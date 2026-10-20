@@ -3,14 +3,17 @@ import { createHash, hkdfSync } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bridgeApprovalCode, bridgeBase64, formatBridgeVerificationCode, type BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
+import { bridgeApprovalCode, bridgeBase64, bridgeBytes, formatBridgeVerificationCode, type BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
+import type { BridgeHeader } from "@mains/contracts/bridge-protocol";
 import { bridgeMember, verifyBridgeMembershipLog, type BridgeMember, type BridgeMembershipChange, type BridgeMembershipEntry, type BridgeMembershipSigner } from "@mains/contracts/bridge-membership";
 import { createNodeBackendRuntime } from "../../runtime/node-backend-runtime";
 import { createBridgeIdentity, type BridgeIdentityClient } from "./bridge.identity";
 import { createBridgeIdentityStorage, createBridgeMembershipStorage, type BridgeSavedIdentity } from "./bridge.identity-storage";
-import { bridgeAccountKeyCommitment, generateBridgeAccountKey, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "./bridge.keys";
+import { bridgeAccountKeyCommitment, deriveBridgeKeys, generateBridgeAccountKey, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "./bridge.keys";
+import { bridgeRecordKeys, createBridgeSealingCodec } from "./bridge.crypto";
+import { createBridgeSigningCodec } from "./bridge.signing";
 import { sealBridgeRecovery } from "./bridge.recovery";
-import { deviceSigner, signBridgeMembershipEntry, verifyBridgeSignature } from "./bridge.membership";
+import { deviceSigner, signBridgeMembershipEntry, verifyBridgeSignature, type BridgeMembershipView } from "./bridge.membership";
 
 /** These accounts have no account records, so a removal's fence admits none. */
 const noRecords = { through: 0, count: 0, root: createHash("sha256").update("[]").digest("base64url") };
@@ -284,6 +287,9 @@ async function fixture(accountKey: Uint8Array | null = null, options: { recovery
     renewalResponse: undefined as unknown,
     proposedHash: null as string | null,
     rejectedTokens: new Set<string>(),
+    /** Refuses this backend (401) everywhere but the signed log, which every registration may read. */
+    refused: false,
+    fence: [] as string[],
     refreshFailures: 0,
     unlocked: () => {},
   };
@@ -293,6 +299,7 @@ async function fixture(accountKey: Uint8Array | null = null, options: { recovery
     state.calls.push({ path, body, method });
     const credential = new Headers(options.headers).get("Authorization")?.replace(/^Bearer /, "");
     if (credential && state.rejectedTokens.has(credential)) return Response.json({ error: "Expired fixture credential" }, { status: 401 });
+    if (state.refused && !(path === "/v1/membership" && method === "GET")) return Response.json({ error: "Backend sign-in expired or was revoked" }, { status: 401 });
     let value: unknown;
     if (path === "/v1/keys/mine") value = state.mine;
     else if (path === "/v1/approvals") value = state.approvals;
@@ -307,6 +314,8 @@ async function fixture(accountKey: Uint8Array | null = null, options: { recovery
       value = state.renewalResponse === undefined ? { nextTokenHash: body.nextTokenHash, expiresAt: state.replacement.expiresAt } : state.renewalResponse;
     }
     else if (path === "/v1/membership" && method === "GET") value = { entries: log.entries.slice(Number(url.searchParams.get("after")) + 1) };
+    // These accounts have no account records, so a removal's fence is empty unless a test says otherwise.
+    else if (path === "/v1/membership/fence" && method === "GET") value = { signatures: state.fence };
     else if (path === "/v1/membership" || path === "/v1/keys/wraps" || path === "/v1/keys/recovery/unlock" || path === "/v1/keys/bootstrap" ||
         path === "/v1/keys/recovery" && method === "PUT" || path.startsWith("/v1/backends/") && method === "DELETE") {
       // Like the hub: compare-and-swap on the head, and only entries that verify extend the log. A retry
@@ -715,4 +724,208 @@ describe("Bridge membership on an active backend", () => {
     expect((await (await import("./bridge.recovery")).openBridgeRecovery(posted.recovery, code)).signingPublicKey).toBe(posted.entry.body.recoverySigningPublicKey);
     expect((await f.log.verified()).recoverySigningPublicKey).toBe(posted.entry.body.recoverySigningPublicKey);
   }, 30_000);
+});
+
+describe("Bridge identity refused by its hub", () => {
+  it("keeps the account key while the hub refuses a backend its log still lists, and recovers when admitted again", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    f.state.refused = true; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: expect.stringContaining("still lists it") });
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+    f.state.refused = false; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: null });
+    expect(f.activatedKeys).toEqual([bridgeBase64(key)]);
+  });
+  // The pinned head is seq 1; a forged history is caught whether it is shorter, as long or longer.
+  it.each([1, 2, 3])("reports a forged history of %s entries as a membership conflict instead of a revocation", async (length) => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    const attacker = testDevice("approver"), forged = membershipLog();
+    await forged.append({ kind: "genesis", body: { member: attacker.member, recoverySigningPublicKey: bridgeBase64(generateBridgeSigningKeyPair().publicKey),
+      accountKeyCommitment: bridgeAccountKeyCommitment(generateBridgeAccountKey()) } }, attacker.signer, attacker.secret);
+    for (const backendId of ["phone", "laptop"].slice(0, length - 1)) await forged.append({ kind: "add", body: { member: testDevice(backendId).member, via: "approval" } }, attacker.signer, attacker.secret);
+    f.log.entries.splice(0, f.log.entries.length, ...forged.entries);
+    f.state.refused = true; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: expect.stringMatching(/membership conflict/i) });
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+  it("pins a newer head read while judging a refusal, so a later rollback is a conflict and the replica keeps that head", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    await f.log.append({ kind: "add", body: { member: testDevice("phone").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    f.state.refused = true; await f.client.refresh();
+    expect(f.client.status().error).toContain("still lists it");
+    expect((await f.vault.read())!.membership).toEqual({ seq: 2, hash: await f.log.hashOf(2) });
+    // The hub hides the newer entry again: the pinned head proves the shorter history is a rollback.
+    f.log.entries.pop(); await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: expect.stringMatching(/membership conflict/i) });
+    // Admitted again while still serving the shorter log: the running replica already holds the pinned head.
+    f.state.refused = false; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: null });
+    expect(f.ready).toHaveBeenCalledTimes(1);
+    expect((await view.refresh()).seq).toBe(2);
+  });
+  it("gives the running replica a removal it pinned, so the replica refuses that writer's record outside its fence", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key), phone = testDevice("phone");
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    await f.log.append({ kind: "add", body: { member: phone.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    const admitted = await view.refresh();
+    // The phone's record, validly signed while it was a member; its removal's fence will not admit it.
+    const keys = bridgeRecordKeys(deriveBridgeKeys(key).recordKey, "collections", "c", "row");
+    const header: BridgeHeader = { v: 1, stream: "account", rowKey: keys.rowKey, registerKey: keys.registerKey!, hlc: { physicalMs: 1, counter: 2 }, origin: "phone", op: "upsert" };
+    const record = createBridgeSigningCodec(createBridgeSealingCodec(key), { accountId: "synthetic-account", backendId: "phone", signingPrivateKey: phone.secret },
+      { current: () => admitted, fence: () => undefined }).seal(header, { table: "collections", pk: "c", register: "row", schemaVersion: 3,
+      values: { id: "c", account_id: "default", name: "forged", created_at: "2026-01-01" }, refs: {}, blobRefs: [] });
+    const receiver = createBridgeSigningCodec(createBridgeSealingCodec(key), { accountId: "synthetic-account", backendId: "local", signingPrivateKey: bridgeBytes(f.saved.signingPrivateKey, 32) }, view);
+    expect(receiver.open(record).body.pk).toBe("c");
+    // The phone is removed. The hub refuses this backend, whose check of the log pins the removal, then hides
+    // the removal from the replica.
+    await f.log.append({ kind: "remove", body: { backendId: "phone", account: noRecords } }, f.approver.signer, f.approver.secret);
+    f.state.refused = true; await f.client.refresh();
+    expect((await f.vault.read())!.membership).toEqual({ seq: 3, hash: await f.log.hashOf(3) });
+    f.log.entries.pop();
+    expect(() => receiver.open(record)).toThrow(/has not verified/);
+    await expect(view.refresh()).rejects.toThrow();
+    expect(() => receiver.open(record)).toThrow(/has not verified/);
+    f.state.refused = false;
+    expect((await view.refresh()).seq).toBe(3);
+    expect(() => receiver.open(record)).toThrow(/outside its removal fence/);
+  });
+  it("reports another continuation of what the replica verified as a conflict, and locks a replica handed one", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    const common = f.log.entries.slice();
+    await f.log.append({ kind: "add", body: { member: testDevice("laptop").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    expect((await view.refresh()).seq).toBe(2);
+    // The replica's progress reaches the identity, which pins it.
+    await vi.waitFor(async () => expect((await f.vault.read())!.membership).toEqual({ seq: 2, hash: await f.log.hashOf(2) }));
+    const fork = signBridgeMembershipEntry(await verifyBridgeMembershipLog(common, verifyBridgeSignature),
+      { kind: "add", body: { member: testDevice("phone").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    const other = [...common, fork];
+    f.log.entries.splice(0, f.log.entries.length, ...other);
+    f.state.refused = true; await f.client.refresh();
+    expect(f.client.status().error).toMatch(/membership conflict/i);
+    expect((await f.vault.read())!.membership?.seq).toBe(2);
+    // Handed a history that differs from its own, the replica's view applies nothing again.
+    view.adopt({ state: await verifyBridgeMembershipLog(other, verifyBridgeSignature), entries: other });
+    expect(view.current()).toBeNull();
+    f.state.refused = false;
+    await expect(view.refresh()).rejects.toThrow(/membership conflict/i);
+  });
+  // The hub answers the replica's refresh with nothing newer, or only part of what this backend adopts meanwhile.
+  it.each([["withholds", 2], ["shows part of", 3]] as const)("keeps a history adopted while the hub %s it during a replica's refresh, and exposes its removal only with the fence", async (_, served) => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    await f.log.append({ kind: "add", body: { member: testDevice("phone").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    await view.refresh();
+    await f.log.append({ kind: "add", body: { member: testDevice("tablet").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    await f.log.append({ kind: "remove", body: { backendId: "phone", account: noRecords } }, f.approver.signer, f.approver.secret);
+    const adopted = { state: await f.log.verified(), entries: f.log.entries.slice() };
+    f.log.entries.splice(served + 1);
+    // Adopted after the refresh has read its head and asked the hub, before the answer arrives.
+    const hub = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: URL, init: RequestInit) => {
+      if (url.pathname === "/v1/membership") { vi.stubGlobal("fetch", hub); view.adopt(adopted); }
+      return hub(url, init);
+    });
+    expect((await view.refresh()).seq).toBe(4);
+    expect(view.fence(4)).toEqual(new Set());
+  });
+  it("never reuses one branch's removal fence for another branch's removal at the same position", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key), phone = testDevice("phone");
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    await f.log.append({ kind: "add", body: { member: phone.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    const admitted = await view.refresh(), base = f.log.entries.slice();
+    const keys = bridgeRecordKeys(deriveBridgeKeys(key).recordKey, "collections", "c", "row");
+    const record = createBridgeSigningCodec(createBridgeSealingCodec(key), { accountId: "synthetic-account", backendId: "phone", signingPrivateKey: phone.secret },
+      { current: () => admitted, fence: () => undefined }).seal({ v: 1, stream: "account", rowKey: keys.rowKey, registerKey: keys.registerKey!, hlc: { physicalMs: 1, counter: 2 },
+      origin: "phone", op: "upsert" }, { table: "collections", pk: "c", register: "row", schemaVersion: 3, values: { id: "c", account_id: "default", name: "forged", created_at: "2026-01-01" }, refs: {}, blobRefs: [] });
+    const receiver = createBridgeSigningCodec(createBridgeSealingCodec(key), { accountId: "synthetic-account", backendId: "local", signingPrivateKey: bridgeBytes(f.saved.signingPrivateKey, 32) }, view);
+    // This backend verified the phone's removal admitting none of its records; the hub serves a removal at the
+    // same position whose fence admits this record, and answers the fence route for that one.
+    await f.log.append({ kind: "remove", body: { backendId: "phone", account: noRecords } }, f.approver.signer, f.approver.secret);
+    const adopted = { state: await f.log.verified(), entries: f.log.entries.slice() };
+    f.log.entries.splice(0, f.log.entries.length, ...base);
+    const signatures = [record.auth!.signature];
+    await f.log.append({ kind: "remove", body: { backendId: "phone", account: { through: 1, count: 1, root: createHash("sha256").update(JSON.stringify(signatures)).digest("base64url") } } },
+      f.approver.signer, f.approver.secret);
+    f.state.fence = signatures;
+    const hub = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: URL, init: RequestInit) => {
+      if (url.pathname === "/v1/membership") { vi.stubGlobal("fetch", hub); view.adopt(adopted); }
+      return hub(url, init);
+    });
+    await expect(view.refresh()).rejects.toThrow(/membership conflict/i);
+    expect(() => receiver.open(record)).toThrow(/has not verified/);
+    // With the fence this backend's removal commits to, the record is outside it.
+    f.state.fence = [];
+    expect((await view.refresh()).head).toBe(adopted.state.head);
+    expect(() => receiver.open(record)).toThrow(/outside its removal fence/);
+  });
+  it("forgets the account key once the signed log shows this backend removed", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    await f.log.append({ kind: "remove", body: { backendId: "local", account: noRecords } }, f.approver.signer, f.approver.secret);
+    f.state.refused = true; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "revoked", error: expect.stringContaining("expired or was revoked") });
+    expect((await f.vault.read())!.accountKey).toBeNull();
+  });
+  it("keeps the account key when the hub refuses the log too, and judges it again after a restart", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    f.state.rejectedTokens.add(f.saved.token); await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "revoked", error: expect.stringContaining("account key is kept") });
+    expect(() => f.client.token()).toThrow();
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+    await f.client.stop();
+    f.state.rejectedTokens.delete(f.saved.token);
+    const restarted = f.makeClient(); await restarted.start(); await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: null });
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+});
+
+describe("Bridge sign-out from a hub serving another history", () => {
+  /** A whole account history the hub forges, longer than this backend's pinned one. */
+  async function forgedHistory(f: Awaited<ReturnType<typeof fixture>>) {
+    const attacker = testDevice("approver"), forged = membershipLog();
+    await forged.append({ kind: "genesis", body: { member: attacker.member, recoverySigningPublicKey: bridgeBase64(generateBridgeSigningKeyPair().publicKey),
+      accountKeyCommitment: bridgeAccountKeyCommitment(generateBridgeAccountKey()) } }, attacker.signer, attacker.secret);
+    for (const backendId of ["phone", "laptop"]) await forged.append({ kind: "add", body: { member: testDevice(backendId).member, via: "approval" } }, attacker.signer, attacker.secret);
+    f.log.entries.splice(0, f.log.entries.length, ...forged.entries);
+  }
+  it("signs a member out locally once the hub's history conflicts with its own", async () => {
+    const f = await fixture(generateBridgeAccountKey());
+    await forgedHistory(f); await f.client.refresh();
+    expect(f.client.status().error).toMatch(/membership conflict/i);
+    await f.client.signOut();
+    expect(f.client.status().state).toBe("signed-out");
+    expect(await f.vault.read()).toBeNull();
+    expect(f.state.calls.some((call) => call.method === "DELETE")).toBe(false);
+  });
+  it("signs out a backend still waiting for its join code once the hub's history conflicts", async () => {
+    const f = await fixture(); await f.offer(f.trueKey); await f.client.refresh();
+    expect(f.client.status().state).toBe("needs-verification");
+    await forgedHistory(f);
+    await f.client.signOut();
+    expect(f.client.status().state).toBe("signed-out");
+    expect(await f.vault.read()).toBeNull();
+  });
+  // The hub answers a replica's refresh with more of its own history, or with nothing newer.
+  it.each([["more of its history", 3], ["nothing newer", 2]] as const)("fails a replica's refresh with the conflict this backend found while the hub sent %s", async (_, served) => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    const common = f.log.entries.slice();
+    await f.log.append({ kind: "add", body: { member: testDevice("laptop").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    await view.refresh();
+    await f.log.append({ kind: "add", body: { member: testDevice("tablet").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    f.log.entries.splice(served + 1);
+    const fork = signBridgeMembershipEntry(await verifyBridgeMembershipLog(common, verifyBridgeSignature),
+      { kind: "add", body: { member: testDevice("phone").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    const other = [...common, fork];
+    const hub = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: URL, init: RequestInit) => {
+      if (url.pathname === "/v1/membership") { vi.stubGlobal("fetch", hub); view.adopt({ state: await verifyBridgeMembershipLog(other, verifyBridgeSignature), entries: other }); }
+      return hub(url, init);
+    });
+    await expect(view.refresh()).rejects.toThrow(/membership conflict/i);
+    expect(view.current()).toBeNull();
+  });
 });

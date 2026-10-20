@@ -48,8 +48,12 @@ async function passwordReset(email: string) {
 describe("Email/password authentication in the real local Worker", () => {
   it("requires email ownership, stores only a password hash and grants no beta/subscription access", async () => {
     const user = await createAccount();
+    await hub.deliveredMail(user.email, "verify-email");
     const failed = await post("sign-in/email", { email: user.email, password });
     expect(failed.status).toBe(403); expect(cookies(failed)).not.toContain("session_token");
+    // Only sign-up sends verification mail; a password attempt never sends another.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(hub.mail.filter((mail) => mail.to === user.email)).toHaveLength(1);
     const db = await hub.database();
     const credential = await db.prepare("SELECT password FROM account WHERE userId=? AND providerId='credential'").bind(user.id).first<{ password: string }>();
     expect(credential?.password).toBeTruthy(); expect(credential!.password).not.toContain(password);

@@ -28,6 +28,12 @@ describe("offline production readiness checks", () => {
     expect(errors).toContain("Production must not share staging D1."); expect(errors).toContain("Production must not share staging R2.");
     expect(errors).toContain("Store credentials in Worker secrets, never inline vars.");
   });
+  it("refuses lifting the closed-beta mail policy in production or staging", () => {
+    const lifted = config(); Object.assign(lifted.vars, { BRIDGE_MAIL_POLICY: "unrestricted" });
+    const message = "Deployed hubs keep the closed-beta mail policy and its daily limit.";
+    expect(productionConfigErrors(lifted, staging)).toContain(message);
+    expect(productionConfigErrors(config(), { ...staging, vars: { ...staging.vars, BRIDGE_MAIL_POLICY: "unrestricted" } })).toContain(message);
+  });
   it("rejects unsafe origins, external DO namespaces and reset overlays", () => {
     const bad = config(); bad.main = "src/staging-reset-worker.ts"; bad.vars.BRIDGE_AUTH_URL = "http://localhost:8790";
     Object.assign(bad.durable_objects.bindings[0], { script_name: staging.name });

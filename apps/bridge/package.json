@@ -28,7 +28,7 @@
     "dev:demo": "tsx scripts/dev-demo.ts",
     "test": "vitest run",
     "test:replication": "node scripts/test-replication.mjs",
-    "test:hosts": "MAINS_BRIDGE_HOST_TESTS=1 vitest run test/hosts.test.ts test/auth-hosts.test.ts test/product-hosts.test.ts test/session-hosts.test.ts test/lan-hosts.test.ts test/value-hosts.test.ts test/subscription-hosts.test.ts",
+    "test:hosts": "npm --prefix ../server run build && MAINS_BRIDGE_HOST_TESTS=1 vitest run test/hosts.test.ts test/auth-hosts.test.ts test/product-hosts.test.ts test/session-hosts.test.ts test/lan-hosts.test.ts test/value-hosts.test.ts test/subscription-hosts.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tools.json",
     "lint": "eslint src/ test/ scripts/"
   },

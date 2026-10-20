@@ -283,11 +283,17 @@ credential alone, and old keys no registration holds leave through
 `POST /v1/membership`. The log decides access as well as publication: sockets,
 blob capabilities and every device route, token renewal included, admit only a
 current member's key, and a removal closes the removed key's sockets as it lands.
-The removal queues its registration's D1 revocation in the same transaction; the
+`GET /v1/membership` alone stays open to every registration's own unexpired
+credential, even a revoked one: a refused backend verifies the whole signed log
+against its pinned head and forgets its account key only if that log removed it. A
+forged history is reported as a membership conflict, and a hub that refuses the log
+too stops the backend without deleting the key. The removal queues its registration's D1 revocation in the same transaction; the
 removing request revokes it right after, and the hub's alarm finishes one that was
 interrupted in between, retrying while D1 is unavailable. Sign-out before the join
 code is entered is the same signed, fenced self-removal, signed on the hub's log
-verified from the entry that admitted the backend. After learning of a removal, other backends accept the removed writer's
+verified from the entry that admitted the backend. A hub that refuses the backend or
+serves another history cannot take that removal, so sign-out then completes locally.
+After learning of a removal, other backends accept the removed writer's
 account records only if their signatures are in its fence, so a hub cannot later
 insert backdated ones. Its run-stream records are fenced in a later slice.
 Approving a backend that re-enrolled with new keys while its old keys are still in
@@ -379,7 +385,9 @@ characters. The mail implementation uses Resend, or an `AUTH_MAILER` service
 binding; Workers `waitUntil` keeps background account emails alive. Local tests
 replace only delivery and consume real Better Auth links. Password registration
 is disabled when no mail service is configured; no migration or existing account
-reset is needed to enable it.
+reset is needed to enable it. During the closed beta, every account email is
+limited to Bridge-eligible addresses, 3 an hour per address and 10 a day per hub
+([Closed beta access](CLOSED-BETA.md#account-email)).
 Choose the OAuth and mail methods you configure; unavailable buttons are hidden.
 Disable `BRIDGE_DEV_AUTH` on a normal hub. No production deployment or provider
 credentials are required for the automated tests.

@@ -63,6 +63,13 @@ export async function backendIdentity(request: Request, env: AuthEnv, pending = 
   }
   return row && row.token_hash === hash && row.status !== "revoked" && (pending || row.status === "approved") ? row : null;
 }
+/** A revoked registration's own unexpired credential, accepted only for reading the signed membership log. */
+async function revokedBackend(request: Request, env: AuthEnv): Promise<BackendRow | null> {
+  const token = request.headers.get("Authorization")?.replace(/^Bearer /, "");
+  if (!env.AUTH_DB || !token?.startsWith("b7_")) return null;
+  return env.AUTH_DB.prepare("SELECT * FROM bridge_backends WHERE token_hash=? AND token_expires_at>? AND status='revoked'")
+    .bind(await digestToken(token), Date.now()).first<BackendRow>();
+}
 export async function backendStillApproved(env: AuthEnv, account: string, backend: string, hash: string): Promise<boolean> {
   return !!await env.AUTH_DB?.prepare("SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND token_hash=? AND status='approved' AND token_expires_at>?")
     .bind(account, backend, hash, Date.now()).first();
@@ -127,10 +134,19 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
         db.prepare("DELETE FROM bridge_approvals WHERE account_id=? AND backend_id=?").bind(user.id, backendId)]);
       return json({ accountId: user.id, email: user.email, backend: format(row), token, expiresAt: row.token_expires_at }, 201);
     }
-    const backend = await backendIdentity(request, env, true, control.rotated);
+    const reading = path === "/v1/membership" && request.method === "GET";
+    const backend = await backendIdentity(request, env, true, control.rotated) ?? (reading ? await revokedBackend(request, env) : null);
     if (!backend) throw new HttpError(401, "Backend sign-in expired or was revoked");
     await rateLimit(env, `backend:${backend.account_id}:${backend.backend_id}`, 180);
     const account = backend.account_id, id = backend.backend_id, ready = backend.status === "approved";
+    // Every registration reads the log with its own unexpired credential, member or not and even revoked: it is
+    // signed metadata, never records. A pending backend verifies it before activating, and a refused or removed
+    // one checks its refusal there rather than taking the hub's word for it.
+    if (reading) {
+      const after = Number(new URL(request.url).searchParams.get("after") ?? -1);
+      if (!Number.isSafeInteger(after) || after < -1) throw new HttpError(400, "Invalid membership cursor");
+      return json(await control.membership.pull(account, after));
+    }
     // The log decides membership: an approval whose keys it no longer admits is revoked, even before D1 has
     // caught up with an interrupted removal (the hub finishes that revocation on its own).
     if (ready && !sameMember(currentMember(await control.membership.state(account), id), registeredMember(backend)))
@@ -142,12 +158,6 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       const approval = await db.prepare("SELECT status,expires_at FROM bridge_approvals WHERE account_id=? AND backend_id=?").bind(account, id).first();
       return json({ accountId: account, backend: format(backend), initialized: !!keys, recoveryPublicKey: keys?.recovery_public_key ?? null,
         wrap: mine ? JSON.parse(mine.wrap) : null, approval, tokenRenewal: "client-hash-v1" });
-    }
-    if (path === "/v1/membership" && request.method === "GET") {
-      // Pending backends read it too: a joining device verifies it before activating.
-      const after = Number(new URL(request.url).searchParams.get("after") ?? -1);
-      if (!Number.isSafeInteger(after) || after < -1) throw new HttpError(400, "Invalid membership cursor");
-      return json(await control.membership.pull(account, after));
     }
     if (path === "/v1/membership" && request.method === "POST") {
       // A member appends the replay-horizon checkpoint here, or removes keys that no registration holds any

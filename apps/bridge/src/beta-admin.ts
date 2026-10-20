@@ -1,11 +1,12 @@
-// Operator-only SQL helpers. No public route imports this module.
+// Operator-only helpers for the beta CLI and the private BridgeOperations entrypoint. No public route imports this module.
 export function bridgeBetaEmail(raw: string): string {
   const email = raw.trim().toLowerCase();
   if (email.length > 254 || [...email].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Use a valid invitation email");
   // Do not strip dots or plus aliases: the exact mailbox must be verified.
   return email;
 }
-export const bridgeBetaSelect = "SELECT email,account_id,status,invited_at,activated_at,expires_at,updated_at FROM bridge_beta_invites WHERE email=?";
+export const bridgeBetaColumns = "email,account_id,status,invited_at,activated_at,expires_at,mailed_at,updated_at";
+export const bridgeBetaSelect = `SELECT ${bridgeBetaColumns} FROM bridge_beta_invites WHERE email=?`;
 export function bridgeBetaInvite(email: string, now = Date.now()) {
   return { sql: `INSERT INTO bridge_beta_invites(email,status,invited_at,updated_at) VALUES(?,'invited',?,?)
     ON CONFLICT(email) DO UPDATE SET status='invited',updated_at=excluded.updated_at

@@ -18,6 +18,8 @@ import { createSqlUsage, type SqlUsageEnv } from "./sql-usage";
 import { reportWriteBudget, subscriptionWriteBudgetPeriod, type WriteBudgetPeriod } from "./write-budget";
 import { verifyBridgePublication } from "./signatures";
 import { createHubMembership, type MembershipAppend } from "./membership";
+import { bridgeBetaEmail } from "./beta-admin";
+import { BridgeMailLimitError, deliverBridgeMail } from "./auth-mail";
 import { bridgeMember, bridgeWriterKeyAt, validateBridgeFence, validateBridgeMembershipEntry } from "@mains/contracts/bridge-membership";
 
 interface Env extends DevAuthEnv, BlobEnv, QuotaEnv, SqlUsageEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
@@ -119,6 +121,20 @@ export class BridgeOperations extends WorkerEntrypoint<Env> {
     if (!this.env.AUTH_DB) throw new Error("Authentication database is not configured");
     const result = await this.env.AUTH_DB.prepare("SELECT account_id FROM bridge_accounts WHERE account_id>? ORDER BY account_id LIMIT 100").bind(after).all<{ account_id: string }>();
     return result.results.map((row) => row.account_id);
+  }
+  /** The invitation email, once per invitation unless `resend`; the operator's beta CLI calls this after
+   * writing the invitation, so the mail provider's key never leaves the Worker. */
+  async sendBetaInvite(email: string, resend = false): Promise<{ sent: boolean; reason?: "not-invited" | "already-sent" | "skipped" | "daily-limit" }> {
+    if (typeof email !== "string" || typeof resend !== "boolean") throw new Error("Invalid invitation");
+    if (!this.env.AUTH_DB) throw new Error("Authentication database is not configured");
+    const address = bridgeBetaEmail(email);
+    const invite = await this.env.AUTH_DB.prepare("SELECT status,mailed_at FROM bridge_beta_invites WHERE email=?").bind(address).first<{ status: string; mailed_at: number | null }>();
+    if (invite?.status !== "invited") return { sent: false, reason: "not-invited" };
+    if (invite.mailed_at !== null && !resend) return { sent: false, reason: "already-sent" };
+    try { if (await deliverBridgeMail(this.env, { kind: "beta-invite", to: address }) === "skipped") return { sent: false, reason: "skipped" }; }
+    catch (error) { if (error instanceof BridgeMailLimitError) return { sent: false, reason: "daily-limit" }; throw error; }
+    await this.env.AUTH_DB.prepare("UPDATE bridge_beta_invites SET mailed_at=? WHERE email=?").bind(Date.now(), address).run();
+    return { sent: true };
   }
   async checkpoint(accountId: string) {
     if (typeof accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(accountId)) throw new Error("Invalid backup account");

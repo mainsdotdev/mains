@@ -26,6 +26,7 @@ export function productionConfigErrors(config: Config, staging: Config): string[
   require(vars.BRIDGE_AUTH_URL !== staging.vars?.BRIDGE_AUTH_URL, "Production must not use the staging authentication origin.");
   require(typeof vars.GITHUB_CLIENT_ID === "string" && vars.GITHUB_CLIENT_ID.length > 0 || typeof vars.MAIL_FROM === "string" && vars.MAIL_FROM.includes("@"), "Configure a GitHub client ID or an email sender; provision their secrets separately.");
   require(!Object.keys(vars).some((key) => /SECRET|TOKEN|PASSWORD|PRIVATE_KEY|API_KEY/i.test(key)), "Store credentials in Worker secrets, never inline vars.");
+  require(vars.BRIDGE_MAIL_POLICY === undefined && staging.vars?.BRIDGE_MAIL_POLICY === undefined, "Deployed hubs keep the closed-beta mail policy and its daily limit.");
   const database = config.d1_databases?.find((entry: Config) => entry.binding === "AUTH_DB");
   require(database && /^[a-f0-9-]{36}$/i.test(database.database_id ?? "") && typeof database.database_name === "string" && database.migrations_dir === "migrations", "Configure AUTH_DB with its production D1 ID and migrations directory.");
   require(database && !staging.d1_databases?.some((entry: Config) => entry.database_id === database.database_id || entry.database_name === database.database_name), "Production must not share staging D1.");

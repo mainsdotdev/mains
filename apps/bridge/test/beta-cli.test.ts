@@ -19,11 +19,17 @@ it("manages invitations in disposable local D1, preserves paid grants and reject
     await writeFile(config, JSON.stringify({ name: "mains-beta-cli-test", compatibility_date: "2026-07-30", vars: { BRIDGE_ENV: "local" },
       d1_databases: [{ binding: "AUTH_DB", database_name: "beta-cli-test", database_id: randomUUID() }] }));
     const schema = join(dir, "schema.sql");
-    await writeFile(schema, `CREATE TABLE user(id TEXT PRIMARY KEY); INSERT INTO user VALUES('paid-user');\n${await readFile("migrations/0004_account_entitlements.sql", "utf8")}\nINSERT INTO account_entitlements VALUES('paid-user','bridge','standard','yearly','active',1,9999999999999,1);\n${await readFile("migrations/0005_closed_beta.sql", "utf8")}`);
+    await writeFile(schema, `CREATE TABLE user(id TEXT PRIMARY KEY); INSERT INTO user VALUES('paid-user');\n${await readFile("migrations/0004_account_entitlements.sql", "utf8")}\nINSERT INTO account_entitlements VALUES('paid-user','bridge','standard','yearly','active',1,9999999999999,1);\n${await readFile("migrations/0005_closed_beta.sql", "utf8")}\n${await readFile("migrations/0007_beta_invite_mail.sql", "utf8")}`);
     await run([wrangler, "d1", "execute", "AUTH_DB", "--config", config, "--local", "--persist-to", state, "--file", schema]);
     const paid = await query("SELECT * FROM account_entitlements"), get = async () => (await query("SELECT * FROM bridge_beta_invites"))[0];
-    await admin(["invite", "--email", `  ${address.toUpperCase()}  `]); const invited = await get();
-    expect(invited).toMatchObject({ email: address, account_id: null, status: "invited", activated_at: null, expires_at: null });
+    const first = await admin(["invite", "--email", `  ${address.toUpperCase()}  `]); const invited = await get();
+    expect(invited).toMatchObject({ email: address, account_id: null, status: "invited", activated_at: null, expires_at: null, mailed_at: null });
+    expect(first.stdout).toContain("Local invitations are not emailed.");
+    // Only a remote invite sends mail, so its options mean nothing locally.
+    for (const flags of [["--resend"], ["--no-mail"]]) {
+      await expect(admin(["invite", "--email", address, ...flags])).rejects.toMatchObject({ stderr: expect.stringContaining("only with a remote invite") });
+    }
+    await expect(admin(["show", "--email", address, "--resend"])).rejects.toMatchObject({ stderr: expect.stringContaining("only with a remote invite") });
     await admin(["invite", "--email", address]); expect(await get()).toEqual(invited);
     expect((await admin(["list"])).stdout).toContain(address);
     expect((await admin(["show", "--email", address])).stdout).toContain(address);

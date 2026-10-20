@@ -1,9 +1,10 @@
 import { betterAuth } from "better-auth";
+import { APIError } from "better-auth/api";
 import { waitUntil } from "cloudflare:workers";
 import { bearer, deviceAuthorization, magicLink } from "better-auth/plugins";
 import { BRIDGE_AUTH_CLIENT_ID } from "@mains/contracts/bridge-auth";
 import { reportBridgeFailure, type BridgeDiagnosticsEnv } from "./observability";
-import { bridgeMailConfigured, sendBridgeMail, type BridgeMailEnv } from "./auth-mail";
+import { bridgeMailConfigured, BridgeMailLimitError, deliverBridgeMail, type BridgeMail, type BridgeMailEnv } from "./auth-mail";
 
 export interface AuthEnv extends BridgeDiagnosticsEnv, BridgeMailEnv {
   BRIDGE_ENV?: "local" | "staging" | "production";
@@ -16,6 +17,11 @@ export interface AuthEnv extends BridgeDiagnosticsEnv, BridgeMailEnv {
 const cache = new WeakMap<object, Map<string, ReturnType<typeof createAuth>>>();
 function createAuth(env: AuthEnv, baseURL: string) {
   if (!env.AUTH_DB || !env.BETTER_AUTH_SECRET || env.BETTER_AUTH_SECRET.length < 32) throw new Error("Bridge sign-in is not configured");
+  // The sign-in link is sent while its request waits, so the daily limit reaches the form as a readable 429.
+  const mail = async (message: BridgeMail) => {
+    try { await deliverBridgeMail(env, message); }
+    catch (error) { throw error instanceof BridgeMailLimitError ? new APIError("TOO_MANY_REQUESTS", { message: error.message }) : error; }
+  };
   return betterAuth({
     database: env.AUTH_DB,
     secret: env.BETTER_AUTH_SECRET,
@@ -27,18 +33,20 @@ function createAuth(env: AuthEnv, baseURL: string) {
     emailAndPassword: {
       enabled: bridgeMailConfigured(env), requireEmailVerification: true, autoSignIn: false,
       minPasswordLength: 12, maxPasswordLength: 128, resetPasswordTokenExpiresIn: 900, revokeSessionsOnPasswordReset: true,
-      sendResetPassword: ({ user, url }) => sendBridgeMail(env, { to: user.email, url, kind: "reset-password" }),
+      sendResetPassword: ({ user, url }) => mail({ to: user.email, url, kind: "reset-password" }),
     },
+    // Verification mail goes out once, at sign-up. A missed link is replaced by an email sign-in link,
+    // which verifies the address too, rather than by another mail on every password attempt.
     emailVerification: {
-      sendOnSignUp: true, sendOnSignIn: true, autoSignInAfterVerification: false, expiresIn: 3600,
-      sendVerificationEmail: ({ user, url }) => sendBridgeMail(env, { to: user.email, url, kind: "verify-email" }),
+      sendOnSignUp: true, sendOnSignIn: false, autoSignInAfterVerification: false, expiresIn: 3600,
+      sendVerificationEmail: ({ user, url }) => mail({ to: user.email, url, kind: "verify-email" }),
     },
     session: { expiresIn: 60 * 60 * 24, cookieCache: { enabled: false } },
     account: { accountLinking: { enabled: true, trustedProviders: ["github"], requireLocalEmailVerified: true }, encryptOAuthTokens: true },
     rateLimit: { enabled: true, storage: "database", window: 60, max: 60 },
     advanced: { database: { generateId: () => crypto.randomUUID() }, useSecureCookies: baseURL.startsWith("https:"), ipAddress: { ipAddressHeaders: ["CF-Connecting-IP"] }, backgroundTasks: { handler: waitUntil } },
     plugins: [bearer(), deviceAuthorization({ verificationUri: `${baseURL}/device`, expiresIn: "10m", interval: "5s", validateClient: (id) => id === BRIDGE_AUTH_CLIENT_ID }),
-      magicLink({ expiresIn: 300, storeToken: "hashed", sendMagicLink: ({ email, url }) => sendBridgeMail(env, { to: email, url, kind: "sign-in" }) })],
+      magicLink({ expiresIn: 300, storeToken: "hashed", sendMagicLink: ({ email, url }) => mail({ to: email, url, kind: "sign-in" }) })],
   });
 }
 export function bridgeAuth(env: AuthEnv, request: Request) {

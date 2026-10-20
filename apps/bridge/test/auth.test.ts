@@ -386,11 +386,24 @@ describe("Verified sign-in and backend key ceremonies", () => {
       expect((await rpc("/v1/blobs/presign", b.token, { op: "get", blobs: [blob] })).status).toBe(401);
       expect((await rpc("/v1/backends/refresh", b.token, { nextTokenHash: tokenHash(`b7_${randomBytes(32).toString("hex")}`) })).status).toBe(401);
       expect((await rpc("/v1/keys/mine", b.token)).status).toBe(401);
+      expect((await rpc("/v1/membership/fence?seq=1", b.token)).status).toBe(401);
+      // The signed log stays readable, so the removed backend verifies its own removal rather than the refusal.
+      const log = await rpc("/v1/membership?after=-1", b.token);
+      expect(log.status).toBe(200);
+      expect((await log.json() as { entries: unknown[] }).entries.at(-1)).toMatchObject({ kind: "remove", body: { backendId: b.backendId } });
     } finally { bSocket.terminate(); await db.prepare("DROP TRIGGER interrupted_revocation").run(); }
     // Nobody retries the request: the hub revokes the registration from its log once D1 is available.
     await vi.waitFor(async () => expect(await status()).toBe("revoked"), { timeout: 15_000, interval: 250 });
     expect(await db.prepare("SELECT 1 FROM bridge_key_wraps WHERE account_id=? AND backend_id=?").bind(b.accountId, b.backendId).first()).toBeNull();
     expect((await rpc("/v1/keys/mine", a.token)).status).toBe(200);
+    // Revoked in D1 too, its own credential still reads the log that proves the removal, and nothing else.
+    const revokedLog = await rpc("/v1/membership?after=-1", b.token);
+    expect(revokedLog.status).toBe(200);
+    expect((await revokedLog.json() as { entries: unknown[] }).entries.at(-1)).toMatchObject({ kind: "remove", body: { backendId: b.backendId } });
+    for (const path of ["/v1/keys/mine", "/v1/approvals", "/v1/membership/fence?seq=1"]) expect((await rpc(path, b.token)).status).toBe(401);
+    // An expired credential reads nothing.
+    await db.prepare("UPDATE bridge_backends SET token_expires_at=0 WHERE account_id=? AND backend_id=?").bind(b.accountId, b.backendId).run();
+    expect((await rpc("/v1/membership?after=-1", b.token)).status).toBe(401);
   }, 30_000);
   it("completes an initialization whose genesis landed without its account when the same proposal is sent again", async () => {
     const a = await register(await login()), material = bootstrapBody(a), entry = material.body.entry;

@@ -360,7 +360,22 @@ from non-members, and removing a member revokes only the D1 registration holding
 its keys. Reads follow the log too: sockets, blob capabilities and device routes
 (token renewal included) admit only a current member's key, so a removal that lands
 before its D1 revocation fails still ends access, and the hub's alarm finishes that
-revocation from a queue the removal writes in its own transaction. Approving a backend that re-enrolled with new keys while its old ones are
+revocation from a queue the removal writes in its own transaction. The log itself
+stays readable to every registration with its own unexpired credential, even after
+D1 revoked it, so a refused backend checks its refusal there. It verifies the whole
+log from genesis to contain its pinned head, pins any newer head that log proves
+(so a later, shorter history is a conflict too), and forgets its account key only
+when that log removed it. Every head the identity pins, including one it reads
+itself and a removal it makes, also reaches the running replica's view: that view
+then applies and publishes nothing until it has the new head's fences, and a
+history that differs from its own locks it as a conflict. The hub therefore cannot
+keep the replica behind a removal this backend already knows. Loaded fences belong
+to their removal entry (its chain hash), not its position, so a fence the hub served
+for another branch never stands in for the verified removal at the same seq. A history of any length that does not contain the pinned head
+is reported as a membership conflict, and a log that still lists it as a refusal;
+a hub that refuses the log as well (an expired or replaced credential, or a hostile
+hub) stops the backend, but proves nothing, so the key stays until sign-out and is
+judged again at the next start. Approving a backend that re-enrolled with new keys while its old ones are
 still admitted (its credential lapsed before it could remove itself) first removes
 the old keys with their fence, which leaves the new registration pending. Sign-out
 remains a fenced self-removal that needs the hub. Still open: a backend whose old

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bridgeMailConfigured, sendBridgeMail, type BridgeMailKind } from "../src/auth-mail";
+import { bridgeMailConfigured, MAINS_DOWNLOAD_URL, sendBridgeMail, type BridgeMailKind } from "../src/auth-mail";
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -23,6 +23,16 @@ describe("Resend authentication mail delivery", () => {
     expect(body.text).toContain(message.url);
     expect(body.text).toContain(`expires in ${expiry}`);
     expect(body).not.toHaveProperty("RESEND_API_KEY");
+  });
+
+  it("sends the beta invitation as plain steps without any sign-in link", async () => {
+    const send = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ id: "local-mail-id" }));
+    vi.stubGlobal("fetch", send);
+    await sendBridgeMail({ RESEND_API_KEY: "local-test-key", MAIL_FROM: "Mains <no-reply@auth.mains.dev>" }, { kind: "beta-invite", to: "invited+alias@example.com" });
+    const body = JSON.parse(send.mock.calls[0][1]!.body as string);
+    expect(body).toMatchObject({ to: ["invited+alias@example.com"], subject: "You're invited to the Mains Bridge beta" });
+    for (const part of [MAINS_DOWNLOAD_URL, "(invited+alias@example.com)", "Activate beta", "Your 30 days start when you activate"]) expect(body.text).toContain(part);
+    expect(body.text).not.toMatch(/token|expires in|\/api\/auth/);
   });
 
   it("requires both sender and secret before enabling email sign-in", async () => {

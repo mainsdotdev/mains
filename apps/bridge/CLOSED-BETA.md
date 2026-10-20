@@ -26,10 +26,31 @@ The user starts from Settings → Bridge → Sign in. After sign-in:
 
 Activation is idempotent. Repeated clicks, login retries, a second device or
 re-inviting an activated account never restart or extend its period. No payment
-provider, automatic renewal, public waitlist or automatic invitation mail exists.
-Tell the selected person which email to use when signing in; no shareable invite
-code or secret is required. A GitHub account must expose that same verified email
-to the authentication provider. Plus aliases and dots are not collapsed.
+provider, automatic renewal or public waitlist exists. A remote invite emails the
+selected person once: plain steps (install Mains, sign in with this exact address,
+choose **Activate beta**) and no link that signs in, so no shareable invite code or
+secret exists. A GitHub account must expose that same verified email to the
+authentication provider. Plus aliases and dots are not collapsed.
+
+## Account email
+
+Resend's free tier allows 100 emails a day across staging and production together,
+so every account email (sign-in link, verification, password reset, invitation)
+passes one policy in `src/auth-mail.ts`:
+
+- Only an address that can use Bridge receives mail: an invitation that was not
+  revoked, or a user with a Bridge account or an entitlement. Any other address is
+  skipped silently, so the public forms answer every address alike.
+- An address receives at most 3 emails an hour; further requests are skipped the
+  same way.
+- Each hub sends at most 10 emails a UTC day. Past that, every request, for any
+  address, is refused with "Email is paused for today", and the sign-in-link form
+  shows it. GitHub sign-in needs no email and keeps working.
+- Verification mail goes out once, at sign-up, not again on each password attempt.
+  Someone who missed it uses **Email me a sign-in link**, which verifies too.
+
+`BRIDGE_MAIL_POLICY=unrestricted` lifts all of this for tests and local development
+only; `production:check` refuses it in either deployed configuration.
 
 ## Operator commands
 
@@ -46,7 +67,13 @@ npm run beta -- revoke --email tester@example.com
 
 - `invite` inserts a pending invitation with no start/expiry and is safe to retry.
   It can reopen a cancelled **unactivated** invitation. It never reopens an
-  activated/revoked/expired grant.
+  activated/revoked/expired grant. A remote invite then emails the invitation
+  through the Worker's private `BridgeOperations.sendBetaInvite`, so the Resend key
+  never leaves the Worker; `mailed_at` records it and a retry sends nothing more.
+  `--resend` sends it again, `--no-mail` skips it, and an invitation already
+  active or revoked gets no mail. The email counts toward the limits above; when
+  the day's limit is reached, run the same command again the next day. Local
+  invites are never emailed.
 - `extend` requires an already activated grant and a later, explicit future end
   timestamp including a timezone. It preserves the original start, can restore
   a revoked grant and does not change an unchanged row when retried.
@@ -83,6 +110,8 @@ wraps, account hubs and R2 objects are unchanged. An active paid/manual grant
 takes precedence over beta. Existing initialized account owners can still sign
 in for read/recovery access without an invitation; they receive no new upload
 rights. Old pending credentials cannot bootstrap an uninvited account.
+Migration `0007_beta_invite_mail.sql` adds the nullable `mailed_at` column; mail
+counters reuse `bridge_limits`.
 
 For each authorized rollout: take and verify the normal environment backup,
 apply pending D1 migrations **before** deploying the hub, deploy the compatible

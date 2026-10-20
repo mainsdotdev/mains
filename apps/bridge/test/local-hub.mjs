@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { fixtureAccountCommitment, fixtureAccountKey, fixtureEntryHash, fixtureGenesis, fixtureMember, fixtureMembershipEntry, fixturePublicKey, rememberFixtureHead } from "./record-signing.mjs";
 
 /** Starts the same Worker as wrangler dev, on an ephemeral real HTTP/WebSocket listener.
- * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, truncateRefreshOnce?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string }, purge?: { token: string } }} [settings] */
+ * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, truncateRefreshOnce?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string }, purge?: { token: string }, mailGuard?: boolean }} [settings] */
 export async function startLocalBridgeHub(settings = {}) {
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hub-"));
   const bundle = join(dir, "hub.mjs");
@@ -43,6 +43,8 @@ export async function startLocalBridgeHub(settings = {}) {
       ...(settings.environment ? { BRIDGE_ENV: settings.environment } : {}),
       ...(settings.maintenance ? { BRIDGE_RESET_ACCOUNT: settings.maintenance.accountId, BRIDGE_RESET_TOKEN: settings.maintenance.token, BRIDGE_AUTH_URL: "https://mains-bridge-staging.team-68e.workers.dev" } : {}),
       ...(settings.purge ? { BRIDGE_PURGE_TOKEN: settings.purge.token } : {}),
+      // Fixtures sign in with arbitrary addresses; mailGuard keeps the deployed closed-beta mail policy.
+      ...(settings.mailGuard ? {} : { BRIDGE_MAIL_POLICY: "unrestricted" }),
       ...(settings.storageLimitBytes !== undefined ? { BRIDGE_STORAGE_LIMIT_BYTES: String(settings.storageLimitBytes) } : {}),
       ...(settings.writesPerMinute !== undefined ? { BRIDGE_WRITES_PER_MINUTE: String(settings.writesPerMinute) } : {}),
       ...(settings.github ? { GITHUB_CLIENT_ID: "local-public-github-id", GITHUB_CLIENT_SECRET: "local-only-github-secret" } : {}),
@@ -54,7 +56,7 @@ export async function startLocalBridgeHub(settings = {}) {
   catch (error) { await mf.dispose().catch(() => {}); await rm(dir, { recursive: true, force: true }); throw error; }
   if (settings.auth) {
     const db = await mf.getD1Database("AUTH_DB");
-    for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql", "0006_backend_token_handover.sql"]) {
+    for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql", "0006_backend_token_handover.sql", "0007_beta_invite_mail.sql"]) {
       const sql = await readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8");
       await db.batch(sql.split(";").filter((part) => part.trim()).map((part) => db.prepare(part)));
     }

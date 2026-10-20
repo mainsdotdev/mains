@@ -35,8 +35,10 @@ export async function fetchBridgeMembership(hubUrl: string, token: string, after
     if (page.entries.length < MEMBERSHIP_PAGE) return { entries, appendedAt: Number.isSafeInteger(page.appendedAt) ? page.appendedAt as number : null };
   }
 }
+/** The hub's history does not contain the one this backend verified. */
+export class BridgeMembershipConflictError extends Error {}
 export const bridgeMembershipConflict = (failure: unknown) =>
-  new Error(`Bridge account membership conflict: ${failure instanceof Error ? failure.message : "invalid log"}`);
+  new BridgeMembershipConflictError(`Bridge account membership conflict: ${failure instanceof Error ? failure.message : "invalid log"}`);
 
 export interface BridgeRemovalFence { account: BridgeAccountFence; signatures: string[] }
 /** What a removal admits: the removed writer's account records exactly as the remover's own full read
@@ -86,6 +88,10 @@ export interface BridgeMembershipView {
   refresh(): Promise<BridgeMembershipState>;
   /** The hub's time for its newest entry at the last refresh; a hint, never verified. */
   headAppendedAt(): number | null;
+  /** Takes a history the caller verified itself, so the hub cannot keep this view behind a removal this
+   * backend already knows. A longer history replaces the view's and stays hidden until the next refresh
+   * loads its fences; one that does not agree with the view's makes every later refresh a conflict. */
+  adopt(membership: BridgeVerifiedMembership): void;
 }
 export function createBridgeMembershipView(options: {
   hubUrl: string; token: () => Promise<string>; accountId: string; accountKeyCommitment: string;
@@ -95,35 +101,54 @@ export function createBridgeMembershipView(options: {
   extended?: (membership: BridgeVerifiedMembership) => void;
 }): BridgeMembershipView {
   let verified = options.initial ?? null, loaded = false, running: Promise<BridgeMembershipState> | undefined, appendedAt: number | null = null;
-  const fences = new Map<number, ReadonlySet<string>>();
-  async function loadFences(entries: readonly BridgeMembershipEntry[], token: string) {
-    for (const entry of entries) if (entry.kind === "remove" && !fences.has(entry.seq))
-      fences.set(entry.seq, await fetchBridgeFence(options.hubUrl, token, entry.seq, entry.body.account));
+  let conflict: Error | null = null;
+  // Keyed by the removal's chain hash, never its position: another branch can hold a different removal, with
+  // a different fence, at the same seq (a refresh still loading the hub's while this view adopts its own).
+  const fences = new Map<string, ReadonlySet<string>>();
+  async function loadFences(membership: BridgeVerifiedMembership, token: string) {
+    for (const entry of membership.entries) {
+      const id = membership.state.hashes[entry.seq];
+      if (entry.kind === "remove" && !fences.has(id)) fences.set(id, await fetchBridgeFence(options.hubUrl, token, entry.seq, entry.body.account));
+    }
   }
   async function load(): Promise<BridgeMembershipState> {
-    const token = await options.token();
-    const { entries: more, appendedAt: newest } = await fetchBridgeMembership(options.hubUrl, token, verified?.state.seq ?? -1);
+    if (conflict) throw conflict;
+    const token = await options.token(), base = verified;
+    const { entries: more, appendedAt: newest } = await fetchBridgeMembership(options.hubUrl, token, base?.state.seq ?? -1);
     appendedAt = newest;
-    if (verified && !more.length) {
-      if (!loaded) { await loadFences(verified.entries, token); loaded = true; }
-      return verified.state;
+    if (base && !more.length) {
+      if (!loaded) await loadFences(base, token);
+      // A history adopted meanwhile is newer than this one: load that instead, or report its conflict.
+      if (conflict || verified !== base) return load();
+      loaded = true;
+      return base.state;
     }
     let state: BridgeMembershipState;
     try {
-      state = verified ? await extendBridgeMembership(verified.state, more, verifyBridgeSignature) : await verifyBridgeMembershipLog(more, verifyBridgeSignature);
+      state = base ? await extendBridgeMembership(base.state, more, verifyBridgeSignature) : await verifyBridgeMembershipLog(more, verifyBridgeSignature);
       if (state.accountId !== options.accountId || state.accountKeyCommitment !== options.accountKeyCommitment) throw new Error("the log belongs to another account key");
     } catch (failure) { throw bridgeMembershipConflict(failure); }
-    const next = { state, entries: [...verified?.entries ?? [], ...more] };
+    const next = { state, entries: [...base?.entries ?? [], ...more] };
     // A removal becomes visible to the codec only together with what it admits.
-    await loadFences(next.entries, token);
+    await loadFences(next, token);
+    if (conflict || verified !== base) return load();
     verified = next; loaded = true;
     options.extended?.(verified);
     return state;
   }
   return {
-    current: () => loaded ? verified?.state ?? null : null,
-    fence: (seq) => fences.get(seq),
+    current: () => loaded && !conflict ? verified?.state ?? null : null,
+    fence: (seq) => { const id = verified?.state.hashes[seq]; return id === undefined ? undefined : fences.get(id); },
     headAppendedAt: () => appendedAt,
     refresh() { return running ??= load().finally(() => { running = undefined; }); },
+    adopt(next) {
+      if (conflict || next.state.accountId !== options.accountId || next.state.accountKeyCommitment !== options.accountKeyCommitment) return;
+      const own = verified?.state;
+      if (own && (next.state.seq > own.seq ? next.state.hashes[own.seq] !== own.head : own.hashes[next.state.seq] !== next.state.head)) {
+        conflict = bridgeMembershipConflict(new Error("this backend verified a different history")); return;
+      }
+      if (own && next.state.seq <= own.seq) return;
+      verified = next; loaded = false;
+    },
   };
 }

@@ -9,8 +9,8 @@ import { createBridgeIdentityStorage, createBridgeMembershipStorage, type Bridge
 import { bridgeAccountKeyCommitment, bridgeJoinCode, generateBridgeAccountKey, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "./bridge.keys";
 import { generateBridgeRecoveryCode, openBridgeRecovery, sealBridgeRecovery } from "./bridge.recovery";
 import { bridgeHttp, bridgeHubUrl, BridgeHttpError, pollBridgeDeviceLogin, startBridgeDeviceLogin, startBridgeLoopback } from "./bridge.login";
-import { bridgeMembershipConflict, createBridgeMembershipView, deviceSigner, fetchBridgeMembership, pullBridgeAccountFence, signBridgeMembershipEntry, verifyBridgeSignature,
-  type BridgeRemovalFence, type BridgeVerifiedMembership } from "./bridge.membership";
+import { bridgeMembershipConflict, BridgeMembershipConflictError, createBridgeMembershipView, deviceSigner, fetchBridgeMembership, pullBridgeAccountFence, signBridgeMembershipEntry, verifyBridgeSignature,
+  type BridgeMembershipView, type BridgeRemovalFence, type BridgeVerifiedMembership } from "./bridge.membership";
 import type { BridgeDevConfig } from "./bridge.config";
 
 const sameMember = (a: BridgeMember | undefined, b: BridgeMember) =>
@@ -37,6 +37,8 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
   let hub: string | null = null, label = hostname(), code: string | null = null, recoveryCode: string | null = null;
   /** Verified from a pinned head; never trusted from the hub alone. */
   let membership: BridgeVerifiedMembership | null = null;
+  /** The view of the replica started last, which every newer pinned history reaches as well. */
+  let replica: BridgeMembershipView | null = null;
   let joinCodes: BridgeJoinCode[] = [];
   let login: BridgeAuthStatus["login"] = null, timer: ReturnType<typeof setTimeout> | undefined, closed = false, running: Promise<void> | undefined;
   let stopLogin: (() => void) | undefined, deviceCode: string | null = null, interval = 5000, epoch = 0, activated = false;
@@ -79,11 +81,14 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       }
     } finally { key.fill(0); }
   }
-  /** Persists verified entries first, then advances the pinned head, so the copy is never behind it. */
+  /** Persists verified entries first, then advances the pinned head, so the copy is never behind it. The
+   * running replica takes it too: the hub must not keep it applying records against a history this backend
+   * already verified past, such as before a removal it made or saw. */
   async function pinMembership(next: BridgeMembershipState, entries: BridgeMembershipEntry[]) {
     membership = { state: next, entries };
     await membershipFiles.write(saved!.accountId, entries);
     if (saved!.membership?.seq !== next.seq || saved!.membership.hash !== next.head) { saved!.membership = { seq: next.seq, hash: next.head }; await vault.write(saved!); }
+    replica?.adopt(membership);
     computeJoinCodes();
   }
   /** Loads the pinned log (local copy, else the hub), then extends it with the hub's newer entries.
@@ -95,7 +100,9 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       if (local) try { membership = { state: await verifyBridgeMembershipLog(local, verifyBridgeSignature, saved.membership), entries: local as BridgeMembershipEntry[] }; } catch { membership = null; }
       if (!membership && offline) throw new Error("Bridge account membership is unavailable offline");
       if (!membership) {
-        try { membership = await verifiedRemote(saved.membership); }
+        // Only a history that fails verification is a conflict; a refused or failed request stays what it is.
+        const entries = await fetchMembership(-1);
+        try { membership = { state: await verifyBridgeMembershipLog(entries, verifyBridgeSignature, saved.membership), entries }; }
         catch (failure) { throw bridgeMembershipConflict(failure); }
         await membershipFiles.write(saved.accountId, membership.entries);
       }
@@ -151,7 +158,10 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     if (saved!.accountKey && saved!.membership) return removeMember(options.backendId, false);
     const anchor = saved!.pendingMembership ?? undefined;
     return removeMember(options.backendId, false, "registration", async () => {
-      const entries = await fetchMembership(-1), state = entries.length ? await verifyBridgeMembershipLog(entries, verifyBridgeSignature, anchor) : null;
+      const entries = await fetchMembership(-1);
+      let state: BridgeMembershipState | null = null;
+      try { if (entries.length) state = await verifyBridgeMembershipLog(entries, verifyBridgeSignature, anchor); }
+      catch (failure) { throw bridgeMembershipConflict(failure); }
       // Keys an earlier registration of this backend left in the log are not this registration's to remove.
       return state && sameMember(bridgeMember(state, options.backendId), self()) ? state : null;
     });
@@ -167,7 +177,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     return { url: new URL("/v1/log", saved.hubUrl).toString().replace(/^http/, "ws"), token: saved.token,
       accountKey: bridgeBytes(saved.accountKey, 32), backendId: options.backendId, label: saved.label,
       accountId: saved.accountId, signingPrivateKey: bridgeBytes(saved.signingPrivateKey, 32),
-      membership: createBridgeMembershipView({ hubUrl: saved.hubUrl, token: async () => api.token(), accountId: saved.accountId,
+      membership: replica = createBridgeMembershipView({ hubUrl: saved.hubUrl, token: async () => api.token(), accountId: saved.accountId,
         accountKeyCommitment: membership.state.accountKeyCommitment, initial: membership,
         extended: (next) => { void exclusive(() => adoptMembership(next)).catch(() => {}); } }) };
   }
@@ -352,6 +362,29 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       await bridgeHttp(hub!, "/api/auth/sign-out", token, {}).catch(() => {});
     }
   }
+  /** Judges a hub's refusal (401) by the account log, which a registration reads with its own credential even
+   * after revocation: only a verified log that removed this backend is "removed", the one verdict that forgets
+   * the account key. The whole log is verified from genesis to contain the pinned head, never just entries
+   * after a cached copy, so a forged history of any length is a conflict. "refused" means the hub refuses the
+   * log too (an expired or replaced credential, or a hostile hub): nothing proves a removal. Otherwise the
+   * result is why the log contradicts the refusal. A backend without a pinned key has nothing to protect. */
+  async function judgeRefusal(): Promise<"removed" | "refused" | { contested: string }> {
+    if (!saved?.accountKey || !saved.membership) return "removed";
+    let entries: BridgeMembershipEntry[];
+    try { entries = await fetchMembership(-1); }
+    catch (failure) {
+      if (failure instanceof BridgeHttpError && failure.status === 401) return "refused";
+      return { contested: failure instanceof Error ? failure.message : "The Bridge account log is unavailable" };
+    }
+    let log: BridgeMembershipState;
+    try { log = await verifyBridgeMembershipLog(entries, verifyBridgeSignature, saved.membership); }
+    catch (failure) { return { contested: bridgeMembershipConflict(failure).message }; }
+    // What the log proved is kept, the running replica included: a later, shorter history no longer
+    // contains the pinned head, and the replica applies nothing until it has this head's fences.
+    if (log.seq > saved.membership.seq) await pinMembership(log, entries);
+    return sameMember(bridgeMember(log, options.backendId), self())
+      ? { contested: "The Bridge hub refused this backend although the account log still lists it; sync waits until it is admitted again" } : "removed";
+  }
   async function refresh(afterCurrent = false): Promise<void> {
     if (closed) return;
     // A notification received during a stale HTTP snapshot must run once more
@@ -370,8 +403,18 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         if (generation !== epoch || closed) return;
         if (failure instanceof BridgeHttpError && /authorization_pending|slow_down/i.test(failure.code ?? failure.message)) { if (/slow_down/i.test(failure.code ?? failure.message)) interval += 5000; }
         else if (failure instanceof BridgeHttpError && failure.status === 401 && saved) {
-          state = "revoked"; saved.accountKey = null; saved.pendingAccountKey = null; saved.pendingMembership = null; saved.pendingToken = null; joinCodes = []; await vault.write(saved); await options.revoked(); activated = false;
-          error = "Backend access expired or was revoked; sign out and sign in again";
+          // A refusal the log contradicts is reported like any other failure: nothing is forgotten, the hub
+          // refuses records meanwhile, replication halts on a conflict by itself, and the next refresh retries.
+          const verdict = await judgeRefusal();
+          if (typeof verdict === "object") error = verdict.contested;
+          else {
+            // Either way this credential is finished; only a verified removal also forgets the account key.
+            // A kept key is judged again when the app restarts.
+            if (verdict === "removed") { saved.accountKey = null; saved.pendingAccountKey = null; saved.pendingMembership = null; saved.pendingToken = null; await vault.write(saved); }
+            state = "revoked"; joinCodes = []; await options.revoked(); activated = false;
+            error = verdict === "removed" ? "Backend access expired or was revoked; sign out and sign in again"
+              : "The Bridge hub refused this backend and its account log; the account key is kept. Sign out and sign in again";
+          }
         } else { error = failure instanceof Error ? failure.message : "Bridge sign-in failed"; if (!saved) state = "error"; }
       } finally { if (generation === epoch && !closed) { notify(); schedule(); } }
     });
@@ -528,9 +571,10 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         try {
           epoch++;
           if (!logout.skipRevoke && saved && state !== "revoked" && saved.expiresAt > Date.now()) {
-            // A member leaves the account through its own signed, fenced removal.
+            // A member leaves the account through its own signed, fenced removal. A hub that refuses this
+            // backend, or serves another history, cannot take that removal, so leaving stays local.
             try { await removeSelf(); }
-            catch (failure) { if (!(failure instanceof BridgeHttpError && failure.status === 401)) throw failure; }
+            catch (failure) { if (!(failure instanceof BridgeHttpError && failure.status === 401 || failure instanceof BridgeMembershipConflictError)) throw failure; }
           }
           await options.revoked(); await vault.remove(); await membershipFiles.remove();
           saved = null; membership = null; joinCodes = []; recoveryCode = null; activated = false;

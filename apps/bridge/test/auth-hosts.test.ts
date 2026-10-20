@@ -94,6 +94,8 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
       // A never approved B and refuses the forged history, so the trusted device shows no code for B.
       const trustedView = await a.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth);
       expect(trustedView.error).toMatch(/membership conflict/i); expect(trustedView.joinCodes).toEqual([]);
+      // The hub refuses A, but the log it still serves proves a conflict, not a removal: A keeps its key.
+      expect(trustedView.state).toBe("ready");
       const guess = "ABCD-EFGH-JKLM";
       expect(await b.client.invoke(CHANNELS.bridge.confirmAccountKey, guess)).toMatchObject({ success: false });
       expect(await b.client.invoke(CHANNELS.bridge.syncNow)).toMatchObject({ success: false });
@@ -103,7 +105,8 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
       } finally { phone.close(); }
       expect((await b.client.call(CHANNELS.bridge.getStatus)).enabled).toBe(false);
       expect(await b.client.call(CHANNELS.atlas.get, { accountId: "default", id: page.item.id })).toBeNull();
-      await a.client.call(CHANNELS.bridge.syncNow);
+      // The forged log omits A, so the hub refuses its sync too; A keeps its key and adopts nothing.
+      expect(await a.client.invoke(CHANNELS.bridge.syncNow)).toMatchObject({ success: false });
       expect(await a.client.call(CHANNELS.atlas.get, { accountId: "default", id: local.item.id })).toBeNull();
       const stored = await fixture.hub.inspect(trusted.accountId!);
       expect(stored.filter((row) => {
