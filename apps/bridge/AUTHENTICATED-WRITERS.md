@@ -40,6 +40,7 @@ changes. It cannot revoke plaintext or keys already copied by that backend.
    retained members can seal new recovery packages to its public encryption key.
    Journal transitions before network calls and resume the same proposal after
    interruption. Offline retained devices refresh membership before publishing.
+   Design draft: [Key epochs](KEY-EPOCHS.md).
 
 Stage 3 slice 1 authenticates membership: every writer key, the local writer's
 earlier keys included, comes from the signed, hash-chained log
