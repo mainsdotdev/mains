@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { fixtureAccountCommitment, fixtureAccountKey, fixtureEntryHash, fixtureGenesis, fixtureMember, fixtureMembershipEntry, fixturePublicKey, rememberFixtureHead } from "./record-signing.mjs";
 
 /** Starts the same Worker as wrangler dev, on an ephemeral real HTTP/WebSocket listener.
- * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, truncateRefreshOnce?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
+ * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, truncateRefreshOnce?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string }, purge?: { token: string } }} [settings] */
 export async function startLocalBridgeHub(settings = {}) {
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hub-"));
   const bundle = join(dir, "hub.mjs");
@@ -27,7 +27,7 @@ export async function startLocalBridgeHub(settings = {}) {
       }
       return response;
     } };
-  ` } } : { entryPoints: [fileURLToPath(new URL(settings.maintenance ? "../src/staging-reset-worker.ts" : "../src/index.ts", import.meta.url))] };
+  ` } } : { entryPoints: [fileURLToPath(new URL(settings.maintenance ? "../src/staging-reset-worker.ts" : settings.purge ? "../src/purge-worker.ts" : "../src/index.ts", import.meta.url))] };
   await build({ ...entry, bundle: true, format: "esm", platform: "browser", conditions: ["workerd"], target: "es2022", outfile: bundle, external: ["cloudflare:workers", "node:*"] });
   /** @type {Array<{to: string, url: string, kind: 'sign-in' | 'verify-email' | 'reset-password'}>} */
   const mail = [];
@@ -42,6 +42,7 @@ export async function startLocalBridgeHub(settings = {}) {
     resourcePersistencePath: join(dir, "storage"), bindings: { BRIDGE_DEV_AUTH: settings.auth ? "false" : "true", BRIDGE_DEV_SECRET: secret,
       ...(settings.environment ? { BRIDGE_ENV: settings.environment } : {}),
       ...(settings.maintenance ? { BRIDGE_RESET_ACCOUNT: settings.maintenance.accountId, BRIDGE_RESET_TOKEN: settings.maintenance.token, BRIDGE_AUTH_URL: "https://mains-bridge-staging.team-68e.workers.dev" } : {}),
+      ...(settings.purge ? { BRIDGE_PURGE_TOKEN: settings.purge.token } : {}),
       ...(settings.storageLimitBytes !== undefined ? { BRIDGE_STORAGE_LIMIT_BYTES: String(settings.storageLimitBytes) } : {}),
       ...(settings.writesPerMinute !== undefined ? { BRIDGE_WRITES_PER_MINUTE: String(settings.writesPerMinute) } : {}),
       ...(settings.github ? { GITHUB_CLIENT_ID: "local-public-github-id", GITHUB_CLIENT_SECRET: "local-only-github-secret" } : {}),
@@ -169,6 +170,9 @@ export async function startLocalBridgeHub(settings = {}) {
     async restart() { options.port = Number(address.port); await mf.dispose(); mf = new Miniflare(convertV4MiniflareOptions(options)); address = await mf.ready; },
     async suspend() { options.port = Number(address.port); await mf.dispose(); },
     async resume() { mf = new Miniflare(convertV4MiniflareOptions(options)); address = await mf.ready; },
+    /** The Durable Object id Cloudflare lists for this account's hub.
+     * @param {string} accountId */
+    async objectId(accountId) { return (await mf.getDurableObjectNamespace("ACCOUNT_HUB")).idFromName(accountId).toString(); },
     /** @param {string} accountId */
     async inspect(accountId) {
       const namespace = await mf.getDurableObjectNamespace("ACCOUNT_HUB");

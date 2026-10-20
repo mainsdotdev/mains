@@ -291,9 +291,23 @@ exist.
 migration table included) and applies all migrations again. Account ids come from
 D1 (`crypto.randomUUID()` per Better Auth user), so each later sign-in gets a new
 account id, and with it a new Durable Object and R2 prefix. The old objects and
-blobs are unreachable ciphertext; they are left in place and can be deleted later
-from the dashboard. Pre-reset backups cannot be restored into this code (their
-table set no longer matches) and expire under their normal retention.
+blobs are unreachable ciphertext left in place. Pre-reset backups cannot be
+restored into this code (their table set no longer matches) and expire under their
+normal retention.
+
+`npm run <env>:purge -- --confirm <worker name>` deletes those old account hubs.
+Cloudflare has no API that deletes a Durable Object, so the script lists the
+`AccountHub` objects holding storage through the Cloudflare API, deploys the
+operator-only overlay `src/purge-worker.ts` with a random one-run secret
+`BRIDGE_PURGE_TOKEN`, and has it clear each object's alarm and storage. The overlay
+skips every object whose account still has a D1 `user` row, so a purge never
+touches a live account. Afterwards the script redeploys the normal Worker (also
+after a failure), deletes the secret and waits for the maintenance route to answer
+404. A failed run is safe to repeat. Cloudflare keeps listing an emptied object as
+holding data until it shuts down (about ten minutes on staging); a later run
+deploys nothing once the listing is empty. The purge does not read R2: an orphaned
+account's prefix needs its account id, which the reset removed, so check the
+buckets with `wrangler r2 bucket info` and empty any leftovers from the dashboard.
 
 Order, staging first:
 
@@ -303,6 +317,7 @@ Order, staging first:
    ```sh
    npm run staging:reset -- --confirm mains-bridge-staging
    npm run staging:deploy
+   npm run staging:purge -- --confirm mains-bridge-staging
    ```
 3. Re-invite yourself (the beta grant was in D1):
    `npm run beta -- invite --email YOU --environment staging --remote`.
