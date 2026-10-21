@@ -161,6 +161,10 @@ export interface AtlasUploadFile {
   /** Base64 file contents, used for a Page's embedded local files. */
   data: string;
 }
+/** Use a bundled cover from `@mains/contracts/atlas-covers` as the Page's cover. */
+export interface AtlasSetCoverPreset extends AtlasIdentity {
+  preset: string;
+}
 export interface AtlasUpdateItem extends AtlasIdentity {
   title?: string;
   collectionId?: string | null;

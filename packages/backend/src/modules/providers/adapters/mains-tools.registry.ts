@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { z } from "zod";
-import { handleAtlasReadPage, handleAtlasCreatePage, handleAtlasUpdatePage } from "./atlas-tools";
+import { handleAtlasReadPage, handleAtlasCreatePage, handleAtlasUpdatePage, handleAtlasListCovers } from "./atlas-tools";
 import type { Tool as CopilotTool } from "@github/copilot-sdk";
 import { PROVIDER_IDS, type ProviderId } from "@mains/contracts/provider-ids";
 import type { JsonValue } from "./codex-app-server-protocol/generated/serde_json/JsonValue";
@@ -36,7 +36,7 @@ import {
   type MainsToolContext,
 } from "./mains-tools.core";
 import {
-  AtlasReadPageSchema, AtlasCreatePageSchema, AtlasUpdatePageSchema,
+  AtlasReadPageSchema, AtlasCreatePageSchema, AtlasUpdatePageSchema, AtlasListCoversSchema,
   SaveReviewSchema,
   SaveFindingSchema,
   SaveFindingsSchema,
@@ -95,14 +95,20 @@ export const MAINS_TOOLS: MainsToolDef[] = [
   },
   {
     name: "AtlasCreatePage",
-    description: "Create a permanent Atlas Page in the current account and project. Use for user-requested notes, knowledge pages or checklists. Returns the Page ID, version and pageHref; Pages survive conversation deletion. Link to the Page using pageHref as the Markdown destination; never prepend a localhost or web origin.",
+    description: "Create a permanent Atlas Page in the current account and project. Use for user-requested notes, knowledge pages or checklists. Optionally set a single-emoji icon and a coverPreset (an id from AtlasListCovers) that fit the topic. Returns the Page ID, version and pageHref; Pages survive conversation deletion. Link to the Page using pageHref as the Markdown destination; never prepend a localhost or web origin.",
     schema: AtlasCreatePageSchema, handler: handleAtlasCreatePage,
     providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude], modes: ["work"],
   },
   {
     name: "AtlasUpdatePage",
-    description: "Update an Atlas Page after AtlasReadPage. Preserve existing block formatting, IDs and atlas-file:// references. Supply expectedVersion; stale updates fail without overwriting user changes. Creates a Page revision attributed to this conversation. Link to the Page using the returned pageHref as the Markdown destination; never prepend a localhost or web origin.",
+    description: "Update an Atlas Page after AtlasReadPage. Preserve existing block formatting, IDs and atlas-file:// references. Supply expectedVersion; stale updates fail without overwriting user changes. Creates a Page revision attributed to this conversation. To change only the icon or cover (null removes either), supply icon and/or coverPreset without content; that creates no revision. Link to the Page using the returned pageHref as the Markdown destination; never prepend a localhost or web origin.",
     schema: AtlasUpdatePageSchema, handler: handleAtlasUpdatePage,
+    providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude], modes: ["work"],
+  },
+  {
+    name: "AtlasListCovers",
+    description: "List the bundled Atlas Page covers as `id: description` lines. Call it before setting coverPreset on AtlasCreatePage or AtlasUpdatePage, then pick the cover whose mood fits the Page's topic.",
+    schema: AtlasListCoversSchema, handler: handleAtlasListCovers,
     providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude], modes: ["work"],
   },
   ...[

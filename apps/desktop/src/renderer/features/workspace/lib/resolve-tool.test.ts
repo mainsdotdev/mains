@@ -18,6 +18,7 @@ describe("resolveTool — Atlas Page tools", () => {
     ["AtlasReadPage", "Read Atlas page", "atlasreadpage"],
     ["AtlasUpdatePage", "Updated Atlas page", "atlasupdatepage"],
     ["AtlasCreatePage", "Created Atlas page", "atlascreatepage"],
+    ["AtlasListCovers", "Listed Atlas covers", "atlaslistcovers"],
   ])("resolves %s identically for dynamic tools and MCP", (name, displayName, groupKey) => {
     for (const wireName of [name, `mcp__mains__${name}`, `mcp__mains__${name.toLowerCase()}`]) {
       expect(resolveTool(`${wireName}: pageId: page-1`)).toMatchObject({

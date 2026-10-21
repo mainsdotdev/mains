@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedFile, AtlasIdentity,
   AtlasItem, AtlasLibraryEntry, AtlasLibraryOptions, AtlasLibraryPage, AtlasListItem, AtlasListOptions, AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem,
-  AtlasUploadFile, AtlasResolveConflict } from "@mains/contracts/atlas";
+  AtlasUploadFile, AtlasResolveConflict, AtlasMetadataPatch } from "@mains/contracts/atlas";
 import { CHANNELS } from "@mains/contracts/channels";
 import { emit } from "../../ipc-kit/event-bus";
 import { ATLAS_LIBRARY_PAGE_SIZE } from "@mains/contracts/atlas";
@@ -14,7 +14,14 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { atlasRepo, type AtlasRecord, type RevisionRecord } from "./atlas.repo";
 import { pageContent } from "./atlas.blocks";
 import { metadataPatch, readMetadata } from "./atlas.metadata";
-import { atlasRoot, fileHash, imageContentHash, inspectSource, readSource, removeFiles, safeName, sourceKey, storagePath, writeFile } from "./atlas.storage";
+import { ATLAS_COVER_SOURCE_PREFIX, coverPreset, isCoverId } from "@mains/contracts/atlas-covers";
+import { readCoverPreset } from "./atlas.covers";
+import { atlasRoot, fileHash, imageContentHash, inspectSource, readSource, removeFiles, restoreFile, safeName, sourceKey, storagePath, writeFile } from "./atlas.storage";
+
+interface PagePresentation {
+  metadata?: AtlasMetadataPatch | null;
+  coverPreset?: string | null;
+}
 
 const pendingSaves = new Map<string, Promise<AtlasItem>>();
 const IMAGE_MIMES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
@@ -190,6 +197,36 @@ function once(key: string, action: () => Promise<AtlasItem>) {
   return promise;
 }
 
+/** Finish fallible cover preparation before writing Page content or presentation. */
+async function prepareMetadata(accountId: string, input: PagePresentation) {
+  let metadata = input.metadata === undefined ? undefined : metadataPatch(input.metadata);
+  if (input.coverPreset !== undefined) {
+    if (input.coverPreset !== null && !isCoverId(input.coverPreset))
+      throw new Error(`Unknown cover "${input.coverPreset}". Call AtlasListCovers for the available ids.`);
+    let coverFileId: string | null = null;
+    if (input.coverPreset !== null) {
+      const preset = input.coverPreset;
+      const key = `${ATLAS_COVER_SOURCE_PREFIX}${preset}`;
+      const cover = await once(`${accountId}:${key}`, async () => {
+        const bytes = await readCoverPreset(preset);
+        const previous = atlasRepo.bySource(accountId, key);
+        if (previous?.storageKey && !await restoreFile(previous.storageKey, bytes, previous.contentHash))
+          // An older app may have shipped different bytes for this preset. Keep its immutable identity.
+          await bridgeService.resolveFile("atlas_items", previous.id, "storage_key");
+        return store(accountId, key, coverPreset(preset)!.file, bytes, null, null);
+      });
+      coverFileId = cover.id;
+    }
+    metadata = { ...metadata, coverFileId };
+  }
+  if (metadata?.coverFileId) {
+    const cover = owned({ id: metadata.coverFileId, accountId });
+    if (cover.kind !== "image" || !cover.storageKey || cover.trashedAt) throw new Error("Page cover image is unavailable");
+    await requirePageFiles([cover.id], accountId);
+  }
+  return metadata;
+}
+
 function savedEntry(item: AtlasListItem): AtlasLibraryEntry {
   return { key: item.id, kind: item.kind, title: item.title, date: item.updatedAt,
     collectionId: item.collectionId, path: item.path, contentHash: item.contentHash, saved: item };
@@ -208,6 +245,8 @@ async function* savedLibraryEntries(options: AtlasLibraryOptions, query: string)
       kind: options.type === "all" ? undefined : options.type, collectionId: options.collectionId,
       trashed: false, ...(options.scope === "favorites" ? { isFavorite: true } : {}) });
     for (const item of items) {
+      // Bundled cover images are presentation, not library content.
+      if (item.sourceKey?.startsWith(ATLAS_COVER_SOURCE_PREFIX)) continue;
       const entry = savedEntry(item);
       if (matchesLibrary(entry, options, query)) yield entry;
     }
@@ -381,20 +420,21 @@ export const atlasService = {
     if (!row) throw new Error("Page revision not found");
     return revision(row);
   },
-  async createPage(input: AtlasCreatePage, actor: "user" | "agent" = "user", sourceRunId: string | null = null) {
+  async createPage(input: AtlasCreatePage & PagePresentation, actor: "user" | "agent" = "user", sourceRunId: string | null = null) {
     const accountId = required(input?.accountId, "Account");
     const name = title(input?.title);
     const collectionId = await collection(input.collectionId, accountId);
     const content = await pageContent(input);
     const fileIds = await requirePageFiles(content.fileIds, accountId);
+    const metadata = await prepareMetadata(accountId, input);
     const id = randomUUID();
     const item = { id, accountId, kind: "page" as const, title: name, collectionId, version: 1, sourceRunId };
     atlasRepo.commitPage(item, { id: randomUUID(), itemId: id, title: name, version: 1,
-      blocksJson: JSON.stringify(content.blocks), markdown: content.markdown, actor, sourceRunId }, 0, fileIds, true);
+      blocksJson: JSON.stringify(content.blocks), markdown: content.markdown, actor, sourceRunId }, 0, fileIds, true, metadata);
     emit(CHANNELS.atlas.changed, {});
     return pageFor(owned({ id, accountId }));
   },
-  async savePage(input: AtlasSavePage, actor: "user" | "agent" = "user", sourceRunId: string | null = null) {
+  async savePage(input: AtlasSavePage & PagePresentation, actor: "user" | "agent" = "user", sourceRunId: string | null = null) {
     const item = owned(input);
     if (item.kind !== "page" || item.trashedAt) throw new Error("Page is in Trash or unavailable");
     if (!Number.isInteger(input.expectedVersion) || input.expectedVersion !== item.version)
@@ -403,14 +443,19 @@ export const atlasService = {
     const name = title(input.title);
     const content = await pageContent(input);
     const fileIds = await requirePageFiles(content.fileIds, item.accountId);
+    const metadata = await prepareMetadata(item.accountId, input);
     const latest = owned(input);
     if (latest.version !== input.expectedVersion || latest.trashedAt)
       throw new Error("This page changed elsewhere. Reload the latest version before saving.");
     const current = latest.currentRevisionId ? atlasRepo.revisionById(item.id, latest.currentRevisionId) : null;
-    if (current?.blocksJson === JSON.stringify(content.blocks) && name === latest.title) return pageFor(latest);
-    atlasRepo.commitPage({ ...item, title: name }, { id: randomUUID(), itemId: item.id, title: name,
-      version: item.version + 1, blocksJson: JSON.stringify(content.blocks), markdown: content.markdown,
-      actor, sourceRunId }, input.expectedVersion, fileIds);
+    if (current?.blocksJson === JSON.stringify(content.blocks) && name === latest.title) {
+      if (metadata === undefined) return pageFor(latest);
+      atlasRepo.update(item.id, item.accountId, {}, metadata);
+    } else {
+      atlasRepo.commitPage({ ...item, title: name }, { id: randomUUID(), itemId: item.id, title: name,
+        version: item.version + 1, blocksJson: JSON.stringify(content.blocks), markdown: content.markdown,
+        actor, sourceRunId }, input.expectedVersion, fileIds, false, metadata);
+    }
     emit(CHANNELS.atlas.changed, {});
     return pageFor(owned(input));
   },
@@ -476,20 +521,13 @@ export const atlasService = {
     const key = `page:${page.id}:${fileHash(bytes)}:${name}`;
     return once(`${page.accountId}:${key}`, () => store(page.accountId, key, name, bytes, null, page.collectionId));
   },
-  async update(input: AtlasUpdateItem) {
+  async update(input: AtlasUpdateItem & PagePresentation) {
     const item = owned(input);
     if (item.kind === "page" && input.title !== undefined) throw new Error("Rename a Page through its editor");
     const fields: Partial<AtlasRecord> = {};
-    const metadata = input.metadata === undefined ? undefined : metadataPatch(input.metadata);
-    if (metadata !== undefined) {
-      if (item.kind !== "page" || item.trashedAt) throw new Error("Page unavailable");
-      if (metadata?.coverFileId) {
-        const cover = owned({ id: metadata.coverFileId, accountId: item.accountId });
-        if (cover.kind !== "image" || !cover.storageKey || cover.trashedAt)
-          throw new Error("Page cover image is unavailable");
-        await requirePageFiles([cover.id], item.accountId);
-      }
-    }
+    if ((input.metadata !== undefined || input.coverPreset !== undefined) && (item.kind !== "page" || item.trashedAt))
+      throw new Error("Page unavailable");
+    const metadata = await prepareMetadata(item.accountId, input);
     if (input.title !== undefined) fields.title = title(input.title);
     if (input.collectionId !== undefined) fields.collectionId = await collection(input.collectionId, item.accountId);
     if (input.isFavorite !== undefined) {
@@ -503,6 +541,13 @@ export const atlasService = {
     atlasRepo.update(item.id, item.accountId, fields, metadata);
     emit(CHANNELS.atlas.changed, {});
     return format(owned(input));
+  },
+  /** Use a bundled cover: its image is saved once per account and shared by every Page that picks it. */
+  async setCoverPreset(input: AtlasIdentity & { preset: string }) {
+    const page = owned(input);
+    if (page.kind !== "page" || page.trashedAt) throw new Error("Page unavailable");
+    if (!isCoverId(input.preset)) throw new Error(`Unknown cover "${input.preset}"`);
+    return this.update({ accountId: page.accountId, id: page.id, coverPreset: input.preset });
   },
   async remove(input: AtlasIdentity) {
     const item = owned(input);

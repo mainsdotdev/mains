@@ -1,6 +1,6 @@
 import { CHANNELS } from "@mains/contracts/channels";
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile,
-  AtlasSavePage, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
+  AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import { handle } from "../../ipc-kit/handle";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { atlasService } from "./atlas.service";
@@ -23,6 +23,7 @@ export function registerAtlasIpc() {
   ipcMain.handle(CHANNELS.atlas.saveFile, handle((input: AtlasSaveFile) => atlasService.saveFile(input)));
   ipcMain.handle(CHANNELS.atlas.uploadFile, handle((input: AtlasUploadFile) => atlasService.uploadFile(input)));
   ipcMain.handle(CHANNELS.atlas.update, handle((input: AtlasUpdateItem) => atlasService.update(input)));
+  ipcMain.handle(CHANNELS.atlas.setCoverPreset, handle((input: AtlasSetCoverPreset) => atlasService.setCoverPreset(input)));
   ipcMain.handle(CHANNELS.atlas.remove, handle((input: AtlasIdentity) => atlasService.remove(input)));
 }
 export function unregisterAtlasIpc() {

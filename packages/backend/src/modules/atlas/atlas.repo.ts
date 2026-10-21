@@ -109,7 +109,7 @@ export const atlasRepo = {
       .orderBy(desc(r.createdAt), desc(r.id)).all();
   },
   commitPage(item: typeof atlasItems.$inferInsert, revision: typeof atlasPageRevisions.$inferInsert,
-    expectedVersion: number, fileIds: string[], create = false) {
+    expectedVersion: number, fileIds: string[], create = false, metadata?: AtlasMetadataPatch | null) {
     const db = getDb();
     db.transaction(() => {
       const current = create ? null : atlasRepo.find(item.id, item.accountId);
@@ -138,6 +138,8 @@ export const atlasRepo = {
           if (!file || file.kind === "page") throw new Error("Embedded Atlas file unavailable");
           return file.id;
         }))].map((fileId) => ({ revisionId: revision.id!, fileId }))).run();
+      // A failed presentation write must roll back the revision and version too.
+      if (metadata !== undefined) atlasRepo.update(item.id, item.accountId, {}, metadata);
     });
   },
   referenced(id: string) {

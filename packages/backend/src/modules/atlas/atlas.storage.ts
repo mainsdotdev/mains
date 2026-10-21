@@ -108,6 +108,31 @@ export async function writeFile(id: string, name: string, bytes: Buffer) {
     return `${id}/${name}`;
   } finally { await fs.rm(temporary, { recursive: true, force: true }); }
 }
+/** Restore an immutable synced file from matching bundled bytes, without overwriting local files. */
+export async function restoreFile(key: string, bytes: Buffer, expectedHash: string | null) {
+  const target = storagePath(key);
+  try { await inspectSource(target, [atlasRoot()]); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  if (fileHash(bytes) !== expectedHash) return false;
+  let directory = getBackendRuntime().getPath("userData");
+  for (const part of ["atlas", "files", key.split("/")[0]]) {
+    directory = path.join(directory, part);
+    try { await fs.mkdir(directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    const stats = await fs.lstat(directory);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("Invalid Atlas storage directory");
+  }
+  const temporary = path.join(directory, `.pending-${randomUUID()}`);
+  try {
+    const handle = await fs.open(temporary, "wx", 0o444);
+    try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+    // Publishing a complete file must not replace one that arrived concurrently.
+    try { await fs.link(temporary, target); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    await inspectSource(target, [atlasRoot()]);
+    return true;
+  } finally { await fs.rm(temporary, { force: true }); }
+}
 export async function removeFiles(id: string) {
   // No folder of ours can have any other id, so there is nothing to remove.
   const directory = itemDirectory(id);

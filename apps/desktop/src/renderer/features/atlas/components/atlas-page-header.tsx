@@ -1,9 +1,15 @@
 import { useRef, useState, type PointerEvent, type ReactNode } from "react";
 import type { AtlasItem, AtlasMetadataPatch } from "@mains/contracts/atlas";
 import {
+  ATLAS_COVER_GROUPS,
+  ATLAS_COVER_PRESETS,
+  ATLAS_COVER_SOURCE_PREFIX,
+} from "@mains/contracts/atlas-covers";
+import {
   Button,
   Input,
   Modal,
+  ModalHeader,
   Muted,
   Slider,
   Text,
@@ -26,12 +32,14 @@ import {
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import {
   useListAtlasQuery,
+  useSetAtlasCoverPresetMutation,
   useUpdateAtlasItemMutation,
   useUploadAtlasFileMutation,
 } from "@/lib/redux/api/atlasApi";
 import { setAtlasCoverPosition } from "@/lib/redux/slices/atlasSlice";
 import { useAtlasOwnerKey } from "../hooks/use-atlas-tabs";
 import { atlasError } from "../hooks/use-save-to-atlas";
+import { coverThumbnail, coverTitle } from "../lib/cover-thumbnails";
 import { pageFileData } from "../lib/page-upload";
 import { AtlasPageIcon } from "./atlas-page-icon";
 
@@ -50,10 +58,11 @@ function CoverChoice({
     <Button
       disabled={disabled}
       onClick={onSelect}
+      title={item.title}
       aria-label={`Use ${item.title} as cover`}
-      className="group overflow-hidden rounded-2xl border border-primary-200 text-left dark:border-primary-800 focus-visible:ring-2 "
+      className="overflow-hidden rounded-xl border border-primary-200 dark:border-primary-800 focus-visible:ring-2"
     >
-      <div className="aspect-video bg-primary-100 dark:bg-primary-900">
+      <div className="aspect-[2/1] bg-primary-100 dark:bg-primary-900">
         {url && (
           <img
             src={url}
@@ -64,10 +73,62 @@ function CoverChoice({
           />
         )}
       </div>
-      <Text as="span" size="xs" className="block truncate px-3 py-2">
-        {item.title}
-      </Text>
     </Button>
+  );
+}
+
+function CoverPresetChoice({
+  id,
+  description,
+  disabled,
+  onSelect,
+}: {
+  id: string;
+  description: string;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  const title = coverTitle(id);
+  const url = coverThumbnail(id);
+  return (
+    <Button
+      disabled={disabled}
+      onClick={onSelect}
+      title={`${title}: ${description}`}
+      aria-label={`Use ${title} as cover`}
+      className="overflow-hidden rounded-xl border border-primary-200 dark:border-primary-800 focus-visible:ring-2"
+    >
+      <div className="aspect-[2/1] bg-primary-100 dark:bg-primary-900">
+        {url && (
+          <img
+            src={url}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="size-full object-cover"
+          />
+        )}
+      </div>
+    </Button>
+  );
+}
+
+/** Saved images shown before "Show more", and how many each click reveals. */
+const IMAGES_PAGE_SIZE = 12;
+
+function CoverSectionTitle({ id, children }: { id: string; children: string }) {
+  return (
+    <Text
+      as="h3"
+      id={id}
+      variant="muted"
+      tone="faint"
+      size="xs"
+      weight="medium"
+      className="mb-2"
+    >
+      {children}
+    </Text>
   );
 }
 
@@ -87,12 +148,14 @@ export function AtlasPageHeader({
   const images = useListAtlasQuery({ accountId });
   const [update, updating] = useUpdateAtlasItemMutation();
   const [upload, uploading] = useUploadAtlasFileMutation();
+  const [setPreset, settingPreset] = useSetAtlasCoverPresetMutation();
   const [readingFile, setReadingFile] = useState(false);
   const disabled =
     !!item.trashedAt ||
     readingFile ||
     updating.isLoading ||
-    uploading.isLoading;
+    uploading.isLoading ||
+    settingPreset.isLoading;
   const coverId = metadata?.coverFileId;
   const cover = images.data?.find((image) => image.id === coverId);
   const coverPath = useAtlasFilePath(cover?.accountId, cover?.id, cover?.path);
@@ -112,6 +175,15 @@ export function AtlasPageHeader({
     null,
   );
   const [choosingCover, setChoosingCover] = useState(false);
+  const [visibleImages, setVisibleImages] = useState(IMAGES_PAGE_SIZE);
+  // Bundled gallery covers are saved to Atlas as images but are not the user's own files.
+  const savedImages = (images.data ?? []).filter(
+    (image) =>
+      image.kind === "image" &&
+      !image.trashedAt &&
+      image.path &&
+      !image.sourceKey?.startsWith(ATLAS_COVER_SOURCE_PREFIX),
+  );
   const uploadRef = useRef<HTMLInputElement>(null);
   const iconParts = splitStoredIcon(metadata?.icon);
   const [iconOpen, setIconOpen] = useState(false);
@@ -131,6 +203,13 @@ export function AtlasPageHeader({
   };
   const selectCover = async (coverFileId: string) => {
     await saveMetadata({ coverFileId });
+    finishCover(coverFileId);
+  };
+  const selectPreset = async (preset: string) => {
+    const saved = await setPreset({ accountId, id, preset }).unwrap();
+    if (saved.metadata?.coverFileId) finishCover(saved.metadata.coverFileId);
+  };
+  const finishCover = (coverFileId: string) => {
     // A new cover starts centered; framing is stored only on this device.
     if (coverFileId !== coverId)
       dispatch(
@@ -142,7 +221,11 @@ export function AtlasPageHeader({
         }),
       );
     setDraftPosition(null);
+    closeCoverPicker();
+  };
+  const closeCoverPicker = () => {
     setChoosingCover(false);
+    setVisibleImages(IMAGES_PAGE_SIZE);
   };
   const startDrag = (event: PointerEvent<HTMLDivElement>) => {
     const image = imageRef.current;
@@ -450,57 +533,86 @@ export function AtlasPageHeader({
       />
       <Modal
         isOpen={choosingCover}
-        onClose={() => setChoosingCover(false)}
+        onClose={closeCoverPicker}
         aria-label="Choose page cover"
-        className="max-w-2xl p-5 rounded-3xl"
+        className="max-w-2xl rounded-3xl"
       >
-        <div className="flex items-center justify-between gap-4">
+        <ModalHeader onClose={closeCoverPicker}>
           <Text weight="medium">Page cover</Text>
           <Button
             variant="primary"
+            className="ml-auto"
             disabled={disabled}
             onClick={() => uploadRef.current?.click()}
           >
             {readingFile || uploading.isLoading ? "Uploading…" : "Upload image"}
           </Button>
-        </div>
-        <Muted className="mt-4">
-          Upload an image or choose one saved in Atlas.
-        </Muted>
-        {images.error != null && (
-          <Text role="alert" className="mt-4">
-            {atlasError(images.error)}
-          </Text>
-        )}
-        <div className="mt-5 grid max-h-[55vh] grid-cols-2 gap-3 overflow-y-auto sm:grid-cols-3">
-          {images.data
-            ?.filter(
-              (image) =>
-                image.kind === "image" && !image.trashedAt && image.path,
-            )
-            .map((image) => (
-              <CoverChoice
-                key={image.id}
-                item={image}
-                disabled={disabled}
-                onSelect={() => {
-                  void selectCover(image.id).catch((error: unknown) =>
-                    toast.error(atlasError(error)),
-                  );
-                }}
-              />
-            ))}
-        </div>
-        {images.isLoading && <Muted className="mt-4">Loading images…</Muted>}
-        {!images.isLoading &&
-          !images.error &&
-          !images.data?.some(
-            (image) => image.kind === "image" && !image.trashedAt && image.path,
-          ) && (
-            <Text variant="muted" tone="faint" size="xs" className="mt-4">
-              No saved images yet. Upload your first cover.
-            </Text>
+        </ModalHeader>
+        <div className="max-h-[65vh] space-y-6 overflow-y-auto px-6 pb-6">
+          {images.error != null && (
+            <Text role="alert">{atlasError(images.error)}</Text>
           )}
+          {images.isLoading && <Muted>Loading images…</Muted>}
+          {savedImages.length > 0 && (
+            <section aria-labelledby="atlas-cover-images">
+              <CoverSectionTitle id="atlas-cover-images">
+                Your images
+              </CoverSectionTitle>
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                {savedImages.slice(0, visibleImages).map((image) => (
+                  <CoverChoice
+                    key={image.id}
+                    item={image}
+                    disabled={disabled}
+                    onSelect={() => {
+                      void selectCover(image.id).catch((error: unknown) =>
+                        toast.error(atlasError(error)),
+                      );
+                    }}
+                  />
+                ))}
+              </div>
+              {savedImages.length > visibleImages && (
+                <Button
+                  variant="ghost"
+                  className="mt-3"
+                  onClick={() =>
+                    setVisibleImages((count) => count + IMAGES_PAGE_SIZE)
+                  }
+                >
+                  Show more
+                </Button>
+              )}
+            </section>
+          )}
+          {ATLAS_COVER_GROUPS.map((group) => (
+            <section
+              key={group.id}
+              aria-labelledby={`atlas-cover-${group.id}`}
+            >
+              <CoverSectionTitle id={`atlas-cover-${group.id}`}>
+                {group.title}
+              </CoverSectionTitle>
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                {ATLAS_COVER_PRESETS.filter(
+                  (cover) => cover.group === group.id,
+                ).map((cover) => (
+                  <CoverPresetChoice
+                    key={cover.id}
+                    id={cover.id}
+                    description={cover.description}
+                    disabled={disabled}
+                    onSelect={() => {
+                      void selectPreset(cover.id).catch((error: unknown) =>
+                        toast.error(atlasError(error)),
+                      );
+                    }}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       </Modal>
     </>
   );

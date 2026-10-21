@@ -20,11 +20,17 @@ const atlasContentFields = {
   blocksJson: z.string().max(2 * 1024 * 1024).optional().describe("Lossless BlockNote block array encoded as JSON; preserve unchanged IDs, properties and atlas-file:// references from AtlasReadPage"),
   markdown: z.string().max(2 * 1024 * 1024).optional().describe("Alternative Markdown input. Lossy for advanced formatting; prefer blocksJson when updating rich content. Supply exactly one content field."),
 };
+const atlasIconField = z.string().trim().min(1).max(32).nullable().optional()
+  .describe("Page icon as a single emoji such as \"📚\". On AtlasUpdatePage, null removes the icon. Leave it out to keep the current icon.");
+const atlasCoverField = z.string().trim().min(1).max(64).nullable().optional()
+  .describe("Page cover id from AtlasListCovers; call it first, ids cannot be guessed. Pick the cover whose mood fits the topic. On AtlasUpdatePage, null removes the cover. Leave it out to keep the current cover.");
+export const AtlasListCoversSchema = z.object({});
 export const AtlasReadPageSchema = z.object({ pageId: z.string().trim().min(1).max(100) });
-export const AtlasCreatePageSchema = z.object({ title: z.string().trim().min(1).max(240), ...atlasContentFields });
+export const AtlasCreatePageSchema = z.object({ title: z.string().trim().min(1).max(240), ...atlasContentFields,
+  icon: atlasIconField, coverPreset: atlasCoverField });
 export const AtlasUpdatePageSchema = z.object({ pageId: z.string().trim().min(1).max(100),
   expectedVersion: z.number().int().min(1).describe("Version returned by AtlasReadPage. A stale write is rejected; read again and reconcile."),
-  title: z.string().trim().min(1).max(240).optional(), ...atlasContentFields });
+  title: z.string().trim().min(1).max(240).optional(), ...atlasContentFields, icon: atlasIconField, coverPreset: atlasCoverField });
 
 const voiceRunId = z.string().trim().min(1).max(100).describe("Working chat ID returned by StartVoiceTask or ListVoiceTasks");
 export const StartVoiceTaskSchema = z.object({

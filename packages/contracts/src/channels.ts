@@ -127,6 +127,7 @@ export const CHANNELS = {
     saveFile: "atlas:saveFile",
     uploadFile: "atlas:uploadFile",
     update: "atlas:update",
+    setCoverPreset: "atlas:setCoverPreset",
     remove: "atlas:remove",
   },
   collections: {

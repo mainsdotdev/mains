@@ -41,6 +41,7 @@
     "codex:protocol:generate": "node scripts/generate-codex-app-server-protocol.mjs",
     "codex:protocol:smoke": "node scripts/smoke-codex-app-server-protocol.mjs",
     "icons:generate": "node scripts/generate-app-icons.cjs",
+    "atlas:cover-thumbnails": "node scripts/generate-atlas-cover-thumbnails.mjs",
     "licenses:generate": "node scripts/generate-third-party-notices.mjs",
     "icons:windows": "node scripts/generate-windows-icon.mjs",
     "smoke:package": "node scripts/smoke-desktop-package.mjs"

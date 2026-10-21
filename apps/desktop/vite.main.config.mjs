@@ -215,6 +215,15 @@ export default defineConfig(({ command }) => {
           console.log('✓ Migrations copied to build directory');
         }
       }
+    },
+    {
+      // Bundled Atlas Page covers; the backend reads them from next to the bundle.
+      name: 'copy-atlas-covers',
+      writeBundle() {
+        const srcDir = '../../packages/backend/assets/atlas-covers';
+        if (!existsSync(srcDir)) throw new Error(`Atlas cover images are missing: ${srcDir}`);
+        cpSync(srcDir, '.vite/build/atlas-covers', { recursive: true });
+      }
     }
   ],
 };

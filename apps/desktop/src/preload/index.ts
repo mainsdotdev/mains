@@ -1,5 +1,5 @@
 import type { BridgeSignInInput, BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
+import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
@@ -368,6 +368,7 @@ const api = {
     saveFile: (input: AtlasSaveFile) => ipcRenderer.invoke(CHANNELS.atlas.saveFile, input),
     uploadFile: (input: AtlasUploadFile) => ipcRenderer.invoke(CHANNELS.atlas.uploadFile, input),
     update: (input: AtlasUpdateItem) => ipcRenderer.invoke(CHANNELS.atlas.update, input),
+    setCoverPreset: (input: AtlasSetCoverPreset) => ipcRenderer.invoke(CHANNELS.atlas.setCoverPreset, input),
     remove: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.remove, options),
   },
   collections: {

@@ -1,6 +1,6 @@
 import { CHANNELS } from "@mains/contracts/channels";
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedPage, AtlasIdentity, AtlasItem, AtlasLibraryOptions, AtlasLibraryPage, AtlasListItem, AtlasListOptions,
-  AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
+  AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import { baseApi } from "./baseApi";
 import type { RootState } from "../index";
 import { closeAtlasPageTab } from "../slices/atlasSlice";
@@ -83,6 +83,10 @@ export const atlasApi = baseApi.injectEndpoints({
         } catch { /* Keep the tab open when moving to Trash fails. */ }
       },
     }),
+    setAtlasCoverPreset: builder.mutation<AtlasItem, AtlasSetCoverPreset>({
+      query: (input) => ({ handler: CHANNELS.atlas.setCoverPreset, args: [input] }),
+      invalidatesTags: (_r, e, { id }) => e ? [] : ["Atlas", { type: "AtlasPage", id }],
+    }),
     removeAtlasItem: builder.mutation<void, AtlasIdentity>({
       query: (input) => ({ handler: CHANNELS.atlas.remove, args: [input] }),
       invalidatesTags: (_r, e, { id }) => e ? [] : ["Atlas", { type: "AtlasPage", id }],
@@ -98,4 +102,4 @@ export const atlasApi = baseApi.injectEndpoints({
 });
 export const { useAtlasLibraryQuery, useListAtlasQuery, useAtlasGeneratedQuery, useAtlasPageQuery, useCreateAtlasPageMutation,
   useSaveAtlasPageMutation, useAtlasRevisionsQuery, useAtlasRevisionQuery, useResolveAtlasConflictMutation, useRestoreAtlasPageMutation, useSaveToAtlasMutation,
-  useUploadAtlasFileMutation, useUpdateAtlasItemMutation, useRemoveAtlasItemMutation } = atlasApi;
+  useUploadAtlasFileMutation, useUpdateAtlasItemMutation, useSetAtlasCoverPresetMutation, useRemoveAtlasItemMutation } = atlasApi;
