@@ -2,7 +2,7 @@ import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { readdir, readFile } from "node:fs/promises";
 import { expect, it } from "vitest";
-import { BRIDGE_MAIL_DAILY_LIMIT } from "../src/auth-mail";
+import { BRIDGE_MAIL_PER_ADDRESS_DAILY } from "../src/auth-mail";
 import { bridgeBetaInvite } from "../src/beta-admin";
 
 it("emails an invitation once through the private operations binding, never from public HTTP", async () => {
@@ -11,6 +11,8 @@ it("emails an invitation once through the private operations binding, never from
   const mf = new Miniflare(convertV4MiniflareOptions({ host: "127.0.0.1", port: 0, workers: [
     { name: "hub", modules: true, script: bundle.outputFiles[0].text, compatibilityDate: "2026-07-30", compatibilityFlags: ["nodejs_compat"],
       d1Databases: { AUTH_DB: "invite-auth" }, r2Buckets: { BLOBS: "invite-blobs" }, durableObjects: { ACCOUNT_HUB: { className: "AccountHub", useSQLite: true } },
+      // The hub's configured daily total; one address's own allowance is reached first.
+      bindings: { BRIDGE_MAIL_DAILY_LIMIT: "20" },
       serviceBindings: { AUTH_MAILER: async (request) => { mail.push(await request.json() as typeof mail[number]); return Response.json({ ok: true }); } } },
     { name: "operator", modules: true, compatibilityDate: "2026-07-30", serviceBindings: { OPS: { name: "hub", entrypoint: "BridgeOperations" } },
       script: `export default {async fetch(request,env){
@@ -38,20 +40,19 @@ it("emails an invitation once through the private operations binding, never from
     expect(mail).toMatchObject([{ to: "invited@example.test", kind: "beta-invite", subject: "You're invited to the Mains Bridge beta" }]);
     expect(await mailedAt("invited@example.test")).toBeGreaterThan(0);
     expect(await send("invited@example.test")).toEqual({ sent: false, reason: "already-sent" });
-    expect(await send("invited@example.test", true)).toEqual({ sent: true });
-    expect(await send("invited@example.test", true)).toEqual({ sent: true });
-    // The fourth email in an hour exceeds the address's allowance like any other email would.
+    for (let i = 1; i < BRIDGE_MAIL_PER_ADDRESS_DAILY; i++) expect(await send("invited@example.test", true)).toEqual({ sent: true });
+    // One more than an address may receive in a day is skipped like any other email would be.
     expect(await send("invited@example.test", true)).toEqual({ sent: false, reason: "skipped" });
-    expect(mail).toHaveLength(3);
+    expect(mail).toHaveLength(BRIDGE_MAIL_PER_ADDRESS_DAILY);
     await db.prepare("UPDATE bridge_beta_invites SET status='revoked' WHERE email='invited@example.test'").run();
     expect(await send("invited@example.test", true)).toEqual({ sent: false, reason: "not-invited" });
     for (const [email, resend] of [["not an email", false], [null, false], ["invited@example.test", "yes"]]) expect((await call(email, resend)).status).toBe(400);
 
     await invite("late@example.test");
-    await db.prepare("UPDATE bridge_limits SET count=? WHERE id LIKE 'mail:day:%'").bind(BRIDGE_MAIL_DAILY_LIMIT).run();
+    await db.prepare("UPDATE bridge_limits SET count=20 WHERE id LIKE 'mail:day:%'").run();
     expect(await send("late@example.test")).toEqual({ sent: false, reason: "daily-limit" });
     expect(await mailedAt("late@example.test")).toBeNull();
-    expect(mail).toHaveLength(3);
+    expect(mail).toHaveLength(BRIDGE_MAIL_PER_ADDRESS_DAILY);
     for (const path of ["/v1/beta/invite", "/__operations/invite", "/sendBetaInvite"]) expect((await hub.fetch(`https://local.test${path}`, { method: "POST" })).status).toBe(404);
   } finally { await mf.dispose(); }
 });

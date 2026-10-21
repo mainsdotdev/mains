@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
-import { BRIDGE_MAIL_DAILY_LIMIT, BRIDGE_MAIL_PER_ADDRESS_HOURLY } from "../src/auth-mail";
+import { BRIDGE_MAIL_DAILY_LIMIT, BRIDGE_MAIL_PER_ADDRESS_DAILY } from "../src/auth-mail";
 import { bridgeBetaInvite, bridgeBetaRevoke } from "../src/beta-admin";
 import { startLocalBridgeHub } from "./local-hub.mjs";
 
 type Hub = Awaited<ReturnType<typeof startLocalBridgeHub>>;
 let ip = 0;
 const address = () => `${randomUUID()}@example.test`;
-async function guarded(test: (hub: Hub) => Promise<void>) {
-  const hub = await startLocalBridgeHub({ auth: true, mailGuard: true });
+async function guarded(test: (hub: Hub) => Promise<void>, mailDailyLimit?: number) {
+  const hub = await startLocalBridgeHub({ auth: true, mailGuard: true, mailDailyLimit });
   try { await test(hub); } finally { await hub.dispose(); }
 }
 /** The sign-in link is sent before its response, so the mail list is final when this returns. */
@@ -26,21 +26,21 @@ it("emails any address, invited or not: Bridge access is gated after sign-in", a
   expect([stranger, revoked].map((email) => sent(hub, email))).toEqual([1, 1]);
 }));
 
-it("sends an address at most three emails an hour, without a different answer", async () => guarded(async (hub) => {
-  const invited = address(); await sql(hub, bridgeBetaInvite(invited));
-  for (let i = 0; i <= BRIDGE_MAIL_PER_ADDRESS_HOURLY; i++) expect((await link(hub, invited)).status).toBe(200);
-  expect(sent(hub, invited)).toBe(BRIDGE_MAIL_PER_ADDRESS_HOURLY);
-}));
+// The hub's daily total is raised here so that only the address's own allowance applies.
+it("sends an address at most ten emails a day, without a different answer", async () => guarded(async (hub) => {
+  const target = address();
+  for (let i = 0; i <= BRIDGE_MAIL_PER_ADDRESS_DAILY; i++) expect((await link(hub, target)).status).toBe(200);
+  expect(sent(hub, target)).toBe(BRIDGE_MAIL_PER_ADDRESS_DAILY);
+}, 100));
 
-it("stops all email after the daily limit and says so to every address", async () => guarded(async (hub) => {
-  const invited = Array.from({ length: BRIDGE_MAIL_DAILY_LIMIT + 1 }, address);
-  for (const email of invited) await sql(hub, bridgeBetaInvite(email));
-  for (const email of invited.slice(0, BRIDGE_MAIL_DAILY_LIMIT)) expect((await link(hub, email)).status).toBe(200);
-  expect(hub.mail).toHaveLength(BRIDGE_MAIL_DAILY_LIMIT);
-  for (const email of [invited.at(-1)!, address()]) {
+it.each([undefined, 3])("stops all email after the daily limit (configured: %s) and says so to every address", async (configured) => guarded(async (hub) => {
+  const limit = configured ?? BRIDGE_MAIL_DAILY_LIMIT, senders = Array.from({ length: limit + 1 }, address);
+  for (const email of senders.slice(0, limit)) expect((await link(hub, email)).status).toBe(200);
+  expect(hub.mail).toHaveLength(limit);
+  for (const email of [senders.at(-1)!, address()]) {
     const refused = await link(hub, email);
     expect(refused.status).toBe(429);
     expect(await refused.json()).toMatchObject({ message: "Email is paused for today. Continue with GitHub or try again tomorrow." });
   }
-  expect(hub.mail).toHaveLength(BRIDGE_MAIL_DAILY_LIMIT);
-}));
+  expect(hub.mail).toHaveLength(limit);
+}, configured));

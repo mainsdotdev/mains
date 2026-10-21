@@ -111,15 +111,19 @@ export function BridgeSignInSection({
             />
           </div>
           <div className="space-y-3">
-            <Button
-              variant="ghost"
-              disabled={busy}
-              aria-expanded={advanced}
-              onClick={() => setAdvanced(!advanced)}
-              className="-ml-3"
-            >
-              Advanced
-            </Button>
+            {/* Released builds sign in to their configured hub; choosing another stays a development tool.
+                A build without one still shows the field, since it is the only way to sign in. */}
+            {import.meta.env.DEV && (
+              <Button
+                variant="ghost"
+                disabled={busy}
+                aria-expanded={advanced}
+                onClick={() => setAdvanced(!advanced)}
+                className="-ml-3"
+              >
+                Advanced
+              </Button>
+            )}
             {advanced && (
               <Text as="label" className="block space-y-2">
                 <span className="block">Bridge hub URL</span>

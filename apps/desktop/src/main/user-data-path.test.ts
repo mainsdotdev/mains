@@ -21,7 +21,7 @@ describe("desktop profile isolation", () => {
   });
 
   it("gives development its own default profile, apart from the installed app's", () => {
-    expect(desktopUserDataPath({ ...defaults, isPackaged: false })).toBe(path.join(appData, "Mains-dev"));
+    expect(desktopUserDataPath({ ...defaults, isPackaged: false })).toBe(path.join(appData, "mains-dev"));
   });
 
   it("preserves development profile selection and explicit command-line precedence", () => {

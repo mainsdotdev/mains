@@ -386,7 +386,7 @@ binding; Workers `waitUntil` keeps background account emails alive. Local tests
 replace only delivery and consume real Better Auth links. Password registration
 is disabled when no mail service is configured; no migration or existing account
 reset is needed to enable it. During the closed beta, every account email is
-limited to 3 an hour per address and 10 a day per hub
+limited to 10 a day per address and a per-hub daily total (production 90, staging 10)
 ([Closed beta access](CLOSED-BETA.md#account-email)). Each email is HTML in the
 sign-in pages' look (`src/mail-template.ts`): the Mains logo, attached inline (CID)
 rather than loaded, above the card, and the site's links below it. The same content

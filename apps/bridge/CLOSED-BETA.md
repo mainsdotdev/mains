@@ -41,11 +41,13 @@ passes one policy in `src/auth-mail.ts`:
 - Any address can sign up and sign in by email; Bridge access is gated after
   sign-in, by invitation. A sign-up appears in the `user` table, where the operator
   picks whom to invite.
-- An address receives at most 3 emails an hour; further requests are skipped
+- An address receives at most 10 emails a day; further requests are skipped
   silently.
-- Each hub sends at most 10 emails a UTC day. Past that, every request, for any
+- Each hub sends at most `BRIDGE_MAIL_DAILY_LIMIT` emails a UTC day (production 90,
+  staging 10, adding up to Resend's 100; 10 when unset). Past that, every request, for any
   address, is refused with "Email is paused for today", and the sign-in-link form
-  shows it. GitHub sign-in needs no email and keeps working.
+  shows it, as it does when Resend itself refuses for its quota. GitHub sign-in
+  needs no email and keeps working.
 - Verification mail goes out at sign-up and again when an unverified address tries
   its password. The limits above bound how often.
 

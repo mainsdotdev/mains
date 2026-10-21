@@ -9,14 +9,14 @@ const githubMark = `<svg aria-hidden="true" focusable="false" viewBox="0 0 20 20
 export function authPage(title: string, markup: string, script: string): Response {
   const nonce = randomToken();
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Mains</title>
-    <style nonce="${nonce}">${authStyles}</style></head><body><main class="auth-card" aria-labelledby="page-title"><header class="brand">${mainsMark}<span class="brand-name">Mains</span><span class="brand-product">Bridge</span></header><h1 id="page-title">${title}</h1>${markup}<p id="result" role="status" aria-live="polite" aria-atomic="true"></p></main><script nonce="${nonce}">${script}</script></body></html>`, {
+    <style nonce="${nonce}">${authStyles}</style></head><body><main class="auth-card" aria-labelledby="page-title"><header class="brand">${mainsMark}<span class="brand-name">Mains</span><span class="brand-product">Bridge</span></header><h1 id="page-title">${title}</h1><p id="result" role="status" aria-live="polite" aria-atomic="true"></p>${markup}</main><script nonce="${nonce}">${script}</script></body></html>`, {
     headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
       "Content-Security-Policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'` },
   });
 }
 export const authClient = `const result=document.querySelector('#result');
-  function message(text){result.textContent=text;result.removeAttribute('data-error');result.setAttribute('role','status');}
-  function fail(error){result.textContent=error.message||'Sign-in is unavailable. Try again.';result.setAttribute('data-error','');result.setAttribute('role','alert');}
+  function message(text,tone){result.textContent=text;result.removeAttribute('data-error');if(text)result.dataset.tone=tone||'info';else delete result.dataset.tone;result.setAttribute('role','status');}
+  function fail(error){result.textContent=error.message||'Sign-in is unavailable. Try again.';result.dataset.tone='error';result.setAttribute('data-error','');result.setAttribute('role','alert');}
   async function post(path,body){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok){const error=Error(r.status>=500?'Sign-in is unavailable. Try again.':data.message||data.error||'Sign-in failed');error.code=data.code;throw error;}return data;}
   function onSubmit(form,action){form.onsubmit=async event=>{event.preventDefault();if(form.dataset.busy)return;const data=new FormData(form);const controls=[...form.querySelectorAll('input,button')];form.dataset.busy='true';controls.forEach(control=>control.disabled=true);message('');try{await action(data);}catch(error){fail(error);}finally{form.querySelectorAll('input[type=password]').forEach(input=>input.value='');controls.forEach(control=>control.disabled=false);delete form.dataset.busy;}};}
   window.addEventListener('pagehide',()=>document.querySelectorAll('input[type=password]').forEach(input=>input.value=''));`;
@@ -62,7 +62,7 @@ export function bridgeSignInPage(url: URL, next: string, methods: { github: bool
       else if(options.mode==='link'){await post('/api/auth/sign-in/magic-link',{email,callbackURL:options.next});message('Check your email for the sign-in link.');}
       else{await post('/api/auth/sign-in/email',{email,password:data.get('password'),callbackURL:options.next});location.assign(options.next);}
     });
-    if(new URLSearchParams(location.search).get('verified')==='1')message('Email verified. Sign in to continue.');
+    if(new URLSearchParams(location.search).get('verified')==='1')message('Email verified. Sign in to continue.','success');
     else if(new URLSearchParams(location.search).has('error'))fail(Error('This email link is invalid or expired. Sign in to request a new one.'));`);
 }
 
@@ -75,5 +75,5 @@ export function bridgeResetPasswordPage(next: string, enabled: boolean): Respons
     `${authClient}const params=new URLSearchParams(location.search);const token=params.get('token');const invalid=!token||params.has('error');
     params.delete('token');params.delete('error');history.replaceState(null,'',location.pathname+(params.size?'?'+params:''));
     const form=document.querySelector('#reset');if(invalid){form.hidden=true;fail(Error('This reset link is invalid or expired. Request a new link from the sign-in page.'));}
-    else onSubmit(form,async data=>{if(data.get('password')!==data.get('confirm'))throw Error('Passwords do not match.');await post('/api/auth/reset-password',{token,newPassword:data.get('password')});form.hidden=true;message('Password saved. Sign in to continue.');});`);
+    else onSubmit(form,async data=>{if(data.get('password')!==data.get('confirm'))throw Error('Passwords do not match.');await post('/api/auth/reset-password',{token,newPassword:data.get('password')});form.hidden=true;message('Password saved. Sign in to continue.','success');});`);
 }

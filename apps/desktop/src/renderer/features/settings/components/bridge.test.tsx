@@ -28,7 +28,7 @@ beforeEach(() => {
   fixture.status = { state: "ready", backendId: "A", hubUrl: "https://bridge.example", accountId: "account", email: "owner@example.com", label: "A", verificationCode: null, joinCodes: [], login: null,
     approvals: [{ requestId: "request", backendId: "B", publicKey: "key", signingPublicKey: "signing-key", label: "New laptop", platform: "darwin", code: "ABCD-EFGH-JKLM", expiresAt: "2026-10-15T20:00:00Z" }], backends: [], recoveryCodeAvailable: true, existing: { runs: 2, pages: 3 }, error: null };
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("Bridge key management", () => {
   it("keeps sync controls hidden until the join code from the approving device is explicitly verified", async () => {
@@ -365,6 +365,28 @@ describe("Bridge key management", () => {
     await act(async () => { fireEvent.submit(dialog.getByRole("button", { name: "Sign in" }).closest("form")!); });
     expect(fixture.signIn).toHaveBeenCalledExactlyOnceWith({ hubUrl: "https://my-bridge.example", label: "Travel Mac", includeExisting: false, flow: kind === "ws" ? "device" : "loopback" });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("offers no other hub in a released build that has one configured", async () => {
+    vi.stubEnv("DEV", false);
+    vi.stubGlobal("__MAINS_BRIDGE_HUB_URL__", "https://configured-bridge.example");
+    fixture.status = { ...fixture.status, state: "signed-out", accountId: null, hubUrl: null, approvals: [] };
+    render(<BridgeSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByRole("button", { name: "Advanced" })).toBeNull();
+    expect(dialog.queryByRole("textbox", { name: "Bridge hub URL" })).toBeNull();
+    await act(async () => { fireEvent.click(dialog.getByRole("button", { name: "Sign in" })); });
+    expect(fixture.signIn).toHaveBeenCalledExactlyOnceWith({ hubUrl: "https://configured-bridge.example", label: "A", includeExisting: true, flow: "device" });
+  });
+  it("still asks a released build without a configured hub for one", () => {
+    vi.stubEnv("DEV", false);
+    vi.stubGlobal("__MAINS_BRIDGE_HUB_URL__", "");
+    fixture.status = { ...fixture.status, state: "signed-out", accountId: null, hubUrl: null, approvals: [] };
+    render(<BridgeSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByRole("button", { name: "Advanced" })).toBeNull();
+    expect(dialog.getByRole("textbox", { name: "Bridge hub URL" })).toBeTruthy();
   });
   it("uses the configured origin for a fresh device without exposing server setup by default", async () => {
     vi.stubGlobal("__MAINS_BRIDGE_HUB_URL__", "https://configured-bridge.example");

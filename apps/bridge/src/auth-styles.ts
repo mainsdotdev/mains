@@ -10,7 +10,7 @@ export const authStyles = `
     --color-primary-700: #575653; --color-primary-800: #262625;
     --color-primary-900: #141414; --color-primary-950: #0c0c0c;
     --color-action: #2563eb; --color-action-hover: #1d4ed8;
-    --color-danger: #ff4436;
+    --color-danger: #ff4436; --color-success: #22c55e;
     --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --background: var(--color-primary-100); --foreground: var(--color-primary-900);
     --muted: var(--color-primary-600); --label: var(--color-primary-700);
@@ -21,6 +21,7 @@ export const authStyles = `
     --glass-rim: color-mix(in srgb, var(--color-primary-950) 10%, transparent);
     --glass-edge: color-mix(in srgb, var(--color-primary) 55%, transparent);
     --error: color-mix(in srgb, var(--color-danger) 70%, var(--color-primary-950));
+    --success: color-mix(in srgb, var(--color-success) 55%, var(--color-primary-950));
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -33,6 +34,7 @@ export const authStyles = `
       --glass-rim: color-mix(in srgb, var(--color-primary) 9%, transparent);
       --glass-edge: color-mix(in srgb, var(--color-primary) 12%, transparent);
       --error: color-mix(in srgb, var(--color-danger) 60%, var(--color-primary));
+      --success: color-mix(in srgb, var(--color-success) 70%, var(--color-primary));
     }
   }
   * { box-sizing: border-box; }
@@ -93,9 +95,22 @@ export const authStyles = `
   .actions .button { flex: 1; min-width: 0; }
   .code-input { min-height: 54px; font: 500 21px/1.4 ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .2em; text-align: center; text-transform: uppercase; }
   .code-input::placeholder { font: 14px/1.5 var(--font-sans); letter-spacing: normal; text-transform: none; }
+  /* The outcome of the last action, right under the title: green when it worked, red when it did not. */
   #result { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
-  #result:not(:empty) { margin-top: 20px; padding: 12px; border: .5px solid var(--glass-rim); border-radius: 12px; background: var(--glass-fill-input); }
-  #result[data-error] { color: var(--error); }
+  #result:not(:empty) {
+    --tone: var(--color-action); --tone-text: var(--foreground);
+    display: flex; gap: 10px; align-items: flex-start; margin: 6px 0 24px; padding: 12px 14px;
+    border: .5px solid color-mix(in srgb, var(--tone) 40%, transparent); border-radius: 12px;
+    background: color-mix(in srgb, var(--tone) 12%, transparent); color: var(--tone-text); font-weight: 500; line-height: 1.45;
+  }
+  #result:not(:empty)::before {
+    content: "i"; flex: none; display: grid; place-items: center; width: 18px; height: 18px; margin-top: 1px;
+    border-radius: 50%; background: var(--tone); color: #ffffff; font-size: 11px; font-weight: 700; line-height: 1;
+  }
+  #result[data-tone="success"] { --tone: var(--color-success); --tone-text: var(--success); }
+  #result[data-tone="success"]::before { content: "✓"; }
+  #result[data-error] { --tone: var(--color-danger); --tone-text: var(--error); }
+  #result[data-error]::before { content: "!"; }
   @media (max-width: 480px) { body { padding: 24px 16px; } .auth-card { padding: 26px 22px; } }
   @media (prefers-reduced-motion: reduce) { input, .button { transition: none; } }
   @media (forced-colors: active) { .auth-card, input, .button, #result:not(:empty) { border: 1px solid ButtonText; } .button-primary { background: ButtonFace; color: ButtonText; } }

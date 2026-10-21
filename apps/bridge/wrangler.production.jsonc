@@ -22,7 +22,8 @@
     "BRIDGE_DEV_AUTH": "false",
     "BRIDGE_AUTH_URL": "https://bridge.mains.dev",
     "GITHUB_CLIENT_ID": "Ov23liObqQHXTr0rw24b",
-    "MAIL_FROM": "Mains <no-reply@auth.mains.dev>"
+    "MAIL_FROM": "Mains <no-reply@auth.mains.dev>",
+    "BRIDGE_MAIL_DAILY_LIMIT": "90"
   },
   "d1_databases": [{
     "binding": "AUTH_DB",

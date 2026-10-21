@@ -21,7 +21,8 @@
     "BRIDGE_DEV_AUTH": "false",
     "BRIDGE_AUTH_URL": "https://mains-bridge-staging.team-68e.workers.dev",
     "GITHUB_CLIENT_ID": "Ov23livSdwQ720Sax55l",
-    "MAIL_FROM": "Mains Staging <no-reply-staging@auth.mains.dev>"
+    "MAIL_FROM": "Mains Staging <no-reply-staging@auth.mains.dev>",
+    "BRIDGE_MAIL_DAILY_LIMIT": "10"
   },
   "d1_databases": [{
     "binding": "AUTH_DB",

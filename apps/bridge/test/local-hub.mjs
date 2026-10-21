@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { fixtureAccountCommitment, fixtureAccountKey, fixtureEntryHash, fixtureGenesis, fixtureMember, fixtureMembershipEntry, fixturePublicKey, rememberFixtureHead } from "./record-signing.mjs";
 
 /** Starts the same Worker as wrangler dev, on an ephemeral real HTTP/WebSocket listener.
- * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, truncateRefreshOnce?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string }, purge?: { token: string }, mailGuard?: boolean }} [settings] */
+ * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, truncateRefreshOnce?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string }, purge?: { token: string }, mailGuard?: boolean, mailDailyLimit?: number }} [settings] */
 export async function startLocalBridgeHub(settings = {}) {
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hub-"));
   const bundle = join(dir, "hub.mjs");
@@ -45,6 +45,7 @@ export async function startLocalBridgeHub(settings = {}) {
       ...(settings.purge ? { BRIDGE_PURGE_TOKEN: settings.purge.token } : {}),
       // Fixtures sign in with arbitrary addresses; mailGuard keeps the deployed closed-beta mail policy.
       ...(settings.mailGuard ? {} : { BRIDGE_MAIL_POLICY: "unrestricted" }),
+      ...(settings.mailDailyLimit ? { BRIDGE_MAIL_DAILY_LIMIT: String(settings.mailDailyLimit) } : {}),
       ...(settings.storageLimitBytes !== undefined ? { BRIDGE_STORAGE_LIMIT_BYTES: String(settings.storageLimitBytes) } : {}),
       ...(settings.writesPerMinute !== undefined ? { BRIDGE_WRITES_PER_MINUTE: String(settings.writesPerMinute) } : {}),
       ...(settings.github ? { GITHUB_CLIENT_ID: "local-public-github-id", GITHUB_CLIENT_SECRET: "local-only-github-secret" } : {}),

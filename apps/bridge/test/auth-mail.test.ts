@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bridgeMailConfigured, MAINS_DOWNLOAD_URL, sendBridgeMail, type BridgeMailKind } from "../src/auth-mail";
+import { bridgeMailConfigured, BridgeMailLimitError, MAINS_DOWNLOAD_URL, sendBridgeMail, type BridgeMailKind } from "../src/auth-mail";
 import { MAINS_LOGO_CID, renderBridgeMail } from "../src/mail-template";
 
 afterEach(() => { vi.unstubAllGlobals(); });
@@ -80,7 +80,14 @@ describe("Resend authentication mail delivery", () => {
     expect(bridgeMailConfigured({ MAIL_FROM: "Mains <no-reply@auth.mains.dev>", RESEND_API_KEY: "local-test-key" })).toBe(true);
   });
 
-  it.each([401, 403, 429, 500])("rejects provider status %s without exposing its response", async (status) => {
+  it("reports the provider's own quota as the daily pause", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("Daily quota exceeded", { status: 429 })));
+    await expect(sendBridgeMail({ RESEND_API_KEY: "local-test-key", MAIL_FROM: "Mains <no-reply@auth.mains.dev>" }, {
+      kind: "sign-in", to: "local-test@example.com", url: "https://bridge.example.com/verify?token=local-only",
+    })).rejects.toBeInstanceOf(BridgeMailLimitError);
+  });
+
+  it.each([401, 403, 500])("rejects provider status %s without exposing its response", async (status) => {
     const send = vi.fn<typeof fetch>().mockResolvedValue(new Response("Provider diagnostic containing private data", { status }));
     vi.stubGlobal("fetch", send);
     await expect(sendBridgeMail({ RESEND_API_KEY: "local-test-key", MAIL_FROM: "Mains <no-reply@auth.mains.dev>" }, {
