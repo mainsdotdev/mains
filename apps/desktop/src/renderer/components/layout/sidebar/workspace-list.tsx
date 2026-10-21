@@ -728,7 +728,7 @@ export default function WorkspacesList({
           key={backend.backendId}
           groupKey={`bridge-workspaces-${backend.backendId}`}
           label={backend.label}
-          icon={<Bridge className="size-3.5" />}
+          icon={<Bridge className="size-3.75" />}
           count={rows.length}
         >
           <div className="px-2.5 pb-1">

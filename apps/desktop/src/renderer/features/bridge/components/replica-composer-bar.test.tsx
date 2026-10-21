@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BridgeBackendInfo, BridgeStatus } from "@mains/contracts/bridge";
 import { ReplicaComposerBar, isReplicaLive } from "./replica-composer-bar";
@@ -8,11 +8,15 @@ import { ReplicaComposerBar, isReplicaLive } from "./replica-composer-bar";
 const online: BridgeBackendInfo = { backendId: "A", label: "Studio Mac", platform: "darwin", online: true, lastSeen: null };
 const offline: BridgeBackendInfo = { ...online, online: false, lastSeen: "2026-10-17T10:15:00Z" };
 const connected = { enabled: true, state: "connected" } as BridgeStatus;
+function SettingsDestination() {
+  const { search } = useLocation();
+  return <p>Settings{search}</p>;
+}
 const renderBar = (props: Partial<Parameters<typeof ReplicaComposerBar>[0]>) => render(<MemoryRouter initialEntries={["/code"]}>
   <Routes>
     <Route path="/code" element={<ReplicaComposerBar run={{ status: "succeeded", startedAt: null }} owner={offline} status={connected}
       hydration={undefined} variant="claude" {...props} />} />
-    <Route path="/relay" element={<p>Relay page</p>} />
+    <Route path="/settings" element={<SettingsDestination />} />
   </Routes>
 </MemoryRouter>);
 afterEach(() => { cleanup(); vi.useRealTimers(); });
@@ -49,9 +53,9 @@ describe("ReplicaComposerBar", () => {
     expect(screen.getByText("· Waiting to download this conversation")).toBeTruthy();
   });
 
-  it("opens Relay to take control on the source device", () => {
+  it("opens Mains Connect settings to take control on the source device", () => {
     renderBar({});
     fireEvent.click(screen.getByRole("button", { name: "Continue with remote control" }));
-    expect(screen.getByText("Relay page")).toBeTruthy();
+    expect(screen.getByText("Settings?section=backends")).toBeTruthy();
   });
 });

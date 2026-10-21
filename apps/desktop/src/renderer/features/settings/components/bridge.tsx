@@ -208,7 +208,7 @@ export default function BridgeSettings() {
           <div className="space-y-4 py-4">
             <Muted size="xs">Step 1 of 2</Muted>
             <Text className="max-w-2xl">
-              On an approved device, open Settings › Bridge › Device setup.
+              On an approved device, open Bridge › Device setup.
               Enter this code there to approve {status.label}.
             </Text>
             {status.verificationCode && (
@@ -392,7 +392,7 @@ export default function BridgeSettings() {
                   {visibleRecoveryCode
                     ? "I saved it — hide code"
                     : status.recoveryCodeAvailable
-                      ? "Show setup code"
+                      ? "Show recovery code"
                       : "New recovery code"}
                 </Button>
               </div>

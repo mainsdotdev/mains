@@ -178,7 +178,7 @@ signing secret. These are development credentials only; normal sign-in and appro
 
 ## Sign-in and key management (B7)
 
-Settings › **Bridge** (`/settings?section=bridge`) signs the selected backend into
+**Bridge** (`/bridge`) in the navigation rail signs the selected backend into
 an account. Desktop opens the system browser and receives a one-use, 60-second
 authorization code on an ephemeral loopback listener, bound with state and PKCE
 S256. A Node backend uses Better Auth’s device authorization flow: the browser
@@ -334,7 +334,7 @@ After A approves, B decrypts the offered account key into protected **pending**
 storage, checks it against the genesis commitment and pins the membership entry
 that admitted it. B cannot start replication (including log pulls, blob downloads
 and local-history uploads) until its operator obtains B's join code from
-Settings › Bridge (or the `mains bridge approve` output, or `joinCodes` in
+Bridge › Device setup (or the `mains bridge approve` output, or `joinCodes` in
 `mains bridge status`) on A and enters it on B. B compares the input locally
 without exposing its expected join code through status, UI or CLI. Likewise, A's
 Settings and notification never show B's expected device code; the operator
@@ -523,7 +523,7 @@ requires a configured provider; the staging infrastructure alone does not
 authorize a backend.
 
 Use persistent isolated A/B profiles without a development config. Sign in from
-Settings → Bridge with the staging HTTPS origin. A creates the account key and
+Bridge with the staging HTTPS origin. A creates the account key and
 recovery code; B signs in to the same account and waits for A's approval or
 recovery. Test run history, Atlas and files, A offline, revocation and recovery.
 An iPad browser still connects to B's running backend, which connects to this
@@ -567,7 +567,7 @@ resumes the same queue without re-enrollment. Existing PUT capabilities and open
 WebSockets recheck permission; an idempotent ACK for an already committed object
 does not upload new data. A D1/schema failure denies new writes.
 
-Settings › Bridge shows the server-backed period, tier and upload state. Monthly
+Bridge shows the server-backed period, tier and upload state. Monthly
 and Yearly are previews of the two billing options while purchases are unavailable;
 choosing one makes no request and grants no access. **Refresh subscription status**
 uses the existing owner-only manual sync action. Other remote-control permissions
@@ -741,7 +741,7 @@ Leaving it unchecked keeps existing chats and Atlas items local; items created
 while approval is pending can sync after approval. **Sync existing history**
 adds the excluded history later. Manual project exclusions remain in force.
 
-Settings › Bridge lists this backend’s projects. **Local only** stops future
+Bridge lists this backend’s projects. **Local only** stops future
 uploads for that project’s workspaces, chats and children, including already
 queued changes. Existing copies on other backends remain there. Turning it off
 queues private edits and deletions with their original clocks. Scope choices
@@ -1154,7 +1154,7 @@ re-checks up to 100 such records once the hub answers, fetching that sequence
 again, so a newer client version or an undamaged copy still applies; one the hub
 no longer serves was superseded and is dropped. Since a compromised signer can publish
 such records at the write rate, one larger than 16 KiB keeps only its header and
-at most 1000 are kept. Settings › Bridge reports how many were skipped.
+at most 1000 are kept. Bridge reports how many were skipped.
 
 An invalid deleted ACK leaves the local row, clock and outbox write intact and
 reports a retryable error. A verified deletion clears a write only after matching

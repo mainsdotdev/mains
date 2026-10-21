@@ -119,7 +119,7 @@ export async function runBridgeCommand(options: ReturnType<typeof parseBridgeArg
       const recovery = await client.call<string | null>(CHANNELS.bridge.takeRecoveryCode);
       if (recovery) console.log(`Save this recovery code now; it is shown once:\n${recovery}`);
     } else if (status.state === "needs-approval") console.log(`Compare code ${status.verificationCode} on an approved backend, then approve ${status.backendId}.\nAfter approval, get this device's join code from the approving device and run mains bridge confirm --code <join-code-from-approving-device>.\nOr run mains bridge recover and enter your recovery code.`);
-    else if (status.state === "needs-verification") console.log("Sync is paused. Get this device's join code from Settings > Bridge or mains bridge status on the approving device, then run mains bridge confirm --code <join-code-from-approving-device>.");
+    else if (status.state === "needs-verification") console.log("Sync is paused. Get this device's join code from Bridge > Device setup or mains bridge status on the approving device, then run mains bridge confirm --code <join-code-from-approving-device>.");
     else throw new Error(status.error ?? "Bridge sign-in failed");
   } finally { client.close(); }
 }

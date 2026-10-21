@@ -14,7 +14,7 @@ import McpApp from "@/routes/McpApp";
 const Atlas = lazy(() => import("@/routes/Atlas"));
 const Settings = lazy(() => import("@/routes/Settings"));
 const Pulse = lazy(() => import("@/routes/Pulse"));
-const Relay = lazy(() => import("@/routes/Relay"));
+const Bridge = lazy(() => import("@/routes/Bridge"));
 const Tasks = lazy(() => import("@/routes/Tasks"));
 
 function DefaultRoute() {
@@ -62,7 +62,8 @@ export function MainRoutes() {
         <Route path="/plugins" element={<PluginsPage />} />
         <Route path="/apps/:appId" element={<McpApp />} />
         <Route path="/pulse" element={<Pulse />} />
-        <Route path="/relay" element={<Relay />} />
+        <Route path="/bridge" element={<Bridge />} />
+        <Route path="/relay" element={<Navigate to="/settings?section=backends" replace />} />
         <Route path="/tasks" element={<TasksRoute />} />
       </Routes>
     </Suspense>

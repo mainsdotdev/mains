@@ -213,7 +213,8 @@ B7 adds Better Auth identity in the hub’s D1 database, distinct from the local
 `accounts` table. `bridge.identity` serializes sign-in, approval, recovery and
 logout without owning SQLite. Desktop uses the system browser with a state/PKCE
 loopback callback; Server uses device-code authorization through `mains bridge`
-or Settings › Bridge. The first backend generates the account key and one-time
+or the Bridge page. Bridge lives in the navigation rail; Mains Connect remote
+control lives in Settings. The first backend generates the account key and one-time
 Argon2id recovery code. Later backends need a matching public-key approval or a
 recovery-signed admission before receiving log/blob access. Every admission,
 removal and recovery rotation is a signed entry in the account's hash-chained

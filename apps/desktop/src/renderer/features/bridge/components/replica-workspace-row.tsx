@@ -30,7 +30,7 @@ export function ReplicaWorkspaceRow({ workspace, projectName, projectIcon, backe
       <span aria-hidden="true" className="size-3.5 shrink-0" />
       <Muted size="s" tone="secondary" className="min-w-0 flex-1 truncate">{branch}</Muted>
       <Tooltip content={`${backend.label} · ${bridgePresence(backend)}`}>
-        <Bridge aria-hidden="true" className={`size-3.5 shrink-0 ${backend.online === true ? "text-success" : "dark:text-primary-600 text-primary-400"}`} />
+        <Bridge aria-hidden="true" className={`size-3.75 shrink-0 ${backend.online === true ? "text-success" : "dark:text-primary-600 text-primary-400"}`} />
       </Tooltip>
     </span>
   </button>;

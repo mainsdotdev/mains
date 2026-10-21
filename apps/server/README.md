@@ -39,7 +39,7 @@ npm run auth -- revoke <device-id>
 link. Pass `--url https://your-browser-facing-origin` when the browser reaches
 the server through an address that is not recorded in server state.
 
-To sync this backend with another Mains backend, open Settings › Bridge in its
+To sync this backend with another Mains backend, open Bridge in its
 browser UI or run `mains bridge login --hub https://your-bridge-hub` while the
 server stays running. Use `mains bridge status`, `mains bridge approve <id>
 --code <matching-code>`, `mains bridge recover` and `mains bridge logout` for

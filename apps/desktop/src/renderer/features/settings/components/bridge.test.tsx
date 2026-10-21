@@ -298,7 +298,7 @@ describe("Bridge key management", () => {
         fixture.status = { ...fixture.status, recoveryCodeAvailable: false };
         return { success: true, data: code };
       });
-      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show setup code" })); });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show recovery code" })); });
     } else {
       fireEvent.click(screen.getByRole("button", { name: "New recovery code" }));
       expect(fixture.regenerate).not.toHaveBeenCalled();
@@ -317,7 +317,7 @@ describe("Bridge key management", () => {
   });
   it("hides a revealed code when the selected backend changes", async () => {
     const view = render(<BridgeSettings />);
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show setup code" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show recovery code" })); });
     expect(screen.getByDisplayValue("AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH")).toBeTruthy();
     fixture.status = { ...fixture.status, backendId: "B" }; view.rerender(<BridgeSettings />);
     expect(screen.queryByDisplayValue("AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH")).toBeNull();

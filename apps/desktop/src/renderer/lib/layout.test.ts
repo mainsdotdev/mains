@@ -20,7 +20,7 @@ describe("hasSidebarPanel", () => {
   });
 
   it("gives standalone pages the rail and full content width", () => {
-    for (const route of ["/tasks", "/pulse", "/plugins", "/relay", "/unknown"]) {
+    for (const route of ["/tasks", "/pulse", "/plugins", "/bridge", "/relay", "/unknown"]) {
       expect(hasSidebarPanel(route)).toBe(false);
     }
   });

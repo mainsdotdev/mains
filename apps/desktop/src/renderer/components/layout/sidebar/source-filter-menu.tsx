@@ -32,7 +32,7 @@ function SourceChoices({ sources, onSourceVisibleChange }: SourceFilterProps) {
         selected={sources.bridge}
         onClick={() => onSourceVisibleChange("bridge", !sources.bridge)}
       >
-        <Bridge className="size-3.5 shrink-0" />
+        <Bridge className="size-3.75 shrink-0" />
         Bridge
       </DropdownMenuItem>
     </>

@@ -121,7 +121,7 @@ function ImageTile({ entry, onOpen, fill = false, device }: { entry: Entry; onOp
       </Button>
       {device && (
         <span className="pointer-events-none absolute left-2 top-2 flex size-6 items-center justify-center rounded-full bg-primary-950/75 text-primary-100">
-          <Bridge aria-hidden="true" className="size-3.5" />
+          <Bridge aria-hidden="true" className="size-3.75" />
           <span className="sr-only">From {device}</span>
         </span>
       )}

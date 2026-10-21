@@ -187,7 +187,7 @@ describe("buildTrayMenu", () => {
     click(menu.find((item) => item.label?.startsWith("Next pulse"))!);
     click(find(menu, "Remote access on"));
     expect(act.navigate).toHaveBeenNthCalledWith(1, "/pulse");
-    expect(act.navigate).toHaveBeenNthCalledWith(2, "/relay");
+    expect(act.navigate).toHaveBeenNthCalledWith(2, "/settings?section=backends");
   });
 
   it("flips the sleep setting from what the menu showed", () => {

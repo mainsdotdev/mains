@@ -96,7 +96,7 @@ Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). C
 
 **Renderer** (`src/renderer/`)
 - React app with Redux Toolkit, React Router (HashRouter), `@/` alias → `src/renderer/`
-- Routes: `/` (default route), `/code[/:workspaceId]` (unified agent workspace — all providers), `/settings`, `/plugins`, `/pulse`, `/relay`, `/tasks` (issue + pull-request inbox)
+- Routes: `/` (default route), `/code[/:workspaceId]` (unified agent workspace — all providers), `/settings` (including Mains Connect remote control), `/plugins`, `/pulse`, `/bridge` (account sync), `/tasks` (issue + pull-request inbox). Legacy `/relay` redirects to Settings › Mains Connect.
 - `/code` hosts every agent provider; which provider it drives comes from the active space's `providerId` column (`claude_code`, `copilot_cli`, `codex`, `cursor`) — switching space via the space picker switches the provider. There are no per-provider routes.
 - The space's `mode` column (`developer`, `work`, `chat` — see `@mains/contracts/modes`) selects the UI shape via `src/renderer/lib/mode-config.ts` (`MODE_CONFIGS`, read through `useModeConfig`): which route `/` redirects to, plus per-mode capability flags (`showGitActions`, `showSources`, `showDeliverables`, `showTerminal`, `showChangesTab`, `showPermissionControls`, `showPlanControls`, `showGoalControls`). Developer shows the coding surface plus run sources; work replaces git with sources and deliverables; chat hides the session panel and every write-adjacent affordance. The agent-side half of a mode is the **mode harness** (`src/shared/mode-harness.ts`, see Provider Adapters)
 - Route table lives in `src/renderer/components/layout/main/main-routes.tsx`; page components in `src/renderer/routes/`

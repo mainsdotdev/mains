@@ -14,7 +14,7 @@ export function BridgeKeyVerification({ busy, onConfirm }: {
       <div className="space-y-4 py-4">
         <Muted size="xs">Step 2 of 2</Muted>
         <Text className="max-w-2xl">
-          On the device that approved this one, open Settings › Bridge › Device setup.
+          On the device that approved this one, open Bridge › Device setup.
           Enter the join code shown in Step 2 for this device.
         </Text>
         <Muted className="max-w-2xl">

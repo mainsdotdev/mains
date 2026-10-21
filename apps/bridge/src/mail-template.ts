@@ -82,7 +82,7 @@ function content(message: BridgeMail): Content {
     // The invitation carries no link that signs in: sign-in always starts in the app.
     const steps = [
       `Install or update Mains: ${MAINS_DOWNLOAD_URL}`,
-      `Open Settings > Bridge and sign in with this email address (${message.to}), or with a GitHub account that uses it.`,
+      `Open Bridge and sign in with this email address (${message.to}), or with a GitHub account that uses it.`,
       "Choose Activate beta in the sign-in window.",
     ];
     return {
@@ -92,7 +92,7 @@ function content(message: BridgeMail): Content {
       action: { label: "Get Mains", url: MAINS_DOWNLOAD_URL },
       body: `<ol style="margin:0 0 24px;padding:0 0 0 20px;color:${color.text}" class="fg">${[
         "Install or update Mains.",
-        `Open <strong>Settings &gt; Bridge</strong> and sign in with <strong>${escape(message.to)}</strong>, or with a GitHub account that uses it.`,
+        `Open <strong>Bridge</strong> and sign in with <strong>${escape(message.to)}</strong>, or with a GitHub account that uses it.`,
         "Choose <strong>Activate beta</strong> in the sign-in window.",
       ]
         .map((step) => `<li style="margin:0 0 8px">${step}</li>`)

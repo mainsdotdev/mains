@@ -9,7 +9,7 @@ That page shows the verified email of the signed-in account beside the account
 switch action, so someone using the wrong account can identify it.
 Public sign-in, create-account and password-reset pages do not advertise beta.
 
-The user starts from Settings → Bridge → Sign in. After sign-in:
+The user starts from Bridge → Sign in. After sign-in:
 
 1. A selected, unactivated account sees its invitation. Merely opening this page
    or signing in does not consume any time.
@@ -18,7 +18,7 @@ The user starts from Settings → Bridge → Sign in. After sign-in:
    desktop state/PKCE callback continues afterwards.
 3. The existing device approval/recovery ceremony still protects encryption
    keys. Beta access never bypasses it.
-4. Settings shows **Beta access** and the expiry in the user's local timezone,
+4. Bridge shows **Beta access** and the expiry in the user's local timezone,
    with the standard plan's storage/file limits and no purchase options.
 5. At expiry, new encrypted record writes and R2 uploads pause, including on
    existing WebSockets and previously signed PUT URLs. Reading, downloading,

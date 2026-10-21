@@ -51,7 +51,7 @@ export function ReplicaComposerBar({ run, owner, status, hydration, variant }: {
         {notice && <Text size="xs" tone="muted" className="truncate">· {notice}</Text>}
       </div>
     </div>
-    <Button variant="primary" onClick={() => navigate("/relay")} title={`Connect to ${owner.label} in Relay to control this conversation`}>
+    <Button variant="primary" onClick={() => navigate("/settings?section=backends")} title={`Connect to ${owner.label} in Settings › Mains Connect to control this conversation`}>
       Continue with remote control
     </Button>
   </div>;
