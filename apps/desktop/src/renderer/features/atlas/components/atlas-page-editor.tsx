@@ -32,7 +32,7 @@ import { appApi, getTransport } from "@/lib/transport";
 import { signLocalImage } from "@/lib/local-image-url";
 import { signLocalDocument } from "@/lib/local-document-url";
 import { atlasError } from "../hooks/use-save-to-atlas";
-import { createPageSaveQueue, type PageDraft } from "../lib/page-save-queue";
+import { AUTOSAVE_INTERVAL_MS, createPageSaveQueue, type PageDraft } from "../lib/page-save-queue";
 import { downloadAtlasText } from "../lib/download";
 import { pageFileData } from "../lib/page-upload";
 import type {
@@ -242,10 +242,12 @@ function PageEditor({
   const schedule = (title: string = queue.draft.title) => {
     if (applying.current || trashPhase.current !== "idle" || isTrashed.current) return;
     queue.edit({ title, blocks: editor.document });
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
+    // Throttle, not debounce: later keystrokes keep the running timer, so
+    // continuous typing still reaches the backend within one interval.
+    timer.current ??= setTimeout(() => {
+      timer.current = null;
       void flush();
-    }, 700);
+    }, AUTOSAVE_INTERVAL_MS);
   };
   useEffect(() => {
     if (recovered) {
@@ -258,6 +260,7 @@ function PageEditor({
     }
     return () => {
       if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
       void flush();
     };
   }, [queue, recovered, initialVersion, flush]);
@@ -281,13 +284,16 @@ function PageEditor({
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (saveState.dirty) {
+        // The autosave interval can still be running; save now so the next
+        // close attempt finds a clean page instead of waiting for the timer.
+        void flush();
         event.preventDefault();
         event.returnValue = "";
       }
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [saveState.dirty]);
+  }, [saveState.dirty, flush]);
   const [history, setHistory] = useState(false);
   const revisions = useAtlasRevisionsQuery(
     { accountId, id },
@@ -454,7 +460,7 @@ function PageEditor({
           : saveState.saving
             ? "Saving…"
             : saveState.dirty
-              ? "Unsaved changes"
+              ? "Draft saved on this device"
               : "Saved"}
       </Text>
       <div className="min-h-0 flex-1 overflow-y-auto noscrollbar pb-44">
@@ -581,8 +587,8 @@ function PageEditor({
       >
         <Text weight="medium">Page history</Text>
         <Muted className="mt-2">
-          Restoring an earlier version creates a new revision. Recent 100
-          versions.
+          Restoring an earlier version creates a new revision. Shows the last
+          version of each of the 10 most recent editing sessions.
         </Muted>
         <div className="mt-5 max-h-[60vh] overflow-y-auto divide-y divide-primary-200/60 dark:divide-primary-800/60">
           {revisions.isLoading && <Muted>Loading history…</Muted>}
@@ -599,7 +605,7 @@ function PageEditor({
                   {row.title}
                 </Text>
                 <Muted className="mt-1 text-xs">
-                  {row.actor === "agent" ? "Agent" : "You"} ·{" "}
+                  {row.actor === "agent" ? "Agent" : row.actor === "restore" ? "Restored" : "You"} ·{" "}
                   {new Date(row.createdAt).toLocaleString()}
                   {" · "}{row.backendLabel ?? row.backendId ?? "This device"}
                 </Muted>

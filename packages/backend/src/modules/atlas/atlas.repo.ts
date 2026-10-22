@@ -80,12 +80,13 @@ export const atlasRepo = {
         .where(and(eq(atlasItems.id, id), eq(atlasItems.accountId, accountId))).run();
     });
   },
-  revisions(itemId: string) {
+  /** Newest first. Summaries only, so a deep window stays cheap; history reads the recent part of it. */
+  revisions(itemId: string, limit = 1000) {
     const r = atlasPageRevisions;
     return getDb().select({ id: r.id, itemId: r.itemId, title: r.title, version: r.version,
       schemaVersion: r.schemaVersion, actor: r.actor, sourceRunId: r.sourceRunId, createdAt: r.createdAt,
       parentRevisionId: r.parentRevisionId, mergedRevisionId: r.mergedRevisionId })
-      .from(r).where(eq(r.itemId, itemId)).orderBy(desc(r.version)).limit(100).all();
+      .from(r).where(eq(r.itemId, itemId)).orderBy(desc(r.version)).limit(limit).all();
   },
   revision(itemId: string, version: number) {
     return getDb().select().from(atlasPageRevisions)
@@ -108,8 +109,25 @@ export const atlasRepo = {
         AND (child.parent_revision_id = ${r.id} OR child.merged_revision_id = ${r.id}))`))
       .orderBy(desc(r.createdAt), desc(r.id)).all();
   },
+  /** A Bridge clock means the hub or another backend may already hold this revision, so it is frozen. */
+  replicated(revisionId: string) {
+    return !!getDb().get(sql`SELECT 1 FROM bridge_row_clock WHERE table_name='atlas_page_revisions' AND pk=${revisionId} LIMIT 1`);
+  },
+  anyReplicated(itemId: string) {
+    return !!getDb().get(sql`SELECT 1 FROM atlas_page_revisions r JOIN bridge_row_clock c
+      ON c.table_name='atlas_page_revisions' AND c.pk=r.id WHERE r.item_id=${itemId} LIMIT 1`);
+  },
+  hasChildren(itemId: string, revisionId: string) {
+    return !!getDb().get(sql`SELECT 1 FROM atlas_page_revisions WHERE item_id=${itemId}
+      AND (parent_revision_id=${revisionId} OR merged_revision_id=${revisionId}) LIMIT 1`);
+  },
+  /**
+   * `coalesce` lets the save rewrite the current revision in place instead of adding one, when nothing else
+   * can depend on it: it is a leaf and has never been replicated. It still takes a new ordinal, so the
+   * Page version keeps detecting concurrent writers.
+   */
   commitPage(item: typeof atlasItems.$inferInsert, revision: typeof atlasPageRevisions.$inferInsert,
-    expectedVersion: number, fileIds: string[], create = false, metadata?: AtlasMetadataPatch | null) {
+    expectedVersion: number, fileIds: string[], create = false, metadata?: AtlasMetadataPatch | null, coalesce = false) {
     const db = getDb();
     db.transaction(() => {
       const current = create ? null : atlasRepo.find(item.id, item.accountId);
@@ -122,24 +140,47 @@ export const atlasRepo = {
       // than the current pointer, so current.version + 1 is not a free slot.
       const ordinal = db.select({ value: sql<number>`coalesce(max(${atlasPageRevisions.version}),0)+1` })
         .from(atlasPageRevisions).where(eq(atlasPageRevisions.itemId, item.id)).get()!.value;
+      const head = coalesce && current?.currentRevisionId ? current.currentRevisionId : null;
+      const rewrite = !!head && !atlasRepo.replicated(head) && !atlasRepo.hasChildren(item.id, head);
+      const revisionId = rewrite ? head! : revision.id!;
       if (create) db.insert(atlasItems).values({ ...item, currentRevisionId: null, version: 0 }).run();
-      db.insert(atlasPageRevisions).values({ ...revision, version: ordinal,
+      if (rewrite) db.update(atlasPageRevisions).set({ title: revision.title, blocksJson: revision.blocksJson,
+        markdown: revision.markdown, sourceRunId: revision.sourceRunId, version: ordinal })
+        .where(and(eq(atlasPageRevisions.id, revisionId), eq(atlasPageRevisions.itemId, item.id))).run();
+      else db.insert(atlasPageRevisions).values({ ...revision, version: ordinal,
         parentRevisionId: current?.currentRevisionId ?? null }).run();
       {
-        const updated = db.update(atlasItems).set({ title: item.title, currentRevisionId: revision.id,
+        const updated = db.update(atlasItems).set({ title: item.title, currentRevisionId: revisionId,
           version: ordinal, updatedAt: new Date() })
           .where(and(eq(atlasItems.id, item.id), eq(atlasItems.accountId, item.accountId),
             eq(atlasItems.version, create ? 0 : expectedVersion), sql`${atlasItems.trashedAt} IS NULL`)).run();
         if (!updated.changes) throw new Error("This page changed elsewhere. Reload the latest version before saving.");
       }
+      // A rewritten head only adds references: a file dropped meanwhile stays protected until the revision goes.
       if (fileIds.length) db.insert(atlasPageFileRefs)
         .values([...new Set(fileIds.map((fileId) => {
           const file = atlasRepo.find(fileId, item.accountId);
           if (!file || file.kind === "page") throw new Error("Embedded Atlas file unavailable");
           return file.id;
-        }))].map((fileId) => ({ revisionId: revision.id!, fileId }))).run();
+        }))].map((fileId) => ({ revisionId, fileId }))).onConflictDoNothing().run();
       // A failed presentation write must roll back the revision and version too.
       if (metadata !== undefined) atlasRepo.update(item.id, item.accountId, {}, metadata);
+    });
+  },
+  /**
+   * Delete revisions, first pointing each surviving one at its nearest surviving ancestor. Without that a
+   * survivor whose only children were deleted would read as an unresolved conflict branch.
+   */
+  prune(itemId: string, drop: string[], relink: { id: string; parentRevisionId: string | null; mergedRevisionId: string | null }[]) {
+    const db = getDb();
+    db.transaction(() => {
+      // Replicated revisions cannot be changed or removed locally: other backends may build on them.
+      if (atlasRepo.anyReplicated(itemId)) return;
+      for (const { id, ...links } of relink)
+        db.update(atlasPageRevisions).set(links).where(and(eq(atlasPageRevisions.id, id), eq(atlasPageRevisions.itemId, itemId))).run();
+      for (let start = 0; start < drop.length; start += 500)
+        db.delete(atlasPageRevisions).where(and(eq(atlasPageRevisions.itemId, itemId),
+          inArray(atlasPageRevisions.id, drop.slice(start, start + 500)))).run();
     });
   },
   referenced(id: string) {

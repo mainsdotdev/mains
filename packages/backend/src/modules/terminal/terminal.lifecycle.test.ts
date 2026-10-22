@@ -15,6 +15,8 @@ function responds(port: number): Promise<boolean> {
     request.setTimeout(500, () => { request.destroy(); resolve(false); });
   });
 }
+// The test scripts print each marker as one string: on a TTY, Node colors number arguments of
+// console.log with ANSI codes, which would split "MAINS_TEST_SERVER <pid> <port>" for the regexes below.
 const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 
 function availablePort(): Promise<number> {
@@ -48,7 +50,7 @@ describe.skipIf(!hasZsh)("real PTY server lifecycle", () => {
     try {
       writeFileSync(path.join(directory, ".zshenv"), "export MAINS_TEST_SHELL_CONFIG=loaded\n");
       writeFileSync(path.join(directory, ".zshrc"), "print MAINS_TEST_RC_$MAINS_TEST_SHELL_CONFIG\n");
-      writeFileSync(serverFile, "const http = require('node:http'); const server = http.createServer((req, res) => res.end('alive')); server.listen(0, '127.0.0.1', () => console.log('MAINS_TEST_SERVER', process.pid, server.address().port));\n");
+      writeFileSync(serverFile, "const http = require('node:http'); const server = http.createServer((req, res) => res.end('alive')); server.listen(0, '127.0.0.1', () => console.log('MAINS_TEST_SERVER ' + process.pid + ' ' + server.address().port));\n");
       terminalService.create(serverId, directory, (_id, data) => { output += data; }, { workspaceId });
       await vi.waitFor(() => expect(output).toContain("MAINS_TEST_RC_loaded"), { timeout: 5000 });
       terminalService.write(serverId, `${quote(process.execPath)} ${quote(serverFile)}\r`);
@@ -83,7 +85,7 @@ describe.skipIf(!hasZsh)("real PTY server lifecycle", () => {
     let childPid = 0;
     vi.stubEnv("ZDOTDIR", directory);
     try {
-      writeFileSync(busyFile, "console.log('MAINS_TEST_BACKGROUND', process.pid); setInterval(() => {}, 1000);\n");
+      writeFileSync(busyFile, "console.log('MAINS_TEST_BACKGROUND ' + process.pid); setInterval(() => {}, 1000);\n");
       terminalService.create(id, directory, (_id, data) => { output += data; }, { workspaceId: id });
       terminalService.write(id, "print MAINS_TEST_READ_READY; read _mains_answer; print MAINS_TEST_READ_DONE\r");
       await vi.waitFor(() => expect(output).toMatch(/MAINS_TEST_READ_READY\r?\n/), { timeout: 8000, interval: 30 });
@@ -142,7 +144,7 @@ describe.skipIf(!hasZsh)("real PTY server lifecycle", () => {
     let port = 0;
     vi.stubEnv("ZDOTDIR", directory);
     try {
-      writeFileSync(file, `const http = require('node:http');\nconst server = http.createServer((req, res) => res.end('alive'));\nserver.listen(0, '127.0.0.1', () => console.log('MAINS_TEST_SERVER', process.pid, server.address().port));\n`);
+      writeFileSync(file, `const http = require('node:http');\nconst server = http.createServer((req, res) => res.end('alive'));\nserver.listen(0, '127.0.0.1', () => console.log('MAINS_TEST_SERVER ' + process.pid + ' ' + server.address().port));\n`);
       terminalService.create(id, directory, (_id, data) => { output += data; }, { workspaceId: "test-a" });
       await terminalService.refreshServers();
       expect(terminalService.list().find((entry) => entry.id === id)?.servers).toEqual([]);
@@ -186,8 +188,8 @@ describe.skipIf(!hasZsh)("real PTY server lifecycle", () => {
     const childPids: number[] = [];
     vi.stubEnv("ZDOTDIR", directory);
     try {
-      writeFileSync(busyFile, "console.log('MAINS_TEST_BUSY', process.pid); setInterval(() => {}, 1000);\n");
-      writeFileSync(serverFile, "const http = require('node:http'); const server = http.createServer((req, res) => res.end('alive')); server.listen(0, '127.0.0.1', () => console.log('MAINS_TEST_SERVER', process.pid, server.address().port));\n");
+      writeFileSync(busyFile, "console.log('MAINS_TEST_BUSY ' + process.pid); setInterval(() => {}, 1000);\n");
+      writeFileSync(serverFile, "const http = require('node:http'); const server = http.createServer((req, res) => res.end('alive')); server.listen(0, '127.0.0.1', () => console.log('MAINS_TEST_SERVER ' + process.pid + ' ' + server.address().port));\n");
       terminalService.create(id, directory, (_id, data) => { output += data; }, { workspaceId: "busy-test" });
       terminalService.write(id, `${quote(process.execPath)} ${quote(busyFile)}\r`);
       await vi.waitFor(() => {

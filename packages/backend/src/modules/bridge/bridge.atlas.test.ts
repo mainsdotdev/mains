@@ -125,7 +125,8 @@ describe("Atlas editing between independent migrated backends", () => {
     await settle(a, b);
     expect((await page(a, base)).conflicts).toEqual([]); expect((await page(b, base)).conflicts).toEqual([]);
     expect((await page(b, base)).revision.id).toBe(result.revision.id);
-    expect(await on(a, (s) => s.revisions(identity(base)))).toHaveLength(4);
+    // History collapses same-session saves, so count the synced graph itself.
+    expect(a.sqlite.prepare("SELECT count(*) n FROM atlas_page_revisions WHERE item_id=?").get(base.item.id)).toEqual({ n: 4 });
     // After merging, both branches remain readable by UUID on either backend.
     expect(await on(b, (s) => s.getRevision({ ...identity(base), revisionId: left.revision.id }))).toMatchObject({ title: "From A" });
     await expect(save(b, base, "Stale editor")).rejects.toThrow(/changed elsewhere/);
@@ -159,7 +160,8 @@ describe("Atlas editing between independent migrated backends", () => {
     const copies = await on(b, (s) => s.list({ accountId: "default", kind: "page" }));
     expect(copies).toHaveLength(1); expect(copies[0].title).toBe("Offline second (recovered)");
     expect(copies[0].id).not.toBe(base.item.id);
-    const history = await on(b, (s) => s.revisions({ id: copies[0].id, accountId: "default" }));
+    const history = b.sqlite.prepare("SELECT id, parent_revision_id AS parentRevisionId FROM atlas_page_revisions WHERE item_id=? ORDER BY version DESC")
+      .all(copies[0].id) as { id: string; parentRevisionId: string | null }[];
     expect(history).toHaveLength(2); expect(history[0].parentRevisionId).toBe(history[1].id);
     expect(history[1].parentRevisionId).toBeNull();
     expect(history.some((r) => [base.revision.id, first.revision.id].includes(r.id))).toBe(false);

@@ -13,6 +13,7 @@ import { bridgeService } from "../bridge";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { atlasRepo, type AtlasRecord, type RevisionRecord } from "./atlas.repo";
 import { pageContent } from "./atlas.blocks";
+import { continuesSession, historyCheckpoints } from "./atlas.history";
 import { metadataPatch, readMetadata } from "./atlas.metadata";
 import { ATLAS_COVER_SOURCE_PREFIX, coverPreset, isCoverId } from "@mains/contracts/atlas-covers";
 import { readCoverPreset } from "./atlas.covers";
@@ -73,6 +74,34 @@ function pageFor(item: AtlasRecord): AtlasPage {
   if (!current) throw new Error("Page revision not found");
   return { item: format(item), revision: revision(current), conflicts: atlasRepo.conflicts(item.id, current.id)
     .map((row) => { const { blocks: _blocks, markdown: _markdown, ...summary } = revision(row); return summary; }) };
+}
+/**
+ * Keep only what history shows. Replicated Pages are skipped inside the repo: their revisions are frozen
+ * because other backends may build on them. Best effort, since a failed cleanup must never fail a save.
+ */
+function pruneHistory(item: AtlasRecord) {
+  try {
+    if (item.kind !== "page" || !item.currentRevisionId || atlasRepo.anyReplicated(item.id)) return;
+    const rows = atlasRepo.revisions(item.id, -1);
+    const pinned = new Set([item.currentRevisionId, ...atlasRepo.conflicts(item.id, item.currentRevisionId).map((row) => row.id)]);
+    const kept = new Set(historyCheckpoints(rows, pinned).map((row) => row.id));
+    const drop = rows.filter((row) => !kept.has(row.id)).map((row) => row.id);
+    if (!drop.length) return;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const survivor = (start: string | null) => {
+      for (let id = start, steps = 0; id && steps <= rows.length; id = byId.get(id)?.parentRevisionId ?? null, steps++)
+        if (kept.has(id)) return id;
+      return null;
+    };
+    const relink = rows.filter((row) => kept.has(row.id)).flatMap((row) => {
+      const parentRevisionId = survivor(row.parentRevisionId), mergedRevisionId = survivor(row.mergedRevisionId);
+      return parentRevisionId === row.parentRevisionId && mergedRevisionId === row.mergedRevisionId ? []
+        : [{ id: row.id, parentRevisionId, mergedRevisionId }];
+    });
+    atlasRepo.prune(item.id, drop, relink);
+  } catch (error) {
+    console.warn("[Atlas] Could not prune page history:", error);
+  }
 }
 async function collection(id: string | null | undefined, accountId: string) {
   if (!id) return null;
@@ -434,7 +463,8 @@ export const atlasService = {
     emit(CHANNELS.atlas.changed, {});
     return pageFor(owned({ id, accountId }));
   },
-  async savePage(input: AtlasSavePage & PagePresentation, actor: "user" | "agent" = "user", sourceRunId: string | null = null) {
+  /** Autosaves from the user fold into their session's revision; agents and restores always add one. */
+  async savePage(input: AtlasSavePage & PagePresentation, actor: "user" | "agent" | "restore" = "user", sourceRunId: string | null = null) {
     const item = owned(input);
     if (item.kind !== "page" || item.trashedAt) throw new Error("Page is in Trash or unavailable");
     if (!Number.isInteger(input.expectedVersion) || input.expectedVersion !== item.version)
@@ -452,24 +482,30 @@ export const atlasService = {
       if (metadata === undefined) return pageFor(latest);
       atlasRepo.update(item.id, item.accountId, {}, metadata);
     } else {
+      const coalesce = actor === "user" && !!current
+        && continuesSession(current, { actor, sourceRunId }, latest.updatedAt, new Date());
       atlasRepo.commitPage({ ...item, title: name }, { id: randomUUID(), itemId: item.id, title: name,
         version: item.version + 1, blocksJson: JSON.stringify(content.blocks), markdown: content.markdown,
-        actor, sourceRunId }, input.expectedVersion, fileIds, false, metadata);
+        actor, sourceRunId }, input.expectedVersion, fileIds, false, metadata, coalesce);
     }
+    pruneHistory(owned(input));
     emit(CHANNELS.atlas.changed, {});
     return pageFor(owned(input));
   },
   revisions(options: AtlasIdentity) {
     const item = owned(options);
     if (item.kind !== "page") throw new Error("Atlas item is not a page");
-    return atlasRepo.revisions(item.id).map((row) => ({ ...row, ...atlasRepo.provenance(row.id), createdAt: row.createdAt.toISOString() }));
+    const pinned = new Set(item.currentRevisionId
+      ? [item.currentRevisionId, ...atlasRepo.conflicts(item.id, item.currentRevisionId).map((row) => row.id)] : []);
+    return historyCheckpoints(atlasRepo.revisions(item.id), pinned)
+      .map((row) => ({ ...row, ...atlasRepo.provenance(row.id), createdAt: row.createdAt.toISOString() }));
   },
   async restore(input: AtlasIdentity & { revisionId?: string; version?: number; expectedVersion: number }) {
     const item = owned(input);
     const older = input.revisionId ? atlasRepo.revisionById(item.id, input.revisionId)
       : input.version === undefined ? null : atlasRepo.revision(item.id, input.version);
     if (!older) throw new Error("Page revision not found");
-    return this.savePage({ ...input, title: older.title, blocks: JSON.parse(older.blocksJson) });
+    return this.savePage({ ...input, title: older.title, blocks: JSON.parse(older.blocksJson) }, "restore");
   },
   async resolveConflict(input: AtlasResolveConflict): Promise<AtlasPage> {
     const item = owned(input);

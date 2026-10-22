@@ -51,6 +51,16 @@ describe("normal conversation to app panel binding", () => {
     act(() => hook.rerender({ events: [event("completed")] }));
     expect(mocks.openTool).toHaveBeenCalledOnce();
   });
+  it("ignores a connector's in-band failure, which carries no isError flag", () => {
+    // Skyscanner rejected "ISTA"/"TYOA" this way; Codex then refuses the resource of that call (-32603).
+    const failed = { content: [{ type: "text", text: "Parameters failed connector schema validation" }],
+      structuredContent: { error: "Parameters failed connector schema validation", error_code: "INVALID_ARGUMENT" }, _meta: null };
+    const hook = renderHook(({ events }) => useMcpAppConversation(workspace(events)), { wrapper: WithOpener, initialProps: { events: [] as RunEvent[] } });
+    act(() => hook.rerender({ events: [event("done", Date.now(), { output: JSON.stringify(failed) })] }));
+    expect(mocks.openTool).not.toHaveBeenCalled();
+    act(() => hook.rerender({ events: [event("done", Date.now(), { output: JSON.stringify(failed) }), { ...event(), id: "tool-2" }] }));
+    expect(mocks.openTool).toHaveBeenCalledOnce();
+  });
   it("relays fresh results from a floating window that has no local app panel", () => {
     mocks.enabled = false;
     const hook = renderHook(({ events }) => useMcpAppConversation(workspace(events)), { wrapper: WithOpener, initialProps: { events: [] as RunEvent[] } });

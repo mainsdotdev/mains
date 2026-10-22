@@ -18,6 +18,7 @@ import { useMcpAppExtensions } from "./use-mcp-app-extensions";
 import { useWorkspaceData } from "@/features/workspace/hooks/use-workspace-data";
 import { composerOwnerKey, mcpAppConversationKey } from "@/features/workspace/lib/ui-context";
 import { sameMcpApp, sameMcpAppScope, mcpAppConversationPath, type McpAppScope } from "@/features/workspace/lib/mcp-app-panel";
+import { hasUsableMcpAppResult } from "@/features/workspace/lib/mcp-app-tool-result";
 import { McpAppCompatibilityNotice } from "@/features/workspace/components/mcp-app-compatibility-notice";
 import { mcpAppCompatibility, mcpAppPath } from "@/lib/mcp-app-extensions";
 import { mcpAppContextItems, mcpAppContextState, mcpAppMessageText, normalizeMcpAppContext,
@@ -213,6 +214,9 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
   }, [captureScope, takeRightEdge, showConversation, commitState, activeContext]);
 
   const openTool = useCallback((result: McpAppToolOpen, automatic = false) => {
+    // The document is bound to this call's id for every resource read, and the
+    // app-server only serves the resource of a call that succeeded.
+    if (!hasUsableMcpAppResult(result.output)) return;
     const scope = hostRef.current?.runId === result.runId ? hostRef.current.scope : captureScope();
     const ownerKey = composerOwnerKey(scope, result.runId);
     // A result in an old transcript may be opened explicitly, but never steals

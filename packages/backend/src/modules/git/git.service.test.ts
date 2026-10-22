@@ -168,6 +168,57 @@ describe("getCommitPreviewDiff", () => {
   });
 });
 
+describe("getRecentSubjects", () => {
+  it("lists subjects newest first, up to the limit", async () => {
+    const repo = makeRepo();
+    for (const subject of ["a", "b", "c"]) {
+      git(repo, "commit", "--allow-empty", "-m", subject);
+    }
+
+    expect(await gitService.getRecentSubjects(repo, "HEAD", 10)).toEqual(["c", "b", "a", "init"]);
+    expect(await gitService.getRecentSubjects(repo, "HEAD", 2)).toEqual(["c", "b"]);
+  });
+
+  it("leaves merge commits out and fills the limit with real ones", async () => {
+    const repo = makeRepo();
+    git(repo, "checkout", "-b", "topic");
+    git(repo, "commit", "--allow-empty", "-m", "fix: on topic");
+    git(repo, "checkout", "main");
+    git(repo, "commit", "--allow-empty", "-m", "feat: on main");
+    git(repo, "merge", "--no-ff", "-m", "Merge branch 'topic'", "topic");
+
+    const subjects = await gitService.getRecentSubjects(repo, "HEAD", 3);
+
+    expect(subjects).toHaveLength(3);
+    expect(subjects).not.toContain("Merge branch 'topic'");
+    expect(subjects).toEqual(
+      expect.arrayContaining(["fix: on topic", "feat: on main", "init"]),
+    );
+  });
+
+  it("reads the given ref, even when a file shares its name", async () => {
+    const repo = makeRepo();
+    git(repo, "checkout", "-b", "topic");
+    git(repo, "commit", "--allow-empty", "-m", "fix: on topic");
+    git(repo, "checkout", "main");
+    write(repo, "topic", "not a ref\n");
+
+    expect(await gitService.getRecentSubjects(repo, "topic", 10)).toEqual(["fix: on topic", "init"]);
+    expect(await gitService.getRecentSubjects(repo, "main", 10)).toEqual(["init"]);
+  });
+
+  it("rejects on a branch with no commits yet, and on a ref that reads as an option", async () => {
+    const repo = path.join(sandbox, `repo-${++repoCounter}`);
+    fs.mkdirSync(repo);
+    git(repo, "init", "-b", "main");
+
+    await expect(gitService.getRecentSubjects(repo, "HEAD", 10)).rejects.toThrow();
+    await expect(gitService.getRecentSubjects(makeRepo(), "--output=leak.txt", 10)).rejects.toThrow(
+      "Invalid ref",
+    );
+  });
+});
+
 describe("captureDiffSnapshot", () => {
   it("returns an empty snapshot for a clean tree", async () => {
     const repo = makeRepo();

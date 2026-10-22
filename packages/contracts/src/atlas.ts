@@ -125,7 +125,8 @@ export interface AtlasPageRevision {
   title: string;
   blocks: unknown[];
   markdown: string;
-  actor: "user" | "agent";
+  /** A restore is its own author so history keeps the state it replaced. */
+  actor: "user" | "agent" | "restore";
   sourceRunId: string | null;
   createdAt: string;
 }

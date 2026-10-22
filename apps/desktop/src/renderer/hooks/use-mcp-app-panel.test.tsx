@@ -159,6 +159,19 @@ describe("shared MCP App panel", () => {
     act(() => h.result.current.attachRun(ownerKey, "run-2", target));
     expect(h.result.current.document?.resourceRunId).toBe("run-1"); expect(h.result.current.runId).toBe("run-2");
   });
+  it("never binds the panel to a call that failed, so a retry opens on its own call id", () => {
+    const h = harness(); const target = scope(); const ownerKey = composerOwnerKey(target, "run-1");
+    act(() => { h.state.dispatch(setComposerContextKey(ownerKey));
+      h.result.current.registerConversation({ scope: target, ownerKey, runId: "run-1", send: mocks.sends }); });
+    const failed = { content: [{ type: "text", text: "Parameters failed connector schema validation" }],
+      structuredContent: { error: "Parameters failed connector schema validation", error_code: "INVALID_ARGUMENT" } };
+    act(() => h.result.current.openTool({ runId: "run-1", app: { ...app, originCallId: "call-failed" }, output: failed, title: app.name }, true));
+    act(() => h.result.current.openTool({ runId: "run-1", app: { ...app, originCallId: "call-failed" }, output: failed, title: app.name }));
+    expect(h.result.current.isOpen).toBe(false); expect(h.result.current.document).toBeNull();
+    act(() => h.result.current.openTool({ runId: "run-1", app: { ...app, originCallId: "call-ok" }, output: { content: [] }, title: app.name }, true));
+    expect(h.result.current.isOpen).toBe(true);
+    expect(h.result.current.document?.app.originCallId).toBe("call-ok");
+  });
   it("routes a model tool result into the existing rail canvas without a second iframe", async () => {
     const h = harness(); const { target, ownerKey } = await openDraft(h);
     act(() => h.result.current.attachRun(ownerKey, "run-1", target));

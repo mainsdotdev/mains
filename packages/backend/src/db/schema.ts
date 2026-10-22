@@ -83,7 +83,7 @@ export const atlasPageRevisions = sqliteTable("atlas_page_revisions", {
   title: text("title").notNull(),
   blocksJson: text("blocks_json").notNull(),
   markdown: text("markdown").notNull(),
-  actor: text("actor", { enum: ["user", "agent"] }).notNull(),
+  actor: text("actor", { enum: ["user", "agent", "restore"] }).notNull(),
   sourceRunId: text("source_run_id").references(() => runs.id, { onDelete: "set null" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 }, (t) => [

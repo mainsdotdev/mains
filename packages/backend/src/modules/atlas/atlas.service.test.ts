@@ -18,6 +18,7 @@ let directory: string;
 let cleanup: () => void;
 let restoreRuntime: () => void;
 const root = (id: string, mode = "work") => path.join(directory, "runs", id, mode);
+const revisionRows = (pageId: string) => db.select().from(atlasPageRevisions).where(eq(atlasPageRevisions.itemId, pageId)).all();
 // Another device's selected outputs, as the runs projection rebuilds them from synced manifests.
 const replicaOutputs = new Map<string, unknown[]>();
 vi.mock("../../db/client", () => ({ getDb: () => db }));
@@ -699,7 +700,8 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     await atlasService.createPage({ accountId: "other", title: "Private", markdown: "Secret content" });
     expect(atlasService.list({ accountId: "default" }).every((item) => !("preview" in item))).toBe(true);
 
-    await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Notes", markdown: "## Today\n- [x] New task" });
+    // An agent save always adds a revision, so version 1 stays available to restore.
+    await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Notes", markdown: "## Today\n- [x] New task" }, "agent");
     const items = atlasService.list({ accountId: "default", includePagePreview: true });
     expect(items).toHaveLength(3);
     expect(items.find((item) => item.id === file.id)).not.toHaveProperty("preview");
@@ -737,7 +739,7 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     expect(unchanged.item.metadata).toEqual({ icon: "emoji:📖", coverFileId: cover.id });
     expect(unchanged.item.version).toBe(1);
     await Promise.all([
-      atlasService.savePage({ ...identity, expectedVersion: 1, title: "Updated", markdown: "New content" }),
+      atlasService.savePage({ ...identity, expectedVersion: 1, title: "Updated", markdown: "New content" }, "agent"),
       atlasService.update({ ...identity, metadata: { icon: "icon:notebook|violet" } }),
     ]);
     const restored = await atlasService.restore({ ...identity, expectedVersion: 2, version: 1 });
@@ -749,7 +751,7 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     expect(atlasService.getPage(identity)?.item.metadata).toEqual({ coverFileId: cover.id });
     await atlasService.update({ ...identity, metadata: null });
     expect(atlasService.getPage(identity)?.item.metadata).toBeNull();
-    expect(atlasService.revisions(identity)).toHaveLength(3);
+    expect(db.select().from(atlasPageRevisions).where(eq(atlasPageRevisions.itemId, page.item.id)).all()).toHaveLength(3);
   });
   it("shares a saved cover without copies and protects it only while a current Page uses it", async () => {
     const first = await atlasService.createPage({ accountId: "default", title: "First" });
@@ -803,14 +805,74 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     expect(page.item.version).toBe(1);
     expect(page.revision.blocks.some((block) => (block as { type: string }).type === "heading")).toBe(true);
     const update = { accountId: "default", id: page.item.id, expectedVersion: 1, title: "Updated", markdown: "New content" };
-    const results = await Promise.allSettled([atlasService.savePage(update), atlasService.savePage(update, "agent")]);
+    const results = await Promise.allSettled([atlasService.savePage(update, "agent"), atlasService.savePage(update, "agent")]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     const restored = await atlasService.restore({ accountId: "default", id: page.item.id, expectedVersion: 2, version: 1 });
     expect(restored.item.version).toBe(3);
     expect(restored.revision.blocks).toEqual(page.revision.blocks);
     expect(restored.item.title).toBe("Notes");
-    expect(atlasService.revisions({ accountId: "default", id: page.item.id }).map((row) => row.version)).toEqual([3, 2, 1]);
+    const versions = db.select().from(atlasPageRevisions).where(eq(atlasPageRevisions.itemId, page.item.id)).all()
+      .map((row) => row.version).sort((left, right) => right - left);
+    expect(versions).toEqual([3, 2, 1]);
+  });
+  it("folds a user's autosaves into one revision while the Page version still advances", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });
+    const identity = { accountId: "default", id: page.item.id };
+    await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Notes", markdown: "v2" });
+    const third = await atlasService.savePage({ ...identity, expectedVersion: 2, title: "Notes", markdown: "v3" });
+    expect(third.revision.id).toBe(page.revision.id);
+    expect(third.revision.markdown).toContain("v3");
+    expect(third.item.version).toBe(3);
+    // The version is still the concurrency token, so a stale editor cannot overwrite the folded save.
+    await expect(atlasService.savePage({ ...identity, expectedVersion: 2, title: "Notes", markdown: "stale" })).rejects.toThrow("changed elsewhere");
+    expect(revisionRows(page.item.id)).toHaveLength(1);
+  });
+  it("adds a revision for another author, an ended session and a restore, and keeps what the restore replaced", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });
+    const identity = { accountId: "default", id: page.item.id };
+    const agent = await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Notes", markdown: "agent text" }, "agent");
+    expect(agent.revision.id).not.toBe(page.revision.id);
+    const user = await atlasService.savePage({ ...identity, expectedVersion: 2, title: "Notes", markdown: "user text" });
+    expect(user.revision.id).not.toBe(agent.revision.id);
+    // A pause longer than a session: the next save starts a new revision instead of rewriting this one.
+    db.update(atlasPageRevisions).set({ createdAt: new Date(Date.now() - 60 * 60_000) }).where(eq(atlasPageRevisions.id, user.revision.id)).run();
+    const later = await atlasService.savePage({ ...identity, expectedVersion: 3, title: "Notes", markdown: "later text" });
+    expect(later.revision.id).not.toBe(user.revision.id);
+    const restored = await atlasService.restore({ ...identity, revisionId: agent.revision.id, expectedVersion: 4 });
+    expect(restored.revision.actor).toBe("restore");
+    expect(restored.revision.id).not.toBe(later.revision.id);
+    // The state the restore replaced stays listed, so the restore can be undone.
+    expect(atlasService.revisions(identity).map((row) => row.id)).toContain(later.revision.id);
+    expect(revisionRows(page.item.id)).toHaveLength(5);
+  });
+  it("prunes what history hides and relinks survivors, so none reads as a conflict", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });
+    const identity = { accountId: "default", id: page.item.id };
+    let latest = page;
+    // Agent saves never fold, so consecutive ones are separate rows that history shows as one session.
+    for (let version = 1; version <= 3; version++)
+      latest = await atlasService.savePage({ ...identity, expectedVersion: latest.item.version, title: "Notes", markdown: `agent ${version}` }, "agent");
+    const rows = revisionRows(page.item.id);
+    expect(rows.map((row) => row.id).sort()).toEqual([page.revision.id, latest.revision.id].sort());
+    expect(rows.find((row) => row.id === latest.revision.id)?.parentRevisionId).toBe(page.revision.id);
+    expect(atlasService.getPage(identity)?.conflicts).toEqual([]);
+    expect(atlasService.revisions(identity).map((row) => row.id)).toEqual([latest.revision.id, page.revision.id]);
+  });
+  it("never rewrites or prunes a replicated revision", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });
+    const identity = { accountId: "default", id: page.item.id };
+    // A Bridge clock means another backend may already hold this revision.
+    db.run(sql`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,portable)
+      VALUES('atlas_page_revisions',${page.revision.id},'row',1,0,'other','{}',1)`);
+    const next = await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Notes", markdown: "v2" });
+    expect(next.revision.id).not.toBe(page.revision.id);
+    expect(atlasService.getRevision({ ...identity, revisionId: page.revision.id }).markdown).toContain("v1");
+    await atlasService.savePage({ ...identity, expectedVersion: 2, title: "Notes", markdown: "agent 1" }, "agent");
+    const last = await atlasService.savePage({ ...identity, expectedVersion: 3, title: "Notes", markdown: "agent 2" }, "agent");
+    // History groups each author's saves into one entry, but nothing is deleted from a replicated Page.
+    expect(revisionRows(page.item.id)).toHaveLength(4);
+    expect(atlasService.revisions(identity).map((row) => row.id)).toEqual([last.revision.id, next.revision.id]);
   });
   it("protects embedded files needed by a previous revision", async () => {
     const page = await atlasService.createPage({ accountId: "default", title: "Visual notes" });

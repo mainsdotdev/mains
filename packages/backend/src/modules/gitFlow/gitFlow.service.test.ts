@@ -36,6 +36,7 @@ vi.mock("../git", () => ({
     getBranchLog: vi.fn(),
     pullFastForward: vi.fn(),
     getLog: vi.fn(),
+    getRecentSubjects: vi.fn(),
     commit: vi.fn(),
     getHeadSha: vi.fn(),
     push: vi.fn(),
@@ -108,6 +109,8 @@ describe("gitFlowService — live branch invariants", () => {
     });
     gitMock.getCurrentBranch.mockResolvedValue("feature/live");
     gitMock.getCommitPreviewDiff.mockResolvedValue("");
+    // clearAllMocks keeps implementations, so every test starts from "no history".
+    gitMock.getRecentSubjects.mockResolvedValue([]);
     gitMock.getRemotes.mockResolvedValue([
       {
         name: "origin",
@@ -391,6 +394,73 @@ describe("gitFlowService — live branch invariants", () => {
   });
 
   describe("generateCommitMessage", () => {
+    it("shows HEAD's recent commit subjects as style examples", async () => {
+      gitMock.getCommitPreviewDiff.mockResolvedValue("some-hunk");
+      gitMock.getRecentSubjects.mockResolvedValue([
+        "feat(atlas): page icon and cover",
+        "fix(bridge): retry on 5xx",
+        `docs: ${"x".repeat(300)}`,
+      ]);
+      generateTextMock.mockResolvedValue("feat: x");
+
+      await gitFlowService.generateCommitMessage({
+        workspaceId: "ws-1",
+        providerId: "claude_code",
+        preview: true,
+      });
+
+      expect(gitMock.getRecentSubjects).toHaveBeenCalledWith("/repo", "HEAD", 10);
+      const [prompt, opts] = generateTextMock.mock.calls[0];
+      expect(prompt).toContain("- feat(atlas): page icon and cover\n");
+      expect(prompt).toContain("- fix(bridge): retry on 5xx\n");
+      // A runaway subject is cut rather than flooding the prompt.
+      expect(prompt).not.toContain("x".repeat(200));
+      expect(prompt.indexOf("Recent commit subjects")).toBeLessThan(
+        prompt.indexOf("some-hunk"),
+      );
+      expect(opts.system).toContain("follow their conventions");
+    });
+
+    it("still generates when the history can't be read (e.g. the first commit)", async () => {
+      gitMock.getCommitPreviewDiff.mockResolvedValue("first-commit-hunk");
+      gitMock.getRecentSubjects.mockRejectedValue(new Error("does not have any commits yet"));
+      generateTextMock.mockResolvedValue("chore: initial commit");
+
+      const message = await gitFlowService.generateCommitMessage({
+        workspaceId: "ws-1",
+        providerId: "claude_code",
+        preview: true,
+      });
+
+      expect(message).toBe("chore: initial commit");
+      const [prompt] = generateTextMock.mock.calls[0];
+      expect(prompt).not.toContain("Recent commit subjects");
+      expect(prompt).toContain("first-commit-hunk");
+    });
+
+    it("sends a file map and drops lockfile hunks from a sectioned diff", async () => {
+      gitMock.getCommitPreviewDiff.mockResolvedValue(
+        [
+          "diff --git a/package-lock.json b/package-lock.json\n--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1 +1 @@\n-old-lock-line\n+new-lock-line\n",
+          "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-before\n+after-real-change\n",
+        ].join(""),
+      );
+      generateTextMock.mockResolvedValue("chore: bump deps");
+
+      await gitFlowService.generateCommitMessage({
+        workspaceId: "ws-1",
+        providerId: "claude_code",
+        preview: true,
+      });
+
+      const [prompt] = generateTextMock.mock.calls[0];
+      expect(prompt).toContain("Changed files (2):");
+      expect(prompt).toContain("M package-lock.json (+1 -1) — diff omitted (lockfile)");
+      expect(prompt).toContain("M src/app.ts (+1 -1)");
+      expect(prompt).toContain("after-real-change");
+      expect(prompt).not.toContain("new-lock-line");
+    });
+
     it("preview mode includes the full commit preview without staging and omits the model", async () => {
       gitMock.getCommitPreviewDiff.mockResolvedValue("tracked-hunk\nnew-file-hunk");
       generateTextMock.mockResolvedValue("feat: do the thing");
@@ -536,6 +606,74 @@ describe("gitFlowService — live branch invariants", () => {
       expect(gitMock.getBranchLog).toHaveBeenCalledWith("/repo", "origin/main");
       expect(generateTextMock.mock.calls[0][0]).toContain("- Add feature");
       expect(gitMock.getBranchDiff).not.toHaveBeenCalledWith("/repo", "main");
+    });
+
+    it("shows the base branch's recent subjects as title-style examples, apart from the branch's own commits", async () => {
+      gitMock.getBranchDiff.mockResolvedValue("branch-diff");
+      gitMock.getBranchLog.mockResolvedValue(["wip on the thing"]);
+      gitMock.getRecentSubjects.mockResolvedValue([
+        "feat(atlas): page icon and cover (#412)",
+        "fix(bridge): retry on 5xx (#410)",
+      ]);
+      generateTextMock.mockResolvedValue("PR title\n\nPR body");
+
+      await gitFlowService.generatePrBody({ workspaceId: "ws-1", providerId: "claude_code" });
+
+      // The ref the diff was actually read against, not the checked-out branch.
+      expect(gitMock.getRecentSubjects).toHaveBeenCalledWith("/repo", "origin/main", 10);
+      const [prompt, opts] = generateTextMock.mock.calls[0];
+      expect(prompt).toContain("Recent commit subjects on origin/main");
+      expect(prompt).toContain("not part of this PR");
+      expect(prompt).toContain("- feat(atlas): page icon and cover (#412)\n");
+      expect(prompt.indexOf("Recent commit subjects")).toBeLessThan(
+        prompt.indexOf("Branch commits:"),
+      );
+      expect(opts.system).toContain("give the title their conventions");
+    });
+
+    it("leaves the examples out, history unread, when no base can be read", async () => {
+      gitMock.getBranchDiff.mockRejectedValue(new Error("Unknown base"));
+      gitMock.getCommitPreviewDiff.mockResolvedValue("new-file-hunk");
+      generateTextMock.mockResolvedValue("PR title\n\nPR body");
+
+      await gitFlowService.generatePrBody({ workspaceId: "ws-1", providerId: "claude_code" });
+
+      expect(gitMock.getRecentSubjects).not.toHaveBeenCalled();
+      expect(generateTextMock.mock.calls[0][0]).not.toContain("Recent commit subjects");
+    });
+
+    it("still generates when the base's history can't be read", async () => {
+      gitMock.getBranchDiff.mockResolvedValue("branch-diff");
+      gitMock.getBranchLog.mockResolvedValue(["add the thing"]);
+      gitMock.getRecentSubjects.mockRejectedValue(new Error("bad object"));
+      generateTextMock.mockResolvedValue("PR title\n\nPR body");
+
+      const result = await gitFlowService.generatePrBody({
+        workspaceId: "ws-1",
+        providerId: "claude_code",
+      });
+
+      expect(result).toEqual({ title: "PR title", body: "PR body" });
+      expect(generateTextMock.mock.calls[0][0]).not.toContain("Recent commit subjects");
+    });
+
+    it("sends a file map and drops lockfile hunks from a sectioned branch diff", async () => {
+      gitMock.getBranchDiff.mockResolvedValue(
+        [
+          "diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml\n--- a/pnpm-lock.yaml\n+++ b/pnpm-lock.yaml\n@@ -1 +1 @@\n-old-lock-line\n+new-lock-line\n",
+          "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-before\n+after-real-change\n",
+        ].join(""),
+      );
+      gitMock.getBranchLog.mockResolvedValue([]);
+      generateTextMock.mockResolvedValue("PR title\n\nPR body");
+
+      await gitFlowService.generatePrBody({ workspaceId: "ws-1", providerId: "claude_code" });
+
+      const [prompt] = generateTextMock.mock.calls[0];
+      expect(prompt).toContain("Changed files (2):");
+      expect(prompt).toContain("M pnpm-lock.yaml (+1 -1) — diff omitted (lockfile)");
+      expect(prompt).toContain("after-real-change");
+      expect(prompt).not.toContain("new-lock-line");
     });
 
     it("surfaces a branch-log failure rather than silently omitting commits", async () => {

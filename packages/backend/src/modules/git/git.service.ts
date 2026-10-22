@@ -305,6 +305,33 @@ export const gitService = {
   },
 
   /**
+   * Subjects of the newest non-merge commits reachable from `ref` — what a
+   * generated message learns the repository's conventions from. Rejects when
+   * `ref` has no commits (an unborn branch), so callers decide what that means.
+   */
+  async getRecentSubjects(
+    rootPath: string,
+    ref: string,
+    limit: number,
+  ): Promise<string[]> {
+    // The ref can come from a picker in the UI; it must never read as an option.
+    if (ref.startsWith("-")) throw new Error(`Invalid ref: ${ref}`);
+    const raw = await getGit(rootPath).raw([
+      "log",
+      ref,
+      "--no-merges",
+      "--pretty=%s",
+      "-n",
+      String(limit),
+      "--",
+    ]);
+    return raw
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  },
+
+  /**
    * The staged (index) diff — i.e. `git diff --cached`. This is exactly what
    * the next commit will record, so it's the input we feed the model when
    * generating a commit message.
