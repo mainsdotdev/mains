@@ -52,6 +52,11 @@ describe("ReplicaComposerBar", () => {
     renderBar({ hydration: { runId: "run", ready: false, error: "offline" } });
     expect(screen.getByText("· Waiting to download this conversation")).toBeTruthy();
   });
+  it("keeps a hydrated conversation live while uploads are still syncing", () => {
+    renderBar({ status: { ...connected, state: "syncing", writeRetryAt: "2026-10-27T12:01:00Z" },
+      owner: online, hydration: { runId: "run", ready: true, error: null } });
+    expect(screen.queryByText(/Showing saved data/)).toBeNull();
+  });
 
   it("opens Mains Connect settings to take control on the source device", () => {
     renderBar({});

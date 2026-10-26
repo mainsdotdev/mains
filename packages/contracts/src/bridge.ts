@@ -13,6 +13,10 @@ export interface BridgeRunState {
   ready: boolean;
   error: string | null;
 }
+export interface BridgeBlockedRecord {
+  table: string; pk: string; register: string; stream: string;
+  label: string; error: string; attempts: number; retryAt: string;
+}
 export interface BridgeStatus {
   enabled: boolean;
   state: "disabled" | "connecting" | "syncing" | "connected" | "read-only" | "offline" | "error";
@@ -23,6 +27,11 @@ export interface BridgeStatus {
   pendingRecords: number;
   /** Synced changes this backend could not verify or apply; set aside instead of stopping sync. Absent on older backends. */
   rejectedRecords?: number;
+  /** Local changes retained for retry after a preparation failure; details are bounded to 20. */
+  blockedRecordCount?: number;
+  blockedRecords?: BridgeBlockedRecord[];
+  /** Upload pacing after the hub's write rate limit; reads remain live. */
+  writeRetryAt?: string | null;
   backends: BridgeBackendInfo[];
   runs: BridgeRunState[];
   quota?: BridgeQuota | null;

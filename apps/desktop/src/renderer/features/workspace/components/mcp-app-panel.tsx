@@ -1,26 +1,32 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { Button, TabStrip } from "@/components/ui";
+import { useNavigate } from "react-router-dom";
+import { Button, toast } from "@/components/ui";
 import { Refresh } from "@/components/ui/icons";
-import { PreviewPanelControls } from "@/components/layout/preview-panel-controls";
-import { ShellHeader } from "@/components/layout/shell-header";
-import { ResizeHandle } from "@/components/layout/resize-handle";
-import { McpAppIcon } from "@/components/layout/sidebar/mcp-app-icon";
-import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
+import { useMcpAppPanel, useMcpAppInstances, McpAppInstanceProvider } from "@/hooks/use-mcp-app-panel";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
-import { setLayoutWidthVar } from "@/hooks/use-layout-width-vars";
-import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
-import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
-import { BROWSER_PANEL_WIDTH_DEFAULT, BROWSER_PANEL_WIDTH_MIN, BROWSER_PANEL_WIDTH_MAX, MCP_APP_PANEL_WIDTH_VAR } from "@/lib/layout";
+import { usePreviewTabLifecycle } from "@/hooks/use-preview-tab-lifecycle";
+import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
+import { setPendingRunId } from "@/lib/redux/slices/workspaceSlice";
+import { mcpAppConversationPath } from "../lib/mcp-app-panel";
 import { mcpAppCompatibility } from "@/lib/mcp-app-extensions";
-import { BaseTab } from "./base-tab";
 import { McpAppWorkspace } from "./mcp-app-workspace";
 
 export const MCP_APP_IDLE_MS = 2 * 60 * 1000;
 
-export function McpAppPanel({ reserveLayoutControls = false }: { reserveLayoutControls?: boolean }) {
+export function McpAppPanel() {
+  const instances = useMcpAppInstances();
+  return <>{instances.map((instance) => <McpAppInstanceProvider key={instance.document!.id} value={instance}>
+    <AppContent />
+  </McpAppInstanceProvider>)}</>;
+}
+
+function AppContent() {
   const panel = useMcpAppPanel();
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+  const composerKey = useAppSelector((state) => state.workspace.composerContextKey);
   const setChatHost = panel?.setChatHost;
-  const { isVisible, isAnimatedIn } = usePanelAnimation(!!panel?.isOpen);
+  const { isVisible } = usePanelAnimation(!!panel?.isOpen);
   const [reloadKey, reload] = useReducer((value: number) => value + 1, 0);
   const [startedDocumentId, setStartedDocumentId] = useState<string | null>(null);
   const beforeSuspend = useRef<(() => Promise<void>) | null>(null);
@@ -29,6 +35,8 @@ export function McpAppPanel({ reserveLayoutControls = false }: { reserveLayoutCo
     return () => { if (beforeSuspend.current === callback) beforeSuspend.current = null; };
   }, []);
   const documentId = panel?.document?.id;
+  const { register } = usePreviewTabLifecycle();
+  useEffect(() => documentId ? register(documentId, async () => { await beforeSuspend.current?.(); }) : undefined, [documentId, register]);
   const currentDocument = useRef(documentId);
   useEffect(() => {
     currentDocument.current = documentId;
@@ -47,93 +55,42 @@ export function McpAppPanel({ reserveLayoutControls = false }: { reserveLayoutCo
     const timer = setTimeout(() => {
       const teardown = beforeSuspend.current;
       if (!teardown) { setStartedDocumentId(null); return; }
-      void teardown().catch(() => {}).finally(() => {
-        // If reopened during teardown, rebuild the app it prepared to close.
+      void teardown().then(() => {
         if (canceled && currentDocument.current === documentId) reload();
         else if (!canceled) setStartedDocumentId(null);
+      }, (error) => {
+        // A failed state save keeps the canvas alive rather than losing work.
+        toast.error(error instanceof Error ? error.message : "Could not save app state");
       });
     }, MCP_APP_IDLE_MS);
     return () => { canceled = true; clearTimeout(timer); };
   }, [panel?.isOpen, startedDocumentId, documentId]);
-  useSuppressBrowserView(isVisible && !!panel?.document);
-  const isDarkMode = useIsDarkMode();
+
+
   if (!panel?.document) return null;
   const app = panel.document.app;
   const interfaceUnsupported = !!mcpAppCompatibility(app).notice;
 
-  return (
-    <div
-      data-mcp-app-panel=""
-      data-mcp-app-panel-visible={isVisible ? "" : undefined}
-      role="complementary"
-      aria-label={`${app.name} app panel`}
-      aria-hidden={!panel.isOpen}
-      inert={!panel.isOpen}
-      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[width,transform,opacity] duration-150 ease-out motion-reduce:transition-none"
-      style={{
-        display: isVisible ? undefined : "none",
-        pointerEvents: panel.isOpen ? undefined : "none",
-        width: panel.isExpanded
-          ? "calc(100% - var(--content-left) + 0.3rem)"
-          : `var(${MCP_APP_PANEL_WIDTH_VAR})`,
-        transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)",
-        opacity: isAnimatedIn ? 1 : 0,
-      }}
-      onPointerDownCapture={(event) => {
-        if (interfaceUnsupported || !panel.isExpanded || panel.chatMode !== "details") return;
-        if ((event.target as Element).closest("[data-floating-chat-surface]")) return;
-        panel.setChatMode("input");
-      }}
-    >
-      {!panel.isExpanded && (
-        <ResizeHandle
-          edge="left"
-          value={panel.width}
-          min={BROWSER_PANEL_WIDTH_MIN}
-          max={BROWSER_PANEL_WIDTH_MAX}
-          computeWidth={(clientX) => window.innerWidth - clientX}
-          onPreview={(width) => setLayoutWidthVar(MCP_APP_PANEL_WIDTH_VAR, width)}
-          onCommit={panel.setWidth}
-          onReset={() => panel.setWidth(BROWSER_PANEL_WIDTH_DEFAULT)}
-          ariaLabel="Resize app panel"
-        />
-      )}
-      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden">
-        <ShellHeader reserveWindowControls={reserveLayoutControls} actions={<>
-          <Button variant="icon" onClick={reload} tooltip="Reload app" tooltipPosition="bottom-left" aria-label="Reload app" className="group">
-            <Refresh aria-hidden className="size-4 rotate-180 transition-transform duration-200 group-active:rotate-90" />
-          </Button>
-          {(!interfaceUnsupported || !panel.isExpanded) && <PreviewPanelControls
-            label={app.name} isExpanded={panel.isExpanded} onToggleExpanded={panel.toggleExpanded} />}
-        </>}>
-          {!panel.isExpanded && (
-            <TabStrip activeKey={panel.document.id} role="tablist" aria-label="App tabs">
-              <BaseTab
-                isActive
-                isFirst
-                showLeadingCorner={false}
-                role="tab"
-                ariaLabel={app.name}
-                onClick={() => { if (panel.isExpanded) panel.setChatMode("input"); }}
-                icon={<McpAppIcon icons={app.icons} isDarkMode={isDarkMode} className="size-3.5 shrink-0" />}
-                label={app.name}
-                tooltip={app.name}
-                closeLabel={`Close ${app.name} tab`}
-                onClose={(event) => {
-                  event.stopPropagation();
-                  panel.close();
-                }}
-              />
-            </TabStrip>
-          )}
-        </ShellHeader>
-        <div className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl ${panel.isExpanded ? "" : "rounded-tl-none"} bg-primary dark:bg-primary-950`}>
-          <div className="relative min-h-0 flex-1 isolate">
-            {startedDocumentId === documentId && <McpAppWorkspace key={reloadKey} registerBeforeSuspend={registerBeforeSuspend} />}
-            {!interfaceUnsupported && <div ref={setChatHost} className="pointer-events-none absolute inset-0 z-10" />}
-          </div>
-        </div>
-      </div>
+
+  return <div data-mcp-app-panel="" data-mcp-app-panel-visible={panel.isOpen ? "" : undefined}
+    aria-label={`${app.name} app panel`} aria-hidden={!panel.isOpen} inert={!panel.isOpen}
+    className="absolute inset-0 flex min-h-0 flex-col overflow-hidden" style={{ display: panel.isOpen ? undefined : "none" }}
+    onPointerDownCapture={(event) => {
+      if (interfaceUnsupported || !panel.isExpanded || panel.chatMode !== "details") return;
+      if (!(event.target as Element).closest("[data-floating-chat-surface]")) panel.setChatMode("input");
+    }}>
+    <div className="flex shrink-0 items-center justify-end gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
+      {panel.ownerKey !== composerKey && <Button variant="ghost" className="text-xs" onClick={() => {
+        if (panel.runId) dispatch(setPendingRunId(panel.runId));
+        if (panel.scope) navigate(mcpAppConversationPath(panel.scope, panel.runId));
+      }}>Open app conversation</Button>}
+      <Button variant="icon" onClick={reload} tooltip="Reload app" aria-label="Reload app">
+        <Refresh className="size-4" />
+      </Button>
     </div>
-  );
+    <div className="relative min-h-0 flex-1 isolate">
+      {startedDocumentId === documentId && <McpAppWorkspace key={reloadKey} registerBeforeSuspend={registerBeforeSuspend} />}
+      {!interfaceUnsupported && <div ref={setChatHost} className="pointer-events-none absolute inset-0 z-10" />}
+    </div>
+  </div>;
 }

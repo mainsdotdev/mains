@@ -55,6 +55,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   let requested = false, failures = 0, subscribed = "";
   // Consecutive write cycles that sent nothing while changes stayed queued, and the outbox they saw.
   let stalls = 0, stalledOutbox = "";
+  let writeRetryAt = 0;
   // Membership is re-read at start, after a reconnect or failure (hints may have been missed), on a hint
   // and with the safety read; a page that binds a newer head also refreshes it first.
   let pullAllRequested = true, nextSafetyPullAt = 0, membershipStale = true;
@@ -185,7 +186,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       // Discover durable local writes without sending a remote pull. This also
       // covers SQL writers that do not emit a renderer/domain event.
       const streams = ["account", ...watchedRuns().map((id) => `run:${id}`)].join(",");
-      const work = !failures && (!readOnly() && pending() > 0 && (!stalls || outboxSignature() !== stalledOutbox) || streams !== subscribed ||
+      const work = !failures && (!readOnly() && Date.now() >= writeRetryAt && pending() > 0 && (!stalls || outboxSignature() !== stalledOutbox) || streams !== subscribed ||
         readOnly() && pending() > 0 && Date.now() >= nextQuotaRefreshAt);
       if (Date.now() < due && (failures > 0 || !requested && !work)) { schedule(due - Date.now()); return; }
       void runCycle().catch(() => {});
@@ -230,34 +231,27 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         if (stopped || paused) return;
       }
       let writeError: unknown;
-      try {
-        let sent = await drain("account", deletesOnly);
-        const accountPending = (sqlite.prepare(`SELECT count(*) AS n FROM bridge_outbox WHERE stream='account'`).get() as { n: number }).n;
-        // Run children may only be published after their account-stream roots/parents.
-        if (!accountPending || deletesOnly) {
-          const outgoing = sqlite.prepare(`SELECT DISTINCT stream FROM bridge_outbox WHERE stream<>'account' AND (?=0 OR op='delete') ORDER BY stream`).all(Number(deletesOnly)) as { stream: BridgeStream }[];
-          for (const row of outgoing) {
-            if (stopped || paused) return;
-            if (deletesOnly) await drain(row.stream, true).catch(() => {}); // A never-published parent may still be queued.
-            else sent += await drain(row.stream);
-          }
+      let sent = 0;
+      const publish = async (stream: BridgeStream, onlyDeletes: boolean) => {
+        try { sent += await drain(stream, onlyDeletes); }
+        catch (cause) {
+          // A write failure never skips the remaining streams or watched reads.
+          writeError ??= cause;
+          if (/write rate limit/i.test(String(cause))) writeRetryAt = Date.now() + 60_000;
+          if (!onlyDeletes) await drain(stream, true).catch(() => {});
         }
-        // A queued change that can never be prepared fails no push, so it would
-        // otherwise be retried, with its uploads, at every one-second check.
-        if (!deletesOnly) {
-          if (sent || !pending()) { stalls = 0; stalledOutbox = ""; }
-          else { stalls++; stalledOutbox = outboxSignature(); }
-        }
-      } catch (cause) {
-        // Refused writes stay queued; reads continue before the refusal is reported.
-        if (!/quota|rate limit|subscription required|clock is ahead|membership changed/i.test(String(cause))) throw cause;
-        writeError = cause;
-        const deletions = sqlite.prepare("SELECT DISTINCT stream FROM bridge_outbox WHERE op='delete' AND stream<>'account'").all() as { stream: BridgeStream }[];
-        for (const { stream } of deletions) {
-          if (stopped || paused) return;
-          // A new, never-published root can still be queued at the account quota.
-          await engine.push(stream, 100, true).catch(() => {});
-        }
+      };
+      await publish("account", deletesOnly || Date.now() < writeRetryAt);
+      const outgoing = sqlite.prepare("SELECT DISTINCT stream FROM bridge_outbox WHERE stream<>'account' ORDER BY stream").all() as { stream: BridgeStream }[];
+      for (const { stream } of outgoing) {
+        if (stopped || paused) return;
+        // Only this run's acknowledged roots unlock its children; unrelated blocked account rows
+        // do not hold it back. Tombstones can still close a never-published run.
+        await publish(stream, deletesOnly || Date.now() < writeRetryAt || !engine.canPushRun(stream.slice(4)));
+      }
+      if (!deletesOnly) {
+        if (sent || !pending()) { stalls = 0; stalledOutbox = ""; }
+        else { stalls++; stalledOutbox = outboxSignature(); }
       }
       for (const runId of watchedRuns()) {
         if (stopped || paused) return;
@@ -267,11 +261,11 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       }
       // Local publishing and incremental hints cannot postpone the safety read.
       if (pullAll) nextSafetyPullAt = Date.now() + (options.idleIntervalMs ?? fallbackPollIntervalMs);
-      if (writeError) throw writeError;
+      if (writeError && !/write rate limit/i.test(String(writeError))) throw writeError;
       // Entering/leaving a quota refusal needs a fresh plan/usage sample. The
       // ordinary live-update path and repeated refusals remain rate limited.
       await refreshQuota(refreshUsage && !wasReadOnly || !!error && /quota|rate limit/i.test(error));
-      state = readOnly() ? "read-only" : "connected"; error = null; failures = 0; lastSyncedAt = new Date().toISOString(); notify();
+      state = readOnly() ? "read-only" : pending() > 0 ? "syncing" : "connected"; error = null; failures = 0; lastSyncedAt = new Date().toISOString(); notify();
     } catch (cause) {
       if (stopped) return;
       if (/quota|rate limit|subscription required/i.test(String(cause))) { quotaDirty = true; await refreshQuota(!error || !/quota|rate limit|subscription required/i.test(error)); }
@@ -297,7 +291,8 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         const active = pending() > 0 && !readOnly();
         const safety = Math.max(0, nextSafetyPullAt - Date.now());
         const activeInterval = options.activeIntervalMs ?? 1000;
-        const retry = stalls ? Math.min(stalledRetryMaxMs, activeInterval * 2 ** Math.min(stalls, 6)) : activeInterval;
+        const retry = Date.now() < writeRetryAt ? writeRetryAt - Date.now() :
+          stalls ? Math.min(stalledRetryMaxMs, activeInterval * 2 ** Math.min(stalls, 6)) : activeInterval;
         const interval = active ? Math.min(retry, safety) :
           readOnly() && pending() > 0 ? Math.min(safety, Math.max(0, nextQuotaRefreshAt - Date.now())) : safety;
         const delay = failures ? Math.min(30_000, 1000 * 2 ** Math.min(failures - 1, 5)) : requested ? 0 : interval;
@@ -314,7 +309,8 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   }
   function syncNow(refreshUsage = false): Promise<void> {
     pullAllRequested = true;
-    return inFlight ? inFlight.catch(() => {}).then(() => runCycle(refreshUsage)) : runCycle(refreshUsage);
+    const run = () => { engine.retryBlocked(); return runCycle(refreshUsage); };
+    return inFlight ? inFlight.catch(() => {}).then(run) : run();
   }
   const api = {
     syncNow,
@@ -353,11 +349,15 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         online: online.get(peer.backend_id) ?? null, lastSeen: peer.last_seen_ms === null ? null : new Date(peer.last_seen_ms).toISOString() }]));
       const owners = sqlite.prepare("SELECT DISTINCT owner_backend_id AS id FROM runs UNION SELECT DISTINCT owner_backend_id FROM workspaces").all() as { id: string }[];
       for (const { id } of owners) if (!backends.has(id)) backends.set(id, { backendId: id, label: `Device ${id.slice(0, 8)}`, platform: null, online: null, lastSeen: null });
-      backends.set(backendId, { backendId, label: config.label, platform: process.platform, online: state === "connected" || state === "read-only", lastSeen: lastSyncedAt });
+      backends.set(backendId, { backendId, label: config.label, platform: process.platform, online: state === "connected" || state === "syncing" || state === "read-only", lastSeen: lastSyncedAt });
       const current = quota?.subscription;
       const displayQuota = current?.canUpload && current.expiresAt && Date.parse(current.expiresAt) <= Date.now()
         ? { ...quota!, subscription: { ...current, status: "expired" as const, canUpload: false } } : quota;
-      return { enabled: true, state: state === "connected" && readOnly() ? "read-only" : state, backendId, label: config.label, lastSyncedAt, error, pendingRecords: pending(), rejectedRecords: engine.unverified(), backends: [...backends.values()], runs: [...runStates.values()], quota: displayQuota };
+      const blocked = engine.blocked();
+      return { enabled: true, state: (state === "connected" || state === "syncing") && readOnly() ? "read-only" : state, backendId, label: config.label, lastSyncedAt, error,
+        pendingRecords: pending(), rejectedRecords: engine.unverified(), blockedRecordCount: blocked.total, blockedRecords: blocked.records,
+        writeRetryAt: Date.now() < writeRetryAt ? new Date(writeRetryAt).toISOString() : null,
+        backends: [...backends.values()], runs: [...runStates.values()], quota: displayQuota };
     },
     async stop() {
       stopped = true; if (timer) clearTimeout(timer); timer = undefined;

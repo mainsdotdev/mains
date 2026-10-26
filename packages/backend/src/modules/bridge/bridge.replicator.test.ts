@@ -16,6 +16,10 @@ import { deviceSigner, pullBridgeAccountFence, signBridgeMembershipEntry } from 
 import { toBase64Url } from "./bridge.encoding";
 import * as websocket from "./bridge.websocket";
 import * as engine from "./bridge.engine";
+import * as fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as blobRecords from "./bridge.blob-records";
 
 const key = new Uint8Array(32).fill(51);
 const config = { version: 1, accountId: "account", signingPrivateKey: toBase64Url(fixtureSigningKey("account", "A")), backendId: "A", url: "ws://127.0.0.1:8790/v1/log", token: "test-token", accountKey: toBase64Url(key), label: "MacBook" };
@@ -99,6 +103,59 @@ describe("Bridge development configuration", () => {
 });
 
 describe.skipIf(!networkMode)("Bridge background replication for desktop/server viewers", () => {
+  it("keeps unrelated account/run writes and watched pulls live while one account file is damaged", async () => {
+    const account = randomUUID(), dataDir = await fs.mkdtemp(join(tmpdir(), "bridge-isolation-"));
+    cleanups.push(() => fs.rm(dataDir, { recursive: true, force: true }));
+    const a = await node(account, "A"), b = await node(account, "B", { dataDir });
+    run(a, "remote"); await a.replicator.syncNow(); await b.replicator.syncNow();
+    b.replicator.watchRun("remote", "view"); await b.replicator.syncNow();
+    await fs.mkdir(join(dataDir, "atlas/files/damaged"), { recursive: true });
+    await fs.writeFile(join(dataDir, "atlas/files/damaged/file.txt"), "wrong bytes");
+    b.sqlite.exec("INSERT INTO atlas_items(id,account_id,kind,title,storage_key,content_hash) VALUES('damaged','default','file','Damaged','damaged/file.txt','wrong-hash')");
+    run(b, "local"); b.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('local','report','Healthy local child')");
+    a.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('remote','report','Fresh remote content')"); await a.replicator.syncNow();
+    await expect(b.replicator.syncNow()).resolves.toBeUndefined(); await a.replicator.syncNow();
+    expect(a.sqlite.prepare("SELECT title FROM runs WHERE id='local'").get()).toEqual({ title: "Synced chat" });
+    expect(b.sqlite.prepare("SELECT content FROM run_artifacts WHERE run_id='remote'").get()).toEqual({ content: "Fresh remote content" });
+    expect(b.sqlite.prepare("SELECT count(*) n FROM bridge_outbox WHERE stream='run:local'").get()).toEqual({ n: 0 });
+    expect(b.replicator.getStatus()).toMatchObject({ error: null, blockedRecordCount: 1,
+      blockedRecords: [expect.objectContaining({ table: "atlas_items", pk: "damaged", register: "content", error: expect.stringMatching(/integrity/) })],
+      runs: [expect.objectContaining({ runId: "remote", ready: true, error: null })] });
+  });
+  it("waits for a run's own unpublished root while other run streams advance", async () => {
+    const account = randomUUID(), dataDir = await fs.mkdtemp(join(tmpdir(), "bridge-parent-"));
+    cleanups.push(() => fs.rm(dataDir, { recursive: true, force: true }));
+    const original = blobRecords.createBridgeBlobRecords;
+    vi.spyOn(blobRecords, "createBridgeBlobRecords").mockImplementation((options) => {
+      const records = original(options), prepare = records.values.prepare;
+      records.values.prepare = async (store, entry) => {
+        if (entry.table_name === "runs" && entry.pk === "blocked" || entry.table_name === "collections" && entry.pk === "blocked-parent")
+          throw new Error("Missing captured parent value");
+        return prepare(store, entry);
+      };
+      return records;
+    });
+    const a = await node(account, "A", { dataDir });
+    run(a, "blocked"); run(a, "ready");
+    a.sqlite.exec("INSERT INTO collections(id,account_id,name) VALUES('blocked-parent','default','Parent')");
+    run(a, "with-parent"); a.sqlite.exec("UPDATE runs SET collection_id='blocked-parent' WHERE id='with-parent'");
+    a.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('blocked','report','Wait'),('ready','report','Send'),('with-parent','report','Wait for parent')");
+    await a.replicator.syncNow();
+    expect(a.sqlite.prepare("SELECT synced_seq FROM bridge_row_clock WHERE table_name='runs' AND pk='with-parent'").get()).toEqual({ synced_seq: expect.any(Number) });
+    expect(a.sqlite.prepare("SELECT DISTINCT stream FROM bridge_outbox ORDER BY stream").all()).toEqual([{ stream: "account" }, { stream: "run:blocked" }, { stream: "run:with-parent" }]);
+  });
+  it("paces rate-limited uploads without reporting an error or stopping watched reads", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B"), hub = await getLocalBridgeTestWorker();
+    run(b, "remote"); await b.replicator.syncNow(); await a.replicator.syncNow();
+    a.replicator.watchRun("remote", "view"); await a.replicator.syncNow();
+    await hub.quotaSql(account, `INSERT INTO write_rate VALUES('A',${Math.floor(Date.now() / 60_000)},600) ON CONFLICT(backend_id) DO UPDATE SET window=excluded.window,count=600`);
+    run(a, "queued"); await expect(a.replicator.syncNow()).resolves.toBeUndefined();
+    expect(a.replicator.getStatus()).toMatchObject({ state: "syncing", error: null, writeRetryAt: expect.any(String), pendingRecords: 1 });
+    b.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('remote','report','Read while paced')"); await b.replicator.syncNow();
+    await a.replicator.syncNow();
+    expect(a.sqlite.prepare("SELECT content FROM run_artifacts WHERE run_id='remote'").get()).toEqual({ content: "Read while paced" });
+    expect(a.replicator.getStatus().runs).toEqual([{ runId: "remote", ready: true, error: null }]);
+  });
   it("applies a removed writer's fenced account records and refuses one a hub inserts after its removal", async () => {
     const account = randomUUID(), hub = await getLocalBridgeTestWorker();
     const a = await node(account, "A"), b = await node(account, "B"), c = await node(account, "C");

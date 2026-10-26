@@ -13,9 +13,12 @@ export function bridgeConnectionDescription(status: BridgeStatus | undefined): s
   const skipped = rejected > 0
     ? ` · ${rejected} change${rejected === 1 ? "" : "s"} from another device couldn't be applied and ${rejected === 1 ? "was" : "were"} skipped`
     : "";
+  const retryDate = status.writeRetryAt ? new Date(status.writeRetryAt) : null;
+  const pacing = retryDate && Number.isFinite(retryDate.getTime())
+    ? ` · Upload limit reached; resuming at ${retryDate.toLocaleTimeString()}` : "";
   switch (status.state) {
     case "connected": return (pending ?? lastSync ?? "No pending changes") + skipped;
-    case "syncing": return (pending ? `Syncing · ${pending}` : "Syncing…") + skipped;
+    case "syncing": return (pending ? `Syncing · ${pending}` : "Syncing…") + pacing + skipped;
     case "offline": return `Offline · ${pending ?? lastSync ?? "Reconnecting automatically"}`;
     case "error": return `Sync paused · ${pending ?? lastSync ?? "Your local data is kept"}`;
     case "read-only": return `Read only · ${pending ?? "New uploads are paused"}` + skipped;

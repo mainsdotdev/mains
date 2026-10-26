@@ -113,7 +113,8 @@ html:not(.app-ready) *::after {
   --nav-rail-width: 3rem;
   --sidebar-width: 18rem;
   --shell-header-height: 2.5rem;
-  --shell-header-top: 0.2125rem;
+  /* Match the 1.25-spacing frame inset used by main and preview headers. */
+  --shell-header-top: calc(var(--spacing) * 1.25);
   --shell-tab-width: 11rem;
   --shell-tab-min-width: 7rem;
   --panel-width: 22rem;

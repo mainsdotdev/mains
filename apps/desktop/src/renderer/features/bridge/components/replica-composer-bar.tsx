@@ -32,7 +32,7 @@ export function ReplicaComposerBar({ run, owner, status, hydration, variant }: {
   const navigate = useNavigate();
   const live = !!run && isReplicaLive(run, owner);
   const elapsed = useElapsed(run?.startedAt, live);
-  const hubOffline = status?.enabled === true && status.state !== "connected" && status.state !== "read-only";
+  const hubOffline = status?.enabled === true && status.state !== "connected" && status.state !== "syncing" && status.state !== "read-only";
   const notice = hubOffline ? "Showing saved data"
     : hydration && !hydration.ready ? hydration.error ? "Waiting to download this conversation" : "Downloading conversation…" : null;
   return <div data-testid="replica-composer"

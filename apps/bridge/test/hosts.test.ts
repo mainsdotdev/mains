@@ -32,7 +32,13 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge through two
       expect(merged.revision.mergedRevisionId).toBe(branched.conflicts![0].id);
       const result = await waitFor(() => b.client.call<AtlasPage>(CHANNELS.atlas.get, identity), (value) => value.revision.id === merged.revision.id && value.conflicts?.length === 0, "resolved graph on B");
       expect(result.item.isFavorite).toBe(true);
-      expect(await b.client.call<unknown[]>(CHANNELS.atlas.revisions, identity)).toHaveLength(4);
+      // History groups edits from one session into a checkpoint. Check the underlying graph
+      // through getRevision so a shortened history list cannot hide a missing replicated branch.
+      const revisionIds = [base.revision.id, branched.revision.id, branched.conflicts![0].id, merged.revision.id];
+      expect(new Set(revisionIds).size).toBe(4);
+      const retained = await Promise.all(revisionIds.map((revisionId) => b.client.call<{ id: string }>(CHANNELS.atlas.getRevision, { ...identity, revisionId })));
+      expect(retained.map((revision) => revision.id)).toEqual(revisionIds);
+      expect(await b.client.call<{ id: string }[]>(CHANNELS.atlas.revisions, identity)).toContainEqual(expect.objectContaining({ id: merged.revision.id }));
       expect(await b.client.invoke(CHANNELS.atlas.savePage, { ...identity, expectedVersion: before!.item.version, title: "Stale", markdown: "Do not overwrite" })).toMatchObject({ success: false });
     } finally { await fixture.dispose(); }
   }, 60_000);

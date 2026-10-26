@@ -6,6 +6,11 @@ const status = (patch: Partial<BridgeStatus>): BridgeStatus => ({ enabled: true,
   lastSyncedAt: null, error: null, pendingRecords: 0, backends: [], runs: [], ...patch });
 
 describe("Bridge connection description", () => {
+  it("shows upload pacing and queued progress without a paused/error description", () => {
+    const retry = "2026-10-27T12:01:00Z";
+    expect(bridgeConnectionDescription(status({ state: "syncing", pendingRecords: 600, writeRetryAt: retry })))
+      .toBe(`Syncing · 600 changes waiting to sync · Upload limit reached; resuming at ${new Date(retry).toLocaleTimeString()}`);
+  });
   it("reports synced changes that were skipped because they could not be applied", () => {
     expect(bridgeConnectionDescription(status({}))).toBe("No pending changes");
     expect(bridgeConnectionDescription(status({ rejectedRecords: 1 })))

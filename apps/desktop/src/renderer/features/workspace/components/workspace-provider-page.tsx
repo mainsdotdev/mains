@@ -579,7 +579,7 @@ function InteractiveWorkspaceProviderPage({
   const floatingPanel = reviewVisible ? {
     isExpanded: true, chatVisible: reviewChatVisible, chatMode: reviewChatMode,
     chatHost: reviewChatHost, setChatMode: setReviewChatMode, nativeOverlay: false,
-  } : mcpPanel?.isExpanded ? { ...mcpPanel, nativeOverlay: false } : browserPanel;
+  } : mcpPanel?.isExpanded && mcpPanel.ownerKey === ws.ownerKey ? { ...mcpPanel, nativeOverlay: false } : browserPanel;
   useVoiceChatPresence(!browserChatOnly && !floatingPanel.isExpanded && !useCenteredPromptLayout
     && !ws.showEmptyState && !ws.isEmptyStatePending
     ? ws.activeRun?.id ?? null : null);

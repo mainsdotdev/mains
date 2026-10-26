@@ -31,6 +31,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("Bridge key management", () => {
+  it("identifies blocked local changes and offers an explicit retry without a global sync error", async () => {
+    fixture.sync = { enabled: true, state: "syncing", backendId: "A", label: "A", lastSyncedAt: null, error: null, pendingRecords: 1, backends: [], runs: [],
+      blockedRecordCount: 1, blockedRecords: [{ table: "atlas_items", pk: "file-id", register: "content", stream: "account", label: "Trip notes", error: "Bridge source file integrity check failed", attempts: 2, retryAt: "2026-10-27T12:01:00Z" }] };
+    render(<BridgeSettings />);
+    expect(screen.getByText("1 change needs attention")).toBeTruthy();
+    expect(screen.getByText("Trip notes")).toBeTruthy();
+    expect(screen.getByText("Record: file-id")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Retry now", hidden: true })); });
+    expect(fixture.syncNow).toHaveBeenCalledOnce();
+  });
   it("keeps sync controls hidden until the join code from the approving device is explicitly verified", async () => {
     fixture.status = { ...fixture.status, state: "needs-verification", joinCodes: [], approvals: [] };
     fixture.projects = [{ id: "p", name: "Private project", localOnly: false, workspaces: 1, runs: 1 }];

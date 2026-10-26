@@ -24,11 +24,11 @@ vi.mock("@/features/workspace/components/tools/mcp-app-display", () => ({ McpApp
   useEffect(() => { mocks.mounts++; }, []);
   return <iframe title="test canvas" />;
 } }));
-import { McpAppPanelProvider, useMcpAppPanel } from "./use-mcp-app-panel";
+import { McpAppPanelProvider, useMcpAppPanel, useMcpAppInstances, McpAppInstanceProvider } from "./use-mcp-app-panel";
 import { McpAppWorkspace } from "@/features/workspace/components/mcp-app-workspace";
-import workspaceReducer, { setComposerContextKey, setSelectedCollectionId, setMcpAppRunId } from "@/lib/redux/slices/workspaceSlice";
+import workspaceReducer, { setComposerContextKey, setSelectedCollectionId, setMcpAppRunId, activateWorkspaceView } from "@/lib/redux/slices/workspaceSlice";
+import previewReducer, { closePreviewTab, openPreviewTab, selectPreviewTab } from "@/lib/redux/slices/previewSlice";
 import settingsReducer from "@/lib/redux/slices/appSettingsSlice";
-import { setBrowserPanelOpen, setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { composerOwnerKey, mcpAppConversationKey } from "@/features/workspace/lib/ui-context";
 import { buildRunContextPayload } from "@/features/workspace/lib/run-context-payload";
 import { toastStore, Toaster } from "@/components/ui";
@@ -37,9 +37,15 @@ const app: McpAppEntrypoint = { id: "magicpath/account-1", name: "MagicPath", se
   resourceUri: "ui://magicpath/canvas", connectorId: "connector-1", linkId: "account-1", entrypoints: ["global"], preferredModelDisplayMode: "fullscreen" };
 const scope = () => ({ backendId: null, spaceId: mocks.spaceId, providerId: "codex", mode: mocks.mode,
   workspaceId: mocks.mode === "developer" ? mocks.workspaceId : undefined, collectionId: null as string | null });
-function harness(initialPath = "/code/ws-1", previousPath?: string) {
+function RetainedCanvases() {
+  const instances = useMcpAppInstances();
+  return <>{instances.map((instance) => <McpAppInstanceProvider key={instance.document!.id} value={instance}><McpAppWorkspace /></McpAppInstanceProvider>)}</>;
+}
+function harness(initialPath = "/code/ws-1", previousPath?: string, strictMode = false) {
   const state = configureStore({ reducer: { workspace: workspaceReducer, appSettings: settingsReducer,
-    backends: () => ({ activeBackendId: null }) } });
+    backends: () => ({ activeBackendId: null }), preview: previewReducer } });
+  state.dispatch(activateWorkspaceView({ key: mocks.workspaceId, workspaceId: mocks.workspaceId, providerId: "codex" }));
+  state.dispatch(setComposerContextKey(composerOwnerKey(scope(), null)));
   mocks.getState.mockImplementation(() => state.getState());
   mocks.subscribe.mockImplementation((listener: () => void) => state.subscribe(listener));
   let navigate!: ReturnType<typeof useNavigate>;
@@ -48,8 +54,8 @@ function harness(initialPath = "/code/ws-1", previousPath?: string) {
     navigate = useNavigate();
     pathname = useLocation().pathname;
     return useMcpAppPanel()!;
-  }, { wrapper: ({ children }: { children: ReactNode }) =>
-    <Provider store={state}><MemoryRouter initialEntries={previousPath ? [previousPath, initialPath] : [initialPath]}><McpAppPanelProvider>{children}<McpAppWorkspace /></McpAppPanelProvider><Toaster /></MemoryRouter></Provider> });
+  }, { reactStrictMode: strictMode, wrapper: ({ children }: { children: ReactNode }) =>
+    <Provider store={state}><MemoryRouter initialEntries={previousPath ? [previousPath, initialPath] : [initialPath]}><McpAppPanelProvider>{children}<RetainedCanvases /></McpAppPanelProvider><Toaster /></MemoryRouter></Provider> });
   return { ...hook, state, navigate: (path: string) => navigate(path), back: () => navigate(-1), get pathname() { return pathname; } };
 }
 async function openDraft(h: ReturnType<typeof harness>, collectionId: string | null = null) {
@@ -72,10 +78,36 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); toastStore.dismissAll(); vi.useRealTimers(); });
 describe("shared MCP App panel", () => {
+  it("keeps a newly opened app session alive during StrictMode effect replay", async () => {
+    const h = harness("/code/ws-1", undefined, true);
+    await openDraft(h);
+    expect(h.result.current.document?.sessionId).toBe("session-1");
+    expect(mocks.closeExtension).not.toHaveBeenCalled();
+    h.unmount();
+    expect(mocks.closeExtension).toHaveBeenCalledExactlyOnceWith({ sessionId: "session-1" });
+  });
+  it("releases only a closed tab's session and context, retaining the other app until unmount", async () => {
+    const h = harness("/code/ws-1", undefined, true);
+    await openDraft(h);
+    const firstId = h.result.current.document!.id;
+    const key = Object.keys(h.state.getState().preview.byOwner)[0];
+    await act(async () => h.result.current.updateModelContext({ content: [{ type: "text", text: "Selection" }] }));
+    const other = { ...app, id: "other", resourceUri: "ui://other", name: "Other" };
+    mocks.openExtension.mockResolvedValue({ success: true, data: { sessionId: "session-2", app: other, output: { content: [] } } });
+    await act(async () => h.result.current.openGlobal(other));
+    expect(mocks.closeExtension).not.toHaveBeenCalled();
+    act(() => h.state.dispatch(closePreviewTab({ ownerKey: key, id: firstId })));
+    expect(mocks.closeExtension).toHaveBeenCalledExactlyOnceWith({ sessionId: "session-1" });
+    expect(h.state.getState().workspace.contextItems).toEqual([]);
+    expect(h.result.current.document?.sessionId).toBe("session-2");
+    h.unmount();
+    expect(mocks.closeExtension).toHaveBeenCalledTimes(2);
+    expect(mocks.closeExtension).toHaveBeenLastCalledWith({ sessionId: "session-2" });
+  });
   it("opens rail apps expanded with a normal draft and no model turn", async () => {
     const h = harness(); const { ownerKey } = await openDraft(h);
-    expect(h.result.current.isExpanded).toBe(true);
-    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(true);
+    expect(h.result.current.isExpanded).toBe(false);
+    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(false);
     expect(h.result.current.ownerKey).toBe(ownerKey);
     expect(h.state.getState().workspace.activeTab).toBe("new-run");
     expect(mocks.sends).not.toHaveBeenCalled();
@@ -90,7 +122,7 @@ describe("shared MCP App panel", () => {
       h.state.dispatch(setComposerContextKey(ownerKey));
       h.result.current.registerConversation({ scope: target, ownerKey, send: mocks.sends });
     });
-    expect(h.result.current.isExpanded).toBe(true);
+    expect(h.result.current.isExpanded).toBe(false);
     expect(h.result.current.chatVisible).toBe(false);
     expect(toastStore.toasts).toHaveLength(0);
     act(() => vi.advanceTimersByTime(800));
@@ -120,27 +152,11 @@ describe("shared MCP App panel", () => {
       expect(toastStore.toasts).toHaveLength(0);
     } finally { app.tool = oldTool; }
   });
-  it("keeps the sidebar closed while expanded and permits it again when docked or closed", async () => {
-    const h = harness(); await openDraft(h);
-    act(() => h.state.dispatch(setSidebarCollapsed(false)));
-    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(true);
-
-    act(() => h.result.current.toggleExpanded());
-    act(() => h.state.dispatch(setSidebarCollapsed(false)));
-    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(false);
-
-    act(() => h.result.current.toggleExpanded());
-    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(true);
-
-    act(() => h.result.current.close());
-    act(() => h.state.dispatch(setSidebarCollapsed(false)));
-    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(false);
-  });
   it("keeps the iframe and session through docking, expansion, close and reopening", async () => {
     const h = harness(); await openDraft(h);
     const frame = document.querySelector("iframe"); const id = h.result.current.document?.id;
     act(() => h.result.current.toggleExpanded());
-    expect(h.result.current.isOpen).toBe(true); expect(h.result.current.isExpanded).toBe(false);
+    expect(h.result.current.isOpen).toBe(true); expect(h.result.current.isExpanded).toBe(true);
     act(() => h.result.current.toggleExpanded());
     act(() => h.result.current.close());
     await act(async () => h.result.current.openGlobal(app));
@@ -181,20 +197,16 @@ describe("shared MCP App panel", () => {
     const frame = document.querySelector("iframe"); const id = h.result.current.document?.id;
     act(() => h.result.current.openTool({ runId: "run-1", app: { ...app, originCallId: "new-call" }, input: { projectId: "123" },
       output: { content: [], structuredContent: { projectId: "123" } }, title: "MagicPath" }, true));
-    expect(h.result.current.isExpanded).toBe(true); expect(h.result.current.document?.id).toBe(id);
+    expect(h.result.current.isExpanded).toBe(false); expect(h.result.current.document?.id).toBe(id);
     expect(h.result.current.document?.input).toEqual({ projectId: "123" });
     expect(document.querySelector("iframe")).toBe(frame); expect(mocks.mounts).toBe(1);
   });
-  it("expands with the compact composer and restores it when reopening a rail app", async () => {
+  it("preserves each app's presentation state when hiding and reopening", async () => {
     const h = harness(); await openDraft(h);
-    act(() => { h.result.current.setChatMode("details"); h.result.current.toggleExpanded(); });
-    act(() => { h.result.current.setChatVisible(false); h.result.current.toggleExpanded(); });
-    expect(h.result.current.isExpanded).toBe(true);
-    expect(h.result.current.chatMode).toBe("input");
-    expect(h.result.current.chatVisible).toBe(true);
-    act(() => { h.result.current.setChatMode("details"); h.result.current.close(); });
+    act(() => { h.result.current.setChatMode("details"); h.result.current.setChatVisible(false); h.result.current.close(); });
     await act(async () => h.result.current.openGlobal(app));
-    expect(h.result.current.chatMode).toBe("input");
+    expect(h.result.current.chatMode).toBe("details");
+    expect(h.result.current.chatVisible).toBe(false);
     expect(mocks.openExtension).toHaveBeenCalledTimes(1);
   });
   it("opens a closed app from a chat result docked even when it was previously expanded", async () => {
@@ -224,23 +236,26 @@ describe("shared MCP App panel", () => {
     expect(h.result.current.scope).toMatchObject({ mode, collectionId: "project-1", workspaceId: undefined });
     await act(async () => h.result.current.sendMessage([{ type: "text", text: "Hello" }]));
     expect(mocks.sends).toHaveBeenCalledWith("Hello", undefined);
+    act(() => h.state.dispatch(setComposerContextKey(composerOwnerKey({ ...scope(), collectionId: "project-1" }, "run-1"))));
     expect(h.result.current.runId).toBe("run-1");
   });
-  it("freezes a Code draft's workspace and uses the current workspace for New chat", async () => {
+  it("keeps the app in its original Code workspace instead of moving it into another", async () => {
     const h = harness(); await openDraft(h);
-    mocks.workspaceId = "ws-2"; h.rerender();
+    const id = h.result.current.document!.id;
+    mocks.workspaceId = "ws-2";
+    act(() => h.state.dispatch(activateWorkspaceView({ key: "ws-2", workspaceId: "ws-2", providerId: "codex" })));
+    expect(h.result.current.document).toBeNull();
+    act(() => h.state.dispatch(activateWorkspaceView({ key: "ws-1", workspaceId: "ws-1", providerId: "codex" })));
+    expect(h.result.current.document?.id).toBe(id);
     expect(h.result.current.scope?.workspaceId).toBe("ws-1");
-    act(() => h.result.current.newChat());
-    expect(h.result.current.scope?.workspaceId).toBe("ws-2");
-    expect(h.result.current.runId).toBeUndefined(); expect(mocks.openExtension).toHaveBeenCalledTimes(1);
   });
-  it("uses the remembered run's workspace when opening an app again", async () => {
-    const h = harness(); const target = scope();
-    act(() => h.state.dispatch(setMcpAppRunId({ key: mcpAppConversationKey(target, app.id), runId: "old-run" })));
+  it("does not borrow a remembered app conversation from a different Code workspace", async () => {
+    const h = harness();
+    act(() => h.state.dispatch(setMcpAppRunId({ key: mcpAppConversationKey(scope(), app.id), runId: "old-run" })));
     mocks.getById.mockResolvedValue({ success: true, data: { id: "old-run", providerId: "codex", spaceId: "space-1", mode: "developer", workspaceId: "original-ws", collectionId: null } });
     await act(async () => h.result.current.openGlobal(app));
-    expect(h.result.current.runId).toBe("old-run"); expect(h.result.current.scope?.workspaceId).toBe("original-ws");
-    expect(h.state.getState().workspace.pendingRunId).toBe("old-run");
+    expect(h.result.current.runId).toBeUndefined();
+    expect(h.result.current.scope?.workspaceId).toBe("ws-1");
   });
   it("rejects a message after leaving its conversation instead of retargeting it", async () => {
     const h = harness(); await openDraft(h);
@@ -316,12 +331,20 @@ describe("shared MCP App panel", () => {
     expect(h.result.current.document).toBeNull();
     expect(mocks.openExtension).not.toHaveBeenCalled();
   });
-  it("gives the right edge to the browser without disposing the app connection", async () => {
+  it("keeps multiple app sessions alive when selecting a browser or another app", async () => {
     const h = harness(); await openDraft(h);
-    act(() => h.state.dispatch(setBrowserPanelOpen(true)));
+    const firstId = h.result.current.document!.id;
+    const key = Object.keys(h.state.getState().preview.byOwner)[0];
+    act(() => h.state.dispatch(openPreviewTab({ ownerKey: key, tab: { kind: "browser", id: "page", title: "Page", faviconUrl: null, isLoading: false, isCrashed: false } })));
     expect(h.result.current.isOpen).toBe(false);
     expect(mocks.closeExtension).not.toHaveBeenCalled();
-    act(() => h.state.dispatch(setBrowserPanelOpen(false)));
-    expect(h.result.current.isOpen).toBe(false);
+    const other = { ...app, id: "other", resourceUri: "ui://other", name: "Other" };
+    mocks.openExtension.mockResolvedValue({ success: true, data: { sessionId: "session-2", app: other, output: { content: [] } } });
+    await act(async () => h.result.current.openGlobal(other));
+    expect(h.state.getState().preview.byOwner[key].tabs).toHaveLength(3);
+    act(() => h.state.dispatch(selectPreviewTab({ ownerKey: key, id: firstId })));
+    expect(h.result.current.document?.app.id).toBe(app.id);
+    expect(mocks.openExtension).toHaveBeenCalledTimes(2);
+    expect(mocks.closeExtension).not.toHaveBeenCalled();
   });
 });

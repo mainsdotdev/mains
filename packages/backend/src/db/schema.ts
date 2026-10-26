@@ -1673,6 +1673,8 @@ export const bridgeOutbox = sqliteTable("bridge_outbox", {
   generation: integer("generation").notNull(),
   stream: text("stream").notNull(), owner: text("owner"), runId: text("run_id"),
   changedAt: integer("changed_at").notNull(),
+  retryGeneration: integer("retry_generation"), retryAttempts: integer("retry_attempts").notNull().default(0),
+  retryAfterMs: integer("retry_after_ms").notNull().default(0), retryError: text("retry_error"),
 }, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register] }), index("idx_bridge_outbox_stream").on(t.stream, t.generation)]);
 
 export const bridgeRowClock = sqliteTable("bridge_row_clock", {

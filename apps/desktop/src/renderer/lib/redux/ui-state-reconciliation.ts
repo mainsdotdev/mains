@@ -5,6 +5,7 @@ import {
   viewKeyBelongsToBackend,
   workspaceIdFromDraftOwnerKey,
   workspaceIdFromViewKey,
+  workspaceIdFromPreviewOwnerKey,
 } from "../../../shared/ui-state-keys";
 import { getTransport, type Transport } from "../transport";
 import type { AppDispatch, RootState } from "./index";
@@ -22,6 +23,8 @@ export function collectUiContextCandidates(
     if (runId) runs.add(runId);
     const workspaceId = workspaceIdFromDraftOwnerKey(key, backendId);
     if (workspaceId) workspaces.add(workspaceId);
+    const previewWorkspaceId = workspaceIdFromPreviewOwnerKey(key, backendId);
+    if (previewWorkspaceId) workspaces.add(previewWorkspaceId);
   };
   const addView = (key: string, activeTab?: string, previousTab?: string | null) => {
     const workspaceId = workspaceIdFromViewKey(key, backendId);
@@ -43,6 +46,7 @@ export function collectUiContextCandidates(
   for (const key of Object.keys(state.appSettings.documentViewerDocByContext)) addOwner(key);
   addOwner(state.appSettings.activeRightPaneContextKey);
   for (const key of browserOwnerKeys) addOwner(key);
+  for (const key of Object.keys(state.preview?.byOwner ?? {})) addOwner(key);
   for (const [key, view] of Object.entries(state.workspace.workspaceViews)) {
     addView(key, view.activeTab, view.previousNonEditorTab);
   }

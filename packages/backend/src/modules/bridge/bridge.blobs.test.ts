@@ -10,6 +10,7 @@ import type { BridgeEnvelope } from "@mains/contracts/bridge-protocol";
 import { createTestDb } from "../../../test/setup-db";
 import { getLocalBridgeTestWorker, disposeBridgeTestHub, networkMode } from "../../../test/bridge-hub";
 import { createBridgeBlobs } from "./bridge.blobs";
+import * as transfer from "./bridge.blob-transfer";
 import { createBridgeBlobRecords } from "./bridge.blob-records";
 import { createBridgeEngine } from "./bridge.engine";
 import { createBridgeWebSocketTransport } from "./bridge.websocket";
@@ -134,9 +135,10 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
     await hub.quotaSql(account, "UPDATE blob_objects SET delete_after=0 WHERE refs=0"); await a.transport.compact();
     await fs.rm(join(a.dataDir, "bridge", "blobs"), { recursive: true, force: true });
     await fs.unlink(join(a.dataDir, "atlas/files/orphan/image.png"));
-    await expect(a.engine.push()).rejects.toThrow(/unavailable locally/);
+    await a.engine.push();
+    expect(a.engine.blocked().records).toContainEqual(expect.objectContaining({ pk: "orphan", error: expect.stringMatching(/unavailable locally/) }));
     expect(a.engine.pending().some((entry) => entry.pk === "orphan")).toBe(true);
-    await fs.writeFile(join(a.dataDir, "atlas/files/orphan/image.png"), image);
+    await fs.writeFile(join(a.dataDir, "atlas/files/orphan/image.png"), image); a.engine.retryBlocked();
     await expect(a.engine.push()).rejects.toThrow(/republishing/); await a.engine.push(); await b.engine.pull();
     expect(await fs.readFile(await b.records.resolve("atlas_items", "orphan"))).toEqual(image);
   });
@@ -208,10 +210,10 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
     const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
     const newer = "new captured value".repeat(100_000);
     a.sqlite.prepare("UPDATE accounts SET bio=? WHERE id='default'").run("previous captured value".repeat(100_000));
-    const real = globalThis.fetch; let changed = false;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+    const real = transfer.requestBridgeChunk; let changed = false;
+    vi.spyOn(transfer, "requestBridgeChunk").mockImplementation(async (url, init) => {
       const response = await real(url, init);
-      if (!changed && init?.method === "PUT") { changed = true; a.sqlite.prepare("UPDATE accounts SET bio=? WHERE id='default'").run(newer); }
+      if (!changed && init.body) { changed = true; a.sqlite.prepare("UPDATE accounts SET bio=? WHERE id='default'").run(newer); }
       return response;
     });
     await a.engine.push("account");
@@ -375,25 +377,25 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
   it("resumes interrupted multi-chunk uploads and downloads, and stores only ciphertext in R2", async () => {
     const account = randomUUID(), a = await files(account, "A"), b = await files(account, "B");
     const bytes = Buffer.alloc(BRIDGE_BLOB_CHUNK_BYTES + 153, 91); bytes.write("private-file-sentinel");
-    const real = globalThis.fetch; let puts = 0;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
-      if (init?.method === "PUT" && ++puts === 2) throw new Error("upload interrupted"); return real(url, init);
+    const real = transfer.requestBridgeChunk; let puts = 0;
+    vi.spyOn(transfer, "requestBridgeChunk").mockImplementation(async (url, init) => {
+      if (init.body && ++puts === 2) throw new Error("upload interrupted"); return real(url, init);
     });
     const description = { column: "path", name: "secret-name.bin", mime: null };
     await expect(a.blobs.publish(bytes, description)).rejects.toThrow("interrupted"); vi.restoreAllMocks();
     let resumedPuts = 0;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => { if (init?.method === "PUT") resumedPuts++; return real(url, init); });
+    vi.spyOn(transfer, "requestBridgeChunk").mockImplementation(async (url, init) => { if (init.body) resumedPuts++; return real(url, init); });
     const ref = await a.blobs.publish(bytes, description); expect(resumedPuts).toBe(1); vi.restoreAllMocks();
     const bucket = await a.hub.bucket(), entries = (await bucket.list()).objects;
     const chunks = entries.filter((entry) => entry.key.includes(ref.blobId)); expect(chunks).toHaveLength(2);
     const sealed = Buffer.from(await (await bucket.get(chunks[0].key))!.arrayBuffer()); expect(sealed.includes(Buffer.from("private-file-sentinel"))).toBe(false); expect(chunks[0].key).not.toContain(description.name);
     let gets = 0;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
-      if (String(url).includes("/chunk?") && !init?.method && ++gets === 2) throw new Error("download interrupted"); return real(url, init);
+    vi.spyOn(transfer, "requestBridgeChunk").mockImplementation(async (url, init) => {
+      if (!init.body && ++gets === 2) throw new Error("download interrupted"); return real(url, init);
     });
     await expect(b.blobs.resolve(ref)).rejects.toThrow("interrupted"); vi.restoreAllMocks();
     let resumedGets = 0;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => { if (String(url).includes("/chunk?") && !init?.method) resumedGets++; return real(url, init); });
+    vi.spyOn(transfer, "requestBridgeChunk").mockImplementation(async (url, init) => { if (!init.body) resumedGets++; return real(url, init); });
     // Buffer.equals: a structural toEqual walks all 4 MiB byte by byte, which takes seconds.
     expect((await fs.readFile(await b.blobs.resolve(ref))).equals(bytes)).toBe(true); expect(resumedGets).toBe(1); vi.restoreAllMocks();
     const restarted = await files(account, "B", { dataDir: b.dataDir });
@@ -419,10 +421,10 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
     a.sqlite.exec("INSERT INTO runs(id,owner_backend_id,account_id,provider_id,title) VALUES('changing','A','default','codex','Changing');");
     const inserted = a.sqlite.prepare("INSERT INTO run_artifacts(run_id,kind,blob_data,metadata) VALUES('changing','image',?,?)").run(image, JSON.stringify({ fileName: "image.png" }));
     await a.engine.push("account"); await b.engine.pull("account");
-    const newer = Buffer.concat([image, Buffer.from("new-version")]), real = globalThis.fetch; let changed = false;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+    const newer = Buffer.concat([image, Buffer.from("new-version")]), real = transfer.requestBridgeChunk; let changed = false;
+    vi.spyOn(transfer, "requestBridgeChunk").mockImplementation(async (url, init) => {
       const response = await real(url, init);
-      if (!changed && init?.method === "PUT") { changed = true; a.sqlite.prepare("UPDATE run_artifacts SET blob_data=? WHERE id=?").run(newer, inserted.lastInsertRowid); }
+      if (!changed && init.body) { changed = true; a.sqlite.prepare("UPDATE run_artifacts SET blob_data=? WHERE id=?").run(newer, inserted.lastInsertRowid); }
       return response;
     });
     await a.engine.push("run:changing"); expect(a.engine.pending().some((entry) => entry.table_name === "run_artifacts")).toBe(true);

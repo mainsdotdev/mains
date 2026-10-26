@@ -13,7 +13,7 @@ describe("Bridge canonical base64url encoding", () => {
     const bytes = storage.subarray(7, storage.length - 11);
     const encoded = toBase64Url(bytes);
     expect(encoded).toBe(Buffer.from(bytes).toString("base64url"));
-    expect(fromBase64Url(encoded, bytes.length)).toEqual(bytes);
+    expect(Buffer.from(fromBase64Url(encoded, bytes.length)).equals(bytes)).toBe(true);
   });
 
   it.each(["", "A", "Zg==", "Zg\n", "Zh", "Zm9", "Zg+", "Zg/", "é"])("rejects a noncanonical encoding %j", (value) => {

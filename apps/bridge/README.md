@@ -1149,7 +1149,9 @@ stops its stream: it is kept in `bridge_parked` as `unverified`, its clock is
 ignored, and the cursor moves on. A record that authenticates but that this
 replica refuses (an ownership collision, a rewritten immutable revision, a
 SQLite constraint) is undone and set aside the same way; a local failure, such
-as recovery or I/O, still rolls back the whole batch to be retried. Each engine
+as recovery or I/O, still rolls back the whole batch to be retried. Membership
+temporarily hidden while loading an adopted history's fences is also retryable:
+the batch rolls back without parking records or advancing its cursor. Each engine
 re-checks up to 100 such records once the hub answers, fetching that sequence
 again, so a newer client version or an undamaged copy still applies; one the hub
 no longer serves was superseded and is dropped. Since a compromised signer can publish
@@ -1181,6 +1183,22 @@ file identity before exposing an atomic, read-only original. Interrupted
 transfers resume per chunk. The default local LRU is 256 MiB, including partial
 downloads; active transfers are pinned and downloads have two slots. Files
 above 50 MiB stay source-only.
+
+Chunk downloads use a 30-second socket inactivity deadline. Uploads monitor socket
+write progress and allow a receipt window of 30 seconds plus the chunk size at
+128 Kibit/s for bytes already queued in the OS. Connection setup remains bounded;
+shutdown aborts in-flight requests. Chunk size and authenticated encoding stay the same.
+
+Backend migration 0040 retains per-generation preparation errors and retry deadlines
+in the outbox. Failed files/value blobs retry with 2–60 second backoff without
+blocking healthy records, unrelated run streams or watched pulls. Deferred records
+are filtered before batch limits. Run children wait only for their own acknowledged
+root and required account parents. Settings identifies blocked changes and offers
+Retry now; new local generations are eligible immediately. A write rate limit
+paces uploads for a minute, preserves reads/deletes and displays syncing with the
+next upload time, rather than a replication error.
+Forked attachment references also wait for their stream's file metadata ACK, so
+a failed synthetic metadata publication leaves the reference available for retry.
 
 `POST /v1/blobs/presign` accepts `{blobs:[{blobId,size}],op:"put"|"get"}`.
 It authenticates the backend and issues ten-minute, account/object/chunk/op

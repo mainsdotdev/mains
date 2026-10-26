@@ -305,6 +305,12 @@ Core tables:
 - `sources/` holds the per-provider `PrSource` interface (mirrors sync's `ResourceFetcher` pattern): `github.source.ts` runs GraphQL search/detail and the write mutations with the stored connection token via `getConnectionWithSecrets` — no `gh` CLI dependency. GitLab/Bitbucket land as new source files behind `source.factory.ts`.
 - Search defaults to the repos selected on the connection (the same set issue sync pulls from, via `getSelectedResources`); with none selected it falls back to a global `involves:@me` search. An explicit `repos` filter overrides the default scope.
 
+**Preview tabs** (`src/renderer/features/workspace/components/preview-panel.tsx`)
+- Browser pages, MCP App instances and actual document files share one right-edge tab strip, resize handle and expansion state. The `+` create action follows the preview tabs, using the same placement as workspace tabs, and opens a new default browser page directly. A fixed toggle remains immediately left of RightPanel: `+` opens a default browser page when closed and becomes `×` to hide previews when open, without moving; MCP apps use their existing launchers, and documents open from selected files, never blank document tabs.
+- `TerminalPanelTrigger` shares `MainContent.headerActions` with `SessionPanelTrigger` so both follow the main content edge. Only preview and RightPanel toggles remain in the fixed window controls.
+- `previewSlice` owns session-only descriptors/order/selection by backend+workspace in Code and conversation owner in Work/Chat. Draft tabs move to their created run. Atlas has its own docked preview group. The existing browser width preference is shared across preview types.
+- Native browser views/history remain in `browserService`; documents retain per-file renderers; MCP instances retain their own connection and original conversation. Tab selection/hiding does not close another resource. Explicit app close waits for widget-state saving; native browser close honors `beforeunload`.
+
 **Browser Module** (`src/main/modules/browser/`)
 - Drives an embedded `WebContentsView` panel inside the Electron window — attach/detach, set bounds, navigate, capture screenshots
 - Panel attachment and requested visibility are separate from overlay suppression. `useSuppressBrowserView` acquires a unique `browser:setSuppressed` lease; releasing it cannot reopen a detached panel or override another overlay. Annotation dropdowns leave the live page visible.

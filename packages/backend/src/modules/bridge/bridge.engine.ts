@@ -6,12 +6,14 @@ import { installBridgeCapture, portablePkSql } from "./bridge.capture";
 import { bridgePassThroughCodec, type BridgeCodec } from "./bridge.crypto";
 import { applyBridgeBatch, applyDeletedAck, isRejectedRecord, openPulledRecord, RECHECK_REASON, UNVERIFIED_REASON, verifyEnvelope, type AppliedChange } from "./bridge.applier";
 import { definition, getClock, isAtlas, quote, syncedTables } from "./bridge.sql";
-import { captureExisting, outboxInScope, prepareRecord, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
+import { bestClock, captureExisting, outboxInScope, prepareRecord, readRow, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
 import type { BridgeTransport } from "./bridge.transport";
 import type { BridgeBlobRecords } from "./bridge.blob-records";
 import { recoverAtlasPage } from "./bridge.atlas";
 import { valueBlobBytes } from "./bridge.value-blobs";
 import { BRIDGE_TABLES } from "./bridge.records";
+import type { BridgeBlockedRecord } from "@mains/contracts/bridge";
+import { BridgeMembershipNotReadyError } from "./bridge.membership";
 
 export interface BridgeEngineOptions {
   sqlite: SQLiteInstance;
@@ -66,6 +68,28 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   let stopped = false;
   let queue: Promise<unknown> = Promise.resolve();
   let parkedCheckedAt: string | undefined, unverifiedChecked = false;
+  function deferPreparation(entry: OutboxEntry, cause: unknown) {
+    if (cause instanceof BridgeMembershipNotReadyError) throw cause;
+    const previous = sqlite.prepare("SELECT retry_generation,retry_attempts FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?")
+      .get(entry.table_name, entry.pk, entry.register, entry.generation) as { retry_generation: number | null; retry_attempts: number } | undefined;
+    if (!previous) return; // A local write superseded the snapshot while I/O was pending.
+    const attempts = previous.retry_generation === entry.generation ? previous.retry_attempts + 1 : 1;
+    const retryAt = Date.now() + Math.min(60_000, 2000 * 2 ** Math.min(attempts - 1, 5));
+    sqlite.prepare(`UPDATE bridge_outbox SET retry_generation=generation,retry_attempts=?,retry_after_ms=?,retry_error=?
+      WHERE table_name=? AND pk=? AND register=? AND generation=?`)
+      .run(attempts, retryAt, cause instanceof Error ? cause.message : "Bridge file preparation failed", entry.table_name, entry.pk, entry.register, entry.generation);
+  }
+  /** A run's acknowledged root and required account parents unlock its stream independently of
+   * unrelated account writes. Cyclic references are already handled by the receiver's parked queue. */
+  function accountPublished(table: string, pk: string, seen = new Set<string>()): boolean {
+    const id = JSON.stringify([table, pk]); if (seen.has(id)) return true;
+    seen.add(id);
+    const def = definition(table), clock = bestClock(store, table, pk, def.primaryRegister!);
+    if (clock?.synced_seq == null) return false;
+    const row = readRow(store, table, pk); if (!row) return false;
+    return Object.entries(def.references).every(([column, ref]) => ref.class !== "required" || row[column] == null ||
+      definition(ref.table).stream !== "account" || accountPublished(ref.table, String(row[column]), seen));
+  }
   const parkedState = () => JSON.stringify([
     (sqlite.prepare("SELECT total_changes() n").get() as { n: number }).n,
     sqlite.pragma("data_version", { simple: true }), sqlite.pragma("schema_version", { simple: true }),
@@ -241,8 +265,10 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   }
   async function push(stream: BridgeStream, limit: number, deletesOnly = false, rebased = false, resigned = false): Promise<number> {
     validateLimit(limit);
+    // Filter deferred generations BEFORE LIMIT so a full batch of bad files cannot starve later rows.
     const outgoing = () => sqlite.prepare(`SELECT * FROM bridge_outbox WHERE stream=? AND (?=1 OR substr(table_name,1,6)<>'atlas_') AND (?=0 OR op='delete')
-      ORDER BY CASE WHEN op='delete' THEN 0 ELSE 1 END,generation,table_name,pk,register LIMIT ?`).all(stream, Number(store.atlasEnabled), Number(deletesOnly), limit) as OutboxEntry[];
+      AND (retry_generation IS NULL OR retry_generation<>generation OR retry_after_ms<=?)
+      ORDER BY CASE WHEN op='delete' THEN 0 ELSE 1 END,generation,table_name,pk,register LIMIT ?`).all(stream, Number(store.atlasEnabled), Number(deletesOnly), Date.now(), limit) as OutboxEntry[];
     let preparationError: unknown;
     // Disk/network work stays outside SQLite transactions. A changed generation
     // is left pending rather than receiving an older generation's manifest.
@@ -260,8 +286,8 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
           await prepareFiles({ ...entry, table_name: "run_attachments", pk: attachmentId, register: "row" });
         }
       } catch (cause) {
-        if (!/quota|rate limit|subscription required/i.test(String(cause))) throw cause;
-        preparationError ??= cause;
+        if (/quota|rate limit|subscription required/i.test(String(cause))) preparationError ??= cause;
+        else deferPreparation(entry, cause);
       }
     }
     const { prepared, attachmentCount } = sqlite.transaction(() => {
@@ -313,6 +339,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       if (i >= attachmentCount) sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
     }
     let rejection: string | undefined, hubMs: number | undefined, stale = false;
+    const failedAttachments = new Set(prepared.slice(0, attachmentCount).flatMap((sent, index) => "error" in results[index] ? [sent.entry.pk] : []));
     for (let i = 0; i < results.length; i++) {
       const result = results[i], sent = prepared[i], entry = sent.entry;
       if ("deleted" in result) continue;
@@ -326,13 +353,26 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
           })();
           stale = true; continue;
         }
-        if (result.error === "blobMissing" && options.blobs) await options.blobs.republish(store, sent.clock);
+        if (result.error === "blobMissing" && options.blobs) {
+          try { await options.blobs.republish(store, sent.clock); }
+          catch (cause) {
+            if (/quota|rate limit|subscription required/i.test(String(cause))) preparationError ??= cause;
+            else if (i < attachmentCount) {
+              // Synthetic file metadata has no outbox row. Its actual references must retain
+              // their ACKs/retry state until this stream has acknowledged the file as well.
+              for (const dependent of prepared.slice(attachmentCount)) if (dependent.entry.table_name === "run_attachment_refs" &&
+                (JSON.parse(dependent.entry.pk) as string[])[1] === entry.pk) deferPreparation(dependent.entry, cause);
+            } else deferPreparation(entry, cause);
+            continue;
+          }
+        }
         rejection ??= result.error === "quotaExceeded" ? "Bridge storage quota exceeded; local changes remain queued" :
           result.error === "rateLimited" ? "Bridge write rate limit reached; local changes remain queued" :
           result.error === "subscriptionRequired" ? "Bridge subscription required; local changes remain queued" :
           result.error === "blobMissing" ? "Bridge files need republishing; local changes remain queued" : "Bridge hub rejected a non-owner write";
         continue;
       }
+      if (entry.table_name === "run_attachment_refs" && failedAttachments.has((JSON.parse(entry.pk) as string[])[1])) continue;
       const clearPublication = () => sqlite.prepare("DELETE FROM bridge_publications WHERE table_name=? AND pk=? AND register=? AND stream=? AND envelope=?")
         .run(entry.table_name, entry.pk, entry.register, entry.stream, JSON.stringify(sent.envelope));
       if (i < attachmentCount) { clearPublication(); continue; }
@@ -384,6 +424,21 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     fullPull(stream: BridgeStream = "account", limit = 100) { return serial(() => pull(stream, true, limit)); },
     retryParked() { return serial(() => retryParked(true)); },
     pending() { return sqlite.prepare("SELECT * FROM bridge_outbox ORDER BY generation").all() as OutboxEntry[]; },
+    canPushRun(runId: string) { return accountPublished("runs", runId); },
+    blocked() {
+      const where = "retry_generation=generation AND retry_error IS NOT NULL";
+      const { total } = sqlite.prepare(`SELECT count(*) total FROM bridge_outbox WHERE ${where}`).get() as { total: number };
+      const rows = sqlite.prepare(`SELECT table_name,pk,register,stream,retry_error,retry_attempts,retry_after_ms FROM bridge_outbox
+        WHERE ${where} ORDER BY generation LIMIT 20`).all() as { table_name: string; pk: string; register: string; stream: string; retry_error: string; retry_attempts: number; retry_after_ms: number }[];
+      const records: BridgeBlockedRecord[] = rows.map((row) => {
+        const source = readRow(store, row.table_name, row.pk);
+        return { table: row.table_name, pk: row.pk, register: row.register, stream: row.stream,
+          label: String(source?.title ?? source?.name ?? source?.file_name ?? row.pk),
+          error: row.retry_error, attempts: row.retry_attempts, retryAt: new Date(row.retry_after_ms).toISOString() };
+      });
+      return { total, records };
+    },
+    retryBlocked() { sqlite.prepare("UPDATE bridge_outbox SET retry_after_ms=0 WHERE retry_generation=generation AND retry_error IS NOT NULL").run(); },
     /** Pulled records set aside because this device could not verify or apply them. */
     unverified() { return (sqlite.prepare("SELECT count(*) AS n FROM bridge_parked WHERE reason=?").get(UNVERIFIED_REASON) as { n: number }).n; },
     async stop() { await queue; stopped = true; store.codec.destroy?.(); },

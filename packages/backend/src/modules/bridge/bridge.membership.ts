@@ -37,6 +37,10 @@ export async function fetchBridgeMembership(hubUrl: string, token: string, after
 }
 /** The hub's history does not contain the one this backend verified. */
 export class BridgeMembershipConflictError extends Error {}
+/** A verified history is being adopted and its removal fences are not ready yet. Retry locally. */
+export class BridgeMembershipNotReadyError extends Error {
+  constructor() { super("Bridge account membership is not verified yet; retry after refreshing membership"); }
+}
 export const bridgeMembershipConflict = (failure: unknown) =>
   new BridgeMembershipConflictError(`Bridge account membership conflict: ${failure instanceof Error ? failure.message : "invalid log"}`);
 

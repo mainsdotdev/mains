@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { BRIDGE_BLOB_CHUNK_BYTES, BRIDGE_BLOB_CIPHER_OVERHEAD, BRIDGE_BLOB_MAX_BYTES, bridgeBlobChunkCount, bridgeBlobChunkSize,
   validateBridgeBlobIdentity, type BridgeBlobRef, type BridgeBlobPresignResult } from "@mains/contracts/bridge-blobs";
 import { createBridgeBlobCrypto } from "./bridge.blob-crypto";
+import { requestBridgeChunk } from "./bridge.blob-transfer";
 
 export interface BridgeBlobsOptions {
   accountKey: Uint8Array; dataDir: string; url: string; token: string | (() => Promise<string>);
@@ -139,7 +140,7 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
         if (sealed) crypto.open(ref, chunk.index, sealed); // Never trust an incomplete/tampered local part.
       } catch { sealed = undefined; }
       if (!sealed) {
-        const response = await request(chunk.url);
+        const response = await requestBridgeChunk(chunk.url, { signal: abort.signal });
         if (!response.ok) throw new Error(`Bridge file is unavailable (${response.status})`);
         sealed = await readBounded(response, bridgeBlobChunkSize(ref.size, chunk.index) + BRIDGE_BLOB_CIPHER_OVERHEAD);
         crypto.open(ref, chunk.index, sealed);
@@ -222,7 +223,7 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
         for (const chunk of await urls(ref, "put")) {
           if (chunk.exists) continue;
           const plaintext = bytes.subarray(chunk.index * BRIDGE_BLOB_CHUNK_BYTES, (chunk.index + 1) * BRIDGE_BLOB_CHUNK_BYTES);
-          const response = await request(chunk.url, { method: "PUT", body: Buffer.from(crypto.seal(ref, chunk.index, plaintext)) });
+          const response = await requestBridgeChunk(chunk.url, { body: Buffer.from(crypto.seal(ref, chunk.index, plaintext)), signal: abort.signal });
           if (!response.ok) {
             if (response.status === 403 && (await response.text()).includes("Bridge subscription required")) throw new Error("Bridge subscription required; local files remain queued");
             throw new Error(`Bridge blob upload failed (${response.status})`);

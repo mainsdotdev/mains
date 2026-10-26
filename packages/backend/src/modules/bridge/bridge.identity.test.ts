@@ -13,7 +13,7 @@ import { bridgeAccountKeyCommitment, deriveBridgeKeys, generateBridgeAccountKey,
 import { bridgeRecordKeys, createBridgeSealingCodec } from "./bridge.crypto";
 import { createBridgeSigningCodec } from "./bridge.signing";
 import { sealBridgeRecovery } from "./bridge.recovery";
-import { deviceSigner, signBridgeMembershipEntry, verifyBridgeSignature, type BridgeMembershipView } from "./bridge.membership";
+import { BridgeMembershipNotReadyError, deviceSigner, signBridgeMembershipEntry, verifyBridgeSignature, type BridgeMembershipView } from "./bridge.membership";
 
 /** These accounts have no account records, so a removal's fence admits none. */
 const noRecords = { through: 0, count: 0, root: createHash("sha256").update("[]").digest("base64url") };
@@ -801,9 +801,9 @@ describe("Bridge identity refused by its hub", () => {
     f.state.refused = true; await f.client.refresh();
     expect((await f.vault.read())!.membership).toEqual({ seq: 3, hash: await f.log.hashOf(3) });
     f.log.entries.pop();
-    expect(() => receiver.open(record)).toThrow(/has not verified/);
+    expect(() => receiver.open(record)).toThrow(BridgeMembershipNotReadyError);
     await expect(view.refresh()).rejects.toThrow();
-    expect(() => receiver.open(record)).toThrow(/has not verified/);
+    expect(() => receiver.open(record)).toThrow(BridgeMembershipNotReadyError);
     f.state.refused = false;
     expect((await view.refresh()).seq).toBe(3);
     expect(() => receiver.open(record)).toThrow(/outside its removal fence/);
@@ -873,7 +873,7 @@ describe("Bridge identity refused by its hub", () => {
       return hub(url, init);
     });
     await expect(view.refresh()).rejects.toThrow(/membership conflict/i);
-    expect(() => receiver.open(record)).toThrow(/has not verified/);
+    expect(() => receiver.open(record)).toThrow(BridgeMembershipNotReadyError);
     // With the fence this backend's removal commits to, the record is outside it.
     f.state.fence = [];
     expect((await view.refresh()).head).toBe(adopted.state.head);

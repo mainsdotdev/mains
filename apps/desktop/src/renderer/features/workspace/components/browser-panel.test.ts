@@ -45,13 +45,15 @@ vi.mock("@/hooks/use-browser-panel", () => ({
     toggleExpanded: mocks.toggleExpanded,
     close: mocks.closePanel,
     ownerKey: mocks.ownerKey,
+    tabOwnerKey: mocks.ownerKey,
   }),
 }));
 
+vi.mock("@/hooks/use-preview-panel", () => ({ usePreviewPanel: () => ({ activeTab: null }) }));
 vi.mock("@/lib/redux/hooks", () => ({
   useAppDispatch: () => mocks.dispatch,
   useAppSelector: (selector: (state: unknown) => unknown) =>
-    selector({ appSettings: { browserPanelWidth: 520, sidebarCollapsed: mocks.sidebarCollapsed } }),
+    selector({ workspace: { composerContextKey: mocks.ownerKey }, appSettings: { browserPanelWidth: 520, sidebarCollapsed: mocks.sidebarCollapsed } }),
 }));
 
 vi.mock("@/lib/redux/api", () => ({

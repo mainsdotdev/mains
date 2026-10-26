@@ -9,9 +9,10 @@ import { createBridgeSealingCodec, bridgeRecordKeys } from "./bridge.crypto";
 import { createBridgeSigningCodec } from "./bridge.signing";
 import { bridgeAccountKeyCommitment, deriveBridgeKeys, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair } from "./bridge.keys";
 import { deviceSigner, signBridgeMembershipEntry, verifyBridgeSignature } from "./bridge.membership";
-import { createBridgeEngine } from "./bridge.engine";
+import { createBridgeEngine, type BridgeEngineOptions } from "./bridge.engine";
 import { createTestDb } from "../../../test/setup-db";
 import type { BridgeTransport } from "./bridge.transport";
+import { BRIDGE_TABLES } from "./bridge.records";
 
 const noRecords = { through: 0, count: 0, root: createHash("sha256").update("[]").digest("base64url") };
 const accountKey = new Uint8Array(32).fill(17), secretA = new Uint8Array(32).fill(18), secretB = new Uint8Array(32).fill(19), next = generateBridgeSigningKeyPair();
@@ -51,6 +52,29 @@ const cleanup: Array<() => unknown> = [];
 afterEach(() => { for (const fn of cleanup.splice(0).reverse()) fn(); });
 
 describe("Bridge authenticated publications", () => {
+  it("retries a page without advancing its cursor when membership becomes unavailable during value restoration", async () => {
+    const fixture = createTestDb(); cleanup.push(fixture.cleanup);
+    fixture.sqlite.exec("INSERT INTO accounts(id) VALUES('default'); INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default','B')");
+    let state: BridgeMembershipState | null = initial, available = false;
+    fixture.sqlite.exec("INSERT INTO collections(id,account_id,name) VALUES('c','default','secret')");
+    const source = fixture.sqlite.prepare("SELECT * FROM collections WHERE id='c'").get() as Record<string, string | null>;
+    fixture.sqlite.exec("DELETE FROM collections WHERE id='c'");
+    const template = envelope(), record = codec().seal(template.header, { table: "collections", pk: "c", register: "row", schemaVersion: 3,
+      values: Object.fromEntries(BRIDGE_TABLES.collections.registers.row.map((column) => [column, source[column]])), refs: {}, blobRefs: [] });
+    const receiver = createBridgeSigningCodec(createBridgeSealingCodec(accountKey),
+      { accountId: "account", backendId: "B", signingPrivateKey: secretB }, { current: () => state, fence: () => undefined });
+    const transport = { pull: async () => ({ records: available ? [{ seq: 1, envelope: record }] : [], next: available ? 1 : 0, hasMore: false }) } as unknown as BridgeTransport;
+    let interrupt = true;
+    const blobs = { values: { async restore() { await Promise.resolve(); if (interrupt) state = null; return new Map(); } } } as unknown as BridgeEngineOptions["blobs"];
+    const engine = createBridgeEngine({ sqlite: fixture.sqlite, backendId: "B", recordKey: deriveBridgeKeys(accountKey).recordKey, transport, codec: receiver, blobs });
+    await engine.bootstrap(); available = true;
+    await expect(engine.pull()).rejects.toThrow(/membership.*not verified/);
+    expect(fixture.sqlite.prepare("SELECT seq FROM bridge_cursors WHERE stream='account'").get()).toEqual({ seq: 0 });
+    expect(fixture.sqlite.prepare("SELECT * FROM bridge_parked").all()).toEqual([]);
+    interrupt = false; state = initial; await engine.pull();
+    expect(fixture.sqlite.prepare("SELECT name FROM collections WHERE id='c'").get()).toEqual({ name: "secret" });
+    expect(engine.unverified()).toBe(0); await engine.stop();
+  });
   it.each(["upsert", "delete"] as const)("accepts a %s signed by a writer's earlier key at the head it bound, never after that key's removal", (op) => {
     const value = envelope(op), current = codec("A", "account", rotated, next.secretKey, fencing(value));
     expect(value.auth!.membership).toEqual({ seq: 1, hash: initial.head });

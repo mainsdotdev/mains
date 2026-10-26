@@ -307,6 +307,26 @@ export default function BridgeSettings() {
                 {sync.error}
               </Text>
             )}
+            {!!sync?.blockedRecordCount && (
+              <details className="space-y-3 pb-3">
+                <Text as="summary" className="cursor-pointer">
+                  {sync.blockedRecordCount} change{sync.blockedRecordCount === 1 ? "" : "s"} need{sync.blockedRecordCount === 1 ? "s" : ""} attention
+                </Text>
+                <Muted>Other changes continue syncing. These changes are kept on this device and retry automatically.</Muted>
+                <ul className="space-y-3">
+                  {sync.blockedRecords?.map((record) => (
+                    <li key={JSON.stringify([record.table, record.pk, record.register])} className="space-y-1">
+                      <Text>{record.label}</Text>
+                      <Muted>{record.error}</Muted>
+                      <Muted size="xs">Next retry {new Date(record.retryAt).toLocaleTimeString()} · Attempt {record.attempts}</Muted>
+                      <Muted as="code" size="xs" className="block break-all">Record: {record.pk}</Muted>
+                    </li>
+                  ))}
+                </ul>
+                {sync.blockedRecordCount > (sync.blockedRecords?.length ?? 0) && <Muted size="xs">Showing the first {sync.blockedRecords?.length ?? 0} changes.</Muted>}
+                <Button variant="secondary" disabled={busy} onClick={() => void act(() => syncNow().unwrap())}>Retry now</Button>
+              </details>
+            )}
           </SettingsSection>
           {sync?.quota?.subscription && (
             <BridgeSubscriptionSection

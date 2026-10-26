@@ -1,13 +1,10 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import {
-  Terminal,
-  TerminalOpen,
   Web,
   SidebarClose,
   SidebarOpen,
 } from "@/components/ui/icons";
-import { Button, toast } from "@/components/ui";
-import { useAppSelector } from "@/lib/redux/hooks";
+import { Button } from "@/components/ui";
 import { useCapabilities } from "@/lib/platform";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { ChatActionsMenu } from "@/features/workspace/components/chat-actions-menu";
@@ -19,25 +16,21 @@ import { LAYOUT_TOGGLE_WIDTH_VAR } from "@/lib/layout";
 interface ToggleButtonProps {
   isOpen: boolean;
   onClick: () => void;
-  terminalOpen?: boolean;
-  onTerminalToggle?: () => void;
   browserOpen?: boolean;
   onBrowserToggle?: () => void;
   showChatActions?: boolean;
-  hideTerminalControls?: boolean;
   showRightPanelToggle?: boolean;
+  newTabAction?: ReactNode;
 }
 
 export function ToggleButton({
   isOpen,
   onClick,
-  terminalOpen,
-  onTerminalToggle,
   browserOpen,
   onBrowserToggle,
   showChatActions = true,
-  hideTerminalControls = false,
   showRightPanelToggle = true,
+  newTabAction,
 }: ToggleButtonProps) {
   const controlsRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -56,22 +49,13 @@ export function ToggleButton({
     };
   }, []);
 
-  const activeWorkspaceId = useAppSelector(
-    (state) => state.workspace.activeWorkspaceId,
-  );
   const { embeddedBrowser } = useCapabilities();
   const { showRightPanel } = useModeConfig();
   const browserShortcut = keyboardShortcutLabel(
     useKeyboardShortcutBinding("app.toggleBrowser"),
   );
-  const terminalShortcut = keyboardShortcutLabel(
-    useKeyboardShortcutBinding("app.toggleTerminal"),
-  );
   const browserTooltip = `${browserOpen ? "Close" : "Open"} browser${
     browserShortcut ? ` (${browserShortcut})` : ""
-  }`;
-  const terminalTooltip = `${terminalOpen ? "Hide" : "Open"} terminal${
-    terminalShortcut ? ` (${terminalShortcut})` : ""
   }`;
   return (
     <div
@@ -85,29 +69,8 @@ export function ToggleButton({
     >
       {showChatActions && <ChatActionsMenu aboveBrowser={browserOpen} />}
       <div className="flex items-center rounded-full p-0.5 empty:hidden">
-        {!hideTerminalControls && onTerminalToggle && (
-          <Button
-            variant="icon"
-            tooltip={terminalTooltip}
-            tooltipPosition="left"
-            onClick={() => {
-              if (!activeWorkspaceId && !terminalOpen) {
-                toast.error("Select a workspace first to use the terminal");
-                return;
-              }
-              onTerminalToggle();
-            }}
-            className={terminalOpen ? "text-primary-700 dark:text-primary-300" : undefined}
-            aria-label={terminalOpen ? "Hide terminal" : "Open terminal"}
-          >
-            {terminalOpen ? (
-              <TerminalOpen className="size-4" />
-            ) : (
-              <Terminal className="size-4" />
-            )}
-          </Button>
-        )}
-        {onBrowserToggle && embeddedBrowser && (
+        {newTabAction}
+        {!newTabAction && onBrowserToggle && embeddedBrowser && (
           <Button
             variant="icon"
             tooltip={browserTooltip}

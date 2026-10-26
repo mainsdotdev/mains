@@ -5,7 +5,7 @@ import { bridgeMember, bridgeWriterKey } from "@mains/contracts/bridge-membershi
 import { bridgeSigningMessage } from "@mains/contracts/bridge-signing";
 import { validateEncryptedBridgeEnvelope } from "@mains/contracts/bridge-wire";
 import type { BridgeCodec } from "./bridge.crypto";
-import type { BridgeMembershipView } from "./bridge.membership";
+import { BridgeMembershipNotReadyError, type BridgeMembershipView } from "./bridge.membership";
 
 export interface BridgeSigningIdentity {
   accountId: string;
@@ -25,7 +25,8 @@ export function createBridgeSigningCodec(codec: BridgeCodec, identity: BridgeSig
       if (header.origin !== backendId || header.owner && header.owner !== backendId) throw new Error("Cannot sign another Bridge writer's record");
       // A writer binds the newest head it verified, which must still list its current key.
       const state = membership.current();
-      if (!state || bridgeMember(state, backendId)?.signingPublicKey !== publicKey) throw new Error("This backend is not a member of the Bridge account");
+      if (!state) throw new BridgeMembershipNotReadyError();
+      if (bridgeMember(state, backendId)?.signingPublicKey !== publicKey) throw new Error("This backend is not a member of the Bridge account");
       const envelope = codec.seal(header, body);
       const auth = { v: 2 as const, accountId, epoch: 1 as const, membership: { seq: state.seq, hash: state.head },
         publicationId: bridgeBase64(randomBytes(32)), signingPublicKey: publicKey };
@@ -38,7 +39,8 @@ export function createBridgeSigningCodec(codec: BridgeCodec, identity: BridgeSig
       const { auth, header } = envelope, bound = auth.membership, state = membership.current();
       if (auth.accountId !== accountId) throw new Error("Bridge record belongs to another account");
       // Replication refreshes membership before a page that binds a newer head (MEMBERSHIP.md §5).
-      if (!state || bound.seq > state.seq) throw new Error("Bridge record binds membership this device has not verified");
+      if (!state) throw new BridgeMembershipNotReadyError();
+      if (bound.seq > state.seq) throw new Error("Bridge record binds membership this device has not verified");
       if (state.hashes[bound.seq] !== bound.hash) throw new Error("Bridge record binds a different membership history");
       const key = bridgeWriterKey(state, header.origin, auth.signingPublicKey, bound.seq);
       if (!key) throw new Error("Bridge record writer is not a member of this account");

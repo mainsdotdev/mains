@@ -6,6 +6,7 @@ import { aliasSet, canonicalPk, clockOf, compareClock, definition, deleted, getC
 import { bestClock, captureExisting, inScope, normalizeCompositeIdentity, physicalPk, portableValues, readRow, type BridgeStore, type PreparedRecord } from "./bridge.store";
 import { ownerSql } from "./bridge.capture";
 import { valueBlobKey } from "./bridge.value-blobs";
+import { BridgeMembershipNotReadyError } from "./bridge.membership";
 
 export interface AppliedChange { table: string; pk: string; runId?: string; op: "upsert" | "delete" }
 type Outcome = "applied" | "ignored" | string;
@@ -73,7 +74,10 @@ export function openPulledRecord(store: BridgeStore, stream: BridgeStream, envel
     const opened = verifyEnvelope(store, envelope);
     if (opened.header.stream !== stream) throw new Error("Bridge pull contains a different stream");
     return { opened };
-  } catch (error) { return { error: error instanceof Error ? error.message : "Invalid Bridge record" }; }
+  } catch (error) {
+    if (error instanceof BridgeMembershipNotReadyError) throw error;
+    return { error: error instanceof Error ? error.message : "Invalid Bridge record" };
+  }
 }
 
 function advanceClock(store: BridgeStore, envelope: BridgeEnvelope) {
@@ -527,7 +531,10 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
 export function applyDeletedAck(store: BridgeStore, sent: PreparedRecord, tombstone: BridgeEnvelope): AppliedChange[] {
   let opened: ReturnType<typeof verifyEnvelope>;
   try { opened = verifyEnvelope(store, tombstone); }
-  catch (error) { throw new BridgeRecordRejected(error instanceof Error ? error.message : "Invalid Bridge deleted ACK"); }
+  catch (error) {
+    if (error instanceof BridgeMembershipNotReadyError) throw error;
+    throw new BridgeRecordRejected(error instanceof Error ? error.message : "Invalid Bridge deleted ACK");
+  }
   const { header, body } = opened, expected = sent.envelope.header;
   if (header.op !== "delete" || header.rowKey !== expected.rowKey && !(expected.runId && body.table === "runs" && body.pk === expected.runId && header.runId === expected.runId && header.owner === expected.owner))
     throw new BridgeRecordRejected("Bridge deleted ACK does not identify the sent row or its run");
