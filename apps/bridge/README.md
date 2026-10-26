@@ -1140,8 +1140,9 @@ The hub refuses a push bound to a head outside its log or to a seq at which the
 session's key was not the writer's, or from a backend that is no longer a member.
 A removed writer's account records verify only through its removal fence; its
 run-stream records are fenced in a later slice
-([Membership and revocation](MEMBERSHIP.md) slice 3), and that and new
-content-key epochs remain release gates.
+([Membership and revocation](MEMBERSHIP.md) slice 3). Run-stream fences and
+[content-key epochs](KEY-EPOCHS.md) are deferred hardening for the initial
+personal-device release.
 
 A signed writer can still author invalid encrypted bodies. A pulled record
 that fails authentication or validation is therefore never applied and never

@@ -198,7 +198,7 @@ removal, and the codec refuses the removed writer's account records outside it.
 An invalid enrollment response or failed local enrollment save revokes the
 requested pending backend with its issued device credential.
 Run-stream fences (MEMBERSHIP.md slice 3) and account-content-key rotation
-remain release gates.
+(KEY-EPOCHS.md) are deferred hardening for the initial personal-device release.
 
 **Bridge** is account replication between independent Mains backends. **Cloud** is the later hosted agent-execution product; Bridge itself never executes an agent. The shared `bridge` module owns the portable record registry, envelope codec and ownership guards. A **register** is a group of columns with one conflict clock; most rows have one, while Atlas separates content from metadata. Every table names a **primary register**, which carries the fields needed to create its row. An **owner backend** is the backend identified by a backend-owned root's `owner_backend_id`; a **replica** belongs to another backend and is read-only here. Account objects can be edited on every backend.
 

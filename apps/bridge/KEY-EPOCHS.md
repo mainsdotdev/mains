@@ -1,12 +1,16 @@
 # Bridge key epochs (stage 4 design)
 
-Status: **draft, deferred (2026-10-20)**; the decisions in §12 need confirmation before implementation.
+Status: **draft, deferred hardening (2026-10-27)**; the decisions in §12 need confirmation before implementation.
 It details stage 4 of [Authenticated writers](AUTHENTICATED-WRITERS.md) on top of
 [Membership and revocation](MEMBERSHIP.md). Bridge has not shipped.
 
-> **Deferred.** Not urgent: an honest hub already refuses a removed device, so the
-> gap needs a compromised hub or leaked hub data as well. It remains a release
-> gate. When picked up, consider a reduced first version before this full design:
+> **Deferred hardening, outside the initial release requirements.** Bridge's
+> initial scope is synchronization between one user's own devices. An honest hub
+> already refuses a removed device. Rotation adds protection if a lost or
+> compromised removed device retains the account key and later obtains ciphertext
+> from a compromised hub or leaked hub data. The initial personal-device release
+> can ship with epoch 1; this design is retained for future hardening.
+> When picked up, consider a reduced first version before this full design:
 > the remover rotates the key right after a removal and wraps it to the remaining
 > members in the existing D1 wraps table (with an epoch column), records carry
 > their epoch, and the recovery code is regenerated with every rotation instead of

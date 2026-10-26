@@ -10,8 +10,10 @@ The hub routes ciphertext and enforces admission, but it is not the source of
 trust for a record's author. An account encryption key must not let its holder
 impersonate a different backend. A bearer credential must not let its holder
 poison permanent tombstones or LWW state without the backend's signing key.
-Revocation must exclude the backend from subsequent content keys and membership
-changes. It cannot revoke plaintext or keys already copied by that backend.
+Revocation must exclude the backend from authenticated hub access and subsequent
+membership changes. Content-key rotation is deferred hardening for the initial
+personal-device release; stage 4 describes its additional protection for later
+ciphertext. Revocation cannot erase plaintext or keys already copied by that backend.
 
 ## Implementation sequence
 
@@ -30,10 +32,11 @@ changes. It cannot revoke plaintext or keys already copied by that backend.
 3. **Membership and revocation.** Pin the account's authenticated membership
    genesis. Sign membership transitions and persist the latest verified state.
    Reject rollback and signer substitution. Define replay/equivocation handling
-   that works with lazy streams and compaction. Revocation checkpoints commit
-   accepted history, so a removed signer cannot backdate new records into an
-   older epoch. Design draft: [Membership and revocation](MEMBERSHIP.md).
-4. **Epoch keys and recovery.** Use a stable record identity/index key and fresh
+   that works with lazy streams and compaction. Account-stream revocation
+   checkpoints commit accepted history; run-stream checkpoints are deferred
+   hardening for the initial personal-device release.
+   Design: [Membership and revocation](MEMBERSHIP.md).
+4. **Epoch keys and recovery (deferred hardening).** Use a stable record identity/index key and fresh
    random content keys per epoch. Scope new blob encryption/storage to its epoch;
    keep historical keys only for historical reads. Distribute new keys only to
    retained members. Recovery authority is independent of account content keys;
@@ -48,9 +51,13 @@ earlier keys included, comes from the signed, hash-chained log
 head. Slice 2 fences a removed writer's account stream to the records its remover
 saw. Keys are not yet rotated on revocation, and a compromised hub can still
 deliver run-stream records a removed writer bound before its removal until slice 3
-fences those too. Do not describe the protocol
-as hardened or release it until all
-stages and their adversarial regression tests are complete. Compromised delivery
+fences those too. Run-stream fences (stage 3 slice 3) and content-key rotation
+(stage 4) are deferred hardening for the initial personal-device release, as
+recorded in [Membership and revocation](MEMBERSHIP.md) and [Key epochs](KEY-EPOCHS.md).
+The implemented membership and account-stream fences retain their adversarial
+regression requirements.
+Full protection against a removed device obtaining later ciphertext also needs
+stage 4. Compromised delivery
 can still withhold messages; signed state does not guarantee availability or
 instant discovery of a revocation hidden from an offline device.
 

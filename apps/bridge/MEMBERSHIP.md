@@ -394,8 +394,12 @@ the newest entry a week old (the hub's time, an unauthenticated hint), at most o
 a day per device; a concurrent append simply loses the compare-and-swap. Members
 append it through `POST /v1/membership`, restricted to `checkpoint`.
 
-**Slice 3 deferred (2026-10-20).** Not urgent: only a compromised hub can deliver a
-removed writer's run-stream records, and only into that writer's own runs. It
-remains a release gate. When picked up, a quick first step is option C (§6):
+**Slice 3 deferred hardening (2026-10-27).** Outside the initial personal-device
+release requirements. Bridge's initial scope is synchronization between one user's
+own devices, and an honest hub already rejects removed writers. Receiver-side run
+fences add protection against a compromised hub delivering records bound before a
+writer's removal, including new records signed with that device's retained key.
+The effect is limited to that writer's own runs. This design is retained for
+future hardening. When picked up, a quick first step is option C (§6):
 after learning of a removal, refuse the removed writer's run records not already
 applied, at the cost of its unopened transcripts. Option B (decision 1) follows.
