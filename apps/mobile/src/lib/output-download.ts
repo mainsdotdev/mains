@@ -5,12 +5,15 @@ export function checkDownloadSignal(signal: AbortSignal): void {
   if (signal.aborted) throw new Error("Download canceled");
 }
 
+/** One identity's directory name in the output cache: a backend's or a run's. */
+export function outputCacheSegment(value: string): string {
+  const encoded = encodeURIComponent(value);
+  if (!encoded || encoded.length > 200) throw new Error("Invalid output cache identity");
+  return `id-${encoded}`;
+}
+
 export function outputCacheSegments(backendId: string, output: RunOutput): string[] {
-  const segment = (value: string) => {
-    const encoded = encodeURIComponent(value);
-    if (!encoded || encoded.length > 200) throw new Error("Invalid output cache identity");
-    return `id-${encoded}`;
-  };
+  const segment = outputCacheSegment;
   if (!/^[a-f0-9]{64}$/.test(output.version) || !Number.isSafeInteger(output.artifactId) || !output.artifactId) throw new Error("Invalid output revision");
   const name = output.name.replace(/[\u0000-\u001f/\\:]/g, "_");
   const dot = name.lastIndexOf(".");

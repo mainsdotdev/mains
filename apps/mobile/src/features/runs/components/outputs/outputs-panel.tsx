@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, View } from "react-native";
 import type { RunOutput } from "@mains/contracts/run-outputs";
 import { backendSession, useSession } from "@/backend/backend-session";
@@ -17,7 +17,7 @@ export function OutputsPanel({ runId }: { runId: string }) {
   const backendId = session.backend?.backendId ?? "";
   const connected = session.connection.kind === "connected";
   const cached = useCoalescedLiveQuery(db.select().from(runOutputs).where(and(eq(runOutputs.backendId, backendId), eq(runOutputs.runId, runId))), runOutputs, [backendId, runId]);
-  const run = useCoalescedLiveQuery(db.select({ updatedAt: runs.updatedAt }).from(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).limit(1), runs, [backendId, runId]);
+  const run = useCoalescedLiveQuery(db.select({ status: runs.status }).from(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).limit(1), runs, [backendId, runId]);
   const [items, setItems] = useState<RunOutput[] | null>(null);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
@@ -37,7 +37,10 @@ export function OutputsPanel({ runId }: { runId: string }) {
     } catch (caught) { if (request === generation.current) setError(caught instanceof Error ? caught.message : "Could not load outputs"); }
     finally { if (request === generation.current) setLoading(false); }
   }, [backendId, runId]);
-  const updated = run.data[0]?.updatedAt?.getTime();
+  // Outputs are selected when a turn completes, so a status change is when the
+  // list can differ. The run row's every other update (a streaming turn bumps
+  // it per event) would re-list and re-stat every file on the Mac.
+  const status = run.data[0]?.status;
   useEffect(() => {
     let active = true;
     void Promise.resolve().then(() => {
@@ -45,8 +48,16 @@ export function OutputsPanel({ runId }: { runId: string }) {
       if (connected) void load(); else setLoading(false);
     });
     return () => { active = false; invalidate(); };
-  }, [backendId, connected, invalidate, load, updated]);
-  const saved = cached.data.flatMap((row) => { try { return [JSON.parse(row.descriptorJson) as RunOutput]; } catch { return []; } });
+  }, [backendId, connected, invalidate, load, status]);
+  const saved = useMemo(
+    () => cached.data.flatMap((row) => { try { return [JSON.parse(row.descriptorJson) as RunOutput]; } catch { return []; } }),
+    [cached.data],
+  );
+  // Checking a local copy touches the filesystem; do it when the cache rows change, not per render.
+  const offline = useMemo(
+    () => new Set(cached.data.filter((row) => cachedOutput(backendId, runId, row.artifactId)?.uri).map((row) => row.artifactId)),
+    [backendId, cached.data, runId],
+  );
   const currentScope = loadedScope === JSON.stringify([backendId, runId]);
   const shown = connected && currentScope && items !== null ? items : saved;
   return <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ padding: spacing.md, gap: spacing.md, paddingBottom: spacing.xxl }}>
@@ -55,7 +66,7 @@ export function OutputsPanel({ runId }: { runId: string }) {
       <Button title="Refresh" size="sm" variant="ghost" disabled={!connected || loading} onPress={() => void load()} />
     </View>
     {!connected ? <ThemedText variant="footnote">Previously downloaded files open offline. Connect to your computer to download other files.</ThemedText> : null}
-    {shown.map((output) => <OutputFileCard key={output.artifactId} runId={runId} artifactId={output.artifactId} name={output.name} byteSize={output.byteSize} desktopOnly={isDesktopOnlyOutput(output)} saved={!isDesktopOnlyOutput(output) && !!cachedOutput(backendId, runId, output.artifactId)?.uri} />)}
+    {shown.map((output) => <OutputFileCard key={output.artifactId} runId={runId} artifactId={output.artifactId} name={output.name} byteSize={output.byteSize} desktopOnly={isDesktopOnlyOutput(output)} saved={!isDesktopOnlyOutput(output) && offline.has(output.artifactId)} />)}
     {!shown.length && !loading ? <ThemedText variant="subhead" style={{ paddingVertical: spacing.xl, textAlign: "center" }}>{error ? "Outputs are unavailable." : "No output files yet."}</ThemedText> : null}
     {error ? <ThemedText variant="footnote" style={{ color: colors.systemRed }}>{error}</ThemedText> : null}
     {loading ? <ActivityIndicator accessibilityLabel="Loading outputs" /> : null}

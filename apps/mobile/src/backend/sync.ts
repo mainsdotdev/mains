@@ -68,6 +68,8 @@ import { ProtocolMismatchError } from "./connection-supervisor";
 import type { WsTransport } from "./ws-transport";
 import { historyRequest, historyLoaded, historyLoading, forgetHistory } from "./run-history";
 import { approvalRow } from "./approval-projection";
+import { forgetRunOutputs } from "./output-cache";
+import { confirmDeletedRuns } from "./output-retention";
 import { turnRow } from "./turn-projection";
 
 /**
@@ -294,6 +296,12 @@ function deleteRunLocally(backendId: string, runId: string): void {
     .where(and(eq(syncCursors.backendId, backendId), eq(syncCursors.runId, runId)))
     .run());
   runProjectionWrite(runs, () => db.delete(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).run());
+}
+
+/** The Mac says the run no longer exists: drop it and the files downloaded from it. */
+function deleteRunGone(backendId: string, runId: string): void {
+  deleteRunLocally(backendId, runId);
+  forgetRunOutputs(backendId, runId);
 }
 
 // ── Run targets: spaces, collections, providers ──
@@ -683,6 +691,7 @@ export function setSpaceTarget(
 
 /** The run list and workspace names: fetched together, applied in one transaction. */
 export async function syncSnapshot(transport: WsTransport, backendId: string): Promise<void> {
+  let staleWithOutputs: string[] = [];
   const [runList, workspaceList] = await Promise.all([
     invoke<RunResponse[]>(transport, CHANNELS.runs.getAll, [RUN_LIST_LIMIT]),
     invoke<WorkspaceResponse[]>(transport, CHANNELS.workspace.list),
@@ -710,12 +719,26 @@ export async function syncSnapshot(transport: WsTransport, backendId: string): P
       )
       .all();
     for (const { id } of stale) deleteRunLocally(backendId, id);
+    // Downloaded files outlive a run that merely aged out of the window; the
+    // ones whose run was deleted are settled below, once the Mac confirms it.
+    const staleIds = new Set(stale.map(({ id }) => id));
+    staleWithOutputs = [...new Set(tx
+      .select({ runId: runOutputs.runId })
+      .from(runOutputs)
+      .where(eq(runOutputs.backendId, backendId))
+      .all()
+      .map(({ runId }) => runId)
+      .filter((runId) => staleIds.has(runId)))];
 
     runProjectionWrite(backends, () => tx.update(backends)
       .set({ lastSyncedAt: new Date() })
       .where(eq(backends.backendId, backendId))
       .run());
   });
+
+  const deleted = await confirmDeletedRuns(staleWithOutputs,
+    (runId) => invoke<RunResponse | null>(transport, CHANNELS.runs.getById, [runId]));
+  for (const runId of deleted) forgetRunOutputs(backendId, runId);
 
   // What the Code sidebar prints beside each workspace. Both are best-effort:
   // a Mac that can't run git for one folder must not stall the snapshot.
@@ -800,7 +823,7 @@ async function syncRunOnce(transport: WsTransport, backendId: string, runId: str
   try {
     const run = await invoke<RunResponse | null>(transport, CHANNELS.runs.getById, [runId]);
     if (!run) {
-      deleteRunLocally(backendId, runId);
+      deleteRunGone(backendId, runId);
       return;
     }
     const [page, approvals] = await Promise.all([
@@ -859,7 +882,7 @@ export function syncRun(transport: WsTransport, backendId: string, runId: string
 async function syncRunRow(transport: WsTransport, backendId: string, runId: string): Promise<void> {
   const run = await invoke<RunResponse | null>(transport, CHANNELS.runs.getById, [runId]);
   if (run) upsertRun(backendId, run);
-  else deleteRunLocally(backendId, runId);
+  else deleteRunGone(backendId, runId);
 }
 
 // ── Events ──

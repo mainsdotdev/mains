@@ -4,10 +4,12 @@ import type { ReadRunOutputPayload, RunOutput, RunOutputChunk } from "@mains/con
 
 import { projectionDb as db, projectionTransaction, runProjectionWrite } from "@/db/client";
 import { runOutputs } from "@/db/schema";
-import { checkDownloadSignal, downloadOutput, outputCacheSegments } from "@/lib/output-download";
+import { checkDownloadSignal, downloadOutput, outputCacheSegment, outputCacheSegments } from "@/lib/output-download";
 
 const root = new Directory(Paths.cache, "mains-outputs");
 const downloads = new Map<string, Set<AbortController>>();
+/** Which run each in-flight download belongs to, so forgetting one run cancels only its own. */
+const downloadRuns = new WeakMap<AbortController, string>();
 const pins = new Map<string, number>();
 const cacheLimit = 200 * 1024 * 1024;
 const whereOutput = (backendId: string, runId: string, artifactId: number) => and(eq(runOutputs.backendId, backendId), eq(runOutputs.runId, runId), eq(runOutputs.artifactId, artifactId));
@@ -64,6 +66,7 @@ export async function ensureOutputFile(backendId: string, output: RunOutput, rea
   temporary.create();
   const writer = temporary.open(FileMode.WriteOnly);
   const controller = new AbortController();
+  downloadRuns.set(controller, output.runId);
   const abort = () => controller.abort();
   signal.addEventListener("abort", abort);
   const active = downloads.get(backendId) ?? new Set<AbortController>();
@@ -90,6 +93,23 @@ export async function ensureOutputFile(backendId: string, output: RunOutput, rea
     if (!active.size) downloads.delete(backendId);
     signal.removeEventListener("abort", abort);
   }
+}
+
+/**
+ * A conversation deleted on the Mac takes its downloaded files with it: rows,
+ * cached copies and any download still running. One that only left the
+ * phone's window keeps them for when it comes back.
+ */
+export function forgetRunOutputs(backendId: string, runId: string): void {
+  for (const controller of downloads.get(backendId) ?? []) {
+    if (downloadRuns.get(controller) === runId) controller.abort();
+  }
+  runProjectionWrite(runOutputs, () => db.delete(runOutputs)
+    .where(and(eq(runOutputs.backendId, backendId), eq(runOutputs.runId, runId))).run());
+  try {
+    const directory = new Directory(root, outputCacheSegment(backendId), outputCacheSegment(runId));
+    if (directory.exists) directory.delete();
+  } catch { /* No cache directory can exist for an identity the cache refuses. */ }
 }
 
 export function clearOutputCache(backendId: string): void {
