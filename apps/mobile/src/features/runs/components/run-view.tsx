@@ -23,6 +23,7 @@ import type {
 import { useRunData } from "../hooks/use-run-data";
 import { useOptimisticPrompt } from "../hooks/use-optimistic-prompt";
 import { useRunOperations } from "../hooks/use-run-operations";
+import { TranscriptScroll, transcriptEnd, hasScrollMomentum, type ScrollDecision } from "../lib/transcript-scroll";
 
 import { AsciiLoader } from "./ascii-loader";
 import { ComposerBar, composerBottomPadding } from "./composer/composer-bar";
@@ -40,21 +41,6 @@ import {
   type TranscriptActions,
 } from "./transcript/transcript-row";
 import { TranscriptTurn } from "./transcript/transcript-turn";
-
-/**
- * How far above the end a reader can rest and still count as following it. At
- * the true end the list sits a home-indicator inset *past* its content, so this
- * allows about a composer's height of drift before the chase lets go.
- */
-const PIN_DISTANCE = 80;
-
-/**
- * How far above the end the reader has to be before the way back down is
- * offered. Further than the chase threshold, so that letting go just shy of
- * the end — where the list still follows on its own — does not flash a button
- * for the one thing already happening.
- */
-const JUMP_DISTANCE = 220;
 
 /**
  * A run's conversation: its transcript, the agent's progress, any approval it
@@ -121,8 +107,9 @@ export function RunView({
     pending?.origin ? (pending.attachments ?? []) : [],
   );
   const rootRef = useRef<View>(null);
-  /** Following the end: cleared by a drag, restored by letting go near it. */
-  const pinned = useRef(true);
+  const metrics = useRef({ frame: 0, content: 0, offset: null as number | null });
+  /** A touch pauses chasing; moving away from the end enters history reading. */
+  const scrollIntent = useRef(new TranscriptScroll());
   const clearComposerSource = useCallback(() => {
     setDraft("");
     setContextSkills([]);
@@ -250,7 +237,7 @@ export function RunView({
         {
           onAccepted: () => {
             clearComposerSource();
-            pinned.current = true;
+            scrollIntent.current.follow();
             setHistoryFollowing(backendId, runId, true);
           },
         },
@@ -275,7 +262,7 @@ export function RunView({
             origin,
             attachments: sentAttachments,
           });
-          pinned.current = true;
+          scrollIntent.current.follow();
           setHistoryFollowing(backendId, runId, true);
         },
         onOptimisticRollback: () => {
@@ -370,12 +357,10 @@ export function RunView({
   const rowLayouts = useRef(new Map<string, { y: number; height: number }>());
   const pageAnchor = useRef<{ key: string; offset: number; items: typeof items } | null>(null);
   const paging = useRef(false);
-  const dragging = useRef(false);
   useEffect(() => {
     const keys = new Set(rows.map((row) => row.key));
     for (const key of rowLayouts.current.keys()) if (!keys.has(key)) rowLayouts.current.delete(key);
   }, [rows]);
-  const metrics = useRef({ frame: 0, content: 0, offset: null as number | null });
   /** Whether the way back down is on screen; the ref keeps `onScroll` cheap. */
   const [awayFromEnd, setAwayFromEnd] = useState(false);
   const away = useRef(false);
@@ -396,20 +381,28 @@ export function RunView({
   const reviewJump = () => {
     const { frame, content, offset } = metrics.current;
     if (frame === 0 || content === 0 || offset === null) return;
-    const next = content - frame + bottomInset - offset > JUMP_DISTANCE;
+    const next = scrollIntent.current.showJump({ frame, content, offset, restOffset, bottomInset }, history.hasNewer);
     if (next === away.current) return;
     away.current = next;
     setAwayFromEnd(next);
   };
+  useEffect(() => {
+    const { frame, content, offset } = metrics.current;
+    if (frame === 0 || content === 0 || offset === null) return;
+    const next = scrollIntent.current.showJump({ frame, content, offset, restOffset, bottomInset }, history.hasNewer);
+    if (next === away.current) return;
+    away.current = next;
+    setAwayFromEnd(next);
+  }, [restOffset, bottomInset, history.hasNewer]);
 
   /** The scroll itself. Everything else that has to follow it lives in `place`. */
   const scrollIntoPlace = (animated: boolean) => {
     const { frame, content, offset } = metrics.current;
     if (frame === 0 || content === 0) return;
-    const end = content - frame + bottomInset;
+    if (scrollIntent.current.dragging) return;
     // A transcript that fits stays at rest under the header; scrolling a short
     // one "to the end" is what used to slide its first message off the top.
-    const max = Math.max(restOffset, end);
+    const max = transcriptEnd({ frame, content, offset, restOffset, bottomInset });
     // `null` means native has not reported its initial offset. Do not assume
     // it already equals `restOffset`: home's transparent floating header does
     // not always receive an automatic inset on its first native layout.
@@ -417,7 +410,7 @@ export function RunView({
     // Unpinned, the only move is back into range: when the content shrinks
     // under the reader — a turn folding as its run settles — iOS leaves the
     // offset past the end, showing nothing, until something scrolls.
-    if (!pinned.current && current !== null && current <= max) return;
+    if (!scrollIntent.current.pinned && current !== null && current <= max) return;
     if (current !== null && Math.abs(max - current) < 1) return;
     // An animated scroll reports its presentation offset through `onScroll`.
     // Writing the destination here would make a bubble measured mid-animation
@@ -441,8 +434,10 @@ export function RunView({
     if (paging.current || history.loading || !connected) return;
     paging.current = true;
     const toLatest = direction === "latest" || !history.loaded;
-    pinned.current = toLatest;
-    setHistoryFollowing(backendId, runId, pinned.current);
+    if (toLatest) scrollIntent.current.follow();
+    else scrollIntent.current.pause();
+    setHistoryFollowing(backendId, runId, toLatest);
+    reviewJump();
     const offset = metrics.current.offset ?? 0;
     const first = rows.find((row) => {
       const layout = rowLayouts.current.get(row.key);
@@ -453,32 +448,44 @@ export function RunView({
       : null;
     try {
       await backendSession.pageRunHistory(runId, direction);
+      // Identical-height pages need an explicit landing as no size event fires.
+      if (toLatest) place(true);
     } catch {
       pageAnchor.current = null;
+      if (toLatest && history.hasNewer) {
+        scrollIntent.current.pause();
+        setHistoryFollowing(backendId, runId, false);
+        reviewJump();
+      }
     } finally {
       paging.current = false;
     }
   };
   const jumpToEnd = () => {
-    if (history.end) { void pageHistory("latest"); return; }
-    pinned.current = true;
-    setHistoryFollowing(backendId, runId, true);
-    place(true);
+    if (paging.current || (history.hasNewer && (history.loading || !connected))) return;
+    pageAnchor.current = null;
+    const decision = scrollIntent.current.jump(history);
+    applyScrollDecision(decision);
+    if (!decision.page) place(true);
   };
 
-  /** Re-read whether the reader is at the end once a scroll comes to rest. */
-  const settle = (event: NativeScrollEvent) => {
-    const { contentOffset, contentSize, layoutMeasurement, targetContentOffset } = event;
-    // A fling reports where it will stop; judge by that rather than by where
-    // the finger left, or a flick up from the end would be chased straight back.
-    const y = targetContentOffset?.y ?? contentOffset.y;
-    pinned.current = contentSize.height - layoutMeasurement.height - y < PIN_DISTANCE && !history.hasNewer;
-    setHistoryFollowing(backendId, runId, pinned.current);
-    if (!paging.current && !pageAnchor.current) {
-      if (y < restOffset + 200 && history.hasOlder) void pageHistory("older");
-      else if (contentSize.height - layoutMeasurement.height - y < 100 && history.hasNewer) void pageHistory("newer");
-    }
-    dragging.current = false;
+  const geometry = (event?: NativeScrollEvent) => ({
+    frame: event?.layoutMeasurement.height ?? metrics.current.frame,
+    content: event?.contentSize.height ?? metrics.current.content,
+    offset: event?.contentOffset.y ?? metrics.current.offset,
+    restOffset, bottomInset,
+  });
+  const applyScrollDecision = (decision: ScrollDecision) => {
+    if (decision.following !== null) setHistoryFollowing(backendId, runId, decision.following);
+    if (decision.page && !paging.current && !pageAnchor.current) void pageHistory(decision.page);
+  };
+  const settle = (event: NativeScrollEvent, endDrag = false) => {
+    const momentum = endDrag && hasScrollMomentum(event.contentOffset.y, event.targetContentOffset?.y, event.velocity?.y);
+    applyScrollDecision(scrollIntent.current.settle({ ...geometry(event),
+      offset: endDrag ? event.targetContentOffset?.y ?? event.contentOffset.y : event.contentOffset.y,
+    }, history, momentum));
+    if (!scrollIntent.current.dragging && scrollIntent.current.pinned) place(true);
+    else reviewJump();
   };
 
   // The composer rides the keyboard itself, as the workspace screen's bar does:
@@ -564,19 +571,13 @@ export function RunView({
         }}
         onScroll={(event) => {
           metrics.current.offset = event.nativeEvent.contentOffset.y;
+          if (!paging.current && !pageAnchor.current) applyScrollDecision(scrollIntent.current.move(geometry(event.nativeEvent), history));
           reviewJump();
-          if (dragging.current && !paging.current && !pageAnchor.current) {
-            const y = event.nativeEvent.contentOffset.y;
-            if (y < restOffset + 200 && history.hasOlder) void pageHistory("older");
-            else if (event.nativeEvent.contentSize.height - event.nativeEvent.layoutMeasurement.height - y < 100 && history.hasNewer) void pageHistory("newer");
-          }
         }}
-        onScrollBeginDrag={() => {
-          pinned.current = false;
-          dragging.current = true;
-          setHistoryFollowing(backendId, runId, false);
+        onScrollBeginDrag={(event) => {
+          applyScrollDecision(scrollIntent.current.beginDrag(geometry(event.nativeEvent)));
         }}
-        onScrollEndDrag={(event) => settle(event.nativeEvent)}
+        onScrollEndDrag={(event) => settle(event.nativeEvent, true)}
         onMomentumScrollEnd={(event) => settle(event.nativeEvent)}
       >
         {(history.hasOlder || history.error) && (
@@ -611,6 +612,7 @@ export function RunView({
                 const y = layout.y - anchor.offset;
                 pageAnchor.current = null;
                 metrics.current.offset = y;
+                scrollIntent.current.rebase(y);
                 listRef.current?.scrollTo({ y, animated: false });
               }
             }}>
@@ -625,7 +627,7 @@ export function RunView({
               actions={actions}
             />
             {changeFooters.get(row.key)?.map((turn) => turn.changes ? (
-              <TurnChangesCard key={turn.id} runId={runId} turnId={turn.id} turnIndex={turn.turnIndex} changes={turn.changes} />
+              <TurnChangesCard key={turn.id} backendId={backendId} runId={runId} turnId={turn.id} turnIndex={turn.turnIndex} changes={turn.changes} />
             ) : null)}
             </View>
           ))
@@ -653,16 +655,11 @@ export function RunView({
         {offerSuggestions ? (
           <PromptSuggestionChips suggestions={suggestions} providerId={providerId} onSelect={setDraft} />
         ) : null}
-        {history.end && (
-          <View style={{ gap: spacing.sm }}>
-            {history.hasNewer && <Pressable disabled={history.loading || !connected} onPress={() => void pageHistory("newer")}>
-              <ThemedText variant="subhead" style={{ textAlign: "center" }}>Load newer messages</ThemedText>
-            </Pressable>}
-            <Pressable disabled={history.loading || !connected} onPress={jumpToEnd}>
-              <ThemedText variant="subhead" style={{ textAlign: "center" }}>Jump to latest</ThemedText>
-            </Pressable>
-          </View>
-        )}
+        {history.hasNewer ? (
+          <Pressable disabled={history.loading || !connected} onPress={() => void pageHistory("newer")}>
+            <ThemedText variant="subhead" style={{ textAlign: "center" }}>Load newer messages</ThemedText>
+          </Pressable>
+        ) : null}
         <View style={{ gap: spacing.md }}>
           {(liveHere && !history.end) || starting || continuationPresentation ? (
             <AsciiLoader mode={mode} thinkingText={thinking} />

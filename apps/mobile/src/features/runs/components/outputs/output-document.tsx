@@ -3,19 +3,27 @@ import { Image } from "expo-image";
 import { Stack, useRouter, type Href } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Share, ScrollView, View } from "react-native";
-import type { RunOutput } from "@mains/contracts/run-outputs";
+import type { RunFile } from "@mains/contracts/run-outputs";
 import { previewDocument } from "../../../../../modules/mains-document-preview";
 import { backendSession, useSession } from "@/backend/backend-session";
-import { cachedOutput, ensureOutputFile, pinOutputFile } from "@/backend/output-cache";
+import { cachedOutput, cachedAttachment, ensureRunFile, pinOutputFile } from "@/backend/output-cache";
 import { Button, ThemedText } from "@/components/ui";
 import { isDesktopOnlyOutput } from "@/lib/output-presentation";
 import { colors, spacing } from "@/theme";
 import { Markdown } from "../transcript/markdown";
 import { DesktopOutputNotice, outputSize } from "./output-file-card";
 
-type Loaded = { output: RunOutput; uri: string; text?: string; truncated?: boolean };
+type Loaded = { output: RunFile; uri: string; text?: string; truncated?: boolean };
 
 export function OutputDocument({ runId, artifactId }: { runId: string; artifactId: number }) {
+  return <RunFileDocument runId={runId} artifactId={artifactId} />;
+}
+
+export function AttachmentDocument({ runId, attachmentId }: { runId: string; attachmentId: string }) {
+  return <RunFileDocument runId={runId} attachmentId={attachmentId} />;
+}
+
+function RunFileDocument({ runId, artifactId, attachmentId }: { runId: string; artifactId?: number; attachmentId?: string }) {
   const router = useRouter();
   const session = useSession();
   const backendId = session.backend?.backendId ?? "";
@@ -23,7 +31,7 @@ export function OutputDocument({ runId, artifactId }: { runId: string; artifactI
   const online = useRef(connected);
   useEffect(() => { online.current = connected; }, [connected]);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
-  const [desktopOutput, setDesktopOutput] = useState<RunOutput | null>(null);
+  const [desktopOutput, setDesktopOutput] = useState<RunFile | null>(null);
   const [progress, setProgress] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,13 +49,18 @@ export function OutputDocument({ runId, artifactId }: { runId: string; artifactI
     void Promise.resolve().then(async () => {
       if (controller.signal.aborted) return;
       setLoaded(null); setDesktopOutput(null); setLoading(true); setError(null); setProgress(0);
-      const cached = cachedOutput(backendId, runId, artifactId);
+      const cached = attachmentId !== undefined ? cachedAttachment(backendId, runId, attachmentId) : cachedOutput(backendId, runId, artifactId!);
       let output = cached?.output;
-      if (online.current) output = (await backendSession.listRunOutputs({ runId, artifactId })).items.find((item) => item.artifactId === artifactId);
+      if (online.current) output = attachmentId !== undefined ? await backendSession.describeAttachmentFile(runId, attachmentId)
+        : (await backendSession.listRunOutputs({ runId, artifactId })).items.find((item) => item.artifactId === artifactId);
+      if (controller.signal.aborted) return;
       if (!output) throw new Error(online.current ? "This output is no longer available." : "Connect to your computer to download this file.");
       if (isDesktopOnlyOutput(output)) { setDesktopOutput(output); setLoading(false); return; }
       if (!online.current && !cached?.uri) throw new Error("Connect to your computer to download this file.");
-      const uri = await ensureOutputFile(backendId, output, (request) => backendSession.readOutputFile(request, backendId), controller.signal, setProgress);
+      const selected = output;
+      const uri = await ensureRunFile(backendId, selected, (offset) => "attachmentId" in selected
+        ? backendSession.readAttachmentChunk({ runId, attachmentId: selected.attachmentId, version: selected.version, offset }, backendId)
+        : backendSession.readOutputFile({ runId, artifactId: selected.artifactId, version: selected.version, offset }, backendId), controller.signal, setProgress);
       if (controller.signal.aborted) return;
       release = pinOutputFile(uri);
       const value: Loaded = { output, uri };
@@ -63,7 +76,7 @@ export function OutputDocument({ runId, artifactId }: { runId: string; artifactI
       if (!controller.signal.aborted) { setLoading(false); setError(caught instanceof Error ? caught.message : "Could not load this file"); }
     });
     return () => { controller.abort(); release(); };
-  }, [artifactId, attempt, backendId, preview, runId]);
+  }, [artifactId, attachmentId, attempt, backendId, preview, runId]);
   const share = async () => {
     if (!loaded) return;
     try { await Share.share({ url: loaded.uri }); }
@@ -81,12 +94,12 @@ export function OutputDocument({ runId, artifactId }: { runId: string; artifactI
       {loaded?.output.previewType === "text" ? <ThemedText variant="mono" selectable>{loaded.text}</ThemedText> : null}
       {loaded?.truncated ? <ThemedText variant="footnote">Showing the first 128 KB. Share the file to read its full contents.</ThemedText> : null}
       {loaded && ["native", "unsupported"].includes(loaded.output.previewType) ? <View style={{ flex: 1, justifyContent: "center", gap: spacing.md }}>
-        <ThemedText variant="title3">{loaded.output.name}</ThemedText>
-        <ThemedText variant="subhead">{outputSize(loaded.output.byteSize)} · Available offline</ThemedText>
-        {loaded.output.previewType === "native" ? <Button title="Open preview" loading={previewing} onPress={() => void preview(loaded.uri, loaded.output.name)} /> : <ThemedText>Use Share to open this file in another app.</ThemedText>}
+        <ThemedText variant="title3" style={{ textAlign: "center" }}>{loaded.output.name}</ThemedText>
+        <ThemedText variant="subhead" style={{ textAlign: "center" }}>{outputSize(loaded.output.byteSize)} · Available offline</ThemedText>
+        {loaded.output.previewType === "native" ? <Button title="Open preview" variant="ghost" loading={previewing} onPress={() => void preview(loaded.uri, loaded.output.name)} /> : <ThemedText style={{ textAlign: "center" }}>Use Share to open this file in another app.</ThemedText>}
       </View> : null}
       {error ? <ThemedText variant="footnote" style={{ color: colors.systemRed }}>{error}</ThemedText> : null}
-      {!loading && !loaded ? <Button title="Try again" onPress={() => setAttempt((value) => value + 1)} /> : null}
+      {!loading && !loaded && !desktopOutput ? <Button title="Try again" onPress={() => setAttempt((value) => value + 1)} /> : null}
     </ScrollView>
     {loaded ? <View style={{ padding: spacing.md, paddingBottom: spacing.xl }}><Button title="Share / Save to Files" disabled={previewing} onPress={() => void share()} /></View> : null}
   </View>;

@@ -46,7 +46,7 @@ function emailSupport(): void {
 function connectionHint(state: ConnectionState): string | null {
   switch (state.kind) {
     case "unreachable":
-      return "Make sure Mains is running on your computer and this phone can reach it — use the same Wi‑Fi, or Tailscale on both.";
+      return "Make sure your computer is awake and Mains is running. Use the same Wi‑Fi, or Tailscale on both devices.";
     case "authBlocked":
       return "Mains on your computer no longer accepts this phone. Create a new pairing link there.";
     case "incompatible":

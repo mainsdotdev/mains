@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
-import { constants, promises as fs } from "node:fs";
+import { constants, promises as fs, type Stats } from "node:fs";
 import path from "node:path";
-import { MOBILE_OUTPUT_MAX_BYTES, OUTPUT_CHUNK_BYTES, outputFileType, type RunOutput, type RunOutputChunk, type ReadRunOutputPayload } from "@mains/contracts/run-outputs";
+import { MOBILE_OUTPUT_MAX_BYTES, OUTPUT_CHUNK_BYTES, outputFileType, type RunFileDescriptor, type RunOutput, type RunOutputChunk, type ReadRunOutputPayload } from "@mains/contracts/run-outputs";
 import type { RunArtifactResponse } from "./runs.dto";
 
 const revision = (runId: string, id: number, reference: string, identity: unknown) => createHash("sha256").update(JSON.stringify([runId, id, reference, identity])).digest("hex");
+export function attachmentFileRevision(runId: string, attachmentId: string, stats: Stats): string {
+  return createHash("sha256").update(JSON.stringify([runId, attachmentId, stats.size, stats.mtimeMs, stats.ctimeMs, stats.ino, stats.dev])).digest("hex");
+}
 
 export function validateOutputReference(runId: unknown, artifactId?: unknown): asserts runId is string {
   if (typeof runId !== "string" || !runId || runId.length > 256 ||
@@ -33,14 +36,17 @@ export async function describeRunOutput(runId: string, artifact: RunArtifactResp
 
 /** An original file travels in bounded chunks, with revision and symlink checks on each read. */
 export async function readRunOutputChunk(output: RunOutput, sourcePath: string, request: ReadRunOutputPayload, replica: boolean): Promise<RunOutputChunk> {
+  return readRunFileChunk(output, sourcePath, request, replica ? undefined : (stats) => revision(output.runId, output.artifactId, sourcePath, [stats.size, stats.mtimeMs, stats.ctimeMs, stats.ino, stats.dev]));
+}
+
+export async function readRunFileChunk(output: RunFileDescriptor, sourcePath: string, request: { offset: number; version: string }, fileRevision?: (stats: Stats) => string): Promise<RunOutputChunk> {
   if (!Number.isSafeInteger(request.offset) || request.offset < 0 || request.offset > output.byteSize ||
     typeof request.version !== "string" || request.version !== output.version) throw new Error("The output changed. Refresh the file and try again.");
   if (await fs.realpath(sourcePath) !== sourcePath) throw new Error("Output file is unavailable");
   const handle = await fs.open(sourcePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const before = await handle.stat();
-    if (!before.isFile() || before.size !== output.byteSize || !replica && before.mtimeMs !== output.modifiedAt) throw new Error("The output changed. Refresh the file and try again.");
-    if (!replica && revision(output.runId, output.artifactId, sourcePath, [before.size, before.mtimeMs, before.ctimeMs, before.ino, before.dev]) !== output.version) throw new Error("The output changed. Refresh the file and try again.");
+    if (!before.isFile() || before.size !== output.byteSize || fileRevision && fileRevision(before) !== output.version) throw new Error("The file changed. Refresh the file and try again.");
     const buffer = Buffer.alloc(Math.min(OUTPUT_CHUNK_BYTES, output.byteSize - request.offset));
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, request.offset);
     const after = await handle.stat();

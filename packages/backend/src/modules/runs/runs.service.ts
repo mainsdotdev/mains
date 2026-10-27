@@ -93,6 +93,7 @@ import {
   resolveRunAttachment,
 } from "./run-attachment-storage";
 import { readAttachmentImage } from "./run-attachment-images";
+import { describeAttachmentFile, readAttachmentChunk } from "./run-attachment-download";
 import {
   resolveConversationSettings,
   validateConversationSettings,
@@ -1953,6 +1954,8 @@ export const runsService = {
 
   listRunAttachmentFiles,
   listRunAttachmentRecords,
+  describeAttachmentFile,
+  readAttachmentChunk,
 
   async readAttachmentFile(
     payload: ResolveAttachmentPathPayload,

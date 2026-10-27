@@ -21,8 +21,8 @@ import type {
 } from "@mains/contracts/runs";
 import { historyWindow, compareHistoryCursors } from "@mains/contracts/run-history";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
-import type { ListRunOutputsPayload, ReadRunOutputPayload } from "@mains/contracts/run-outputs";
-import { demoOutputs, readDemoOutput } from "./demo-outputs";
+import type { ListRunOutputsPayload, ReadRunOutputPayload, ReadRunAttachmentPayload } from "@mains/contracts/run-outputs";
+import { demoOutputs, readDemoOutput, demoPromptAttachment, demoAttachmentFile, readDemoAttachment } from "./demo-outputs";
 import { conversationSettingsFrom, snapshotRunSettingConfig, type ConversationSettings } from "@mains/contracts/run-settings";
 
 import type { DemoHandler } from "./demo-socket";
@@ -327,7 +327,9 @@ const now = () => new Date().toISOString();
 export class DemoBackend implements DemoHandler {
   private readonly runs: DemoRun[] = snapshot.runs.map((run) => ({ ...run }));
   private readonly artifacts = new Map<string, DemoArtifact[]>(
-    Object.entries(snapshot.artifacts).map(([runId, list]) => [runId, list.map((a) => ({ ...a }))]),
+    Object.entries(snapshot.artifacts).map(([runId, list]) => [runId, list.map((a, index) => a.kind === "user-prompt" && index === list.findIndex((item) => item.kind === "user-prompt")
+      ? { ...a, metadata: { ...a.metadata, attachments: [...(Array.isArray(a.metadata?.attachments) ? a.metadata.attachments : []), demoPromptAttachment()] } }
+      : { ...a })]),
   );
   private readonly toolCalls = new Map<string, DemoToolCall[]>(
     Object.entries(snapshot.toolCalls).map(([runId, list]) => [
@@ -397,6 +399,12 @@ export class DemoBackend implements DemoHandler {
 
   invoke(channel: string, args: unknown[]): unknown {
     switch (channel) {
+      case CHANNELS.runArtifacts.describeAttachmentFile:
+      case CHANNELS.runArtifacts.readAttachmentChunk: {
+        const request = args[0] as ReadRunAttachmentPayload;
+        if (!this.runs.some((run) => run.id === request.runId)) throw new Error("Conversation not found");
+        return channel === CHANNELS.runArtifacts.describeAttachmentFile ? demoAttachmentFile(request.runId, request.attachmentId) : readDemoAttachment(request);
+      }
       case CHANNELS.runs.listOutputs: {
         const request = args[0] as ListRunOutputsPayload;
         if (!this.runs.some((run) => run.id === request.runId)) throw new Error("Conversation not found");

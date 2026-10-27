@@ -36,6 +36,7 @@ import { SubagentSummaryRow } from "../subagents/subagent-summary-row";
 import { ToolBlock } from "./tools/tool-block";
 import { HistoryContentLink } from "../history-content-link";
 import { OutputFileCard } from "../outputs/output-file-card";
+import { PromptAttachmentCard } from "./prompt-attachment-card";
 
 /**
  * What the action row under an agent message may do. Threaded down from the
@@ -318,6 +319,9 @@ function PromptBubble({
         opacity: hidden ? 0 : 1,
       }}
     >
+      {item.documents?.length ? <View style={{ width: "100%", maxWidth: 260, gap: spacing.xs, marginBottom: spacing.xs }}>
+        {item.documents.map((document) => <PromptAttachmentCard key={document.key} document={document} />)}
+      </View> : null}
       {item.images.length > 0 ? (
         <View style={{ alignItems: "flex-end", gap: spacing.xs }}>
           <PromptImageGrid

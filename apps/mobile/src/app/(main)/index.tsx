@@ -32,6 +32,7 @@ import {
   composerBottomPadding,
   homeRun,
   useHomeRun,
+  useRunHasOutputs,
   type ComposerSendOrigin,
 } from "@/features/runs";
 import { ModeMenu } from "@/features/spaces";
@@ -50,8 +51,6 @@ import { colors, radius, shadows, spacing, useProviderAccentPair } from "@/theme
 
 /** The round glass buttons' size, and the pills' height, along the top. */
 const CONTROL_HEIGHT = 46;
-/** Two 44-point targets plus the capsule's horizontal padding. */
-const RUN_TOOLBAR_WIDTH = 44 * 3 + spacing.xs * 2;
 /** The connection pill under them, shown while the Mac is out of reach. */
 const PILL_HEIGHT = 30;
 
@@ -493,11 +492,12 @@ function ConnectionPill({ name, onPress }: { name: string; onPress: () => void }
  */
 function RunToolbar({ runId, onNewRun }: { runId: string | null; onNewRun: () => void }) {
   const router = useRouter();
+  const hasOutputs = useRunHasOutputs(runId ?? "");
   return (
     <GlassSurface
       interactive
       style={{
-        width: RUN_TOOLBAR_WIDTH,
+        width: 44 * (hasOutputs ? 3 : 2) + spacing.xs * 2,
         height: CONTROL_HEIGHT,
         borderRadius: radius.full,
         flexDirection: "row",
@@ -505,10 +505,10 @@ function RunToolbar({ runId, onNewRun }: { runId: string | null; onNewRun: () =>
         paddingHorizontal: spacing.xs,
       }}
     >
-      <Pressable accessibilityRole="button" accessibilityLabel="Outputs" disabled={!runId}
+      {hasOutputs ? <Pressable accessibilityRole="button" accessibilityLabel="Outputs"
         onPress={() => router.push({ pathname: "/outputs", params: { runId: runId ?? "" } } as Href)} style={{ opacity: runId ? 1 : 0.4 }}>
         <ToolbarGlyph icon="doc.on.doc" />
-      </Pressable>
+      </Pressable> : null}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="New run"

@@ -47,6 +47,7 @@ export default function MainLayout() {
           <Stack.Screen name="document" options={{ title: "Document" }} />
           <Stack.Screen name="outputs" options={{ title: "Outputs", presentation: "formSheet", sheetAllowedDetents: [0.62, 1], sheetGrabberVisible: true }} />
           <Stack.Screen name="output/[artifactId]" options={{ title: "File" }} />
+          <Stack.Screen name="attachment/[attachmentId]" options={{ title: "Attachment" }} />
           <Stack.Screen name="workspace/[id]" options={{ title: "" }} />
           <Stack.Screen name="settings" options={{ title: "Settings", headerLargeTitle: true }} />
           <Stack.Screen
@@ -83,6 +84,7 @@ export default function MainLayout() {
             options={{ presentation: "fullScreenModal", animation: "fade", headerShown: false }}
           />
           <Stack.Screen name="history-content" options={{ title: "Full content", headerLargeTitle: false }} />
+          <Stack.Screen name="file-diff" options={{ title: "Changes", headerLargeTitle: false }} />
           <Stack.Screen
             name="image/[artifactId]"
             options={{

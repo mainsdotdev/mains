@@ -50,6 +50,7 @@ import {
   runArtifacts,
   runTurns,
   runOutputs,
+  runAttachmentFiles,
   runs,
   skills,
   spaceTargets,
@@ -722,11 +723,11 @@ export async function syncSnapshot(transport: WsTransport, backendId: string): P
     // Downloaded files outlive a run that merely aged out of the window; the
     // ones whose run was deleted are settled below, once the Mac confirms it.
     const staleIds = new Set(stale.map(({ id }) => id));
-    staleWithOutputs = [...new Set(tx
+    staleWithOutputs = [...new Set([...tx
       .select({ runId: runOutputs.runId })
       .from(runOutputs)
       .where(eq(runOutputs.backendId, backendId))
-      .all()
+      .all(), ...tx.select({ runId: runAttachmentFiles.runId }).from(runAttachmentFiles).where(eq(runAttachmentFiles.backendId, backendId)).all()]
       .map(({ runId }) => runId)
       .filter((runId) => staleIds.has(runId)))];
 
@@ -993,6 +994,7 @@ export function runExists(backendId: string, runId: string): boolean {
 export function clearBackend(backendId: string): void {
   projectionTransaction(() => {
     runProjectionWrite(runOutputs, () => db.delete(runOutputs).where(eq(runOutputs.backendId, backendId)).run());
+    runProjectionWrite(runAttachmentFiles, () => db.delete(runAttachmentFiles).where(eq(runAttachmentFiles.backendId, backendId)).run());
     runProjectionWrite(aiDataConsents, () => db.delete(aiDataConsents).where(eq(aiDataConsents.backendId, backendId)).run());
     runProjectionWrite(spaceTargets, () => db.delete(spaceTargets).where(eq(spaceTargets.backendId, backendId)).run());
     runProjectionWrite(spaces, () => db.delete(spaces).where(eq(spaces.backendId, backendId)).run());

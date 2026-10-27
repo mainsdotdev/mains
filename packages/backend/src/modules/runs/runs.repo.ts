@@ -144,6 +144,12 @@ export const runsRepo = {
     return getDb().select().from(runAttachments).where(eq(runAttachments.id, id)).get() ?? null;
   },
 
+  findReferencedAttachment(id: string) {
+    return getDb().select({ attachment: runAttachments }).from(runAttachments)
+      .innerJoin(runAttachmentRefs, eq(runAttachments.id, runAttachmentRefs.attachmentId))
+      .where(eq(runAttachments.id, id)).get()?.attachment ?? null;
+  },
+
   retainAttachment(runId: string, inputKey: string, ordinal: number, attachment: typeof runAttachments.$inferInsert) {
     getDb().transaction((tx) => {
       tx.insert(runAttachments).values(attachment).onConflictDoNothing().run();

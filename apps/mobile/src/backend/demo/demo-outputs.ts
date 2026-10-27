@@ -1,4 +1,5 @@
-import { OUTPUT_CHUNK_BYTES, outputFileType, type RunOutput, type RunOutputChunk, type ReadRunOutputPayload } from "@mains/contracts/run-outputs";
+import { OUTPUT_CHUNK_BYTES, outputFileType, type RunAttachmentFile, type ReadRunAttachmentPayload, type RunOutput, type RunOutputChunk, type ReadRunOutputPayload } from "@mains/contracts/run-outputs";
+import type { StoredAttachment } from "@mains/contracts/runs";
 
 /** Small bundled documents exercise preview, chunk downloads and offline copies without a backend. */
 function samplePdf(): string {
@@ -23,6 +24,20 @@ const files = [
 
 export function demoOutputs(runId: string): RunOutput[] {
   return files.map((file, index) => ({ runId, artifactId: file.id, name: file.name, byteSize: file.content.length, modifiedAt: 1, version: String(index + 1).repeat(64), ...outputFileType(file.name) }));
+}
+
+export const DEMO_ATTACHMENT_ID = "d".repeat(64);
+export function demoPromptAttachment(): StoredAttachment {
+  return { attachmentId: DEMO_ATTACHMENT_ID, name: files[0].name, type: "document", mimeType: "application/pdf", byteSize: files[0].content.length };
+}
+export function demoAttachmentFile(runId: string, attachmentId: string): RunAttachmentFile {
+  if (attachmentId !== DEMO_ATTACHMENT_ID) throw new Error("Attachment not found in this conversation");
+  const { artifactId: _artifactId, ...file } = demoOutputs(runId)[0];
+  return { ...file, attachmentId };
+}
+export function readDemoAttachment(request: ReadRunAttachmentPayload): RunOutputChunk {
+  demoAttachmentFile(request.runId, request.attachmentId);
+  return readDemoOutput({ runId: request.runId, artifactId: files[0].id, version: request.version, offset: request.offset });
 }
 
 export function readDemoOutput(request: ReadRunOutputPayload): RunOutputChunk {

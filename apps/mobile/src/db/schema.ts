@@ -37,6 +37,17 @@ export const runOutputs = sqliteTable("run_outputs", {
   lastOpenedAt: integer("last_opened_at", { mode: "timestamp_ms" }),
 }, (t) => [primaryKey({ columns: [t.backendId, t.runId, t.artifactId] })]);
 
+/** Prompt originals share the bounded file cache, with attachment identities kept separate. */
+export const runAttachmentFiles = sqliteTable("run_attachment_files", {
+  backendId: text("backend_id").notNull(),
+  runId: text("run_id").notNull(),
+  attachmentId: text("attachment_id").notNull(),
+  descriptorJson: text("descriptor_json").notNull(),
+  version: text("version").notNull(),
+  localUri: text("local_uri"),
+  lastOpenedAt: integer("last_opened_at", { mode: "timestamp_ms" }),
+}, (t) => [primaryKey({ columns: [t.backendId, t.runId, t.attachmentId] })]);
+
 /** Spaces: a run's home on the Mac — provider + mode. Selected in the sidebar. */
 export const spaces = sqliteTable(
   "spaces",

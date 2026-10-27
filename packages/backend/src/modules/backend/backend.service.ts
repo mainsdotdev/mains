@@ -51,6 +51,8 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.runArtifacts.readImage,
   CHANNELS.runArtifacts.readAttachmentImage,
   CHANNELS.runArtifacts.readAttachmentFile,
+  CHANNELS.runArtifacts.describeAttachmentFile,
+  CHANNELS.runArtifacts.readAttachmentChunk,
   CHANNELS.runContext.getByRun,
   CHANNELS.workspace.list,
   CHANNELS.workspace.get,

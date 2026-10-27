@@ -3,7 +3,7 @@ import { useHeaderHeight } from "expo-router/react-navigation";
 import { View } from "react-native";
 
 import { backendSession } from "@/backend/backend-session";
-import { RunView, goHome } from "@/features/runs";
+import { RunView, goHome, useRunHasOutputs } from "@/features/runs";
 import { useRunTitle } from "@/lib/use-run-title";
 
 /** One run under a navigation bar: opened from a list, a search, or a fork. */
@@ -13,6 +13,7 @@ export default function RunScreen() {
   const runId = typeof id === "string" ? id : "";
   const headerHeight = useHeaderHeight();
   const title = useRunTitle(runId);
+  const hasOutputs = useRunHasOutputs(runId);
 
   return (
     <View style={{ flex: 1 }}>
@@ -22,9 +23,9 @@ export default function RunScreen() {
 
       {process.env.EXPO_OS === "ios" && (
         <Stack.Toolbar placement="right">
-          <Stack.Toolbar.Button icon="doc.on.doc" accessibilityLabel="Outputs" onPress={() => router.push({ pathname: "/outputs", params: { runId } } as Href)}>
+          {hasOutputs ? <Stack.Toolbar.Button icon="doc.on.doc" accessibilityLabel="Outputs" onPress={() => router.push({ pathname: "/outputs", params: { runId } } as Href)}>
             Outputs
-          </Stack.Toolbar.Button>
+          </Stack.Toolbar.Button> : null}
           {/* Declared before the menu, so it sits to the left of it. */}
           <Stack.Toolbar.Button icon="square.and.pencil" accessibilityLabel="New run" onPress={goHome}>
             New run

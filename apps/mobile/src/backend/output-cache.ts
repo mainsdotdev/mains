@@ -1,10 +1,10 @@
 import { and, eq } from "drizzle-orm";
 import { Directory, File, FileMode, Paths } from "expo-file-system";
-import type { ReadRunOutputPayload, RunOutput, RunOutputChunk } from "@mains/contracts/run-outputs";
+import type { RunFile, RunAttachmentFile, RunOutput, RunOutputChunk } from "@mains/contracts/run-outputs";
 
 import { projectionDb as db, projectionTransaction, runProjectionWrite } from "@/db/client";
-import { runOutputs } from "@/db/schema";
-import { checkDownloadSignal, downloadOutput, outputCacheSegment, outputCacheSegments } from "@/lib/output-download";
+import { runOutputs, runAttachmentFiles } from "@/db/schema";
+import { checkDownloadSignal, downloadRunFile, outputCacheSegment, outputCacheSegments } from "@/lib/output-download";
 
 const root = new Directory(Paths.cache, "mains-outputs");
 const downloads = new Map<string, Set<AbortController>>();
@@ -13,6 +13,7 @@ const downloadRuns = new WeakMap<AbortController, string>();
 const pins = new Map<string, number>();
 const cacheLimit = 200 * 1024 * 1024;
 const whereOutput = (backendId: string, runId: string, artifactId: number) => and(eq(runOutputs.backendId, backendId), eq(runOutputs.runId, runId), eq(runOutputs.artifactId, artifactId));
+const whereAttachment = (backendId: string, runId: string, attachmentId: string) => and(eq(runAttachmentFiles.backendId, backendId), eq(runAttachmentFiles.runId, runId), eq(runAttachmentFiles.attachmentId, attachmentId));
 
 export function pinOutputFile(uri: string): () => void {
   pins.set(uri, (pins.get(uri) ?? 0) + 1);
@@ -30,15 +31,27 @@ export function rememberOutputs(backendId: string, outputs: readonly RunOutput[]
   });
 }
 
-export function cachedOutput(backendId: string, runId: string, artifactId: number): { output: RunOutput; uri: string | null } | null {
-  const row = db.select().from(runOutputs).where(whereOutput(backendId, runId, artifactId)).get();
+export function rememberAttachment(backendId: string, output: RunAttachmentFile): void {
+  const previous = db.select().from(runAttachmentFiles).where(whereAttachment(backendId, output.runId, output.attachmentId)).get();
+  const data = { descriptorJson: JSON.stringify(output), version: output.version, localUri: previous?.version === output.version ? previous.localUri : null };
+  runProjectionWrite(runAttachmentFiles, () => db.insert(runAttachmentFiles).values({ backendId, runId: output.runId, attachmentId: output.attachmentId, ...data })
+    .onConflictDoUpdate({ target: [runAttachmentFiles.backendId, runAttachmentFiles.runId, runAttachmentFiles.attachmentId], set: data }).run());
+}
+
+function cachedFile(backendId: string, runId: string, identity: { artifactId: number } | { attachmentId: string }): { output: RunFile; uri: string | null } | null {
+  const row = "attachmentId" in identity
+    ? db.select().from(runAttachmentFiles).where(whereAttachment(backendId, runId, identity.attachmentId)).get()
+    : db.select().from(runOutputs).where(whereOutput(backendId, runId, identity.artifactId)).get();
   if (!row) return null;
   try {
-    const output = JSON.parse(row.descriptorJson) as RunOutput;
+    const output = JSON.parse(row.descriptorJson) as RunFile;
     const expected = new File(root, ...outputCacheSegments(backendId, output));
     return { output, uri: row.localUri === expected.uri && expected.exists && expected.size === output.byteSize ? expected.uri : null };
   } catch { return null; }
 }
+
+export function cachedOutput(backendId: string, runId: string, artifactId: number) { return cachedFile(backendId, runId, { artifactId }); }
+export function cachedAttachment(backendId: string, runId: string, attachmentId: string) { return cachedFile(backendId, runId, { attachmentId }); }
 
 function pruneCache(except: string): void {
   if (!root.exists) return;
@@ -51,12 +64,13 @@ function pruneCache(except: string): void {
     bytes -= file.size;
     file.delete();
     runProjectionWrite(runOutputs, () => db.update(runOutputs).set({ localUri: null }).where(eq(runOutputs.localUri, file.uri)).run());
+    runProjectionWrite(runAttachmentFiles, () => db.update(runAttachmentFiles).set({ localUri: null }).where(eq(runAttachmentFiles.localUri, file.uri)).run());
   }
 }
 
-export async function ensureOutputFile(backendId: string, output: RunOutput, read: (request: ReadRunOutputPayload) => Promise<RunOutputChunk>, signal: AbortSignal, onProgress?: (received: number) => void): Promise<string> {
+export async function ensureRunFile(backendId: string, output: RunFile, read: (offset: number) => Promise<RunOutputChunk>, signal: AbortSignal, onProgress?: (received: number) => void): Promise<string> {
   checkDownloadSignal(signal);
-  const cached = cachedOutput(backendId, output.runId, output.artifactId);
+  const cached = cachedFile(backendId, output.runId, output);
   if (cached?.uri && cached.output.version === output.version) return cached.uri;
   const [backend, run, revision, name] = outputCacheSegments(backendId, output);
   const directory = new Directory(root, backend, run, revision);
@@ -75,14 +89,19 @@ export async function ensureOutputFile(backendId: string, output: RunOutput, rea
   const unpin = pinOutputFile(temporary.uri);
   try {
     if (signal.aborted) controller.abort();
-    await downloadOutput({ output, read, signal: controller.signal, write: (bytes) => writer.writeBytes(bytes), onProgress });
+    await downloadRunFile({ output, read, signal: controller.signal, write: (bytes) => writer.writeBytes(bytes), onProgress });
     writer.close();
     checkDownloadSignal(controller.signal);
     if (temporary.size !== output.byteSize) throw new Error("Incomplete download. Try again.");
     if (destination.exists && destination.size === output.byteSize) temporary.delete();
     else { if (destination.exists) destination.delete(); temporary.move(destination); }
-    rememberOutputs(backendId, [output]);
-    runProjectionWrite(runOutputs, () => db.update(runOutputs).set({ localUri: destination.uri, lastOpenedAt: new Date() }).where(whereOutput(backendId, output.runId, output.artifactId)).run());
+    if ("attachmentId" in output) {
+      rememberAttachment(backendId, output);
+      runProjectionWrite(runAttachmentFiles, () => db.update(runAttachmentFiles).set({ localUri: destination.uri, lastOpenedAt: new Date() }).where(whereAttachment(backendId, output.runId, output.attachmentId)).run());
+    } else {
+      rememberOutputs(backendId, [output]);
+      runProjectionWrite(runOutputs, () => db.update(runOutputs).set({ localUri: destination.uri, lastOpenedAt: new Date() }).where(whereOutput(backendId, output.runId, output.artifactId)).run());
+    }
     try { pruneCache(destination.uri); } catch { /* Cache maintenance must not hide a downloaded file. */ }
     return destination.uri;
   } finally {
@@ -106,6 +125,8 @@ export function forgetRunOutputs(backendId: string, runId: string): void {
   }
   runProjectionWrite(runOutputs, () => db.delete(runOutputs)
     .where(and(eq(runOutputs.backendId, backendId), eq(runOutputs.runId, runId))).run());
+  runProjectionWrite(runAttachmentFiles, () => db.delete(runAttachmentFiles)
+    .where(and(eq(runAttachmentFiles.backendId, backendId), eq(runAttachmentFiles.runId, runId))).run());
   try {
     const directory = new Directory(root, outputCacheSegment(backendId), outputCacheSegment(runId));
     if (directory.exists) directory.delete();

@@ -89,6 +89,19 @@ test("output cache migration preserves chats and separates file revisions by com
   } finally { db.close(); }
 });
 
+test("a v20 phone keeps its downloaded outputs while attachment copies are isolated by identity and owner", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 20);
+    db.exec("INSERT INTO run_outputs (backend_id,run_id,artifact_id,descriptor_json,version,local_uri) VALUES ('mac','run',-1,'{}','v','file:///output.pdf')");
+    migrateDatabase(migrationDatabase(db));
+    const insert = db.prepare("INSERT INTO run_attachment_files (backend_id,run_id,attachment_id,descriptor_json,version,local_uri) VALUES (?,?,?,?,?,?)");
+    for (const [backend, run, id] of [["a","run","one"],["b","run","one"],["a","other","one"],["a","run","two"]]) insert.run(backend, run, id, "{}", "revision", null);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM run_attachment_files").get().n, 4);
+    assert.equal(db.prepare("SELECT local_uri FROM run_outputs").get().local_uri, "file:///output.pdf");
+  } finally { db.close(); }
+});
+
 test("upgrading a v14 phone preserves its chats and preferences while adding conversation settings", () => {
   const db = new DatabaseSync(":memory:");
   try {

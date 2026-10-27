@@ -101,6 +101,13 @@ projection of runs, workspaces, models, and conversation history. It can start,
 continue, fork, and stop runs, answer approval requests, and attach photos and
 skills. Demo Mode works on the phone without a backend.
 
+Connection attempts time out after 10 seconds. After at most 30 seconds of
+visible recovery, the app shows Unreachable and continues silent probes after
+30-second waits, rotating saved addresses. Try again, network recovery, and
+returning to the foreground trigger an immediate attempt. Offline/background
+states pause retry timers; authorization/version failures require re-pairing
+or an update instead of repeated attempts.
+
 Conversation headers expose Outputs, and transcript document cards open the
 same file viewer. PDF and Office outputs use Quick Look; images, Markdown,
 TXT and CSV open in the app. Share / Save to Files keeps the original filename.
@@ -111,6 +118,16 @@ read-only handlers expose selected conversation outputs without filesystem acces
 Demo Mode includes a small PDF and Markdown output for checking this flow.
 HTML and interactive visualization outputs currently show **See on desktop**
 without a mobile preview, download or share action.
+
+Documents sent from mobile or desktop also appear as cards on their user
+messages, including messages with no text. Cards open the same viewer and
+support sharing and cached offline copies. The backend must include
+`runArtifacts:describeAttachmentFile` and `runArtifacts:readAttachmentChunk`.
+Legacy uploads without a durable attachment id remain visible with Preview
+unavailable. Demo conversations include a bundled PDF attachment.
+For an older backend with only the original-file reader, known document
+attachments up to 2 MiB can still open. Larger files require an updated,
+restarted desktop backend; the phone displays that requirement explicitly.
 
 Model, effort, permissions, speed, Plan, and Goal belong to each conversation.
 Existing chats load and persist their next-message preferences through
@@ -134,6 +151,11 @@ phone caches also project bounded previews before the first render. Use a
 backend containing these handlers when testing this behavior; older backends
 may not support the full-content reader. Oversized responses/events have a
 separate device transport limit.
+
+Tap an edited file below a completed turn to open its saved diff, with line
+numbers, colored additions/deletions and word emphasis. Large diffs use bounded
+pages; binary changes stay on desktop. This uses the existing history-content
+reader and does not read or modify the current working tree.
 
 CI installs the mobile lockfile, runs its tests, typecheck and lint, verifies
 Expo package compatibility, and exports an iOS JavaScript bundle. Native builds

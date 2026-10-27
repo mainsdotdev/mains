@@ -1,6 +1,7 @@
 import type { RunArtifactRow, ToolCallRow } from "@/db/schema";
 
 import { parsePromptImages, type PromptImage } from "./prompt-images";
+import { parsePromptDocuments, type PromptDocument } from "./prompt-documents";
 
 import { promptFileFromPath, type PromptFile, type PromptSkill } from "./prompt-chips";
 import { partitionSubagentCalls, type SessionSubagent } from "./subagents";
@@ -44,6 +45,7 @@ export type TranscriptItem = (
       files: PromptFile[];
       /** Image attachments shown above the user's text bubble. */
       images: PromptImage[];
+      documents?: PromptDocument[];
     }
   | { key: string; kind: "response"; text: string; at: number; fullContent?: FullContent }
   | { key: string; kind: "tools"; calls: ToolCallRow[]; at: number }
@@ -131,7 +133,8 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
       return null;
     case "user-prompt": {
       const images = parsePromptImages(meta.attachments, artifact.runId);
-      return artifact.content || images.length > 0
+      const documents = parsePromptDocuments(meta.attachments, artifact.runId);
+      return artifact.content || images.length > 0 || documents.length > 0
         ? {
             key,
             kind: "prompt",
@@ -141,6 +144,7 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
             skills: promptSkills(meta),
             files: promptFiles(meta),
             images,
+            documents,
           }
         : null;
     }

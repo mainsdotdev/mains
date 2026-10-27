@@ -5,8 +5,10 @@ import { AppState } from "react-native";
 import { toWebSocketUrl } from "@mains/contracts/backend";
 import { setHistoryFollowing } from "./run-history";
 import { CHANNELS } from "@mains/contracts/channels";
-import type { ListRunOutputsPayload, ReadRunOutputPayload, RunOutputsPage, RunOutputChunk } from "@mains/contracts/run-outputs";
-import { rememberOutputs, clearOutputCache } from "./output-cache";
+import type { ListRunOutputsPayload, ReadRunOutputPayload, ReadRunAttachmentPayload, RunAttachmentFile, RunOutputsPage, RunOutputChunk } from "@mains/contracts/run-outputs";
+import { rememberOutputs, rememberAttachment, cachedAttachment, clearOutputCache } from "./output-cache";
+import { AttachmentFileReader, type AttachmentFileHint } from "./attachment-files";
+import { parsePromptDocuments } from "@/lib/prompt-documents";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type {
   AccountResponse,
@@ -35,8 +37,8 @@ import type {
   DismissAsyncQuestionsPayload,
 } from "@mains/contracts/async-questions";
 import { db } from "@/db/client";
-import { runs, spaces } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { runArtifacts, runs, spaces } from "@/db/schema";
+import { and, eq, sql } from "drizzle-orm";
 import type { ServiceResponse } from "@mains/contracts/ws-protocol";
 import {
   hasAiDataConsent,
@@ -175,6 +177,7 @@ class BackendSession {
   private supervisor: ConnectionSupervisor | null = null;
   private unsubscribeSupervisor: (() => void) | null = null;
   private transport: WsTransport | null = null;
+  private readonly attachmentFiles = new AttachmentFileReader();
   private detachEvents: (() => void) | null = null;
   private viewingRunId: string | null = null;
 
@@ -290,6 +293,7 @@ class BackendSession {
   async forget(): Promise<void> {
     const backendId = this.snapshot.backend?.backendId;
     this.stop();
+    this.attachmentFiles.clear();
     await forgetPairedBackend();
     if (backendId) clearOutputCache(backendId);
     if (backendId) clearBackend(backendId);
@@ -680,6 +684,32 @@ class BackendSession {
     if (this.snapshot.backend?.backendId !== expectedBackendId) throw new Error("The connected computer changed");
     if (!result.success) throw new Error(result.error);
     return result.data as RunOutputChunk;
+  }
+
+  async describeAttachmentFile(runId: string, attachmentId: string): Promise<RunAttachmentFile> {
+    const backendId = this.snapshot.backend?.backendId;
+    if (!backendId || !this.isConnected() || !this.transport) throw new Error("Connect to Mains on your computer to open this attachment");
+    let hint: AttachmentFileHint | null = cachedAttachment(backendId, runId, attachmentId)?.output ?? null;
+    if (!hint) {
+      const rows = db.select({ metadataJson: sql<string | null>`CASE WHEN length(${runArtifacts.metadataJson}) <= 16384 THEN ${runArtifacts.metadataJson} ELSE NULL END` })
+        .from(runArtifacts).where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId), eq(runArtifacts.kind, "user-prompt"), sql`instr(${runArtifacts.metadataJson}, ${attachmentId}) > 0`)).limit(20).all();
+      for (const row of rows) {
+        try { hint = parsePromptDocuments(JSON.parse(row.metadataJson ?? "{}").attachments, runId).find((document) => document.attachmentId === attachmentId) ?? null; } catch { /* A damaged cached descriptor cannot authorize a legacy download. */ }
+        if (hint) break;
+      }
+    }
+    const file = await this.attachmentFiles.describe(this.transport, backendId, runId, attachmentId, hint);
+    if (this.snapshot.backend?.backendId !== backendId) throw new Error("The connected computer changed");
+    rememberAttachment(backendId, file);
+    return file;
+  }
+
+  async readAttachmentChunk(request: ReadRunAttachmentPayload, expectedBackendId: string): Promise<RunOutputChunk> {
+    if (this.snapshot.backend?.backendId !== expectedBackendId) throw new Error("The connected computer changed");
+    if (!this.isConnected() || !this.transport) throw new Error("Connect to Mains on your computer to download this attachment");
+    const result = await this.attachmentFiles.readChunk(this.transport, expectedBackendId, request);
+    if (this.snapshot.backend?.backendId !== expectedBackendId) throw new Error("The connected computer changed");
+    return result;
   }
 
   /** The transcript on screen — its events trigger refetches; others wait. */

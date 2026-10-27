@@ -327,6 +327,19 @@ export const MIGRATIONS: readonly (string | ((database: MigrationDatabase) => vo
     PRIMARY KEY (backend_id, run_id, artifact_id)
   );
   `,
+  // v21 — downloaded prompt documents, isolated from generated outputs
+  `
+  CREATE TABLE run_attachment_files (
+    backend_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    attachment_id TEXT NOT NULL,
+    descriptor_json TEXT NOT NULL,
+    version TEXT NOT NULL,
+    local_uri TEXT,
+    last_opened_at INTEGER,
+    PRIMARY KEY (backend_id, run_id, attachment_id)
+  );
+  `,
 ];
 
 export function migrateDatabase(database: MigrationDatabase): void {
