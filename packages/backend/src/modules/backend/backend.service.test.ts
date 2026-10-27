@@ -155,9 +155,12 @@ describe("backendService", () => {
       expect([...PAIRED_DEVICE_COMMANDS].sort()).toEqual([
         "providers:updateRunSettings",
         "runs:abort",
+        "runs:answerAsyncQuestions",
         "runs:continue",
+        "runs:dismissAsyncQuestions",
         "runs:execute",
         "runs:fork",
+        "runs:steer",
         "runs:toolApprovalResponse",
         "runs:updateConversationSettings",
         "space:update",

@@ -24,7 +24,14 @@ import type {
   RunEphemeralEvent,
   ReadRunHistoryContentPayload,
   RunHistoryContentPage,
+  RunSteerPayload,
+  RunSteerResponse,
 } from "@mains/contracts/runs";
+import type {
+  AnswerAsyncQuestionsPayload,
+  AnswerAsyncQuestionsResponse,
+  DismissAsyncQuestionsPayload,
+} from "@mains/contracts/async-questions";
 import { db } from "@/db/client";
 import { runs, spaces } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
@@ -471,27 +478,9 @@ class BackendSession {
     /** Phone-local files serialized for the Mac's attachment pipeline. */
     attachments?: FileAttachment[],
   ): Promise<ServiceResponse<ContinueRunResponse>> {
-    const { accountId, backend } = this.snapshot;
-    if (!accountId || !backend) {
-      return { success: false, error: "Not connected to Mains on your computer yet" };
-    }
-    const run = db
-      .select({ providerId: runs.providerId })
-      .from(runs)
-      .where(and(eq(runs.backendId, backend.backendId), eq(runs.id, runId)))
-      .get();
-    if (!run) {
-      return { success: false, error: "That run is not available on this phone yet" };
-    }
-    if (
-      backend.backendId !== DEMO_BACKEND_ID &&
-      !hasAiDataConsent(backend.backendId, run.providerId)
-    ) {
-      return {
-        success: false,
-        error: missingAiDataConsentMessage(run.providerId),
-      };
-    }
+    const target = this.sendableRun(runId);
+    if (!target.ok) return { success: false, error: target.error };
+    const { accountId, backendId } = target;
     const payload: ContinueRunPayload = {
       runId,
       accountId,
@@ -501,11 +490,109 @@ class BackendSession {
       ...(contextSkills?.length ? { contextSkills } : {}),
     };
     const result = await this.command<ContinueRunResponse>(CHANNELS.runs.continue, [payload]);
-    if (result.success && this.transport) {
-      setHistoryFollowing(backend.backendId, runId, true);
-      void syncRun(this.transport, backend.backendId, runId, "latest").catch(() => {});
-    }
+    if (result.success) this.followLatest(backendId, runId);
     return result;
+  }
+
+  /**
+   * Add a message to the turn a Codex or Claude run is still working on — the
+   * desktop's steer. The agent reads it mid-turn; the Mac persists it as a
+   * prompt, which the refetch brings into the transcript.
+   */
+  async steerRun(
+    runId: string,
+    message: string,
+    contextSkills?: SkillSummary[],
+    attachments?: FileAttachment[],
+  ): Promise<ServiceResponse<RunSteerResponse>> {
+    const target = this.sendableRun(runId);
+    if (!target.ok) return { success: false, error: target.error };
+    const payload: RunSteerPayload = {
+      runId,
+      accountId: target.accountId,
+      // Fresh per message; a retry of this command reuses its commandId instead.
+      clientUserMessageId: newCommandId(),
+      message,
+      ...(attachments?.length ? { attachments } : {}),
+      ...(contextSkills?.length ? { contextSkills } : {}),
+    };
+    const result = await this.command<RunSteerResponse>(CHANNELS.runs.steer, [payload]);
+    if (result.success) this.followLatest(target.backendId, runId);
+    return result;
+  }
+
+  /**
+   * Answer the questions Codex asked at the end of a turn. The Mac formats
+   * the answers into one message and steers or continues the run with it.
+   * `checkOnly` asks whether an earlier, unconfirmed answer arrived, without
+   * sending anything.
+   */
+  async answerAsyncQuestions(
+    runId: string,
+    artifactId: number,
+    answers: string[],
+    checkOnly = false,
+  ): Promise<ServiceResponse<AnswerAsyncQuestionsResponse>> {
+    const target = this.sendableRun(runId);
+    if (!target.ok) return { success: false, error: target.error };
+    const payload: AnswerAsyncQuestionsPayload = {
+      runId,
+      accountId: target.accountId,
+      artifactId,
+      answers,
+      ...(checkOnly ? { checkOnly } : {}),
+    };
+    const result = await this.command<AnswerAsyncQuestionsResponse>(
+      CHANNELS.runs.answerAsyncQuestions,
+      [payload],
+    );
+    if (result.success && result.data.accepted) this.followLatest(target.backendId, runId);
+    return result;
+  }
+
+  /** Record that the user chose not to answer; nothing reaches the agent. */
+  async dismissAsyncQuestions(runId: string, artifactId: number): Promise<ServiceResponse<void>> {
+    const { accountId, backend } = this.snapshot;
+    if (!accountId || !backend) {
+      return { success: false, error: "Not connected to Mains on your computer yet" };
+    }
+    const payload: DismissAsyncQuestionsPayload = { runId, accountId, artifactId };
+    return this.command<void>(CHANNELS.runs.dismissAsyncQuestions, [payload]);
+  }
+
+  /** After a send lands, follow the run's end and pull it rather than wait for the push. */
+  private followLatest(backendId: string, runId: string): void {
+    setHistoryFollowing(backendId, runId, true);
+    if (this.transport) void syncRun(this.transport, backendId, runId, "latest").catch(() => {});
+  }
+
+  /**
+   * What sending into one of this backend's runs needs: the account it
+   * belongs to, and the user's permission to share the message with that
+   * run's AI provider.
+   */
+  private sendableRun(
+    runId: string,
+  ): { ok: true; accountId: string; backendId: string } | { ok: false; error: string } {
+    const { accountId, backend } = this.snapshot;
+    if (!accountId || !backend) {
+      return { ok: false, error: "Not connected to Mains on your computer yet" };
+    }
+    const run = db
+      .select({ providerId: runs.providerId })
+      .from(runs)
+      .where(and(eq(runs.backendId, backend.backendId), eq(runs.id, runId)))
+      .get();
+    if (!run) {
+      return { ok: false, error: "That run is not available on this phone yet" };
+    }
+    if (
+      backend.backendId !== DEMO_BACKEND_ID &&
+      !hasAiDataConsent(backend.backendId, run.providerId)
+    ) {
+      return { ok: false, error: missingAiDataConsentMessage(run.providerId) };
+    }
+    return { ok: true, accountId, backendId: backend.backendId };
   }
 
   /**
@@ -517,33 +604,14 @@ class BackendSession {
     sourceRunId: string,
     message: string,
   ): Promise<ServiceResponse<ForkRunResponse>> {
-    const { accountId, backend } = this.snapshot;
-    if (!accountId || !backend) {
-      return { success: false, error: "Not connected to Mains on your computer yet" };
-    }
-    const run = db
-      .select({ providerId: runs.providerId })
-      .from(runs)
-      .where(and(eq(runs.backendId, backend.backendId), eq(runs.id, sourceRunId)))
-      .get();
-    if (!run) {
-      return { success: false, error: "That run is not available on this phone yet" };
-    }
-    if (
-      backend.backendId !== DEMO_BACKEND_ID &&
-      !hasAiDataConsent(backend.backendId, run.providerId)
-    ) {
-      return {
-        success: false,
-        error: missingAiDataConsentMessage(run.providerId),
-      };
-    }
-    const payload: ForkRunPayload = { sourceRunId, accountId, message };
+    const target = this.sendableRun(sourceRunId);
+    if (!target.ok) return { success: false, error: target.error };
+    const payload: ForkRunPayload = { sourceRunId, accountId: target.accountId, message };
     const result = await this.command<ForkRunResponse>(CHANNELS.runs.fork, [payload]);
     if (result.success && this.transport) {
       // The new run has no row in the projection yet; pull it before the
       // screen that is about to open queries for it.
-      void syncRun(this.transport, backend.backendId, result.data.runId).catch(() => {});
+      void syncRun(this.transport, target.backendId, result.data.runId).catch(() => {});
     }
     return result;
   }

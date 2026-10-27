@@ -13,6 +13,7 @@ import { cachedHistoryQueries } from "@/db/history-queries";
 import { useRunHistory } from "@/backend/run-history";
 import { pendingApprovals, runArtifacts, runs, toolCalls, workspaces } from "@/db/schema";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
+import { pendingAsyncQuestions } from "@/lib/async-questions";
 import { latestPromptSuggestions } from "@/lib/prompt-suggestions";
 import { buildTranscript } from "@/lib/transcript";
 import { useModelSelection } from "@/lib/use-model-selection";
@@ -111,6 +112,7 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
   );
   const thinking = useMemo(() => latestThinking([...artifactQuery.data].reverse()), [artifactQuery.data]);
   const suggestions = useMemo(() => latestPromptSuggestions(artifactQuery.data), [artifactQuery.data]);
+  const asyncQuestions = useMemo(() => pendingAsyncQuestions(artifactQuery.data), [artifactQuery.data]);
   const modelSelection = useModelSelection(backendId, providerId, runId);
 
   const readingCache = [runQuery, artifactQuery, callQuery].some(
@@ -150,6 +152,8 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     },
     approvals: {
       waiting: waitingApprovals,
+      /** Codex's end-of-turn questions still waiting on the user, if any. */
+      questions: asyncQuestions,
       now,
     },
     modelSelection,

@@ -111,7 +111,8 @@ export function ComposerBar({
   onAttachmentsChange?: (attachments: ComposerAttachment[]) => void;
   /**
    * Given only while a run is in flight: the send button becomes a stop button,
-   * as it does on the desktop (`SendButton` swaps on `loading && onStop`).
+   * as it does on the desktop (`SendButton` swaps on `loading && onStop`) — or,
+   * with a message for a turn that accepts one, stays Send until it is sent.
    */
   onStop?: () => void;
   /** The model pill: what is selected, its effort, and what tapping opens. */
@@ -131,6 +132,9 @@ export function ComposerBar({
   const accent = useProviderAccent(providerId);
   const canSend =
     !disabled && !sending && (value.trim().length > 0 || attachments.length > 0);
+  // While a run is in flight the button stops it — unless the running turn
+  // can take the message waiting here, which it then sends instead.
+  const stopping = onStop !== undefined && !canSend;
   const inputRef = useRef<TextInput>(null);
   const attachmentButtonRef = useRef<View>(null);
   const attachmentImageRefsRef = useRef(new Map<string, View>());
@@ -493,11 +497,11 @@ export function ComposerBar({
 
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={onStop ? "Stop run" : "Send"}
+            accessibilityLabel={stopping ? "Stop run" : "Send"}
             // Stopping stays available while the composer itself is disabled —
             // a run in flight is exactly when the field is closed for typing.
-            disabled={onStop ? false : !canSend}
-            onPress={onStop ?? sendFromInput}
+            disabled={stopping ? false : !canSend}
+            onPress={stopping ? onStop : sendFromInput}
             style={({ pressed }) => ({
               width: 36,
               height: 36,
@@ -512,8 +516,8 @@ export function ComposerBar({
             })}
           >
             <SFSymbol
-              name={onStop ? "stop.fill" : sending ? "ellipsis" : "arrow.up"}
-              size={onStop ? 13 : 16}
+              name={stopping ? "stop.fill" : sending ? "ellipsis" : "arrow.up"}
+              size={stopping ? 13 : 16}
               tint={colors.onTint}
             />
           </Pressable>

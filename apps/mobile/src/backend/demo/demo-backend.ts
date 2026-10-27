@@ -11,6 +11,8 @@ import type {
   RunHistoryCursor,
   ReadRunTextFilePayload,
   RunTextFile,
+  RunSteerPayload,
+  RunSteerResponse,
   SkillSummary,
   SpaceModePayload,
   StartRunPayload,
@@ -510,6 +512,8 @@ export class DemoBackend implements DemoHandler {
         return this.execute(args[0] as StartRunPayload);
       case CHANNELS.runs.continue:
         return this.continueRun(args[0] as ContinueRunPayload);
+      case CHANNELS.runs.steer:
+        return this.steer(args[0] as RunSteerPayload);
       case CHANNELS.runs.fork:
         return this.fork(args[0] as ForkRunPayload);
       case CHANNELS.runs.abort:
@@ -632,6 +636,19 @@ export class DemoBackend implements DemoHandler {
       payload.contextSkills,
     );
     return { runId: run.id, resumed: true };
+  }
+
+  /** A message for the replay in flight, recorded as the Mac records a steer; the scenario plays on. */
+  private steer(payload: RunSteerPayload): RunSteerResponse {
+    const run = this.runs.find((r) => r.id === payload.runId);
+    if (!run) throw new Error("Run not found");
+    if (run.status !== "running") throw new Error("There is no active turn to steer. The message stays queued.");
+    this.appendArtifact(run, "user-prompt", payload.message, {
+      source: "user",
+      delivery: "steer",
+      clientUserMessageId: payload.clientUserMessageId,
+    });
+    return { runId: run.id, turnId: `demo-steer-${payload.clientUserMessageId}` };
   }
 
   private fork(payload: ForkRunPayload): { runId: string; sourceRunId: string } {

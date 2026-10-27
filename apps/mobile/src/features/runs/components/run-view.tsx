@@ -26,6 +26,7 @@ import { useRunOperations } from "../hooks/use-run-operations";
 
 import { AsciiLoader } from "./ascii-loader";
 import { ComposerBar, composerBottomPadding } from "./composer/composer-bar";
+import { AsyncQuestionCard } from "./approvals/async-question-card";
 import { PendingApprovalCard } from "./approvals/pending-approval-card";
 import { ReplicaBar } from "./replica-bar";
 import { PromptSuggestionChips } from "./transcript/prompt-suggestion-chips";
@@ -94,7 +95,7 @@ export function RunView({
     backend: { id: backendId, connected },
     run: { record: run, isLive: runIsLive, isReplica, providerId, mode, workspacePath },
     transcript: { items, streamingItems, thinking, suggestions, history },
-    approvals: { waiting, now },
+    approvals: { waiting, questions, now },
     modelSelection,
   } = useRunData(runId, expectedProviderId);
   /** Sent, but the Mac has yet to answer with a run. */
@@ -220,6 +221,8 @@ export function RunView({
 
   const {
     continueRun,
+    steerRun,
+    canSteer,
     forkRun,
     stopRun,
     sending,
@@ -230,8 +233,23 @@ export function RunView({
     turnIsActive,
     conversationSettings: modelSelection.settings,
   });
+  /** The composer feeds the running turn instead of waiting for it to end. */
+  const steering = liveHere && canSteer;
 
   const send = (origin: ComposerSendOrigin | null) => {
+    if (steering) {
+      void steerRun(
+        { sourceText: draft, contextSkills, attachments },
+        {
+          onAccepted: () => {
+            clearComposerSource();
+            pinned.current = true;
+            setHistoryFollowing(backendId, runId, true);
+          },
+        },
+      );
+      return;
+    }
     const sentDraft = draft;
     const sentContextSkills = contextSkills;
     const sentAttachments = attachments;
@@ -473,7 +491,9 @@ export function RunView({
   const placeholder = !connected
     ? "Connect to Mains on your computer to continue this run"
     : runIsLive
-      ? "The agent is still working…"
+      ? steering
+        ? "Add to what the agent is working on…"
+        : "The agent is still working…"
       : !run
         ? starting
           ? "Starting the run…"
@@ -656,6 +676,19 @@ export function RunView({
               }}
             />
           ))}
+          {/*
+            Codex's questions wait behind any real approval, as on the desktop,
+            and only where they can be answered: this computer's run, read at
+            its end, where whether a newer message moved on is known.
+          */}
+          {questions && waiting.length === 0 && !isReplica && !history.end ? (
+            <AsyncQuestionCard
+              key={questions.artifactId}
+              runId={runId}
+              providerId={providerId}
+              pending={questions}
+            />
+          ) : null}
           {run?.lastError ? (
             <View
               style={{
@@ -703,7 +736,7 @@ export function RunView({
             // Mac is reachable to hear it.
             onStop={runIsLive && connected ? () => void stopRun() : undefined}
             sending={sending}
-            disabled={!connected || turnIsActive || !run}
+            disabled={!connected || !run || (turnIsActive && !steering)}
             error={sendError}
             attachments={attachments}
             onAttachmentsChange={setAttachments}
