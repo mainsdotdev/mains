@@ -1,3 +1,4 @@
+import { assertOwnedRecord } from "../bridge";
 import { automationsRepo } from "./automations.repo";
 import { syncService } from "../sync/sync.service";
 import type {
@@ -135,6 +136,7 @@ export const automationsService = {
   },
 
   update(id: string, input: UpdateAutomationInput): Automation {
+    assertOwnedRecord("automations", id);
     if (input.action && !actionHandlers[input.action]) {
       throw new Error(`Unknown action: ${input.action}`);
     }
@@ -158,6 +160,7 @@ export const automationsService = {
   },
 
   delete(id: string): void {
+    assertOwnedRecord("automations", id);
     cancelTimer(id);
     automationsRepo.delete(id);
   },
@@ -165,6 +168,7 @@ export const automationsService = {
   // ── Execution ──
 
   async executeAutomation(id: string): Promise<AutomationRun | null> {
+    assertOwnedRecord("automations", id);
     const automation = automationsRepo.findById(id);
     if (!automation) {
       throw new Error("Automation not found");

@@ -372,16 +372,22 @@ export const providersService = {
   },
 
   async detectInstalled(): Promise<DetectedClisResponse> {
-    const [claude, copilot] = await Promise.all([
+    const [claude, copilot, codex, cursor] = await Promise.all([
       providersRepo.findById(PROVIDER_IDS.claude),
       providersRepo.findById(PROVIDER_IDS.copilot),
+      providersRepo.findById(PROVIDER_IDS.codex),
+      providersRepo.findById(PROVIDER_IDS.cursor),
     ]);
-    const claudeBinary = claude?.config?.binary;
-    const copilotBinary = copilot?.config?.binary;
-    return detectInstalledClis(
-      typeof claudeBinary === "string" ? claudeBinary : undefined,
-      typeof copilotBinary === "string" ? copilotBinary : undefined,
-    );
+    const binary = (provider: typeof claude) =>
+      typeof provider?.config?.binary === "string" && provider.config.binary
+        ? provider.config.binary
+        : undefined;
+    return detectInstalledClis({
+      claude: binary(claude),
+      copilot: binary(copilot),
+      codex: binary(codex),
+      cursor: binary(cursor),
+    });
   },
 };
 

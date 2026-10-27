@@ -49,6 +49,7 @@ export const baseApi = createApi({
   refetchOnFocus: true,
   refetchOnReconnect: true,
   tagTypes: [
+    'Bridge',
     'ConnectionState',
     'Connection',
     'Atlas',

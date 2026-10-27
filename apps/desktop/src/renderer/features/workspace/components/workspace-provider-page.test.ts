@@ -4,7 +4,7 @@ import { createElement, type ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { WorkspaceProviderPage } from "./workspace-provider-page";
 import { WorkspaceTabs } from "./workspace-tabs";
 import appSettingsReducer, {
@@ -47,6 +47,7 @@ const page = vi.hoisted(() => ({
   mode: "developer" as "developer" | "work" | "chat",
   runQueryReady: true,
   realTabs: false,
+  workspaceLoading: false,
 }));
 const browser = vi.hoisted(() => ({
   isExpanded: false,
@@ -57,6 +58,10 @@ const browser = vi.hoisted(() => ({
 }));
 const mcp = vi.hoisted(() => ({ panel: null as null | Record<string, unknown> }));
 vi.mock("@/hooks/use-mcp-app-panel", () => ({ useMcpAppPanel: () => mcp.panel }));
+vi.mock("../hooks/use-workspace-data", () => ({ useWorkspaceData: () => ({ currentWorkspace: page.state.currentWorkspace ?? null, loading: page.workspaceLoading }) }));
+vi.mock("@/features/bridge/components/replica-workspace-view", () => ({
+  ReplicaWorkspaceView: () => createElement("div", { "data-testid": "replica-view" }, "Read-only"),
+}));
 
 vi.mock("@/hooks/use-browser-panel", () => ({
   useBrowserPanel: () => ({
@@ -122,6 +127,7 @@ vi.mock("@/lib/redux/api", () => ({
   useGetAccountQuery: () => ({}),
   useGetCollectionQuery: () => ({}),
   useGetProviderByIdQuery: () => ({}),
+  useGetWorkspaceQuery: () => ({}),
   useUpdateProviderMutation: () => [vi.fn()],
   useGetRunByIdQuery: (id: string) => ({
     currentData: page.runQueryReady
@@ -204,10 +210,52 @@ afterEach(() => {
   page.mode = "developer";
   page.runQueryReady = true;
   page.realTabs = false;
+  page.workspaceLoading = false;
   vi.unstubAllGlobals();
 });
 
 describe("WorkspaceProviderPage while changing spaces", () => {
+  const route = () => render(createElement(MemoryRouter, { initialEntries: ["/code/runs/run-1"] },
+    createElement(MainHeaderProvider, null, createElement(Routes, null,
+      createElement(Route, { path: "/code/runs/:runId", element: createElement(WorkspaceProviderPage, { providerId: "codex", variant: "codex" }) }),
+    )),
+  ));
+
+  it("opens a synced conversation without mounting an interactive composer", async () => {
+    page.state = { runs: [{ id: "run-1", isReplica: true, ownerBackendId: "source" }], currentWorkspace: null };
+    route();
+    await waitFor(() => expect(screen.getByTestId("replica-view")).toBeTruthy());
+    expect(screen.queryByTestId("pinned-input")).toBeNull();
+    expect(screen.queryByTestId("centered-input")).toBeNull();
+  });
+
+  it("keeps source remote control interactive even with a previously selected replica workspace", () => {
+    page.state = { runs: [{ id: "run-1", isReplica: false, ownerBackendId: "source" }], activeTab: "run-1",
+      activeRunId: "run-1", activeRun: { id: "run-1", status: "succeeded" }, composerRun: { id: "run-1" },
+      currentWorkspace: { id: "old-workspace", isReplica: true }, currentEvents: [], currentTurns: [],
+      openIssueTabs: [], openSignalTabs: [], openNoteTabs: [], showEmptyState: false, showInput: true, goal: "", uploadedFiles: [] };
+    route();
+    expect(screen.getByTestId("pinned-input")).toBeTruthy();
+    expect(screen.queryByTestId("replica-view")).toBeNull();
+  });
+
+  it("waits for backend ownership before offering controls for a direct run link", () => {
+    page.state = { runs: [], currentWorkspace: null };
+    page.runQueryReady = false;
+    route();
+    expect(screen.getByText("Loading conversation…")).toBeTruthy();
+    expect(screen.queryByTestId("pinned-input")).toBeNull();
+  });
+
+  it("waits for workspace ownership before mounting provider controls on a cold load", () => {
+    page.state = { runs: [], currentWorkspace: null };
+    page.workspaceLoading = true;
+    renderPage();
+    expect(screen.getByText("Loading conversation…")).toBeTruthy();
+    expect(screen.queryByTestId("pinned-input")).toBeNull();
+    expect(screen.queryByTestId("centered-input")).toBeNull();
+  });
+
   it("shows a compact completed-run question action above the composer and opens input only on request", () => {
     const run = { id: "run-1", status: "succeeded", providerId: "codex", goal: "Question" };
     page.state = { runs: [run], activeTab: run.id, activeRunId: run.id, activeRun: run, composerRun: run,

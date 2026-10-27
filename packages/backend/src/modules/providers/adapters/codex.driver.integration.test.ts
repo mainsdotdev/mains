@@ -842,6 +842,30 @@ describe("codex.driver / app-server protocol", () => {
     });
   });
 
+  it("reads the version of a CLI installed after Mains first looked for it", async () => {
+    process.env.MAINS_CODEX_FIXTURE_VERSION = CODEX_APP_SERVER_PROTOCOL_VERSION;
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-install-"));
+    tempDirs.push(directory);
+    const binary = path.join(directory, path.basename(fixtureBinary));
+
+    const driver = createCodexDriver({ binary, timeout: 2000 });
+    drivers.push(driver);
+
+    expect((await driver.getAccountInfo?.())?.cli).toMatchObject({
+      version: null,
+      compatibility: "unknown",
+    });
+
+    fs.copyFileSync(fixtureBinary, binary);
+    fs.chmodSync(binary, 0o755);
+    expect((await driver.getAccountInfo?.())?.cli).toMatchObject({
+      version: CODEX_APP_SERVER_PROTOCOL_VERSION,
+      compatibility: "supported",
+    });
+  });
+
   it("allows a newer CLI in forward-compatible mode and reports a warning", async () => {
     process.env.MAINS_CODEX_FIXTURE_VERSION = NEWER_THAN_TESTED;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);

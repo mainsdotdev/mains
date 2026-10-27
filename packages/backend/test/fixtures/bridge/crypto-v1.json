@@ -1,0 +1,42 @@
+{
+  "provenance": "Generated independently with Python stdlib HKDF/HMAC and PyNaCl 1.6.2 (libsodium XChaCha20-Poly1305/X25519). Device inputs are RFC 7748 section 6.1. These are public test keys.",
+  "accountKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "derivedHex": {
+    "body": "04a5a4a62229e1de7790aea65c29602da31651040bbacccc6bdbfb92ba4429c0",
+    "record": "a1fad060efdbcc68c35473003047daf58d4f4046d2bfec76a0156f1369c22ef1",
+    "blob-id": "4d227d0233fc3dcd53828dd8e89d368874820fcd99e41271e37a75ee10b3f1f2"
+  },
+  "delete": {
+    "body": {
+      "table": "collections",
+      "pk": "known-id"
+    },
+    "envelope": {
+      "header": {
+        "v": 1,
+        "stream": "account",
+        "rowKey": "bahEQsMxDZC33V2KqqUHxg",
+        "hlc": {
+          "physicalMs": 1700000000000,
+          "counter": 7
+        },
+        "origin": "backend-a",
+        "op": "delete"
+      },
+      "body": {
+        "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYX",
+        "payload": "DDZIcpqQzJ4Ph3ZNB51hxd7gTFQpt0bxqAxgBS9Nb9zEKfmuDLN_xqK5LDijXWo6Yb0D8NmVdg"
+      }
+    }
+  },
+  "wrap": {
+    "recipientSecretKeyHex": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+    "recipientPublicKeyHex": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+    "sealed": {
+      "v": 1,
+      "ephemeralPublicKey": "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo",
+      "nonce": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYn",
+      "payload": "FgQnDx1gjolQtJncoNh3yCf492KDN-YlPVtSJXGwVs58CinOvR25PXsc1wK1M3wk"
+    }
+  }
+}

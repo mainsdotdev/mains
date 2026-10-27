@@ -18,7 +18,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { CHANNELS } from "@mains/contracts/channels";
 import { getMainWindow } from "../../windows/mainWindow";
-import { isRunOwnerKey, isWorkspaceDraftOwnerKey } from "../../../shared/ui-state-keys";
+import { isRunOwnerKey, isWorkspaceDraftOwnerKey, workspaceBrowserExpansionKey } from "../../../shared/ui-state-keys";
 import {
   buildInspectorScript,
   buildInspectorCaptureCompleteScript,
@@ -936,20 +936,10 @@ export const browserService = {
       }
       if (matches("browser.nextTab") || matches("browser.previousTab")) {
         event.preventDefault();
-        const ids = Array.from(this.tabs.values())
-          .filter((tab) => tab.ownerKey === record.ownerKey)
-          .map((tab) => tab.id);
-        const current = ids.indexOf(record.id);
-        const direction = matches("browser.previousTab") ? -1 : 1;
-        const next = (current + direction + ids.length) % ids.length;
-        if (ids[next]) {
-          void this.activateTab(ids[next]).catch((error) => {
-            console.warn(
-              "[browser] Failed to activate a tab from shortcut:",
-              error,
-            );
-          });
-        }
+        this._sendToRenderer(CHANNELS.browser.shortcut, {
+          action: "app-shortcut",
+          shortcutId: matches("browser.previousTab") ? "browser.previousTab" : "browser.nextTab",
+        });
       }
     });
 
@@ -1833,7 +1823,7 @@ export const browserService = {
     this._loadPersistedTabs();
     const matches = (key: string) => target.kind === "run"
       ? isRunOwnerKey(key, target.backendId, target.id)
-      : isWorkspaceDraftOwnerKey(key, target.backendId, target.id);
+      : isWorkspaceDraftOwnerKey(key, target.backendId, target.id) || key === workspaceBrowserExpansionKey(target.backendId, target.id);
 
     // Switching away first detaches the native view without creating another
     // tab for the context we are about to forget.

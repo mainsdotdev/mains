@@ -17,7 +17,6 @@ export function useShellHeaderChrome(sidebarCollapsed?: boolean) {
   const reserveTrafficLights = macWindowChrome && !isFullscreen;
   return {
     sidebarToggleLeft: reserveTrafficLights ? "5.25rem" : "0.75rem",
-    mainInsetLeft: getCollapsedHeaderPaddingLeft(sidebarCollapsed, macWindowChrome, isFullscreen),
-    previewInsetLeft: sidebarCollapsed && reserveTrafficLights ? "5rem" : undefined,
+    headerInsetLeft: getCollapsedHeaderPaddingLeft(sidebarCollapsed, macWindowChrome, isFullscreen),
   };
 }

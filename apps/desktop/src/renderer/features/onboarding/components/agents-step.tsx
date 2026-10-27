@@ -10,26 +10,6 @@ import { useGetProviderAccountInfoQuery } from "@/lib/redux/api/providersApi";
 import { useProviderAuthTerminal } from "@/features/workspace/hooks/use-provider-auth-terminal";
 import { TerminalSection } from "@/features/workspace/components/terminal-section";
 
-const SETUP: Record<ProviderVariant, { command: string | null; docs: string }> =
-  {
-    claude: {
-      command: null,
-      docs: "https://docs.anthropic.com/en/docs/claude-code",
-    },
-    codex: {
-      command: "npm install -g @openai/codex",
-      docs: "https://developers.openai.com/codex/cli",
-    },
-    copilot: {
-      command: null,
-      docs: "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli",
-    },
-    cursor: {
-      command: "curl https://cursor.com/install -fsS | bash",
-      docs: "https://docs.cursor.com/en/cli/overview",
-    },
-  };
-
 interface AgentsStepProps {
   options: OnboardingProvider[];
   value: ProviderVariant | null;
@@ -120,11 +100,10 @@ export function AgentsStep({
 
   if (setup) {
     const provider = getProviderVariant(setup);
-    const instructions = SETUP[setup];
     const Icon = provider.icon;
     const option = options.find((option) => option.variant === setup);
     const loginCommand =
-      instructions.command === null
+      provider.installCommand === null
         ? setupQuery?.data?.cli?.authLoginCommand
         : provider.authLoginCommand;
     const activeTerminal = authTerminal.session?.providerId === provider.providerId
@@ -161,24 +140,24 @@ export function AgentsStep({
               : connectedAccount?.type === "copilot" && connectedAccount.login
                 ? `Signed in as ${connectedAccount.login}.`
                 : `${provider.label} is ready to use.`
-            : instructions.command
+            : provider.installCommand
               ? "Install the CLI in your terminal, then sign in to your account."
               : option?.installed
                 ? `Sign in to connect your ${provider.label} account. No separate installation is needed.`
                 : `${provider.label} is included with Mains. Reinstall Mains to restore it, then recheck.`}
         </p>
-        {instructions.command && (
+        {provider.installCommand && (
           <div className="onboarding-command glass-outline">
-            <code>{instructions.command}</code>
+            <code>{provider.installCommand}</code>
             <CopyButton
               variant="icon"
               tooltip="Copy install command"
-              text={instructions.command}
+              text={provider.installCommand}
             />
           </div>
         )}
-        {instructions.command && <span className="onboarding-command-label">Sign in</span>}
-        {instructions.command && (
+        {provider.installCommand && <span className="onboarding-command-label">Sign in</span>}
+        {provider.installCommand && (
           <div className="onboarding-command glass-outline">
             <code>{loginCommand ?? provider.authLoginCommand}</code>
             <CopyButton
@@ -213,7 +192,7 @@ export function AgentsStep({
                 variant="subtle"
                 className="onboarding-text-button mt-2"
                 onClick={() =>
-                  void window.api.shell.openExternal(instructions.docs)
+                  void window.api.shell.openExternal(provider.setupGuideUrl)
                 }
               >
                 Open setup guide <ChevronUp className="size-3.5 rotate-90" />

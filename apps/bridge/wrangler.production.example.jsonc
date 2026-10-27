@@ -1,0 +1,40 @@
+{
+  // Copy to wrangler.production.jsonc and replace the placeholders after
+  // provisioning separate production resources. This template cannot deploy.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mains-bridge-production",
+  "account_id": "REPLACE_WITH_CLOUDFLARE_ACCOUNT_ID",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "redact_query_string": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": false },
+    "traces": { "enabled": false },
+    "issues": { "enabled": false }
+  },
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "secrets": { "required": ["BETTER_AUTH_SECRET", "GITHUB_CLIENT_SECRET"] },
+  "routes": [{ "pattern": "REPLACE_WITH_PRODUCTION_HOST", "custom_domain": true }],
+  "vars": {
+    "BRIDGE_ENV": "production",
+    "BRIDGE_DEV_AUTH": "false",
+    "BRIDGE_AUTH_URL": "https://REPLACE_WITH_PRODUCTION_HOST",
+    "GITHUB_CLIENT_ID": "REPLACE_WITH_PRODUCTION_OAUTH_CLIENT_ID"
+  },
+  "d1_databases": [{
+    "binding": "AUTH_DB",
+    "database_name": "mains-bridge-production-auth",
+    "database_id": "REPLACE_WITH_PRODUCTION_D1_ID",
+    "migrations_dir": "migrations"
+  }],
+  "r2_buckets": [
+    { "binding": "BLOBS", "bucket_name": "mains-bridge-production-blobs" },
+    { "binding": "BLOB_ARCHIVE", "bucket_name": "mains-bridge-production-archive" }
+  ],
+  "durable_objects": { "bindings": [{ "name": "ACCOUNT_HUB", "class_name": "AccountHub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AccountHub"] }]
+}

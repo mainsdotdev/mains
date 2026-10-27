@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CHANNELS } from "@mains/contracts/channels";
 import { decodeWsMessage, MAX_DEVICE_MESSAGE_BYTES } from "@mains/contracts/ws-protocol";
 import { clearHandlers, registerHandler } from "./handler-registry";
 import { WebSocketSink } from "./websocket-sink";
@@ -34,6 +35,22 @@ const invokeFrame = (id: number, channel: string, args: unknown[]) =>
 describe("serveConnection", () => {
   afterEach(() => {
     clearHandlers();
+  });
+
+  it("never writes or replays recovery material through persistent command receipts", async () => {
+    const channel = CHANNELS.bridge.takeRecoveryCode;
+    let taken = false;
+    registerHandler(channel, async () => { const code = taken ? null : "one-use-recovery-secret"; taken = true; return { success: true, data: code }; });
+    const conn = Object.assign(fakeConn("browser"), { deviceId: "web-session" });
+    const receipts = { find: vi.fn().mockResolvedValue(null), record: vi.fn().mockResolvedValue(undefined) };
+    serveConnection(conn, new WebSocketSink(), { commandReceipts: receipts });
+    const frame = (id: number) => JSON.stringify({ kind: "invoke", id, channel, args: [], commandId: "same-attempt" });
+    conn.emit(frame(1)); await new Promise((resolve) => setImmediate(resolve));
+    conn.emit(frame(2)); await new Promise((resolve) => setImmediate(resolve));
+    expect(conn.sent.map((value) => decodeWsMessage(value))).toMatchObject([
+      { result: { success: true, data: "one-use-recovery-secret" } }, { result: { success: true, data: null } },
+    ]);
+    expect(receipts.find).not.toHaveBeenCalled(); expect(receipts.record).not.toHaveBeenCalled();
   });
 
   it("rejects oversized device responses before transmission and leaves owner responses available", async () => {

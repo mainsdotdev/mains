@@ -5,7 +5,7 @@ interface PageShellProps {
   children: ReactNode;
   /**
    * Add bottom padding (`pb-16`) on top of the default `pt-16`. Use for simple
-   * pages where content ends without its own bottom spacing (Pulse, Relay).
+   * pages where content ends without its own bottom spacing (Pulse).
    * Pages whose content includes its own bottom padding (Settings, Plugins)
    * leave this off.
    */
@@ -15,7 +15,7 @@ interface PageShellProps {
 
 /**
  * Top-level shell for full-page routes — centred 240ch column with a scrollable
- * body. Use this for any top-level page (Settings, Plugins, Pulse, Relay, …)
+ * body. Use this for any top-level page (Settings, Plugins, Pulse, Bridge, …)
  * so the centred-column width and scroll behaviour stay consistent.
  */
 export function PageShell({

@@ -1,3 +1,5 @@
+import { assertOwnedRecord, bridgeService } from "../bridge";
+import type { ResolveArtifactPathPayload } from "@mains/contracts/runs";
 import { CHANNELS } from "@mains/contracts/channels";
 import { conversationSettingsFrom, type ConversationSettings } from "@mains/contracts/run-settings";
 import type {
@@ -83,6 +85,7 @@ import {
 import { sanitizeRunAttachments } from "./run-attachments";
 import {
   listRunAttachmentFiles,
+  listRunAttachmentRecords,
   prepareRunAttachments,
   pruneUnreferencedAttachments,
   resolveRunAttachment,
@@ -259,6 +262,9 @@ async function selectedArtifacts(
     artifacts: RunArtifactResponse[];
   },
 ) {
+  // Replica paths name the source filesystem. Its stored transcript is readable
+  // without discovering deliverables or hashing files on the viewing backend.
+  if (run.isReplica) return replicaArtifacts(run.id, artifacts);
   let outputs = await selectedOutputArtifacts(run);
   if (outputWindow) {
     const artifactIds = new Set(outputWindow.artifacts.map((row) => row.id));
@@ -276,6 +282,24 @@ async function selectedArtifacts(
     ),
     ...outputs,
   ]);
+}
+
+/** Reconstitute the existing selected-output projection from authenticated manifests,
+ * without walking the source filesystem or creating another artifact ledger. */
+function replicaArtifacts(runId: string, artifacts: RunArtifactResponse[]): RunArtifactResponse[] {
+  const outputs: RunArtifactResponse[] = [];
+  for (const artifact of artifacts) {
+    const snapshots = artifact.metadata?.bridgeOutputs;
+    if (!Array.isArray(snapshots)) continue;
+    for (const output of snapshots) {
+      if (!output || typeof output.path !== "string" || !["image", "document"].includes(output.kind)) continue;
+      const id = -parseInt(createHash("sha256").update(JSON.stringify([runId, output.metadata?.outputTurn, output.path])).digest("hex").slice(0, 13), 16) - 1;
+      outputs.push({ ...artifact, id, kind: output.kind, path: null, content: "", blobData: null,
+        metadata: { ...output.metadata, path: output.path, bridgeSourceArtifactId: artifact.id, bridgeSourcePath: output.path } });
+    }
+  }
+  return [...artifacts.filter((row) => !["image", "file", "document"].includes(row.kind) || !outputs.some((output) =>
+    output.metadata?.bridgeSourceArtifactId === row.id || output.metadata?.path === (row.path ?? row.metadata?.path))), ...outputs];
 }
 
 /** Last model that actually handled a turn, falling back to the run's initial snapshot. */
@@ -672,6 +696,7 @@ export const runsService = {
       if (!payload.workspaceId)
         throw new Error("Select a workspace before starting voice chat.");
       workspace = await workspaceService.get(payload.workspaceId);
+      if (workspace) assertOwnedRecord("workspaces", workspace.id);
       if (!workspace) throw new Error("Workspace not found");
       if (workspace.accountId !== payload.accountId)
         throw new Error("Workspace does not belong to this account");
@@ -722,6 +747,7 @@ export const runsService = {
   },
 
   async startRealtime(payload: RunRealtimeStartPayload): Promise<void> {
+    assertOwnedRecord("runs", payload.runId);
     if (
       typeof payload?.connectionId !== "string" ||
       !/^[\w-]{1,80}$/.test(payload.connectionId) ||
@@ -1153,6 +1179,7 @@ export const runsService = {
                 status: "in_progress",
               });
             session = createRunSession({
+              onTurnClosed: runsService.snapshotBridgeOutputs,
               runId: run.id,
               accountId: run.accountId,
               providerId: run.providerId,
@@ -1217,6 +1244,7 @@ export const runsService = {
   },
 
   async stopRealtime(payload: RunRealtimeStopPayload): Promise<void> {
+    assertOwnedRecord("runs", payload.runId);
     const run = await runsRepo.findRunById(payload.runId);
     if (!run) throw new Error("Run not found");
     if (run.accountId !== payload.accountId)
@@ -1385,10 +1413,12 @@ export const runsService = {
    * somehow has no workspace.
    */
   async getRunExecutionRoot(runId: string): Promise<string | null> {
+    assertOwnedRecord("runs", runId);
     const run = await runsRepo.findRunById(runId);
     if (!run) return null;
     if (run.workspaceId) {
       const workspace = await workspaceService.get(run.workspaceId);
+      if (workspace) assertOwnedRecord("workspaces", workspace.id);
       return workspace?.rootPath ?? null;
     }
     if (run.mode === "developer") return null;
@@ -1486,10 +1516,12 @@ export const runsService = {
   },
 
   async createRun(payload: CreateRunPayload): Promise<string> {
+    if (payload.workspaceId) assertOwnedRecord("workspaces", payload.workspaceId);
     return runsRepo.insertRun(payload);
   },
 
   async updateRun(id: string, payload: UpdateRunPayload): Promise<RunResponse> {
+    assertOwnedRecord("runs", id);
     const patch = { ...payload };
     if (payload.conversationSettings !== undefined) {
       const run = await runsRepo.findRunById(id);
@@ -1517,6 +1549,7 @@ export const runsService = {
   async moveRunToCollection(
     payload: MoveRunToCollectionPayload,
   ): Promise<RunResponse> {
+    assertOwnedRecord("runs", payload.runId);
     const run = await runsRepo.findRunById(payload.runId);
     if (!run) throw new Error("Run not found");
     if (run.accountId !== payload.accountId) {
@@ -1552,6 +1585,7 @@ export const runsService = {
    * the workspace list, which has no pinned group to be hoisted into.
    */
   async setRunPinned(payload: SetRunPinnedPayload): Promise<RunResponse> {
+    assertOwnedRecord("runs", payload.runId);
     const run = await runsRepo.findRunById(payload.runId);
     if (!run) throw new Error("Run not found");
     if (run.accountId !== payload.accountId) {
@@ -1590,6 +1624,7 @@ export const runsService = {
   },
 
   async deleteRun(id: string): Promise<void> {
+    assertOwnedRecord("runs", id);
     const run = await runsRepo.findRunById(id);
     if (!run) throw new Error("Run not found");
     await syncCodexRunSession(run, "delete");
@@ -1608,6 +1643,7 @@ export const runsService = {
   },
 
   async archiveRun(id: string): Promise<RunResponse> {
+    assertOwnedRecord("runs", id);
     const run = await runsRepo.findRunById(id);
     if (!run) throw new Error("Run not found");
     await syncCodexRunSession(run, "archive");
@@ -1617,10 +1653,12 @@ export const runsService = {
   },
 
   async unarchiveRun(id: string): Promise<RunResponse> {
+    assertOwnedRecord("runs", id);
     const run = await runsRepo.findRunById(id);
     if (!run) throw new Error("Run not found");
     if (run.workspaceId) {
       const workspace = await workspaceService.get(run.workspaceId);
+      if (workspace) assertOwnedRecord("workspaces", workspace.id);
       if (!workspace) {
         throw new Error("Cannot restore a run whose workspace was deleted");
       }
@@ -1651,19 +1689,66 @@ export const runsService = {
   },
 
   async addContext(payload: CreateRunContextPayload): Promise<number> {
+    assertOwnedRecord("runs", payload.runId);
     return runsRepo.insertContext(payload);
   },
 
   async removeContext(id: number): Promise<void> {
+    assertOwnedRecord("run_context", id);
     await runsRepo.deleteContext(id);
   },
 
   // ─── Run Artifact Operations ───
   async getOutputArtifacts(runId: string): Promise<RunArtifactResponse[]> {
     const run = await runsRepo.findRunById(runId);
-    return run ? selectedOutputArtifacts(run) : [];
+    if (!run) return [];
+    return run.isReplica ? replicaArtifacts(runId, await runsRepo.findArtifactsByRun(runId)).filter((row) => row.metadata?.outputSelected) : selectedOutputArtifacts(run);
+  },
+  async snapshotBridgeOutputs(runId: string): Promise<void> {
+    if (!bridgeService.isRunning()) return;
+    const run = await runsRepo.findRunById(runId);
+    if (!run || run.isReplica) return;
+    const roots = [await runsService.getRunExecutionRoot(runId), path.join(getBackendRuntime().getPath("userData"), "generated-images", runId)].filter((root): root is string => !!root);
+    if (run.providerId === "codex" && run.sessionId && /^[\w-]+$/.test(run.sessionId)) roots.push(path.join(os.homedir(), ".codex", "generated_images", run.sessionId));
+    const grouped = new Map<number, unknown[]>();
+    for (const output of (await selectedOutputArtifacts(run)).slice(0, 48)) {
+      const anchor = output.metadata?.outputAnchor as { id?: number } | undefined;
+      if (typeof anchor?.id !== "number" || !output.path) continue;
+      const source = await runsRepo.findArtifactById(anchor.id);
+      if (!source || source.runId !== runId || source.metadata?.bridgeOutputs) continue;
+      const blobRef = await bridgeService.captureOutput(output.path, roots, null);
+      const snapshots = grouped.get(anchor.id) ?? [];
+      snapshots.push({ path: output.path, kind: output.kind, metadata: output.metadata, ...(blobRef ? { blobRef } : {}) });
+      grouped.set(anchor.id, snapshots);
+    }
+    for (const [anchorId, outputs] of grouped) await runsRepo.recordBridgeOutputs(runId, anchorId, outputs);
+  },
+  async resolveReplicaFile(payload: ResolveArtifactPathPayload): Promise<string> {
+    if (!payload || typeof payload.runId !== "string" || !payload.runId ||
+        (payload.artifactId === undefined) === (payload.sourcePath === undefined) ||
+        payload.artifactId !== undefined && !Number.isSafeInteger(payload.artifactId) ||
+        payload.sourcePath !== undefined && (typeof payload.sourcePath !== "string" || payload.sourcePath.length > 8192)) throw new Error("Invalid replica file reference");
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run?.isReplica) throw new Error("This file is not a replica");
+    const artifacts = replicaArtifacts(run.id, await runsRepo.findArtifactsByRun(run.id));
+    const normalize = (value: string) => path.posix.normalize(stripTextFileLocator(decodeFileReference(value)).replace(/\\/g, "/"));
+    const reference = payload.sourcePath === undefined ? undefined : normalize(payload.sourcePath);
+    const matches = artifacts.filter((row) => {
+      if (payload.artifactId !== undefined) return row.id === payload.artifactId;
+      const file = row.metadata?.bridgeSourcePath ?? row.path ?? row.metadata?.path;
+      if (typeof file !== "string" || !reference) return false;
+      const source = normalize(file);
+      return source === reference || !/^(?:\/|[A-Za-z]:\/|\.\.\/)/.test(reference) && source.endsWith(`/${reference}`);
+    });
+    const artifact = matches.length === 1 ? matches[0] : undefined;
+    if (!artifact) throw new Error("File not found in this conversation's selected outputs");
+    const sourceId = artifact.metadata?.bridgeSourceArtifactId;
+    return typeof sourceId === "number"
+      ? bridgeService.resolveFile("run_artifacts", sourceId, "metadata", String(artifact.metadata?.bridgeSourcePath))
+      : bridgeService.resolveFile("run_artifacts", artifact.id);
   },
   async registerDeliverable(runId: string, reference: string, role: OutputRole = "deliverable") {
+    assertOwnedRecord("runs", runId);
     const run = await runsRepo.findRunById(runId);
     if (!run || run.status !== "running") throw new Error("Deliverables require an active conversation");
     if (run.mode === "chat") throw new Error("Deliverables can only be registered in Code or Work mode");
@@ -1770,13 +1855,16 @@ export const runsService = {
           )
         : await runsRepo.findArtifactById(payload.artifactId);
     if (!artifact) throw new Error("Artifact not found");
+    if (payload.runId && artifact.runId !== payload.runId) throw new Error("Artifact not found in this conversation");
     if (artifact.kind !== "image") throw new Error("Not an image artifact");
     // The adapters record where the file is in the metadata, not the column.
-    const filePath =
+    let filePath =
       artifact.path ??
       (typeof artifact.metadata?.path === "string"
         ? artifact.metadata.path
         : null);
+    const run = await runsRepo.findRunById(artifact.runId);
+    if (run?.isReplica) filePath = await runsService.resolveReplicaFile({ runId: run.id, artifactId: artifact.id });
     const bytes =
       artifact.blobData ??
       (filePath && fs.existsSync(filePath) ? fs.readFileSync(filePath) : null);
@@ -1826,6 +1914,7 @@ export const runsService = {
   },
 
   listRunAttachmentFiles,
+  listRunAttachmentRecords,
 
   async readAttachmentFile(
     payload: ResolveAttachmentPathPayload,
@@ -1845,10 +1934,12 @@ export const runsService = {
   },
 
   async addArtifact(payload: CreateRunArtifactPayload): Promise<number> {
+    assertOwnedRecord("runs", payload.runId);
     return runsRepo.insertArtifact(payload);
   },
 
   async removeArtifact(id: number): Promise<void> {
+    assertOwnedRecord("run_artifacts", id);
     await runsRepo.deleteArtifact(id);
   },
 
@@ -1861,6 +1952,7 @@ export const runsService = {
   },
 
   async addToolCall(payload: CreateToolCallPayload): Promise<number> {
+    if (payload.runId) assertOwnedRecord("runs", payload.runId);
     return runsRepo.insertToolCall(payload);
   },
 
@@ -1868,6 +1960,7 @@ export const runsService = {
     id: number,
     payload: UpdateToolCallPayload,
   ): Promise<void> {
+    assertOwnedRecord("tool_calls", id);
     await runsRepo.updateToolCall(id, payload);
   },
 
@@ -1951,6 +2044,7 @@ export const runsService = {
           throw new Error("Developer runs require a workspace");
         }
         workspace = await workspaceService.get(payload.workspaceId);
+      if (workspace) assertOwnedRecord("workspaces", workspace.id);
         if (!workspace) {
           throw new Error(`Workspace "${payload.workspaceId}" not found`);
         }
@@ -2048,6 +2142,7 @@ export const runsService = {
       }
 
       const session = createRunSession({
+        onTurnClosed: runsService.snapshotBridgeOutputs,
         runId,
         accountId: payload.accountId,
         providerId: payload.providerId,
@@ -2142,6 +2237,7 @@ export const runsService = {
       }
 
       const workspace = await workspaceService.get(payload.workspaceId);
+      if (workspace) assertOwnedRecord("workspaces", workspace.id);
       if (!workspace) {
         throw new Error(`Workspace "${payload.workspaceId}" not found`);
       }
@@ -2195,6 +2291,7 @@ export const runsService = {
       await runsRepo.updateRun(runId, { startedAt: new Date() });
 
       const session = createRunSession({
+        onTurnClosed: runsService.snapshotBridgeOutputs,
         runId,
         accountId: payload.accountId,
         providerId: payload.providerId,
@@ -2258,6 +2355,7 @@ export const runsService = {
    * spawns a new RunSession (with seedTurnIndex so turns continue from the right index).
    */
   async continueRun(payload: ContinueRunPayload): Promise<ContinueRunResponse> {
+    assertOwnedRecord("runs", payload.runId);
     const { runId, accountId, message, additionalContext } = payload;
     if (continuingRuns.has(runId))
       throw new Error("This conversation is already starting a response.");
@@ -2419,6 +2517,7 @@ export const runsService = {
         }
 
         const session = createRunSession({
+          onTurnClosed: runsService.snapshotBridgeOutputs,
           runId,
           accountId,
           providerId: run.providerId,
@@ -2514,6 +2613,7 @@ export const runsService = {
   },
 
   async steerRun(payload: RunSteerPayload): Promise<RunSteerResponse> {
+    assertOwnedRecord("runs", payload.runId);
     const run = await runsRepo.findRunById(payload.runId);
     if (!run) throw new Error("Run not found");
     if (run.accountId !== payload.accountId)
@@ -2564,16 +2664,19 @@ export const runsService = {
   },
 
   answerAsyncQuestions(payload: AnswerAsyncQuestionsPayload) {
+    assertOwnedRecord("runs", payload.runId);
     return answerAsyncQuestions(payload, this);
   },
 
   dismissAsyncQuestions(payload: DismissAsyncQuestionsPayload) {
+    assertOwnedRecord("runs", payload.runId);
     return dismissAsyncQuestions(payload);
   },
 
   async getInputStatus(
     payload: RunInputStatusPayload,
   ): Promise<{ accepted: boolean }> {
+    assertOwnedRecord("runs", payload.runId);
     const run = await runsRepo.findRunById(payload.runId);
     if (!run) throw new Error("Run not found");
     if (run.accountId !== payload.accountId)
@@ -2640,6 +2743,7 @@ export const runsService = {
    * Creates a new run row, then spawns a RunSession wired to adapter.forkRun.
    */
   async forkRun(payload: ForkRunPayload): Promise<ForkRunResponse> {
+    assertOwnedRecord("runs", payload.sourceRunId);
     const { sourceRunId, accountId, message } = payload;
     const uploads = sanitizeRunAttachments(
       payload.attachments,
@@ -2762,6 +2866,7 @@ export const runsService = {
       }
 
       const session = createRunSession({
+        onTurnClosed: runsService.snapshotBridgeOutputs,
         runId: newRunId,
         accountId,
         providerId: sourceRun.providerId,
@@ -2830,6 +2935,7 @@ export const runsService = {
    * status="canceled" directly.
    */
   async abortRun(runId: string): Promise<void> {
+    assertOwnedRecord("runs", runId);
     const run = await runsRepo.findRunById(runId);
     if (!run) throw new Error("Run not found");
     if (run.status !== "running" && run.status !== "queued") {
@@ -2860,7 +2966,7 @@ export const runsService = {
   // ─── Session inspection / deletion ───
   async canResumeRun(runId: string): Promise<boolean> {
     const run = await runsRepo.findRunById(runId);
-    if (!run) return false;
+    if (!run || run.isReplica) return false;
 
     // Can only resume runs that completed (succeeded, failed, or canceled)
     if (run.status === "running" || run.status === "queued") {
@@ -2898,6 +3004,7 @@ export const runsService = {
     runId: string,
     turnId: number,
   ): Promise<RunTurnChangesSummary> {
+    assertOwnedRecord("runs", runId);
     const run = await runsRepo.findRunById(runId);
     if (!run) throw new Error("Run not found");
     if (runSessionRegistry.get(runId)) {
@@ -2959,6 +3066,7 @@ export const runsService = {
   },
 
   async deleteRunSession(runId: string): Promise<void> {
+    assertOwnedRecord("runs", runId);
     const run = await runsRepo.findRunById(runId);
     if (!run) throw new Error("Run not found");
 

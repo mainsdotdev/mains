@@ -1,6 +1,8 @@
 import type { AtlasPage } from "@mains/contracts/atlas";
 
 export interface PageDraft { title: string; blocks: unknown[] }
+/** Every backend save is a full-copy revision. The local draft is written on each edit, so this only paces history. */
+export const AUTOSAVE_INTERVAL_MS = 30_000;
 /** Serial saves keep typing during an in-flight write from losing the newer draft. */
 export function createPageSaveQueue(options: {
   page: AtlasPage;

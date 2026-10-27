@@ -1,3 +1,4 @@
+vi.mock("../bridge", () => ({ assertOwnedRecord: vi.fn() }));
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "@mains/contracts/channels";

@@ -90,6 +90,13 @@ export const ATLAS_PAGE_TOOLS: BuiltinTool[] = [
     icon: <Globe className="size-4" />,
     aliases: ["atlascreatepage"],
   },
+  {
+    displayName: "Listed Atlas covers",
+    groupKey: "atlaslistcovers",
+    category: "Atlas",
+    icon: <Globe className="size-4" />,
+    aliases: ["atlaslistcovers"],
+  },
 ];
 
 /** One clause of a tool group's summary sentence — see `PHRASES_BY_GROUP_KEY`. */
@@ -498,6 +505,11 @@ export const PHRASES_BY_GROUP_KEY: Record<string, ToolPhrase> = {
     many: "created Atlas pages",
     rank: 20,
   },
+  atlaslistcovers: {
+    one: "browsed Atlas covers",
+    many: "browsed Atlas covers",
+    rank: 30,
+  },
   "atlasreadpage:failed": {
     one: "tried to read an Atlas page",
     many: "tried to read Atlas pages",
@@ -512,6 +524,11 @@ export const PHRASES_BY_GROUP_KEY: Record<string, ToolPhrase> = {
     one: "tried to create an Atlas page",
     many: "tried to create Atlas pages",
     rank: 20,
+  },
+  "atlaslistcovers:failed": {
+    one: "tried to browse Atlas covers",
+    many: "tried to browse Atlas covers",
+    rank: 30,
   },
   // Setup / intent — what the agent reached for before doing the work.
   skill: { one: "loaded a tool", many: "loaded tools", rank: 10 },

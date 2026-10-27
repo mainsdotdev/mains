@@ -62,5 +62,21 @@ export default defineConfig({
         cpSync(source, destination, { recursive: true });
       },
     },
+    {
+      // Bundled Atlas Page covers; the backend reads them from next to the bundle.
+      name: "copy-server-atlas-covers",
+      closeBundle() {
+        const source = path.resolve(
+          import.meta.dirname,
+          "../../packages/backend/assets/atlas-covers",
+        );
+        if (!existsSync(source)) {
+          throw new Error(`Atlas cover images are missing: ${source}`);
+        }
+        cpSync(source, path.resolve(import.meta.dirname, ".vite/server/atlas-covers"), {
+          recursive: true,
+        });
+      },
+    },
   ],
 });

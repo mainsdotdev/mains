@@ -52,6 +52,9 @@ export type {
   TextAlign,
 } from "./text";
 
+// Usage
+export { UsageTicks } from "./usage-ticks";
+
 // Input (primitives)
 export { Input, NativeSelect, Textarea } from "./input";
 export type {

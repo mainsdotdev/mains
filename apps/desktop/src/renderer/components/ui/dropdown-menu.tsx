@@ -645,6 +645,8 @@ export interface DropdownMenuItemProps {
   disabled?: boolean;
   selected?: boolean;
   indicator?: "check" | "none";
+  /** Exclusive choices are radios. Independent choices, such as source filters, are checkboxes. */
+  selection?: "single" | "multiple";
 }
 
 export function DropdownMenuItem({
@@ -655,6 +657,7 @@ export function DropdownMenuItem({
   disabled = false,
   selected,
   indicator = "check",
+  selection = "single",
 }: DropdownMenuItemProps) {
   const variantClasses = {
     default:
@@ -666,7 +669,13 @@ export function DropdownMenuItem({
     <Button
       type="button"
       variant="bare"
-      role={selected === undefined ? "menuitem" : "menuitemradio"}
+      role={
+        selected === undefined
+          ? "menuitem"
+          : selection === "multiple"
+            ? "menuitemcheckbox"
+            : "menuitemradio"
+      }
       aria-checked={selected}
       aria-disabled={disabled || undefined}
       tabIndex={-1}

@@ -3,10 +3,10 @@ import { useSyncExternalStore } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui";
 import {
+  Bridge,
   Home,
   Plugin,
   Question,
-  Relay,
   Search,
   Settings,
   Task,
@@ -88,7 +88,7 @@ export function NavigationRail({
     },
     ...(showTasks ? [{ label: "Tasks", path: "/tasks", Icon: Task }] : []),
     { label: "Pulse", path: "/pulse", Icon: Clock },
-    { label: "Connect", path: "/relay", Icon: Relay },
+    { label: "Bridge", path: "/bridge", Icon: Bridge },
   ];
   const buttonClass = (active: boolean) =>
     `flex size-8 shrink-0 items-center justify-center rounded-xl transition-colors ${

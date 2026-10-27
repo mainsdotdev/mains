@@ -117,7 +117,7 @@ describe("Dock icons", () => {
   });
 
   it("preserves every active choice and includes both appearances plus Icon Composer sources", () => {
-    expect(APP_ICON_IDS).toEqual(["mains-default", "mains-atlas"]);
+    expect(APP_ICON_IDS).toEqual(["mains-default", "mains-atlas", "mains-bridge"]);
     for (const id of APP_ICON_IDS) {
       saveIcon(id);
       expect(getSavedDockIcon()).toBe(id);
@@ -130,10 +130,13 @@ describe("Dock icons", () => {
     }
   });
 
-  it("uses the new flat asset path with a 96px transparent margin", () => {
-    setDockIcon("mains-atlas");
-    expect(mocks.nativeImage.createFromPath.mock.calls[0][0]).toMatch(
-      /icons\/atlas\.png$/,
+  it.each([
+    ["mains-atlas", "atlas.png"],
+    ["mains-bridge", "bridge.png"],
+  ] as const)("loads %s with a 96px transparent margin", (id, filename) => {
+    setDockIcon(id);
+    expect(mocks.nativeImage.createFromPath).toHaveBeenCalledWith(
+      path.join(process.cwd(), ".vite/renderer/icons", filename),
     );
     const bitmap = mocks.nativeImage.createFromBitmap.mock.calls[0][0] as Buffer;
     expect(bitmap.length).toBe(1024 * 1024 * 4);
@@ -144,35 +147,55 @@ describe("Dock icons", () => {
   });
 
   it("includes every logo layer referenced by the Icon Composer sources", () => {
-    for (const id of APP_ICON_IDS) {
+    const assets = [
+      ...APP_ICON_IDS.map((id) => appIconAssetPath(id)),
+      appIconAssetPath("mains-default", "light", true),
+    ];
+    for (const asset of assets) {
       const source = path.join(process.cwd(), "src/renderer/public",
-        appIconAssetPath(id).replace(/\.png$/, ".icon"));
+        asset.replace(/\.png$/, ".icon"));
       const document = JSON.parse(fs.readFileSync(path.join(source, "icon.json"), "utf8")) as {
         groups: { layers: { "image-name"?: string }[] }[];
       };
       for (const group of document.groups) {
         for (const layer of group.layers) {
           const name = layer["image-name"];
-          if (name) expect(fs.existsSync(path.join(source, "Assets", name)), `${id}: ${name}`).toBe(true);
+          if (name) expect(fs.existsSync(path.join(source, "Assets", name)), `${asset}: ${name}`).toBe(true);
         }
       }
     }
   });
 
-  it("uses a PNG for Default in development", () => {
+  it.each([
+    ["", "mains-staging.png"],
+    ["Dark", "mains-staging-dark.png"],
+  ])("uses the staging PNG for Default in development with the Mac's %j appearance", (style, filename) => {
     mocks.app.isPackaged = false;
+    mocks.systemPreferences.getUserDefault.mockReturnValue(style);
     applySavedDockIcon();
-    expect(mocks.nativeImage.createFromPath).toHaveBeenCalledWith(
-      path.join(process.cwd(), "src/renderer/public/icons/mains-default.png"),
-    );
+    const iconPath = path.join(process.cwd(), "src/renderer/public/icons", filename);
+    expect(fs.existsSync(iconPath)).toBe(true);
+    expect(mocks.nativeImage.createFromPath).toHaveBeenCalledWith(iconPath);
     expect(mocks.app.dock.setIcon).toHaveBeenCalledOnce();
   });
 
+  it("preserves a custom icon choice in development", () => {
+    mocks.app.isPackaged = false;
+    saveIcon("mains-bridge");
+    applySavedDockIcon();
+    expect(mocks.nativeImage.createFromPath).toHaveBeenCalledWith(
+      path.join(process.cwd(), "src/renderer/public/icons/bridge.png"),
+    );
+    expect(getSavedDockIcon()).toBe("mains-bridge");
+  });
+
   it.each([
-    ["", "atlas.png"],
-    ["Dark", "atlas-dark.png"],
-  ])("restores Atlas with the Mac's %j appearance at startup", (style, filename) => {
-    saveIcon("mains-atlas");
+    ["mains-atlas", "", "atlas.png"],
+    ["mains-atlas", "Dark", "atlas-dark.png"],
+    ["mains-bridge", "", "bridge.png"],
+    ["mains-bridge", "Dark", "bridge-dark.png"],
+  ])("restores %s with the Mac's %j appearance at startup", (id, style, filename) => {
+    saveIcon(id);
     mocks.systemPreferences.getUserDefault.mockReturnValue(style);
     applySavedDockIcon();
     expect(mocks.nativeImage.createFromPath).toHaveBeenCalledWith(

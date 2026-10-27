@@ -1,4 +1,5 @@
 import * as pty from "node-pty";
+import { assertOwnedRecord } from "../bridge";
 import { existsSync } from "fs";
 import os from "os";
 import path from "path";
@@ -96,6 +97,7 @@ export const terminalService = {
     for (const name of [options.workspaceId, options.workspaceName]) {
       if (name !== undefined && (typeof name !== "string" || !name.trim() || name.length > 256)) throw new Error("Invalid terminal workspace.");
     }
+    if (options.workspaceId) assertOwnedRecord("workspaces", options.workspaceId);
 
     // Provider login terminals are workspace-less. Resolve their cwd on the
     // backend, not in the renderer, so remote backends use their own home.

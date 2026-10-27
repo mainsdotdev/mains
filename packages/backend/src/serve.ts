@@ -84,6 +84,7 @@ import { tailscaleService } from "./modules/tailscale";
 import { resolveWebRoot } from "./web-root";
 import { registerSearchIpc, unregisterSearchIpc } from "./modules/search";
 import type { PairingCode } from "./modules/backend";
+import { bridgeService, registerBridgeIpc, unregisterBridgeIpc } from "./modules/bridge";
 
 export interface ServeOptions {
   /** Port to listen on. Default 8787. */
@@ -131,6 +132,7 @@ interface BackendRegistration {
 }
 
 const BACKEND_REGISTRATIONS: readonly BackendRegistration[] = [
+  { register: registerBridgeIpc, unregister: unregisterBridgeIpc },
   { register: registerAccountIpc, unregister: unregisterAccountIpc },
   { register: registerBackendIpc, unregister: unregisterBackendIpc },
   { register: registerSyncIpc, unregister: unregisterSyncIpc },
@@ -204,9 +206,11 @@ export async function startBackendServer(
       registration.register();
       registered.push(registration);
     }
+    await bridgeService.start();
     automationsService.start();
     pulseService.start();
   } catch (error) {
+    await bridgeService.stop();
     automationsService.stop();
     pulseService.stop();
     unregisterBackendRegistrations(registered);
@@ -244,6 +248,7 @@ export async function startBackendServer(
       commandReceipts: backendService.commandReceipts,
     });
   } catch (error) {
+    await bridgeService.stop();
     automationsService.stop();
     pulseService.stop();
     unregisterBackendRegistrations(registered);
@@ -296,6 +301,7 @@ export async function startBackendServer(
     if (stopPromise) return stopPromise;
     stopPromise = (async () => {
       await wsHost.close();
+      await bridgeService.stop();
       await tailscaleService.stopServeIfActive();
       automationsService.stop();
       pulseService.stop();

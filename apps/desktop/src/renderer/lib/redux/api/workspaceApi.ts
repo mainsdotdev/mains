@@ -17,6 +17,10 @@ import type { WorkspaceIntakePayload, CancelWorkspaceClonePayload } from "@mains
 // ─────────────────────────────────────────────────────────────
 
 export interface WorkspaceMetadata {
+  /** Source device's last checked-out branch; set for Bridge replicas. */
+  lastBranch?: string;
+  tracking?: string | null;
+  worktree?: { enabled: boolean; name?: string };
   language?: string;
   framework?: string;
   packageManager?: string;
@@ -32,7 +36,7 @@ export type WorkspaceStatus =
   | "canceled"
   | "duplicate";
 
-export interface Workspace {
+export interface Workspace extends Partial<import("@mains/contracts/bridge").BackendOwnership> {
   id: string;
   accountId: string;
   projectId: string | null;

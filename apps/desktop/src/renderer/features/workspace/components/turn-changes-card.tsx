@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from "react";
 import { Button, Text, toast } from "@/components/ui";
 import { Diff, FileIconComponent, Undo } from "@/components/ui/icons";
 import { extractErrorMessage } from "@/lib/extract-error-message";
+import { useReplicaView } from "@/hooks/use-replica-view";
 import {
   useGetRunTurnChangesDiffQuery,
   useUndoRunTurnChangesMutation,
@@ -149,6 +150,7 @@ export function TurnChangesCard({
   changes,
   canUndo,
 }: TurnChangesCardProps) {
+  const replica = useReplicaView();
   const { files } = changes;
   const [openPaths, setOpenPaths] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -245,6 +247,7 @@ export function TurnChangesCard({
   };
 
   const handleUndo = async () => {
+    if (replica) return;
     try {
       await undoChanges({ runId, turnId }).unwrap();
       setUndoneLocally(true);
@@ -290,7 +293,7 @@ export function TurnChangesCard({
             {!isUndone && hasSharedFiles && <span>Shared with a parallel run</span>}
           </Text>
         </div>
-        {!isUndone && (
+        {!replica && !isUndone && (
           <Button
             onClick={handleUndo}
             disabled={isUndoing || !canUndo || hasSharedFiles}

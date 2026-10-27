@@ -1,148 +1,80 @@
 // @vitest-environment jsdom
-
-import { createElement } from "react";
-import { act, render } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const harness = vi.hoisted(() => ({
-  dispatch: vi.fn(),
-  createTab: vi.fn(),
-  createHtmlPreviewTab: vi.fn(),
-  setContext: vi.fn(),
-  pathname: "/workspace/run-1",
-  browserPanelOpen: false,
-  browserPanelExpanded: false,
-}));
-
-vi.mock("@/lib/redux/hooks", () => ({
-  useAppDispatch: () => harness.dispatch,
-  useAppSelector: (selector: (state: unknown) => unknown) =>
-    selector({
-      appSettings: {
-        browserPanelOpen: harness.browserPanelOpen,
-        browserPanelExpanded: harness.browserPanelExpanded,
-      },
-      workspace: { composerContextKey: "chat-1", composerContextReady: true },
-    }),
-}));
-
-vi.mock("react-router-dom", () => ({
-  useLocation: () => ({ pathname: harness.pathname }),
-}));
-
-vi.mock("@/lib/layout", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/layout")>()),
-  shouldHideRightPanel: (pathname: string) => pathname === "/settings",
-}));
-
-import {
-  BrowserPanelProvider,
-  useBrowserPanel,
-} from "./use-browser-panel";
-
-describe("BrowserPanelProvider", () => {
-  let panel: ReturnType<typeof useBrowserPanel> | null = null;
-
-  function Consumer() {
-    panel = useBrowserPanel();
-    return null;
-  }
-
-  beforeEach(() => {
-    panel = null;
-    vi.clearAllMocks();
-    harness.pathname = "/workspace/run-1";
-    harness.browserPanelOpen = false;
-    harness.browserPanelExpanded = false;
-    harness.createTab.mockResolvedValue({ success: true, data: {} });
-    harness.createHtmlPreviewTab.mockResolvedValue({ success: true, data: {} });
-    harness.setContext.mockResolvedValue({ success: true, data: {} });
-    Object.defineProperty(window, "api", {
-      configurable: true,
-      value: { browser: { createTab: harness.createTab, createHtmlPreviewTab: harness.createHtmlPreviewTab, setContext: harness.setContext } },
-    });
+import { createElement, type ReactNode, type ComponentProps } from "react";
+import { configureStore } from "@reduxjs/toolkit";
+import { Provider } from "react-redux";
+import { MemoryRouter, useNavigate } from "react-router-dom";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const mock = vi.hoisted(() => ({ mode: "developer", setContext: vi.fn(), createTab: vi.fn(), createHtmlPreviewTab: vi.fn() }));
+vi.mock("./use-mode-config", () => ({ useModeConfig: () => ({ mode: mock.mode }) }));
+import settings from "@/lib/redux/slices/appSettingsSlice";
+import workspace, { activateWorkspaceView, setComposerContextKey } from "@/lib/redux/slices/workspaceSlice";
+import preview, { openPreviewTab, setPreviewExpanded } from "@/lib/redux/slices/previewSlice";
+import { BrowserPanelProvider, useBrowserPanel } from "./use-browser-panel";
+import { workspaceBrowserExpansionKey } from "../../shared/ui-state-keys";
+function harness() {
+  const state = configureStore({ reducer: { appSettings: settings, workspace, preview, backends: () => ({ activeBackendId: null }) } });
+  state.dispatch(activateWorkspaceView({ key: "ws-1", workspaceId: "ws-1", providerId: "codex" }));
+  state.dispatch(setComposerContextKey("chat-1"));
+  let navigate!: ReturnType<typeof useNavigate>;
+  const hook = renderHook(() => { navigate = useNavigate(); return useBrowserPanel(); }, {
+    wrapper: ({ children }: { children: ReactNode }) => createElement(Provider, { store: state } as ComponentProps<typeof Provider>,
+      createElement(MemoryRouter, null, createElement(BrowserPanelProvider, null, children))),
   });
-
-  it("opens an external URL in a new in-app browser tab", async () => {
-    render(
-      createElement(
-        BrowserPanelProvider,
-        null,
-        createElement(Consumer),
-      ),
-    );
-
-    await act(async () => {
-      await panel!.openUrl("https://www.skyscanner.com/transport/flights");
-    });
-
-    expect(harness.createTab).toHaveBeenCalledWith(
-      "https://www.skyscanner.com/transport/flights",
-      "chat-1",
-    );
-    expect(harness.setContext).toHaveBeenCalledWith("chat-1");
-    expect(harness.setContext.mock.invocationCallOrder[0])
-      .toBeLessThan(harness.createTab.mock.invocationCallOrder[0]);
-    expect(harness.dispatch.mock.calls.map(([action]) => action.type)).toEqual([
-      "appSettings/setRightPanelOpen",
-      "appSettings/setSessionPanelOpen",
-      "appSettings/setDocumentViewerOpen",
-      "appSettings/setDocumentViewerDoc",
-      "appSettings/setBrowserPanelOpen",
-    ]);
+  return { ...hook, state, navigate: (path: string) => navigate(path) };
+}
+beforeEach(() => {
+  vi.clearAllMocks(); mock.mode = "developer";
+  mock.setContext.mockResolvedValue({ success: true });
+  let count = 0;
+  const created = () => ({ success: true, data: { activeTabId: `page-${++count}`, tabs: Array.from({ length: count }, (_, i) => ({ tabId: `page-${i + 1}`, title: `Page ${i + 1}`, faviconUrl: null, isLoading: false, isCrashed: false })) } });
+  mock.createTab.mockImplementation(async () => created());
+  mock.createHtmlPreviewTab.mockImplementation(async () => created());
+  Object.defineProperty(window, "api", { configurable: true, value: { browser: mock } });
+});
+afterEach(cleanup);
+describe("browser preview integration", () => {
+  it("opens multiple native pages alongside an existing document in the Code workspace", async () => {
+    const h = harness(); const key = workspaceBrowserExpansionKey(null, "ws-1");
+    act(() => h.state.dispatch(openPreviewTab({ ownerKey: key, tab: { kind: "document", id: "pdf", doc: { path: "/a.pdf", fileName: "a.pdf", docType: "pdf" } } })));
+    await act(async () => { await h.result.current.openUrl("https://example.com"); await h.result.current.newTab(); });
+    expect(mock.createTab).toHaveBeenNthCalledWith(1, "https://example.com", key);
+    expect(h.state.getState().preview.byOwner[key].tabs.map((tab) => tab.id)).toEqual(["pdf", "page-1", "page-2"]);
+    expect(h.result.current.ownerKey).toBe("chat-1");
+    expect(h.result.current.tabOwnerKey).toBe(key);
+    act(() => h.state.dispatch(setComposerContextKey("chat-2")));
+    expect(h.result.current.isOpen).toBe(true);
+    expect(h.state.getState().preview.byOwner[key].tabs).toHaveLength(3);
   });
-
-  it("opens a local HTML file in a browser preview tab for the active chat", async () => {
-    render(createElement(BrowserPanelProvider, null, createElement(Consumer)));
-
-    await act(async () => {
-      await panel!.openHtmlFile("/tmp/palette.html");
-    });
-
-    expect(harness.setContext).toHaveBeenCalledWith("chat-1");
-    expect(harness.createHtmlPreviewTab).toHaveBeenCalledWith("/tmp/palette.html", "chat-1");
-    expect(harness.createTab).not.toHaveBeenCalled();
+  it("opens HTML previews in the same group", async () => {
+    const h = harness();
+    await act(async () => h.result.current.openHtmlFile("/tmp/preview.html"));
+    expect(mock.createHtmlPreviewTab).toHaveBeenCalledWith("/tmp/preview.html", workspaceBrowserExpansionKey(null, "ws-1"));
+    expect(mock.createTab).not.toHaveBeenCalled();
   });
-
-  it("hides on Settings without clearing the chat's open browser", () => {
-    harness.pathname = "/settings";
-    harness.browserPanelOpen = true;
-    render(createElement(BrowserPanelProvider, null, createElement(Consumer)));
-    expect(panel?.isOpen).toBe(false);
-    expect(harness.dispatch).not.toHaveBeenCalled();
+  it("hides previews on Settings and restores selection on return without closing tabs", async () => {
+    const h = harness(); await act(async () => h.result.current.newTab());
+    act(() => h.navigate("/settings")); expect(h.result.current.isOpen).toBe(false);
+    act(() => h.navigate("/code/ws-1")); expect(h.result.current.isOpen).toBe(true);
+    act(() => h.result.current.close());
+    expect(h.state.getState().preview.byOwner[h.result.current.tabOwnerKey].tabs).toHaveLength(1);
   });
-
-  it("expands the selected chat's browser without changing its owner", () => {
-    harness.browserPanelOpen = true;
-    render(createElement(BrowserPanelProvider, null, createElement(Consumer)));
-
-    act(() => panel!.toggleExpanded());
-
-    expect(harness.dispatch).toHaveBeenCalledWith(expect.objectContaining({
-      type: "appSettings/setBrowserPanelExpanded",
-      payload: true,
-    }));
-    expect(panel?.ownerKey).toBe("chat-1");
+  it.each(["work", "chat"])("isolates %s browser tabs by conversation", async (mode) => {
+    mock.mode = mode; const h = harness(); await act(async () => h.result.current.newTab());
+    act(() => h.state.dispatch(setComposerContextKey("chat-2")));
+    expect(h.result.current.isOpen).toBe(false);
+    act(() => h.state.dispatch(setComposerContextKey("chat-1")));
+    expect(h.result.current.isOpen).toBe(true);
   });
-
-  it("docks the browser in Atlas and restores expansion when leaving without changing saved state", () => {
-    harness.browserPanelOpen = true;
-    harness.browserPanelExpanded = true;
-    const view = render(createElement(BrowserPanelProvider, null, createElement(Consumer)));
-    expect(panel?.isExpanded).toBe(true);
-
-    harness.pathname = "/atlas/page-1";
-    view.rerender(createElement(BrowserPanelProvider, null, createElement(Consumer)));
-    expect(panel?.isOpen).toBe(true);
-    expect(panel?.isExpanded).toBe(false);
-    expect(panel?.canExpand).toBe(false);
-    act(() => panel!.toggleExpanded());
-    expect(harness.dispatch).not.toHaveBeenCalled();
-
-    harness.pathname = "/code/run-1";
-    view.rerender(createElement(BrowserPanelProvider, null, createElement(Consumer)));
-    expect(panel?.isExpanded).toBe(true);
-    expect(panel?.canExpand).toBe(true);
-    expect(harness.dispatch).not.toHaveBeenCalled();
+  it("keeps Atlas docked without changing the workspace expansion preference", async () => {
+    const h = harness(); await act(async () => h.result.current.newTab());
+    const key = h.result.current.tabOwnerKey;
+    act(() => h.state.dispatch(setPreviewExpanded({ ownerKey: key, expanded: true })));
+    expect(h.result.current.isExpanded).toBe(true);
+    act(() => h.navigate("/atlas/page-1"));
+    expect(h.result.current.canExpand).toBe(false);
+    act(() => h.result.current.toggleExpanded());
+    act(() => h.navigate("/code/ws-1"));
+    expect(h.result.current.isExpanded).toBe(true);
   });
 });

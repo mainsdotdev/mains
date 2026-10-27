@@ -84,7 +84,7 @@ export function Modal({
   return createPortal(
     <div
       className={cn(
-        "fixed inset-0 z-(--z-modal) flex justify-center p-4",
+        "fixed inset-0 z-(--z-modal) flex justify-center p-6",
         placement === "top" ? "items-start pt-[12vh]" : "items-center",
       )}
     >
@@ -114,7 +114,7 @@ export function Modal({
         className={cn(
           "relative flex flex-col max-h-[92vh] focus:outline-none",
           surface === "panel" &&
-            "glass-surface rounded-xl shadow-2xl overflow-hidden",
+            "glass-surface rounded-3xl overflow-hidden",
           className,
         )}
         style={{
@@ -153,7 +153,7 @@ export function ModalHeader({
   const titleId = useContext(ModalTitleContext) ?? undefined;
 
   return (
-    <div className="flex items-center justify-between px-4 py-2.5  shrink-0">
+    <div className="flex items-center justify-between px-6 py-4 shrink-0">
       <div id={titleId} className="flex items-center gap-2 min-w-0 flex-1">
         {children}
       </div>

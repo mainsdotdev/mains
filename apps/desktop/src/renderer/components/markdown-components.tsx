@@ -13,6 +13,8 @@ import { useOpenLink } from "@/hooks/use-open-link";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import { atlasPageIdFromHref } from "@/features/atlas/lib/page-link";
 import { localFileReference } from "@mains/contracts/local-file-reference";
+import { useReplicaView } from "@/hooks/use-replica-view";
+import { useReplicaFilePath } from "@/hooks/use-replica-file-path";
 import { fileBasename, fileHrefPath, isAbsoluteFilePath, isWindowsAbsolutePath } from "@/lib/file-path";
 
 function decodeFileHrefPath(filePath: string): string {
@@ -47,6 +49,7 @@ export function MarkdownLink({
   showFavicon?: boolean;
   openWebLinksInApp?: boolean;
 }) {
+  const replica = useReplicaView();
   const openFileInEditor = useOpenFileInEditor();
   const openLink = useOpenLink();
   const { openHtmlFile } = useBrowserPanel();
@@ -85,6 +88,7 @@ export function MarkdownLink({
     const isHtml = extension?.toLowerCase() === "html" || extension?.toLowerCase() === "htm";
     return (
       <Button
+        disabled={!!replica}
         onClick={() => {
           const filePath = target.path;
           if (isHtml && isAbsoluteFilePath(filePath)) {
@@ -196,13 +200,16 @@ function MarkdownImage({ src, alt, width, height, title }: {
   title?: string;
 }) {
   const onPreview = useContext(MarkdownImagePreviewContext);
+  const replica = useReplicaView();
   const [loadApproved, setLoadApproved] = useState(false);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const remote = isRemoteImageSrc(src);
   const localPath = src && isAbsoluteFilePath(fileHrefPath(src)) && !src.startsWith("/__")
     ? decodeFileHrefPath(src)
     : undefined;
-  const localUrl = useLocalImageUrl(!remote || loadApproved ? localPath : undefined);
+  const replicaFile = useReplicaFilePath(replica?.runId, localPath);
+  const localUrl = useLocalImageUrl(replica ? replicaFile?.path : (!remote || loadApproved) ? localPath : undefined);
+  if (replica && localPath && !localUrl) return <Text size="xs" tone="muted">{replicaFile?.error ? `Image available on ${replica.label}` : "Loading image…"}</Text>;
 
   if (remote && !loadApproved) {
     let host = src;

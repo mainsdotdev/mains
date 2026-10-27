@@ -15,6 +15,7 @@
 export { baseApi } from "./baseApi";
 
 export * from "./accountApi";
+export * from "./bridgeApi";
 export * from "./appSettingsApi";
 export * from "./automationsApi";
 export * from "./collectionsApi";

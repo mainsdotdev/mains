@@ -1,0 +1,198 @@
+import { BRIDGE_MAX_CLOCK_SKEW_MS, type BridgeEnvelope, type BridgeLogRecord, type BridgePushResult, type BridgeStream } from "@mains/contracts/bridge-protocol";
+import { BRIDGE_MAX_FRAME_BYTES } from "@mains/contracts/bridge-wire";
+import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
+import { installBlobReferences } from "./blob-gc";
+import { createHubCompaction } from "./compaction";
+
+type LogRow = { seq: number; envelope: string };
+/** Tombstones are permanent and stay available outside quota and subscription, so they get
+ * their own per-backend budget: generous for bulk cleanup, but no longer unlimited. */
+export const BRIDGE_DELETES_PER_MINUTE = 600;
+/** Download capabilities protect blobs from collection and are free for honest clients, which
+ * cache what they download; the budget bounds a looping or leaked client instead. */
+export const BRIDGE_READS_PER_MINUTE = 1200;
+/** Fixed conservative charge for each permanent replay receipt, including its index. */
+export const BRIDGE_PUBLICATION_RECEIPT_BYTES = 256;
+const order = (a: BridgeEnvelope, b: BridgeEnvelope) => a.header.hlc.physicalMs - b.header.hlc.physicalMs || a.header.hlc.counter - b.header.hlc.counter ||
+  (a.header.origin < b.header.origin ? -1 : a.header.origin > b.header.origin ? 1 : 0);
+
+/** Only opaque keys, authenticated routing fields and whole ciphertext envelopes enter storage. */
+export function createHubStore(storage: DurableObjectStorage) {
+  const sql = storage.sql;
+  sql.exec(`CREATE TABLE IF NOT EXISTS streams(stream TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS log(stream TEXT NOT NULL, seq INTEGER NOT NULL, row_key TEXT NOT NULL, register_key TEXT, op TEXT NOT NULL, envelope TEXT NOT NULL, PRIMARY KEY(stream,seq));
+    CREATE INDEX IF NOT EXISTS log_row ON log(row_key);
+    CREATE TABLE IF NOT EXISTS latest(stream TEXT NOT NULL, register_key TEXT NOT NULL, seq INTEGER NOT NULL, envelope TEXT NOT NULL, PRIMARY KEY(stream,register_key));
+    CREATE TABLE IF NOT EXISTS deleted(row_key TEXT PRIMARY KEY, stream TEXT NOT NULL, seq INTEGER NOT NULL, envelope TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS row_owners(row_key TEXT PRIMARY KEY, owner TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS runs(run_id TEXT PRIMARY KEY, owner TEXT NOT NULL, root_key TEXT NOT NULL UNIQUE, tombstone TEXT);
+    CREATE TABLE IF NOT EXISTS presence(backend_id TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS backend_metadata(backend_id TEXT PRIMARY KEY, label TEXT NOT NULL, platform TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS write_rate(backend_id TEXT PRIMARY KEY,window INTEGER NOT NULL,count INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS stream_activity(stream TEXT PRIMARY KEY,last_activity INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS write_budget(period_start INTEGER PRIMARY KEY,records INTEGER NOT NULL CHECK(records>=0));`);
+  // Each receipt keeps the membership seq its publication bound, so receipts below the replay horizon can go.
+  sql.exec(`CREATE TABLE IF NOT EXISTS publications(publication_id TEXT PRIMARY KEY,signature TEXT NOT NULL,seq INTEGER NOT NULL,membership_seq INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS publications_membership ON publications(membership_seq);`);
+  const first = <T>(query: string, ...args: (string | number | null)[]): T | undefined => sql.exec(query, ...args).toArray()[0] as T | undefined;
+  storage.transactionSync(() => {
+    sql.exec(`CREATE INDEX IF NOT EXISTS latest_row_key ON latest(json_extract(envelope,'$.header.rowKey'));
+      CREATE TABLE IF NOT EXISTS record_usage(id INTEGER PRIMARY KEY CHECK(id=1),bytes INTEGER NOT NULL CHECK(bytes>=0));`);
+    if (!first("SELECT 1 FROM record_usage WHERE id=1")) {
+      // Upgrade existing stores once. Old versions retained these superseded
+      // ciphertexts until compaction, but already excluded them from quota.
+      sql.exec(`DELETE FROM latest WHERE json_extract(envelope,'$.header.rowKey') IN (SELECT row_key FROM deleted)
+        OR stream IN (SELECT 'run:'||run_id FROM runs WHERE tombstone IS NOT NULL);
+        INSERT INTO record_usage SELECT 1,
+          coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM latest),0)
+          +coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM deleted),0)
+          +(SELECT count(*) FROM publications)*${BRIDGE_PUBLICATION_RECEIPT_BYTES};`);
+    }
+    for (const table of ["latest", "deleted"]) sql.exec(`
+      CREATE TRIGGER IF NOT EXISTS ${table}_usage_insert AFTER INSERT ON ${table} BEGIN
+        UPDATE record_usage SET bytes=bytes+length(CAST(NEW.envelope AS BLOB)) WHERE id=1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS ${table}_usage_delete AFTER DELETE ON ${table} BEGIN
+        UPDATE record_usage SET bytes=bytes-length(CAST(OLD.envelope AS BLOB)) WHERE id=1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS ${table}_usage_update AFTER UPDATE OF envelope ON ${table}
+      WHEN length(CAST(NEW.envelope AS BLOB))<>length(CAST(OLD.envelope AS BLOB)) BEGIN
+        UPDATE record_usage SET bytes=bytes+length(CAST(NEW.envelope AS BLOB))-length(CAST(OLD.envelope AS BLOB)) WHERE id=1;
+      END;`);
+    sql.exec(`CREATE TRIGGER IF NOT EXISTS publications_usage_insert AFTER INSERT ON publications BEGIN
+        UPDATE record_usage SET bytes=bytes+${BRIDGE_PUBLICATION_RECEIPT_BYTES} WHERE id=1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS publications_usage_delete AFTER DELETE ON publications BEGIN
+        UPDATE record_usage SET bytes=bytes-${BRIDGE_PUBLICATION_RECEIPT_BYTES} WHERE id=1;
+      END;`);
+  });
+  installBlobReferences(storage);
+  const compaction = createHubCompaction(storage);
+  const api = {
+    recordBytes(): number {
+      return first<{ bytes: number }>("SELECT bytes FROM record_usage WHERE id=1")!.bytes;
+    },
+    takeWrite(backendId: string, limit: number): boolean {
+      const window = Math.floor(Date.now() / 60_000);
+      const rate = first<{ window: number; count: number }>("SELECT window,count FROM write_rate WHERE backend_id=?", backendId);
+      if (rate?.window === window && rate.count >= limit) return false;
+      sql.exec("INSERT INTO write_rate VALUES(?,?,1) ON CONFLICT(backend_id) DO UPDATE SET window=excluded.window,count=CASE WHEN write_rate.window=excluded.window THEN count+1 ELSE 1 END", backendId, window);
+      return true;
+    },
+    push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; writesPerMinute: number; canUpload?: boolean;
+      hasBlobs?: (blobs: BridgeBlobIdentity[]) => boolean; periodStart?: number }, replay?: { horizon: number; head: { seq: number; hash: string } }) {
+      return storage.transactionSync(() => {
+        const changed: BridgeLogRecord[] = [];
+        const results = envelopes.map((envelope): BridgePushResult => {
+          const h = envelope.header;
+          // Signature verification has already succeeded for the entire batch at the RPC boundary.
+          const auth = envelope.auth!;
+          const ack = (seq: number): BridgePushResult => ({ seq, publicationId: auth.publicationId });
+          const deadAck = (deleted: BridgeEnvelope): BridgePushResult => ({ deleted, publicationId: auth.publicationId });
+          const published = first<{ signature: string; seq: number }>("SELECT signature,seq FROM publications WHERE publication_id=?", auth.publicationId);
+          if (published && published.signature !== auth.signature) throw new Error("Bridge publication identifier was reused");
+          if (h.stream !== stream || h.origin !== backendId || h.owner && h.owner !== backendId) return { error: "notOwner" };
+          const owner = first<{ owner: string }>("SELECT owner FROM row_owners WHERE row_key=?", h.rowKey);
+          if (owner && owner.owner !== backendId) return { error: "notOwner" };
+          const previous = h.op === "upsert" ? first<LogRow>("SELECT seq,envelope FROM latest WHERE stream=? AND register_key=?", stream, h.registerKey) : undefined;
+          const previousEnvelope: BridgeEnvelope | undefined = previous && JSON.parse(previous.envelope);
+          // Both keys derive from the same table and pk, so a register belongs to one row:
+          // another row key here can only be replacing a value its writer does not own.
+          if (previousEnvelope && previousEnvelope.header.rowKey !== h.rowKey) return { error: "notOwner" };
+          const hubMs = Date.now();
+          if (h.hlc.physicalMs > hubMs + BRIDGE_MAX_CLOCK_SKEW_MS) return { error: "clockSkew", hubMs };
+          if (stream !== "account") {
+            const run = first<{ owner: string; tombstone: string | null }>("SELECT owner,tombstone FROM runs WHERE run_id=?", stream.slice(4));
+            if (h.runId !== stream.slice(4) || !run || run.owner !== backendId || h.owner !== backendId) return { error: "notOwner" };
+            if (run.tombstone) return deadAck(JSON.parse(run.tombstone));
+          } else if (h.runId) {
+            const run = first<{ owner: string; root_key: string }>("SELECT owner,root_key FROM runs WHERE run_id=?", h.runId);
+            if (!h.owner || run && (run.owner !== backendId || run.root_key !== h.rowKey) ||
+                first("SELECT 1 FROM runs WHERE root_key=? AND run_id<>?", h.rowKey, h.runId)) return { error: "notOwner" };
+          }
+          const deleted = first<LogRow>("SELECT seq,envelope FROM deleted WHERE row_key=?", h.rowKey);
+          if (deleted) return deadAck(JSON.parse(deleted.envelope));
+          // Compaction/idle expiry cannot turn a captured signed publication into new activity.
+          if (published) return ack(published.seq);
+          // Below the horizon a receipt may already be gone, so nothing bound there is new any more: the
+          // writer signs it again on a newer head (MEMBERSHIP.md §8).
+          if (replay && auth.membership.seq < replay.horizon) return { error: "membershipStale", head: replay.head };
+          const comparison = previousEnvelope && order(envelope, previousEnvelope);
+          // Upgrade only the original writer's exact legacy clock. This changes
+          // neither LWW order nor application data; a stale image still loses.
+          const rootsUpgrade = comparison === 0 && h.blobs !== undefined && previousEnvelope?.header.blobs === undefined;
+          if (previous && comparison !== undefined && comparison <= 0 && !rootsUpgrade) return ack(previous.seq);
+          if (h.op === "upsert" && budget?.canUpload === false) return { error: "subscriptionRequired" };
+          if (h.op === "upsert" && h.blobs && budget?.hasBlobs && !budget.hasBlobs(h.blobs)) return { error: "blobMissing" };
+          const encoded = JSON.stringify(envelope);
+          if (h.op === "upsert" && budget) {
+            const delta = new TextEncoder().encode(encoded).length - (previous ? new TextEncoder().encode(previous.envelope).length : 0) + BRIDGE_PUBLICATION_RECEIPT_BYTES;
+            if (delta > 0 && api.recordBytes() + budget.blobBytes + delta > budget.limitBytes) return { error: "quotaExceeded" };
+            if (!api.takeWrite(backendId, budget.writesPerMinute)) return { error: "rateLimited" };
+          }
+          // Backend ids never contain ':', so this bucket cannot collide with the upsert one.
+          if (h.op === "delete" && !api.takeWrite(`${backendId}:delete`, BRIDGE_DELETES_PER_MINUTE)) return { error: "rateLimited" };
+          if (stream === "account" && h.runId) sql.exec("INSERT OR IGNORE INTO runs(run_id,owner,root_key) VALUES(?,?,?)", h.runId, backendId, h.rowKey);
+          if (h.owner) sql.exec("INSERT OR IGNORE INTO row_owners(row_key,owner) VALUES(?,?)", h.rowKey, h.owner);
+          sql.exec("INSERT INTO streams(stream,seq) VALUES(?,1) ON CONFLICT(stream) DO UPDATE SET seq=seq+1", stream);
+          const seq = first<{ seq: number }>("SELECT seq FROM streams WHERE stream=?", stream)!.seq;
+          sql.exec("INSERT INTO publications(publication_id,signature,seq,membership_seq) VALUES(?,?,?,?)", auth.publicationId, auth.signature, seq, auth.membership.seq);
+          if (h.runId) sql.exec("INSERT INTO stream_activity VALUES(?,?) ON CONFLICT(stream) DO UPDATE SET last_activity=excluded.last_activity", `run:${h.runId}`, Date.now());
+          sql.exec("INSERT INTO log(stream,seq,row_key,register_key,op,envelope) VALUES(?,?,?,?,?,?)", stream, seq, h.rowKey, h.registerKey ?? null, h.op, encoded);
+          if (h.op === "delete") {
+            sql.exec("INSERT INTO deleted(row_key,stream,seq,envelope) VALUES(?,?,?,?)", h.rowKey, stream, seq, encoded);
+            sql.exec("UPDATE runs SET tombstone=? WHERE root_key=?", encoded, h.rowKey);
+            // Reclaim logical register bytes in the same transaction, across
+            // registers/reused attachments and all children of a deleted run.
+            sql.exec("DELETE FROM latest WHERE json_extract(envelope,'$.header.rowKey')=?", h.rowKey);
+            sql.exec("DELETE FROM latest WHERE stream IN(SELECT 'run:'||run_id FROM runs WHERE root_key=?)", h.rowKey);
+          } else sql.exec("INSERT INTO latest(stream,register_key,seq,envelope) VALUES(?,?,?,?) ON CONFLICT(stream,register_key) DO UPDATE SET seq=excluded.seq,envelope=excluded.envelope", stream, h.registerKey, seq, encoded);
+          changed.push({ seq, envelope });
+          return ack(seq);
+        });
+        // Fair-use accounting: newly accepted upserts only, one counter write
+        // per publication. Idempotent re-ACKs, refusals and deletes are free.
+        const accepted = changed.filter((record) => record.envelope.header.op === "upsert").length;
+        if (!accepted || budget?.periodStart === undefined) return { results, changed };
+        const after = first<{ records: number }>(`INSERT INTO write_budget(period_start,records) VALUES(?,?)
+          ON CONFLICT(period_start) DO UPDATE SET records=records+excluded.records RETURNING records`, budget.periodStart, accepted)!.records;
+        return { results, changed, periodRecords: { before: after - accepted, after } };
+      });
+    },
+    /** Drops receipts bound below the replay horizon, a bounded batch at a time. */
+    compactReceipts(horizon: number, limit = 1000): { hasMore: boolean } {
+      const removed = sql.exec("DELETE FROM publications WHERE rowid IN (SELECT rowid FROM publications WHERE membership_seq<? LIMIT ?) RETURNING 1", horizon, limit).toArray().length;
+      return { hasMore: removed >= limit };
+    },
+    /** Signatures of every account-stream record `backendId` authored that pulls can still return. */
+    accountSignatures(backendId: string): string[] {
+      return sql.exec<{ signature: string }>(`SELECT json_extract(envelope,'$.auth.signature') AS signature FROM log
+        WHERE stream='account' AND json_extract(envelope,'$.header.origin')=?`, backendId).toArray().map((row) => row.signature);
+    },
+    pull(stream: BridgeStream, after: number, limit: number) {
+      // Paginate by bytes as well as record count so a valid push always remains pullable.
+      const entries = sql.exec<LogRow>("SELECT seq,envelope FROM log WHERE stream=? AND seq>? ORDER BY seq LIMIT ?", stream, after, limit + 1);
+      const records: BridgeLogRecord[] = []; let bytes = 512, hasMore = false;
+      // Do not materialize limit+1 large rows before enforcing the frame byte cap.
+      for (const entry of entries) {
+        if (records.length === limit) { hasMore = true; break; }
+        const size = new TextEncoder().encode(entry.envelope).length + 64;
+        if (records.length && bytes + size > BRIDGE_MAX_FRAME_BYTES - 1024) { hasMore = true; break; }
+        bytes += size; records.push({ seq: entry.seq, envelope: JSON.parse(entry.envelope) });
+      }
+      return { records, next: records.at(-1)?.seq ?? Math.max(after, first<{ seq: number }>("SELECT seq FROM streams WHERE stream=?", stream)?.seq ?? 0), hasMore };
+    },
+    compact: compaction.compact,
+    nextExpiry: compaction.nextExpiry,
+    // Persist connection transitions only. Pulls and pings must not turn an
+    // otherwise idle account into a writer or invalidate its backup bookmark.
+    seen(backendId: string) {
+      sql.exec(`INSERT INTO presence(backend_id,last_seen) VALUES(?,?) ON CONFLICT(backend_id) DO UPDATE SET last_seen=excluded.last_seen`, backendId, Date.now());
+    },
+    identify(backendId: string, label: string, platform: string) {
+      sql.exec("INSERT INTO backend_metadata(backend_id,label,platform) VALUES(?,?,?) ON CONFLICT(backend_id) DO UPDATE SET label=excluded.label,platform=excluded.platform", backendId, label.trim(), platform);
+    },
+    presence() { return sql.exec<{ backend_id: string; last_seen: number; label: string | null; platform: string | null }>("SELECT p.backend_id,p.last_seen,m.label,m.platform FROM presence p LEFT JOIN backend_metadata m ON m.backend_id=p.backend_id").toArray(); },
+  };
+  return api;
+}

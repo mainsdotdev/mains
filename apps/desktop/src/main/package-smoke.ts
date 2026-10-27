@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { pathToFileURL } from "node:url";
+import { createServer } from "node:http";
 import { app, nativeTheme, type BrowserWindow } from "electron";
 import os from "node:os";
 import Database from "better-sqlite3";
@@ -23,19 +23,29 @@ export async function runPackageSmoke(window: BrowserWindow): Promise<void> {
   finally { database.close(); }
 
   const repo = await gitService.initRepo("Git Türkçe smoke", app.getPath("userData"));
-  const cloneUrl = "https://mains-smoke.invalid/git-smoke.git";
-  const gitConfig = path.join(app.getPath("userData"), "git-smoke.config");
-  // Exercise the real clone command with a local fixture, without auth/network.
-  fs.writeFileSync(gitConfig, `[url "${pathToFileURL(repo.rootPath).href}"]\n\tinsteadOf = ${cloneUrl}\n`);
-  const previousGitConfig = process.env.GIT_CONFIG_GLOBAL;
-  process.env.GIT_CONFIG_GLOBAL = gitConfig;
+  // Serve Git's dumb HTTP protocol on loopback. Git 4 deliberately filters
+  // ambient config redirects, so the smoke test uses a real local transport.
+  await execFileAsync("git", ["-C", repo.rootPath, "update-server-info"], { windowsHide: true });
+  const gitDirectory = path.join(repo.rootPath, ".git");
+  const gitServer = createServer((request, response) => {
+    const relative = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    const file = path.resolve(gitDirectory, `.${decodeURIComponent(relative)}`);
+    if (!file.startsWith(gitDirectory + path.sep)) { response.writeHead(404).end(); return; }
+    fs.readFile(file, (error, bytes) => {
+      response.writeHead(error ? 404 : 200, { "Content-Type": "application/octet-stream" });
+      response.end(error ? undefined : bytes);
+    });
+  });
+  await new Promise<void>((resolve) => gitServer.listen(0, "127.0.0.1", resolve));
   try {
-    const clone = await gitService.cloneRepo(cloneUrl, app.getPath("userData"));
+    const address = gitServer.address();
+    assert(address && typeof address !== "string");
+    const clone = await gitService.cloneRepo(`http://127.0.0.1:${address.port}`, app.getPath("userData"));
     assert.equal(clone.defaultBranch, "main");
     assert(fs.existsSync(path.join(clone.clonedPath, "README.md")));
   } finally {
-    if (previousGitConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
-    else process.env.GIT_CONFIG_GLOBAL = previousGitConfig;
+    gitServer.closeAllConnections();
+    await new Promise<void>((resolve) => gitServer.close(() => resolve()));
   }
 
   await new Promise<void>((resolve, reject) => {

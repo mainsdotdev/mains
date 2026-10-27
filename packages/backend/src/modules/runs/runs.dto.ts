@@ -1,3 +1,4 @@
+import type { BackendOwnership } from "../bridge";
 // ─────────────────────────────────────────────────────────────
 // Run Types
 // ─────────────────────────────────────────────────────────────
@@ -59,7 +60,7 @@ export interface WorkspaceRunListOptions {
   limit?: number;
 }
 
-export interface RunResponse {
+export interface RunResponse extends BackendOwnership {
   id: string;
   accountId: string;
   workspaceId: string | null;

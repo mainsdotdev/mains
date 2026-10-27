@@ -45,13 +45,15 @@ vi.mock("@/hooks/use-browser-panel", () => ({
     toggleExpanded: mocks.toggleExpanded,
     close: mocks.closePanel,
     ownerKey: mocks.ownerKey,
+    tabOwnerKey: mocks.ownerKey,
   }),
 }));
 
+vi.mock("@/hooks/use-preview-panel", () => ({ usePreviewPanel: () => ({ activeTab: null }) }));
 vi.mock("@/lib/redux/hooks", () => ({
   useAppDispatch: () => mocks.dispatch,
   useAppSelector: (selector: (state: unknown) => unknown) =>
-    selector({ appSettings: { browserPanelWidth: 520, sidebarCollapsed: mocks.sidebarCollapsed } }),
+    selector({ workspace: { composerContextKey: mocks.ownerKey }, appSettings: { browserPanelWidth: 520, sidebarCollapsed: mocks.sidebarCollapsed } }),
 }));
 
 vi.mock("@/lib/redux/api", () => ({
@@ -353,6 +355,10 @@ describe("BrowserPanel browser menu", () => {
       expect(panel.style.top).toBe("var(--shell-header-height)");
       expect(chatTab.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(actions.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      // The main header already reserves the layout controls. A second inset
+      // would slide Restore left of where Expand sat in the docked strip.
+      const restore = screen.getByRole("button", { name: "Restore browser panel" });
+      expect(restore.closest("[data-shell-header]")?.className.split(" ")).not.toContain("pr-2");
       expect(screen.getByLabelText("Browser chat")).toBe(chatStage);
     }
     fireEvent.click(screen.getByRole("button", { name: "Chat options" }));

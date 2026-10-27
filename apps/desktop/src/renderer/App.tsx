@@ -4,6 +4,7 @@ import Sidebar from "./components/layout/sidebar";
 import RightPanel from "./components/layout/right-panel";
 import { ToggleButton } from "./components/layout/right-panel/toggle-button";
 import { SessionPanel, SessionPanelTrigger } from "@/features/workspace/components/session-panel";
+import { TerminalPanelTrigger } from "@/features/workspace/components/terminal-panel-trigger";
 import { SubagentPanel } from "@/features/workspace/components/subagent-panel/subagent-panel";
 import { useHasSessionSubagents } from "./features/workspace/hooks/use-session-subagents";
 import { selectSessionRunId } from "@/features/workspace/components/session-panel/select-session-run";
@@ -23,15 +24,15 @@ import {
   isWorkspaceRoute,
   isAtlasRoute,
   NAV_RAIL_WIDTH,
-  MCP_APP_PANEL_WIDTH_VAR,
 } from "./lib/layout";
 import { useBottomTerminal } from "./hooks/use-bottom-terminal";
 import { useBrowserPanel, BrowserPanelProvider } from "./hooks/use-browser-panel";
 import { McpAppPanelProvider, useMcpAppPanel } from "./hooks/use-mcp-app-panel";
-import { McpAppPanel } from "./features/workspace/components/mcp-app-panel";
-import { BrowserPanel } from "./features/workspace/components/browser-panel";
+import { PreviewPanel } from "./features/workspace/components/preview-panel";
+import { usePreviewPanel } from "./hooks/use-preview-panel";
+import { PreviewTabLifecycleProvider } from "./hooks/use-preview-tab-lifecycle";
+import { PreviewNewTabButton } from "./features/workspace/components/preview-new-tab-button";
 import { useDocumentViewer, DocumentViewerProvider } from "./hooks/use-document-viewer";
-import { DocumentViewerPanel } from "./features/workspace/components/document-viewer-panel";
 import { useWorkspaceVariant } from "./hooks/use-workspace-variant";
 import { useModeConfig } from "./hooks/use-mode-config";
 import { ReduxProvider } from "./providers/redux-provider";
@@ -59,6 +60,8 @@ import { RealtimeVoiceDock } from "./features/workspace/components/realtime-voic
 import { useWindowRequests } from "./hooks/use-window-requests";
 import { useAppSettingsEvents } from "./hooks/use-app-settings-events";
 import { useOnboardingWindow } from "./features/onboarding/hooks/use-onboarding-window";
+import { useBridgeStatus } from "./features/bridge/hooks/use-bridge";
+import { useGetRunByIdQuery, useGetWorkspaceQuery, useListWorkspacesQuery } from "./lib/redux/api";
 import {
   KeyboardShortcutsProvider,
   useKeyboardShortcut,
@@ -76,7 +79,6 @@ const OnboardingScreen = lazy(() =>
 const SIDEBAR_WIDTH = "var(--sidebar-width)";
 const RIGHT_PANEL_WIDTH = "var(--panel-width)";
 const BROWSER_PANEL_WIDTH = "var(--browser-panel-width)";
-const DOC_VIEWER_PANEL_WIDTH = "var(--doc-viewer-panel-width)";
 const SESSION_PANEL_WIDTH = "var(--session-panel-width)";
 /** Content inset when no panel occupies that edge. */
 const EDGE_GUTTER = "0.375rem";
@@ -109,6 +111,7 @@ function useDropdownAnimationPrewarm() {
 }
 
 function AppContent() {
+  useBridgeStatus();
   useDropdownAnimationPrewarm();
   useLayoutWidthVars();
   useAppearanceFonts();
@@ -131,10 +134,9 @@ function AppContent() {
   const bottomTerminal = useBottomTerminal();
   const browserPanel = useBrowserPanel();
   const mcpAppPanel = useMcpAppPanel();
-  const appExpanded = !!mcpAppPanel?.isExpanded;
+  const preview = usePreviewPanel();
   const docViewer = useDocumentViewer();
   const modeConfig = useModeConfig();
-  const showTerminalToggle = !hideWorkspacePanels && variant !== "default" && modeConfig.showTerminal;
   const showBrowserToggle = atlasRoute || variant !== "default";
   const dispatch = useAppDispatch();
   const sidebarCollapsed = useAppSelector(
@@ -151,6 +153,13 @@ function AppContent() {
   const sessionRunId = useAppSelector((state) =>
     selectSessionRunId(state.workspace),
   );
+  const { data: knownWorkspaces = [] } = useListWorkspacesQuery();
+  const { currentData: selectedWorkspace } = useGetWorkspaceQuery(activeWorkspaceId ?? "", { skip: !activeWorkspaceId });
+  const { currentData: selectedRun } = useGetRunByIdQuery(sessionRunId ?? "", { skip: !sessionRunId });
+  const workspaceAccess = selectedWorkspace ?? knownWorkspaces.find((workspace) => workspace.id === activeWorkspaceId);
+  const replicaView = workspaceAccess?.isReplica === true || selectedRun?.isReplica === true;
+  const operationalAccess = !replicaView && (!activeWorkspaceId || !!workspaceAccess) && (!sessionRunId || !!selectedRun);
+  const showTerminalToggle = operationalAccess && !hideWorkspacePanels && variant !== "default" && modeConfig.showTerminal;
   const onboardingCompleted = useAppSelector(
     (state) => state.appSettings.onboardingCompleted,
   );
@@ -161,30 +170,25 @@ function AppContent() {
     () => !onboardingCompleted && !isWeb && typeof document.startViewTransition !== "function",
   );
   const isMobile = useIsMobile();
-  const browserTabsInHeader = browserPanel.isExpanded && !modeConfig.showTabs && !isMobile;
+  const browserTabsInHeader = false;
 
   // Atlas and Chat/Work hide workspace tools without changing the persisted
   // developer preference. Document and browser previews own a separate lane.
   const rightPanelVisible =
-    rightPaneReady && !hideWorkspacePanels && modeConfig.showRightPanel && isRightPanelOpen;
+    operationalAccess && rightPaneReady && !hideWorkspacePanels && modeConfig.showRightPanel && isRightPanelOpen && !preview.isOpen;
   // Whatever currently owns the right edge — the content stops there, and the
   // session box aligns to the same edge just inside it.
-  const rightLaneWidth = mcpAppPanel?.isOpen
-    ? appExpanded ? EDGE_GUTTER : `var(${MCP_APP_PANEL_WIDTH_VAR})`
-    : docViewer.isOpen
-    ? DOC_VIEWER_PANEL_WIDTH
-    : browserPanel.isOpen
-      ? browserTabsInHeader ? EDGE_GUTTER : BROWSER_PANEL_WIDTH
-      : rightPanelVisible
-        ? RIGHT_PANEL_WIDTH
-        : EDGE_GUTTER;
+  const rightLaneWidth = preview.isOpen
+    ? preview.isExpanded ? EDGE_GUTTER : BROWSER_PANEL_WIDTH
+    : rightPanelVisible ? RIGHT_PANEL_WIDTH : EDGE_GUTTER;
+
   // The box has two independent targets: Code can describe a workspace before
   // a run exists; Work can describe a workspace-less run. Git remains gated
   // behind the workspace half so its status query never touches managed run
   // directories.
   const hasSessionPanelTarget =
-    (modeConfig.showGitActions && !!activeWorkspaceId) ||
-    (modeConfig.showSources && !!sessionRunId);
+    operationalAccess && ((modeConfig.showGitActions && !!activeWorkspaceId) ||
+    (modeConfig.showSources && !!sessionRunId));
   const sessionPanelShown =
     isSessionPanelOpen &&
     !hideWorkspacePanels &&
@@ -213,7 +217,7 @@ function AppContent() {
     hasSubagents &&
     !!sessionRunId &&
     !hideWorkspacePanels &&
-    !mcpAppPanel?.isOpen &&
+    !preview.isOpen &&
     rightLaneWidth === EDGE_GUTTER;
   const subagentPanelDocked =
     subagentPanelShown && !isMobile && !subagentPanelCollapsed;
@@ -245,21 +249,13 @@ function AppContent() {
 
   useKeyboardShortcut("app.toggleSidebar", () => {
     dispatch(setSidebarCollapsed(!sidebarCollapsed));
-  }, { enabled: !appExpanded && (isMobile || workspaceRoute || atlasRoute), allowInEditable: true });
+  }, { enabled: isMobile || workspaceRoute || atlasRoute, allowInEditable: true });
   useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
     enabled:
       showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
     allowInEditable: true,
   });
-  useKeyboardShortcut("app.toggleBrowser", () => {
-    if (!showBrowserToggle) return;
-    if (!browserPanel.isOpen) {
-      mcpAppPanel?.close();
-      dispatch(setRightPanelOpen(false));
-      docViewer.close();
-    }
-    browserPanel.toggle();
-  }, {
+  useKeyboardShortcut("app.toggleBrowser", browserPanel.toggle, {
     enabled: showBrowserToggle && !hideRightPanel,
     allowInEditable: true,
   });
@@ -309,32 +305,20 @@ function AppContent() {
   const showLayoutControls = !hideRightPanel && !(isMobile && !sidebarCollapsed);
   const layoutControls = showLayoutControls ? (
     <ToggleButton
-      showChatActions={isMobile && !atlasRoute}
-      hideTerminalControls={appExpanded || hideWorkspacePanels || (browserPanel.isOpen && browserPanel.isExpanded)}
-      showRightPanelToggle={!hideWorkspacePanels}
+      showChatActions={operationalAccess && isMobile && !atlasRoute}
+      showRightPanelToggle={operationalAccess && !hideWorkspacePanels && modeConfig.showRightPanel}
       isOpen={rightPanelVisible}
       onClick={() => {
-        const open = !isRightPanelOpen;
+        const open = !rightPanelVisible;
         if (open) {
-          mcpAppPanel?.close();
-          browserPanel.close();
-          docViewer.close();
+          preview.hide();
           // The right panel takes the edge the session box sits against.
           dispatch(setSessionPanelOpen(false));
         }
         dispatch(setRightPanelOpen(open));
       }}
-      terminalOpen={showTerminalToggle ? bottomTerminal.isOpen : undefined}
-      onTerminalToggle={showTerminalToggle ? bottomTerminal.toggle : undefined}
-      browserOpen={showBrowserToggle ? browserPanel.isOpen : undefined}
-      onBrowserToggle={showBrowserToggle ? () => {
-        if (!browserPanel.isOpen) {
-          mcpAppPanel?.close();
-          dispatch(setRightPanelOpen(false));
-          docViewer.close();
-        }
-        browserPanel.toggle();
-      } : undefined}
+      browserOpen={preview.isOpen}
+      newTabAction={showBrowserToggle ? <PreviewNewTabButton togglePanel /> : undefined}
     />
   ) : undefined;
 
@@ -366,13 +350,13 @@ function AppContent() {
             aria-hidden
           />
         )}
-        {!appExpanded && (isMobile || workspaceRoute || atlasRoute) && !(
+        {(isMobile || workspaceRoute || atlasRoute) && !(
           isMobile &&
           (rightPanelVisible || browserPanel.isOpen || docViewer.isOpen || mcpAppPanel?.isOpen)
         ) && (
           <SidebarToggleButton
             isOpen={!sidebarCollapsed}
-            browserExpanded={browserPanel.isExpanded || appExpanded}
+            browserExpanded={preview.isExpanded}
             onClick={() => dispatch(setSidebarCollapsed(!sidebarCollapsed))}
           />
         )}
@@ -382,11 +366,14 @@ function AppContent() {
           marginRight={contentRight}
           transparentSurface={workspaceRoute}
           contentInsetRight={contentInsetRight}
-          headerActions={!isMobile && !hideWorkspacePanels && !appExpanded && !browserPanel.isExpanded && (
-            <SessionPanelTrigger showGitActions={modeConfig.showGitActions} showSources={modeConfig.showSources} />
+          headerActions={operationalAccess && (!isMobile || showTerminalToggle) && !hideWorkspacePanels && !preview.isExpanded && (
+            <div className="flex items-center gap-0.5 empty:hidden">
+              {!isMobile && <SessionPanelTrigger showGitActions={modeConfig.showGitActions} showSources={modeConfig.showSources} />}
+              {showTerminalToggle && <TerminalPanelTrigger isOpen={bottomTerminal.isOpen} onToggle={bottomTerminal.toggle} />}
+            </div>
           )}
           reserveWindowControls={showLayoutControls && rightLaneWidth === EDGE_GUTTER}
-          headerHidden={(browserPanel.isExpanded && !browserTabsInHeader) || appExpanded}
+          headerHidden={preview.isExpanded}
           browserTabsInHeader={browserTabsInHeader}
           sidebarCollapsed={sidebarCollapsed}
         >
@@ -394,10 +381,10 @@ function AppContent() {
             <MainRoutes />
           </ErrorBoundary>
         </MainContent>
-        {!hideWorkspacePanels && modeConfig.showRightPanel && (
+        {operationalAccess && !hideWorkspacePanels && modeConfig.showRightPanel && (
           <RightPanel isOpen={rightPanelVisible} width={RIGHT_PANEL_WIDTH} />
         )}
-        {!hideWorkspacePanels && (
+        {operationalAccess && !hideWorkspacePanels && (
           <SessionPanel
             providerId={activeProviderId}
             runId={sessionRunId}
@@ -405,15 +392,10 @@ function AppContent() {
             floating={sessionPanelFloating}
           />
         )}
-        {!hideWorkspacePanels && (
+        {operationalAccess && !hideWorkspacePanels && (
           <SubagentPanel shown={subagentPanelShown} laneOffset={rightLaneWidth} />
         )}
-        <BrowserPanel
-          tabsInMainHeader={browserTabsInHeader}
-          reserveLayoutControls={showLayoutControls}
-        />
-        <McpAppPanel reserveLayoutControls={showLayoutControls} />
-        <DocumentViewerPanel reserveLayoutControls={showLayoutControls} />
+        <PreviewPanel reserveLayoutControls={showLayoutControls} />
         {layoutControls}
       </MainLayout>
     </>
@@ -429,9 +411,11 @@ export default function App() {
             <MainHeaderProvider>
               <BrowserPanelProvider>
                 <DocumentViewerProvider>
-                  <McpAppPanelProvider>
-                    <AppContent />
-                  </McpAppPanelProvider>
+                  <PreviewTabLifecycleProvider>
+                    <McpAppPanelProvider>
+                      <AppContent />
+                    </McpAppPanelProvider>
+                  </PreviewTabLifecycleProvider>
                 </DocumentViewerProvider>
               </BrowserPanelProvider>
             </MainHeaderProvider>

@@ -1,13 +1,16 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { AsciiSpinner, Button, Text, toast } from "@/components/ui";
+import { AsciiSpinner, Button, CopyButton, Text, UsageTicks, toast } from "@/components/ui";
 import {
   SettingsPageShell,
   SettingsSection,
   SettingsRow,
+  SettingsDivider,
 } from "./settings-layout";
 import {
   useArchiveSpaceMutation,
+  useDetectInstalledClisQuery,
+  useGetProviderAccountInfoQuery,
   useGetProviderByIdQuery,
   useGetSpacesQuery,
   useSetActiveSpaceMutation,
@@ -16,6 +19,7 @@ import {
   useUpdateProviderCliMutation,
 } from "@/lib/redux/api";
 import type { AccountInfo } from "@/lib/redux/api/providersApi";
+import { getProviderVariantById } from "@/lib/provider-variants";
 import { getSpaceDefaultRoute } from "@/lib/route-utils";
 import { extractErrorMessage } from "@/lib/extract-error-message";
 
@@ -23,7 +27,7 @@ type ProviderData = ReturnType<typeof useGetProviderByIdQuery>["data"];
 
 export function useProviderSettings<TConfig extends object = Record<string, unknown>>(
   providerId: string,
-  spaceSlug: string,
+  seededSpaceId: string,
 ) {
   const navigate = useNavigate();
   const {
@@ -37,9 +41,9 @@ export function useProviderSettings<TConfig extends object = Record<string, unkn
   const [unarchiveSpace] = useUnarchiveSpaceMutation();
   const [setActiveSpace] = useSetActiveSpaceMutation();
 
-  const space = spaces.find((s) => s.slug === spaceSlug);
+  const space = spaces.find((s) => s.id === seededSpaceId);
   const otherVisibleSpaces = spaces.filter(
-    (s) => s.slug !== spaceSlug && !s.isArchived,
+    (s) => s.id !== seededSpaceId && !s.isArchived,
   );
   const canHide = otherVisibleSpaces.length > 0;
   const config = (provider?.config ?? {}) as TConfig;
@@ -94,10 +98,36 @@ export function useProviderSettings<TConfig extends object = Record<string, unkn
 }
 
 /**
+ * Whether this backend has the provider's CLI, from the same probe onboarding
+ * uses. `installed` stays undefined until the probe answers (or if it fails),
+ * so callers keep their ordinary UI rather than claiming the CLI is missing.
+ * `recheck` re-probes and re-reads the account, which reports the version.
+ */
+export function useProviderCliInstallation(providerId: string) {
+  const variant = getProviderVariantById(providerId);
+  const detected = useDetectInstalledClisQuery(undefined, {
+    refetchOnMountOrArgChange: true,
+  });
+  const account = useGetProviderAccountInfoQuery(providerId);
+  return {
+    installed: variant && detected.data ? detected.data[variant.variant] : undefined,
+    installCommand: variant?.installCommand ?? null,
+    setupGuideUrl: variant?.setupGuideUrl,
+    label: variant?.label,
+    isChecking: detected.isFetching || account.isFetching,
+    recheck: () => {
+      void detected.refetch();
+      void account.refetch();
+    },
+  };
+}
+
+/**
  * CLI version + self-update section shared by every provider page.
  * Owns the update mutation and result message; per-provider bits come in as
  * props. Extra provider-specific rows (e.g. Cursor's outdated notice) render
- * below the update row via `children`.
+ * below the update row via `children`. A missing CLI replaces all of that with
+ * how to install it (or, for a bundled runtime, how to restore it).
  */
 export function ProviderCliSection({
   providerId,
@@ -119,6 +149,7 @@ export function ProviderCliSection({
   const [updateCli, { isLoading: isUpdatingCli }] =
     useUpdateProviderCliMutation();
   const [updateResult, setUpdateResult] = useState<string | null>(null);
+  const installation = useProviderCliInstallation(providerId);
 
   const handleUpdateCli = async () => {
     setUpdateResult(null);
@@ -127,10 +158,71 @@ export function ProviderCliSection({
       setUpdateResult(
         res.success ? `${shortName} CLI updated.` : res.output || "Update failed.",
       );
-    } catch {
-      setUpdateResult("Update failed.");
+    } catch (error) {
+      setUpdateResult(extractErrorMessage(error, "Update failed."));
     }
   };
+
+  if (installation.installed === false) {
+    const { installCommand, setupGuideUrl, isChecking, recheck } = installation;
+    return (
+      <SettingsSection title="CLI">
+        <SettingsRow
+          title={cliName}
+          description={
+            installCommand
+              ? "Not installed. Install it in your terminal, then recheck."
+              : `${shortName} is included with Mains but missing from this installation. Reinstall Mains, then recheck.`
+          }
+        >
+          <div className="flex items-center gap-3">
+            <Text as="span" size="xs" tone="subtle">
+              Not installed
+            </Text>
+            <Button variant={buttonVariant} onClick={recheck} disabled={isChecking}>
+              {isChecking ? "Checking…" : "Recheck"}
+            </Button>
+          </div>
+        </SettingsRow>
+        {installCommand && (
+          <>
+            <SettingsDivider />
+            <SettingsRow
+              title="Install"
+              description={
+                setupGuideUrl ? (
+                  <>
+                    Run this in your terminal.{" "}
+                    <a
+                      href={setupGuideUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 underline"
+                    >
+                      Open setup guide
+                    </a>
+                  </>
+                ) : (
+                  "Run this in your terminal."
+                )
+              }
+            >
+              <div className="flex w-fit max-w-full items-center gap-2 rounded-xl glass-input py-1 pr-1 pl-3">
+                <Text as="code" size="s" className="min-w-0 truncate font-mono select-all">
+                  {installCommand}
+                </Text>
+                <CopyButton
+                  text={installCommand}
+                  tooltip="Copy install command"
+                  copiedTooltip="Copied!"
+                />
+              </div>
+            </SettingsRow>
+          </>
+        )}
+      </SettingsSection>
+    );
+  }
 
   return (
     <SettingsSection title="CLI">
@@ -175,14 +267,18 @@ export function ProviderCliSection({
 /**
  * Account section shared by the provider pages. The page decides which
  * account type counts as "signed in" for its provider and passes the resolved
- * row content; this component owns the skeleton / API-key / signed-out states.
+ * row content; this component owns the skeleton / API-key / signed-out /
+ * missing-CLI states. A missing CLI can't sign in, so its row says to install
+ * it rather than repeating the provider's sign-in instructions.
  */
 export function ProviderAccountSection({
+  providerId,
   isLoading,
   signedIn,
   isApiKey = false,
   notSignedInDescription,
 }: {
+  providerId: string;
   isLoading: boolean;
   /** Resolved row content when the provider-specific account type matched. */
   signedIn: { title: string; description: string; plan: string } | null;
@@ -190,9 +286,23 @@ export function ProviderAccountSection({
   isApiKey?: boolean;
   notSignedInDescription: string;
 }) {
+  const { installed, installCommand, label } = useProviderCliInstallation(providerId);
   return (
     <SettingsSection title="Account">
-      {isLoading ? (
+      {installed === false ? (
+        <SettingsRow
+          title="Not signed in"
+          description={
+            installCommand
+              ? `Install the ${label} CLI below, then sign in.`
+              : `Reinstall Mains to restore ${label}, then sign in.`
+          }
+        >
+          <Text as="span" size="xs" tone="subtle">
+            No account
+          </Text>
+        </SettingsRow>
+      ) : isLoading ? (
         <div className="flex items-center justify-between py-4">
           <div className="flex flex-col gap-1.5">
             <div className="h-4 w-40 rounded bg-primary-200/50 dark:bg-primary-700/30 animate-pulse" />
@@ -254,65 +364,6 @@ export interface ProviderUsageSummary {
  * (`24 / 200`) when it reports them.
  */
 export type UsageReadout = "percentLeft" | "counts";
-
-const USAGE_TICK_COUNT = 24;
-
-/**
- * Tick colour by how much of the window is left — the same quantity the meter
- * draws, so the colour can't disagree with the fill. Half the allowance gone
- * turns it amber, a fifth left turns it red.
- */
-function usageLevelClass(remainingPercent: number): string {
-  if (remainingPercent <= 20) return "bg-danger";
-  if (remainingPercent <= 50) return "bg-warning";
-  return "bg-accent";
-}
-
-/**
- * Segmented meter: a row of thin ticks, the ones covering what's *left* in the
- * level colour, the rest muted. Rounds to the nearest tick but always lights at
- * least one for a non-zero remainder so a 1% reading isn't drawn empty.
- *
- * The meter reads the same way on every provider — a full row means a full
- * allowance — so it takes consumption and derives the fill itself rather than
- * letting a caller hand it the opposite quantity.
- */
-function UsageTicks({
-  usedPercent,
-  label,
-}: {
-  usedPercent: number;
-  label: string;
-}) {
-  const clamped = Math.min(100, Math.max(0, 100 - usedPercent));
-  const filled =
-    clamped === 0
-      ? 0
-      : Math.max(1, Math.round((clamped / 100) * USAGE_TICK_COUNT));
-  const levelClass = usageLevelClass(clamped);
-
-  return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={Math.round(clamped)}
-      className="flex items-center gap-1.25"
-    >
-      {Array.from({ length: USAGE_TICK_COUNT }, (_, i) => (
-        <span
-          key={i}
-          className={`h-3.5 w-0.75 rounded-full transition-colors duration-300 ${
-            i < filled
-              ? levelClass
-              : "bg-primary-300/70 dark:bg-primary-600/50"
-          }`}
-        />
-      ))}
-    </div>
-  );
-}
 
 /**
  * One rate-limit row. The meter always draws what's left; `readout` only picks

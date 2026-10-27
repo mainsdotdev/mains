@@ -8,9 +8,16 @@ export function providerSettingsKey(backendId: string | null, providerId: string
   return JSON.stringify([backendId ?? "local", providerId]);
 }
 
-/** Browser expansion in Code mode is shared by chats in one workspace. */
+/** Code preview tabs and their expansion are shared by chats in one workspace. */
 export function workspaceBrowserExpansionKey(backendId: string | null, workspaceId: string): string {
   return JSON.stringify([backendId ?? "local", "browser-workspace", workspaceId]);
+}
+
+/** Code preview tabs share the existing backend/workspace browser owner. */
+export function workspaceIdFromPreviewOwnerKey(key: string, backendId: string): string | null {
+  const parts = keyParts(key);
+  return parts?.length === 3 && parts[0] === backendId && parts[1] === "browser-workspace" && typeof parts[2] === "string"
+    ? parts[2] : null;
 }
 
 /** Reviewed patches are shared by conversations and spaces in one workspace. */

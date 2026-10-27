@@ -12,7 +12,7 @@ import HelpMenu from "./help-menu";
 import { useCapabilities, useIsMobile } from "@/lib/platform";
 import {
   Project,
-  Relay,
+  Bridge,
   Plugin,
   Box,
   New,
@@ -155,6 +155,8 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     isAddingLocal,
     handleCloneRepo,
     handleOpenCloneModal,
+    handleOpenCloneFor,
+    cloneDraftUrl,
     pendingClones,
     handleCancelClone,
     handleRetryClone,
@@ -256,8 +258,8 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     location.pathname === "/pulse" || location.pathname.startsWith("/pulse/");
   const isTasksRoute =
     location.pathname === "/tasks" || location.pathname.startsWith("/tasks/");
-  const isRelayRoute =
-    location.pathname === "/relay" || location.pathname.startsWith("/relay/");
+  const isBridgeRoute =
+    location.pathname === "/bridge" || location.pathname.startsWith("/bridge/");
   const isPluginsDisabledForAgent = !spaceProvider.supportsPlugins;
 
   const handleModeChange = (mode: ModeId) => {
@@ -488,18 +490,18 @@ export default function Sidebar({ collapsed }: SidebarProps) {
               <div className="px-3 mb-2">
               <Button
                 variant="subtle"
-                tooltip="Mains Connect"
+                tooltip="Bridge"
                 className={`justify-start flex items-center gap-2 w-full rounded-xl transition-colors ${
-                  isRelayRoute
+                  isBridgeRoute
                     ? " glass-outline bg-primary/50 dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
                     : ""
                 }`}
-                onClick={() => navigate("/relay")}
-                aria-current={isRelayRoute ? "page" : undefined}
+                onClick={() => navigate("/bridge")}
+                aria-current={isBridgeRoute ? "page" : undefined}
               >
-                <Relay
+                <Bridge
                   className={`w-4 h-4 -ml-1 shrink-0 ${
-                    isRelayRoute
+                    isBridgeRoute
                       ? "text-primary-950 dark:text-primary"
                       : "text-primary-900 dark:text-primary-100"
                   }`}
@@ -508,11 +510,11 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                   as="span"
                   size="s"
                   weight="normal"
-                  tone={isRelayRoute ? "contrast" : "default"}
+                  tone={isBridgeRoute ? "contrast" : "default"}
                   align="left"
                   className="flex-1"
                 >
-                  Connect
+                  Bridge
                 </Text>
 
               </Button>
@@ -531,6 +533,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
               searchQuery={searchQuery}
               onNewChatInCollection={handleNewChat}
               onCreateCollection={handleOpenCreateCollectionModal}
+              onCloneRepository={handleOpenCloneFor}
             />
             <BackgroundRunsDock />
             <UpdateBanner />
@@ -588,6 +591,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           addLocalShortcut={addLocalShortcut}
           onAddLocal={() => void handleAddProject()}
           onClone={handleCloneRepo}
+          cloneUrl={cloneDraftUrl || undefined}
           onCreate={handleCreateProject}
           onClose={handleCloseAddProjectModal}
         />

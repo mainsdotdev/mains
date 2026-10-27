@@ -136,7 +136,7 @@ function AtlasSurface({ accountId, imageCreation }: { accountId: string; imageCr
     <AtlasImageCreator accountId={accountId} collectionId={collectionId} runId={runId} />
   </Suspense>;
   return itemId ? <Suspense fallback={<PageShell><Muted>Opening page…</Muted></PageShell>}>
-    <AtlasPageEditor key={`${ownerKey}:${itemId}`} accountId={accountId} id={itemId} handleRef={editorRef} onTitleChange={titleChanged}
+    <AtlasPageEditor key={`${ownerKey}:${itemId}`} accountId={accountId} id={itemId} handleRef={editorRef} draftScope={ownerKey.startsWith('["local",') ? undefined : ownerKey} onTitleChange={titleChanged}
       requestedAction={pageAction} onActionHandled={actionHandled} />
   </Suspense> : <AtlasLibrary key={`${ownerKey}:${collectionId ?? ""}`} accountId={accountId} />;
 }

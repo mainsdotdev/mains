@@ -1,5 +1,5 @@
 {
-  "cliVersion": "0.162.1",
+  "cliVersion": "0.163.0",
   "files": [
     {
       "path": "AbsolutePathBuf.ts",
@@ -31,7 +31,7 @@
     },
     {
       "path": "ContentItem.ts",
-      "sha256": "82a9678802f672880ede5b3d61ae339474ca2a3f65c3cbad599f06ce219f2a06"
+      "sha256": "85966046f5abe7d74754cb5a8dc385a13f87de5daa3cc12fe2258efc5226e935"
     },
     {
       "path": "ConversationTextRole.ts",
@@ -127,11 +127,11 @@
     },
     {
       "path": "RealtimeVoice.ts",
-      "sha256": "3d0d02147d7ff8b50f7474684fd594fa606dc4dfe3af9e6c5e4ca598ddfee640"
+      "sha256": "581a8758d3699c7fa2efbc0e34cc047f888606de6fc2e0953d49cdac3f5f6355"
     },
     {
       "path": "RealtimeVoicesList.ts",
-      "sha256": "90dab674f89a95b27a1a02029b0e9da1b1311396b207b321a2dea0f2d9ff7bb2"
+      "sha256": "4ed3f82a3ace7706e0e22474cd22a02bac851856852e4bb70c1b403be5b83e51"
     },
     {
       "path": "ReasoningEffort.ts",
@@ -163,7 +163,7 @@
     },
     {
       "path": "ResponseItem.ts",
-      "sha256": "41697f3b742c4bb287a3e7331ac2fe0908edf0ccfc05fc7e19311b1542d51641"
+      "sha256": "475382b456d8be630ddf81f7d99ed956395e6d0253b1efe74fc73a6f28db5f79"
     },
     {
       "path": "ResponseItemId.ts",
@@ -887,7 +887,7 @@
     },
     {
       "path": "v2/ThreadForkParams.ts",
-      "sha256": "ea9dd8fb39979f32293a31f98e599509430b7cc80840b2a0afc90a2b953e942e"
+      "sha256": "3e6e6823df95f8e63f6a5582d20aed54374c099dc6d709b5ce28d0f99dc8e39e"
     },
     {
       "path": "v2/ThreadForkResponse.ts",
@@ -943,7 +943,11 @@
     },
     {
       "path": "v2/ThreadReadResponse.ts",
-      "sha256": "09d84ab28738dd7f906f7adf4dc741e745d5ee826029653f4d7741c4953a7b42"
+      "sha256": "b1b2426a9b8f5c370b2f299f1a58449166a0a1a5587aa349b15a6533343bad32"
+    },
+    {
+      "path": "v2/ThreadReadState.ts",
+      "sha256": "ff66dd19ce9010738fc0ae34d09737cf05be1219884a1fe58be26127469ab3ba"
     },
     {
       "path": "v2/ThreadRealtimeBemItemPresentation.ts",
@@ -1082,6 +1086,10 @@
       "sha256": "fa9f1eda4cb375ce0fb7aac2a7e8c25d5dd5d7a7b0f30f716de1574bff7fe17a"
     },
     {
+      "path": "v2/ThreadUnreadPosition.ts",
+      "sha256": "525e670f9b42a8e25d5f01eb13f62fe1a85b3741c29ea3b2fdfab74109c83c0f"
+    },
+    {
       "path": "v2/ThreadUnsubscribeParams.ts",
       "sha256": "5780913f01bac19e8edb8c01c77151efefdae62bf451968270e5bb8e0dda37b2"
     },
@@ -1139,7 +1147,7 @@
     },
     {
       "path": "v2/TurnToolOutput.ts",
-      "sha256": "6cd2705dfb62b22df331f044ab73530cc37fe82c7c6f43ec5379208563b1343e"
+      "sha256": "37c668368fa9cf32b9d10a8befc4b8c6e7d85f5a6c4c4c0091bdbd9058debff2"
     },
     {
       "path": "v2/TurnsPage.ts",

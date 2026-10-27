@@ -219,7 +219,7 @@ export const browserChatWindow = {
       acceptFirstMouse: true,
       backgroundColor: "#00000000",
       webPreferences: {
-        preload: path.join(__dirname, "index.js"),
+        preload: path.join(__dirname, "preload.cjs"),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false,

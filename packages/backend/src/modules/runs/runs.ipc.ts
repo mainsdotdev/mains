@@ -34,6 +34,7 @@ import type {
   ReadRunHistoryContentPayload,
   ReadAttachmentImagePayload,
   ResolveAttachmentPathPayload,
+  ResolveArtifactPathPayload,
   ReadRunTextFilePayload,
   RunSteerPayload,
   RunInputStatusPayload,
@@ -251,6 +252,8 @@ export function registerRunsIpc(): void {
   );
   ipcMain.handle(CHANNELS.runArtifacts.readAttachmentImage,
     handle((payload: ReadAttachmentImagePayload) => runsService.readAttachmentImage(payload)));
+  ipcMain.handle(CHANNELS.runArtifacts.resolveFilePath,
+    handle((payload: ResolveArtifactPathPayload) => runsService.resolveReplicaFile(payload)));
   ipcMain.handle(CHANNELS.runArtifacts.resolveAttachmentPath,
     handle((payload: ResolveAttachmentPathPayload) => runsService.resolveAttachmentPath(payload)));
   ipcMain.handle(CHANNELS.runArtifacts.readAttachmentFile,
@@ -359,6 +362,7 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runArtifacts.readImage,
     CHANNELS.runArtifacts.readAttachmentImage,
     CHANNELS.runArtifacts.resolveAttachmentPath,
+    CHANNELS.runArtifacts.resolveFilePath,
     CHANNELS.runArtifacts.readAttachmentFile,
     CHANNELS.runArtifacts.add,
     CHANNELS.runArtifacts.remove,

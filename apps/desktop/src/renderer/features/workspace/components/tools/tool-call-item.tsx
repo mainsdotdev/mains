@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { isDeferredToolOutput, type DeferredToolOutput } from "@mains/contracts/runs";
 import { appApi } from "@/lib/transport";
+import { useReplicaView } from "@/hooks/use-replica-view";
 import { TranscriptItemScope, useToolExpansion } from "../../lib/transcript-view-state";
 import { Text } from "@/components/ui";
 import type { RunEvent } from "../../types";
@@ -337,6 +338,7 @@ function DeferredOutputRow({ event, deferred, isCompact = true }: ToolCallItemPr
 }
 
 function ToolCallBody({ event, isCompact = true }: ToolCallItemProps) {
+  const replica = useReplicaView();
   const input = event.metadata?.input;
   const { toolName, params, summary } = typeof event.metadata?.toolName === "string"
     ? { toolName: event.metadata.toolName,
@@ -398,6 +400,8 @@ function ToolCallBody({ event, isCompact = true }: ToolCallItemProps) {
     </ToolStatusProvider></TranscriptItemScope>
   );
 
+  if (replica) return wrap(<GenericToolDisplay icon={toolIcon} displayName={resolved.displayName} params={metadataInput ?? params}
+    output={event.metadata?.output} isCompact={isCompact} />);
   if (isEmptyTool) {
     if (isCompact) {
       return wrap(

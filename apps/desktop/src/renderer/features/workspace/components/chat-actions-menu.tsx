@@ -92,7 +92,7 @@ export function ChatActionsMenu({ aboveBrowser = false }: { aboveBrowser?: boole
     deleteChat,
   } = useChatActions();
 
-  if (mode === "developer" || !run) return null;
+  if (mode === "developer" || !run || run.isReplica) return null;
 
   const label = chatTitle(run);
   const isPinned = run.pinnedAt !== null;

@@ -55,6 +55,23 @@ npm run licenses:generate  # Regenerate THIRD-PARTY-NOTICES.txt
 The standalone Node application, CLI, packaging, and server release checks live
 in `../server`. Keep server-only composition code out of this Electron app.
 
+For a second development backend, set `MAINS_DEV_USER_DATA` to an absolute
+disposable directory before `npm start`. Unpackaged Electron then isolates both
+Chromium state and `mains.db` there, before acquiring its instance/database locks.
+For a packaged app, launch its executable with `--user-data-dir=/absolute/path`
+to select an isolated profile before those same locks. Without an explicit path,
+unpackaged Electron uses its own `mains-dev` profile (with `.data/mains.db`) and the
+packaged app keeps the canonical `mains` profile, so their Bridge identities, files
+and instance locks never collide.
+Do not redirect HOME or use the installed app's profile for replica tests. Bridge
+starts after Bridge sign-in and key approval, or with an explicit
+`<userData>/bridge/dev.json` / `MAINS_BRIDGE_CONFIG`;
+see `../bridge/README.md` for the two-backend demo and acceptance commands.
+
+Local renderer previews and test fixtures must use their own Vite `cacheDir`
+inside an ignored disposable directory. Never share the app's dependency cache:
+another Vite server can replace its prebundles and break later dynamic imports.
+
 Tests require `better-sqlite3` to be rebuilt against the local Node ABI — the `test*` scripts handle this automatically, but running `vitest` directly will fail if you skip that step (use `npm rebuild better-sqlite3` first). Desktop-adapter tests live next to the file under test; backend tests and shared fixtures/factories live in `../../packages/backend`.
 
 ## Architecture Overview
@@ -72,14 +89,14 @@ Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). C
 
 **Preload** (`src/preload/index.ts`)
 - Exposes `window.api` object with typed IPC methods
-- Namespaced by domain: `api.account`, `api.app`, `api.appSettings`, `api.automations`, `api.browser`, `api.connections`, `api.documents`, `api.entities`, `api.fileExplorer`, `api.gitFlow`, `api.guards`, `api.imageProxy`, `api.issues`, `api.localBackend`, `api.platform`, `api.projects`, `api.providers`, `api.pullRequests`, `api.pulse`, `api.remoteBackends`, `api.runs`, `api.runArtifacts`, `api.runContext`, `api.runTurns`, `api.shell`, `api.signals`, `api.space`, `api.ssh`, `api.stats`, `api.sync`, `api.tasks`, `api.terminal`, `api.toolCalls`, `api.updates`, `api.workspace`
+- Namespaced by domain: `api.account`, `api.app`, `api.appSettings`, `api.automations`, `api.bridge`, `api.browser`, `api.connections`, `api.documents`, `api.entities`, `api.fileExplorer`, `api.gitFlow`, `api.guards`, `api.imageProxy`, `api.issues`, `api.localBackend`, `api.platform`, `api.projects`, `api.providers`, `api.pullRequests`, `api.pulse`, `api.remoteBackends`, `api.runs`, `api.runArtifacts`, `api.runContext`, `api.runTurns`, `api.shell`, `api.signals`, `api.space`, `api.ssh`, `api.stats`, `api.sync`, `api.tasks`, `api.terminal`, `api.toolCalls`, `api.updates`, `api.workspace`
 - The `workspace` namespace is an aggregate — it covers workspace lifecycle plus reviews, review findings, diffs, and activity. Connection credentials/states are folded into `api.connections`; project resources and linked issues into `api.projects`.
 - **There is no `api.git`.** The `git` module is main-process-internal (see **Git Module**); renderer git effects go through `api.workspace.*`, `api.gitFlow.*`, and `projects:listBranches`.
 - After modifying preload, restart dev server to pick up changes
 
 **Renderer** (`src/renderer/`)
 - React app with Redux Toolkit, React Router (HashRouter), `@/` alias → `src/renderer/`
-- Routes: `/` (default route), `/code[/:workspaceId]` (unified agent workspace — all providers), `/settings`, `/plugins`, `/pulse`, `/relay`, `/tasks` (issue + pull-request inbox)
+- Routes: `/` (default route), `/code[/:workspaceId]` (unified agent workspace — all providers), `/settings` (including Mains Connect remote control), `/plugins`, `/pulse`, `/bridge` (account sync), `/tasks` (issue + pull-request inbox). Legacy `/relay` redirects to Settings › Mains Connect.
 - `/code` hosts every agent provider; which provider it drives comes from the active space's `providerId` column (`claude_code`, `copilot_cli`, `codex`, `cursor`) — switching space via the space picker switches the provider. There are no per-provider routes.
 - The space's `mode` column (`developer`, `work`, `chat` — see `@mains/contracts/modes`) selects the UI shape via `src/renderer/lib/mode-config.ts` (`MODE_CONFIGS`, read through `useModeConfig`): which route `/` redirects to, plus per-mode capability flags (`showGitActions`, `showSources`, `showDeliverables`, `showTerminal`, `showChangesTab`, `showPermissionControls`, `showPlanControls`, `showGoalControls`). Developer shows the coding surface plus run sources; work replaces git with sources and deliverables; chat hides the session panel and every write-adjacent affordance. The agent-side half of a mode is the **mode harness** (`src/shared/mode-harness.ts`, see Provider Adapters)
 - Route table lives in `src/renderer/components/layout/main/main-routes.tsx`; page components in `src/renderer/routes/`
@@ -119,7 +136,7 @@ Each domain module follows a layered pattern (see `../../packages/backend/src/mo
 
 **Cross-module access** goes through service methods or named barrel functions (`logWorkspaceActivity`, `recordWorkspaceDiff`, `getConnectionWithSecrets`, `getIssuesByResourceIds`) — never another module's repo.
 
-Shared backend domains: `account`, `appSettings`, `automations`, `backend`, `collections`, `connections`, `entities`, `fileExplorer`, `git`, `gitFlow`, `guards`, `imageProxy`, `projects`, `providers`, `pullRequests`, `pulse`, `runs`, `search`, `space`, `stats`, `sync`, `tailscale`, `terminal`, `tools`, `workspace`. Desktop-only adapters and integrations remain under `src/main/modules/`: `appshots`, `browser`, `keyboardShortcuts`, `localBackend`, `mcpApps`, `remoteBackends`, `ssh`, and `updates`, plus the native halves of split domains.
+Shared backend domains: `account`, `appSettings`, `automations`, `backend`, `bridge`, `collections`, `connections`, `entities`, `fileExplorer`, `git`, `gitFlow`, `guards`, `imageProxy`, `projects`, `providers`, `pullRequests`, `pulse`, `runs`, `search`, `space`, `stats`, `sync`, `tailscale`, `terminal`, `tools`, `workspace`. Desktop-only adapters and integrations remain under `src/main/modules/`: `appshots`, `browser`, `keyboardShortcuts`, `localBackend`, `mcpApps`, `remoteBackends`, `ssh`, and `updates`, plus the native halves of split domains.
 
 Not every domain has all six files. Domains that own no tables skip `repo`/`dto`, and `git` / `tailscale` have no `ipc.ts` at all. When adding a domain, match a sibling with similar responsibilities rather than blindly copying `account/`; keep native host adapters out of the backend package.
 
@@ -138,7 +155,7 @@ Sites that reference the registry:
 2. `../../packages/backend/src/modules/{name}/{name}.ipc.ts` — `ipcMain.handle(CHANNELS.entities.getAll, ...)`
 3. `src/renderer/lib/redux/api/{name}Api.ts` — `{ handler: CHANNELS.entities.getAll }`
 
-Channel namespaces: `account`, `app`, `appSettings`, `automations`, `backend`, `browser`, `connections`, `documents`, `entities`, `fileExplorer`, `gitFlow`, `guards`, `imageProxy`, `issues`, `localBackend`, `projects`, `providers`, `pullRequests`, `pulse`, `remoteBackends`, `runArtifacts`, `runContext`, `runToolCalls`, `runTurns`, `runs`, `search`, `shell`, `signals`, `space`, `ssh`, `stats`, `sync`, `tasks`, `terminal`, `toolCalls`, `updates`, `workspace`.
+Channel namespaces: `account`, `app`, `appSettings`, `automations`, `backend`, `bridge`, `browser`, `connections`, `documents`, `entities`, `fileExplorer`, `gitFlow`, `guards`, `imageProxy`, `issues`, `localBackend`, `projects`, `providers`, `pullRequests`, `pulse`, `remoteBackends`, `runArtifacts`, `runContext`, `runToolCalls`, `runTurns`, `runs`, `search`, `shell`, `signals`, `space`, `ssh`, `stats`, `sync`, `tasks`, `terminal`, `toolCalls`, `updates`, `workspace`.
 
 All IPC responses use the `ServiceResponse<T>` envelope: `{ success: true, data }` or `{ success: false, error }`, built by `ok()` / `fail()` from `@mains/contracts/service-response`. The renderer unwraps it exactly once, in `ipcBaseQuery` — never in `transformResponse`.
 
@@ -190,7 +207,7 @@ Core tables:
 **Workspace System** (`../../packages/backend/src/modules/workspace/`)
 - Aggregate module: workspaces + activity + diffs + reviews + findings under one 6-file layout and one `workspace:*` channel namespace
 - **Workspace intake**: `workspace:createFromSource` turns a repo into a project + workspace pair. Four acquisitions (`folder`, `clone`, `init`, `worktree`) feed one shared intake tail (git import → `findOrCreateProject` → derive `workspacesPath` → assemble metadata → `createWorkspace`). Never re-inline this at call sites.
-- **Workspace git operations**: `workspace:createBranch`, `workspace:renameBranch`, `workspace:switchBranch`, `workspace:discardPaths`, `workspace:listGitStates` (+ the `workspace:gitStateChanged` watcher event). The current branch is never persisted — it is read live from git.
+- **Workspace git operations**: `workspace:createBranch`, `workspace:renameBranch`, `workspace:switchBranch`, `workspace:discardPaths`, `workspace:listGitStates` (+ the `workspace:gitStateChanged` watcher event). The current branch is read live from git; its only persisted form is `metadata.lastBranch`, a last-known hint that Bridge replicas show for other devices' checkouts and that this device never reads back.
 - **Branch model**: `projects.defaultBranch` = repository integration branch; `workspaces.baseBranch` = that workspace's PR target (repointed at the parent branch by `workspace:createBranch`); the checked-out branch lives only in git.
 - Cross-module writers use the named barrel functions `logWorkspaceActivity`, `recordWorkspaceDiff`, `clearWorkspaceDiff`.
 
@@ -288,6 +305,12 @@ Core tables:
 - `sources/` holds the per-provider `PrSource` interface (mirrors sync's `ResourceFetcher` pattern): `github.source.ts` runs GraphQL search/detail and the write mutations with the stored connection token via `getConnectionWithSecrets` — no `gh` CLI dependency. GitLab/Bitbucket land as new source files behind `source.factory.ts`.
 - Search defaults to the repos selected on the connection (the same set issue sync pulls from, via `getSelectedResources`); with none selected it falls back to a global `involves:@me` search. An explicit `repos` filter overrides the default scope.
 
+**Preview tabs** (`src/renderer/features/workspace/components/preview-panel.tsx`)
+- Browser pages, MCP App instances and actual document files share one right-edge tab strip, resize handle and expansion state. The `+` create action follows the preview tabs, using the same placement as workspace tabs, and opens a new default browser page directly. A fixed toggle remains immediately left of RightPanel: `+` opens a default browser page when closed and becomes `×` to hide previews when open, without moving; MCP apps use their existing launchers, and documents open from selected files, never blank document tabs.
+- `TerminalPanelTrigger` shares `MainContent.headerActions` with `SessionPanelTrigger` so both follow the main content edge. Only preview and RightPanel toggles remain in the fixed window controls.
+- `previewSlice` owns session-only descriptors/order/selection by backend+workspace in Code and conversation owner in Work/Chat. Draft tabs move to their created run. Atlas has its own docked preview group. The existing browser width preference is shared across preview types.
+- Native browser views/history remain in `browserService`; documents retain per-file renderers; MCP instances retain their own connection and original conversation. Tab selection/hiding does not close another resource. Explicit app close waits for widget-state saving; native browser close honors `beforeunload`.
+
 **Browser Module** (`src/main/modules/browser/`)
 - Drives an embedded `WebContentsView` panel inside the Electron window — attach/detach, set bounds, navigate, capture screenshots
 - Panel attachment and requested visibility are separate from overlay suppression. `useSuppressBrowserView` acquires a unique `browser:setSuppressed` lease; releasing it cannot reopen a detached panel or override another overlay. Annotation dropdowns leave the live page visible.
@@ -332,7 +355,7 @@ Core tables:
 - **Layering**: `components/ui/` holds feature-agnostic primitives and may NOT import from `@/features/` (ESLint-enforced). `components/layout/` is the app shell — `main/`, `sidebar/`, `right-panel/`, `page-shell`, `resize-handle` — and composing features there is correct. Feature panels do not belong in `layout/`: the session panel (environment, sources, deliverables) and subagent panel live under `features/workspace/components/` and are rendered from `App.tsx`.
 - **Shared input UI**: `src/renderer/components/ui/input/` (`input-form`, `rich-input-form`, `permission-mode-dropdown`, `model-select-dropdown`, `fast-mode-button`, `goal-button`, `dictation-button`, `file-upload-dropdown`, `compact-composer-controls`, `send-button`)
 - **Routing**: HashRouter — page components in `src/renderer/routes/`
-- **Settings Routing**: `/settings?section={id}` — section ids live in `src/renderer/features/settings/settings-sections.tsx`: `general`, `appearance`, `git`, `connections`, `backends`, `dashboard`, `archive`, `claude`, `codex`, `codex-plugins`, `copilot`, `cursor`, `notifications`, `personalization`, `schedules`, `security`, `projects`
+- **Settings Routing**: `/settings?section={id}` — section ids live in `src/renderer/features/settings/settings-sections.tsx`: `general`, `appearance`, `git`, `connections`, `backends`, `bridge`, `dashboard`, `archive`, `claude`, `codex`, `codex-plugins`, `copilot`, `cursor`, `notifications`, `personalization`, `schedules`, `security`, `projects`
 - **Styling**: Tailwind CSS v4 (PostCSS-based)
 - **Colors come from theme tokens, never literals.** App themes (`src/renderer/lib/app-themes.ts`, Settings › Appearance, per provider) re-derive the tokens at runtime, so anything painted outside them ignores the theme:
   - Surfaces, borders, hovers, and text use the neutral scale `primary` / `primary-50` … `primary-950`; links, focus, and selection use `accent`, with `accent-foreground` for text on an accent fill; submit buttons use the fixed `action` color. No hex (`bg-[#…]`, inline `style` colors), no Tailwind palette classes (`blue-500`, `gray-*`), no `bg-white` / `text-white`.
@@ -355,6 +378,13 @@ The four agent UIs share the single `/code` route and are distinguished by a **p
 - To add an icon: drop the component in `components/ui/icons/` and register it in `iconRegistry`
 
 **App Icon Generation** (macOS)
+
+`npm run icons:generate` renders light/dark PNGs from the Icon Composer sources in
+`src/renderer/public/icons/` and regenerates the packaged default PNG/ICNS.
+The development app's Default choice uses `mains-staging.icon`, including its
+real `construction-grid.svg` layer; the packaged app uses `mains-default.icon`.
+Regenerate the PNGs after editing an Icon Composer source.
+
 ```bash
 # From src/renderer/public/ — regenerate iconset from icon.png (must be 1024x1024+)
 sips -z 16 16 icon.png --out icon.iconset/icon_16x16.png

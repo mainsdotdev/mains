@@ -30,11 +30,29 @@ function method<F extends AsyncFn>(channel: string): F {
 }
 
 export const appApi = {
+  bridge: {
+    signIn: method<typeof window.api.bridge.signIn>(CHANNELS.bridge.signIn),
+    signOut: method<typeof window.api.bridge.signOut>(CHANNELS.bridge.signOut),
+    setProjectLocalOnly: method<typeof window.api.bridge.setProjectLocalOnly>(CHANNELS.bridge.setProjectLocalOnly),
+    includeLocalHistory: method<typeof window.api.bridge.includeLocalHistory>(CHANNELS.bridge.includeLocalHistory),
+    refreshAuth: method<typeof window.api.bridge.refreshAuth>(CHANNELS.bridge.refreshAuth),
+    approveBackend: method<typeof window.api.bridge.approveBackend>(CHANNELS.bridge.approveBackend),
+    confirmAccountKey: method<typeof window.api.bridge.confirmAccountKey>(CHANNELS.bridge.confirmAccountKey),
+    rejectBackend: method<typeof window.api.bridge.rejectBackend>(CHANNELS.bridge.rejectBackend),
+    requestApproval: method<typeof window.api.bridge.requestApproval>(CHANNELS.bridge.requestApproval),
+    revokeBackend: method<typeof window.api.bridge.revokeBackend>(CHANNELS.bridge.revokeBackend),
+    enterRecoveryCode: method<typeof window.api.bridge.enterRecoveryCode>(CHANNELS.bridge.enterRecoveryCode),
+    takeRecoveryCode: method<typeof window.api.bridge.takeRecoveryCode>(CHANNELS.bridge.takeRecoveryCode),
+    regenerateRecoveryCode: method<typeof window.api.bridge.regenerateRecoveryCode>(CHANNELS.bridge.regenerateRecoveryCode),
+  },
   account: {
     get: method<typeof window.api.account.get>(CHANNELS.account.get),
   },
   atlas: {
     get: method<typeof window.api.atlas.get>(CHANNELS.atlas.get),
+    getRevision: method<typeof window.api.atlas.getRevision>(CHANNELS.atlas.getRevision),
+    resolveConflict: method<typeof window.api.atlas.resolveConflict>(CHANNELS.atlas.resolveConflict),
+    resolveFile: method<typeof window.api.atlas.resolveFile>(CHANNELS.atlas.resolveFile),
   },
   runs: {
     getHistory: method<typeof window.api.runs.getHistory>(CHANNELS.runs.getHistory),
@@ -69,6 +87,7 @@ export const appApi = {
     ),
   },
   runArtifacts: {
+    resolveFilePath: method<typeof window.api.runArtifacts.resolveFilePath>(CHANNELS.runArtifacts.resolveFilePath),
     readAttachmentImage: method<typeof window.api.runArtifacts.readAttachmentImage>(CHANNELS.runArtifacts.readAttachmentImage),
     resolveAttachmentPath: method<typeof window.api.runArtifacts.resolveAttachmentPath>(CHANNELS.runArtifacts.resolveAttachmentPath),
     readAttachmentFile: method<typeof window.api.runArtifacts.readAttachmentFile>(CHANNELS.runArtifacts.readAttachmentFile),

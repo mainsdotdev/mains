@@ -1,3 +1,6 @@
+import { usePreviewPanel } from "@/hooks/use-preview-panel";
+import { syncBrowserPreviewTabs } from "@/lib/redux/slices/previewSlice";
+import { browserPreviewTab } from "../lib/preview-tabs";
 import {
   useCallback,
   useEffect,
@@ -141,9 +144,11 @@ function waitForPaint(): Promise<void> {
 }
 
 export function BrowserPanel({
+  embedded = false,
   tabsInMainHeader = false,
   reserveLayoutControls = false,
 }: {
+  embedded?: boolean;
   tabsInMainHeader?: boolean;
   reserveLayoutControls?: boolean;
 }) {
@@ -159,9 +164,12 @@ export function BrowserPanel({
     toggleExpanded,
     setChatHost,
     close,
-    ownerKey,
+    tabOwnerKey: ownerKey,
   } = useBrowserPanel();
   const dispatch = useAppDispatch();
+  const preview = usePreviewPanel();
+  const selectedPreviewId = preview.activeTab?.kind === "browser" ? preview.activeTab.id : null;
+  const conversationOwnerKey = useAppSelector((state) => state.workspace.composerContextKey);
   const viewportRef = useRef<HTMLDivElement>(null);
   const chatStageRef = useRef<HTMLDivElement>(null);
   const locationInputRef = useRef<HTMLInputElement>(null);
@@ -269,8 +277,12 @@ export function BrowserPanel({
 
   const applyBrowserState = useCallback((state: BrowserState) => {
     if (state.ownerKey && state.ownerKey !== ownerKey) return;
-    const lastTabClosed = browserStateOwnerRef.current === ownerKey &&
-      !!activeTabIdRef.current && state.tabs.length === 0;
+    const lastTabClosed = browserStateOwnerRef.current === ownerKey && !!activeTabIdRef.current && !state.tabs.length;
+    const changedNativeSelection = browserStateOwnerRef.current === ownerKey &&
+      !!activeTabIdRef.current && activeTabIdRef.current !== state.activeTabId && !!state.activeTabId &&
+      state.tabs.some((tab) => tab.tabId === activeTabIdRef.current);
+    dispatch(syncBrowserPreviewTabs({ ownerKey, tabs: state.tabs.map(browserPreviewTab),
+      activeTabId: state.activeTabId, activate: changedNativeSelection }));
     if (
       activeTabIdRef.current &&
       activeTabIdRef.current !== state.activeTabId
@@ -280,7 +292,8 @@ export function BrowserPanel({
     activeTabIdRef.current = state.activeTabId;
     browserStateOwnerRef.current = ownerKey;
     setBrowserState(state);
-    if (lastTabClosed) close();
+    if (!embedded && lastTabClosed) close();
+
     const active = state.tabs.find((tab) => tab.tabId === state.activeTabId);
     if (
       active &&
@@ -288,7 +301,7 @@ export function BrowserPanel({
     ) {
       setUrlInput(active.url === BLANK_URL ? "" : active.url);
     }
-  }, [ownerKey, setUrlInput, close]);
+  }, [ownerKey, setUrlInput, dispatch, embedded, close]);
 
   const applyResponseState = useCallback(
     (response: any, fallbackError: string) => {
@@ -306,10 +319,17 @@ export function BrowserPanel({
 
   useLayoutEffect(() => {
     if (!api?.setContext) return;
-    void api.setContext(ownerKey, isOpen).then((response: any) => {
+    void api.setContext(ownerKey, false).then((response: any) => {
       applyResponseState(response, "Failed to restore browser tabs");
     });
   }, [api, ownerKey, isOpen, applyResponseState]);
+
+  useEffect(() => {
+    if (!isOpen || !selectedPreviewId || !api || selectedPreviewId === activeTabIdRef.current) return;
+    void api.activateTab(selectedPreviewId).then((response: any) => {
+      applyResponseState(response, "Failed to activate browser tab");
+    });
+  }, [api, isOpen, selectedPreviewId, applyResponseState]);
 
   const applyDownloads = useCallback(
     (nextDownloads: BrowserDownloadViewModel[], notify: boolean) => {
@@ -580,8 +600,9 @@ export function BrowserPanel({
     );
     const offSelection = api.onSelection((selection) => {
       const { ownerKey: selectionOwnerKey, ...contextSelection } = selection as ContextBrowserSelection & { ownerKey?: string };
+      if (selectionOwnerKey && selectionOwnerKey !== ownerKey) return;
       dispatch(addContextItemForKey({
-        key: selectionOwnerKey || ownerKey,
+        key: conversationOwnerKey,
         item: { kind: "browser", ...contextSelection },
       }));
       toast.success(contextSelection.elements?.length
@@ -637,7 +658,7 @@ export function BrowserPanel({
       offDownloads();
       offHistory();
     };
-  }, [api, applyBrowserState, applyDownloads, applyResponseState, dispatch, ownerKey]);
+  }, [api, applyBrowserState, applyDownloads, applyResponseState, dispatch, ownerKey, conversationOwnerKey]);
 
   useEffect(() => {
     if (!api || !findOpen) return;
@@ -1208,9 +1229,9 @@ export function BrowserPanel({
       if (!(await prepareBrowserMenuAction()) || !api) return;
       const response = await api.captureScreenshot(mode);
       if (response?.success && response.data) {
-        const { ownerKey: captureOwnerKey, ...contextSelection } = response.data as ContextBrowserSelection & { ownerKey?: string };
+        const { ownerKey: _captureOwnerKey, ...contextSelection } = response.data as ContextBrowserSelection & { ownerKey?: string };
         dispatch(addContextItemForKey({
-          key: captureOwnerKey || ownerKey,
+          key: conversationOwnerKey,
           item: { kind: "browser", ...contextSelection },
         }));
         toast.success(
@@ -1222,13 +1243,15 @@ export function BrowserPanel({
         toast.error(response?.error || "Failed to capture page");
       }
     },
-    [api, dispatch, prepareBrowserMenuAction, ownerKey],
+    [api, dispatch, prepareBrowserMenuAction, conversationOwnerKey],
   );
 
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      if (embedded && (matchesKeyboardShortcut(event, closeTabShortcut) || matchesKeyboardShortcut(event, nextTabShortcut) ||
+        matchesKeyboardShortcut(event, previousTabShortcut) || matchesKeyboardShortcut(event, newTabShortcut))) return;
       if (event.key === "Escape" && selectMode) {
         event.preventDefault();
         void api?.setSelectMode(false);
@@ -1288,6 +1311,7 @@ export function BrowserPanel({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
     activeTab,
+    embedded,
     activateTab,
     browserState.activeTabId,
     browserState.tabs,
@@ -1397,7 +1421,7 @@ export function BrowserPanel({
   // Keep the DOM surface and native viewport on the same content edge.
   // Space for window controls belongs only to the tab strip above them.
   const panelWidth = isExpanded
-    ? "calc(100% - var(--content-left) + 0.3rem)"
+    ? "calc(100% - var(--content-left) + var(--spacing) * 1.25)"
     : "var(--browser-panel-width)";
 
   if (!api) {
@@ -1441,12 +1465,13 @@ export function BrowserPanel({
   return (
     <div
       data-browser-panel=""
-      className="fixed inset-y-0 right-0 z-(--z-overlay) overflow-hidden transition-[width,transform,opacity] duration-150 ease-out"
+      className={embedded ? "absolute inset-0 flex min-h-0 flex-col overflow-hidden" : "fixed inset-y-0 right-0 z-(--z-overlay) overflow-hidden transition-[width,transform,opacity] duration-150 ease-out"}
       style={{
-        width: panelWidth,
+        width: embedded ? undefined : panelWidth,
         top: tabsInMainHeader ? "var(--shell-header-height)" : undefined,
-        transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)",
-        opacity: isAnimatedIn ? 1 : 0,
+        transform: embedded ? undefined : isAnimatedIn ? "translateX(0)" : "translateX(100%)",
+        opacity: embedded ? 1 : isAnimatedIn ? 1 : 0,
+        display: isOpen ? undefined : "none",
       }}
       role="complementary"
       aria-label="Embedded browser"
@@ -1456,7 +1481,7 @@ export function BrowserPanel({
         setChatMode("input");
       }}
     >
-      {!isExpanded && (
+      {!embedded && !isExpanded && (
         <ResizeHandle
           edge="left"
           value={browserPanelWidth}
@@ -1477,8 +1502,8 @@ export function BrowserPanel({
 
       {/* The tab strip shares the shell header surface. Browser content starts
           below it. Clip both at the inset content edge, keeping the outer gap clear. */}
-      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden">
-      {tabsInMainHeader && browserTabsHost ? createPortal(tabStrip, browserTabsHost) : tabStrip}
+      <div className={embedded ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "absolute inset-1.25 flex min-h-0 flex-col overflow-hidden"}>
+      {!embedded && (tabsInMainHeader && browserTabsHost ? createPortal(tabStrip, browserTabsHost) : tabStrip)}
 
       <div data-browser-content="" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
       <div className="relative">

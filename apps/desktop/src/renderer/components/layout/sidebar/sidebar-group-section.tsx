@@ -6,7 +6,7 @@ import { ArrowUp, New } from "@/components/ui/icons";
 
 /** Shared by the header's own glyph and any a caller supplies in its place. */
 export const SIDEBAR_ACTION_ICON =
-  "w-3 h-3 text-primary-800 dark:text-primary-200 hover:text-primary-900 dark:hover:text-primary-100";
+  "size-3.5 text-primary-800 dark:text-primary-200 hover:text-primary-900 dark:hover:text-primary-100";
 
 /**
  * A collapsible sidebar section: header row (label, count, hover "+" action)

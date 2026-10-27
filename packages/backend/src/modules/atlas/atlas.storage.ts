@@ -25,6 +25,11 @@ export function storagePath(key: string): string {
   if (!/^[\w-]+\/[^/\\]+$/.test(key) || [".", ".."].includes(path.basename(key))) throw new Error("Invalid Atlas file key");
   return path.join(atlasRoot(), key);
 }
+/** Folders exist only for this device's random item ids. An id synced from
+ * another device must never select a path outside the Atlas folder. */
+function itemDirectory(id: string): string | null {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(id) ? path.join(atlasRoot(), id) : null;
+}
 function within(root: string, child: string) {
   const relative = path.relative(root, child);
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
@@ -92,7 +97,8 @@ export async function imageContentHash(real: string, stats: Stats): Promise<stri
 }
 export async function writeFile(id: string, name: string, bytes: Buffer) {
   if (bytes.length > MAX_FILE_BYTES) throw new Error("File exceeds the 100 MB Atlas limit");
-  const directory = path.join(atlasRoot(), id);
+  const directory = itemDirectory(id);
+  if (!directory) throw new Error("Invalid Atlas item id");
   const temporary = path.join(atlasRoot(), `.pending-${randomUUID()}`);
   await fs.mkdir(temporary, { recursive: true });
   try {
@@ -102,8 +108,35 @@ export async function writeFile(id: string, name: string, bytes: Buffer) {
     return `${id}/${name}`;
   } finally { await fs.rm(temporary, { recursive: true, force: true }); }
 }
+/** Restore an immutable synced file from matching bundled bytes, without overwriting local files. */
+export async function restoreFile(key: string, bytes: Buffer, expectedHash: string | null) {
+  const target = storagePath(key);
+  try { await inspectSource(target, [atlasRoot()]); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  if (fileHash(bytes) !== expectedHash) return false;
+  let directory = getBackendRuntime().getPath("userData");
+  for (const part of ["atlas", "files", key.split("/")[0]]) {
+    directory = path.join(directory, part);
+    try { await fs.mkdir(directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    const stats = await fs.lstat(directory);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("Invalid Atlas storage directory");
+  }
+  const temporary = path.join(directory, `.pending-${randomUUID()}`);
+  try {
+    const handle = await fs.open(temporary, "wx", 0o444);
+    try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+    // Publishing a complete file must not replace one that arrived concurrently.
+    try { await fs.link(temporary, target); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    await inspectSource(target, [atlasRoot()]);
+    return true;
+  } finally { await fs.rm(temporary, { force: true }); }
+}
 export async function removeFiles(id: string) {
-  const directory = path.join(atlasRoot(), id);
+  // No folder of ours can have any other id, so there is nothing to remove.
+  const directory = itemDirectory(id);
+  if (!directory) return;
   for (const file of await fs.readdir(directory, { withFileTypes: true }).catch(() => [])) {
     if (file.isFile()) await removeImagePreviews(path.join(directory, file.name)).catch(() => {});
   }

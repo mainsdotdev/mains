@@ -42,7 +42,7 @@ export function getAppIconPath(id: AppIconId): string {
   const appearance = systemPreferences.getUserDefault("AppleInterfaceStyle", "string") === "Dark"
     ? "dark"
     : "light";
-  const assetPath = appIconAssetPath(id, appearance);
+  const assetPath = appIconAssetPath(id, appearance, !app.isPackaged);
   if (!app.isPackaged) {
     return path.join(app.getAppPath(), "src/renderer/public", assetPath);
   }

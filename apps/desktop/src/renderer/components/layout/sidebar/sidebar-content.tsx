@@ -24,6 +24,8 @@ interface SidebarContentProps {
   searchQuery: string;
   onNewChatInCollection: (collectionId: string) => void;
   onCreateCollection: () => void;
+  /** Opens the clone dialog for a repository that exists only on another device. */
+  onCloneRepository?: (url: string) => void;
 }
 
 export function SidebarContent({
@@ -39,6 +41,7 @@ export function SidebarContent({
   searchQuery,
   onNewChatInCollection,
   onCreateCollection,
+  onCloneRepository,
 }: SidebarContentProps) {
   // The one list-swap point: developer lists workspaces, the chat shell
   // (work/chat modes) lists chats grouped by project.
@@ -58,6 +61,7 @@ export function SidebarContent({
           />
         ) : (
           <WorkspacesList
+            onCloneRepository={onCloneRepository}
             workspaces={workspaces}
             pendingClones={pendingClones}
             onCancelClone={onCancelClone}

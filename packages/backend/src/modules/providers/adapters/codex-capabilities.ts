@@ -851,12 +851,16 @@ export function createCodexCapabilities(
   async function listRealtimeVoices(): Promise<RealtimeVoiceCatalog> {
     const server = await options.ensureServer();
     const { voices } = await server.sendRequest("thread/realtime/listVoices", {});
-    // Codex 0.160 uses the v1 voice family for its v3 WebRTC conversations.
-    if (!Array.isArray(voices?.v1) || !voices.v1.every((voice) => typeof voice === "string" && voice.length > 0)
-      || typeof voices.defaultV1 !== "string" || !voices.v1.includes(voices.defaultV1)) {
+    // Codex 0.163 adds a dedicated v3 catalog; older servers use v1 for v3 calls.
+    const availableVoices = voices?.v3?.length ? voices.v3 : voices?.v1;
+    if (!Array.isArray(availableVoices) || availableVoices.length === 0
+      || !availableVoices.every((voice) => typeof voice === "string" && voice.length > 0)) {
       throw new Error("Codex returned an invalid voice list.");
     }
-    return { voices: [...new Set(voices.v1)], defaultVoice: voices.defaultV1 };
+    // There is no defaultV3 field. Preserve defaultV1 when this catalog has it.
+    const defaultVoice = availableVoices.includes(voices.defaultV1)
+      ? voices.defaultV1 : availableVoices[0];
+    return { voices: [...new Set(availableVoices)], defaultVoice };
   }
 
   async function listModels(): Promise<ModelInfo[]> {

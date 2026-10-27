@@ -11,6 +11,8 @@ export interface RunEvent {
 }
 
 export interface Run {
+  ownerBackendId?: string;
+  isReplica?: boolean;
   id: string;
   workspaceId?: string | null;
   collectionId?: string | null;

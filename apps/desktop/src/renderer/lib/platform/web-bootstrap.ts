@@ -2,6 +2,7 @@ import { setTransport, WsTransport } from "@/lib/transport";
 import { isWeb } from "./platform";
 import { installWebApi } from "./web-api-shim";
 import { exchangeWebLogin, takeWebLoginCode } from "./web-login";
+import { installWebCrypto } from "./web-crypto";
 
 /**
  * Web-mode bootstrap. Imported FIRST in main.tsx so it runs before any app
@@ -16,6 +17,7 @@ import { exchangeWebLogin, takeWebLoginCode } from "./web-login";
  * See docs/design/remote-backend.md (web client).
  */
 if (isWeb && typeof window !== "undefined") {
+  installWebCrypto(window.crypto);
   // Mark the document so CSS can paint a solid background (the page isn't a
   // transparent Electron window; without this the window translucency renders as
   // a washed-out white in a browser). See index.css `.mains-web`.

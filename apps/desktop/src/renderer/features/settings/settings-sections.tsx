@@ -100,8 +100,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "lens", label: "Lens", icon: View, showInNav: capabilities.appshots, Component: LensSettings },
   { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard, showInNav: capabilities.windowChrome, Component: KeyboardShortcutsSettings },
   { id: "connections", label: "Connections", icon: Connect, showInNav: true, Component: ConnectionsSettings },
-  // Hidden from the Settings nav — surfaced as the top-level Connect route instead.
-  { id: "backends", label: "Mains Connect", icon: Relay, Component: BackendsSettings },
+  { id: "backends", label: "Mains Connect", icon: Relay, showInNav: true, Component: BackendsSettings },
   { id: "dashboard", label: "Dashboard", icon: Chart, showInNav: true, Component: DashboardPage },
   { id: "archive", label: "Archive", icon: Archive, showInNav: true, Component: ArchiveSettings },
 

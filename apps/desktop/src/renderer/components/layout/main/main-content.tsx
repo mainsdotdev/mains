@@ -42,7 +42,7 @@ export function MainContent({
   browserTabsInHeader,
 }: MainContentProps) {
   const { header, firstTabActive, pending, setBrowserTabsHost } = useMainHeader();
-  const { mainInsetLeft: headerPaddingLeft } = useShellHeaderChrome(sidebarCollapsed);
+  const { headerInsetLeft: headerPaddingLeft } = useShellHeaderChrome(sidebarCollapsed);
 
   // When header exists and the first tab is active, the content's top-left corner
   // must be sharp so it connects seamlessly with the active tab above it.

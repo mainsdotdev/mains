@@ -6,7 +6,7 @@ import process from "node:process";
 import { setTimeout } from "node:timers";
 
 const fixtureCliVersion =
-  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.162.1";
+  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.163.0";
 
 if (process.argv.includes("--version")) {
   process.stdout.write(`codex-cli ${fixtureCliVersion}\n`);
@@ -689,8 +689,10 @@ input.on("line", (line) => {
     }
 
     case "thread/realtime/listVoices":
-      respond(id, { voices: {
+      respond(id, { voices: process.env.MAINS_CODEX_FIXTURE_VOICES
+        ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_VOICES) : {
         v1: ["cove", "maple", "juniper"], v2: ["marin", "cedar"],
+        v3: ["cove", "maple", "juniper", "aube", "rio", "viola"],
         defaultV1: "cove", defaultV2: "marin",
       } });
       break;

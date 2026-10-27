@@ -1,0 +1,949 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash, hkdfSync } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { bridgeApprovalCode, bridgeBase64, bridgeBytes, formatBridgeVerificationCode, type BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
+import type { BridgeHeader } from "@mains/contracts/bridge-protocol";
+import { bridgeMember, verifyBridgeMembershipLog, type BridgeMember, type BridgeMembershipChange, type BridgeMembershipEntry, type BridgeMembershipSigner } from "@mains/contracts/bridge-membership";
+import { createNodeBackendRuntime } from "../../runtime/node-backend-runtime";
+import { createBridgeIdentity, type BridgeIdentityClient } from "./bridge.identity";
+import { createBridgeIdentityStorage, createBridgeMembershipStorage, type BridgeSavedIdentity } from "./bridge.identity-storage";
+import { bridgeAccountKeyCommitment, deriveBridgeKeys, generateBridgeAccountKey, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "./bridge.keys";
+import { bridgeRecordKeys, createBridgeSealingCodec } from "./bridge.crypto";
+import { createBridgeSigningCodec } from "./bridge.signing";
+import { sealBridgeRecovery } from "./bridge.recovery";
+import { BridgeMembershipNotReadyError, deviceSigner, signBridgeMembershipEntry, verifyBridgeSignature, type BridgeMembershipView } from "./bridge.membership";
+
+/** These accounts have no account records, so a removal's fence admits none. */
+const noRecords = { through: 0, count: 0, root: createHash("sha256").update("[]").digest("base64url") };
+const accountFence = vi.fn(async () => ({ account: noRecords, signatures: [] as string[] }));
+const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+// Independent Node/OpenSSL answers, including all 60 comparison bits.
+function fingerprint(bytes: Uint8Array) {
+  const n = BigInt(`0x${Buffer.from(bytes).subarray(0, 8).toString("hex")}`) >> 4n;
+  return Array.from({ length: 12 }, (_, i) => alphabet[Number(n >> BigInt(55 - 5 * i) & 31n)]).join("").match(/.{4}/g)!.join("-");
+}
+const approvalSigningKey = bridgeBase64(new Uint8Array(32).fill(17));
+const deviceCode = (publicKey: string, signingPublicKey = approvalSigningKey, backendId = "new-device", accountId = "synthetic-account") =>
+  fingerprint(createHash("sha256").update(JSON.stringify([3, "mains.bridge.v3/device-approval", accountId, backendId, publicKey, signingPublicKey])).digest());
+const joinCode = (key: Uint8Array, admittedBy: string, backendId = "local", accountId = "synthetic-account") =>
+  fingerprint(new Uint8Array(hkdfSync("sha256", key, "mains.bridge.v3", JSON.stringify(["join", accountId, backendId, admittedBy]), 32)));
+const dirs: string[] = [], clients: BridgeIdentityClient[] = [];
+afterEach(async () => {
+  for (const client of clients.splice(0)) await client.stop();
+  vi.unstubAllGlobals(); vi.useRealTimers(); vi.restoreAllMocks();
+  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+});
+
+describe("Bridge registration cleanup", () => {
+  it.each(["backendId", "publicKey", "signingPublicKey", "storage"])("revokes the requested pending device after a %s enrollment failure and permits retry", async (field) => {
+    const dir = await mkdtemp(join(tmpdir(), "mains-registration-")); dirs.push(dir);
+    const storage = createNodeBackendRuntime({ dataDir: dir, appVersion: "test" }).secretStorage;
+    const issued = `b7_${"4".repeat(64)}`, ready = vi.fn();
+    let pending: Record<string, string> | null = null, substitute = true;
+    const encrypt = storage.encryptString.bind(storage);
+    vi.spyOn(storage, "encryptString").mockImplementation((value) => {
+      if (substitute && field === "storage" && JSON.parse(value).v === 3) throw new Error("Injected enrollment storage failure");
+      return encrypt(value);
+    });
+    const removed: { id: string; token: string | null }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: URL, options: RequestInit) => {
+      const body = options.body ? JSON.parse(String(options.body)) : undefined;
+      if (url.pathname === "/api/auth/device/code") return Response.json({ device_code: "device", user_code: "code", verification_uri_complete: "https://hub.invalid/verify", expires_in: 600, interval: 5 });
+      if (url.pathname === "/api/auth/device/token") return Response.json({ access_token: "browser-session" });
+      if (url.pathname === "/api/auth/sign-out") return Response.json({ success: true });
+      if (url.pathname === "/v1/backends" && options.method === "POST") {
+        if (pending) return Response.json({ error: "Backend already registered" }, { status: 409 });
+        pending = body;
+        return Response.json({ accountId: "account", email: "owner@example.com", token: issued, expiresAt: Date.now() + 86400_000,
+          backend: { ...body, ...(substitute && field !== "storage" ? { [field]: field === "backendId" ? "other-device" : bridgeBase64(generateBridgeSigningKeyPair().publicKey) } : {}), status: "pending" } });
+      }
+      if (url.pathname.startsWith("/v1/backends/") && options.method === "DELETE") {
+        removed.push({ id: url.pathname, token: new Headers(options.headers).get("Authorization") });
+        pending = null; return Response.json({ success: true });
+      }
+      if (url.pathname === "/v1/keys/mine") return Response.json({ accountId: "account", initialized: true, backend: { ...pending, status: "pending" },
+        wrap: null, recoveryPublicKey: null, approval: { status: "pending", expires_at: Date.now() + 600_000 } });
+      throw new Error(`Unexpected registration request ${url.pathname}`);
+    }));
+    const client = createBridgeIdentity({ backendId: "local", dataDir: dir, storage, kind: "node", openExternal: vi.fn(), ready, changed: vi.fn(), approval: vi.fn(), revoked: vi.fn(), accountFence });
+    clients.push(client);
+    const input = { hubUrl: "https://hub.invalid", flow: "device" as const, includeExisting: true };
+    await client.signIn(input); await client.refresh();
+    expect(client.status().error).toMatch(field === "storage" ? /enrollment storage failure/ : /device keys changed/);
+    expect(removed).toEqual([{ id: "/v1/backends/local", token: `Bearer ${issued}` }]);
+    expect(await createBridgeIdentityStorage(dir, storage).read()).toBeNull(); expect(ready).not.toHaveBeenCalled();
+    substitute = false;
+    await client.signIn(input); await client.refresh();
+    expect(client.status()).toMatchObject({ state: "needs-approval", error: null });
+  });
+});
+
+describe("Bridge identity from before the membership log", () => {
+  it.each([1, 2])("starts signed out with a reset notice instead of failing to start on a vault %i identity", async (version) => {
+    const dir = await mkdtemp(join(tmpdir(), "mains-superseded-")); dirs.push(dir);
+    const storage = createNodeBackendRuntime({ dataDir: dir, appVersion: "test" }).secretStorage;
+    await mkdir(join(dir, "bridge"), { recursive: true });
+    await writeFile(join(dir, "bridge", "identity.json"), JSON.stringify({ v: version, format: storage.format, sealed: storage.encryptString("{}").toString("base64") }));
+    const client = createBridgeIdentity({ backendId: "local", dataDir: dir, storage, kind: "node", openExternal: vi.fn(), ready: vi.fn(), changed: vi.fn(), approval: vi.fn(), revoked: vi.fn(), accountFence });
+    clients.push(client); await client.start();
+    expect(client.status()).toMatchObject({ state: "signed-out", accountId: null, error: expect.stringMatching(/reset/) });
+  });
+});
+
+describe("Bridge identity background cadence", () => {
+  it.each([null, {}, { expiresAt: "invalid" }, { expiresAt: 0 }, { nextTokenHash: "a".repeat(64), expiresAt: 9999999999999 },
+    { token: `b7_${"2".repeat(64)}`, expiresAt: 9999999999999 }])("preserves trusted keys and the current token for a truncated or malformed renewal response (%j)", async (response) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const key = generateBridgeAccountKey(), f = await fixture(key); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const restarted = f.makeClient(); await restarted.start(); f.state.renewalResponse = response;
+    await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: expect.stringContaining("renewal response") });
+    expect(restarted.token()).toBe(f.saved.token);
+    expect((await f.vault.read())!.token).toBe(f.saved.token);
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+  it("keeps trusted keys after a lost refresh response and retries with the old token after restart", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const key = generateBridgeAccountKey(), f = await fixture(key); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const beforeRestart = f.makeClient(); await beforeRestart.start(); f.state.refreshFailures = 1;
+    await beforeRestart.refresh();
+    expect(beforeRestart.status()).toMatchObject({ state: "ready", error: expect.stringContaining("lost refresh response") });
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key)); expect(beforeRestart.token()).toBe(f.saved.token);
+    const pending = (await f.vault.read())!.pendingToken;
+    expect(pending).toBe(f.state.replacement.token);
+    expect(f.state.calls.filter((call) => call.path.endsWith("/refresh")).at(-1)!.body)
+      .toEqual({ nextTokenHash: createHash("sha256").update(pending!).digest("hex") });
+    await beforeRestart.stop();
+    const restarted = f.makeClient(); await restarted.start(); await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: null });
+    expect(restarted.token()).toBe(f.state.replacement.token);
+    expect(restarted.token()).toBe(pending);
+    expect((await f.vault.read())!.pendingToken).toBeNull();
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+  it("does not send a proposal before its random token is durable", async () => {
+    const f = await fixture(generateBridgeAccountKey()); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const restarted = f.makeClient(); await restarted.start(); f.state.calls = [];
+    const encrypt = f.storage.encryptString.bind(f.storage);
+    vi.spyOn(f.storage, "encryptString").mockImplementation((value) => {
+      if (JSON.parse(value).pendingToken) throw new Error("Injected proposal-storage failure");
+      return encrypt(value);
+    });
+    await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: expect.stringContaining("proposal-storage failure") });
+    expect(f.state.calls.some((call) => call.path.endsWith("/refresh"))).toBe(false);
+    expect((await f.vault.read())!.pendingToken).toBeUndefined();
+    expect(restarted.token()).toBe(f.saved.token);
+  });
+  it("does not stage a proposal on a hub that still uses server-generated credentials", async () => {
+    const f = await fixture(generateBridgeAccountKey()); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    f.state.mine.tokenRenewal = undefined;
+    const restarted = f.makeClient(); await restarted.start(); f.state.calls = []; await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: expect.stringContaining("Update the Bridge hub") });
+    expect(f.state.calls.some((call) => call.path.endsWith("/refresh"))).toBe(false);
+    expect((await f.vault.read())!.pendingToken).toBeUndefined(); expect(restarted.token()).toBe(f.saved.token);
+  });
+  it("reports a competing successor as a conflict without erasing trusted keys", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const restarted = f.makeClient(); await restarted.start(); f.state.proposedHash = "a".repeat(64);
+    await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: expect.stringContaining("conflict") });
+    expect(restarted.token()).toBe(f.saved.token);
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+  it("resumes a saved successor even after the predecessor expires during an outage", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key); await f.client.stop();
+    const pendingToken = `b7_${"3".repeat(64)}`;
+    await f.vault.write({ ...(await f.vault.read())!, pendingToken, expiresAt: Date.now() - 1 });
+    f.state.proposedHash = createHash("sha256").update(pendingToken).digest("hex");
+    f.state.rejectedTokens.add(f.saved.token);
+    const restarted = f.makeClient(); await restarted.start(); await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: null });
+    expect(restarted.token()).toBe(pendingToken);
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+  it("publishes a replacement token only after protected storage succeeds and preserves the old identity on failure", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const key = generateBridgeAccountKey(), f = await fixture(key); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const restarted = f.makeClient(); await restarted.start();
+    const encrypt = f.storage.encryptString.bind(f.storage), observed: string[] = [];
+    let fail = true;
+    const write = vi.spyOn(f.storage, "encryptString").mockImplementation((value) => {
+      if (JSON.parse(value).token === f.state.replacement.token) {
+        observed.push(restarted.token());
+        if (fail) throw new Error("Injected protected-storage failure");
+      }
+      return encrypt(value);
+    });
+    try {
+      await restarted.refresh();
+      expect(restarted.status()).toMatchObject({ state: "ready", error: expect.stringContaining("protected-storage failure") });
+      expect(restarted.token()).toBe(f.saved.token);
+      expect((await f.vault.read())!.token).toBe(f.saved.token);
+      expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+      fail = false; await restarted.refresh();
+      expect(observed).toEqual([f.saved.token, f.saved.token]);
+      expect(restarted.token()).toBe(f.state.replacement.token);
+      expect((await f.vault.read())!.token).toBe(f.state.replacement.token);
+      expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+    } finally { write.mockRestore(); }
+  });
+  it("does not lose an approval notification that arrives during an older HTTP snapshot", async () => {
+    const f = await fixture(generateBridgeAccountKey()), original = globalThis.fetch;
+    let release!: () => void, entered!: () => void, hold = true;
+    const blocked = new Promise<void>((resolve) => { release = resolve; }), snapshot = new Promise<void>((resolve) => { entered = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      const response = await original(...args);
+      if (new URL(String(args[0])).pathname === "/v1/approvals" && hold) { hold = false; entered(); await blocked; }
+      return response;
+    }));
+    const current = f.client.refresh(); await snapshot;
+    const request = approval(bridgeBase64(generateBridgeDeviceKeyPair().publicKey)); f.state.approvals = [request];
+    const notified = f.client.refresh(true); release(); await Promise.all([current, notified]);
+    expect(f.client.status().approvals).toEqual([request]);
+  });
+  it("checks a ready identity every five minutes instead of every five seconds", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const f = await fixture(generateBridgeAccountKey()); f.state.calls = [];
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(f.state.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.state.calls.map((call) => call.path)).toEqual(["/v1/keys/mine", "/v1/membership", "/v1/approvals", "/v1/backends"]);
+  });
+  it("keeps short approval checks, but waits five minutes without rewriting a pending candidate", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const f = await fixture(); f.state.calls = [];
+    await vi.advanceTimersByTimeAsync(4999); expect(f.state.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.state.calls.map((call) => call.path)).toEqual(["/v1/keys/mine"]);
+    await f.offer(f.trueKey); await f.client.refresh(); f.state.calls = [];
+    const identityFile = join(f.dir, "bridge", "identity.json"), before = await readFile(identityFile);
+    await vi.advanceTimersByTimeAsync(299_999); expect(f.state.calls).toEqual([]);
+    expect(await readFile(identityFile)).toEqual(before);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.state.calls.map((call) => call.path)).toEqual(["/v1/keys/mine", "/v1/membership"]);
+    expect(await readFile(identityFile)).toEqual(before);
+    await f.client.confirmAccountKey(await f.admittedJoinCode()); f.state.calls = [];
+    await vi.advanceTimersByTimeAsync(299_999); expect(f.state.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.state.calls.map((call) => call.path)).toEqual(["/v1/keys/mine", "/v1/membership", "/v1/approvals", "/v1/backends"]);
+  });
+});
+
+function testDevice(backendId: string) {
+  const encryption = generateBridgeDeviceKeyPair(), signing = generateBridgeSigningKeyPair();
+  const member: BridgeMember = { backendId, publicKey: bridgeBase64(encryption.publicKey), signingPublicKey: bridgeBase64(signing.publicKey) };
+  return { member, secret: signing.secretKey, encryption, signer: deviceSigner(member) };
+}
+/** A signed log written by the account's approver; the fake hub serves it and appends what clients send. */
+function membershipLog(accountId = "synthetic-account") {
+  const entries: BridgeMembershipEntry[] = [];
+  const verified = () => verifyBridgeMembershipLog(entries, verifyBridgeSignature);
+  return {
+    entries, verified,
+    async append(change: BridgeMembershipChange, signer: BridgeMembershipSigner, secret: Uint8Array) {
+      const head = entries.length ? await verified() : { accountId, seq: -1 as const, head: null };
+      const entry = signBridgeMembershipEntry(head, change, signer, secret); entries.push(entry); return entry;
+    },
+    async hashOf(seq: number) { return (await verified()).hashes[seq]; },
+  };
+}
+async function fixture(accountKey: Uint8Array | null = null, options: { recoverySigningPublicKey?: string } = {}) {
+  const dir = await mkdtemp(join(tmpdir(), "mains-approval-security-")); dirs.push(dir);
+  const storage = createNodeBackendRuntime({ dataDir: dir, appVersion: "test" }).secretStorage;
+  const vault = createBridgeIdentityStorage(dir, storage), pair = generateBridgeDeviceKeyPair(), signing = generateBridgeSigningKeyPair(), publicKey = bridgeBase64(pair.publicKey);
+  const approver = testDevice("approver"), authority = generateBridgeSigningKeyPair(), trueKey = accountKey ?? generateBridgeAccountKey(), log = membershipLog();
+  await log.append({ kind: "genesis", body: { member: approver.member, recoverySigningPublicKey: options.recoverySigningPublicKey ?? bridgeBase64(authority.publicKey),
+    accountKeyCommitment: bridgeAccountKeyCommitment(trueKey) } }, approver.signer, approver.secret);
+  const local: BridgeMember = { backendId: "local", publicKey, signingPublicKey: bridgeBase64(signing.publicKey) };
+  const admitted = () => log.entries.find((entry) => entry.kind === "add" && entry.body.member.backendId === "local");
+  async function admit() { if (!admitted()) await log.append({ kind: "add", body: { member: local, via: "approval" } }, approver.signer, approver.secret); return admitted()!; }
+  if (accountKey) await admit();
+  const saved: BridgeSavedIdentity = { v: 3, backendId: "local", hubUrl: "https://hub.invalid", label: "Local", accountId: "synthetic-account", email: "test@example.invalid",
+    signingPublicKey: local.signingPublicKey, signingPrivateKey: bridgeBase64(signing.secretKey),
+    publicKey, privateKey: bridgeBase64(pair.secretKey), token: "b7_synthetic_fixture", expiresAt: Date.now() + 90 * 86400_000,
+    accountKey: accountKey ? bridgeBase64(accountKey) : null, includeExisting: true, activationPending: !accountKey,
+    ...(accountKey ? { membership: { seq: 1, hash: await log.hashOf(1) } } : {}) };
+  await vault.write(saved);
+  if (accountKey) await createBridgeMembershipStorage(dir).write(saved.accountId, log.entries);
+  const state = {
+    mine: { accountId: saved.accountId, initialized: true, tokenRenewal: "client-hash-v1" as string | undefined,
+      backend: { backendId: saved.backendId, publicKey, signingPublicKey: saved.signingPublicKey, label: "Local", platform: "test", status: accountKey ? "approved" : "pending" },
+      wrap: accountKey ? sealBridgeAccountKey(accountKey, pair.publicKey) : null,
+      approval: { status: "pending", expires_at: Date.now() + 600_000 } },
+    approvals: [] as BridgeApprovalRequest[],
+    backends: [] as { backendId: string; label: string; signingPublicKey?: string; status?: string }[],
+    calls: [] as { path: string; body: any; method: string }[],
+    recovery: null as any,
+    replacement: { token: `b7_${"2".repeat(64)}`, expiresAt: Date.now() + 90 * 86400_000 },
+    renewalResponse: undefined as unknown,
+    proposedHash: null as string | null,
+    rejectedTokens: new Set<string>(),
+    /** Refuses this backend (401) everywhere but the signed log, which every registration may read. */
+    refused: false,
+    fence: [] as string[],
+    refreshFailures: 0,
+    unlocked: () => {},
+  };
+  vi.stubGlobal("fetch", vi.fn(async (url: URL, options: RequestInit) => {
+    expect(url.origin).toBe("https://hub.invalid");
+    const path = url.pathname, method = options.method ?? (options.body ? "POST" : "GET"), body = options.body ? JSON.parse(options.body as string) : undefined;
+    state.calls.push({ path, body, method });
+    const credential = new Headers(options.headers).get("Authorization")?.replace(/^Bearer /, "");
+    if (credential && state.rejectedTokens.has(credential)) return Response.json({ error: "Expired fixture credential" }, { status: 401 });
+    if (state.refused && !(path === "/v1/membership" && method === "GET")) return Response.json({ error: "Backend sign-in expired or was revoked" }, { status: 401 });
+    let value: unknown;
+    if (path === "/v1/keys/mine") value = state.mine;
+    else if (path === "/v1/approvals") value = state.approvals;
+    else if (path === "/v1/backends" && method === "GET") value = state.backends;
+    else if (path === "/v1/backends/refresh") {
+      const pending = (await vault.read())!.pendingToken;
+      expect(pending).toMatch(/^b7_[a-f0-9]{64}$/);
+      expect(body).toEqual({ nextTokenHash: createHash("sha256").update(pending!).digest("hex") });
+      if (state.proposedHash && state.proposedHash !== body.nextTokenHash) return Response.json({ error: "Bridge token renewal conflict" }, { status: 409 });
+      state.proposedHash = body.nextTokenHash; state.replacement.token = pending!;
+      if (state.refreshFailures > 0) { state.refreshFailures--; throw new TypeError("Injected lost refresh response"); }
+      value = state.renewalResponse === undefined ? { nextTokenHash: body.nextTokenHash, expiresAt: state.replacement.expiresAt } : state.renewalResponse;
+    }
+    else if (path === "/v1/membership" && method === "GET") value = { entries: log.entries.slice(Number(url.searchParams.get("after")) + 1) };
+    // These accounts have no account records, so a removal's fence is empty unless a test says otherwise.
+    else if (path === "/v1/membership/fence" && method === "GET") value = { signatures: state.fence };
+    else if (path === "/v1/membership" || path === "/v1/keys/wraps" || path === "/v1/keys/recovery/unlock" || path === "/v1/keys/bootstrap" ||
+        path === "/v1/keys/recovery" && method === "PUT" || path.startsWith("/v1/backends/") && method === "DELETE") {
+      // Like the hub: compare-and-swap on the head, and only entries that verify extend the log. A retry
+      // after a lost reply finds its own entry already there.
+      if (body?.entry && JSON.stringify(log.entries[body.entry.seq]) !== JSON.stringify(body.entry)) {
+        if (body.entry.seq !== log.entries.length) return Response.json({ error: "Account membership changed; refresh and try again" }, { status: 409 });
+        try { await verifyBridgeMembershipLog([...log.entries, body.entry], verifyBridgeSignature); }
+        catch (failure) { return Response.json({ error: failure instanceof Error ? failure.message : "Invalid entry" }, { status: 403 }); }
+        log.entries.push(body.entry);
+      }
+      // Like the hub: a registration holding a member's keys leaves only with a signed removal.
+      const target = path.startsWith("/v1/backends/") ? decodeURIComponent(path.slice("/v1/backends/".length)) : null;
+      const registration = target === "local" ? state.mine.backend : state.backends.find((entry) => entry.backendId === target);
+      if (target && !body?.entry && log.entries.length && bridgeMember(await log.verified(), target)?.signingPublicKey === registration?.signingPublicKey)
+        return Response.json({ error: "Invalid identity or key request" }, { status: 400 });
+      if (path === "/v1/keys/recovery/unlock") state.unlocked();
+      // Like the hub: the initializer's registration is approved together with the account.
+      if (path === "/v1/keys/bootstrap") { state.mine.backend.status = "approved"; state.mine.initialized = true; }
+      value = { ok: true };
+    }
+    else if (path === "/v1/keys/recovery") value = state.recovery;
+    else throw new Error(`Unexpected hub request: ${path}`);
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  }));
+  const activatedKeys: string[] = [];
+  const changed = vi.fn();
+  const ready = vi.fn(async (config: { accountKey: Uint8Array }) => { activatedKeys.push(bridgeBase64(config.accountKey)); });
+  function makeClient() {
+    const client = createBridgeIdentity({ backendId: saved.backendId, dataDir: dir, storage, kind: "node", ready,
+      openExternal: async () => {}, changed, approval() {}, revoked: async () => {}, accountFence });
+    clients.push(client); return client;
+  }
+  const client = makeClient(); await client.start(); await client.refresh();
+  /** The approver admits this backend and the hub offers it `key`. */
+  async function offer(key: Uint8Array) {
+    await admit();
+    state.mine.backend.status = "approved"; state.mine.wrap = sealBridgeAccountKey(key, pair.publicKey);
+  }
+  /** A hub that forges a whole account: its own genesis and approver, consistent with `key`. */
+  async function forge(key: Uint8Array) {
+    const attacker = testDevice("approver"), forged = membershipLog();
+    await forged.append({ kind: "genesis", body: { member: attacker.member, recoverySigningPublicKey: bridgeBase64(generateBridgeSigningKeyPair().publicKey),
+      accountKeyCommitment: bridgeAccountKeyCommitment(key) } }, attacker.signer, attacker.secret);
+    await forged.append({ kind: "add", body: { member: local, via: "approval" } }, attacker.signer, attacker.secret);
+    log.entries.splice(0, log.entries.length, ...forged.entries);
+    state.mine.backend.status = "approved"; state.mine.wrap = sealBridgeAccountKey(key, pair.publicKey);
+  }
+  const admittedJoinCode = async (key = trueKey) => joinCode(key, await log.hashOf(admitted()!.seq));
+  return { state, client, makeClient, ready, changed, activatedKeys, vault, saved, pair, offer, forge, admittedJoinCode, dir, storage, log, approver, local, trueKey, authority };
+}
+function approval(publicKey: string, code = deviceCode(publicKey)): BridgeApprovalRequest {
+  return { requestId: "request", backendId: "new-device", publicKey, signingPublicKey: approvalSigningKey, code, label: "New device", platform: "test", expiresAt: new Date(Date.now() + 600_000).toISOString() };
+}
+
+describe("Bridge approval with an untrusted hub", () => {
+  it("preserves every one of the 60 comparison bits and excludes unused tail bits", () => {
+    const zero = new Uint8Array(8), codes = new Set<string>();
+    for (let bit = 0; bit < 60; bit++) {
+      const bytes = zero.slice(); bytes[bit >>> 3] = 1 << (7 - (bit & 7));
+      const code = formatBridgeVerificationCode(bytes); expect(code).not.toBe(formatBridgeVerificationCode(zero)); codes.add(code);
+    }
+    expect(codes.size).toBe(60);
+    const tail = zero.slice(); tail[7] = 15;
+    expect(formatBridgeVerificationCode(tail)).toBe(formatBridgeVerificationCode(zero));
+  });
+  it("uses a domain-separated 60-bit device code instead of the legacy six characters", async () => {
+    const publicKey = bridgeBase64(new Uint8Array(32).fill(42));
+    const identity = { accountId: "synthetic-account", backendId: "new-device", publicKey, signingPublicKey: approvalSigningKey };
+    expect(await bridgeApprovalCode(identity)).toBe(deviceCode(publicKey));
+    expect(await bridgeApprovalCode(identity)).toMatch(/^(?:[A-HJ-NP-Z2-9]{4}-){2}[A-HJ-NP-Z2-9]{4}$/);
+  });
+  it("rejects a substituted signing key even when its encryption key stays unchanged", async () => {
+    const f = await fixture(generateBridgeAccountKey()), request = approval(bridgeBase64(generateBridgeDeviceKeyPair().publicKey));
+    f.state.approvals = [request]; await f.client.refresh();
+    const signingPublicKey = bridgeBase64(generateBridgeSigningKeyPair().publicKey);
+    await expect(f.client.approve({ ...request, signingPublicKey })).rejects.toThrow(/codes do not match/i);
+    await expect(f.client.approve({ ...request, signingPublicKey, code: deviceCode(request.publicKey, signingPublicKey) })).rejects.toThrow(/changed/i);
+    expect(f.state.calls.some((call) => call.path === "/v1/keys/wraps")).toBe(false);
+  });
+  it("pins its own signing key against a substituted hub identity", async () => {
+    const f = await fixture(generateBridgeAccountKey());
+    f.state.mine.backend.signingPublicKey = bridgeBase64(generateBridgeSigningKeyPair().publicKey);
+    await f.client.refresh();
+    expect(f.client.status().error).toMatch(/identity changed/i);
+    expect((await f.vault.read())!.signingPublicKey).toBe(f.saved.signingPublicKey);
+    expect(JSON.stringify(f.client.status())).not.toContain(f.saved.signingPrivateKey);
+  });
+  it("derives displayed codes locally and rejects the real device's code paired with an attacker's key before sealing", async () => {
+    const f = await fixture(generateBridgeAccountKey()), honest = generateBridgeDeviceKeyPair(), attacker = generateBridgeDeviceKeyPair();
+    const forged = approval(bridgeBase64(attacker.publicKey), deviceCode(bridgeBase64(honest.publicKey)));
+    f.state.approvals = [forged]; await f.client.refresh();
+    expect(f.client.status().approvals[0].code).toBe(deviceCode(forged.publicKey));
+    expect(f.client.status().approvals[0].code).not.toBe(forged.code);
+    await expect(f.client.approve(forged)).rejects.toThrow(/codes do not match/i);
+    expect(f.state.calls.some((call) => call.path === "/v1/keys/wraps")).toBe(false);
+  });
+  it("rejects a substituted or stale approval snapshot and six-character downgrade", async () => {
+    const f = await fixture(generateBridgeAccountKey()), peer = generateBridgeDeviceKeyPair(), attacker = generateBridgeDeviceKeyPair();
+    const request = approval(bridgeBase64(peer.publicKey)); f.state.approvals = [request]; await f.client.refresh();
+    await expect(f.client.approve({ ...request, publicKey: bridgeBase64(attacker.publicKey), code: deviceCode(bridgeBase64(attacker.publicKey)) })).rejects.toThrow(/changed|pending/i);
+    await expect(f.client.approve({ ...request, code: "ABC234" })).rejects.toThrow(/12-character/i);
+    request.expiresAt = new Date(Date.now() - 1).toISOString(); await f.client.refresh();
+    await expect(f.client.approve(request)).rejects.toThrow(/expired|pending/i);
+    expect(f.state.calls.some((call) => call.path === "/v1/keys/wraps")).toBe(false);
+  });
+  it("seals the real key to the verified recipient, admits it in the log, and shows the join code for its admission", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key), peer = generateBridgeDeviceKeyPair();
+    const request = approval(bridgeBase64(peer.publicKey)); f.state.approvals = [request]; f.state.backends = [{ backendId: "new-device", label: "New device" }];
+    await f.client.refresh();
+    await f.client.approve({ ...request, code: request.code.toLowerCase().replace(/-/g, " ") });
+    const posted = f.state.calls.find((call) => call.path === "/v1/keys/wraps")!.body;
+    expect(posted.code).toBe(request.code);
+    expect(openBridgeAccountKey(posted.wrap, peer.secretKey)).toEqual(key);
+    expect(posted.entry).toMatchObject({ kind: "add", body: { member: { backendId: "new-device", publicKey: request.publicKey, signingPublicKey: approvalSigningKey }, via: "approval" },
+      signer: { kind: "device", backendId: "local", signingPublicKey: f.local.signingPublicKey } });
+    expect(f.log.entries.at(-1)).toEqual(posted.entry);
+    expect(f.client.status().joinCodes).toEqual([{ backendId: "new-device", label: "New device", code: joinCode(key, await f.log.hashOf(posted.entry.seq), "new-device") }]);
+  });
+  it("re-signs an approval on the new head when another change lands first", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key), peer = generateBridgeDeviceKeyPair(), other = testDevice("other");
+    const request = approval(bridgeBase64(peer.publicKey)); f.state.approvals = [request]; await f.client.refresh();
+    // Lands after this backend last synced, but before its approval reaches the hub.
+    const original = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      if (new URL(String(args[0])).pathname === "/v1/keys/wraps" && f.log.entries.length === 2)
+        await f.log.append({ kind: "add", body: { member: other.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+      return original(...args);
+    }));
+    await f.client.approve(request);
+    const posts = f.state.calls.filter((call) => call.path === "/v1/keys/wraps");
+    expect(posts.map((call) => call.body.entry.seq)).toEqual([2, 3]);
+    expect((await f.log.verified()).seq).toBe(3);
+  });
+  it("holds an offered key outside the active identity until the approver's join code is entered", async () => {
+    const f = await fixture(); await f.offer(f.trueKey); await f.client.refresh();
+    const code = await f.admittedJoinCode();
+    expect(f.client.status()).toMatchObject({ state: "needs-verification", joinCodes: [] });
+    expect(JSON.stringify(f.client.status())).not.toContain(code);
+    expect(f.ready).not.toHaveBeenCalled(); expect(() => f.client.token()).toThrow(/approval|verification/i);
+    expect(await f.vault.read()).toMatchObject({ accountKey: null, pendingAccountKey: bridgeBase64(f.trueKey), pendingMembership: { seq: 1, hash: await f.log.hashOf(1) } });
+    await expect(f.client.confirmAccountKey("ABC234")).rejects.toThrow(/12-character/i);
+    await expect(f.client.confirmAccountKey(joinCode(f.trueKey, await f.log.hashOf(0)))).rejects.toThrow(/join codes do not match/i);
+    f.state.backends = [{ backendId: "local", label: "Local" }];
+    await f.client.confirmAccountKey(code);
+    expect(f.client.status()).toMatchObject({ state: "ready", backends: f.state.backends }); expect(f.ready).toHaveBeenCalledOnce();
+    expect(await f.vault.read()).toMatchObject({ accountKey: bridgeBase64(f.trueKey), pendingAccountKey: null, pendingMembership: null, membership: { seq: 1, hash: await f.log.hashOf(1) } });
+  });
+  it("blocks sync when a malicious hub forges the key, the account history and the approval together", async () => {
+    const f = await fixture(), real = await (async () => { await f.offer(f.trueKey); return f.admittedJoinCode(); })(), fake = generateBridgeAccountKey();
+    // The hub swaps everything before this device first looks; only the approver's code is out of its reach.
+    await f.forge(fake); await f.client.refresh();
+    expect(f.client.status().state).toBe("needs-verification");
+    await expect(f.client.confirmAccountKey(real)).rejects.toThrow(/join codes do not match/i);
+    expect(f.client.status().state).toBe("needs-verification"); expect(f.ready).not.toHaveBeenCalled();
+    expect((await f.vault.read())!.accountKey).toBeNull();
+  });
+  it("rejects a wrong recipient, a key the account never committed to, or a history without this backend", async () => {
+    const f = await fixture(); await f.offer(f.trueKey);
+    f.state.mine.wrap = sealBridgeAccountKey(f.trueKey, generateBridgeDeviceKeyPair().publicKey); await f.client.refresh();
+    expect(f.client.status().state).toBe("needs-approval"); expect(f.ready).not.toHaveBeenCalled();
+    await f.offer(generateBridgeAccountKey()); await f.client.refresh();
+    expect(f.client.status().error).toMatch(/does not match the account/i);
+    f.log.entries.splice(1); await f.offer(f.trueKey); f.log.entries.splice(1); await f.client.refresh();
+    expect(f.client.status().error).toMatch(/does not include this backend/i);
+    expect(f.ready).not.toHaveBeenCalled();
+    expect((await f.vault.read())!.accountKey).toBeNull(); expect((await f.vault.read())!.pendingAccountKey).toBeUndefined();
+  });
+  it("persists the verification gate across restart and pins the candidate against later hub replacement", async () => {
+    const f = await fixture(); await f.offer(f.trueKey); await f.client.refresh(); await f.client.stop();
+    const restarted = f.makeClient(); await restarted.start();
+    expect(restarted.status()).toMatchObject({ state: "needs-verification", joinCodes: [] });
+    await f.forge(generateBridgeAccountKey()); await restarted.refresh(true);
+    expect(restarted.status().error).toMatch(/changed/i); expect(f.ready).not.toHaveBeenCalled();
+    expect((await f.vault.read())!.pendingAccountKey).toBe(bridgeBase64(f.trueKey));
+  });
+  it("does not bootstrap a new account over a pending verification when the hub claims keys disappeared", async () => {
+    const f = await fixture(); await f.offer(f.trueKey); await f.client.refresh();
+    f.state.mine.initialized = false; f.state.mine.backend.status = "pending"; f.state.mine.wrap = null; await f.client.refresh();
+    expect(f.client.status().state).toBe("needs-verification"); expect(f.ready).not.toHaveBeenCalled();
+    expect(f.state.calls.some((call) => call.path === "/v1/keys/bootstrap")).toBe(false);
+  });
+  it("cannot be switched to bootstrap after learning that the account already exists, even before a key offer", async () => {
+    const f = await fixture();
+    f.state.mine.initialized = false; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "needs-approval", error: expect.stringMatching(/keys disappeared/i) });
+    expect(f.ready).not.toHaveBeenCalled();
+    expect(f.state.calls.some((call) => call.path === "/v1/keys/bootstrap")).toBe(false);
+    expect(await f.vault.read()).toMatchObject({ accountKey: null, accountInitialized: true });
+  });
+  it("keeps existing locally pinned keys when the hub supplies a different wrap", async () => {
+    const actual = generateBridgeAccountKey(), f = await fixture(actual); f.state.mine.wrap = sealBridgeAccountKey(generateBridgeAccountKey(), f.pair.publicKey); await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: null });
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(actual)); expect(f.ready).toHaveBeenCalledOnce();
+  });
+  it("activates recovery using the locally decrypted key, admitted by the code's own authority, even if the hub returns a forged wrap afterwards", async () => {
+    const actual = generateBridgeAccountKey(), code = "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA", sealed = await sealBridgeRecovery(actual, code);
+    const f = await fixture(null, { recoverySigningPublicKey: sealed.signingPublicKey });
+    // The fixture's genesis commits to its own key; recovery is for this account's actual key.
+    f.log.entries.splice(0); await f.log.append({ kind: "genesis", body: { member: f.approver.member, recoverySigningPublicKey: sealed.signingPublicKey,
+      accountKeyCommitment: bridgeAccountKeyCommitment(actual) } }, f.approver.signer, f.approver.secret);
+    f.state.recovery = { recovery: sealed.wrap, recoveryPublicKey: sealed.signingPublicKey };
+    f.state.unlocked = () => { f.state.mine.backend.status = "approved"; f.state.mine.wrap = sealBridgeAccountKey(generateBridgeAccountKey(), f.pair.publicKey); };
+    await f.client.enterRecoveryCode(code);
+    expect(f.client.status()).toMatchObject({ state: "ready" });
+    expect(f.log.entries.at(-1)).toMatchObject({ kind: "add", body: { member: f.local, via: "recovery" }, signer: { kind: "recovery", signingPublicKey: sealed.signingPublicKey } });
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(actual));
+    expect(f.ready).toHaveBeenCalledOnce();
+    expect(f.activatedKeys).toEqual([bridgeBase64(actual)]);
+  }, 30_000);
+  it("refuses a replaced recovery code and a code for another account", async () => {
+    const actual = generateBridgeAccountKey(), code = "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA", sealed = await sealBridgeRecovery(actual, code);
+    const f = await fixture(null);
+    f.log.entries.splice(0); await f.log.append({ kind: "genesis", body: { member: f.approver.member, recoverySigningPublicKey: bridgeBase64(f.authority.publicKey),
+      accountKeyCommitment: bridgeAccountKeyCommitment(actual) } }, f.approver.signer, f.approver.secret);
+    f.state.recovery = { recovery: sealed.wrap, recoveryPublicKey: sealed.signingPublicKey };
+    await expect(f.client.enterRecoveryCode(code)).rejects.toThrow(/replaced/i);
+    f.state.recovery = { recovery: (await sealBridgeRecovery(generateBridgeAccountKey(), code)).wrap, recoveryPublicKey: sealed.signingPublicKey };
+    await expect(f.client.enterRecoveryCode(code)).rejects.toThrow(/does not match the account/i);
+    expect(f.state.calls.some((call) => call.path === "/v1/keys/recovery/unlock")).toBe(false); expect(f.ready).not.toHaveBeenCalled();
+  }, 30_000);
+});
+
+describe("Bridge membership on an active backend", () => {
+  it("bootstraps an account with a self-signed genesis whose recovery authority comes from the new code", async () => {
+    const f = await fixture();
+    f.log.entries.splice(0); f.state.mine.initialized = false; await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, accountInitialized: false });
+    f.state.backends = [{ backendId: "local", label: "Local" }];
+    const client = f.makeClient(); await client.start(); await client.refresh();
+    // Devices are listed right after the account exists, not at the next scheduled refresh.
+    expect(client.status()).toMatchObject({ state: "ready", backends: f.state.backends });
+    const posted = f.state.calls.find((call) => call.path === "/v1/keys/bootstrap")!.body, recovery = client.takeRecoveryCode()!;
+    expect(posted.entry).toMatchObject({ seq: 0, kind: "genesis", body: { member: f.local }, signer: { kind: "device", backendId: "local" } });
+    const opened = await (await import("./bridge.recovery")).openBridgeRecovery(posted.recovery, recovery);
+    expect(posted.entry.body.recoverySigningPublicKey).toBe(opened.signingPublicKey);
+    expect(posted.entry.body.accountKeyCommitment).toBe(bridgeAccountKeyCommitment(opened.accountKey));
+    expect(await f.vault.read()).toMatchObject({ membership: { seq: 0, hash: await f.log.hashOf(0) }, accountKey: bridgeBase64(opened.accountKey) });
+    expect(JSON.parse(await readFile(join(f.dir, "bridge", "membership.json"), "utf8")).entries).toEqual([posted.entry]);
+  }, 30_000);
+  /** A fresh account the hub has not initialized; `bootstrap` sees each initialization request first. */
+  async function uninitialized(bootstrap: (body: any, send: () => Promise<Response>) => Promise<Response>) {
+    const f = await fixture();
+    f.log.entries.splice(0); f.state.mine.initialized = false; await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, accountInitialized: false });
+    const original = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => new URL(String(args[0])).pathname === "/v1/keys/bootstrap"
+      ? bootstrap(JSON.parse(String(args[1]!.body)), () => original(...args)) : original(...args)));
+    return f;
+  }
+  it("keeps its bootstrap proposal across a lost reply and activates exactly that account, with its recovery code", async () => {
+    let lost = false;
+    const f = await uninitialized(async (_, send) => { const reply = await send(); if (lost) return reply; lost = true; throw new TypeError("Injected lost bootstrap reply"); });
+    const client = f.makeClient(); await client.start(); await client.refresh();
+    expect(client.status()).toMatchObject({ state: "needs-approval", error: expect.stringContaining("lost bootstrap reply") });
+    const proposal = (await f.vault.read())!.pendingBootstrap!;
+    expect(proposal.entry).toEqual(f.log.entries[0]); expect(f.state.mine.backend.status).toBe("approved");
+    // After a restart it finds the proposal accepted, sends nothing new and activates the saved key.
+    await client.stop(); const restarted = f.makeClient(); await restarted.start(); await restarted.refresh();
+    expect(restarted.status().state).toBe("ready");
+    expect(f.state.calls.filter((call) => call.path === "/v1/keys/bootstrap")).toHaveLength(1);
+    expect(f.activatedKeys).toEqual([proposal.accountKey]);
+    expect(restarted.takeRecoveryCode()).toBe(proposal.recoveryCode);
+    expect(await f.vault.read()).toMatchObject({ accountKey: proposal.accountKey, pendingBootstrap: null, membership: { seq: 0, hash: await f.log.hashOf(0) } });
+  }, 30_000);
+  it("resends the identical proposal when the hub kept its genesis but lost the account", async () => {
+    const sent: unknown[] = [];
+    const f = await uninitialized(async (body, send) => {
+      sent.push(body); if (sent.length > 1) return send();
+      f.log.entries.push(body.entry); return Response.json({ error: "Invalid identity or key request" }, { status: 400 });
+    });
+    const client = f.makeClient(); await client.start(); await client.refresh();
+    expect(client.status().state).not.toBe("ready");
+    await client.refresh();
+    expect(client.status().state).toBe("ready");
+    expect(sent).toHaveLength(2); expect(sent[1]).toEqual(sent[0]); expect(f.log.entries).toHaveLength(1);
+  }, 30_000);
+  it("keeps its proposal when a retry is refused because its own timed-out attempt completed meanwhile", async () => {
+    let attempts = 0;
+    const f = await uninitialized(async (_, send) => {
+      // The first attempt times out; the hub finishes it just before it reads the retry.
+      if (++attempts === 1) throw new TypeError("Injected bootstrap timeout");
+      await send(); return Response.json({ error: "This account already has keys" }, { status: 409 });
+    });
+    const client = f.makeClient(); await client.start(); await client.refresh();
+    const proposal = (await f.vault.read())!.pendingBootstrap!;
+    await client.refresh();
+    expect(client.status().state).toBe("ready"); expect(attempts).toBe(2);
+    expect(f.activatedKeys).toEqual([proposal.accountKey]); expect(client.takeRecoveryCode()).toBe(proposal.recoveryCode);
+    expect((await f.vault.read())!.pendingBootstrap).toBeNull();
+  }, 30_000);
+  it("drops its proposal once another backend's genesis has won", async () => {
+    const f = await fixture(); f.state.mine.initialized = false; await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, accountInitialized: false });
+    const client = f.makeClient(); await client.start(); await client.refresh();
+    expect((await f.vault.read())!.pendingBootstrap).toBeNull();
+    f.state.mine.initialized = true; await client.refresh();
+    expect(client.status().state).toBe("needs-approval");
+    expect(f.state.calls.filter((call) => call.path === "/v1/keys/bootstrap")).toHaveLength(1);
+  }, 30_000);
+  it("signs out before its join code is entered through its own signed removal", async () => {
+    const f = await fixture(); await f.offer(f.trueKey); await f.client.refresh();
+    expect(f.client.status().state).toBe("needs-verification");
+    await f.client.signOut();
+    expect(f.state.calls.find((call) => call.path === "/v1/backends/local")).toMatchObject({ method: "DELETE",
+      body: { entry: { kind: "remove", body: { backendId: "local", account: noRecords }, signer: { backendId: "local" } } } });
+    expect((await f.log.verified()).keys.find((key) => key.backendId === "local")!.until).not.toBeNull();
+    expect(f.client.status().state).toBe("signed-out"); expect(await f.vault.read()).toBeNull();
+  });
+  it("signs out a re-enrolled backend by its credential alone while its earlier keys are still admitted", async () => {
+    const f = await fixture(), earlier = testDevice("local");
+    await f.log.append({ kind: "add", body: { member: earlier.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    accountFence.mockClear(); await f.client.signOut();
+    // A pending registration cannot read the account stream for a fence, and those keys are not its own.
+    expect(accountFence).not.toHaveBeenCalled();
+    expect(f.state.calls.filter((call) => call.path === "/v1/backends/local")).toEqual([{ path: "/v1/backends/local", body: undefined, method: "DELETE" }]);
+    expect(f.client.status().state).toBe("signed-out"); expect(await f.vault.read()).toBeNull();
+  });
+  it("signs out a backend the log never admitted by its credential alone", async () => {
+    const f = await fixture(); await f.client.signOut();
+    expect(f.state.calls.filter((call) => call.path === "/v1/backends/local")).toEqual([{ path: "/v1/backends/local", body: undefined, method: "DELETE" }]);
+    expect(f.client.status().state).toBe("signed-out"); expect(await f.vault.read()).toBeNull();
+  });
+  it("extends its pinned history, and stops at a hub history that does not contain it", async () => {
+    const f = await fixture(generateBridgeAccountKey()), other = testDevice("other");
+    await f.log.append({ kind: "add", body: { member: other.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    await f.client.refresh();
+    expect(await f.vault.read()).toMatchObject({ membership: { seq: 2, hash: await f.log.hashOf(2) } });
+    // The hub rewrites the account from genesis: same length, different history.
+    const rewritten = membershipLog(), attacker = testDevice("approver");
+    await rewritten.append({ kind: "genesis", body: { member: attacker.member, recoverySigningPublicKey: bridgeBase64(generateBridgeSigningKeyPair().publicKey),
+      accountKeyCommitment: bridgeAccountKeyCommitment(generateBridgeAccountKey()) } }, attacker.signer, attacker.secret);
+    await rewritten.append({ kind: "add", body: { member: f.local, via: "approval" } }, attacker.signer, attacker.secret);
+    await rewritten.append({ kind: "add", body: { member: other.member, via: "approval" } }, attacker.signer, attacker.secret);
+    await rewritten.append({ kind: "remove", body: { backendId: "other", account: noRecords } }, attacker.signer, attacker.secret);
+    f.log.entries.splice(0, f.log.entries.length, ...rewritten.entries); await f.client.refresh();
+    expect(f.client.status().error).toMatch(/membership conflict/i);
+    expect(await f.vault.read()).toMatchObject({ membership: { seq: 2 } });
+    // A restart without the local copy still refuses it.
+    await rm(join(f.dir, "bridge", "membership.json")); await f.client.stop();
+    const restarted = f.makeClient(); await restarted.start(); await restarted.refresh();
+    expect(restarted.status().error).toMatch(/membership conflict/i); expect(f.ready).toHaveBeenCalledOnce();
+  });
+  it("starts offline from its verified local copy", async () => {
+    const f = await fixture(generateBridgeAccountKey()); await f.client.stop();
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
+    const restarted = f.makeClient(); await restarted.start();
+    expect(restarted.status().state).toBe("ready"); expect(f.ready).toHaveBeenCalledTimes(2);
+  });
+  it("publishes a peer's verified removal even while its registration still reports approved", async () => {
+    const f = await fixture(generateBridgeAccountKey()), other = testDevice("other");
+    await f.log.append({ kind: "add", body: { member: other.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    f.state.backends = [{ ...other.member, label: "Other", status: "approved" }];
+    await f.client.refresh();
+    expect(f.client.status().backends[0].status).toBe("approved");
+    f.changed.mockClear();
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    await f.log.append({ kind: "remove", body: { backendId: "other", account: noRecords } }, other.signer, other.secret);
+    await view.refresh();
+    await vi.waitFor(() => {
+      expect(f.client.status().backends[0].status).toBe("revoked");
+      expect(f.changed).toHaveBeenCalled();
+    });
+    expect(f.state.backends[0].status).toBe("approved");
+    expect(f.client.status().state).toBe("ready");
+  });
+  it("removes members, and itself on sign-out, only through signed removals", async () => {
+    const f = await fixture(generateBridgeAccountKey()), other = testDevice("other");
+    await f.log.append({ kind: "add", body: { member: other.member, via: "approval" } }, f.approver.signer, f.approver.secret); await f.client.refresh();
+    f.state.backends = [{ backendId: "other", label: "Other", signingPublicKey: other.member.signingPublicKey, status: "approved" }];
+    await f.client.revoke("other");
+    // Only the entry travels: the hub derives the fence's list from the records it stores.
+    expect(Object.keys(f.state.calls.find((call) => call.path === "/v1/backends/other")!.body)).toEqual(["entry"]);
+    expect(f.state.calls.find((call) => call.path === "/v1/backends/other")!.body.entry).toMatchObject({ kind: "remove", body: { backendId: "other", account: noRecords }, signer: { backendId: "local" } });
+    await f.client.signOut();
+    expect(f.state.calls.find((call) => call.path === "/v1/backends/local")!.body.entry).toMatchObject({ kind: "remove", body: { backendId: "local", account: noRecords }, signer: { backendId: "local" } });
+    expect((await f.log.verified()).keys.filter((key) => key.until === null).map((key) => key.backendId)).toEqual(["approver"]);
+    await expect(readFile(join(f.dir, "bridge", "membership.json"))).rejects.toThrow();
+  });
+  it("reads the removed writer's account records again whenever its removal is re-signed", async () => {
+    const f = await fixture(generateBridgeAccountKey()), other = testDevice("other"), late = testDevice("late");
+    await f.log.append({ kind: "add", body: { member: other.member, via: "approval" } }, f.approver.signer, f.approver.secret); await f.client.refresh();
+    f.state.backends = [{ backendId: "other", label: "Other", signingPublicKey: other.member.signingPublicKey, status: "approved" }];
+    accountFence.mockClear();
+    const original = globalThis.fetch; let raced = false;
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      if (new URL(String(args[0])).pathname === "/v1/backends/other" && !raced) {
+        raced = true; await f.log.append({ kind: "add", body: { member: late.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+      }
+      return original(...args);
+    }));
+    await f.client.revoke("other");
+    expect(accountFence.mock.calls).toEqual([["other"], ["other"]]);
+    expect(f.state.calls.filter((call) => call.path === "/v1/backends/other").map((call) => call.body.entry.seq)).toEqual([3, 4]);
+  });
+  it("approves a backend that re-enrolled with new keys only after removing its old keys with their fence", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key), stale = testDevice("new-device"), peer = generateBridgeDeviceKeyPair();
+    await f.log.append({ kind: "add", body: { member: stale.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    const request = approval(bridgeBase64(peer.publicKey)); f.state.approvals = [request]; await f.client.refresh();
+    const written = [bridgeBase64(new Uint8Array(64).fill(3)), bridgeBase64(new Uint8Array(64).fill(4))];
+    accountFence.mockImplementationOnce(async () => ({ signatures: written, account: { through: 9, count: 2, root: createHash("sha256").update(JSON.stringify(written)).digest("base64url") } }));
+    await f.client.approve(request);
+    // The old keys leave through the membership route, so the new registration stays pending.
+    expect(f.state.calls.some((call) => call.path === "/v1/backends/new-device")).toBe(false);
+    const removal = f.state.calls.findIndex((call) => call.path === "/v1/membership" && call.method === "POST");
+    expect(f.state.calls[removal].body).toEqual({ entry: expect.objectContaining({ kind: "remove", body: { backendId: "new-device", account: { through: 9, count: 2, root: expect.any(String) } } }) });
+    expect(removal).toBeLessThan(f.state.calls.findIndex((call) => call.path === "/v1/keys/wraps"));
+    expect((await f.log.verified()).keys.filter((entry) => entry.backendId === "new-device").map(({ signingPublicKey, until }) => [signingPublicKey, until === null]))
+      .toEqual([[stale.member.signingPublicKey, false], [approvalSigningKey, true]]);
+  });
+  it("revokes a re-enrolled backend's pending registration apart from removing the old keys it left in the log", async () => {
+    const f = await fixture(generateBridgeAccountKey()), stale = testDevice("other"), renewed = testDevice("other");
+    await f.log.append({ kind: "add", body: { member: stale.member, via: "approval" } }, f.approver.signer, f.approver.secret); await f.client.refresh();
+    f.state.backends = [{ backendId: "other", label: "Other", signingPublicKey: renewed.member.signingPublicKey, status: "pending" }];
+    await f.client.revoke("other");
+    const calls = f.state.calls.filter((call) => call.path === "/v1/membership" && call.method === "POST" || call.path === "/v1/backends/other");
+    expect(calls.map(({ path, method, body }) => [path, method, body?.entry?.kind])).toEqual([["/v1/membership", "POST", "remove"], ["/v1/backends/other", "DELETE", undefined]]);
+    expect((await f.log.verified()).keys.find((key) => key.backendId === "other")!.until).not.toBeNull();
+  });
+  it("replaces the recovery code together with the authority derived from it", async () => {
+    const f = await fixture(generateBridgeAccountKey());
+    const code = await f.client.regenerateRecoveryCode();
+    const posted = f.state.calls.find((call) => call.path === "/v1/keys/recovery" && call.method === "PUT")!.body;
+    expect(posted.entry).toMatchObject({ kind: "recovery", signer: { backendId: "local" } });
+    expect((await (await import("./bridge.recovery")).openBridgeRecovery(posted.recovery, code)).signingPublicKey).toBe(posted.entry.body.recoverySigningPublicKey);
+    expect((await f.log.verified()).recoverySigningPublicKey).toBe(posted.entry.body.recoverySigningPublicKey);
+  }, 30_000);
+});
+
+describe("Bridge identity refused by its hub", () => {
+  it("keeps the account key while the hub refuses a backend its log still lists, and recovers when admitted again", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    f.state.refused = true; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: expect.stringContaining("still lists it") });
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+    f.state.refused = false; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: null });
+    expect(f.activatedKeys).toEqual([bridgeBase64(key)]);
+  });
+  // The pinned head is seq 1; a forged history is caught whether it is shorter, as long or longer.
+  it.each([1, 2, 3])("reports a forged history of %s entries as a membership conflict instead of a revocation", async (length) => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    const attacker = testDevice("approver"), forged = membershipLog();
+    await forged.append({ kind: "genesis", body: { member: attacker.member, recoverySigningPublicKey: bridgeBase64(generateBridgeSigningKeyPair().publicKey),
+      accountKeyCommitment: bridgeAccountKeyCommitment(generateBridgeAccountKey()) } }, attacker.signer, attacker.secret);
+    for (const backendId of ["phone", "laptop"].slice(0, length - 1)) await forged.append({ kind: "add", body: { member: testDevice(backendId).member, via: "approval" } }, attacker.signer, attacker.secret);
+    f.log.entries.splice(0, f.log.entries.length, ...forged.entries);
+    f.state.refused = true; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: expect.stringMatching(/membership conflict/i) });
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+  it("pins a newer head read while judging a refusal, so a later rollback is a conflict and the replica keeps that head", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    await f.log.append({ kind: "add", body: { member: testDevice("phone").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    f.state.refused = true; await f.client.refresh();
+    expect(f.client.status().error).toContain("still lists it");
+    expect((await f.vault.read())!.membership).toEqual({ seq: 2, hash: await f.log.hashOf(2) });
+    // The hub hides the newer entry again: the pinned head proves the shorter history is a rollback.
+    f.log.entries.pop(); await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: expect.stringMatching(/membership conflict/i) });
+    // Admitted again while still serving the shorter log: the running replica already holds the pinned head.
+    f.state.refused = false; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "ready", error: null });
+    expect(f.ready).toHaveBeenCalledTimes(1);
+    expect((await view.refresh()).seq).toBe(2);
+  });
+  it("gives the running replica a removal it pinned, so the replica refuses that writer's record outside its fence", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key), phone = testDevice("phone");
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    await f.log.append({ kind: "add", body: { member: phone.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    const admitted = await view.refresh();
+    // The phone's record, validly signed while it was a member; its removal's fence will not admit it.
+    const keys = bridgeRecordKeys(deriveBridgeKeys(key).recordKey, "collections", "c", "row");
+    const header: BridgeHeader = { v: 1, stream: "account", rowKey: keys.rowKey, registerKey: keys.registerKey!, hlc: { physicalMs: 1, counter: 2 }, origin: "phone", op: "upsert" };
+    const record = createBridgeSigningCodec(createBridgeSealingCodec(key), { accountId: "synthetic-account", backendId: "phone", signingPrivateKey: phone.secret },
+      { current: () => admitted, fence: () => undefined }).seal(header, { table: "collections", pk: "c", register: "row", schemaVersion: 3,
+      values: { id: "c", account_id: "default", name: "forged", created_at: "2026-01-01" }, refs: {}, blobRefs: [] });
+    const receiver = createBridgeSigningCodec(createBridgeSealingCodec(key), { accountId: "synthetic-account", backendId: "local", signingPrivateKey: bridgeBytes(f.saved.signingPrivateKey, 32) }, view);
+    expect(receiver.open(record).body.pk).toBe("c");
+    // The phone is removed. The hub refuses this backend, whose check of the log pins the removal, then hides
+    // the removal from the replica.
+    await f.log.append({ kind: "remove", body: { backendId: "phone", account: noRecords } }, f.approver.signer, f.approver.secret);
+    f.state.refused = true; await f.client.refresh();
+    expect((await f.vault.read())!.membership).toEqual({ seq: 3, hash: await f.log.hashOf(3) });
+    f.log.entries.pop();
+    expect(() => receiver.open(record)).toThrow(BridgeMembershipNotReadyError);
+    await expect(view.refresh()).rejects.toThrow();
+    expect(() => receiver.open(record)).toThrow(BridgeMembershipNotReadyError);
+    f.state.refused = false;
+    expect((await view.refresh()).seq).toBe(3);
+    expect(() => receiver.open(record)).toThrow(/outside its removal fence/);
+  });
+  it("reports another continuation of what the replica verified as a conflict, and locks a replica handed one", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    const common = f.log.entries.slice();
+    await f.log.append({ kind: "add", body: { member: testDevice("laptop").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    expect((await view.refresh()).seq).toBe(2);
+    // The replica's progress reaches the identity, which pins it.
+    await vi.waitFor(async () => expect((await f.vault.read())!.membership).toEqual({ seq: 2, hash: await f.log.hashOf(2) }));
+    const fork = signBridgeMembershipEntry(await verifyBridgeMembershipLog(common, verifyBridgeSignature),
+      { kind: "add", body: { member: testDevice("phone").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    const other = [...common, fork];
+    f.log.entries.splice(0, f.log.entries.length, ...other);
+    f.state.refused = true; await f.client.refresh();
+    expect(f.client.status().error).toMatch(/membership conflict/i);
+    expect((await f.vault.read())!.membership?.seq).toBe(2);
+    // Handed a history that differs from its own, the replica's view applies nothing again.
+    view.adopt({ state: await verifyBridgeMembershipLog(other, verifyBridgeSignature), entries: other });
+    expect(view.current()).toBeNull();
+    f.state.refused = false;
+    await expect(view.refresh()).rejects.toThrow(/membership conflict/i);
+  });
+  // The hub answers the replica's refresh with nothing newer, or only part of what this backend adopts meanwhile.
+  it.each([["withholds", 2], ["shows part of", 3]] as const)("keeps a history adopted while the hub %s it during a replica's refresh, and exposes its removal only with the fence", async (_, served) => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    await f.log.append({ kind: "add", body: { member: testDevice("phone").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    await view.refresh();
+    await f.log.append({ kind: "add", body: { member: testDevice("tablet").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    await f.log.append({ kind: "remove", body: { backendId: "phone", account: noRecords } }, f.approver.signer, f.approver.secret);
+    const adopted = { state: await f.log.verified(), entries: f.log.entries.slice() };
+    f.log.entries.splice(served + 1);
+    // Adopted after the refresh has read its head and asked the hub, before the answer arrives.
+    const hub = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: URL, init: RequestInit) => {
+      if (url.pathname === "/v1/membership") { vi.stubGlobal("fetch", hub); view.adopt(adopted); }
+      return hub(url, init);
+    });
+    expect((await view.refresh()).seq).toBe(4);
+    expect(view.fence(4)).toEqual(new Set());
+  });
+  it("never reuses one branch's removal fence for another branch's removal at the same position", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key), phone = testDevice("phone");
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    await f.log.append({ kind: "add", body: { member: phone.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    const admitted = await view.refresh(), base = f.log.entries.slice();
+    const keys = bridgeRecordKeys(deriveBridgeKeys(key).recordKey, "collections", "c", "row");
+    const record = createBridgeSigningCodec(createBridgeSealingCodec(key), { accountId: "synthetic-account", backendId: "phone", signingPrivateKey: phone.secret },
+      { current: () => admitted, fence: () => undefined }).seal({ v: 1, stream: "account", rowKey: keys.rowKey, registerKey: keys.registerKey!, hlc: { physicalMs: 1, counter: 2 },
+      origin: "phone", op: "upsert" }, { table: "collections", pk: "c", register: "row", schemaVersion: 3, values: { id: "c", account_id: "default", name: "forged", created_at: "2026-01-01" }, refs: {}, blobRefs: [] });
+    const receiver = createBridgeSigningCodec(createBridgeSealingCodec(key), { accountId: "synthetic-account", backendId: "local", signingPrivateKey: bridgeBytes(f.saved.signingPrivateKey, 32) }, view);
+    // This backend verified the phone's removal admitting none of its records; the hub serves a removal at the
+    // same position whose fence admits this record, and answers the fence route for that one.
+    await f.log.append({ kind: "remove", body: { backendId: "phone", account: noRecords } }, f.approver.signer, f.approver.secret);
+    const adopted = { state: await f.log.verified(), entries: f.log.entries.slice() };
+    f.log.entries.splice(0, f.log.entries.length, ...base);
+    const signatures = [record.auth!.signature];
+    await f.log.append({ kind: "remove", body: { backendId: "phone", account: { through: 1, count: 1, root: createHash("sha256").update(JSON.stringify(signatures)).digest("base64url") } } },
+      f.approver.signer, f.approver.secret);
+    f.state.fence = signatures;
+    const hub = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: URL, init: RequestInit) => {
+      if (url.pathname === "/v1/membership") { vi.stubGlobal("fetch", hub); view.adopt(adopted); }
+      return hub(url, init);
+    });
+    await expect(view.refresh()).rejects.toThrow(/membership conflict/i);
+    expect(() => receiver.open(record)).toThrow(BridgeMembershipNotReadyError);
+    // With the fence this backend's removal commits to, the record is outside it.
+    f.state.fence = [];
+    expect((await view.refresh()).head).toBe(adopted.state.head);
+    expect(() => receiver.open(record)).toThrow(/outside its removal fence/);
+  });
+  it("forgets the account key once the signed log shows this backend removed", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    await f.log.append({ kind: "remove", body: { backendId: "local", account: noRecords } }, f.approver.signer, f.approver.secret);
+    f.state.refused = true; await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "revoked", error: expect.stringContaining("expired or was revoked") });
+    expect((await f.vault.read())!.accountKey).toBeNull();
+  });
+  it("keeps the account key when the hub refuses the log too, and judges it again after a restart", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    f.state.rejectedTokens.add(f.saved.token); await f.client.refresh();
+    expect(f.client.status()).toMatchObject({ state: "revoked", error: expect.stringContaining("account key is kept") });
+    expect(() => f.client.token()).toThrow();
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+    await f.client.stop();
+    f.state.rejectedTokens.delete(f.saved.token);
+    const restarted = f.makeClient(); await restarted.start(); await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: null });
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+});
+
+describe("Bridge sign-out from a hub serving another history", () => {
+  /** A whole account history the hub forges, longer than this backend's pinned one. */
+  async function forgedHistory(f: Awaited<ReturnType<typeof fixture>>) {
+    const attacker = testDevice("approver"), forged = membershipLog();
+    await forged.append({ kind: "genesis", body: { member: attacker.member, recoverySigningPublicKey: bridgeBase64(generateBridgeSigningKeyPair().publicKey),
+      accountKeyCommitment: bridgeAccountKeyCommitment(generateBridgeAccountKey()) } }, attacker.signer, attacker.secret);
+    for (const backendId of ["phone", "laptop"]) await forged.append({ kind: "add", body: { member: testDevice(backendId).member, via: "approval" } }, attacker.signer, attacker.secret);
+    f.log.entries.splice(0, f.log.entries.length, ...forged.entries);
+  }
+  it("signs a member out locally once the hub's history conflicts with its own", async () => {
+    const f = await fixture(generateBridgeAccountKey());
+    await forgedHistory(f); await f.client.refresh();
+    expect(f.client.status().error).toMatch(/membership conflict/i);
+    await f.client.signOut();
+    expect(f.client.status().state).toBe("signed-out");
+    expect(await f.vault.read()).toBeNull();
+    expect(f.state.calls.some((call) => call.method === "DELETE")).toBe(false);
+  });
+  it("signs out a backend still waiting for its join code once the hub's history conflicts", async () => {
+    const f = await fixture(); await f.offer(f.trueKey); await f.client.refresh();
+    expect(f.client.status().state).toBe("needs-verification");
+    await forgedHistory(f);
+    await f.client.signOut();
+    expect(f.client.status().state).toBe("signed-out");
+    expect(await f.vault.read()).toBeNull();
+  });
+  // The hub answers a replica's refresh with more of its own history, or with nothing newer.
+  it.each([["more of its history", 3], ["nothing newer", 2]] as const)("fails a replica's refresh with the conflict this backend found while the hub sent %s", async (_, served) => {
+    const key = generateBridgeAccountKey(), f = await fixture(key);
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    const common = f.log.entries.slice();
+    await f.log.append({ kind: "add", body: { member: testDevice("laptop").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    await view.refresh();
+    await f.log.append({ kind: "add", body: { member: testDevice("tablet").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    f.log.entries.splice(served + 1);
+    const fork = signBridgeMembershipEntry(await verifyBridgeMembershipLog(common, verifyBridgeSignature),
+      { kind: "add", body: { member: testDevice("phone").member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    const other = [...common, fork];
+    const hub = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: URL, init: RequestInit) => {
+      if (url.pathname === "/v1/membership") { vi.stubGlobal("fetch", hub); view.adopt({ state: await verifyBridgeMembershipLog(other, verifyBridgeSignature), entries: other }); }
+      return hub(url, init);
+    });
+    await expect(view.refresh()).rejects.toThrow(/membership conflict/i);
+    expect(view.current()).toBeNull();
+  });
+});

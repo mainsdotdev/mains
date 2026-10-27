@@ -14,6 +14,7 @@ import backendsReducer from "./slices/backendsSlice";
 import runQueueReducer from "./slices/runQueueSlice";
 import atlasReducer from "./slices/atlasSlice";
 import terminalReducer from "./slices/terminalSlice";
+import previewReducer from "./slices/previewSlice";
 import { workspacePersistConfig } from "./workspace-persistence";
 import { onTransportChange } from "../transport";
 import { parseAppThemeSettings } from "../app-themes";
@@ -79,6 +80,8 @@ const appSettingsPersistConfig = {
     // and survives tab switches and restarts.
     "subagentPanelCollapsed",
     "workspaceListGrouping",
+    "workspaceListSources",
+    "chatListSources",
     "workspaceGroupExpanded",
     "pinnedMcpAppKeysByProvider",
     "onboardingCliAutoSelectApplied",
@@ -124,6 +127,7 @@ export const store = configureStore({
     runQueue: runQueueReducer,
     atlas: persistedAtlasReducer,
     terminal: terminalReducer,
+    preview: previewReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

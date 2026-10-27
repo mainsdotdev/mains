@@ -4,6 +4,7 @@ import * as path from "path";
 import { atlasService } from "../atlas";
 import { projectsService } from "../projects";
 import { collectionsService } from "../collections";
+import { bridgeService } from "../bridge";
 import { managedExecutionRoots } from "../runs";
 import { workspaceService } from "../workspace";
 import { isDiscoveredSkillDocument } from "../providers/skill-document-paths";
@@ -38,8 +39,8 @@ function isWithin(parent: string, child: string): boolean {
 
 async function listContentRoots(): Promise<string[]> {
   const [workspaces, projects] = await Promise.all([
-    workspaceService.list(true),
-    projectsService.list(true),
+    workspaceService.listOwned(true),
+    projectsService.listOwned(true),
   ]);
 
   const roots = new Set<string>(managedExecutionRoots());
@@ -97,5 +98,6 @@ export async function assertWithinReadableContentRoots(realPath: string): Promis
   }
   if (await collectionsService.isStoredSourceFile(realPath)) return;
   if (await atlasService.isStoredFile(realPath)) return;
+  if (await bridgeService.isCachedFile(realPath)) return;
   throw new Error("Path is outside your workspaces");
 }

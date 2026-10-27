@@ -20,7 +20,7 @@ export function useWorkspaceData(providerId?: string, mode?: ModeId) {
   const [userSelectedProvider, setSelectedProvider] =
     useState<string | null>(null);
 
-  const { data: workspaces = [] } = useListWorkspacesQuery();
+  const { data: workspaces = [], isLoading: loadingWorkspaces } = useListWorkspacesQuery();
 
   const { data: allProviders = EMPTY_PROVIDERS } =
     useGetProvidersByKindQuery("agent_runtime");
@@ -41,7 +41,7 @@ export function useWorkspaceData(providerId?: string, mode?: ModeId) {
     return workspaces.length > 0 ? workspaces[0].id : undefined;
   }, [mode, workspaceId, providerId, savedWorkspaceIdByProvider, workspaces]);
 
-  const { data: fetchedWorkspace } = useGetWorkspaceQuery(effectiveWorkspaceId!, {
+  const { currentData: fetchedWorkspace, isLoading: loadingWorkspace, isFetching: fetchingWorkspace } = useGetWorkspaceQuery(effectiveWorkspaceId!, {
     skip: !effectiveWorkspaceId,
   });
 
@@ -65,6 +65,7 @@ export function useWorkspaceData(providerId?: string, mode?: ModeId) {
   }, [effectiveWorkspaceId]);
 
   return {
+    loading: loadingWorkspaces || (!!effectiveWorkspaceId && !currentWorkspace && (loadingWorkspace || fetchingWorkspace)),
     workspaceId: effectiveWorkspaceId,
     workspaces,
     providers,

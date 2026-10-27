@@ -1,8 +1,9 @@
+import type { BackendOwnership } from "../bridge";
 // ─────────────────────────────────────────────────────────────
 // Project DTOs
 // ─────────────────────────────────────────────────────────────
 
-export interface ProjectResponse {
+export interface ProjectResponse extends BackendOwnership {
   id: string;
   accountId: string;
   name: string;

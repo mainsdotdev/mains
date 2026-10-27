@@ -36,10 +36,14 @@ export interface MainsToolContext {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Tool descriptions (shared between Claude MCP + Copilot custom tools)
+// Tool descriptions (rendered into every driver's tool definition)
 // ─────────────────────────────────────────────────────────────
 
 export const TOOL_DESCRIPTIONS = {
+  AtlasReadPage: "Read an Atlas Page's title, canonical BlockNote blocks, Markdown projection and current version. Page IDs are provided by the user or AtlasCreatePage. Markdown is lossy for some block formats. Link to the Page using the returned pageHref as the Markdown destination; never prepend a localhost or web origin.",
+  AtlasCreatePage: "Create a permanent Atlas Page in the current account and project. Use for user-requested notes, knowledge pages or checklists. Optionally set a single-emoji icon and a coverPreset (an id from AtlasListCovers) that fit the topic. Returns the Page ID, version and pageHref; Pages survive conversation deletion. Link to the Page using pageHref as the Markdown destination; never prepend a localhost or web origin.",
+  AtlasUpdatePage: "Update an Atlas Page after AtlasReadPage. Preserve existing block formatting, IDs and atlas-file:// references. Supply expectedVersion; stale updates fail without overwriting user changes. Creates a Page revision attributed to this conversation. To change only the icon or cover (null removes either), supply icon and/or coverPreset without content; that creates no revision. Link to the Page using the returned pageHref as the Markdown destination; never prepend a localhost or web origin.",
+  AtlasListCovers: "List the bundled Atlas Page covers as `id: description` lines. Call it before setting coverPreset on AtlasCreatePage or AtlasUpdatePage, then pick the cover whose mood fits the Page's topic.",
   RegisterDeliverable: "Before your final reply, register each completed document, presentation, spreadsheet or image you are delivering to the user. This makes the file visible even without a Markdown link. Register the actual saved path; do not register project source files merely read or edited. Use working or preview for intermediate files. Final reply links take precedence over registered fallback outputs. The conversation and turn are automatically scoped by Mains; never supply another conversation's files.",
   SaveReview:
     "Create a new review record. Returns the generated review ID. Workspace and run are automatically set from the current session.",
@@ -48,7 +52,7 @@ export const TOOL_DESCRIPTIONS = {
   SaveFindings:
     "Save multiple code review findings at once. Returns all generated finding IDs.",
   CheckPackage:
-    "IMPORTANT: Call this tool only before explicitly adding named packages (for example: npm install axios, pnpm add zod, pip install requests, cargo add serde). Do NOT call it for dependency restore commands with no package names, such as npm install, npm ci, pnpm install, yarn install, or bun install. Checks packages against a dependency security service and returns safety scores, risk levels, and alerts. If any package is blocked, do NOT install it — inform the user instead.",
+    "IMPORTANT: Call this tool only before explicitly adding named packages (for example: npm install axios, pnpm add zod, pip install requests, cargo add serde). Do NOT call it for dependency restore commands with no package names, such as npm install, npm ci, pnpm install, yarn install, or bun install. Checks packages against a dependency security service and returns safety scores, risk levels, and alerts. If any package is blocked, do NOT install it — inform the user instead. If the check itself fails, tell the user rather than installing unchecked.",
   StartVoiceTask: "Delegate user-requested project work or a multi-step task to a separate visible working chat. Inherits this chat's account, workspace, model and permissions. Returns immediately; creation is not completion. Repeated taskKey returns the existing chat without resending the prompt. For follow-ups use SendVoiceTaskMessage. Independent work needs a new taskKey.",
   ListVoiceTasks: "List this voice conversation's linked working chats and their current status. Use before starting work that may already have a chat.",
   ReadVoiceTask: "Read verified progress, latest report, tool activity and pending user action from a linked working chat. Never infer completion from a spoken acknowledgment.",
@@ -90,7 +94,7 @@ export async function handleSaveReview(
     workspaceId: ctx.workspaceId ?? undefined,
     title: args.title,
     summary: args.summary,
-    status: (args.status as any) ?? "open",
+    status: args.status ?? "open",
     runId: ctx.runId ?? undefined,
     metadata: args.metadata,
   });
@@ -116,7 +120,7 @@ export async function handleSaveFinding(
 ) {
   const findingId = await workspaceService.createFinding({
     reviewId: args.reviewId,
-    severity: args.severity as any,
+    severity: args.severity,
     file: args.file,
     lineStart: args.lineStart,
     lineEnd: args.lineEnd,
@@ -157,7 +161,7 @@ export async function handleSaveFindings(
   const findingIds = await workspaceService.createManyFindings(
     args.findings.map((f) => ({
       reviewId: args.reviewId,
-      severity: f.severity as any,
+      severity: f.severity,
       file: f.file,
       lineStart: f.lineStart,
       lineEnd: f.lineEnd,
@@ -203,17 +207,10 @@ export async function handleCheckPackage(
 ) {
   const { guardsService } = await import("../../guards/guards.service");
 
-  if (!args.packages || args.packages.length === 0) {
-    return {
-      content: [{ type: "text" as const, text: "No packages provided to check." }],
-      isError: true,
-    };
-  }
-
   const pkgs = args.packages.map((p) => ({
     name: p.name,
     version: p.version,
-    ecosystem: (p.ecosystem || "npm") as any,
+    ecosystem: p.ecosystem ?? "npm",
   }));
 
   let checks;
@@ -221,35 +218,39 @@ export async function handleCheckPackage(
     checks = await guardsService.checkPackages(pkgs);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      content: [{ type: "text" as const, text: `Guard check failed: ${message}` }],
-      isError: true,
-    };
+    throw new Error(`Guard check failed: ${message}`);
   }
 
-  const lines: string[] = [];
-  let hasBlocked = false;
-
-  for (const r of checks) {
-    const status = r.allowed ? "✅ ALLOWED" : "❌ BLOCKED";
-    if (!r.allowed) hasBlocked = true;
-
-    const scorePart = r.score
-      ? ` | score: ${(r.score.overallScore * 100).toFixed(0)}/100 (quality=${r.score.categories.quality ?? "-"}, vulnerability=${r.score.categories.vulnerability ?? "-"}, supplyChain=${r.score.categories.supplyChain ?? "-"})`
-      : "";
-    const alertPart = r.alerts.length > 0
-      ? ` | alerts: ${r.alerts.map((a) => `${a.severity}: ${a.title}`).join(", ")}`
-      : "";
-    const reasonPart = r.reason ? ` | ${r.reason}` : "";
-
-    lines.push(`${status} ${r.package.name}${scorePart}${alertPart}${reasonPart}`);
-  }
-
-  if (hasBlocked) {
-    lines.push("\n⚠️ One or more packages were BLOCKED. Do NOT install blocked packages. Inform the user about the security risks.");
-  }
+  // Guard scores are 0–1; report every score on one 0–100 scale.
+  const percent = (score: number) => Math.round(score * 100);
+  const blocked = checks.some((r) => !r.allowed);
+  const output = {
+    blocked,
+    results: checks.map((r) => ({
+      name: r.package.name,
+      version: r.package.version ?? null,
+      ecosystem: r.package.ecosystem,
+      allowed: r.allowed,
+      score: r.score
+        ? {
+            overall: percent(r.score.overallScore),
+            riskLevel: r.score.riskLevel,
+            categories: Object.fromEntries(
+              Object.entries(r.score.categories).flatMap(([name, value]) =>
+                value === undefined ? [] : [[name, percent(value)]],
+              ),
+            ),
+          }
+        : null,
+      alerts: r.alerts.map((a) => ({ severity: a.severity, title: a.title })),
+      reason: r.reason ?? null,
+    })),
+    ...(blocked && {
+      warning: "One or more packages were BLOCKED. Do NOT install blocked packages. Inform the user about the security risks.",
+    }),
+  };
 
   return {
-    content: [{ type: "text" as const, text: lines.join("\n") }],
+    content: [{ type: "text" as const, text: JSON.stringify(output) }],
   };
 }

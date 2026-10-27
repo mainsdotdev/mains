@@ -58,7 +58,7 @@ interface BrowserTabStripProps {
   inMainHeader?: boolean;
 }
 
-function BrowserTabIcon({
+export function BrowserTabIcon({
   faviconUrl,
   isLoading,
   isCrashed,
@@ -110,17 +110,19 @@ export function BrowserTabStrip({
   inMainHeader,
 }: BrowserTabStripProps) {
   const { header } = useMainHeader();
-  const { previewInsetLeft } = useShellHeaderChrome(sidebarCollapsed);
-  const reserveTrafficLights = isExpanded && !inMainHeader && !!previewInsetLeft;
-  const firstTabFlush = !reserveTrafficLights &&
+  const { headerInsetLeft } = useShellHeaderChrome(sidebarCollapsed);
+  const reserveHeaderInset = isExpanded && !inMainHeader && !!headerInsetLeft;
+  const firstTabFlush = !reserveHeaderInset &&
     (!inMainHeader || (!header && !sidebarCollapsed)) &&
     tabs[0]?.tabId === activeTabId;
 
   return (
     <ShellHeader
       data-browser-flush-tab-active={firstTabFlush ? "true" : undefined}
-      paddingLeft={reserveTrafficLights ? previewInsetLeft : undefined}
+      paddingLeft={reserveHeaderInset ? headerInsetLeft : undefined}
       reserveWindowControls={reserveLayoutControls && !inMainHeader}
+      // The main header already reserves the globe. pr-2 here would slide Restore left of Expand.
+      className={inMainHeader ? "pr-0" : undefined}
       actions={<PreviewPanelControls label="browser" isExpanded={isExpanded}
         onToggleExpanded={onToggleExpanded} onClose={reserveLayoutControls ? undefined : onClosePanel} />}
     >
@@ -139,7 +141,7 @@ export function BrowserTabStrip({
               key={tab.tabId}
               isActive={active}
               isFirst={index === 0 && (!inMainHeader || !header)}
-              showLeadingCorner={inMainHeader ? undefined : index > 0 || !!reserveTrafficLights}
+              showLeadingCorner={inMainHeader ? undefined : index > 0 || !!reserveHeaderInset}
               role="tab"
               ariaLabel={title}
               onClick={() => onActivate(tab.tabId)}

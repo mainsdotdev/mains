@@ -243,7 +243,7 @@ printf 'ok\\n'
 
   it("honours explicit overrides for detection, account checks, login and updates", async () => {
     const current = driver(configured);
-    expect(detectInstalledClis(undefined, configured)).toMatchObject({ copilot: true, copilotSource: "configured" });
+    expect(detectInstalledClis({ copilot: configured })).toMatchObject({ copilot: true, copilotSource: "configured" });
     const info = await current.getAccountInfo!();
     expect(info.cli).toMatchObject({ source: "configured", updateMethod: "cli" });
     expect(sdk.clients[0].options.connection).toEqual({ kind: "stdio", path: configured, args: [] });

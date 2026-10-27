@@ -1,4 +1,5 @@
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
+import type { BridgeSignInInput, BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
+import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
@@ -245,6 +246,27 @@ const api = {
       ipcRenderer.invoke(CHANNELS.ssh.closeTunnel, id),
   },
   // Encrypted at-rest storage for direct-mode backend owner tokens (local-only)
+  bridge: {
+    getAuthStatus: () => ipcRenderer.invoke(CHANNELS.bridge.getAuthStatus),
+    signIn: (input: BridgeSignInInput) => ipcRenderer.invoke(CHANNELS.bridge.signIn, input),
+    signOut: (removeAccountObjects = false) => ipcRenderer.invoke(CHANNELS.bridge.signOut, removeAccountObjects),
+    refreshAuth: () => ipcRenderer.invoke(CHANNELS.bridge.refreshAuth),
+    approveBackend: (input: Pick<BridgeApprovalRequest, "requestId" | "backendId" | "publicKey" | "signingPublicKey" | "code">) => ipcRenderer.invoke(CHANNELS.bridge.approveBackend, input),
+    confirmAccountKey: (fingerprint: string) => ipcRenderer.invoke(CHANNELS.bridge.confirmAccountKey, fingerprint),
+    rejectBackend: (requestId: string) => ipcRenderer.invoke(CHANNELS.bridge.rejectBackend, requestId),
+    requestApproval: () => ipcRenderer.invoke(CHANNELS.bridge.requestApproval),
+    revokeBackend: (backendId: string) => ipcRenderer.invoke(CHANNELS.bridge.revokeBackend, backendId),
+    enterRecoveryCode: (code: string) => ipcRenderer.invoke(CHANNELS.bridge.enterRecoveryCode, code),
+    takeRecoveryCode: () => ipcRenderer.invoke(CHANNELS.bridge.takeRecoveryCode),
+    regenerateRecoveryCode: () => ipcRenderer.invoke(CHANNELS.bridge.regenerateRecoveryCode),
+    getStatus: () => ipcRenderer.invoke(CHANNELS.bridge.getStatus),
+    syncNow: () => ipcRenderer.invoke(CHANNELS.bridge.syncNow),
+    getProjectScopes: () => ipcRenderer.invoke(CHANNELS.bridge.getProjectScopes),
+    setProjectLocalOnly: (projectId: string, localOnly: boolean) => ipcRenderer.invoke(CHANNELS.bridge.setProjectLocalOnly, projectId, localOnly),
+    includeLocalHistory: () => ipcRenderer.invoke(CHANNELS.bridge.includeLocalHistory),
+    watchRun: (runId: string, watcherId: string) => ipcRenderer.invoke(CHANNELS.bridge.watchRun, runId, watcherId),
+    unwatchRun: (watcherId: string) => ipcRenderer.invoke(CHANNELS.bridge.unwatchRun, watcherId),
+  },
   remoteBackends: {
     setToken: (id: string, token: string) =>
       ipcRenderer.invoke(CHANNELS.remoteBackends.setToken, id, token),
@@ -338,11 +360,15 @@ const api = {
     get: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.get, options),
     createPage: (input: AtlasCreatePage) => ipcRenderer.invoke(CHANNELS.atlas.createPage, input),
     savePage: (input: AtlasSavePage) => ipcRenderer.invoke(CHANNELS.atlas.savePage, input),
+    resolveFile: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.resolveFile, options),
+    getRevision: (options: AtlasIdentity & { revisionId: string }) => ipcRenderer.invoke(CHANNELS.atlas.getRevision, options),
+    resolveConflict: (input: AtlasResolveConflict) => ipcRenderer.invoke(CHANNELS.atlas.resolveConflict, input),
     revisions: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.revisions, options),
-    restore: (input: AtlasIdentity & { version: number; expectedVersion: number }) => ipcRenderer.invoke(CHANNELS.atlas.restore, input),
+    restore: (input: AtlasRestorePage) => ipcRenderer.invoke(CHANNELS.atlas.restore, input),
     saveFile: (input: AtlasSaveFile) => ipcRenderer.invoke(CHANNELS.atlas.saveFile, input),
     uploadFile: (input: AtlasUploadFile) => ipcRenderer.invoke(CHANNELS.atlas.uploadFile, input),
     update: (input: AtlasUpdateItem) => ipcRenderer.invoke(CHANNELS.atlas.update, input),
+    setCoverPreset: (input: AtlasSetCoverPreset) => ipcRenderer.invoke(CHANNELS.atlas.setCoverPreset, input),
     remove: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.remove, options),
   },
   collections: {
@@ -925,6 +951,8 @@ const api = {
   },
   // Run artifacts operations
   runArtifacts: {
+    resolveFilePath: (payload: import("@mains/contracts/runs").ResolveArtifactPathPayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.resolveFilePath, payload),
     getByRun: (runId: string, sinceId?: number) =>
       ipcRenderer.invoke(CHANNELS.runArtifacts.getByRun, runId, sinceId),
     readAttachmentImage: (payload: import("@mains/contracts/runs").ReadAttachmentImagePayload) =>

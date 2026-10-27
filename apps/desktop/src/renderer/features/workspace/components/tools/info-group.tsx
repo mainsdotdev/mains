@@ -59,6 +59,9 @@ import {
   readAsyncQuestions,
   readAsyncQuestionState,
 } from "@mains/contracts/async-questions";
+import { useReplicaView } from "@/hooks/use-replica-view";
+import { ReplicaImage } from "../replica-image";
+import { ReplicaFile } from "../replica-file";
 
 interface PromptAttachment {
   attachmentId?: string;
@@ -183,9 +186,23 @@ function InfoGroupImpl({
   providerId,
   floatingChat = false,
 }: InfoGroupProps) {
+  const replica = useReplicaView();
   const event = group.events[0];
   const [previewAtt, setPreviewAtt] = useState<PromptPreview | null>(null);
   if (!event) return null;
+  if (replica && runId && event.type === "artifact" && event.metadata?.kind === "image") {
+    return <>{group.events.map((row) => {
+      const id = /^artifact-(-?\d+)$/.exec(row.id)?.[1];
+      return id ? <ReplicaImage key={row.id} runId={runId} artifactId={Number(id)} name={String(row.metadata?.fileName ?? row.metadata?.title ?? "image.png")} /> : null;
+    })}</>;
+  }
+  if (replica && runId && event.type === "artifact" && ["document", "file", "visualization"].includes(String(event.metadata?.kind))) {
+    const id = /^artifact-(-?\d+)$/.exec(event.id)?.[1];
+    return id ? <ReplicaFile runId={runId} artifactId={Number(id)} name={String(event.metadata?.fileName ?? event.metadata?.title ?? "file")} /> : null;
+  }
+  if (replica && event.type === "artifact" && ["image", "document", "file", "visualization", "image_generation"].includes(String(event.metadata?.kind))) {
+    return <Text as="div" size="xs" tone="muted" className="my-3">File available on {replica.label}</Text>;
+  }
   if (event.type === "artifact" && event.metadata?.kind === "voice-task") {
     const task = event.metadata.voiceTask as VoiceTaskLink | undefined;
     return task && typeof task.id === "string" ? (
@@ -226,8 +243,8 @@ function InfoGroupImpl({
         displayName: parent ? `${parent}/${fileName}` : fileName,
       };
     });
-    const attachments = (event.metadata?.attachments ??
-      []) as PromptAttachment[];
+    const attachments = ((event.metadata?.attachments ?? []) as PromptAttachment[]).filter((attachment) => !replica || !!attachment.attachmentId)
+      .map((attachment) => replica ? { attachmentId: attachment.attachmentId, name: attachment.name, type: attachment.type, mimeType: attachment.mimeType } : attachment);
     const annotations = (
       (event.metadata?.browserAnnotations ?? []) as BrowserAnnotation[]
     ).filter(
@@ -511,7 +528,7 @@ function InfoGroupImpl({
     const questions = readAsyncQuestions(event.metadata.questions);
     const artifactId = /^artifact-(\d+)$/.exec(event.id)?.[1];
     if (questions.length > 0) {
-      if (runId && artifactId)
+      if (!replica && runId && artifactId)
         return (
           <CodexAsyncQuestionCard
             runId={runId}

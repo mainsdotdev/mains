@@ -11,6 +11,9 @@ npm install
 npm run serve -- --lan --port 8787
 npm run pair
 npm run auth -- list
+npm run bridge -- status
+npm run bridge -- projects
+npm run bridge -- local-only <project-id> --on
 npm run service -- status
 npm run build
 npm test

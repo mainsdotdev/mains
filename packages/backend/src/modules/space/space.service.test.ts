@@ -355,9 +355,9 @@ describe("spaceService", () => {
     });
 
     it("create propagates repo failures", async () => {
-      const spy = vi.spyOn(spaceRepo, "findBySlug").mockRejectedValueOnce(new Error("slug check failed"));
+      const spy = vi.spyOn(spaceRepo, "create").mockRejectedValueOnce(new Error("create failed"));
       await expect(spaceService.create({ name: "Test" })).rejects.toThrow(
-        "slug check failed",
+        "create failed",
       );
       spy.mockRestore();
     });
@@ -408,5 +408,29 @@ describe("spaceService", () => {
       ).rejects.toThrow("Failed to update space");
       findByIdSpy.mockRestore();
     });
+  });
+});
+
+// Replicas bypass local intent validation, but edits still enforce it atomically.
+describe("Bridge-compatible Space identity", () => {
+  beforeEach(() => { ({ db, sqlite: _sqlite, cleanup } = createTestDb()); createAccount(db); });
+  afterEach(() => cleanup());
+  it("allows replicated duplicates and changes unrelated fields without renaming them", async () => {
+    createSpace(db, { id: "a", name: "Same", slug: "same" });
+    createSpace(db, { id: "b", name: "Same", slug: "same" });
+    expect((await spaceService.getAll()).map((row) => row.id).sort()).toEqual(["a", "b"]);
+    await expect(spaceService.update("b", { icon: "emoji:🎯" })).resolves.toMatchObject({ id: "b", name: "Same", slug: "same" });
+  });
+  it("validates the slug derived from a rename and the name of a custom-slug create", async () => {
+    createSpace(db, { id: "a", name: "Work", slug: "work" });
+    createSpace(db, { id: "b", name: "Other", slug: "other" });
+    await expect(spaceService.update("b", { name: "Work" })).rejects.toThrow(/already exists/);
+    await expect(spaceService.create({ name: "Work", slug: "custom" })).rejects.toThrow(/name:.*already exists/);
+    expect(await spaceService.getById("b")).toMatchObject({ name: "Other", slug: "other" });
+  });
+  it("archives a seeded id even after its name and slug change", async () => {
+    createSpace(db, { id: "codex", name: "My Agent", slug: "renamed" });
+    await spaceService.delete("codex");
+    expect(await spaceService.getById("codex")).toMatchObject({ id: "codex", isArchived: true });
   });
 });
