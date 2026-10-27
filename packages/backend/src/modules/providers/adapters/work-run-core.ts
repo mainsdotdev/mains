@@ -257,6 +257,8 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
   // 1:1 delegation for optional pass-through methods
   if (driver.updateConfig)
     adapter.updateConfig = driver.updateConfig.bind(driver);
+  if (driver.invalidateCatalogs)
+    adapter.invalidateCatalogs = driver.invalidateCatalogs.bind(driver);
   if (driver.shutdown) adapter.shutdown = driver.shutdown.bind(driver);
   if (driver.canResumeSession)
     adapter.canResumeSession = driver.canResumeSession.bind(driver);

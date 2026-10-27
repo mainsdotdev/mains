@@ -2822,10 +2822,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   let cachedPlugins: PluginListResponse | null = null;
   let cachedPluginsTimestamp = 0;
   const PLUGINS_CACHE_TTL_MS = 5 * 60 * 1000;
+  // Late reads may finish for their caller, but cannot rewarm a retired catalog.
+  let catalogGeneration = 0;
 
   // A plugin change adds/removes commands, skills, and agents — so installing or
   // uninstalling one must invalidate those caches too, not just the plugin list.
   function invalidatePluginCaches(): void {
+    catalogGeneration++;
     cachedPlugins = null;
     cachedPluginsTimestamp = 0;
     commandsCache.clear();
@@ -3384,6 +3387,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // ─────────────────────────────────────────────────────────────
 
   async function fetchDiskSkills(workspacePath?: string): Promise<SkillInfo[]> {
+    const generation = catalogGeneration;
     const cacheKey = workspacePath ?? "__global__";
     const now = Date.now();
     const cached = skillsCache.get(cacheKey);
@@ -3407,7 +3411,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         skills.push(...projectSkills);
       }
 
-      skillsCache.set(cacheKey, { skills, timestamp: now });
+      if (generation === catalogGeneration) skillsCache.set(cacheKey, { skills, timestamp: now });
       return skills;
     } catch (error) {
       logError("Failed to discover skills:", error);
@@ -4376,6 +4380,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       }
     },
 
+    invalidateCatalogs() {
+      cachedModels = null;
+      cachedModelsTimestamp = 0;
+      invalidatePluginCaches();
+    },
+
     async shutdown(): Promise<void> {
       sessionIdMemo.clear();
       for (const cwd of [...mcpHosts.keys()]) closeMcpHost(cwd);
@@ -4404,6 +4414,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async listModels(): Promise<ModelInfo[]> {
+      const generation = catalogGeneration;
       const now = Date.now();
       if (cachedModels && now - cachedModelsTimestamp < MODELS_CACHE_TTL_MS) {
         return cachedModels;
@@ -4454,8 +4465,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           };
         });
 
-        cachedModels = models;
-        cachedModelsTimestamp = now;
+        if (generation === catalogGeneration) {
+          cachedModels = models;
+          cachedModelsTimestamp = now;
+        }
         return models;
       } catch (error) {
         logError("Failed to fetch models from SDK:", error);
@@ -4464,6 +4477,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async listCommands(workspacePath?: string): Promise<CommandInfo[]> {
+      const generation = catalogGeneration;
       const now = Date.now();
       const cacheKey = workspacePath ?? "__global__";
       const cachedEntry = commandsCache.get(cacheKey);
@@ -4494,7 +4508,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
             userFacing: true,
           }));
 
-        commandsCache.set(cacheKey, { commands, timestamp: now });
+        if (generation === catalogGeneration) commandsCache.set(cacheKey, { commands, timestamp: now });
         return commands;
       } catch (error) {
         logError("Failed to fetch commands from SDK:", error);
@@ -4507,6 +4521,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async listPlugins(): Promise<PluginListResponse> {
+      const generation = catalogGeneration;
       const now = Date.now();
       if (cachedPlugins && now - cachedPluginsTimestamp < PLUGINS_CACHE_TTL_MS) {
         return cachedPlugins;
@@ -4572,8 +4587,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           readInstalledShaById(),
           manifestsByMarketplace,
         );
-        cachedPlugins = result;
-        cachedPluginsTimestamp = now;
+        if (generation === catalogGeneration) {
+          cachedPlugins = result;
+          cachedPluginsTimestamp = now;
+        }
         return result;
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);

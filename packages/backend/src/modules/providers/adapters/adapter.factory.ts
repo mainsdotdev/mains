@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { ProviderResponse } from "../providers.dto";
+import { providerAccountCacheKey, providerCatalogConfigKey } from "../../../../shared/provider-catalog";
 import type {
   WorkRunAdapter,
   AdapterConfig,
@@ -52,6 +53,16 @@ export const isSupportedWorkProvider = isProviderId as (
  * We reuse adapters to maintain connection state
  */
 const adapterCache = new Map<string, WorkRunAdapter>();
+const catalogConfigKeys = new WeakMap<WorkRunAdapter, string>();
+const accountKeys = new WeakMap<WorkRunAdapter, string>();
+
+function refreshAdapterConfig(adapter: WorkRunAdapter, config: AdapterConfig): void {
+  const next = providerCatalogConfigKey(config);
+  const previous = catalogConfigKeys.get(adapter);
+  adapter.updateConfig?.(config);
+  catalogConfigKeys.set(adapter, next);
+  if (previous !== undefined && previous !== next) adapter.invalidateCatalogs?.();
+}
 
 /**
  * The adapter config for a provider: its stored `config` blob plus the
@@ -165,7 +176,7 @@ export function createWorkAdapter(provider: ProviderResponse): WorkRunAdapter {
   // holds the writer lock on every thread it opened.
   const cached = adapterCache.get(provider.id);
   if (cached) {
-    cached.updateConfig?.(config);
+    refreshAdapterConfig(cached, config);
     return cached;
   }
 
@@ -205,6 +216,7 @@ export function createWorkAdapter(provider: ProviderResponse): WorkRunAdapter {
 
   // Cache the adapter
   adapterCache.set(provider.id, adapter);
+  catalogConfigKeys.set(adapter, providerCatalogConfigKey(config));
 
   return adapter;
 }
@@ -218,7 +230,7 @@ export function refreshWorkAdapterConfig(provider: ProviderResponse): void {
   const cached = adapterCache.get(provider.id);
   if (!cached?.updateConfig) return;
   if (!isProviderId(provider.id)) return;
-  cached.updateConfig(buildAdapterConfig(provider));
+  refreshAdapterConfig(cached, buildAdapterConfig(provider));
 }
 
 /**
@@ -348,7 +360,12 @@ export async function getAccountInfoForProvider(provider: ProviderResponse): Pro
   if (!adapter.getAccountInfo) {
     return { account: null, requiresOpenaiAuth: false };
   }
-  return adapter.getAccountInfo();
+  const info = await adapter.getAccountInfo();
+  const next = providerAccountCacheKey(info);
+  // The first check also retires discovery warmed before account state was known.
+  if (accountKeys.get(adapter) !== next) adapter.invalidateCatalogs?.();
+  accountKeys.set(adapter, next);
+  return info;
 }
 
 /**
@@ -361,7 +378,9 @@ export async function updateCliForProvider(
   if (!adapter.updateCli) {
     return { success: false, output: `Provider "${provider.displayName}" does not support CLI updates.` };
   }
-  return adapter.updateCli();
+  const result = await adapter.updateCli();
+  if (result.success) adapter.invalidateCatalogs?.();
+  return result;
 }
 
 export async function listPluginsForProvider(provider: ProviderResponse): Promise<PluginListResponse> {

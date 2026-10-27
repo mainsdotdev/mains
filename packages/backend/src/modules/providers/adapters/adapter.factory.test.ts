@@ -15,6 +15,8 @@ vi.mock("./cursor.driver", () => ({ createCursorDriver: (c: any) => createCursor
 import {
   clearAdapterCache,
   createWorkAdapter,
+  getAccountInfoForProvider,
+  updateCliForProvider,
   listSkillsForProvider,
   refreshWorkAdapterConfig,
 } from "./adapter.factory";
@@ -81,6 +83,56 @@ describe("createWorkAdapter", () => {
       createWorkAdapter({ ...codexProvider({}), isEnabled: false }),
     ).toThrow(/is not enabled/);
     expect(createCodexDriver).not.toHaveBeenCalled();
+  });
+
+  it("clears discovery after catalog settings change while retaining the live adapter", () => {
+    const driver = { ...fakeDriver(), invalidateCatalogs: vi.fn() };
+    createCodexDriver.mockReturnValue(driver);
+    const adapter = createWorkAdapter(codexProvider({ binary: "/codex" }));
+    refreshWorkAdapterConfig(codexProvider({ binary: "/codex", planMode: true }));
+    expect(driver.invalidateCatalogs).not.toHaveBeenCalled();
+
+    refreshWorkAdapterConfig(codexProvider({ binary: "/other-codex", planMode: true }));
+    expect(driver.invalidateCatalogs).toHaveBeenCalledOnce();
+    expect(createWorkAdapter(codexProvider({ binary: "/other-codex", planMode: false }))).toBe(adapter);
+    expect(driver.invalidateCatalogs).toHaveBeenCalledOnce();
+    expect(createCodexDriver).toHaveBeenCalledOnce();
+  });
+
+  it("clears account-dependent discovery on initial and changed account checks, preserving it on failures", async () => {
+    const driver = { ...fakeDriver(), invalidateCatalogs: vi.fn(), getAccountInfo: vi.fn() };
+    createCodexDriver.mockReturnValue(driver);
+    const provider = codexProvider({});
+    driver.getAccountInfo.mockResolvedValue({ account: null, requiresOpenaiAuth: false });
+    await getAccountInfoForProvider(provider);
+    expect(driver.invalidateCatalogs).toHaveBeenCalledOnce();
+    await getAccountInfoForProvider(provider);
+    expect(driver.invalidateCatalogs).toHaveBeenCalledOnce();
+
+    driver.getAccountInfo.mockResolvedValue({
+      account: { type: "chatgpt", email: "user@example.test", planType: "pro" }, requiresOpenaiAuth: false,
+    });
+    await getAccountInfoForProvider(provider);
+    expect(driver.invalidateCatalogs).toHaveBeenCalledTimes(2);
+    driver.getAccountInfo.mockRejectedValueOnce(new Error("offline"));
+    await expect(getAccountInfoForProvider(provider)).rejects.toThrow("offline");
+    expect(driver.invalidateCatalogs).toHaveBeenCalledTimes(2);
+    await getAccountInfoForProvider(provider);
+    expect(driver.invalidateCatalogs).toHaveBeenCalledTimes(2);
+    expect(createCodexDriver).toHaveBeenCalledOnce();
+  });
+
+  it("clears discovery only after a successful CLI update without replacing the adapter", async () => {
+    const driver = { ...fakeDriver(), invalidateCatalogs: vi.fn(), updateCli: vi.fn() };
+    createCodexDriver.mockReturnValue(driver);
+    const provider = codexProvider({});
+    driver.updateCli.mockResolvedValueOnce({ success: false, output: "failed" });
+    await updateCliForProvider(provider);
+    expect(driver.invalidateCatalogs).not.toHaveBeenCalled();
+    driver.updateCli.mockResolvedValueOnce({ success: true, output: "updated" });
+    await updateCliForProvider(provider);
+    expect(driver.invalidateCatalogs).toHaveBeenCalledOnce();
+    expect(createCodexDriver).toHaveBeenCalledOnce();
   });
 
   it("preserves installed plugin identity as a structured mention path", async () => {

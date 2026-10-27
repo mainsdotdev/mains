@@ -124,6 +124,26 @@ printf 'ok\\n'
     expect(sdk.clients[0].options).not.toHaveProperty("useLoggedInUser");
   });
 
+  it("does not rewarm model discovery from a query started before invalidation or stop the client", async () => {
+    const current = driver();
+    await current.listModels!();
+    const client = sdk.clients[0];
+    current.invalidateCatalogs?.();
+    let finish!: (value: { models: Array<{ id: string; name: string }> }) => void;
+    client.rpc.models.list.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const pending = current.listModels!();
+    await vi.waitFor(() => expect(client.rpc.models.list).toHaveBeenCalledTimes(2));
+    current.invalidateCatalogs?.();
+    finish({ models: [{ id: "old", name: "Old" }] });
+    await pending;
+
+    client.rpc.models.list.mockResolvedValue({ models: [{ id: "new", name: "New" }] });
+    expect(await current.listModels!()).toEqual([expect.objectContaining({ id: "new" })]);
+    expect(client.rpc.models.list).toHaveBeenCalledTimes(3);
+    expect(client.stop).not.toHaveBeenCalled();
+    expect(sdk.clients).toHaveLength(1);
+  });
+
   it.each([undefined, false, true])("forwards the provider token and preserves explicit login choice (%s)", async (useLoggedInUser) => {
     await configuredDriver({ githubToken: "test-provider-token", useLoggedInUser }).getAccountInfo!();
     expect(sdk.clients[0].options.gitHubToken).toBe("test-provider-token");

@@ -716,6 +716,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
   // Slash commands, cached per cwd. Cursor streams them via the
   // `available_commands_update` notification (not in the session/new response).
   const commandCacheByCwd = new Map<string, CommandInfo[]>();
+  let catalogGeneration = 0;
 
   function findCursorBinary(): string {
     if (config.binary) return config.binary;
@@ -2299,6 +2300,12 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       adoptConfig(config, next as CursorAdapterConfig);
     },
 
+    invalidateCatalogs() {
+      catalogGeneration++;
+      commandCacheByCwd.clear();
+      // Effort/fast capabilities are model metadata, independent of the account.
+    },
+
     async shutdown(): Promise<void> {
       sessionIdMap.clear();
 
@@ -2407,6 +2414,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     },
 
     async listCommands(workspacePath?: string): Promise<CommandInfo[]> {
+      const generation = catalogGeneration;
       const cwd = workspacePath || os.homedir();
       const cached = commandCacheByCwd.get(cwd);
       if (cached) return cached;
@@ -2441,7 +2449,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
             finish([]);
           });
         });
-        if (commands.length > 0) commandCacheByCwd.set(cwd, commands);
+        if (commands.length > 0 && generation === catalogGeneration) commandCacheByCwd.set(cwd, commands);
         return commands;
       } catch (error) {
         logWarn(
