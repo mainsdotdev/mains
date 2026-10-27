@@ -96,7 +96,7 @@ export function RunView({
   const {
     loading: initialLoading,
     backend: { id: backendId, connected },
-    run: { record: run, isLive: runIsLive, isReplica, providerId, mode, workspacePath },
+    run: { record: run, isLive: runIsLive, isReplica, providerId, mode, workspacePath, fileLinks },
     transcript: { items, turns, plan, streamingItems, thinking, suggestions, history },
     approvals: { waiting, questions, now },
     modelSelection,
@@ -314,9 +314,10 @@ export function RunView({
             // computer's conversation can only be branched on that computer.
             onFork: connected && !isReplica ? fork : undefined,
             onOpenFile: openTextFile,
+            canOpenFile: fileLinks,
           }
         : undefined,
-    [actionState, connected, fork, forking, isReplica, openTextFile, run, turnIsActive],
+    [actionState, connected, fileLinks, fork, forking, isReplica, openTextFile, run, turnIsActive],
   );
 
   // Offered only where picking one can lead somewhere: a settled run this

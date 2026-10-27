@@ -9,9 +9,9 @@ import Animated, {
 
 import { parseMarkdown, type Block, type Inline, type ListItem } from "@/lib/markdown";
 import { prepareMathMarkdown } from "@/lib/math-markdown";
-import { outputReferenceName } from "@/lib/output-reference";
 import { colors, motion, radius, spacing, useBrandColors } from "@/theme";
 
+import { useFileLinkFilter } from "./file-links";
 import MathMarkdown from "./math-markdown";
 import { GlassSurface, SFSymbol, ThemedText } from "@/components/ui";
 
@@ -544,6 +544,7 @@ function InlineNode({
   onOpenFile?: (filePath: string) => void;
 }) {
   const brand = useBrandColors();
+  const canOpenFile = useFileLinkFilter();
 
   switch (node.type) {
     case "text":
@@ -581,7 +582,7 @@ function InlineNode({
       );
 
     case "link": {
-      const localFile = onOpenFile && isMarkdownFileHref(node.href);
+      const localFile = onOpenFile && canOpenFile(node.href);
       return (
         <Text
           style={{ color: brand.accent }}
@@ -595,11 +596,6 @@ function InlineNode({
       );
     }
   }
-}
-
-/** A scheme-less Markdown path, matching the desktop's local-file link rule. */
-function isMarkdownFileHref(href: string): boolean {
-  return outputReferenceName(href) !== null;
 }
 
 /** A quiet tail: enough contrast to feel fluid, without making prose pulse. */

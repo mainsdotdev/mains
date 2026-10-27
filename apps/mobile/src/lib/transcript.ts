@@ -21,6 +21,8 @@ type FullContent = { runId: string; id: number; source: "artifact" };
  *  - "prompt_suggestion"      → not a row: the run screen offers the latest
  *                               ones as follow-up chips after the answer
  *  - "image"                  → an image; the pixels are fetched on demand
+ *  - "document", "file"       → a file card, for selected outputs only
+ *  - "visualization"          → a "See on desktop" card
  *  - kind "log" artifacts     → hidden unless they are errors
  *  - anything else            → an assistant message
  *
@@ -71,6 +73,8 @@ type FlatItem =
   | { key: string; kind: "image"; image: TranscriptImage; at: number; turnId?: number };
 
 interface ArtifactMetadata {
+  /** Set by the backend on a file its deliverable rules selected for this turn. */
+  outputSelected?: unknown;
   title?: unknown;
   mimeType?: unknown;
   path?: unknown;
@@ -151,6 +155,11 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
     case "visualization":
     case "document":
     case "file": {
+      // The phone can download only selected outputs. A local conversation's
+      // page carries no other files, but another computer's (a Bridge replica)
+      // keeps its working copies and tool-written files: their cards would
+      // only open onto "no longer available", so they stay out.
+      if (artifact.kind !== "visualization" && meta.outputSelected !== true) return null;
       const reference = artifact.path ?? meta.path;
       if (typeof reference !== "string" && artifact.kind !== "visualization") return null;
       const name = artifact.kind === "visualization" && typeof meta.title === "string" && meta.title

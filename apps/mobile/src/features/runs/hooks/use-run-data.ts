@@ -11,9 +11,10 @@ import {
 import { db } from "@/db/client";
 import { cachedHistoryQueries } from "@/db/history-queries";
 import { useRunHistory } from "@/backend/run-history";
-import { pendingApprovals, runArtifacts, runTurns, runs, toolCalls, workspaces } from "@/db/schema";
+import { pendingApprovals, runArtifacts, runOutputs, runTurns, runs, toolCalls, workspaces } from "@/db/schema";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { pendingAsyncQuestions } from "@/lib/async-questions";
+import { fileLinkFilter, knownOutputNames } from "@/lib/output-reference";
 import { latestPromptSuggestions } from "@/lib/prompt-suggestions";
 import { buildTranscript } from "@/lib/transcript";
 import { useModelSelection } from "@/lib/use-model-selection";
@@ -90,6 +91,24 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     () => buildTranscript(artifactQuery.data, callQuery.data),
     [artifactQuery.data, callQuery.data],
   );
+  const mode = isModeId(run?.mode) ? run.mode : DEFAULT_MODE_ID;
+  // Outputs listed before keep their links even when their turn is outside the window.
+  const outputQuery = useCoalescedLiveQuery(
+    db
+      .select({ descriptorJson: runOutputs.descriptorJson })
+      .from(runOutputs)
+      .where(and(eq(runOutputs.backendId, backendId), eq(runOutputs.runId, runId))),
+    runOutputs,
+    [backendId, runId],
+  );
+  const fileLinks = useMemo(
+    () => fileLinkFilter({
+      outputNames: knownOutputNames(items, outputQuery.data),
+      // Only Work/Chat runs have a folder of their own the Mac reads Markdown from.
+      markdownFallback: mode !== "developer",
+    }),
+    [items, mode, outputQuery.data],
+  );
   const streamingMessages = useStreamingMessages(runId);
   const { persistedResponseContents, streamingItems } = useMemo(
     () => projectStreamingTranscript(items, streamingMessages),
@@ -142,8 +161,10 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
       /** Another computer's conversation (Bridge): read here, never continued. */
       isReplica: run?.isReplica === true,
       providerId,
-      mode: isModeId(run?.mode) ? run.mode : DEFAULT_MODE_ID,
+      mode,
       workspacePath: workspaceQuery.data[0]?.rootPath ?? null,
+      /** Which file references in this transcript can open on the phone. */
+      fileLinks,
     },
     transcript: {
       items,

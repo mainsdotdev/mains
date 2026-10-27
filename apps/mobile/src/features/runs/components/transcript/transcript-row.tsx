@@ -51,8 +51,10 @@ export interface TranscriptActions {
   onFork?: () => Promise<void>;
   /** A continuation is running, so preserve the fork button without accepting taps. */
   forkDisabled: boolean;
-  /** A Work/Chat Markdown link opens on its own native screen. */
+  /** A conversation's file link opens on its own native screen. */
   onOpenFile?: (filePath: string) => void;
+  /** Which file references link to `onOpenFile`; the rest stay plain text. */
+  canOpenFile?: (filePath: string) => boolean;
 }
 
 /**

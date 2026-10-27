@@ -79,9 +79,10 @@ test("interactive transcript artifacts become desktop notices without exposing H
   const artifact = (id, kind, path, metadata = {}) => ({ backendId: "b", runId: "r", id, kind, path, content: "<html><script>interactive()</script></html>", metadataJson: JSON.stringify(metadata), createdAt: new Date(id) });
   const items = buildTranscript([
     artifact(1, "visualization", "/private/run/chart.html", { title: "Budget forecast", mobileContentDeferred: { chars: 50000 } }),
-    artifact(2, "file", "/private/run/dashboard.html", { fileName: "Dashboard" }),
+    // Files reach the phone as the backend's selected outputs, which carry the flag.
+    artifact(2, "file", "/private/run/dashboard.html", { fileName: "Dashboard", outputSelected: true }),
     artifact(3, "visualization", null),
-    artifact(4, "document", "/private/run/report.pdf"),
+    artifact(4, "document", "/private/run/report.pdf", { outputSelected: true }),
   ], []);
   assert.deepEqual(items.map((item) => [item.kind, item.name, item.desktopOnly === true]), [
     ["document", "Budget forecast", true], ["document", "Dashboard", true], ["document", "Interactive output", true], ["document", "report.pdf", false],

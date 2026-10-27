@@ -20,9 +20,9 @@ import {
   toolSummary,
 } from "@/lib/tool-output";
 import { resolveTool } from "@/lib/tool-registry";
-import { outputReferenceName } from "@/lib/output-reference";
 import { colors, spacing } from "@/theme";
 
+import { useFileLinkFilter } from "../file-links";
 import { DiffStat, ToolCodeBody, ToolDetail, ToolDiffBody, ToolRow, ToolTextBody } from "./tool-row";
 import { HistoryContentLink } from "../../history-content-link";
 
@@ -237,9 +237,10 @@ function buildView(
 
 /** A file path: the name alone, since a phone row has no room for the rest. */
 function FileDetail({ path, onOpen }: { path: string; onOpen?: () => void }) {
+  const canOpenFile = useFileLinkFilter();
   if (!path) return <ToolDetail>{""}</ToolDetail>;
   const fileName = shortFileName(path);
-  if (!onOpen) return <ToolDetail>{fileName}</ToolDetail>;
+  if (!onOpen || !canOpenFile(path)) return <ToolDetail>{fileName}</ToolDetail>;
   return (
     <Pressable
       accessibilityRole="link"
@@ -256,17 +257,12 @@ function FileDetail({ path, onOpen }: { path: string; onOpen?: () => void }) {
   );
 }
 
-/** Only the document viewer's supported local files become tool-row links. */
+/** Offered to the row; `FileDetail` links it only when the conversation can open that file. */
 function markdownFileOpener(
   filePath: string,
   onOpenFile?: (filePath: string) => void,
 ): (() => void) | undefined {
-  if (!onOpenFile || !isMarkdownFilePath(filePath)) return undefined;
-  return () => onOpenFile(filePath);
-}
-
-function isMarkdownFilePath(filePath: string): boolean {
-  return outputReferenceName(filePath.trim()) !== null;
+  return onOpenFile ? () => onOpenFile(filePath) : undefined;
 }
 
 interface Todo {
