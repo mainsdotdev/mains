@@ -36,7 +36,9 @@ async function node(account: string, backendId: string, extra: Partial<BridgeRep
   fixture.sqlite.prepare("INSERT INTO accounts(id) VALUES('default')").run();
   fixture.sqlite.prepare("INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default',?)").run(backendId);
   fixture.sqlite.exec("INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude')");
-  const options: BridgeReplicatorOptions = { sqlite: fixture.sqlite, backendId, autoStart: false, config: {
+  // Fake time runs ahead of hub replies on the real socket, so a slow reply must not reach the
+  // 15 s request timeout before it lands. Offline tests pass their own short timeout.
+  const options: BridgeReplicatorOptions = { sqlite: fixture.sqlite, backendId, autoStart: false, requestTimeoutMs: 3_600_000, config: {
     url: hub.wsUrl, token: await hub.token(account, backendId), accountKey: key, backendId, label: `Computer ${backendId}`, accountId: account, signingPrivateKey: fixtureSigningKey(account, backendId),
   }, ...extra };
   const replicator = createBridgeReplicator(options); cleanups.push(() => replicator.stop());
@@ -50,7 +52,8 @@ function run(n: Awaited<ReturnType<typeof node>>, id = "r") {
   n.sqlite.prepare("INSERT INTO runs(id,account_id,owner_backend_id,provider_id,title,status) VALUES(?,'default',?,'claude_code','Synced chat','running')").run(id, n.options.backendId);
 }
 async function flushBackground(predicate: () => boolean) {
-  for (let i = 0; i < 2000; i++) {
+  // Bounded by real time, not turns: hub replies arrive over a real socket at the machine's pace.
+  for (const deadline = performance.now() + 10_000; performance.now() < deadline;) {
     await new Promise<void>((resolve) => setImmediate(resolve));
     await vi.advanceTimersByTimeAsync(0);
     if (predicate()) return;
