@@ -1,0 +1,124 @@
+import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
+import { hmac } from "@noble/hashes/hmac.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { randomBytes } from "@noble/hashes/utils.js";
+import { BRIDGE_PROTOCOL_VERSION, type BridgeBody, type BridgeEnvelope, type BridgeHeader } from "@mains/contracts/bridge-protocol";
+import { validateBridgeHeader, validateBridgeCiphertext } from "@mains/contracts/bridge-wire";
+import { bridgeHeaderFields } from "@mains/contracts/bridge-signing";
+import { fromBase64Url, toBase64Url, utf8 } from "./bridge.encoding";
+import { deriveBridgeKeys } from "./bridge.keys";
+import { bridgeBlobRoots, validateBridgeBlobIdentity, type BridgeBlobRef } from "@mains/contracts/bridge-blobs";
+
+export interface BridgeCodec {
+  seal(header: BridgeHeader, body: BridgeBody): BridgeEnvelope;
+  open(envelope: BridgeEnvelope): { header: BridgeHeader; body: BridgeBody };
+  destroy?(): void;
+}
+
+export function bridgeRecordKeys(key: Uint8Array, table: string, pk: string, register?: string) {
+  if (key.byteLength !== 32) throw new Error("Bridge record key must contain 32 bytes");
+  const digest = (value: string) => toBase64Url(hmac(sha256, key, utf8(value)).subarray(0, 16));
+  return {
+    rowKey: digest(`${table}:${pk}`),
+    ...(register === undefined ? {} : { registerKey: digest(`${table}:${pk}:${register}`) }),
+  };
+}
+
+/** A fixed field order authenticates the complete routing header independently of JSON key order. */
+export function bridgeHeaderAad(header: BridgeHeader): Uint8Array {
+  validateBridgeHeader(header);
+  return utf8(JSON.stringify(bridgeHeaderFields(header)));
+}
+
+export function createBridgeSealingCodec(accountKey: Uint8Array): BridgeCodec {
+  const keys = deriveBridgeKeys(accountKey);
+  const verifyIdentity = (header: BridgeHeader, body: BridgeBody) => {
+    const expected = bridgeRecordKeys(keys.recordKey, body.table, body.pk, "register" in body ? body.register : undefined);
+    if (header.rowKey !== expected.rowKey || header.registerKey !== expected.registerKey) throw new Error("Bridge encrypted record identity mismatch");
+  };
+  return {
+    seal(header, body) {
+      if (header.op === "upsert" && "blobRefs" in body) header = { ...header, blobs: bridgeBlobRoots(body.blobRefs) };
+      validateRecord(header, body); verifyIdentity(header, body);
+      const nonce = randomBytes(24);
+      const ciphertext = xchacha20poly1305(keys.bodyKey, nonce, bridgeHeaderAad(header)).encrypt(utf8(JSON.stringify(body)));
+      const envelope = { header: structuredClone(header), body: { nonce: toBase64Url(nonce), payload: toBase64Url(ciphertext) } };
+      validateBridgeCiphertext(envelope);
+      return envelope;
+    },
+    open(envelope) {
+      validateBridgeCiphertext(envelope);
+      let plaintext: Uint8Array;
+      try { plaintext = xchacha20poly1305(keys.bodyKey, fromBase64Url(envelope.body.nonce!, 24), bridgeHeaderAad(envelope.header)).decrypt(fromBase64Url(envelope.body.payload)); }
+      catch { throw new Error("Bridge record authentication failed"); }
+      try {
+        const body: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plaintext));
+        validateRecord(envelope.header, body); verifyIdentity(envelope.header, body);
+        return { header: structuredClone(envelope.header), body };
+      } finally { plaintext.fill(0); }
+    },
+  };
+}
+
+/** In-memory tests only. The WebSocket transport and hub reject this plaintext format. */
+export const bridgePassThroughCodec: BridgeCodec = {
+  seal(header, body) {
+    if (header.op === "upsert" && "blobRefs" in body) header = { ...header, blobs: bridgeBlobRoots(body.blobRefs) };
+    validateRecord(header, body);
+    return { header: structuredClone(header), body: { nonce: null, payload: JSON.stringify(body) } };
+  },
+  open(envelope) {
+    if (envelope.body.nonce !== null) throw new Error("Encrypted record requires the sealing codec");
+    const body: unknown = JSON.parse(envelope.body.payload);
+    validateRecord(envelope.header, body);
+    return { header: structuredClone(envelope.header), body: body as BridgeBody };
+  },
+};
+
+function validateRecord(header: BridgeHeader, value: unknown): asserts value is BridgeBody {
+  if (header.v !== BRIDGE_PROTOCOL_VERSION || typeof header.origin !== "string" || !header.origin ||
+      typeof header.rowKey !== "string" || !header.rowKey ||
+      (header.owner !== undefined && (typeof header.owner !== "string" || !header.owner)) ||
+      (header.runId !== undefined && (typeof header.runId !== "string" || !header.runId)) ||
+      (header.retention !== undefined && (header.retention !== "30d-idle" || header.op !== "upsert" || header.stream === "account" || !header.owner || header.stream !== `run:${header.runId}`)) ||
+      (header.stream !== "account" && !/^run:.+/.test(header.stream)) ||
+      !Number.isSafeInteger(header.hlc.physicalMs) || header.hlc.physicalMs < 0 ||
+      !Number.isSafeInteger(header.hlc.counter) || header.hlc.counter < 0)
+    throw new Error("Invalid Bridge record header");
+  if (!value || typeof value !== "object") throw new Error("Invalid Bridge record body");
+  const body = value as Record<string, unknown>;
+  if (typeof body.table !== "string" || !body.table || typeof body.pk !== "string" || !body.pk)
+    throw new Error("Invalid Bridge record identity");
+  if (header.op === "delete") {
+    if (header.registerKey !== undefined || header.blobs !== undefined || Object.keys(body).some((key) => key !== "table" && key !== "pk"))
+      throw new Error("Bridge deletes are minimal row-level records");
+  } else if (header.op !== "upsert" || typeof header.registerKey !== "string" || !header.registerKey || typeof body.register !== "string" || !body.register ||
+      !Number.isSafeInteger(body.schemaVersion) || (body.schemaVersion as number) < 1 ||
+      !body.values || typeof body.values !== "object" || Array.isArray(body.values) ||
+      !body.refs || typeof body.refs !== "object" || Array.isArray(body.refs) || !Array.isArray(body.blobRefs)) {
+    throw new Error("Invalid Bridge upsert");
+  }
+  if (header.op === "upsert") {
+    const blobs = body.blobRefs as BridgeBlobRef[];
+    if (blobs.length > 64) throw new Error("Too many Bridge file references");
+    const slots = new Set<string>();
+    for (const ref of blobs) {
+      validateBridgeBlobIdentity(ref);
+      const slot = JSON.stringify([ref.column, ref.sourcePath ?? null]);
+      if (typeof ref.column !== "string" || !ref.column || typeof ref.name !== "string" || !ref.name || ref.name.length > 255 ||
+          ref.kind !== undefined && ref.kind !== "value" || ref.kind === "value" && (body.schemaVersion as number) < 4 ||
+          /[\\/]/.test(ref.name) || [...ref.name].some((char) => char.charCodeAt(0) < 32) || ref.mime !== null && (typeof ref.mime !== "string" || ref.mime.length > 200) ||
+          ref.sourcePath !== undefined && (typeof ref.sourcePath !== "string" || ref.sourcePath.length > 8192) || slots.has(slot)) throw new Error("Invalid Bridge file manifest");
+      slots.add(slot);
+    }
+    if (header.blobs !== undefined) {
+      const roots = bridgeBlobRoots(blobs);
+      if (header.blobs.length !== roots.length || roots.some((root, index) => root.blobId !== header.blobs![index].blobId || root.size !== header.blobs![index].size))
+        throw new Error("Bridge blob roots do not match the encrypted manifest");
+    }
+    const values = (value as BridgeBody & { values: Record<string, unknown> }).values;
+    if (Object.values(values).some((entry) => entry !== null &&
+        !["string", "number", "boolean"].includes(typeof entry) || typeof entry === "number" && !Number.isFinite(entry)))
+      throw new Error("Bridge values must be portable SQLite scalars");
+  }
+}

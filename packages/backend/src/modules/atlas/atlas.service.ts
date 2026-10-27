@@ -1,17 +1,28 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedFile, AtlasIdentity,
   AtlasItem, AtlasLibraryEntry, AtlasLibraryOptions, AtlasLibraryPage, AtlasListItem, AtlasListOptions, AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem,
-  AtlasUploadFile } from "@mains/contracts/atlas";
+  AtlasUploadFile, AtlasResolveConflict, AtlasMetadataPatch } from "@mains/contracts/atlas";
+import { CHANNELS } from "@mains/contracts/channels";
+import { emit } from "../../ipc-kit/event-bus";
 import { ATLAS_LIBRARY_PAGE_SIZE } from "@mains/contracts/atlas";
 import { collectionsService } from "../collections";
+import { bridgeService } from "../bridge";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { atlasRepo, type AtlasRecord, type RevisionRecord } from "./atlas.repo";
 import { pageContent } from "./atlas.blocks";
+import { continuesSession, historyCheckpoints } from "./atlas.history";
 import { metadataPatch, readMetadata } from "./atlas.metadata";
-import { atlasRoot, fileHash, imageContentHash, inspectSource, readSource, removeFiles, safeName, sourceKey, storagePath, writeFile } from "./atlas.storage";
+import { ATLAS_COVER_SOURCE_PREFIX, coverPreset, isCoverId } from "@mains/contracts/atlas-covers";
+import { readCoverPreset } from "./atlas.covers";
+import { atlasRoot, fileHash, imageContentHash, inspectSource, readSource, removeFiles, restoreFile, safeName, sourceKey, storagePath, writeFile } from "./atlas.storage";
+
+interface PagePresentation {
+  metadata?: AtlasMetadataPatch | null;
+  coverPreset?: string | null;
+}
 
 const pendingSaves = new Map<string, Promise<AtlasItem>>();
 const IMAGE_MIMES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
@@ -47,19 +58,50 @@ function owned(input: AtlasIdentity) {
 }
 function format(row: AtlasRecord): AtlasItem {
   const { storageKey, contentHash: _hash, ...item } = row;
-  return { ...item, metadata: readMetadata(row.metadata), path: storageKey ? storagePath(storageKey) : null,
+  const metadata = readMetadata(row.metadata);
+  if (metadata?.coverFileId) metadata.coverFileId = atlasRepo.find(metadata.coverFileId, row.accountId)?.id ?? metadata.coverFileId;
+  return { ...item, metadata, path: storageKey ? storagePath(storageKey) : null,
     trashedAt: row.trashedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
 }
 function revision(row: RevisionRecord): AtlasPageRevision {
   const { blocksJson, ...rest } = row;
-  return { ...rest, blocks: JSON.parse(blocksJson), createdAt: row.createdAt.toISOString() };
+  return { ...rest, ...atlasRepo.provenance(row.id), blocks: JSON.parse(blocksJson), createdAt: row.createdAt.toISOString() };
 }
 function pageFor(item: AtlasRecord): AtlasPage {
   if (item.kind !== "page") throw new Error("Atlas item is not a page");
-  const current = atlasRepo.revision(item.id, item.version);
+  const current = item.currentRevisionId ? atlasRepo.revisionById(item.id, item.currentRevisionId) : null;
   if (!current) throw new Error("Page revision not found");
-  return { item: format(item), revision: revision(current) };
+  return { item: format(item), revision: revision(current), conflicts: atlasRepo.conflicts(item.id, current.id)
+    .map((row) => { const { blocks: _blocks, markdown: _markdown, ...summary } = revision(row); return summary; }) };
+}
+/**
+ * Keep only what history shows. Replicated Pages are skipped inside the repo: their revisions are frozen
+ * because other backends may build on them. Best effort, since a failed cleanup must never fail a save.
+ */
+function pruneHistory(item: AtlasRecord) {
+  try {
+    if (item.kind !== "page" || !item.currentRevisionId || atlasRepo.anyReplicated(item.id)) return;
+    const rows = atlasRepo.revisions(item.id, -1);
+    const pinned = new Set([item.currentRevisionId, ...atlasRepo.conflicts(item.id, item.currentRevisionId).map((row) => row.id)]);
+    const kept = new Set(historyCheckpoints(rows, pinned).map((row) => row.id));
+    const drop = rows.filter((row) => !kept.has(row.id)).map((row) => row.id);
+    if (!drop.length) return;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const survivor = (start: string | null) => {
+      for (let id = start, steps = 0; id && steps <= rows.length; id = byId.get(id)?.parentRevisionId ?? null, steps++)
+        if (kept.has(id)) return id;
+      return null;
+    };
+    const relink = rows.filter((row) => kept.has(row.id)).flatMap((row) => {
+      const parentRevisionId = survivor(row.parentRevisionId), mergedRevisionId = survivor(row.mergedRevisionId);
+      return parentRevisionId === row.parentRevisionId && mergedRevisionId === row.mergedRevisionId ? []
+        : [{ id: row.id, parentRevisionId, mergedRevisionId }];
+    });
+    atlasRepo.prune(item.id, drop, relink);
+  } catch (error) {
+    console.warn("[Atlas] Could not prune page history:", error);
+  }
 }
 async function collection(id: string | null | undefined, accountId: string) {
   if (!id) return null;
@@ -68,31 +110,73 @@ async function collection(id: string | null | undefined, accountId: string) {
   return id;
 }
 async function requirePageFiles(ids: string[], accountId: string) {
+  const canonical: string[] = [];
   for (const id of ids) {
     const file = owned({ id, accountId });
     if (!file.storageKey || file.kind === "page") throw new Error("Embedded Atlas file not found");
-    const stats = await fs.lstat(storagePath(file.storageKey));
-    if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("Embedded Atlas file is missing");
+    try {
+      const stats = await fs.lstat(storagePath(file.storageKey));
+      if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("Embedded Atlas file is missing");
+    } catch (error) {
+      // References are metadata. An authenticated immutable manifest is enough
+      // to edit offline without downloading every historical embed again.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !atlasRepo.hasFileManifest(file.id)) throw error;
+    }
+    canonical.push(file.id);
   }
+  return [...new Set(canonical)];
 }
 async function runContext(runId: string, accountId: string) {
   // Lazy seam: provider tools also call Atlas while runs owns their lifecycle.
   const { runsService } = await import("../runs");
   const run = await runsService.getRunById(required(runId, "Conversation"));
   if (!run || run.accountId !== accountId) throw new Error("Conversation not found");
-  const root = await runsService.getRunExecutionRoot(runId);
+  const root = run.isReplica ? null : await runsService.getRunExecutionRoot(runId);
   const imageRoot = path.join(getBackendRuntime().getPath("userData"), "generated-images", runId);
   // Codex's native image files are outside the execution cwd. Admit only this
   // account-owned run's thread, never the shared directory of all Codex threads.
-  const codexImages = run.providerId === "codex" && run.sessionId && /^[\w-]+$/.test(run.sessionId)
+  const codexImages = !run.isReplica && run.providerId === "codex" && run.sessionId && /^[\w-]+$/.test(run.sessionId)
     ? path.join(os.homedir(), ".codex", "generated_images", run.sessionId) : null;
-  const attachments = await runsService.listRunAttachmentFiles(runId);
+  const attachments = run.isReplica ? [] : await runsService.listRunAttachmentFiles(runId);
   return { run, runsService, codexImages, attachments,
     roots: [...(root ? [root] : []), imageRoot, ...(codexImages ? [codexImages] : []),
       ...attachments.map((file) => path.dirname(file.path))] };
 }
+/** Another device's conversation offers the uploads and selected outputs Bridge synced
+ * from it. Only their records are read: a card downloads its file when it opens. */
+async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeof runContext>>): Promise<AtlasGeneratedFile[]> {
+  const common = { runId: run.id, runTitle: run.title ?? "Conversation", collectionId: run.collectionId };
+  const backendId = run.ownerBackendId ?? "";
+  const replicaKey = (...identity: unknown[]) => createHash("sha256").update(JSON.stringify([run.id, ...identity])).digest("hex");
+  const result: AtlasGeneratedFile[] = [];
+  for (const { attachment, isBrowserAnnotation } of runsService.listRunAttachmentRecords(run.id)) {
+    const type = classify(attachment.name);
+    if (isBrowserAnnotation || !type) continue;
+    result.push({ ...common, ...type, origin: "attachment", contentHash: attachment.contentHash,
+      sourceKey: replicaKey("attachment", attachment.id), path: attachment.name, fileName: attachment.name,
+      byteSize: attachment.byteSize, modifiedAt: attachment.createdAt.toISOString(),
+      replica: { backendId, attachmentId: attachment.id } });
+  }
+  for (const output of await runsService.getOutputArtifacts(run.id)) {
+    const source = output.metadata?.path;
+    const type = typeof source === "string" ? classify(source) : null;
+    if (typeof source !== "string" || !type) continue;
+    const modified = Number(output.metadata?.modifiedAt);
+    // The source device keys its own copy by this path, so a file it saved to Atlas is not listed twice.
+    result.push({ ...common, ...type, origin: "generated",
+      sourceKey: path.isAbsolute(source) ? sourceKey(run.id, source) : replicaKey("output", output.id), path: source,
+      fileName: typeof output.metadata?.fileName === "string" ? output.metadata.fileName : path.basename(source),
+      byteSize: Number(output.metadata?.byteSize) || 0,
+      modifiedAt: (modified > 0 ? new Date(modified) : output.createdAt).toISOString(),
+      replica: { backendId, artifactId: output.id } });
+  }
+  return [...new Map(result.map((item) => [item.sourceKey, item])).values()];
+}
 async function generatedForRun(runId: string, accountId: string, hashImages = true): Promise<AtlasGeneratedFile[]> {
-  const { run, runsService, roots, attachments } = await runContext(runId, accountId);
+  const context = await runContext(runId, accountId);
+  const { run, runsService, roots, attachments } = context;
+  // Generated discovery walks this backend's execution folders.
+  if (run.isReplica) return replicaFilesForRun(context);
   const candidates = new Set<string>();
   for (const artifact of await runsService.getOutputArtifacts(runId)) {
     if (artifact.metadata?.outputSelected && artifact.path) candidates.add(artifact.path);
@@ -120,6 +204,7 @@ async function store(accountId: string, key: string, name: string, bytes: Buffer
   const previous = atlasRepo.bySource(accountId, key);
   if (previous) {
     if (previous.trashedAt) atlasRepo.update(previous.id, accountId, { trashedAt: null });
+    emit(CHANNELS.atlas.changed, {});
     return format(owned({ id: previous.id, accountId }));
   }
   const id = randomUUID();
@@ -129,6 +214,7 @@ async function store(accountId: string, key: string, name: string, bytes: Buffer
   try {
     atlasRepo.insert({ id, accountId, ...type, title: name, fileName: name, storageKey,
       byteSize: bytes.length, contentHash: fileHash(bytes), sourceRunId, sourceKey: key, collectionId });
+    emit(CHANNELS.atlas.changed, {});
     return format(owned({ id, accountId }));
   } catch (error) { await removeFiles(id); throw error; }
 }
@@ -138,6 +224,36 @@ function once(key: string, action: () => Promise<AtlasItem>) {
   const promise = action().finally(() => pendingSaves.delete(key));
   pendingSaves.set(key, promise);
   return promise;
+}
+
+/** Finish fallible cover preparation before writing Page content or presentation. */
+async function prepareMetadata(accountId: string, input: PagePresentation) {
+  let metadata = input.metadata === undefined ? undefined : metadataPatch(input.metadata);
+  if (input.coverPreset !== undefined) {
+    if (input.coverPreset !== null && !isCoverId(input.coverPreset))
+      throw new Error(`Unknown cover "${input.coverPreset}". Call AtlasListCovers for the available ids.`);
+    let coverFileId: string | null = null;
+    if (input.coverPreset !== null) {
+      const preset = input.coverPreset;
+      const key = `${ATLAS_COVER_SOURCE_PREFIX}${preset}`;
+      const cover = await once(`${accountId}:${key}`, async () => {
+        const bytes = await readCoverPreset(preset);
+        const previous = atlasRepo.bySource(accountId, key);
+        if (previous?.storageKey && !await restoreFile(previous.storageKey, bytes, previous.contentHash))
+          // An older app may have shipped different bytes for this preset. Keep its immutable identity.
+          await bridgeService.resolveFile("atlas_items", previous.id, "storage_key");
+        return store(accountId, key, coverPreset(preset)!.file, bytes, null, null);
+      });
+      coverFileId = cover.id;
+    }
+    metadata = { ...metadata, coverFileId };
+  }
+  if (metadata?.coverFileId) {
+    const cover = owned({ id: metadata.coverFileId, accountId });
+    if (cover.kind !== "image" || !cover.storageKey || cover.trashedAt) throw new Error("Page cover image is unavailable");
+    await requirePageFiles([cover.id], accountId);
+  }
+  return metadata;
 }
 
 function savedEntry(item: AtlasListItem): AtlasLibraryEntry {
@@ -158,6 +274,8 @@ async function* savedLibraryEntries(options: AtlasLibraryOptions, query: string)
       kind: options.type === "all" ? undefined : options.type, collectionId: options.collectionId,
       trashed: false, ...(options.scope === "favorites" ? { isFavorite: true } : {}) });
     for (const item of items) {
+      // Bundled cover images are presentation, not library content.
+      if (item.sourceKey?.startsWith(ATLAS_COVER_SOURCE_PREFIX)) continue;
       const entry = savedEntry(item);
       if (matchesLibrary(entry, options, query)) yield entry;
     }
@@ -187,11 +305,11 @@ async function* generatedLibraryEntries(options: AtlasLibraryOptions, query: str
       if (options.scope === "generated" && file.origin === "attachment") continue;
       if (options.scope === "uploads" && file.origin !== "attachment") continue;
       const entry: AtlasLibraryEntry = { key: file.sourceKey, kind: file.kind, title: file.fileName,
-        date: file.modifiedAt, collectionId: file.collectionId, path: file.path, generated: file };
+        date: file.modifiedAt, collectionId: file.collectionId, path: file.replica ? null : file.path, generated: file };
       if (!matchesLibrary(entry, options, query)) continue;
       const saved = atlasRepo.bySource(options.accountId, file.sourceKey);
       if (options.scope === "all" && saved && (saved.trashedAt || matchesLibrary(savedEntry(format(saved)), options, query))) continue;
-      if (file.kind === "image" && !file.contentHash) {
+      if (file.kind === "image" && !file.contentHash && !file.replica) {
         try { file.contentHash = await imageContentHash(file.path, await fs.stat(file.path)); }
         catch { continue; }
       }
@@ -273,7 +391,10 @@ export const atlasService = {
         entry.saved = previews.get(entry.key) ?? entry.saved;
         for (const match of (entry.saved.preview ?? "").matchAll(/atlas-file:\/\/([^\s)>]+)/g)) {
           const image = atlasRepo.find(match[1], accountId);
-          if (image?.kind === "image" && image.storageKey) previewImages[match[0]] = storagePath(image.storageKey);
+          if (image?.kind === "image" && image.storageKey) {
+            try { previewImages[match[0]] = await this.resolveFile({ id: image.id, accountId }); }
+            catch { /* A missing preview must not hide the Page's text. */ }
+          }
         }
       }
     }
@@ -307,19 +428,43 @@ export const atlasService = {
     const item = atlasRepo.find(id, accountId);
     return item ? pageFor(item) : null;
   },
-  async createPage(input: AtlasCreatePage, actor: "user" | "agent" = "user", sourceRunId: string | null = null) {
+  async resolveFile(options: AtlasIdentity): Promise<string> {
+    const item = owned(options);
+    if (!item.storageKey || item.kind === "page") throw new Error("Atlas file unavailable");
+    const local = storagePath(item.storageKey);
+    try {
+      const stats = await fs.lstat(local);
+      if (stats.isSymbolicLink() || !stats.isFile()) throw new Error("Invalid Atlas file");
+      // inspectSource also excludes symlinked parent directories.
+      await inspectSource(local, [atlasRoot()]);
+      return local;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return bridgeService.resolveFile("atlas_items", item.id, "storage_key");
+    }
+  },
+  getRevision(options: AtlasIdentity & { revisionId: string }): AtlasPageRevision {
+    const item = owned(options);
+    const row = atlasRepo.revisionById(item.id, required(options.revisionId, "Revision"));
+    if (!row) throw new Error("Page revision not found");
+    return revision(row);
+  },
+  async createPage(input: AtlasCreatePage & PagePresentation, actor: "user" | "agent" = "user", sourceRunId: string | null = null) {
     const accountId = required(input?.accountId, "Account");
     const name = title(input?.title);
     const collectionId = await collection(input.collectionId, accountId);
     const content = await pageContent(input);
-    await requirePageFiles(content.fileIds, accountId);
+    const fileIds = await requirePageFiles(content.fileIds, accountId);
+    const metadata = await prepareMetadata(accountId, input);
     const id = randomUUID();
     const item = { id, accountId, kind: "page" as const, title: name, collectionId, version: 1, sourceRunId };
     atlasRepo.commitPage(item, { id: randomUUID(), itemId: id, title: name, version: 1,
-      blocksJson: JSON.stringify(content.blocks), markdown: content.markdown, actor, sourceRunId }, 0, content.fileIds, true);
+      blocksJson: JSON.stringify(content.blocks), markdown: content.markdown, actor, sourceRunId }, 0, fileIds, true, metadata);
+    emit(CHANNELS.atlas.changed, {});
     return pageFor(owned({ id, accountId }));
   },
-  async savePage(input: AtlasSavePage, actor: "user" | "agent" = "user", sourceRunId: string | null = null) {
+  /** Autosaves from the user fold into their session's revision; agents and restores always add one. */
+  async savePage(input: AtlasSavePage & PagePresentation, actor: "user" | "agent" | "restore" = "user", sourceRunId: string | null = null) {
     const item = owned(input);
     if (item.kind !== "page" || item.trashedAt) throw new Error("Page is in Trash or unavailable");
     if (!Number.isInteger(input.expectedVersion) || input.expectedVersion !== item.version)
@@ -327,35 +472,70 @@ export const atlasService = {
     if (input.blocks === undefined && input.markdown === undefined) throw new Error("Page content is required");
     const name = title(input.title);
     const content = await pageContent(input);
-    await requirePageFiles(content.fileIds, item.accountId);
-    const current = atlasRepo.revision(item.id, item.version);
-    if (current?.blocksJson === JSON.stringify(content.blocks) && name === item.title) return pageFor(owned(input));
-    atlasRepo.commitPage({ ...item, title: name }, { id: randomUUID(), itemId: item.id, title: name,
-      version: item.version + 1, blocksJson: JSON.stringify(content.blocks), markdown: content.markdown,
-      actor, sourceRunId }, input.expectedVersion, content.fileIds);
+    const fileIds = await requirePageFiles(content.fileIds, item.accountId);
+    const metadata = await prepareMetadata(item.accountId, input);
+    const latest = owned(input);
+    if (latest.version !== input.expectedVersion || latest.trashedAt)
+      throw new Error("This page changed elsewhere. Reload the latest version before saving.");
+    const current = latest.currentRevisionId ? atlasRepo.revisionById(item.id, latest.currentRevisionId) : null;
+    if (current?.blocksJson === JSON.stringify(content.blocks) && name === latest.title) {
+      if (metadata === undefined) return pageFor(latest);
+      atlasRepo.update(item.id, item.accountId, {}, metadata);
+    } else {
+      const coalesce = actor === "user" && !!current
+        && continuesSession(current, { actor, sourceRunId }, latest.updatedAt, new Date());
+      atlasRepo.commitPage({ ...item, title: name }, { id: randomUUID(), itemId: item.id, title: name,
+        version: item.version + 1, blocksJson: JSON.stringify(content.blocks), markdown: content.markdown,
+        actor, sourceRunId }, input.expectedVersion, fileIds, false, metadata, coalesce);
+    }
+    pruneHistory(owned(input));
+    emit(CHANNELS.atlas.changed, {});
     return pageFor(owned(input));
   },
   revisions(options: AtlasIdentity) {
     const item = owned(options);
     if (item.kind !== "page") throw new Error("Atlas item is not a page");
-    return atlasRepo.revisions(item.id).map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
+    const pinned = new Set(item.currentRevisionId
+      ? [item.currentRevisionId, ...atlasRepo.conflicts(item.id, item.currentRevisionId).map((row) => row.id)] : []);
+    return historyCheckpoints(atlasRepo.revisions(item.id), pinned)
+      .map((row) => ({ ...row, ...atlasRepo.provenance(row.id), createdAt: row.createdAt.toISOString() }));
   },
-  async restore(input: AtlasIdentity & { version: number; expectedVersion: number }) {
+  async restore(input: AtlasIdentity & { revisionId?: string; version?: number; expectedVersion: number }) {
     const item = owned(input);
-    const older = atlasRepo.revision(item.id, input.version);
+    const older = input.revisionId ? atlasRepo.revisionById(item.id, input.revisionId)
+      : input.version === undefined ? null : atlasRepo.revision(item.id, input.version);
     if (!older) throw new Error("Page revision not found");
-    return this.savePage({ ...input, title: older.title, blocks: JSON.parse(older.blocksJson) });
+    return this.savePage({ ...input, title: older.title, blocks: JSON.parse(older.blocksJson) }, "restore");
+  },
+  async resolveConflict(input: AtlasResolveConflict): Promise<AtlasPage> {
+    const item = owned(input);
+    if (item.kind !== "page" || item.trashedAt || item.version !== input.expectedVersion)
+      throw new Error("This page changed elsewhere. Reload the latest version before resolving.");
+    if (input.choice !== "current" && input.choice !== "other") throw new Error("Invalid conflict resolution");
+    const current = item.currentRevisionId ? atlasRepo.revisionById(item.id, item.currentRevisionId) : null;
+    const other = atlasRepo.conflicts(item.id, current?.id ?? "").find((row) => row.id === input.revisionId);
+    if (!current || !other) throw new Error("This conflict changed elsewhere. Reload the latest version before resolving.");
+    const selected = input.choice === "current" ? current : other;
+    const content = await pageContent({ blocks: JSON.parse(selected.blocksJson) });
+    const fileIds = await requirePageFiles(content.fileIds, item.accountId);
+    atlasRepo.commitPage({ ...item, title: selected.title }, { id: randomUUID(), itemId: item.id,
+      version: 0, title: selected.title, blocksJson: JSON.stringify(content.blocks), markdown: content.markdown,
+      actor: "user", mergedRevisionId: other.id }, input.expectedVersion, fileIds);
+    emit(CHANNELS.atlas.changed, {});
+    return pageFor(owned(input));
   },
   async saveFile(input: AtlasSaveFile) {
     const accountId = required(input?.accountId, "Account");
     const requested = required(input?.path, "File path");
     const context = await runContext(input.runId, accountId);
+    if (context.run.isReplica) throw new Error("Save this file from its source backend");
     const { real } = await inspectSource(requested, context.roots);
     const key = sourceKey(input.runId, real);
     return once(`${accountId}:${key}`, async () => {
       const old = atlasRepo.bySource(accountId, key);
       if (old) {
         if (old.trashedAt) atlasRepo.update(old.id, accountId, { trashedAt: null });
+        emit(CHANNELS.atlas.changed, {});
         return format(owned({ id: old.id, accountId }));
       }
       // Hidden annotation captures remain available for an explicit user save.
@@ -377,20 +557,13 @@ export const atlasService = {
     const key = `page:${page.id}:${fileHash(bytes)}:${name}`;
     return once(`${page.accountId}:${key}`, () => store(page.accountId, key, name, bytes, null, page.collectionId));
   },
-  async update(input: AtlasUpdateItem) {
+  async update(input: AtlasUpdateItem & PagePresentation) {
     const item = owned(input);
     if (item.kind === "page" && input.title !== undefined) throw new Error("Rename a Page through its editor");
     const fields: Partial<AtlasRecord> = {};
-    const metadata = input.metadata === undefined ? undefined : metadataPatch(input.metadata);
-    if (metadata !== undefined) {
-      if (item.kind !== "page" || item.trashedAt) throw new Error("Page unavailable");
-      if (metadata?.coverFileId) {
-        const cover = owned({ id: metadata.coverFileId, accountId: item.accountId });
-        if (cover.kind !== "image" || !cover.storageKey || cover.trashedAt)
-          throw new Error("Page cover image is unavailable");
-        await requirePageFiles([cover.id], item.accountId);
-      }
-    }
+    if ((input.metadata !== undefined || input.coverPreset !== undefined) && (item.kind !== "page" || item.trashedAt))
+      throw new Error("Page unavailable");
+    const metadata = await prepareMetadata(item.accountId, input);
     if (input.title !== undefined) fields.title = title(input.title);
     if (input.collectionId !== undefined) fields.collectionId = await collection(input.collectionId, item.accountId);
     if (input.isFavorite !== undefined) {
@@ -402,13 +575,22 @@ export const atlasService = {
       fields.trashedAt = input.trashed ? new Date() : null;
     }
     atlasRepo.update(item.id, item.accountId, fields, metadata);
+    emit(CHANNELS.atlas.changed, {});
     return format(owned(input));
+  },
+  /** Use a bundled cover: its image is saved once per account and shared by every Page that picks it. */
+  async setCoverPreset(input: AtlasIdentity & { preset: string }) {
+    const page = owned(input);
+    if (page.kind !== "page" || page.trashedAt) throw new Error("Page unavailable");
+    if (!isCoverId(input.preset)) throw new Error(`Unknown cover "${input.preset}"`);
+    return this.update({ accountId: page.accountId, id: page.id, coverPreset: input.preset });
   },
   async remove(input: AtlasIdentity) {
     const item = owned(input);
     if (!item.trashedAt) throw new Error("Move this item to Trash before deleting it");
     // Deletion checks current covers and revision references in one transaction.
     atlasRepo.remove(item.id, item.accountId);
+    emit(CHANNELS.atlas.changed, {});
     if (item.storageKey) await removeFiles(item.id);
   },
   async isStoredFile(realPath: string) {

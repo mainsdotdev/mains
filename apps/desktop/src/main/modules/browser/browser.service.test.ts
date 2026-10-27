@@ -20,7 +20,7 @@ vi.mock("../keyboardShortcuts", () => ({
 
 import { browserService } from "./browser.service";
 import { CHANNELS } from "@mains/contracts/channels";
-import { runOwnerKey } from "../../../shared/ui-state-keys";
+import { runOwnerKey, workspaceBrowserExpansionKey } from "../../../shared/ui-state-keys";
 import type { BrowserSelectionPayload } from "./browser.dto";
 
 function resetInMemory() {
@@ -524,6 +524,19 @@ describe("browserService — tabs by chat", () => {
     expect(saved.tabs).toHaveLength(2);
     expect(saved.tabs.map((tab: { ownerKey: string }) => tab.ownerKey).sort())
       .toEqual([keptDraft, keptRun].sort());
+  });
+
+  it("retains workspace browser pages after chat deletion and removes them with the workspace", async () => {
+    const owner = workspaceBrowserExpansionKey("local", "ws-a");
+    const other = workspaceBrowserExpansionKey("remote", "ws-a");
+    await browserService.setContext(owner); await browserService.createTab("https://example.com/one");
+    await browserService.createTab("https://example.com/two");
+    await browserService.setContext(other); await browserService.createTab("https://example.com/remote");
+    await browserService.forgetContext({ backendId: "local", kind: "run", id: "old-chat" });
+    await browserService.setContext(owner);
+    expect(browserService.getState().tabs).toHaveLength(2);
+    await browserService.forgetContext({ backendId: "local", kind: "workspace", id: "ws-a" });
+    expect(browserService.listOwnerKeys()).toEqual([other]);
   });
 
   it("assigns version-one global tabs to the first opened chat", async () => {

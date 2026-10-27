@@ -83,6 +83,8 @@ export interface RunSessionContext {
   };
   /** Defaults to -1 (fresh run). continueRun passes the recovered max turn index. */
   seedTurnIndex?: number;
+  /** Local file snapshots at the settled turn boundary; never waits for network. */
+  onTurnClosed?: (runId: string) => Promise<void>;
 }
 
 /** Where a turn began, for turn changes. */
@@ -460,6 +462,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       console.error(`[RunSession ${runId}] Failed to close active turn:`, err);
     }
     await persistTurnChanges(turnId, baseline, turnEndTree);
+    try { await ctx.onTurnClosed?.(runId); }
+    catch (error) { console.error(`[RunSession ${runId}] Could not snapshot Bridge outputs:`, error); }
   }
 
   // ─── Tool call cleanup ───

@@ -120,6 +120,7 @@ export default function ClaudeSettings() {
     >
       {/* Account info — from the Claude Code login session */}
       <ProviderAccountSection
+        providerId={PROVIDER_IDS.claude}
         isLoading={isLoadingAccount}
         signedIn={
           account?.type === "claude"

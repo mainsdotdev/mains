@@ -37,6 +37,7 @@ export default function CursorSettings(
     >
       {/* Account info — from `agent about` */}
       <ProviderAccountSection
+        providerId={PROVIDER_IDS.cursor}
         isLoading={isLoadingAccount}
         signedIn={
           account?.type === "cursor"

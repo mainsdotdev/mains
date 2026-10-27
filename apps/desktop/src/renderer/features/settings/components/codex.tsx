@@ -217,7 +217,10 @@ function CodexMemorySection({ providerEnabled }: { providerEnabled: boolean }) {
 export default function CodexSettings() {
   const { provider, isLoading, error, config, updateConfig, updating } =
     useProviderSettings<CodexAdapterConfig>(PROVIDER_IDS.codex, "codex");
-  const voices = useGetProviderRealtimeVoicesQuery(PROVIDER_IDS.codex, { skip: !provider?.isEnabled });
+  const voices = useGetProviderRealtimeVoicesQuery(PROVIDER_IDS.codex, {
+    skip: !provider?.isEnabled,
+    refetchOnMountOrArgChange: true,
+  });
   const { data: rateLimits, isLoading: isLoadingRateLimits } =
     useGetProviderRateLimitsQuery(PROVIDER_IDS.codex, {
       pollingInterval: 60000,
@@ -328,6 +331,7 @@ export default function CodexSettings() {
     >
       {/* Account info */}
       <ProviderAccountSection
+        providerId={PROVIDER_IDS.codex}
         isLoading={isLoadingAccount}
         signedIn={
           account?.type === "chatgpt"

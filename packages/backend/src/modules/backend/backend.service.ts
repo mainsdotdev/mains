@@ -1,10 +1,10 @@
+import { getLocalBackendId } from "../../db/backend-identity";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { CHANNELS } from "@mains/contracts/channels";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { registeredChannels } from "../../ipc-kit";
 import { generateToken, hashToken, tokensMatch } from "../../ipc-kit/ws-auth";
-import { appSettingsService } from "../appSettings";
 import { backendRepo } from "./backend.repo";
 import { parseDeviceName, parsePairDeviceInput } from "./backend.validation";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
@@ -159,7 +159,6 @@ function machineName(): string {
 // Two clients describing an un-minted backend at once must not each mint their
 // own id (the last write would win and the other client would key its saved
 // backend on an id that never persists). Share the in-flight mint instead.
-let minting: Promise<string> | null = null;
 
 // ── Pairing codes ──
 
@@ -214,18 +213,7 @@ export const backendService = {
 
   /** This install's stable id — minted on first use, then persisted for good. */
   async getBackendId(): Promise<string> {
-    const settings = await appSettingsService.getSettings();
-    if (settings.backendId) return settings.backendId;
-    if (!minting) {
-      minting = (async () => {
-        const backendId = randomUUID();
-        await appSettingsService.setBackendId(backendId);
-        return backendId;
-      })().finally(() => {
-        minting = null;
-      });
-    }
-    return minting;
+    return getLocalBackendId();
   },
 
   /**

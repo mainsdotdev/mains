@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import {
   getSettingsRouteId,
   getSettingsSection,
@@ -9,6 +9,10 @@ import { PageShell } from "@/components/layout/page-shell";
 
 export default function SettingsPage() {
   const [searchParams] = useSearchParams();
+  if (searchParams.get("section") === "bridge") {
+    return <Navigate to="/bridge" replace />;
+  }
+
   const activeSection = getSettingsRouteId(searchParams.get("section"));
   const section = getSettingsSection(activeSection);
   const { Component } = section;

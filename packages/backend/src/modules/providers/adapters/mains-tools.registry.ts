@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { z } from "zod";
-import { handleAtlasReadPage, handleAtlasCreatePage, handleAtlasUpdatePage } from "./atlas-tools";
+import { handleAtlasReadPage, handleAtlasCreatePage, handleAtlasUpdatePage, handleAtlasListCovers } from "./atlas-tools";
 import type { Tool as CopilotTool } from "@github/copilot-sdk";
 import { PROVIDER_IDS, type ProviderId } from "@mains/contracts/provider-ids";
 import type { JsonValue } from "./codex-app-server-protocol/generated/serde_json/JsonValue";
@@ -36,7 +36,7 @@ import {
   type MainsToolContext,
 } from "./mains-tools.core";
 import {
-  AtlasReadPageSchema, AtlasCreatePageSchema, AtlasUpdatePageSchema,
+  AtlasReadPageSchema, AtlasCreatePageSchema, AtlasUpdatePageSchema, AtlasListCoversSchema,
   SaveReviewSchema,
   SaveFindingSchema,
   SaveFindingsSchema,
@@ -46,7 +46,13 @@ import {
   SendVoiceTaskMessageSchema, StopVoiceTaskSchema, EndVoiceChatSchema,
 } from "./mains-tools.schemas";
 
-/** The MCP-style result every mains handler returns. */
+/**
+ * The MCP-style result every mains handler returns.
+ *
+ * A handler reports failure by throwing; every driver surfaces a throw as a
+ * tool error. A result describes an outcome, including a negative verdict such
+ * as a blocked package. `isError` is left to the seam itself (an unknown tool).
+ */
 export type MainsToolResult = {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
@@ -57,13 +63,48 @@ export interface MainsToolDef {
   name: string;
   description: string;
   schema: z.ZodObject<any>;
-  handler: (args: any, ctx: MainsToolContext) => Promise<MainsToolResult>;
+  /** Takes the model's raw args; `defineTool` validates them before the real handler runs. */
+  handler: (args: unknown, ctx: MainsToolContext) => Promise<MainsToolResult>;
   /** Which drivers expose this tool. */
   providers: ProviderId[];
   /** Which experience modes expose this tool. Absent = every mode. */
   modes?: ModeId[];
   scope?: "voice";
 }
+
+/**
+ * Declare a tool. Only Claude's SDK validates args against the tool's shape;
+ * Codex, Cursor and Copilot hand the model's raw args to the handler. Parsing
+ * here gives every driver the same validation, and types the handler's args
+ * from the schema.
+ */
+function defineTool<S extends z.ZodObject<any>>(
+  def: Omit<MainsToolDef, "schema" | "handler"> & {
+    schema: S;
+    handler: (args: z.infer<S>, ctx: MainsToolContext) => Promise<MainsToolResult>;
+  },
+): MainsToolDef {
+  return {
+    ...def,
+    handler: async (args, ctx) => {
+      const parsed = def.schema.safeParse(args ?? {});
+      if (!parsed.success) {
+        throw new Error(`Invalid arguments for ${def.name}:\n${z.prettifyError(parsed.error)}`);
+      }
+      return def.handler(parsed.data, ctx);
+    },
+  };
+}
+
+/** Voice coordination tools: Codex only, and only on a voice bridge. */
+const voiceTool = <S extends z.ZodObject<any>>(
+  name: keyof typeof TOOL_DESCRIPTIONS,
+  schema: S,
+  handler: (args: z.infer<S>, ctx: MainsToolContext) => Promise<MainsToolResult>,
+) => defineTool({
+  name, description: TOOL_DESCRIPTIONS[name], schema, handler,
+  providers: [PROVIDER_IDS.codex], scope: "voice",
+});
 
 // Availability groups, named so the asymmetry is self-documenting.
 // The review-flow tools are not exposed to Codex (it is a code-writing flow).
@@ -80,73 +121,76 @@ const PACKAGE_GUARD: ProviderId[] = [PROVIDER_IDS.codex, PROVIDER_IDS.cursor];
 // to Work. Availability is declared per tool and checked against provider modes.
 const DEVELOPER_ONLY: ModeId[] = ["developer"];
 
+// Atlas serves Work and Chat, which only Claude and Codex offer (PROVIDER_MODES
+// in contracts/modes); Copilot and Cursor stay Developer-only.
+const ATLAS: ProviderId[] = [PROVIDER_IDS.codex, PROVIDER_IDS.claude];
+
 export const MAINS_TOOLS: MainsToolDef[] = [
-  {
+  defineTool({
     name: "RegisterDeliverable", description: TOOL_DESCRIPTIONS.RegisterDeliverable,
     schema: RegisterDeliverableSchema, handler: handleRegisterDeliverable,
     providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude, PROVIDER_IDS.copilot, PROVIDER_IDS.cursor],
     modes: ["developer", "work"],
-  },
-  {
-    name: "AtlasReadPage",
-    description: "Read an Atlas Page's title, canonical BlockNote blocks, Markdown projection and current version. Page IDs are provided by the user or AtlasCreatePage. Markdown is lossy for some block formats. Link to the Page using the returned pageHref as the Markdown destination; never prepend a localhost or web origin.",
+  }),
+  defineTool({
+    name: "AtlasReadPage", description: TOOL_DESCRIPTIONS.AtlasReadPage,
     schema: AtlasReadPageSchema, handler: handleAtlasReadPage,
-    providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude],
-  },
-  {
-    name: "AtlasCreatePage",
-    description: "Create a permanent Atlas Page in the current account and project. Use for user-requested notes, knowledge pages or checklists. Returns the Page ID, version and pageHref; Pages survive conversation deletion. Link to the Page using pageHref as the Markdown destination; never prepend a localhost or web origin.",
+    providers: ATLAS,
+  }),
+  defineTool({
+    name: "AtlasCreatePage", description: TOOL_DESCRIPTIONS.AtlasCreatePage,
     schema: AtlasCreatePageSchema, handler: handleAtlasCreatePage,
-    providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude], modes: ["work"],
-  },
-  {
-    name: "AtlasUpdatePage",
-    description: "Update an Atlas Page after AtlasReadPage. Preserve existing block formatting, IDs and atlas-file:// references. Supply expectedVersion; stale updates fail without overwriting user changes. Creates a Page revision attributed to this conversation. Link to the Page using the returned pageHref as the Markdown destination; never prepend a localhost or web origin.",
+    providers: ATLAS, modes: ["work"],
+  }),
+  defineTool({
+    name: "AtlasUpdatePage", description: TOOL_DESCRIPTIONS.AtlasUpdatePage,
     schema: AtlasUpdatePageSchema, handler: handleAtlasUpdatePage,
-    providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude], modes: ["work"],
-  },
-  ...[
-    { name: "StartVoiceTask", schema: StartVoiceTaskSchema, handler: handleStartVoiceTask },
-    { name: "ListVoiceTasks", schema: ListVoiceTasksSchema, handler: handleListVoiceTasks },
-    { name: "ReadVoiceTask", schema: ReadVoiceTaskSchema, handler: handleReadVoiceTask },
-    { name: "WaitVoiceTask", schema: WaitVoiceTaskSchema, handler: handleWaitVoiceTask },
-    { name: "SendVoiceTaskMessage", schema: SendVoiceTaskMessageSchema, handler: handleSendVoiceTaskMessage },
-    { name: "StopVoiceTask", schema: StopVoiceTaskSchema, handler: handleStopVoiceTask },
-    { name: "EndVoiceChat", schema: EndVoiceChatSchema, handler: handleEndVoiceChat },
-  ].map((tool) => ({ ...tool, description: TOOL_DESCRIPTIONS[tool.name as keyof typeof TOOL_DESCRIPTIONS],
-    providers: [PROVIDER_IDS.codex], scope: "voice" as const })),
-  {
+    providers: ATLAS, modes: ["work"],
+  }),
+  defineTool({
+    name: "AtlasListCovers", description: TOOL_DESCRIPTIONS.AtlasListCovers,
+    schema: AtlasListCoversSchema, handler: handleAtlasListCovers,
+    providers: ATLAS, modes: ["work"],
+  }),
+  voiceTool("StartVoiceTask", StartVoiceTaskSchema, handleStartVoiceTask),
+  voiceTool("ListVoiceTasks", ListVoiceTasksSchema, handleListVoiceTasks),
+  voiceTool("ReadVoiceTask", ReadVoiceTaskSchema, handleReadVoiceTask),
+  voiceTool("WaitVoiceTask", WaitVoiceTaskSchema, handleWaitVoiceTask),
+  voiceTool("SendVoiceTaskMessage", SendVoiceTaskMessageSchema, handleSendVoiceTaskMessage),
+  voiceTool("StopVoiceTask", StopVoiceTaskSchema, handleStopVoiceTask),
+  voiceTool("EndVoiceChat", EndVoiceChatSchema, handleEndVoiceChat),
+  defineTool({
     name: "SaveReview",
     description: TOOL_DESCRIPTIONS.SaveReview,
     schema: SaveReviewSchema,
     handler: handleSaveReview,
     providers: REVIEW_FLOW,
     modes: DEVELOPER_ONLY,
-  },
-  {
+  }),
+  defineTool({
     name: "SaveFinding",
     description: TOOL_DESCRIPTIONS.SaveFinding,
     schema: SaveFindingSchema,
     handler: handleSaveFinding,
     providers: REVIEW_FLOW,
     modes: DEVELOPER_ONLY,
-  },
-  {
+  }),
+  defineTool({
     name: "SaveFindings",
     description: TOOL_DESCRIPTIONS.SaveFindings,
     schema: SaveFindingsSchema,
     handler: handleSaveFindings,
     providers: REVIEW_FLOW,
     modes: DEVELOPER_ONLY,
-  },
-  {
+  }),
+  defineTool({
     name: "CheckPackage",
     description: TOOL_DESCRIPTIONS.CheckPackage,
     schema: CheckPackageSchema,
     handler: handleCheckPackage,
     providers: PACKAGE_GUARD,
     modes: DEVELOPER_ONLY,
-  },
+  }),
 ];
 
 const BY_NAME = new Map(MAINS_TOOLS.map((t) => [t.name, t]));
@@ -223,7 +267,11 @@ export function toClaudeTools(
   }));
 }
 
-/** Copilot custom tool: prefixed name, JSON Schema params, string result. */
+/**
+ * Copilot custom tool: prefixed name, JSON Schema params. A plain result is
+ * returned as a string; an `isError` one as a `failure` result object, since a
+ * bare string reads as success to Copilot.
+ */
 export function toCopilotTools(
   ctx: MainsToolContext,
   mode: ModeId = DEFAULT_MODE_ID,
@@ -234,7 +282,8 @@ export function toCopilotTools(
     parameters: toJsonSchema(t.schema),
     handler: async (args) => {
       const result = await t.handler(args, ctx);
-      return result.content[0]?.text ?? "";
+      const text = result.content.map((item) => item.text).join("\n");
+      return result.isError ? { resultType: "failure" as const, textResultForLlm: text, error: text } : text;
     },
   }));
 }

@@ -10,6 +10,7 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { removeImagePreviews } from "../imageProxy";
 import { attachmentFileName } from "./run-attachments";
 import { runsRepo } from "./runs.repo";
+import { bridgeService } from "../bridge";
 
 type AttachmentRow = typeof runAttachments.$inferSelect;
 const activeWrites = new Set<string>();
@@ -140,11 +141,13 @@ export async function resolveRunAttachment(runId: string, attachmentId: string):
   if (typeof runId !== "string" || typeof attachmentId !== "string") throw new Error("Invalid attachment reference");
   const attachment = runsRepo.findAttachment(runId, attachmentId);
   if (!attachment) throw new Error("Attachment not found in this conversation");
+  const run = await runsRepo.findRunById(runId);
+  if (run?.isReplica) return { attachment, path: await bridgeService.resolveFile("run_attachments", attachmentId, "storage_key") };
   return { attachment, path: await originalPath(attachment) };
 }
 
-/** A read-only projection of this run's verified originals, without loading bytes. */
-export async function listRunAttachmentFiles(runId: string) {
+/** This run's attachment records, with browser-annotation captures marked, without opening files. */
+export function listRunAttachmentRecords(runId: string): Array<{ attachment: AttachmentRow; isBrowserAnnotation: boolean }> {
   const attachments = runsRepo.listAttachments(runId);
   if (!attachments.length) return [];
   const annotationIds = new Set<string>();
@@ -163,11 +166,16 @@ export async function listRunAttachmentFiles(runId: string) {
       }
     }
   }
+  return attachments.map((attachment) => ({ attachment, isBrowserAnnotation: annotationIds.has(attachment.id) }));
+}
+
+/** A read-only projection of this run's verified originals, without loading bytes. */
+export async function listRunAttachmentFiles(runId: string) {
   const result: Array<{ attachmentId: string; path: string; type: AttachmentRow["type"]; contentHash: string; isBrowserAnnotation: boolean }> = [];
-  for (const attachment of attachments) {
+  for (const { attachment, isBrowserAnnotation } of listRunAttachmentRecords(runId)) {
     try {
       result.push({ attachmentId: attachment.id, type: attachment.type, path: await originalPath(attachment),
-        contentHash: attachment.contentHash, isBrowserAnnotation: annotationIds.has(attachment.id) });
+        contentHash: attachment.contentHash, isBrowserAnnotation });
     } catch { /* Missing legacy originals must not hide the remaining library. */ }
   }
   return result;

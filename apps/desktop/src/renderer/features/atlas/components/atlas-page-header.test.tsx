@@ -7,11 +7,12 @@ import type { AtlasItem } from "@mains/contracts/atlas";
 import atlasReducer, { setAtlasCoverPosition } from "@/lib/redux/slices/atlasSlice";
 import { AtlasPageHeader } from "./atlas-page-header";
 
-const mocks = vi.hoisted(() => ({ update: vi.fn(), upload: vi.fn(), error: vi.fn(), items: [] as AtlasItem[] }));
+const mocks = vi.hoisted(() => ({ update: vi.fn(), upload: vi.fn(), preset: vi.fn(), error: vi.fn(), items: [] as AtlasItem[] }));
 vi.mock("@/lib/redux/api/atlasApi", () => ({
   useListAtlasQuery: () => ({ data: mocks.items }),
   useUpdateAtlasItemMutation: () => [(input: unknown) => ({ unwrap: () => mocks.update(input) }), {}],
   useUploadAtlasFileMutation: () => [(input: unknown) => ({ unwrap: () => mocks.upload(input) }), {}],
+  useSetAtlasCoverPresetMutation: () => [(input: unknown) => ({ unwrap: () => mocks.preset(input) }), {}],
 }));
 vi.mock("@/hooks/use-local-image-url", () => ({ useLocalImageUrl: (path: string) => path }));
 vi.mock("@/components/ui", async (original) => ({
@@ -34,12 +35,13 @@ function setup(page = item()) {
   return { store, rerender: (next: AtlasItem) => view.rerender(<Provider store={store}><AtlasPageHeader item={next} /></Provider>) };
 }
 beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.clearAllMocks();
   mocks.update.mockResolvedValue({});
   mocks.items = [item({ id: "cover", kind: "image", title: "Saved photo", path: "/atlas/photo.png" }),
     item({ id: "other", kind: "image", title: "Other photo", path: "/atlas/other.png" })];
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("Atlas Page presentation", () => {
   it("reuses a stored cover without uploading/copying it, and edits the icon independently", async () => {
@@ -82,6 +84,70 @@ describe("Atlas Page presentation", () => {
     act(() => { store.dispatch(setAtlasCoverPosition({ ownerKey, id: "page", coverFileId: "cover", coverPositionY: 90 })); });
     rerender(item({ metadata: { coverFileId: "other" } }));
     expect(screen.getByRole("img", { name: "Page cover" }).style.objectPosition).toBe("50% 50%");
+  });
+  it("offers the bundled gallery first and saves a chosen cover once, without uploading", async () => {
+    mocks.items = [...mocks.items, item({ id: "preset-ocean", kind: "image", title: "ocean.png", path: "/atlas/ocean.png", sourceKey: "cover-preset:ocean" })];
+    mocks.preset.mockResolvedValue({ metadata: { coverFileId: "preset-ocean" } });
+    const { store } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "Add cover" }));
+    // Saved images come first, then the bundled gallery, in one picker without tabs.
+    const images = screen.getByRole("heading", { name: "Your images" });
+    const gallery = screen.getByRole("heading", { name: "Color & Gradient" });
+    expect(images.compareDocumentPosition(gallery) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("tab")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Use Ocean as cover" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Choose page cover" })).toBeNull());
+    expect(mocks.preset).toHaveBeenCalledWith({ accountId: "default", id: "page", preset: "ocean" });
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(store.getState().atlas.coverPositions[ownerKey].page).toEqual({ coverFileId: "preset-ocean", coverPositionY: 50 });
+    // Bundled covers saved in Atlas are not listed among the user's own images.
+    fireEvent.click(screen.getByRole("button", { name: "Add cover" }));
+    expect(screen.getByRole("button", { name: "Use Saved photo as cover" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Use ocean.png as cover" })).toBeNull();
+  });
+  it("closes the cover picker from its close button without changing the Page", () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Add cover" }));
+    expect(screen.getByRole("dialog", { name: "Choose page cover" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog", { name: "Choose page cover" })).toBeNull();
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.preset).not.toHaveBeenCalled();
+  });
+  it("shows twelve saved images first and reveals the rest with Show more", () => {
+    mocks.items = Array.from({ length: 14 }, (_, index) => item({ id: `image-${index}`, kind: "image", title: `Photo ${index}`, path: `/atlas/${index}.png` }));
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Add cover" }));
+    expect(screen.getAllByRole("button", { name: /^Use Photo \d+ as cover$/ })).toHaveLength(12);
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(screen.getAllByRole("button", { name: /^Use Photo \d+ as cover$/ })).toHaveLength(14);
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+  });
+  it("omits the saved images section when there are none", () => {
+    mocks.items = [];
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Add cover" }));
+    expect(screen.queryByRole("heading", { name: "Your images" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Color & Gradient" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use Dawn as cover" })).toBeTruthy();
+    // Photos get their own section below the gradients.
+    const photos = screen.getByRole("heading", { name: "British Library" });
+    expect(screen.getByRole("heading", { name: "Color & Gradient" }).compareDocumentPosition(photos) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use Rio aqueduct as cover" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Birmingham Museums Trust" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use Open sea as cover" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "The Metropolitan Museum of Art" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use Great wave as cover" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "NASA" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use Saturn as cover" })).toBeTruthy();
+  });
+  it("reports a failed gallery selection and keeps the picker open", async () => {
+    mocks.preset.mockRejectedValueOnce(new Error("Cover image for \"dawn\" is not installed"));
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Add cover" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use Dawn as cover" }));
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith("Cover image for \"dawn\" is not installed"));
+    expect(screen.getByRole("dialog", { name: "Choose page cover" })).toBeTruthy();
   });
   it("reports a failed cover selection without changing persisted framing", async () => {
     mocks.update.mockRejectedValueOnce(new Error("Could not save cover"));

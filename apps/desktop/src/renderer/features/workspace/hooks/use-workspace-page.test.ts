@@ -20,6 +20,7 @@ import workspaceReducer, {
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import type { ContextBrowserItem, ContextMcpAppItem, ContextReviewItem } from "../lib/composer-context";
 import type { UploadedFile } from "@/components/ui";
+import previewReducer from "@/lib/redux/slices/previewSlice";
 import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
 import { DocumentViewerProvider, useDocumentViewer } from "@/hooks/use-document-viewer";
 
@@ -201,6 +202,7 @@ function workspacePage(providerId = "claude_code") {
   const store = configureStore({
     reducer: {
       workspace: workspaceReducer,
+      preview: previewReducer,
       runQueue: runQueueReducer,
       appSettings: () => ({ onboardingCompleted: true }),
       backends: () => ({ activeBackendId: null }),
@@ -223,6 +225,7 @@ describe("document previews across routes", () => {
     const store = configureStore({
       reducer: {
         workspace: workspaceReducer,
+      preview: previewReducer,
         runQueue: runQueueReducer,
         appSettings: appSettingsReducer,
         backends: () => ({ activeBackendId: null }),
@@ -258,7 +261,7 @@ describe("document previews across routes", () => {
     act(() => navigate("/atlas"));
     expect(panel.isOpen).toBe(false);
     expect(panel.currentDoc).toBeNull();
-    expect(store.getState().appSettings.documentViewerDocByContext[chatOwner]).toEqual(chatDoc);
+    expect(store.getState().preview.byOwner[chatOwner].tabs).toEqual([expect.objectContaining({ kind: "document", doc: chatDoc })]);
 
     act(() => panel.open(atlasDoc));
     expect(panel.currentDoc).toEqual(atlasDoc);
@@ -280,7 +283,7 @@ describe("document previews across routes", () => {
     act(() => panel.open(atlasDoc));
     act(() => navigate("/code"));
     expect(panel.isOpen).toBe(false);
-    expect(panel.currentDoc).toBeNull();
+    expect(panel.currentDoc).toEqual(chatDoc);
   });
 });
 
@@ -984,6 +987,7 @@ describe("useWorkspacePage after a space switch", () => {
     const store = configureStore({
       reducer: {
         workspace: workspaceReducer,
+      preview: previewReducer,
       runQueue: runQueueReducer,
         appSettings: () => ({ onboardingCompleted: true }),
         backends: () => ({ activeBackendId: null }),

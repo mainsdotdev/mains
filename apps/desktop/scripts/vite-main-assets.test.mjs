@@ -24,6 +24,7 @@ async function verifyRuntimeAssets(command) {
     const migrations = path.join(fixture, 'packages/backend/src/db/migrations');
     write(path.join(migrations, '0000_initial.sql'), 'SELECT 1;');
     write(path.join(migrations, 'meta/_journal.json'), '{"entries":[]}');
+    write(path.join(fixture, 'packages/backend/assets/atlas-covers/aurora.png'), 'png');
 
     // Small packages exercise the actual copy hooks without copying installed
     // SDK binaries or touching the development app's build or database.
@@ -47,9 +48,10 @@ async function verifyRuntimeAssets(command) {
     const ready = Promise.withResolvers();
     const copiesComplete = Promise.withResolvers();
     const requiredAssets = [
-      'main.js',
+      'main.cjs',
       'db/migrations/0000_initial.sql',
       'db/migrations/meta/_journal.json',
+      'atlas-covers/aurora.png',
       ...['better-sqlite3', 'node-pty', 'ws', '@blocknote/server-util', 'converter-dependency', '@github/copilot-sdk',
         '@anthropic-ai/claude-agent-sdk-win32-x64', '@github/copilot-sdk-win32-x64',
         '@github/copilot-win32-x64', '@vscode/ripgrep-win32-x64']
@@ -63,7 +65,7 @@ async function verifyRuntimeAssets(command) {
       build: {
         watch: command === 'serve' ? {} : null,
         outDir: output,
-        lib: { entry, formats: ['cjs'], fileName: () => 'main.js' },
+        lib: { entry, formats: ['cjs'], fileName: () => 'main.cjs' },
       },
       plugins: [
         // Forge prepends this hook and starts Electron as soon as it resolves.

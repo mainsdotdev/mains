@@ -11,6 +11,7 @@ import { classifyDocType } from "@/lib/document-viewer";
 import { selectSessionRunId } from "@/features/workspace/components/session-panel/select-session-run";
 import { appApi } from "@/lib/transport";
 import { toast } from "@/components/ui";
+import { useReplicaView } from "@/hooks/use-replica-view";
 import { fileBasename, fileHrefPath, isAbsoluteFilePath } from "@/lib/file-path";
 import type {
   DirEntry,
@@ -31,6 +32,7 @@ import type {
  * fails says so — a click that silently does nothing reads as a broken app.
  */
 export function useOpenFileInEditor() {
+  const replica = useReplicaView();
   const dispatch = useAppDispatch();
   const { showTabs } = useModeConfig();
   const { open: openDocument } = useDocumentViewer();
@@ -48,6 +50,16 @@ export function useOpenFileInEditor() {
       const reference = filePath?.trim() ?? "";
       const trimmed = /^file:/i.test(reference) ? fileHrefPath(reference) : reference;
       if (!trimmed) return;
+      if (replica) {
+        const docType = classifyDocType(trimmed, true);
+        if (!replica.runId || !docType) { toast.error(`This file is available on ${replica.label}`); return; }
+        try {
+          const result = await appApi.runArtifacts.resolveFilePath({ runId: replica.runId, sourcePath: trimmed });
+          if (!result.success) throw new Error(result.error);
+          openDocument({ path: result.data, fileName: fileBasename(trimmed), docType });
+        } catch (error) { toast.error(error instanceof Error ? error.message : `File available on ${replica.label}`); }
+        return;
+      }
 
       // Workspace-less runs (work, chat) still have a directory their files
       // live in — agents write bare filenames into their answers, and without
@@ -137,6 +149,6 @@ export function useOpenFileInEditor() {
 
       toast.error(`File not found: ${basename}`);
     },
-    [dispatch, workspaceRoot, sessionRunId, showTabs, openDocument],
+    [dispatch, workspaceRoot, sessionRunId, showTabs, openDocument, replica],
   );
 }

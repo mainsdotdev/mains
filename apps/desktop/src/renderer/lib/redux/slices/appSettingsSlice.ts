@@ -38,6 +38,34 @@ export type ThemePreference = "light" | "dark" | "system";
 
 export type WorkspaceGrouping = "none" | "status" | "project";
 
+/** Which origins a sidebar list shows. At least one stays on. */
+export type WorkspaceListSources = { local: boolean; bridge: boolean };
+
+export const DEFAULT_WORKSPACE_LIST_SOURCES: WorkspaceListSources = {
+  local: true,
+  bridge: true,
+};
+
+export function normalizeWorkspaceListSources(
+  value: unknown,
+): WorkspaceListSources {
+  if (!value || typeof value !== "object") return DEFAULT_WORKSPACE_LIST_SOURCES;
+  const sources = value as Partial<WorkspaceListSources>;
+  if (typeof sources.local !== "boolean" || typeof sources.bridge !== "boolean") {
+    return DEFAULT_WORKSPACE_LIST_SOURCES;
+  }
+  return { local: sources.local, bridge: sources.bridge };
+}
+
+function withSourceVisible(
+  current: WorkspaceListSources,
+  source: keyof WorkspaceListSources,
+  visible: boolean,
+): WorkspaceListSources {
+  const next = { ...normalizeWorkspaceListSources(current), [source]: visible };
+  return next.local || next.bridge ? next : normalizeWorkspaceListSources(current);
+}
+
 export const isThemePreference = (value: unknown): value is ThemePreference =>
   value === "light" || value === "dark" || value === "system";
 
@@ -97,6 +125,10 @@ export interface AppSettingsState {
   bottomTerminalOpen: boolean;
   /** How the sidebar workspace list is grouped. */
   workspaceListGrouping: WorkspaceGrouping;
+  /** Which origins the sidebar workspace list includes. */
+  workspaceListSources: WorkspaceListSources;
+  /** Which origins the chat sidebar includes. Independent of the workspace list. */
+  chatListSources: WorkspaceListSources;
   /** Sidebar group key → expanded. Absent means expanded (the default). */
   workspaceGroupExpanded: Record<string, boolean>;
   /** Provider → logical app pin keys (or unresolved legacy ids) in pin order, shared across modes/workspaces. */
@@ -133,6 +165,8 @@ const initialState: AppSettingsState = {
   codeFontFamily: "",
   bottomTerminalOpen: false,
   workspaceListGrouping: "project",
+  workspaceListSources: DEFAULT_WORKSPACE_LIST_SOURCES,
+  chatListSources: DEFAULT_WORKSPACE_LIST_SOURCES,
   workspaceGroupExpanded: {},
   pinnedMcpAppKeysByProvider: {},
   onboardingCliAutoSelectApplied: false,
@@ -319,6 +353,32 @@ const appSettingsSlice = createSlice({
     ) => {
       state.workspaceListGrouping = action.payload;
     },
+    setWorkspaceListSourceVisible: (
+      state,
+      action: PayloadAction<{
+        source: keyof WorkspaceListSources;
+        visible: boolean;
+      }>,
+    ) => {
+      state.workspaceListSources = withSourceVisible(
+        state.workspaceListSources,
+        action.payload.source,
+        action.payload.visible,
+      );
+    },
+    setChatListSourceVisible: (
+      state,
+      action: PayloadAction<{
+        source: keyof WorkspaceListSources;
+        visible: boolean;
+      }>,
+    ) => {
+      state.chatListSources = withSourceVisible(
+        state.chatListSources,
+        action.payload.source,
+        action.payload.visible,
+      );
+    },
     setWorkspaceGroupExpanded: (
       state,
       action: PayloadAction<{ groupKey: string; expanded: boolean }>,
@@ -401,6 +461,8 @@ export const {
   setFontFamily,
   setBottomTerminalOpen,
   setWorkspaceListGrouping,
+  setWorkspaceListSourceVisible,
+  setChatListSourceVisible,
   setWorkspaceGroupExpanded,
   setMcpAppPinned,
   reconcileMcpAppPins,

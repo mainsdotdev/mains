@@ -1,0 +1,15 @@
+export { assertOwnedHere, assertOwnedRecord, ownedHere, ownershipOf } from "./bridge.ownership";
+export type { BackendOwnership } from "./bridge.ownership";
+export { createBridgeEngine } from "./bridge.engine";
+export type { BridgeEngine, BridgeEngineOptions } from "./bridge.engine";
+export type { BridgeTransport, BridgePullPage } from "./bridge.transport";
+export { createBridgeSealingCodec } from "./bridge.crypto";
+export type { BridgeCodec } from "./bridge.crypto";
+export { deriveBridgeKeys, generateBridgeAccountKey, generateBridgeDeviceKeyPair, sealBridgeAccountKey, openBridgeAccountKey } from "./bridge.keys";
+export type { BridgeSealedAccountKey } from "./bridge.keys";
+export { createBridgeWebSocketTransport } from "./bridge.websocket";
+export type { BridgeWebSocketOptions, BridgeWebSocketTransport } from "./bridge.websocket";
+export type { AppliedChange } from "./bridge.applier";
+export type { BridgeRecoveryContext } from "./bridge.store";
+export { bridgeService } from "./bridge.service";
+export { registerBridgeIpc, unregisterBridgeIpc } from "./bridge.ipc";

@@ -1,5 +1,5 @@
 import { getProviderVariant } from "@/lib/provider-variants";
-import { ONBOARDING_AGENT_SLUGS } from "../onboarding-agents";
+import { ONBOARDING_AGENT_IDS } from "../onboarding-agents";
 import { RisoBackdrop } from "./riso-backdrop";
 
 export function WelcomeIntroStep() {
@@ -16,7 +16,7 @@ export function WelcomeIntroStep() {
         />
       </div>
       <div className="onboarding-welcome-providers">
-        {ONBOARDING_AGENT_SLUGS.map((variant) => {
+        {ONBOARDING_AGENT_IDS.map((variant) => {
           const provider = getProviderVariant(variant);
           const Icon = provider.icon;
           return (

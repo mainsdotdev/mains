@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
@@ -10,6 +10,8 @@ const executable = process.argv[2] ?? (process.platform === 'win32'
   : path.resolve(`out/Mains-darwin-${process.arch}/Mains.app/Contents/MacOS/Mains`));
 assert(existsSync(executable), `Package the app first: ${executable}`);
 const directory = mkdtempSync(path.join(os.tmpdir(), 'Mains Türkçe package smoke '));
+// Acceptance must never move or replace the user's installed app.
+writeFileSync(path.join(directory, 'move-to-applications.json'), JSON.stringify({ declined: true }));
 const resultFile = path.join(directory, 'result.json');
 const env = { ...process.env, MAINS_SMOKE_USER_DATA: directory, MAINS_SMOKE_RESULT: resultFile };
 delete env.ELECTRON_RUN_AS_NODE;

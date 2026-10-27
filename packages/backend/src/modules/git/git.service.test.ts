@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { WORKSPACE_CLONE_CANCELED } from "@mains/contracts/workspace-intake";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
@@ -62,6 +61,29 @@ function makeRepo(): string {
 
 function write(repo: string, file: string, content: string): void {
   fs.writeFileSync(path.join(repo, file), content);
+}
+
+/** A real loopback Git remote, independent of filtered GIT_CONFIG_* overrides. */
+async function serveGitRemote(repo: string) {
+  git(repo, "update-server-info");
+  const directory = path.join(repo, ".git");
+  const server = createServer((request, response) => {
+    const relative = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    const file = path.resolve(directory, `.${decodeURIComponent(relative)}`);
+    if (!file.startsWith(directory + path.sep)) { response.writeHead(404).end(); return; }
+    fs.readFile(file, (error, bytes) => {
+      response.writeHead(error ? 404 : 200, { "Content-Type": "application/octet-stream" });
+      response.end(error ? undefined : bytes);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  onTestFinished(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Missing test server port");
+  return `http://127.0.0.1:${address.port}`;
 }
 
 /**
@@ -143,6 +165,57 @@ describe("getCommitPreviewDiff", () => {
     expect(diff).toContain("+first commit contents");
     expect(fs.existsSync(path.join(repo, ".git/index"))).toBe(false);
     expect(git(repo, "status", "--porcelain")).toBe("?? new.txt");
+  });
+});
+
+describe("getRecentSubjects", () => {
+  it("lists subjects newest first, up to the limit", async () => {
+    const repo = makeRepo();
+    for (const subject of ["a", "b", "c"]) {
+      git(repo, "commit", "--allow-empty", "-m", subject);
+    }
+
+    expect(await gitService.getRecentSubjects(repo, "HEAD", 10)).toEqual(["c", "b", "a", "init"]);
+    expect(await gitService.getRecentSubjects(repo, "HEAD", 2)).toEqual(["c", "b"]);
+  });
+
+  it("leaves merge commits out and fills the limit with real ones", async () => {
+    const repo = makeRepo();
+    git(repo, "checkout", "-b", "topic");
+    git(repo, "commit", "--allow-empty", "-m", "fix: on topic");
+    git(repo, "checkout", "main");
+    git(repo, "commit", "--allow-empty", "-m", "feat: on main");
+    git(repo, "merge", "--no-ff", "-m", "Merge branch 'topic'", "topic");
+
+    const subjects = await gitService.getRecentSubjects(repo, "HEAD", 3);
+
+    expect(subjects).toHaveLength(3);
+    expect(subjects).not.toContain("Merge branch 'topic'");
+    expect(subjects).toEqual(
+      expect.arrayContaining(["fix: on topic", "feat: on main", "init"]),
+    );
+  });
+
+  it("reads the given ref, even when a file shares its name", async () => {
+    const repo = makeRepo();
+    git(repo, "checkout", "-b", "topic");
+    git(repo, "commit", "--allow-empty", "-m", "fix: on topic");
+    git(repo, "checkout", "main");
+    write(repo, "topic", "not a ref\n");
+
+    expect(await gitService.getRecentSubjects(repo, "topic", 10)).toEqual(["fix: on topic", "init"]);
+    expect(await gitService.getRecentSubjects(repo, "main", 10)).toEqual(["init"]);
+  });
+
+  it("rejects on a branch with no commits yet, and on a ref that reads as an option", async () => {
+    const repo = path.join(sandbox, `repo-${++repoCounter}`);
+    fs.mkdirSync(repo);
+    git(repo, "init", "-b", "main");
+
+    await expect(gitService.getRecentSubjects(repo, "HEAD", 10)).rejects.toThrow();
+    await expect(gitService.getRecentSubjects(makeRepo(), "--output=leak.txt", 10)).rejects.toThrow(
+      "Invalid ref",
+    );
   });
 });
 
@@ -408,6 +481,16 @@ describe("initRepo", () => {
 });
 
 describe("cloneRepo", () => {
+  it("clones a loopback HTTP remote with Git's default security guards", async () => {
+    const url = await serveGitRemote(makeRepo());
+    const parent = path.join(sandbox, "http-clone");
+    fs.mkdirSync(parent);
+    const result = await gitService.cloneRepo(url, parent);
+    expect(result.defaultBranch).toBe("main");
+    expect(result.originUrl).toBe(url);
+    expect(fs.readFileSync(path.join(result.clonedPath, "README.md"), "utf8").trim()).toBe("# test");
+  });
+
   it("stops a real in-flight Git request and removes its partial checkout", async () => {
     let requestStarted!: () => void;
     const started = new Promise<void>((resolve) => { requestStarted = resolve; });
@@ -444,20 +527,17 @@ describe("cloneRepo", () => {
 
   it.runIf(process.platform === "win32")("clones with the stale PATH inherited from Windows Explorer", async () => {
     const source = makeRepo();
-    const url = "https://mains-test.invalid/fixture.git";
-    const config = path.join(sandbox, "clone-config");
-    // Redirect this fixture URL locally so the regression needs no network or auth.
-    git(sandbox, "config", "--file", config, `url.${pathToFileURL(source).href}.insteadOf`, url);
-    git(sandbox, "config", "--file", config, "core.autocrlf", "false");
+    const url = await serveGitRemote(source);
     const parent = path.join(sandbox, "Türkçe clone parent");
     fs.mkdirSync(parent);
-    vi.stubEnv("GIT_CONFIG_GLOBAL", config);
     vi.stubEnv("PATH", path.join(process.env.SystemRoot ?? "C:\\Windows", "System32"));
     try {
       augmentPathForPackagedApp(true);
       const result = await gitService.cloneRepo(url, parent);
-      expect(result).toEqual({ clonedPath: path.join(parent, "fixture"), defaultBranch: "main", originUrl: url });
-      expect(fs.readFileSync(path.join(result.clonedPath, "README.md"), "utf8")).toBe("# test\n");
+      expect(result.defaultBranch).toBe("main");
+      expect(result.originUrl).toBe(url);
+      expect(path.dirname(result.clonedPath)).toBe(parent);
+      expect(fs.readFileSync(path.join(result.clonedPath, "README.md"), "utf8").trim()).toBe("# test");
       expect(await gitService.getCurrentBranch(result.clonedPath)).toBe("main");
     } finally {
       vi.unstubAllEnvs();

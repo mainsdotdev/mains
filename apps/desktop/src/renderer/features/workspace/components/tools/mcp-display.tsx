@@ -4,10 +4,8 @@ import { ToolHeader, ToolCollapse, type ToolStatus } from "./_shared";
 import { type McpAppToolMetadata } from "./mcp-app-display";
 import { McpAppLauncher } from "./mcp-app-launcher";
 import { McpResultNotice, McpResultText } from "./mcp-result-notice";
-import {
-  mcpOutputSegments,
-  mcpStructuredContentOmitted,
-} from "../../lib/mcp-output";
+import { mcpOutputSegments } from "../../lib/mcp-output";
+import { hasUsableMcpAppResult } from "../../lib/mcp-app-tool-result";
 
 interface McpDisplayProps {
   displayName: string;
@@ -20,29 +18,6 @@ interface McpDisplayProps {
   status?: ToolStatus;
   runId?: string;
   mcpApp?: McpAppToolMetadata;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-/** An app resource is tied to a completed, successful originating tool call. */
-function hasUsableMcpAppResult(output: unknown): boolean {
-  // Older Claude transcripts store text-only tools as their MCP content blocks.
-  if (Array.isArray(output)) return output.length > 0;
-  const result = asRecord(output);
-  if (!result || result.isError === true || mcpStructuredContentOmitted(output))
-    return false;
-
-  const structured = asRecord(result.structuredContent);
-  if (typeof structured?.error_code === "string") return false;
-
-  const meta = asRecord(result._meta);
-  const codexApps = asRecord(meta?._codex_apps);
-  const authFailure = asRecord(codexApps?.connector_auth_failure);
-  return authFailure?.is_auth_failure !== true;
 }
 
 function formatCodePayload(raw: string): string {

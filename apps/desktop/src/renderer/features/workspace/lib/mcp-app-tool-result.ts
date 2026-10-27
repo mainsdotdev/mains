@@ -1,11 +1,38 @@
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import type { RunEvent } from "../types";
+import { mcpStructuredContentOmitted } from "./mcp-output";
+
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
 
 function record(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === "string") {
     try { return record(JSON.parse(value)); } catch { return undefined; }
   }
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  return plainRecord(value);
+}
+
+/**
+ * An app resource is tied to a completed, successful originating tool call.
+ * Connectors report failures in-band (`structuredContent.error_code`) without
+ * setting `isError`, and the app-server refuses to serve the resource of a call
+ * that did not succeed.
+ */
+export function hasUsableMcpAppResult(output: unknown): boolean {
+  // Older Claude transcripts store text-only tools as their MCP content blocks.
+  if (Array.isArray(output)) return output.length > 0;
+  const result = plainRecord(output);
+  if (!result || result.isError === true || mcpStructuredContentOmitted(output))
+    return false;
+
+  const structured = plainRecord(result.structuredContent);
+  if (typeof structured?.error_code === "string") return false;
+
+  const meta = plainRecord(result._meta);
+  const codexApps = plainRecord(meta?._codex_apps);
+  const authFailure = plainRecord(codexApps?.connector_auth_failure);
+  return authFailure?.is_auth_failure !== true;
 }
 
 /** Route new model tool results to the open app, preserving connector/account ownership. */

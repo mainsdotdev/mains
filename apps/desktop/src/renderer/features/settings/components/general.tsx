@@ -164,14 +164,14 @@ function MenuBarIconToggle() {
 }
 
 function AgentsSection() {
-  const { visibleAgentCount, spacesBySlug, toggleAgent } = useAgentSpaces({
+  const { visibleAgentCount, spacesById, toggleAgent } = useAgentSpaces({
     navigateOnSwitch: false,
   });
 
   return (
     <div className="flex flex-col gap-3 md:flex-row">
       {AGENT_CHOICES.map(({ slug, label, Icon }) => {
-        const space = spacesBySlug.get(slug);
+        const space = spacesById.get(slug);
         const isSelected = !!space && !space.isArchived;
         const cannotArchiveLast = isSelected && visibleAgentCount <= 1;
         return (

@@ -39,8 +39,9 @@ export default function ProjectDetail({ id }: ProjectDetailProps) {
   }
 
   // Live branch names (local + remote, deduped in projectsService).
+  // Another device's project points at that device's paths; never read git there.
   const { data: branchNames } = useListProjectBranchesQuery(id, {
-    skip: !project?.rootPath,
+    skip: !project?.rootPath || project.isReplica === true,
   });
   useEffect(() => {
     if (branchNames) {
@@ -79,9 +80,10 @@ export default function ProjectDetail({ id }: ProjectDetailProps) {
     return handleSave(value);
   }, [handleSave]);
 
-  // Auto-save when the icon or its tint changes (skip syncs from project
-  // load/switch via isDirty)
-  const iconKey = `${icon}|${iconColor}`;
+  // Only auto-save changes to the stored icon. A tint chosen before a registry
+  // icon is just a draft; saving it would refetch and reset the picker.
+  // Skip syncs from project load/switch via isDirty.
+  const iconKey = formatIcon(iconKindOf(icon), icon, iconColor);
   const prevIconRef = useRef(iconKey);
   useEffect(() => {
     if (prevIconRef.current === iconKey) return;
@@ -142,6 +144,16 @@ export default function ProjectDetail({ id }: ProjectDetailProps) {
       <div>
         <Heading2 className="mb-2">Project</Heading2>
         <Muted>Project not found.</Muted>
+      </div>
+    );
+  }
+
+  // Scripts, paths and branches are device-local. Only the owning device edits them.
+  if (project.isReplica) {
+    return (
+      <div>
+        <Heading2 className="mb-2">{project.name}</Heading2>
+        <Muted>This project is on another device. Manage its settings there, or clone it to this device from the sidebar.</Muted>
       </div>
     );
   }

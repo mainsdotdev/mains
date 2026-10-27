@@ -20,6 +20,8 @@ import AddProjectModal from "@/components/layout/sidebar/add-project-modal";
 import WorkspacesList from "@/components/layout/sidebar/workspace-list";
 import { useSidebarActions } from "./use-sidebar-actions";
 
+vi.mock("@/features/bridge/hooks/use-bridge", () => ({ useBridgeStatus: () => ({ data: undefined }) }));
+
 vi.mock("@/hooks/use-active-space", () => ({
   useActiveSpace: () => ({ spaces: [], activeSpace: { id: "space", providerId: "codex", mode: "developer" } }),
 }));
@@ -75,6 +77,7 @@ function CloneSurface() {
   return (
     <>
       <button onClick={actions.handleOpenAddProjectModal}>Add Project</button>
+      <button onClick={() => actions.handleOpenCloneFor("git@github.com:mainsdotdev/docs.git")}>Clone docs to this device</button>
       <button onClick={() => navigate("/code/other")}>Other workspace</button>
       <Input aria-label="Search workspaces" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} />
       <output data-testid="route">{location.pathname}</output>
@@ -96,6 +99,7 @@ function CloneSurface() {
           isCreating={actions.isCreatingProject}
           onAddLocal={actions.handleAddProject}
           onClone={actions.handleCloneRepo}
+          cloneUrl={actions.cloneDraftUrl || undefined}
           onCreate={actions.handleCreateProject}
           onClose={actions.handleCloseAddProjectModal}
         />
@@ -152,6 +156,21 @@ afterEach(() => {
 });
 
 describe("background repository clones", () => {
+  it("offers only cloning, prefilled, for a repository from another device", async () => {
+    harness();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Clone docs to this device" }));
+    screen.getByRole("dialog", { name: "Clone to this device" });
+    expect((screen.getByRole("textbox", { name: "Git URL" }) as HTMLInputElement).value).toBe("git@github.com:mainsdotdev/docs.git");
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByText("Add from local")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Add Project" }));
+    screen.getByRole("tablist", { name: "Project setup method" });
+    expect((screen.getByRole("textbox", { name: "Git URL" }) as HTMLInputElement).value).toBe("");
+    screen.getByText("Add from local");
+  });
+
   it.each(["project", "none"] as const)("closes the modal and displays the first clone with %s grouping", async (grouping) => {
     const h = harness(grouping);
     const user = userEvent.setup();

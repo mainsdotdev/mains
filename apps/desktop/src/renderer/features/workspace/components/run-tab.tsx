@@ -32,8 +32,9 @@ function VariantIcon({ variant }: { variant: string; isActive: boolean }) {
   return <Icon className={cn("size-4", descriptor.accentClassName)} />;
 }
 
-function TabIcon({ run, variant, isActive }: { run: Run; variant: string; isActive: boolean }) {
-  const isRunning = run.status === "running" || run.status === "queued";
+/** Shared with read-only replica tabs, which pass `live` from the source's presence. */
+export function TabIcon({ run, variant, isActive, live }: { run: Pick<Run, "status">; variant: string; isActive: boolean; live?: boolean }) {
+  const isRunning = live ?? (run.status === "running" || run.status === "queued");
   return (
     <span className="flex items-center justify-center size-4 shrink-0">
       {isRunning ? (

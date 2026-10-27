@@ -11,6 +11,7 @@ import {
 } from "../providers.utils";
 import { createClaudeDriver, mapSDKMessage } from "./claude.driver";
 import { runsRepo } from "../../runs/runs.repo";
+import { bridgeService } from "../../bridge";
 import type { WorkRunEvent } from "../../../../shared/adapter.types";
 
 const sdk = vi.hoisted(() => ({
@@ -34,6 +35,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 vi.mock("../../guards/guards.service", () => ({
   guardsService: { buildClaudeGuardHook: vi.fn().mockResolvedValue(null) },
 }));
+vi.mock("../../bridge", () => ({ bridgeService: { mirrorClaudeSession: vi.fn().mockResolvedValue(undefined) } }));
 
 describe("Claude runtime without a system CLI", () => {
   let fixture: string;
@@ -223,6 +225,11 @@ esac
     expect(cancel).not.toHaveBeenCalled();
     await expect(driver.steerRun!({ runId: "steer", clientUserMessageId: "late", message: "Late" })).rejects.toThrow("no active");
     await driver.cleanup?.(acquired.session);
+    expect(bridgeService.mirrorClaudeSession).toHaveBeenCalledWith({ runId: "steer", sessionId: acquired.sessionId, dir: fixture });
+    expect(sdk.close.mock.invocationCallOrder.at(-1)).toBeLessThan(vi.mocked(bridgeService.mirrorClaudeSession).mock.invocationCallOrder.at(-1)!);
+    expect(sdk.query.mock.calls.at(-1)?.[0].options).not.toHaveProperty("sessionStore");
+    vi.mocked(bridgeService.mirrorClaudeSession).mockRejectedValueOnce(new Error("Private raw session must not be logged"));
+    await expect(driver.cleanup?.(acquired.session)).resolves.toBeUndefined();
   });
 
   it("acknowledges a queued continuation by its client uuid before its assistant reply", async () => {
@@ -281,6 +288,7 @@ esac
     await expect(execution).resolves.toMatchObject({ status: "canceled" }); await rejected;
     expect(request).toHaveBeenCalledWith({ subtype: "interrupt", cancel_queued: true });
     await driver.cleanup?.(acquired.session);
+    expect(bridgeService.mirrorClaudeSession).toHaveBeenCalledWith({ runId: "stop", sessionId: acquired.sessionId, dir: fixture });
   });
 
   it("delivers a deferred web result after an intermediate turn without completing the call early", async () => {
@@ -464,7 +472,7 @@ esac
 
   it("honors an explicit executable for detection, queries, auth and self-update", async () => {
     const driver = createClaudeDriver({ binary: configured });
-    expect(detectInstalledClis(configured)).toMatchObject({ claude: true, claudeSource: "configured" });
+    expect(detectInstalledClis({ claude: configured })).toMatchObject({ claude: true, claudeSource: "configured" });
     await driver.listModels!();
     expect(sdk.query).toHaveBeenCalledWith(expect.objectContaining({
       options: expect.objectContaining({ pathToClaudeCodeExecutable: configured }),

@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
-import simpleGit, { type SimpleGit } from "simple-git";
+import { simpleGit, type SimpleGit } from "simple-git";
 
 // ─────────────────────────────────────────────────────────────
 // Diff snapshot — the git module's deep diff-capture operation.

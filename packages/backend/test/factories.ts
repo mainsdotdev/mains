@@ -1,3 +1,4 @@
+import { getLocalBackendId } from "../src/db/backend-identity";
 import { randomUUID } from "crypto";
 import {
   accounts,
@@ -57,6 +58,7 @@ export function createProject(
   const data = {
     id: overrides.id ?? randomUUID(),
     accountId,
+    ownerBackendId: overrides.ownerBackendId ?? getLocalBackendId(db),
     name: overrides.name ?? "Test Project",
     rootPath: overrides.rootPath ?? `/tmp/test/${randomUUID()}`,
     remoteOrigin: overrides.remoteOrigin ?? `github.com/test/${randomUUID()}`,
@@ -119,6 +121,7 @@ export function createWorkspace(
   createProject(db, {
     id: projectId,
     accountId,
+    ownerBackendId: overrides.ownerBackendId ?? getLocalBackendId(db),
     name: overrides.name ?? "Test Project",
     rootPath,
     remoteOrigin: null,
@@ -208,6 +211,7 @@ export function createRun(
   const data = {
     id: overrides.id ?? randomUUID(),
     accountId,
+    ownerBackendId: overrides.ownerBackendId ?? getLocalBackendId(db),
     providerId,
     ...overrides,
   };

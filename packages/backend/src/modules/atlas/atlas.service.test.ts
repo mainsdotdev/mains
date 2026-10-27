@@ -2,30 +2,39 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { RunOutputFile } from "@mains/contracts/runs";
 import { createTestDb } from "../../../test/setup-db";
 import { createAccount, createRun, createRunArtifact, createToolCall } from "../../../test/factories";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import type { DatabaseInstance } from "../../db/types";
-import { atlasItems, atlasPageRevisions, collections, runs } from "../../db/schema";
+import { atlasItems, atlasPageRevisions, collections, runAttachmentRefs, runAttachments, runs } from "../../db/schema";
+import { ownershipOf } from "../bridge/bridge.ownership";
 import { atlasRepo } from "./atlas.repo";
+import { sourceKey } from "./atlas.storage";
 
 let db: DatabaseInstance;
 let directory: string;
 let cleanup: () => void;
 let restoreRuntime: () => void;
 const root = (id: string, mode = "work") => path.join(directory, "runs", id, mode);
+const revisionRows = (pageId: string) => db.select().from(atlasPageRevisions).where(eq(atlasPageRevisions.itemId, pageId)).all();
+// Another device's selected outputs, as the runs projection rebuilds them from synced manifests.
+const replicaOutputs = new Map<string, unknown[]>();
 vi.mock("../../db/client", () => ({ getDb: () => db }));
 // Keep the integration focused on Atlas' real SQLite/storage boundary.
 vi.mock("../runs", () => ({ runsService: {
-  getRunById: async (id: string) => db.select().from(runs).where(eq(runs.id, id)).get() ?? null,
+  getRunById: async (id: string) => {
+    const run = db.select().from(runs).where(eq(runs.id, id)).get();
+    return run ? { ...run, ...ownershipOf(run.ownerBackendId) } : null;
+  },
   getRunExecutionRoot: async (id: string) => {
     const run = db.select().from(runs).where(eq(runs.id, id)).get();
     return root(id, run?.mode ?? "work");
   },
   listRunOutputFiles: vi.fn(async (_id: string): Promise<RunOutputFile[]> => []),
   getOutputArtifacts: async (id: string) => {
+    if (replicaOutputs.has(id)) return replicaOutputs.get(id);
     const { runsRepo } = await import("../runs/runs.repo");
     const { projectRunDeliverables } = await import("../runs/run-deliverables");
     const run = await runsRepo.findRunById(id);
@@ -40,12 +49,16 @@ vi.mock("../runs", () => ({ runsService: {
     const { listRunAttachmentFiles } = await import("../runs/run-attachment-storage");
     return listRunAttachmentFiles(id);
   },
+  listRunAttachmentRecords: (id: string) => listRunAttachmentRecords(id),
 } }));
 import { atlasService } from "./atlas.service";
-import { attachmentDescriptor, prepareRunAttachments, resolveRunAttachment } from "../runs/run-attachment-storage";
+import { attachmentDescriptor, listRunAttachmentRecords, prepareRunAttachments, resolveRunAttachment } from "../runs/run-attachment-storage";
 import { runsRepo } from "../runs/runs.repo";
 import { insertRunInputArtifact } from "../runs/run-input-artifact";
-import { handleAtlasCreatePage, handleAtlasReadPage, handleAtlasUpdatePage } from "../providers/adapters/atlas-tools";
+import { ATLAS_COVER_PRESETS } from "@mains/contracts/atlas-covers";
+import * as covers from "./atlas.covers";
+import { bridgeService } from "../bridge";
+import { handleAtlasCreatePage, handleAtlasListCovers, handleAtlasReadPage, handleAtlasUpdatePage } from "../providers/adapters/atlas-tools";
 
 beforeEach(() => {
   ({ db, cleanup } = createTestDb());
@@ -73,6 +86,175 @@ describe("Atlas agent access", { timeout: 15000 }, () => {
     expect(JSON.parse(updated.content[0].text).pageHref).toBe(page.pageHref);
     await expect(handleAtlasUpdatePage({ pageId: page.item.id, expectedVersion: 1, markdown: "Stale" }, context("work"))).rejects.toThrow("changed elsewhere");
     expect(atlasService.getPage({ id: page.item.id, accountId: "default" })?.revision.markdown).toContain("Updated");
+  });
+  it("sets, changes and removes a Page icon without creating a revision", async () => {
+    createRun(db, { id: "work", mode: "work" });
+    const created = JSON.parse((await handleAtlasCreatePage({ title: "Reading list", markdown: "Books", icon: "📚" }, context("work"))).content[0].text);
+    expect(created.item.metadata).toEqual({ icon: "emoji:📚" });
+    expect(created.item.version).toBe(1);
+    const changed = JSON.parse((await handleAtlasUpdatePage({ pageId: created.item.id, expectedVersion: 1, icon: "🧠" }, context("work"))).content[0].text);
+    expect(changed.item.metadata).toEqual({ icon: "emoji:🧠" });
+    expect(changed.item.version).toBe(1);
+    const both = JSON.parse((await handleAtlasUpdatePage({ pageId: created.item.id, expectedVersion: 1, markdown: "More books", icon: "emoji:🔖" }, context("work"))).content[0].text);
+    expect(both.item.version).toBe(2);
+    expect(both.item.metadata).toEqual({ icon: "emoji:🔖" });
+    const removed = JSON.parse((await handleAtlasUpdatePage({ pageId: created.item.id, expectedVersion: 2, icon: null }, context("work"))).content[0].text);
+    expect(removed.item.metadata).toBeNull();
+    await expect(handleAtlasUpdatePage({ pageId: created.item.id, expectedVersion: 2 }, context("work"))).rejects.toThrow("Supply");
+    await expect(handleAtlasUpdatePage({ pageId: created.item.id, expectedVersion: 2, title: "Renamed" }, context("work"))).rejects.toThrow("new title");
+    await expect(handleAtlasUpdatePage({ pageId: created.item.id, expectedVersion: 2, icon: "x\u0000y" }, context("work"))).rejects.toThrow("Invalid Page icon");
+  });
+  it("sets a bundled cover once per account and shares it between Pages", async () => {
+    createRun(db, { id: "work", mode: "work" });
+    const first = JSON.parse((await handleAtlasCreatePage({ title: "Trip", markdown: "Plan", icon: "✈️", coverPreset: "ocean" }, context("work"))).content[0].text);
+    const second = JSON.parse((await handleAtlasCreatePage({ title: "Dive log", markdown: "Notes", coverPreset: "ocean" }, context("work"))).content[0].text);
+    expect(first.item.metadata.icon).toBe("emoji:✈️");
+    expect(first.item.metadata.coverFileId).toBeTruthy();
+    expect(second.item.metadata.coverFileId).toBe(first.item.metadata.coverFileId);
+    expect(first.item.version).toBe(1);
+    const cover = atlasService.list({ accountId: "default", kind: "image" });
+    expect(cover).toHaveLength(1);
+    expect(cover[0]).toMatchObject({ id: first.item.metadata.coverFileId, kind: "image", mimeType: "image/png", sourceKey: "cover-preset:ocean" });
+    expect(fs.readFileSync(cover[0].path!).subarray(1, 4).toString()).toBe("PNG");
+    // Changing the cover keeps the icon; removing it keeps the icon too.
+    const changed = JSON.parse((await handleAtlasUpdatePage({ pageId: first.item.id, expectedVersion: 1, coverPreset: "citrus" }, context("work"))).content[0].text);
+    expect(changed.item.metadata.icon).toBe("emoji:✈️");
+    expect(changed.item.metadata.coverFileId).not.toBe(first.item.metadata.coverFileId);
+    expect(changed.item.version).toBe(1);
+    const removed = JSON.parse((await handleAtlasUpdatePage({ pageId: first.item.id, expectedVersion: 1, coverPreset: null }, context("work"))).content[0].text);
+    expect(removed.item.metadata).toEqual({ icon: "emoji:✈️" });
+    await expect(handleAtlasUpdatePage({ pageId: first.item.id, expectedVersion: 1, coverPreset: "nope" }, context("work"))).rejects.toThrow();
+  });
+  it("lists the bundled covers and rejects an unknown id before writing", async () => {
+    createRun(db, { id: "work", mode: "work" });
+    createRun(db, { id: "chat", mode: "chat" });
+    const listed = (await handleAtlasListCovers({}, context("work"))).content[0].text;
+    for (const cover of ATLAS_COVER_PRESETS) expect(listed).toContain(`${cover.id}: ${cover.description}`);
+    await expect(handleAtlasListCovers({}, context("chat"))).rejects.toThrow("Work mode");
+    await expect(handleAtlasCreatePage({ title: "Unknown cover", markdown: "Body", coverPreset: "nope" }, context("work"))).rejects.toThrow("AtlasListCovers");
+    expect(atlasService.list({ accountId: "default" })).toEqual([]);
+  });
+  it("lets the gallery set a bundled cover directly, only on a live Page", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Gallery", markdown: "Body" });
+    const item = await atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "forest" });
+    expect(item.metadata?.coverFileId).toBeTruthy();
+    expect(item.version).toBe(1);
+    const again = await atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "forest" });
+    expect(again.metadata?.coverFileId).toBe(item.metadata?.coverFileId);
+    expect(atlasService.list({ accountId: "default", kind: "image" })).toHaveLength(1);
+    await expect(atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "../forest" })).rejects.toThrow("Unknown cover");
+    await atlasService.update({ accountId: "default", id: page.item.id, trashed: true });
+    await expect(atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "dawn" })).rejects.toThrow("Page unavailable");
+    await expect(atlasService.setCoverPreset({ accountId: "other", id: page.item.id, preset: "dawn" })).rejects.toThrow("not found");
+  });
+  it("saves a photo cover with its own file type", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Photo", markdown: "Body" });
+    const item = await atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "nutmeg" });
+    const cover = atlasService.list({ accountId: "default", kind: "image" }).find((image) => image.id === item.metadata?.coverFileId);
+    expect(cover).toMatchObject({ mimeType: "image/jpeg", fileName: "nutmeg.jpg", sourceKey: "cover-preset:nutmeg" });
+    expect(fs.readFileSync(cover!.path!).subarray(0, 3).toString("hex")).toBe("ffd8ff");
+  });
+  it("keeps bundled cover images out of the Atlas library", async () => {
+    createRun(db, { id: "work", mode: "work" });
+    await handleAtlasCreatePage({ title: "Covered", markdown: "Body", coverPreset: "aurora" }, context("work"));
+    const library = await atlasService.library({ accountId: "default", type: "all", scope: "all" });
+    expect(library.items.map((entry) => entry.title)).toEqual(["Covered"]);
+    expect(atlasService.list({ accountId: "default", kind: "image" })).toHaveLength(1);
+  });
+  it("does not create a Page when its cover cannot be prepared", async () => {
+    createRun(db, { id: "work", mode: "work" });
+    vi.spyOn(covers, "readCoverPreset").mockRejectedValueOnce(new Error("Cover read failed"));
+    await expect(handleAtlasCreatePage({ title: "Retry", markdown: "Body", icon: "📚", coverPreset: "ocean" }, context("work")))
+      .rejects.toThrow("Cover read failed");
+    expect(atlasService.list({ accountId: "default", kind: "page" })).toEqual([]);
+    await handleAtlasCreatePage({ title: "Retry", markdown: "Body", icon: "📚", coverPreset: "ocean" }, context("work"));
+    expect(atlasService.list({ accountId: "default", kind: "page" })).toHaveLength(1);
+  });
+  it("preserves content, icon and version after a cover failure so the same update can be retried", async () => {
+    createRun(db, { id: "work", mode: "work" });
+    const page = await atlasService.createPage({ accountId: "default", title: "Original", markdown: "Old" });
+    const before = atlasService.getPage({ accountId: "default", id: page.item.id });
+    vi.spyOn(covers, "readCoverPreset").mockRejectedValueOnce(new Error("Cover read failed"));
+    const input = { pageId: page.item.id, expectedVersion: 1, title: "Changed", markdown: "New", icon: "📚", coverPreset: "ocean" };
+    await expect(handleAtlasUpdatePage(input, context("work"))).rejects.toThrow("Cover read failed");
+    expect(atlasService.getPage({ accountId: "default", id: page.item.id })).toEqual(before);
+    expect(atlasService.revisions({ accountId: "default", id: page.item.id })).toHaveLength(1);
+    const saved = JSON.parse((await handleAtlasUpdatePage(input, context("work"))).content[0].text);
+    expect(saved.item).toMatchObject({ version: 2, title: "Changed", metadata: { icon: "emoji:📚" } });
+    expect(saved.revision.markdown).toContain("New");
+  });
+  it("does not change an icon when a presentation-only cover change fails", async () => {
+    createRun(db, { id: "work", mode: "work" });
+    const page = await atlasService.createPage({ accountId: "default", title: "Original", markdown: "Old" });
+    vi.spyOn(covers, "readCoverPreset").mockRejectedValueOnce(new Error("Cover read failed"));
+    await expect(handleAtlasUpdatePage({ pageId: page.item.id, expectedVersion: 1, icon: "📚", coverPreset: "ocean" }, context("work")))
+      .rejects.toThrow("Cover read failed");
+    expect(atlasService.getPage({ accountId: "default", id: page.item.id })?.item.metadata).toBeNull();
+  });
+  it.each([false, true])("restores a missing preset file locally (missing directory: %s)", async (removeDirectory) => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Offline", markdown: "Body" });
+    await atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "ocean" });
+    const image = atlasService.list({ accountId: "default", kind: "image" })[0];
+    const bytes = fs.readFileSync(image.path!);
+    if (removeDirectory) fs.rmSync(path.dirname(image.path!), { recursive: true, force: true });
+    else fs.rmSync(image.path!, { force: true });
+    await atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "ocean" });
+    expect(atlasService.list({ accountId: "default", kind: "image" })).toHaveLength(1);
+    expect(await atlasService.resolveFile({ accountId: "default", id: image.id })).toBe(image.path);
+    expect(fs.readFileSync(image.path!)).toEqual(bytes);
+  });
+  it.each(["create", "update"])("rolls back the Page and revision if its presentation write fails (%s)", async (operation) => {
+    createRun(db, { id: "work", mode: "work" });
+    const page = await atlasService.createPage({ accountId: "default", title: "Original", markdown: "Old" });
+    const before = atlasService.getPage({ accountId: "default", id: page.item.id });
+    db.run(sql`CREATE TRIGGER reject_page_metadata BEFORE UPDATE OF metadata ON atlas_items
+      BEGIN SELECT RAISE(ABORT, 'Presentation write failed'); END`);
+    const action = operation === "create"
+      ? handleAtlasCreatePage({ title: "New", markdown: "New", icon: "📚" }, context("work"))
+      : handleAtlasUpdatePage({ pageId: page.item.id, expectedVersion: 1, markdown: "New", icon: "📚" }, context("work"));
+    await expect(action).rejects.toThrow("Presentation write failed");
+    expect(atlasService.list({ accountId: "default", kind: "page" })).toHaveLength(1);
+    expect(atlasService.getPage({ accountId: "default", id: page.item.id })).toEqual(before);
+    expect(atlasService.revisions({ accountId: "default", id: page.item.id })).toHaveLength(1);
+    expect(db.select().from(atlasPageRevisions).all()).toHaveLength(1);
+  });
+  it("saves presentation even when the supplied Page content has not changed", async () => {
+    createRun(db, { id: "work", mode: "work" });
+    const page = await atlasService.createPage({ accountId: "default", title: "Original", markdown: "Body" });
+    const saved = JSON.parse((await handleAtlasUpdatePage({ pageId: page.item.id, expectedVersion: 1,
+      blocksJson: JSON.stringify(page.revision.blocks), icon: "📚", coverPreset: "ocean" }, context("work"))).content[0].text);
+    expect(saved.item).toMatchObject({ version: 1, metadata: { icon: "emoji:📚" } });
+    expect(saved.item.metadata.coverFileId).toBeTruthy();
+    expect(atlasService.revisions({ accountId: "default", id: page.item.id })).toHaveLength(1);
+  });
+  it("never restores a different bundled image under a saved cover's immutable identity", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Offline", markdown: "Body" });
+    await atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "ocean" });
+    const image = atlasService.list({ accountId: "default", kind: "image" })[0];
+    fs.rmSync(image.path!, { force: true });
+    vi.spyOn(covers, "readCoverPreset").mockResolvedValueOnce(Buffer.from("different bundled image"));
+    const download = vi.spyOn(bridgeService, "resolveFile").mockRejectedValueOnce(new Error("Offline"));
+    await expect(atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "ocean" })).rejects.toThrow("Offline");
+    expect(download).toHaveBeenCalledWith("atlas_items", image.id, "storage_key");
+    expect(fs.existsSync(image.path!)).toBe(false);
+    expect(atlasService.list({ accountId: "default", kind: "image" })).toEqual([image]);
+  });
+  it("does not restore a cover through a symlinked storage directory", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Safe", markdown: "Body" });
+    await atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "ocean" });
+    const image = atlasService.list({ accountId: "default", kind: "image" })[0];
+    fs.rmSync(path.dirname(image.path!), { recursive: true, force: true });
+    const outside = path.join(directory, "outside");
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.dirname(image.path!), "junction");
+    await expect(atlasService.setCoverPreset({ accountId: "default", id: page.item.id, preset: "ocean" }))
+      .rejects.toThrow("Invalid Atlas storage directory");
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+  it("rejects an invalid icon before creating the Page", async () => {
+    createRun(db, { id: "work", mode: "work" });
+    await expect(handleAtlasCreatePage({ title: "Bad icon", markdown: "Body", icon: "a\u0000b" }, context("work"))).rejects.toThrow("Invalid Page icon");
+    expect(atlasService.list({ accountId: "default", kind: "page" })).toEqual([]);
   });
   it("keeps Chat read-only even if its handler is invoked directly", async () => {
     createRun(db, { id: "chat", mode: "chat" });
@@ -252,6 +434,30 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect((await atlasService.generated({ accountId: "default" })).items).toEqual([]);
     expect(await resolveRunAttachment("annotation-fork", image.attachmentId!)).toMatchObject({ path: image.sourcePath });
   });
+  it("lists another device's uploads and selected outputs from their records, without opening its files", async () => {
+    createRun(db, { id: "replica", title: "On the laptop", ownerBackendId: "laptop" });
+    const id = "b".repeat(64), hash = "c".repeat(64), source = "/Users/laptop/out/chart.png";
+    db.insert(runAttachments).values({ id, name: "Screenshot.png", type: "image", mimeType: "image/png",
+      storageKey: `attachments/${id}/Screenshot.png`, byteSize: 125636, contentHash: hash, createdAt: new Date("2026-10-16T09:00:00Z") }).run();
+    db.insert(runAttachmentRefs).values({ runId: "replica", attachmentId: id, inputKey: "prompt", ordinal: 0 }).run();
+    replicaOutputs.set("replica", [{ id: -42, runId: "replica", kind: "image", path: null, content: "", blobData: null, entityId: null,
+      contentHash: null, createdAt: new Date("2026-10-17T10:00:00Z"), metadata: { outputSelected: true, path: source, fileName: "chart.png", byteSize: 2048 } }]);
+    try {
+      const images = (await atlasService.library({ accountId: "default", type: "image" })).items;
+      expect(images.map((entry) => [entry.title, entry.path, entry.generated?.origin, entry.generated?.replica])).toEqual([
+        ["chart.png", null, "generated", { backendId: "laptop", artifactId: -42 }],
+        ["Screenshot.png", null, "attachment", { backendId: "laptop", attachmentId: id }],
+      ]);
+      // The laptop keys its own output by that path, so a copy it saved to Atlas is not listed twice.
+      expect(images[0].generated?.sourceKey).toBe(sourceKey("replica", source));
+      expect(images[1]).toMatchObject({ contentHash: hash, generated: { runTitle: "On the laptop", byteSize: 125636 } });
+      // A saved copy of the same image replaces the upload in All; Uploads still lists it.
+      db.insert(atlasItems).values({ id: "saved-copy", accountId: "default", kind: "image", title: "Saved", contentHash: hash }).run();
+      expect((await atlasService.library({ accountId: "default", type: "image" })).items.some((entry) => entry.generated?.replica?.attachmentId)).toBe(false);
+      expect((await atlasService.library({ accountId: "default", scope: "uploads" })).items.map((entry) => entry.generated?.replica?.attachmentId)).toEqual([id]);
+      await expect(atlasService.saveFile({ accountId: "default", runId: "replica", path: source })).rejects.toThrow("source backend");
+    } finally { replicaOutputs.clear(); }
+  });
   it("projects image content hashes across uploads and generated files and refreshes changed outputs", async () => {
     createRun(db, { id: "hash-uploads" });
     const [upload] = (await prepareRunAttachments("hash-uploads", [{ name: "photo.png", type: "image", mimeType: "image/png",
@@ -286,6 +492,22 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(fs.readFileSync(saved.path!, "utf8")).toBe("original contents");
     expect(atlasService.list({ accountId: "default" })).toHaveLength(1);
     expect(await atlasService.isStoredFile(fs.realpathSync(saved.path!))).toBe(true);
+  });
+  it("deletes a removed item's own folder but never follows a synced id outside the Atlas folder", async () => {
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: output() });
+    const folder = path.dirname(saved.path!);
+    await atlasService.update({ accountId: "default", id: saved.id, trashed: true });
+    await atlasService.remove({ accountId: "default", id: saved.id });
+    expect(fs.existsSync(folder)).toBe(false);
+
+    // Another device chose this id; it resolves to a folder beside the profile's Atlas files.
+    const outside = path.join(directory, "outside");
+    fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, "keep.txt"), "not Atlas data");
+    db.insert(atlasItems).values({ id: "../../outside", accountId: "default", kind: "image", title: "Photo.png",
+      storageKey: "crafted/Photo.png", trashedAt: new Date() }).run();
+    await atlasService.remove({ accountId: "default", id: "../../outside" });
+    expect(fs.readFileSync(path.join(outside, "keep.txt"), "utf8")).toBe("not Atlas data");
+    expect(atlasService.get({ accountId: "default", id: "../../outside" })).toBeNull();
   });
   it("enforces account ownership, output provenance and symlink boundaries", async () => {
     const file = output();
@@ -478,7 +700,8 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     await atlasService.createPage({ accountId: "other", title: "Private", markdown: "Secret content" });
     expect(atlasService.list({ accountId: "default" }).every((item) => !("preview" in item))).toBe(true);
 
-    await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Notes", markdown: "## Today\n- [x] New task" });
+    // An agent save always adds a revision, so version 1 stays available to restore.
+    await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Notes", markdown: "## Today\n- [x] New task" }, "agent");
     const items = atlasService.list({ accountId: "default", includePagePreview: true });
     expect(items).toHaveLength(3);
     expect(items.find((item) => item.id === file.id)).not.toHaveProperty("preview");
@@ -516,7 +739,7 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     expect(unchanged.item.metadata).toEqual({ icon: "emoji:📖", coverFileId: cover.id });
     expect(unchanged.item.version).toBe(1);
     await Promise.all([
-      atlasService.savePage({ ...identity, expectedVersion: 1, title: "Updated", markdown: "New content" }),
+      atlasService.savePage({ ...identity, expectedVersion: 1, title: "Updated", markdown: "New content" }, "agent"),
       atlasService.update({ ...identity, metadata: { icon: "icon:notebook|violet" } }),
     ]);
     const restored = await atlasService.restore({ ...identity, expectedVersion: 2, version: 1 });
@@ -528,7 +751,7 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     expect(atlasService.getPage(identity)?.item.metadata).toEqual({ coverFileId: cover.id });
     await atlasService.update({ ...identity, metadata: null });
     expect(atlasService.getPage(identity)?.item.metadata).toBeNull();
-    expect(atlasService.revisions(identity)).toHaveLength(3);
+    expect(db.select().from(atlasPageRevisions).where(eq(atlasPageRevisions.itemId, page.item.id)).all()).toHaveLength(3);
   });
   it("shares a saved cover without copies and protects it only while a current Page uses it", async () => {
     const first = await atlasService.createPage({ accountId: "default", title: "First" });
@@ -582,14 +805,74 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     expect(page.item.version).toBe(1);
     expect(page.revision.blocks.some((block) => (block as { type: string }).type === "heading")).toBe(true);
     const update = { accountId: "default", id: page.item.id, expectedVersion: 1, title: "Updated", markdown: "New content" };
-    const results = await Promise.allSettled([atlasService.savePage(update), atlasService.savePage(update, "agent")]);
+    const results = await Promise.allSettled([atlasService.savePage(update, "agent"), atlasService.savePage(update, "agent")]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     const restored = await atlasService.restore({ accountId: "default", id: page.item.id, expectedVersion: 2, version: 1 });
     expect(restored.item.version).toBe(3);
     expect(restored.revision.blocks).toEqual(page.revision.blocks);
     expect(restored.item.title).toBe("Notes");
-    expect(atlasService.revisions({ accountId: "default", id: page.item.id }).map((row) => row.version)).toEqual([3, 2, 1]);
+    const versions = db.select().from(atlasPageRevisions).where(eq(atlasPageRevisions.itemId, page.item.id)).all()
+      .map((row) => row.version).sort((left, right) => right - left);
+    expect(versions).toEqual([3, 2, 1]);
+  });
+  it("folds a user's autosaves into one revision while the Page version still advances", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });
+    const identity = { accountId: "default", id: page.item.id };
+    await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Notes", markdown: "v2" });
+    const third = await atlasService.savePage({ ...identity, expectedVersion: 2, title: "Notes", markdown: "v3" });
+    expect(third.revision.id).toBe(page.revision.id);
+    expect(third.revision.markdown).toContain("v3");
+    expect(third.item.version).toBe(3);
+    // The version is still the concurrency token, so a stale editor cannot overwrite the folded save.
+    await expect(atlasService.savePage({ ...identity, expectedVersion: 2, title: "Notes", markdown: "stale" })).rejects.toThrow("changed elsewhere");
+    expect(revisionRows(page.item.id)).toHaveLength(1);
+  });
+  it("adds a revision for another author, an ended session and a restore, and keeps what the restore replaced", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });
+    const identity = { accountId: "default", id: page.item.id };
+    const agent = await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Notes", markdown: "agent text" }, "agent");
+    expect(agent.revision.id).not.toBe(page.revision.id);
+    const user = await atlasService.savePage({ ...identity, expectedVersion: 2, title: "Notes", markdown: "user text" });
+    expect(user.revision.id).not.toBe(agent.revision.id);
+    // A pause longer than a session: the next save starts a new revision instead of rewriting this one.
+    db.update(atlasPageRevisions).set({ createdAt: new Date(Date.now() - 60 * 60_000) }).where(eq(atlasPageRevisions.id, user.revision.id)).run();
+    const later = await atlasService.savePage({ ...identity, expectedVersion: 3, title: "Notes", markdown: "later text" });
+    expect(later.revision.id).not.toBe(user.revision.id);
+    const restored = await atlasService.restore({ ...identity, revisionId: agent.revision.id, expectedVersion: 4 });
+    expect(restored.revision.actor).toBe("restore");
+    expect(restored.revision.id).not.toBe(later.revision.id);
+    // The state the restore replaced stays listed, so the restore can be undone.
+    expect(atlasService.revisions(identity).map((row) => row.id)).toContain(later.revision.id);
+    expect(revisionRows(page.item.id)).toHaveLength(5);
+  });
+  it("prunes what history hides and relinks survivors, so none reads as a conflict", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });
+    const identity = { accountId: "default", id: page.item.id };
+    let latest = page;
+    // Agent saves never fold, so consecutive ones are separate rows that history shows as one session.
+    for (let version = 1; version <= 3; version++)
+      latest = await atlasService.savePage({ ...identity, expectedVersion: latest.item.version, title: "Notes", markdown: `agent ${version}` }, "agent");
+    const rows = revisionRows(page.item.id);
+    expect(rows.map((row) => row.id).sort()).toEqual([page.revision.id, latest.revision.id].sort());
+    expect(rows.find((row) => row.id === latest.revision.id)?.parentRevisionId).toBe(page.revision.id);
+    expect(atlasService.getPage(identity)?.conflicts).toEqual([]);
+    expect(atlasService.revisions(identity).map((row) => row.id)).toEqual([latest.revision.id, page.revision.id]);
+  });
+  it("never rewrites or prunes a replicated revision", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });
+    const identity = { accountId: "default", id: page.item.id };
+    // A Bridge clock means another backend may already hold this revision.
+    db.run(sql`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,portable)
+      VALUES('atlas_page_revisions',${page.revision.id},'row',1,0,'other','{}',1)`);
+    const next = await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Notes", markdown: "v2" });
+    expect(next.revision.id).not.toBe(page.revision.id);
+    expect(atlasService.getRevision({ ...identity, revisionId: page.revision.id }).markdown).toContain("v1");
+    await atlasService.savePage({ ...identity, expectedVersion: 2, title: "Notes", markdown: "agent 1" }, "agent");
+    const last = await atlasService.savePage({ ...identity, expectedVersion: 3, title: "Notes", markdown: "agent 2" }, "agent");
+    // History groups each author's saves into one entry, but nothing is deleted from a replicated Page.
+    expect(revisionRows(page.item.id)).toHaveLength(4);
+    expect(atlasService.revisions(identity).map((row) => row.id)).toEqual([last.revision.id, next.revision.id]);
   });
   it("protects embedded files needed by a previous revision", async () => {
     const page = await atlasService.createPage({ accountId: "default", title: "Visual notes" });

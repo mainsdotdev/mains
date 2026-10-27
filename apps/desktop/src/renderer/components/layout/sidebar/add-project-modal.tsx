@@ -24,6 +24,8 @@ interface AddProjectModalProps {
   onClone: (url: string, targetPath: string) => void;
   onCreate: (name: string, parentPath?: string) => void;
   onClose: () => void;
+  /** A repository that exists on another device: the dialog only clones it, prefilled. */
+  cloneUrl?: string;
 }
 
 const PROJECT_TABS: ReadonlyArray<{ value: ProjectTab; label: string }> = [
@@ -43,6 +45,7 @@ export default function AddProjectModal({
   onClone,
   onCreate,
   onClose,
+  cloneUrl,
 }: AddProjectModalProps) {
   const { nativeDialogs } = useCapabilities();
   const titleId = useId();
@@ -50,14 +53,15 @@ export default function AddProjectModal({
   const panelId = useId();
   const primaryInputRef = useRef<HTMLInputElement>(null);
 
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(cloneUrl ?? "");
   const [clonePath, setClonePath] = useState(() =>
     nativeDialogs ? window.api.platform.homedir + "/Desktop" : "",
   );
   const [name, setName] = useState("");
   const [parentPath, setParentPath] = useState("");
 
-  const isClone = activeTab === "clone";
+  const cloneOnly = cloneUrl !== undefined;
+  const isClone = cloneOnly || activeTab === "clone";
   const isBusy = isAddingLocal || isCreating;
   const trimmedName = name.trim();
   const invalidName = !trimmedName || INVALID_NAME.test(trimmedName);
@@ -95,27 +99,31 @@ export default function AddProjectModal({
       className="w-full max-w-2xl rounded-3xl px-6 pt-5 pb-6"
     >
       <Body as="h2" id={titleId} weight="semibold">
-        Add Project
+        {cloneOnly ? "Clone to this device" : "Add Project"}
       </Body>
       <Caption className="mt-1 block">
-        Bring in a repository or start a new one.
+        {cloneOnly
+          ? "This repository is on another device. Clone it here to work in it."
+          : "Bring in a repository or start a new one."}
       </Caption>
 
-      <SegmentedTabs
-        id={tabsId}
-        value={activeTab}
-        onChange={onTabChange}
-        options={PROJECT_TABS}
-        panelId={panelId}
-        aria-label="Project setup method"
-        disabled={isBusy}
-        className="mt-5 w-fit max-w-full"
-      />
+      {!cloneOnly && (
+        <SegmentedTabs
+          id={tabsId}
+          value={activeTab}
+          onChange={onTabChange}
+          options={PROJECT_TABS}
+          panelId={panelId}
+          aria-label="Project setup method"
+          disabled={isBusy}
+          className="mt-5 w-fit max-w-full"
+        />
+      )}
 
       <form
         id={panelId}
-        role="tabpanel"
-        aria-labelledby={getSegmentedTabId(tabsId, activeTab)}
+        role={cloneOnly ? undefined : "tabpanel"}
+        aria-labelledby={cloneOnly ? undefined : getSegmentedTabId(tabsId, activeTab)}
         onSubmit={handleSubmit}
         className="pt-5"
       >
@@ -205,7 +213,7 @@ export default function AddProjectModal({
         </div>
       </form>
 
-      <div className="mt-5 border-t border-primary-200/70 pt-4 dark:border-primary-800/70">
+      {!cloneOnly && <div className="mt-5 border-t border-primary-200/70 pt-4 dark:border-primary-800/70">
         <Button
           variant="subtle"
           fullWidth
@@ -231,7 +239,7 @@ export default function AddProjectModal({
             <Caption className="shrink-0">{addLocalShortcut}</Caption>
           )}
         </Button>
-      </div>
+      </div>}
     </Modal>
   );
 }

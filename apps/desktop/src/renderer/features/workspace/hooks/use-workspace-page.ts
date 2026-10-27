@@ -1,3 +1,4 @@
+import { previewOwnerKey } from "../lib/preview-tabs";
 import { useComposerRunQueue, type QueueMessageSnapshot } from "./use-composer-run-queue";
 import { composerAnnotationPrompt, hasComposerMessage } from "../lib/composer-message";
 import { runMessageQueue } from "../lib/run-message-queue";
@@ -453,7 +454,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       dispatch(setDraftText({ key: nextOwnerKey, text: state.draftTextByKey[ownerKey] ?? "" }));
       moveTransientUploadsToOwner(ownerKey, nextOwnerKey);
       dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
-      await (window as any).api?.browser?.reassignTabs?.(ownerKey, nextOwnerKey);
+      await (window as any).api?.browser?.reassignTabs?.(previewOwnerKey(contextParts, ownerKey), previewOwnerKey(contextParts, nextOwnerKey));
       attachAppRun?.(ownerKey, runId, contextParts);
       const visible = store.getState().workspace;
       if (visible.workspaceViewKey !== viewKey ||
@@ -544,7 +545,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
         dispatch(setDraftText({ key: ownerKey, text: "" }));
         dispatch(setDraftText({ key: nextOwnerKey, text: remainingDraft }));
         dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
-        await (window as any).api?.browser?.reassignTabs?.(ownerKey, nextOwnerKey);
+        await (window as any).api?.browser?.reassignTabs?.(previewOwnerKey(contextParts, ownerKey), previewOwnerKey(contextParts, nextOwnerKey));
       } else if (!continuing) {
         dispatch(setRunConversationSettings({ key: nextOwnerKey, settings: newRunSettings }));
       }
@@ -621,8 +622,8 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
             }
             dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
             await (window as any).api?.browser?.reassignTabs?.(
-              ownerKey,
-              nextOwnerKey,
+              previewOwnerKey(contextParts, ownerKey),
+              previewOwnerKey(contextParts, nextOwnerKey),
             );
             clearInputState();
             dispatch(setActiveTab(newRunId));

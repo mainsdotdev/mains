@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("@mains/backend/modules/bridge", () => ({ assertOwnedRecord: vi.fn() }));
 
 const harness = vi.hoisted(() => ({
   findRunById: vi.fn(),

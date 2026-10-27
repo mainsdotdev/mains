@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { collectionsRepo } from "./collections.repo";
+import { bridgeService } from "../bridge";
 import {
   validateAddCollectionSource,
   validateCollectionIdentity,
@@ -28,6 +29,14 @@ import {
 } from "./collections.storage";
 
 const MAX_FILE_SOURCE_BYTES = 20 * 1024 * 1024;
+async function resolveSourceFile(args: Parameters<typeof resolveCollectionSourceStorage>[0]): Promise<string> {
+  if (!bridgeService.isRunning()) return resolveCollectionSourceStorage(args);
+  try {
+    const file = resolveCollectionSourceStorage(args), stat = await fs.lstat(file);
+    if (stat.isFile() && !stat.isSymbolicLink()) return file;
+  } catch { /* An alias or a replica may have no original under this backend's managed path. */ }
+  return bridgeService.resolveFile("collection_sources", args.sourceId, "storage_key");
+}
 
 function decodeBase64(data: string): Buffer {
   const normalized = data.replace(/\s/g, "");
@@ -206,7 +215,7 @@ export const collectionsService = {
   ): Promise<CollectionSourceMaterial[]> {
     await requireOwnedCollection(options.collectionId, options.accountId);
     const sources = await collectionsRepo.listSourceRecords(options.collectionId);
-    return sources.map((source) => ({
+    return Promise.all(sources.map(async (source) => ({
       id: source.id,
       collectionId: source.collectionId,
       kind: source.kind,
@@ -216,13 +225,13 @@ export const collectionsService = {
       contentHash: source.contentHash,
       createdAt: source.createdAt,
       updatedAt: source.updatedAt,
-      absolutePath: resolveCollectionSourceStorage({
+      absolutePath: await resolveSourceFile({
         collectionId: source.collectionId,
         sourceId: source.id,
         name: source.name,
         storageKey: source.storageKey,
       }),
-    }));
+    })));
   },
 
   async addSource(payload: unknown): Promise<CollectionSourceResponse> {

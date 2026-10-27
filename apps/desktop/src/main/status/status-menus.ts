@@ -235,7 +235,7 @@ export function buildTrayMenu(
         devices > 0
           ? `Remote access on · ${devices} paired ${devices === 1 ? "device" : "devices"}`
           : "Remote access on",
-      click: () => actions.navigate("/relay"),
+      click: () => actions.navigate("/settings?section=backends"),
     });
   }
 

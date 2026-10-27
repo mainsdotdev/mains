@@ -3,7 +3,8 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const transport = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@/lib/transport/registry", () => ({ getTransport: () => transport, onTransportChange: vi.fn() }));
-import { clearAttachmentImageCache, loadAttachmentImage, useAttachmentImage } from "./attachment-image";
+import { clearAttachmentImageCache, loadAttachmentImage, loadArtifactImage, useAttachmentImage } from "./attachment-image";
+import { CHANNELS } from "@mains/contracts/channels";
 
 let created = vi.fn((_blob?: Blob | MediaSource) => "");
 let revoked = vi.fn((_url: string) => {});
@@ -20,6 +21,14 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearAttachmentImageCache(); vi.unstubAllGlobals(); });
 
 describe("attachment pixel lifetime", () => {
+  it("keeps artifact and attachment identities separate and releases an expanded replica preview", async () => {
+    const attachment = await loadAttachmentImage("run", "1"), artifact = await loadArtifactImage("run", 1);
+    expect(artifact.src).not.toBe(attachment.src);
+    expect(transport.invoke).toHaveBeenCalledWith(CHANNELS.runArtifacts.readImage, [{ runId: "run", artifactId: 1, maxSide: 256 }]);
+    const full = await loadArtifactImage("run", 1, 1600); full.release();
+    expect(full.isActive()).toBe(false); expect(artifact.isActive()).toBe(true);
+    attachment.release(); artifact.release();
+  });
   it("coalesces thumbnail requests and revokes unused entries when the LRU fills", async () => {
     const [first, duplicate] = await Promise.all([loadAttachmentImage("run", "first"), loadAttachmentImage("run", "first")]);
     expect(first.src).toBe(duplicate.src); expect(transport.invoke).toHaveBeenCalledOnce();

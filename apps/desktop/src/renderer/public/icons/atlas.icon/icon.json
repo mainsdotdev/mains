@@ -6,6 +6,15 @@
     {
       "layers" : [
         {
+          "glass-specializations" : [
+            {
+              "value" : true
+            },
+            {
+              "appearance" : "tinted",
+              "value" : false
+            }
+          ],
           "image-name" : "atlas.png",
           "name" : "atlas",
           "position" : {

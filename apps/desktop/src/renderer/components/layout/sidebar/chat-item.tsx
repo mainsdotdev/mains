@@ -22,8 +22,11 @@ import {
 } from "@/components/ui/icons";
 import type { Collection, RecentRun } from "@/lib/redux/api";
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
+import { getModeConfig } from "@/lib/mode-config";
 import { ProjectIcon } from "./project-icon";
 import { SidebarItemHoverCard } from "./sidebar-item-hover-card";
+import type { BridgeBackendInfo } from "@mains/contracts/bridge";
+import { DeviceBadge } from "@/features/bridge/components/device-badge";
 
 /** What the row prints — title, else the goal's first line. */
 export function chatLabel(run: Pick<RecentRun, "title" | "goal">): string {
@@ -38,10 +41,10 @@ export function chatLabel(run: Pick<RecentRun, "title" | "goal">): string {
 }
 
 interface ChatItemProps {
+  device?: BridgeBackendInfo;
   run: RecentRun;
   variant: AsciiSpinnerVariant;
   isActive: boolean;
-  isRecent?: boolean;
   onSelect: () => void;
   /** Opens the linked Atlas Page with this chat selected. */
   onOpenPage?: () => void;
@@ -59,9 +62,9 @@ interface ChatItemProps {
 
 export function ChatItem({
   run,
+  device,
   variant,
   isActive,
-  isRecent = false,
   onSelect,
   onOpenPage,
   onArchive,
@@ -72,7 +75,7 @@ export function ChatItem({
   isPinned,
   onTogglePin,
 }: ChatItemProps) {
-  const isLive = run.status === "running" || run.status === "queued";
+  const isLive = (run.status === "running" || run.status === "queued") && (!run.isReplica || device?.online === true);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [menuPosition, setMenuPosition] = useState({
     x: 0,
@@ -90,6 +93,7 @@ export function ChatItem({
   const isEditing = draft !== null;
 
   const startRename = () => {
+    if (run.isReplica) return;
     setIsMenuOpen(false);
     abandoned.current = false;
     setDraft(label);
@@ -104,6 +108,7 @@ export function ChatItem({
 
   const openMenu = (event: MouseEvent) => {
     event.stopPropagation();
+    if (run.isReplica) return;
     const rect = triggerRef.current?.getBoundingClientRect();
     if (rect) {
       setMenuPosition({
@@ -126,10 +131,10 @@ export function ChatItem({
       updatedAt={run.updatedAt}
       description={
         collections.find((collection) => collection.id === run.collectionId)
-          ?.name ?? "Chat"
+          ?.name ?? getModeConfig(run.mode).label
       }
       disabled={isEditing || isMenuOpen}
-      actions={[
+      actions={run.isReplica ? [] : [
         {
           label: isPinned ? "Unpin chat" : "Pin chat",
           icon: isPinned ? (
@@ -171,36 +176,23 @@ export function ChatItem({
             onSelect();
           }
         }}
-        className={`group/chat w-full flex items-center gap-1.5 pr-2.5 py-1 rounded-[10px] cursor-pointer transition-colors ${
-          isRecent ? "pl-2.5" : "pl-7"
-        } ${
+        className={`group/chat w-full flex items-center gap-1.5 pl-2.5 pr-2.5 py-1 rounded-[10px] cursor-pointer transition-colors ${
           isActive
             ? "bg-primary/50 glass-outline-soft glass-outline dark:bg-primary/5"
             : "hover:bg-primary/50 dark:hover:bg-primary/5"
         }`}
       >
-        {/* Two homes for one indicator. An indented project row has an empty
-            gutter to hang it in, so labels stay aligned whether or not a chat
-            is running. A Recents row is flush with the sidebar's edge — hung
-            there the spinner lands outside the row, so it takes a place in the
-            flow instead and nudges the label across while the run is live. */}
-        {isLive && isRecent && (
+        {isLive && (
           // The slot reserves width in the flow; the spinner itself is taken
           // out of it. A box with no in-flow content cannot set the row's
-          // height, so a live chat and an idle one measure exactly the same —
-          // the same reason the indented rows hang theirs in the gutter.
+          // height, so a live chat and an idle one measure exactly the same.
           <span className="relative shrink-0 w-3 self-stretch">
             <span className="absolute inset-0 flex items-center justify-center">
               <AsciiSpinner variant={variant} kind="circle" />
             </span>
           </span>
         )}
-        <span className="relative flex min-w-0 flex-1 items-center gap-1.5">
-          {isLive && !isRecent && (
-            <span className="pointer-events-none absolute right-full top-1/2 mr-1.5 -translate-y-1/2">
-              <AsciiSpinner variant={variant} kind="circle" />
-            </span>
-          )}
+        <span className="relative flex min-w-0 flex-1 items-center gap-0.5">
           {onOpenPage && !isEditing && (
             <Button
               variant="icon"
@@ -212,6 +204,9 @@ export function ChatItem({
                 event.stopPropagation();
                 onOpenPage();
               }}
+              // The icon button's own padding sits the glyph to the right of
+              // a chat title that has no page. Pull it back so they share an edge.
+              className="-ml-1"
             >
               <Page aria-hidden="true" />
             </Button>
@@ -255,7 +250,8 @@ export function ChatItem({
             </Text>
           )}
         </span>
-        <div
+        {run.isReplica && device && <DeviceBadge backend={device} compact />}
+        {!run.isReplica && <div
           className={`ml-auto flex items-center gap-1 shrink-0 ${
             isEditing ? "hidden" : ""
           }`}
@@ -291,10 +287,10 @@ export function ChatItem({
           >
             <Option className="w-3.5 h-3.5" />
           </Button>
-        </div>
+        </div>}
       </div>
       <DropdownMenu
-        isOpen={isMenuOpen}
+        isOpen={isMenuOpen && !run.isReplica}
         aria-label="Chat actions"
         position={menuPosition}
         onClose={() => setIsMenuOpen(false)}

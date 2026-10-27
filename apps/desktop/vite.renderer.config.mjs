@@ -1,5 +1,5 @@
 // Vite Renderer configuration for the Renderer Process
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { readFileSync } from 'fs';
@@ -7,8 +7,10 @@ import { readFileSync } from 'fs';
 const pkg = JSON.parse(readFileSync(path.resolve(import.meta.dirname, 'package.json'), 'utf-8'));
 
 //  https://vitejs.dev/config
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
+  // Standalone previews/tests must not replace the live renderer's prebundles.
+  cacheDir: path.resolve(import.meta.dirname, 'node_modules/.vite/renderer'),
   // `@mains/contracts` is a live `file:` dependency shared with the mobile app.
   // Pre-bundling it makes additions to the channel map invisible to an already
   // running renderer, so new IPC endpoints can be invoked with an `undefined`
@@ -18,6 +20,7 @@ export default defineConfig({
   },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __MAINS_BRIDGE_HUB_URL__: JSON.stringify(loadEnv(mode, import.meta.dirname, 'MAINS_BRIDGE_').MAINS_BRIDGE_HUB_URL?.trim() || ''),
   },
   root: path.resolve(import.meta.dirname, 'src/renderer'),
   build: {
@@ -38,4 +41,4 @@ export default defineConfig({
   css: {
     postcss: path.resolve(import.meta.dirname, 'postcss.config.js'),
   },
-});
+}));

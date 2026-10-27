@@ -211,6 +211,83 @@
       "when": 1791308692124,
       "tag": "0029_atlas_item_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1792072726592,
+      "tag": "0030_bridge_ownership",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1792074695106,
+      "tag": "0031_bridge_replication",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1792079748374,
+      "tag": "0032_bridge_runtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1792083091013,
+      "tag": "0033_bridge_blobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1792085108967,
+      "tag": "0034_atlas_revision_graph",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1792085422297,
+      "tag": "0035_atlas_recovery_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1792090251073,
+      "tag": "0036_bridge_product_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1792092950509,
+      "tag": "0037_provider_session_mirror",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1792115211400,
+      "tag": "0038_bridge_blob_roots",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1792400000000,
+      "tag": "0039_bridge_signed_publications",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1793059200000,
+      "tag": "0040_bridge_outbox_retry",
+      "breakpoints": true
     }
   ]
 }

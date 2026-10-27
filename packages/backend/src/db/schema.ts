@@ -8,6 +8,7 @@ import {
   uniqueIndex,
   check,
   primaryKey,
+  type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 import { PROVIDER_IDS, SUPPORTED_PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { DEFAULT_MODE_ID, MODE_IDS } from "@mains/contracts/modes";
@@ -60,6 +61,7 @@ export const atlasItems = sqliteTable("atlas_items", {
   contentHash: text("content_hash"),
   isFavorite: integer("is_favorite", { mode: "boolean" }).notNull().default(false),
   trashedAt: integer("trashed_at", { mode: "timestamp" }),
+  currentRevisionId: text("current_revision_id").references((): AnySQLiteColumn => atlasPageRevisions.id, { onDelete: "set null" }),
   version: integer("version").notNull().default(0),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
@@ -74,16 +76,20 @@ export const atlasItems = sqliteTable("atlas_items", {
 export const atlasPageRevisions = sqliteTable("atlas_page_revisions", {
   id: text("id").primaryKey().notNull(),
   itemId: text("item_id").notNull().references(() => atlasItems.id, { onDelete: "cascade" }),
+  parentRevisionId: text("parent_revision_id").references((): AnySQLiteColumn => atlasPageRevisions.id, { onDelete: "set null" }),
+  mergedRevisionId: text("merged_revision_id").references((): AnySQLiteColumn => atlasPageRevisions.id, { onDelete: "set null" }),
   version: integer("version").notNull(),
   schemaVersion: integer("schema_version").notNull().default(1),
   title: text("title").notNull(),
   blocksJson: text("blocks_json").notNull(),
   markdown: text("markdown").notNull(),
-  actor: text("actor", { enum: ["user", "agent"] }).notNull(),
+  actor: text("actor", { enum: ["user", "agent", "restore"] }).notNull(),
   sourceRunId: text("source_run_id").references(() => runs.id, { onDelete: "set null" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 }, (t) => [
   uniqueIndex("uniq_atlas_page_revisions_version").on(t.itemId, t.version),
+  index("idx_atlas_page_revisions_parent").on(t.parentRevisionId),
+  index("idx_atlas_page_revisions_merged").on(t.mergedRevisionId),
   check("check_atlas_page_revisions_blocks_json", sql`json_valid(${t.blocksJson})`),
 ]);
 
@@ -95,6 +101,12 @@ export const atlasPageFileRefs = sqliteTable("atlas_page_file_refs", {
   primaryKey({ columns: [t.revisionId, t.fileId] }),
   index("idx_atlas_page_file_refs_file").on(t.fileId),
 ]);
+
+/** Local receipts join revision deleted ACKs to the later Page tombstone. */
+export const bridgeAtlasRecoveries = sqliteTable("bridge_atlas_recoveries", {
+  revisionId: text("revision_id").primaryKey().notNull(),
+  recoveredItemId: text("recovered_item_id").notNull(),
+});
 
 export const appSettings = sqliteTable("app_settings", {
   id: text("id").primaryKey().notNull().default("default"),
@@ -290,6 +302,7 @@ export const projects = sqliteTable(
   "projects",
   {
     id: text("id").primaryKey(),
+    ownerBackendId: text("owner_backend_id").notNull().default(""),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -318,10 +331,10 @@ export const projects = sqliteTable(
   },
   (t) => [
     uniqueIndex("uniq_projects_account_origin")
-      .on(t.accountId, t.remoteOrigin)
+      .on(t.accountId, t.ownerBackendId, t.remoteOrigin)
       .where(sql`${t.remoteOrigin} IS NOT NULL`),
     uniqueIndex("uniq_projects_account_root")
-      .on(t.accountId, t.rootPath)
+      .on(t.accountId, t.ownerBackendId, t.rootPath)
       .where(sql`${t.remoteOrigin} IS NULL`),
     index("idx_projects_account").on(t.accountId),
     index("idx_projects_remote_origin").on(t.remoteOrigin),
@@ -342,6 +355,7 @@ export const workspaces = sqliteTable(
   "workspaces",
   {
     id: text("id").primaryKey(), // uuid
+    ownerBackendId: text("owner_backend_id").notNull().default(""),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -376,7 +390,7 @@ export const workspaces = sqliteTable(
   (t) => [
     index("idx_workspaces_account").on(t.accountId),
     index("idx_workspaces_project").on(t.projectId),
-    uniqueIndex("uniq_workspaces_account_root").on(t.accountId, t.rootPath),
+    uniqueIndex("uniq_workspaces_account_root").on(t.accountId, t.ownerBackendId, t.rootPath),
     index("idx_workspaces_status").on(t.status),
     index("idx_workspaces_updated").on(t.updatedAt),
     index("idx_workspaces_account_sort").on(t.accountId, t.sortOrder),
@@ -488,6 +502,7 @@ export const runs = sqliteTable(
   "runs",
   {
     id: text("id").primaryKey(), // uuid
+    ownerBackendId: text("owner_backend_id").notNull().default(""),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -731,6 +746,20 @@ export const runContext = sqliteTable(
 /* -----------------------------
    RUN ARTIFACTS (patches, logs, files, reports)
 ------------------------------ */
+
+/** Exact SDK session entries. Large received entries are resolved from their
+ * encrypted blob manifest instead of being duplicated in the row. */
+export const providerSessionEntries = sqliteTable("provider_session_entries", {
+  id: text("id").primaryKey().notNull(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  sessionId: text("session_id").notNull(), subpath: text("subpath").notNull().default(""),
+  seq: integer("seq").notNull(), uuid: text("uuid"), entry: text("entry"),
+  byteSize: integer("byte_size").notNull(), contentHash: text("content_hash").notNull(),
+}, (t) => [
+  index("idx_provider_session_entries_order").on(t.runId, t.sessionId, t.subpath, t.seq, t.id),
+  check("check_provider_session_entry_json", sql`${t.entry} IS NULL OR json_valid(${t.entry})`),
+  check("check_provider_session_entry_size", sql`${t.byteSize} >= 0 AND ${t.seq} >= 0`),
+]);
 
 export const runArtifacts = sqliteTable(
   "run_artifacts",
@@ -1217,8 +1246,8 @@ export const spaces = sqliteTable(
       .default(sql`(unixepoch())`),
   },
   (t) => [
-    uniqueIndex("uniq_spaces_account_slug").on(t.accountId, t.slug),
-    uniqueIndex("uniq_spaces_account_name").on(t.accountId, t.name),
+    index("idx_spaces_account_slug").on(t.accountId, t.slug),
+    index("idx_spaces_account_name").on(t.accountId, t.name),
     index("idx_spaces_account").on(t.accountId),
     index("idx_spaces_sort").on(t.sortOrder),
     index("idx_spaces_updated").on(t.updatedAt),
@@ -1428,6 +1457,7 @@ export const automations = sqliteTable(
   "automations",
   {
     id: text("id").primaryKey(),
+    ownerBackendId: text("owner_backend_id").notNull().default(""),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -1519,6 +1549,7 @@ export const pulses = sqliteTable(
   "pulses",
   {
     id: text("id").primaryKey(),
+    ownerBackendId: text("owner_backend_id").notNull().default(""),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -1589,3 +1620,106 @@ export const pulses = sqliteTable(
     check("check_pulses_minute", sql`${t.minute} BETWEEN 0 AND 59`),
   ],
 );
+
+/** Shared transaction flag; B2's applier and capture triggers use this singleton. */
+export const bridgeState = sqliteTable("bridge_state", {
+  id: integer("id").primaryKey(),
+  applying: integer("applying", { mode: "boolean" }).notNull().default(false),
+}, (t) => [check("check_bridge_state_singleton", sql`${t.id} = 1`)]);
+
+// Bridge's durable bookkeeping is local to each backend, never replicated.
+export const bridgeConfig = sqliteTable("bridge_config", {
+  id: integer("id").primaryKey(),
+  backendId: text("backend_id").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  atlasEnabled: integer("atlas_enabled", { mode: "boolean" }).notNull().default(false),
+  backfillTable: text("backfill_table"),
+  backfillPk: text("backfill_pk"),
+  backfillDone: integer("backfill_done", { mode: "boolean" }).notNull().default(false),
+  blobRootsVersion: integer("blob_roots_version").notNull().default(0),
+  accountFingerprint: text("account_fingerprint"),
+  trackingEnabled: integer("tracking_enabled", { mode: "boolean" }).notNull().default(false),
+  bridgeAccountId: text("account_id"), hubOrigin: text("hub_origin"),
+  enrollmentStaging: integer("enrollment_staging", { mode: "boolean" }).notNull().default(false),
+  devDisabled: integer("dev_disabled", { mode: "boolean" }).notNull().default(false),
+  logoutPending: integer("logout_pending", { mode: "boolean" }).notNull().default(false),
+  logoutRevoked: integer("logout_revoked", { mode: "boolean" }).notNull().default(false),
+  logoutRemoveSynced: integer("logout_remove_synced", { mode: "boolean" }).notNull().default(false),
+}, (t) => [check("check_bridge_config_singleton", sql`${t.id} = 1`)]);
+
+/** Last observed device labels/presence survive restarts; online is never persisted. */
+export const bridgePeers = sqliteTable("bridge_peers", {
+  backendId: text("backend_id").primaryKey().notNull(),
+  label: text("label").notNull(),
+  platform: text("platform"),
+  lastSeenMs: integer("last_seen_ms"),
+});
+
+export const bridgeClock = sqliteTable("bridge_clock", {
+  id: integer("id").primaryKey(),
+  physicalMs: integer("physical_ms").notNull().default(0),
+  counter: integer("counter").notNull().default(0),
+  generation: integer("generation").notNull().default(0),
+}, (t) => [check("check_bridge_clock_singleton", sql`${t.id} = 1`)]);
+
+export const bridgePublications = sqliteTable("bridge_publications", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(), stream: text("stream").notNull(),
+  image: text("image").notNull(), envelope: text("envelope").notNull(),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register, t.stream] })]);
+
+export const bridgeOutbox = sqliteTable("bridge_outbox", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(),
+  op: text("op", { enum: ["upsert", "delete"] }).notNull(),
+  generation: integer("generation").notNull(),
+  stream: text("stream").notNull(), owner: text("owner"), runId: text("run_id"),
+  changedAt: integer("changed_at").notNull(),
+  retryGeneration: integer("retry_generation"), retryAttempts: integer("retry_attempts").notNull().default(0),
+  retryAfterMs: integer("retry_after_ms").notNull().default(0), retryError: text("retry_error"),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register] }), index("idx_bridge_outbox_stream").on(t.stream, t.generation)]);
+
+export const bridgeRowClock = sqliteTable("bridge_row_clock", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(),
+  physicalMs: integer("physical_ms").notNull(), counter: integer("counter").notNull(), origin: text("origin").notNull(),
+  syncedSeq: integer("synced_seq"),
+  lastAckMs: integer("last_ack_ms"),
+  dirty: integer("dirty", { mode: "boolean" }).notNull().default(false), projectId: text("project_id"),
+  // Latest register image also retains losing aliases' values for deterministic projection.
+  valuesJson: text("values_json").notNull(), refsJson: text("refs_json").notNull().default("{}"),
+  // NULL means this local generation has not prepared its file manifest yet.
+  blobRefsJson: text("blob_refs_json"),
+  portable: integer("portable", { mode: "boolean" }).notNull().default(false),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register] })]);
+
+export const bridgeCursors = sqliteTable("bridge_cursors", {
+  stream: text("stream").primaryKey().notNull(), seq: integer("seq").notNull().default(0),
+});
+
+export const bridgeParked = sqliteTable("bridge_parked", {
+  stream: text("stream").notNull(), seq: integer("seq").notNull(), envelope: text("envelope").notNull(), reason: text("reason").notNull(),
+}, (t) => [primaryKey({ columns: [t.stream, t.seq] })]);
+
+export const bridgePendingLinks = sqliteTable("bridge_pending_links", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(), column: text("column_name").notNull(),
+  parentTable: text("parent_table").notNull(), parentPk: text("parent_pk").notNull(), owner: text("owner").notNull(),
+  physicalMs: integer("physical_ms").notNull(), counter: integer("counter").notNull(), origin: text("origin").notNull(),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register, t.column] })]);
+
+export const bridgeIdMap = sqliteTable("bridge_id_map", {
+  ownerBackendId: text("owner_backend_id").notNull(), tableName: text("table_name").notNull(), remoteId: text("remote_id").notNull(), localId: integer("local_id").notNull(),
+}, (t) => [primaryKey({ columns: [t.ownerBackendId, t.tableName, t.remoteId] })]);
+
+export const bridgeAliases = sqliteTable("bridge_aliases", {
+  tableName: text("table_name").notNull(), aliasPk: text("alias_pk").notNull(), canonicalPk: text("canonical_pk").notNull(),
+}, (t) => [primaryKey({ columns: [t.tableName, t.aliasPk] }), index("idx_bridge_aliases_canonical").on(t.tableName, t.canonicalPk)]);
+
+export const bridgeTombstones = sqliteTable("bridge_tombstones", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(),
+  // Locally captured tombstones are sealed when the outbox is read; remote ones stay whole.
+  envelope: text("envelope"),
+  stream: text("stream").notNull().default("account"), owner: text("owner"), runId: text("run_id"), projectId: text("project_id"),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk] })]);
+
+export const bridgeExclusions = sqliteTable("bridge_exclusions", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(),
+  reason: text("reason").notNull().default("manual"),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk] })]);

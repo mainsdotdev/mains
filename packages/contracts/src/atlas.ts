@@ -32,6 +32,7 @@ export interface AtlasItem {
   isFavorite: boolean;
   trashedAt: string | null;
   version: number;
+  currentRevisionId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -64,10 +65,14 @@ export interface AtlasGeneratedFile {
   runTitle: string;
   collectionId: string | null;
   kind: "file" | "image";
+  /** On another device's conversation, that device's path: display-only, never opened here. */
   path: string;
   fileName: string;
   mimeType: string;
   byteSize: number;
+  /** A file of another device's conversation. It opens through the synced attachment or
+   * selected output it names, downloaded on demand; it is saved to Atlas from that device. */
+  replica?: { backendId: string; attachmentId?: string; artifactId?: number };
   modifiedAt: string;
 }
 export interface AtlasGeneratedOptions {
@@ -110,16 +115,28 @@ export interface AtlasLibraryPage {
 export interface AtlasPageRevision {
   id: string;
   itemId: string;
+  parentRevisionId?: string | null;
+  mergedRevisionId?: string | null;
+  /** Backend identity is stable; label is a cached, display-only device name. */
+  backendId?: string | null;
+  backendLabel?: string | null;
   version: number;
   schemaVersion: number;
   title: string;
   blocks: unknown[];
   markdown: string;
-  actor: "user" | "agent";
+  /** A restore is its own author so history keeps the state it replaced. */
+  actor: "user" | "agent" | "restore";
   sourceRunId: string | null;
   createdAt: string;
 }
-export interface AtlasPage { item: AtlasItem; revision: AtlasPageRevision }
+export type AtlasRevisionSummary = Omit<AtlasPageRevision, "blocks" | "markdown">;
+export interface AtlasPage { item: AtlasItem; revision: AtlasPageRevision; conflicts?: AtlasRevisionSummary[] }
+export interface AtlasRestorePage extends AtlasIdentity {
+  revisionId: string;
+  expectedVersion: number;
+}
+export interface AtlasResolveConflict extends AtlasRestorePage { choice: "current" | "other" }
 export interface AtlasCreatePage {
   accountId: string;
   title: string;
@@ -144,6 +161,10 @@ export interface AtlasUploadFile {
   fileName: string;
   /** Base64 file contents, used for a Page's embedded local files. */
   data: string;
+}
+/** Use a bundled cover from `@mains/contracts/atlas-covers` as the Page's cover. */
+export interface AtlasSetCoverPreset extends AtlasIdentity {
+  preset: string;
 }
 export interface AtlasUpdateItem extends AtlasIdentity {
   title?: string;

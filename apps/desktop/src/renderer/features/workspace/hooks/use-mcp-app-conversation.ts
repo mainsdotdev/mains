@@ -3,6 +3,7 @@ import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
 import { useMcpAppToolOpener } from "@/hooks/use-mcp-app-tool-opener";
 import type { useWorkspacePage } from "./use-workspace-page";
 import type { McpAppToolMetadata } from "../components/tools/mcp-app-display";
+import { hasUsableMcpAppResult } from "../lib/mcp-app-tool-result";
 
 /** App messages and floating chat use the normal workspace conversation. */
 export function useMcpAppConversation(ws: ReturnType<typeof useWorkspacePage>) {
@@ -26,7 +27,7 @@ export function useMcpAppConversation(ws: ReturnType<typeof useWorkspacePage>) {
           !["done", "completed"].includes(String(event.metadata?.status)) || !event.metadata?.mcpApp || observed.current.seen.has(event.id)) continue;
       let output = event.metadata.output;
       if (typeof output === "string") { try { output = JSON.parse(output); } catch { continue; } }
-      if (!output || typeof output !== "object" || (output as { isError?: boolean }).isError) continue;
+      if (!output || typeof output !== "object" || !hasUsableMcpAppResult(output)) continue;
       const app = event.metadata.mcpApp as McpAppToolMetadata;
       if (!app.server || !app.tool || !app.resourceUri) continue;
       observed.current.seen.add(event.id);

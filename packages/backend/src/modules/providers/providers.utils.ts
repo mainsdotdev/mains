@@ -746,18 +746,29 @@ export function findCursorBinaryPath(): string | null {
 export type { DetectedClis } from "@mains/contracts/provider-cli";
 
 /**
- * Detect provider runtimes available on this backend, including bundled ones.
- * Used by the onboarding flow to pre-select detected agents.
+ * The Codex and Cursor drivers spawn a configured `binary` as-is, with no
+ * fallback, so detection must judge that executable rather than the default.
  */
-export function detectInstalledClis(claudeBinary?: string, copilotBinary?: string): DetectedClis {
-  const claude = resolveClaudeRuntime(claudeBinary);
-  const copilot = resolveCopilotRuntime(copilotBinary);
+function configuredBinaryExists(binary: string): boolean {
+  return path.isAbsolute(binary) ? isExecutableFile(binary) : whichBinary(binary) !== null;
+}
+
+/**
+ * Detect provider runtimes available on this backend, including bundled ones.
+ * Used by onboarding to pre-select detected agents and by the provider
+ * settings pages to tell a missing CLI apart from a signed-out one.
+ */
+export function detectInstalledClis(
+  binaries: Partial<Record<"claude" | "copilot" | "codex" | "cursor", string>> = {},
+): DetectedClis {
+  const claude = resolveClaudeRuntime(binaries.claude);
+  const copilot = resolveCopilotRuntime(binaries.copilot);
   return {
     claude: claude !== null,
     ...(claude ? { claudeSource: claude.source } : {}),
     copilot: copilot !== null,
     ...(copilot ? { copilotSource: copilot.source } : {}),
-    codex: findCodexBinaryPath() !== null,
-    cursor: findCursorBinaryPath() !== null,
+    codex: binaries.codex ? configuredBinaryExists(binaries.codex) : findCodexBinaryPath() !== null,
+    cursor: binaries.cursor ? configuredBinaryExists(binaries.cursor) : findCursorBinaryPath() !== null,
   };
 }

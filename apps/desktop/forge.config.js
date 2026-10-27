@@ -232,6 +232,7 @@ module.exports = {
     ],
     extraResource: [
       '../../packages/backend/src/db/migrations',
+      '../../packages/backend/assets/atlas-covers',
       'src/renderer/public/icon.png',
       'src/renderer/public/icons',
       // Menu-bar icon: both representations, so the packaged app resolves them

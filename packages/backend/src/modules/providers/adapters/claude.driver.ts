@@ -1,4 +1,5 @@
 import { pickRunSettingConfig } from "@mains/contracts/run-settings";
+import { bridgeService } from "../../bridge";
 // ─────────────────────────────────────────────────────────────
 // Claude ProviderDriver
 //
@@ -4280,6 +4281,15 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       }
 
       removeClaudeRuntimeSettings(cs.runtimeSettingsPath);
+      if (cs.state.sessionId) {
+        try {
+          await bridgeService.mirrorClaudeSession({ runId: cs.runId, sessionId: cs.state.sessionId, dir: cs.options.cwd ?? process.cwd() });
+        } catch {
+          // The next turn imports the full native session again. Mirror failure
+          // must not change a completed/aborted run's outcome or log raw entries.
+          logWarn("Could not mirror Claude session; will retry after its next turn");
+        }
+      }
     },
 
     async readMcpAppResource(request) {

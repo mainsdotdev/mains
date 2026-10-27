@@ -1,3 +1,4 @@
+import { assertOwnedRecord } from "../bridge";
 import { pulseRepo } from "./pulse.repo";
 import { validateCreate, validateUpdate } from "./pulse.validation";
 import { runsService } from "../runs/runs.service";
@@ -170,6 +171,7 @@ export const pulseService = {
     const validationError = validateCreate(input);
     if (validationError) throw new Error(validationError);
 
+    if (input.workspaceId) assertOwnedRecord("workspaces", input.workspaceId);
     const nextRunAt = computeNextRunAt(input, new Date());
     const pulse = pulseRepo.create(accountId, input, nextRunAt);
     scheduleNext();
@@ -177,9 +179,11 @@ export const pulseService = {
   },
 
   update(id: string, input: UpdatePulseInput): Pulse | null {
+    assertOwnedRecord("pulses", id);
     const existing = pulseRepo.findById(id);
     if (!existing) throw new Error("Pulse not found");
 
+    if (input.workspaceId) assertOwnedRecord("workspaces", input.workspaceId);
     const merged = { ...existing, ...input };
     const validationError = validateUpdate(merged);
     if (validationError) throw new Error(validationError);
@@ -211,6 +215,7 @@ export const pulseService = {
   },
 
   delete(id: string): void {
+    assertOwnedRecord("pulses", id);
     pulseRepo.delete(id);
     scheduleNext();
   },
@@ -222,6 +227,7 @@ export const pulseService = {
   // ── Execution ──
 
   async executePulse(id: string): Promise<Pulse | null> {
+    assertOwnedRecord("pulses", id);
     const pulse = pulseRepo.findById(id);
     if (!pulse) throw new Error("Pulse not found");
 

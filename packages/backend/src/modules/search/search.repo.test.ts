@@ -21,11 +21,11 @@ describe("searchRepo full-text chat search", () => {
       INSERT INTO accounts(id) VALUES ('account-1'), ('account-2');
       INSERT INTO providers(id, kind, display_name)
       VALUES ('codex', 'agent_runtime', 'Codex');
-      INSERT INTO runs(id, account_id, provider_id, title, is_archived) VALUES
-        ('run-1', 'account-1', 'codex', 'Gyroscope', 0),
-        ('run-2', 'account-1', 'codex', 'Physics notes', 0),
-        ('run-other-account', 'account-2', 'codex', 'Private physics', 0),
-        ('run-archived', 'account-1', 'codex', 'Old physics', 1);
+      INSERT INTO runs(id, account_id, provider_id, title, is_archived, owner_backend_id) VALUES
+        ('run-1', 'account-1', 'codex', 'Gyroscope', 0, 'test-backend'),
+        ('run-2', 'account-1', 'codex', 'Physics notes', 0, 'test-backend'),
+        ('run-other-account', 'account-2', 'codex', 'Private physics', 0, 'test-backend'),
+        ('run-archived', 'account-1', 'codex', 'Old physics', 1, 'test-backend');
       INSERT INTO run_artifacts(run_id, kind, content, metadata) VALUES
         ('run-1', 'user-prompt', 'How does gyroscopic precession work?', '{}'),
         ('run-1', 'report', 'Precession reverses when the spin reverses.', '{}'),

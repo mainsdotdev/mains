@@ -29,7 +29,9 @@ function isExpectedAbsence(error: unknown): boolean {
   if (code === "ENOENT" || code === "ENOTDIR") return true;
   // "no longer exists" is the deliberate refusal raised by the workspace
   // run-start guard — an intended outcome, not a defect to dump a stack for.
-  return /\b(does not exist|no longer exists|no such file or directory)\b/i.test(
+  // A synced record whose bytes never left their device (missing there, or
+  // above the Bridge file limit) is likewise a known state of that record.
+  return /\b(does not exist|no longer exists|no such file or directory|available only on its source device)\b/i.test(
     error.message,
   );
 }

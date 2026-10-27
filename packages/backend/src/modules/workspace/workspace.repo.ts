@@ -1,3 +1,5 @@
+import { getLocalBackendId } from "../../db/backend-identity";
+import { ownedHere, ownershipOf } from "../bridge";
 import { eq, desc, and, sql, inArray, max } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
@@ -30,6 +32,18 @@ import type {
 // ── Workspace ──
 // ─────────────────────────────────────────────────────────────
 export const workspaceRepo = {
+  async findAllOwned(includeArchived = false): Promise<WorkspaceResponse[]> {
+    const rows = await getDb()
+      .select()
+      .from(workspaces)
+      .where(and(
+        ownedHere(workspaces.ownerBackendId),
+        includeArchived ? undefined : eq(workspaces.isArchived, false),
+      ))
+      .orderBy(desc(workspaces.updatedAt));
+    return rows.map(mapWorkspaceRow);
+  },
+
   async findAll(includeArchived = false): Promise<WorkspaceResponse[]> {
     const db = getDb();
     const query = db.select().from(workspaces);
@@ -97,6 +111,7 @@ export const workspaceRepo = {
       .where(
         and(
           eq(workspaces.accountId, accountId),
+          ownedHere(workspaces.ownerBackendId),
           eq(workspaces.rootPath, rootPath),
         ),
       )
@@ -121,8 +136,9 @@ export const workspaceRepo = {
     const [last] = await db
       .select({ value: max(workspaces.sortOrder) })
       .from(workspaces)
-      .where(eq(workspaces.accountId, payload.accountId));
+      .where(and(ownedHere(workspaces.ownerBackendId), eq(workspaces.accountId, payload.accountId)));
     await db.insert(workspaces).values({
+      ownerBackendId: getLocalBackendId(db),
       id: payload.id,
       accountId: payload.accountId,
       projectId: payload.projectId,
@@ -145,7 +161,7 @@ export const workspaceRepo = {
       orderedIds.forEach((id, sortOrder) => {
         db.update(workspaces)
           .set({ sortOrder })
-          .where(and(eq(workspaces.id, id), eq(workspaces.accountId, accountId)))
+          .where(and(ownedHere(workspaces.ownerBackendId), eq(workspaces.id, id), eq(workspaces.accountId, accountId)))
           .run();
       });
     });
@@ -181,6 +197,19 @@ export const workspaceRepo = {
     return this.findById(id);
   },
 
+  /** Records the checked-out branch as a hint for other Bridge devices; this
+   * device keeps reading git live. Owned rows only, without bumping updatedAt. */
+  async recordLastBranch(id: string, branch: string): Promise<boolean> {
+    const db = getDb();
+    const owned = and(eq(workspaces.id, id), ownedHere(workspaces.ownerBackendId));
+    const [row] = await db.select({ metadata: workspaces.metadata }).from(workspaces).where(owned).limit(1);
+    if (!row) return false;
+    const metadata = safeJsonParse<Record<string, unknown>>(row.metadata) ?? {};
+    if (metadata.lastBranch === branch) return false;
+    await db.update(workspaces).set({ metadata: JSON.stringify({ ...metadata, lastBranch: branch }) }).where(owned);
+    return true;
+  },
+
   async delete(id: string): Promise<void> {
     const db = getDb();
     await db.delete(workspaces).where(eq(workspaces.id, id));
@@ -188,7 +217,7 @@ export const workspaceRepo = {
 
   async deleteByProjectId(projectId: string): Promise<void> {
     const db = getDb();
-    await db.delete(workspaces).where(eq(workspaces.projectId, projectId));
+    await db.delete(workspaces).where(and(ownedHere(workspaces.ownerBackendId), eq(workspaces.projectId, projectId)));
   },
 
   async archive(id: string): Promise<WorkspaceResponse | null> {
@@ -207,7 +236,7 @@ export const workspaceRepo = {
     const [last] = await db
       .select({ value: max(workspaces.sortOrder) })
       .from(workspaces)
-      .where(eq(workspaces.accountId, workspace.accountId));
+      .where(and(ownedHere(workspaces.ownerBackendId), eq(workspaces.accountId, workspace.accountId)));
     await db
       .update(workspaces)
       .set({
@@ -657,6 +686,7 @@ function mapWorkspaceRow(
   row: typeof workspaces.$inferSelect,
 ): WorkspaceResponse {
   return {
+    ...ownershipOf(row.ownerBackendId),
     id: row.id,
     accountId: row.accountId,
     projectId: row.projectId,

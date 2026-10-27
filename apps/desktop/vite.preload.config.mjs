@@ -9,10 +9,13 @@ export default defineConfig(({ command }) => ({
     lib: {
       entry: 'src/preload/index.ts',
       formats: ['cjs'],
-      fileName: () => 'preload.js',
+      fileName: () => 'preload.cjs',
     },
     rollupOptions: {
       external: ['electron'],
+      output: {
+        entryFileNames: 'preload.cjs',
+      },
     },
   },
 }));

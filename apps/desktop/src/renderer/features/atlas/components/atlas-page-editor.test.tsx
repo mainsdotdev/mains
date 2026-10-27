@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AtlasPage } from "@mains/contracts/atlas";
 import type { AtlasPendingPageAction } from "../lib/page-actions";
+import { AUTOSAVE_INTERVAL_MS } from "../lib/page-save-queue";
 import AtlasPageEditor, { type AtlasPageEditorHandle } from "./atlas-page-editor";
 
 const mocks = vi.hoisted(() => ({
@@ -219,7 +220,7 @@ describe("Atlas Page menu actions", () => {
     mocks.page = { ...mocks.page!, item: { ...mocks.page!.item, trashedAt: "2026-10-11" } };
     rerender();
     act(() => lateChange());
-    await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTOSAVE_INTERVAL_MS); });
     unmount();
     expect(mocks.save).not.toHaveBeenCalled();
     expect(localStorage.getItem("mains:atlas:draft:account:page")).toContain("Local draft");
@@ -236,7 +237,7 @@ describe("Atlas Page menu actions", () => {
     expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("disabled", true);
     expect(await mocks.beforeSend!()).toBe(false);
     act(() => mocks.onEditorChange!());
-    await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTOSAVE_INTERVAL_MS); });
     expect(mocks.save).toHaveBeenCalledOnce();
     await act(async () => {
       failTrash(new Error("Could not move to Trash"));
@@ -244,9 +245,33 @@ describe("Atlas Page menu actions", () => {
     });
     expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("disabled", false);
     fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "Still editing" } });
-    await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTOSAVE_INTERVAL_MS); });
     expect(mocks.save).toHaveBeenCalledTimes(2);
     expect(mocks.save).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Still editing", expectedVersion: 2 }));
+  });
+
+  it("saves a continuous edit once per autosave interval instead of after every pause", async () => {
+    vi.useFakeTimers();
+    setup();
+    const title = screen.getByRole("textbox", { name: "Page title" });
+    fireEvent.change(title, { target: { value: "First" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(AUTOSAVE_INTERVAL_MS - 1_000); });
+    fireEvent.change(title, { target: { value: "Second" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(900); });
+    expect(mocks.save).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(mocks.save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ title: "Second" }));
+  });
+
+  it("saves a dirty draft as soon as the window starts closing", async () => {
+    vi.useFakeTimers();
+    setup();
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "Closing" } });
+    expect(mocks.save).not.toHaveBeenCalled();
+    const event = new Event("beforeunload", { cancelable: true });
+    await act(async () => { window.dispatchEvent(event); });
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ title: "Closing" }));
   });
 
   it("moves the intended Page and rejects actions after its backend changes", async () => {

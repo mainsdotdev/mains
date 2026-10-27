@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { findCursorBinaryPath, mergePathDirs, providerProcessPath, resolveClaudeRuntime, resolveCopilotRuntime, providerLoginCommand } from "./providers.utils";
+import { detectInstalledClis, findCursorBinaryPath, mergePathDirs, providerProcessPath, resolveClaudeRuntime, resolveCopilotRuntime, providerLoginCommand } from "./providers.utils";
 
 describe("providers.utils / development Claude runtime", () => {
   it("resolves the SDK's native dependency without a system installation", () => {
@@ -66,6 +66,22 @@ describe("providers.utils / development Copilot runtime", () => {
       fs.rmSync(baseDirectory, { recursive: true, force: true });
     }
   }, 20_000);
+});
+
+describe("providers.utils / detectInstalledClis", () => {
+  it("judges a configured Codex or Cursor binary itself, since their drivers spawn it with no fallback", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mains-detect-"));
+    const binary = path.join(directory, process.platform === "win32" ? "agent.exe" : "agent");
+    fs.writeFileSync(binary, "fixture");
+    fs.chmodSync(binary, 0o755);
+    try {
+      expect(detectInstalledClis({ codex: binary, cursor: binary })).toMatchObject({ codex: true, cursor: true });
+      const missing = path.join(directory, "missing");
+      expect(detectInstalledClis({ codex: missing, cursor: missing })).toMatchObject({ codex: false, cursor: false });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("providers.utils / mergePathDirs", () => {

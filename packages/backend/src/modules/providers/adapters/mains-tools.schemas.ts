@@ -20,11 +20,17 @@ const atlasContentFields = {
   blocksJson: z.string().max(2 * 1024 * 1024).optional().describe("Lossless BlockNote block array encoded as JSON; preserve unchanged IDs, properties and atlas-file:// references from AtlasReadPage"),
   markdown: z.string().max(2 * 1024 * 1024).optional().describe("Alternative Markdown input. Lossy for advanced formatting; prefer blocksJson when updating rich content. Supply exactly one content field."),
 };
+const atlasIconField = z.string().trim().min(1).max(32).nullable().optional()
+  .describe("Page icon as a single emoji such as \"📚\". On AtlasUpdatePage, null removes the icon. Leave it out to keep the current icon.");
+const atlasCoverField = z.string().trim().min(1).max(64).nullable().optional()
+  .describe("Page cover id from AtlasListCovers; call it first, ids cannot be guessed. Pick the cover whose mood fits the topic. On AtlasUpdatePage, null removes the cover. Leave it out to keep the current cover.");
+export const AtlasListCoversSchema = z.object({});
 export const AtlasReadPageSchema = z.object({ pageId: z.string().trim().min(1).max(100) });
-export const AtlasCreatePageSchema = z.object({ title: z.string().trim().min(1).max(240), ...atlasContentFields });
+export const AtlasCreatePageSchema = z.object({ title: z.string().trim().min(1).max(240), ...atlasContentFields,
+  icon: atlasIconField, coverPreset: atlasCoverField });
 export const AtlasUpdatePageSchema = z.object({ pageId: z.string().trim().min(1).max(100),
   expectedVersion: z.number().int().min(1).describe("Version returned by AtlasReadPage. A stale write is rejected; read again and reconcile."),
-  title: z.string().trim().min(1).max(240).optional(), ...atlasContentFields });
+  title: z.string().trim().min(1).max(240).optional(), ...atlasContentFields, icon: atlasIconField, coverPreset: atlasCoverField });
 
 const voiceRunId = z.string().trim().min(1).max(100).describe("Working chat ID returned by StartVoiceTask or ListVoiceTasks");
 export const StartVoiceTaskSchema = z.object({
@@ -53,21 +59,27 @@ const findingFields = {
   severity: z
     .enum(["critical", "warning", "info"])
     .describe("Finding severity level"),
-  file: z.string().describe("File path where the finding was detected"),
-  lineStart: z.number().optional().describe("Start line number"),
-  lineEnd: z.number().optional().describe("End line number"),
-  message: z.string().describe("Description of the finding"),
-  reason: z.string().describe("Why this was flagged"),
-  suggestion: z.string().optional().describe("Suggested fix"),
+  file: z.string().trim().min(1).max(4096).describe("File path where the finding was detected"),
+  lineStart: z.number().int().min(1).optional().describe("Start line number, 1-based"),
+  lineEnd: z.number().int().min(1).optional().describe("End line number, 1-based; not before lineStart"),
+  message: z.string().trim().min(1).max(4000).describe("Description of the finding"),
+  reason: z.string().trim().min(1).max(4000).describe("Why this was flagged"),
+  suggestion: z.string().max(8000).optional().describe("Suggested fix"),
   metadata: z
     .record(z.string(), z.unknown())
     .optional()
     .describe("Additional metadata as JSON"),
 };
 
+const lineRangeIsOrdered = (finding: { lineStart?: number; lineEnd?: number }) =>
+  finding.lineStart === undefined || finding.lineEnd === undefined || finding.lineEnd >= finding.lineStart;
+const lineRangeError = { message: "lineEnd must not be before lineStart", path: ["lineEnd"] };
+
+const reviewId = z.string().trim().min(1).max(100).describe("ID of the parent review");
+
 export const SaveReviewSchema = z.object({
-  title: z.string().describe("Review title"),
-  summary: z.string().optional().describe("Review summary"),
+  title: z.string().trim().min(1).max(240).describe("Review title"),
+  summary: z.string().max(8000).optional().describe("Review summary"),
   // No `.default("open")`: a default would force `status` into JSON Schema's
   // `required` list, changing the agent-facing contract. The handler applies
   // the "open" default at runtime instead.
@@ -81,15 +93,15 @@ export const SaveReviewSchema = z.object({
     .describe("Additional metadata as JSON"),
 });
 
-export const SaveFindingSchema = z.object({
-  reviewId: z.string().describe("ID of the parent review"),
-  ...findingFields,
-});
+export const SaveFindingSchema = z
+  .object({ reviewId, ...findingFields })
+  .refine(lineRangeIsOrdered, lineRangeError);
 
 export const SaveFindingsSchema = z.object({
-  reviewId: z.string().describe("ID of the parent review"),
+  reviewId,
   findings: z
-    .array(z.object(findingFields))
+    .array(z.object(findingFields).refine(lineRangeIsOrdered, lineRangeError))
+    .min(1)
     .describe("Array of findings to save"),
 });
 
@@ -107,13 +119,13 @@ export const CheckPackageSchema = z.object({
           .describe("Package ecosystem (defaults to npm)"),
       }),
     )
+    .min(1)
     .describe("Packages to check"),
 });
 
-// Handler arg types are the *input* types (pre-parse): the non-Claude drivers
-// pass raw args straight through without Zod parsing, so optional fields with
-// defaults can legitimately arrive undefined.
-export type SaveReviewArgs = z.input<typeof SaveReviewSchema>;
-export type SaveFindingArgs = z.input<typeof SaveFindingSchema>;
-export type SaveFindingsArgs = z.input<typeof SaveFindingsSchema>;
-export type CheckPackageArgs = z.input<typeof CheckPackageSchema>;
+// The registry parses every tool call against its schema before the handler
+// runs, so handlers receive the parsed (output) shape.
+export type SaveReviewArgs = z.infer<typeof SaveReviewSchema>;
+export type SaveFindingArgs = z.infer<typeof SaveFindingSchema>;
+export type SaveFindingsArgs = z.infer<typeof SaveFindingsSchema>;
+export type CheckPackageArgs = z.infer<typeof CheckPackageSchema>;

@@ -1,0 +1,4 @@
+{
+  "production": { "bucket": "mains-bridge-production-backups" },
+  "staging": { "bucket": "mains-bridge-staging-backups" }
+}

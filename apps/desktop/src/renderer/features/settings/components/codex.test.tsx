@@ -2,12 +2,15 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   setMemorySetting: vi.fn(),
   resetMemories: vi.fn(),
+  voiceCatalog: vi.fn(() => ({ data: undefined as RealtimeVoiceCatalog | undefined })),
+  voiceSettings: vi.fn((_props: { catalog?: RealtimeVoiceCatalog | null }) => null),
   memorySettings: {
     supported: true,
     memoriesEnabled: true,
@@ -22,7 +25,7 @@ vi.mock("@/lib/redux/hooks", () => ({ useAppDispatch: () => vi.fn() }));
 vi.mock("@/lib/redux/api", () => ({
   useGetProviderRateLimitsQuery: () => ({ data: undefined, isLoading: false }),
   useGetProviderAccountInfoQuery: () => ({ data: undefined, isLoading: false }),
-  useGetProviderRealtimeVoicesQuery: () => ({ data: undefined }),
+  useGetProviderRealtimeVoicesQuery: mocks.voiceCatalog,
   useConsumeProviderRateLimitResetCreditMutation: () => [vi.fn(), { isLoading: false }],
   useGetCodexMemorySettingsQuery: () => ({ data: mocks.memorySettings, isLoading: false, isFetching: false, error: null }),
   useSetCodexMemorySettingMutation: () => [mocks.setMemorySetting, { isLoading: false }],
@@ -44,18 +47,34 @@ vi.mock("./provider-settings-shared", () => ({
   selectedSchemaLabel: () => "None",
 }));
 vi.mock("./structured-outputs-modal", () => ({ StructuredOutputsModal: () => null }));
-vi.mock("./codex-voice-settings", () => ({ CodexVoiceSettings: () => null }));
+vi.mock("./codex-voice-settings", () => ({ CodexVoiceSettings: mocks.voiceSettings }));
 
 import CodexSettings from "./codex";
 
 beforeEach(() => {
   mocks.updateConfig.mockClear();
+  mocks.voiceCatalog.mockReset().mockReturnValue({ data: undefined });
+  mocks.voiceSettings.mockClear();
   mocks.setMemorySetting.mockReset().mockReturnValue({ unwrap: async () => undefined });
   mocks.resetMemories.mockReset().mockReturnValue({ unwrap: async () => undefined });
   mocks.memorySettings.supported = true;
   mocks.memorySettings.memoriesEnabled = true;
   mocks.memorySettings.allowToolAssistedChats = true;
   HTMLElement.prototype.scrollIntoView = vi.fn();
+});
+
+describe("Codex voice settings", () => {
+  it("refreshes the native catalog when settings open and passes new voices to the picker", () => {
+    const catalog = { voices: ["cove", "aube", "rio", "viola"], defaultVoice: "cove" };
+    mocks.voiceCatalog.mockReturnValue({ data: catalog });
+    render(<CodexSettings />);
+
+    expect(mocks.voiceCatalog).toHaveBeenCalledWith("codex", {
+      skip: false,
+      refetchOnMountOrArgChange: true,
+    });
+    expect(mocks.voiceSettings.mock.calls.at(-1)?.[0].catalog).toBe(catalog);
+  });
 });
 
 describe("Codex memory settings", () => {

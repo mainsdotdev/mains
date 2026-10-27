@@ -104,7 +104,7 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
     show: false, // Always create hidden, control visibility via ready-to-show
     ...windowsWindowAppearanceOptions(),
     webPreferences: {
-      preload: path.join(__dirname, "index.js"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,

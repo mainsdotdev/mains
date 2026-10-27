@@ -8,6 +8,7 @@ import { Plan, ArrowUp } from "@/components/ui/icons";
 import { useUpdateToolCallMutation } from "@/lib/redux/api/toolsApi";
 import { Button, Text } from "@/components/ui";
 import { coerceToolOutput } from "../../lib/parse-tool-content";
+import { useReplicaView } from "@/hooks/use-replica-view";
 import {
   getPersistedPlanStatus,
   shouldShowPlanActions,
@@ -32,6 +33,7 @@ export function PlanDisplay({
   onApplyPlan,
   onDismissPlan,
 }: PlanDisplayProps) {
+  const replica = useReplicaView();
   const [updateToolCall] = useUpdateToolCallMutation();
 
   const input = event.metadata?.input as Record<string, unknown> | undefined;
@@ -60,6 +62,7 @@ export function PlanDisplay({
   const toolCallId = parseInt(event.id.replace("tool-", ""), 10);
 
   const persistStatus = async (newStatus: PlanStatus) => {
+    if (replica) return;
     setStatus(newStatus);
     if (!isNaN(toolCallId)) {
       await updateToolCall({
@@ -70,7 +73,7 @@ export function PlanDisplay({
   };
 
   const handleApply = async () => {
-    if (isSubmitting) return;
+    if (replica || isSubmitting) return;
     setIsSubmitting(true);
     try {
       await persistStatus("applied");
@@ -84,7 +87,7 @@ export function PlanDisplay({
   };
 
   const handleDismiss = async () => {
-    if (isSubmitting) return;
+    if (replica || isSubmitting) return;
     setIsSubmitting(true);
     try {
       await persistStatus("dismissed");
@@ -95,7 +98,7 @@ export function PlanDisplay({
     }
   };
 
-  const showActions = shouldShowPlanActions({
+  const showActions = !replica && shouldShowPlanActions({
     status,
     interactionMode,
     hasPendingApproval,

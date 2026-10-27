@@ -1,3 +1,5 @@
+import { getLocalBackendId } from "../../db/backend-identity";
+import { ownedHere } from "../bridge";
 import { eq, sql, and, lte } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { automations, automationRuns } from "../../db/schema";
@@ -15,7 +17,7 @@ export const automationsRepo = {
 
   findActive() {
     const db = getDb();
-    return db.select().from(automations).where(eq(automations.isActive, true)).all();
+    return db.select().from(automations).where(and(ownedHere(automations.ownerBackendId), eq(automations.isActive, true))).all();
   },
 
   findById(id: string) {
@@ -30,6 +32,7 @@ export const automationsRepo = {
       .from(automations)
       .where(
         and(
+          ownedHere(automations.ownerBackendId),
           eq(automations.isActive, true),
           lte(automations.nextRunAt, now),
         ),
@@ -45,6 +48,7 @@ export const automationsRepo = {
 
     db.insert(automations)
       .values({
+      ownerBackendId: getLocalBackendId(db),
         id,
         accountId,
         name: input.name,
