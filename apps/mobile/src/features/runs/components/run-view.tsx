@@ -28,6 +28,7 @@ import { AsciiLoader } from "./ascii-loader";
 import { ComposerBar, composerBottomPadding } from "./composer/composer-bar";
 import { PendingApprovalCard } from "./approvals/pending-approval-card";
 import { ReplicaBar } from "./replica-bar";
+import { PromptSuggestionChips } from "./transcript/prompt-suggestion-chips";
 import {
   FlyingPromptBubble,
   PROMPT_BUBBLE_ROW_PADDING,
@@ -92,7 +93,7 @@ export function RunView({
     loading: initialLoading,
     backend: { id: backendId, connected },
     run: { record: run, isLive: runIsLive, isReplica, providerId, mode, workspacePath },
-    transcript: { items, streamingItems, thinking, history },
+    transcript: { items, streamingItems, thinking, suggestions, history },
     approvals: { waiting, now },
     modelSelection,
   } = useRunData(runId, expectedProviderId);
@@ -292,6 +293,20 @@ export function RunView({
         : undefined,
     [actionState, connected, fork, forking, isReplica, mode, openTextFile, run, turnIsActive],
   );
+
+  // Offered only where picking one can lead somewhere: a settled run this
+  // phone can continue, read at its end, with nothing typed or on its way yet.
+  // Typing replaces the offer, as picking one does.
+  const offerSuggestions =
+    suggestions.length > 0 &&
+    Boolean(run) &&
+    !isReplica &&
+    !runIsLive &&
+    connected &&
+    !history.end &&
+    !continuationPresentation &&
+    !sending &&
+    draft.length === 0;
 
   const listRef = useRef<ScrollView>(null);
 
@@ -608,6 +623,9 @@ export function RunView({
             actions={actions}
           />
         ))}
+        {offerSuggestions ? (
+          <PromptSuggestionChips suggestions={suggestions} providerId={providerId} onSelect={setDraft} />
+        ) : null}
         {history.end && (
           <View style={{ gap: spacing.sm }}>
             {history.hasNewer && <Pressable disabled={history.loading || !connected} onPress={() => void pageHistory("newer")}>

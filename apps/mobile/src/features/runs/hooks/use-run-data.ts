@@ -13,6 +13,7 @@ import { cachedHistoryQueries } from "@/db/history-queries";
 import { useRunHistory } from "@/backend/run-history";
 import { pendingApprovals, runArtifacts, runs, toolCalls, workspaces } from "@/db/schema";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
+import { latestPromptSuggestions } from "@/lib/prompt-suggestions";
 import { buildTranscript } from "@/lib/transcript";
 import { useModelSelection } from "@/lib/use-model-selection";
 import { useNow } from "@/lib/use-now";
@@ -109,6 +110,7 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     [approvalQuery.data, now],
   );
   const thinking = useMemo(() => latestThinking([...artifactQuery.data].reverse()), [artifactQuery.data]);
+  const suggestions = useMemo(() => latestPromptSuggestions(artifactQuery.data), [artifactQuery.data]);
   const modelSelection = useModelSelection(backendId, providerId, runId);
 
   const readingCache = [runQuery, artifactQuery, callQuery].some(
@@ -142,6 +144,8 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
       streamingItems: history.end ? [] : streamingItems,
       promptCount,
       thinking,
+      /** Follow-ups offered after the latest answer, until the user's next message. */
+      suggestions,
       history,
     },
     approvals: {

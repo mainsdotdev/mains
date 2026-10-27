@@ -17,7 +17,8 @@ type FullContent = { runId: string; id: number; source: "artifact" };
  *
  *  - "user-prompt"            → a prompt bubble
  *  - "thinking", subagent     → hidden (UI-only on desktop too)
- *  - "prompt_suggestion"      → hidden (no composer on the phone yet)
+ *  - "prompt_suggestion"      → not a row: the run screen offers the latest
+ *                               ones as follow-up chips after the answer
  *  - "image"                  → an image; the pixels are fetched on demand
  *  - kind "log" artifacts     → hidden unless they are errors
  *  - anything else            → an assistant message
