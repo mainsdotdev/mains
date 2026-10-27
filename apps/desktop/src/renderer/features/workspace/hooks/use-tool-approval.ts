@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { appEvents, appApi } from "@/lib/transport";
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import { CHANNELS } from "@mains/contracts/channels";
+import type { ServiceResponse } from "@mains/contracts/service-response";
+import { appApi, getTransport, onTransportChange, type Transport } from "@/lib/transport";
 
 export interface ToolApprovalRequest {
   requestId: string;
@@ -40,79 +42,118 @@ interface RunStatusLike {
 }
 
 /**
- * Subscribes to `runs:toolApprovalRequest` IPC and tracks pending approvals.
- *
- * Pass the current `runs` list so finished runs' stale approvals are cleared
- * automatically — otherwise a user who never acts on a request (e.g. closes
- * the tab, cancels the run) would leak the entry forever.
+ * Restores the broker's pending requests on mount/reconnect, then keeps them
+ * current with pushes. `runs` controls visibility only: leaving a workspace
+ * must not discard a request that is still waiting in the backend.
  */
 export function useToolApproval(runs?: readonly RunStatusLike[]) {
-  const [rawApprovals, setRawApprovals] = useState<ToolApprovalRequest[]>([]);
+  const transport = useSyncExternalStore(onTransportChange, getTransport);
+  const [state, setState] = useState<{ transport: Transport; approvals: ToolApprovalRequest[] }>(
+    () => ({ transport, approvals: [] }),
+  );
+  // Mutations after a snapshot starts take precedence over that snapshot,
+  // including local answers that have not received their resolved push yet.
+  const changesDuringRead = useRef<Map<string, ToolApprovalRequest | null> | null>(null);
 
   useEffect(() => {
-    const cleanupRequest = appEvents.runs.onToolApprovalRequest(
-      (request: ToolApprovalRequest) => {
-        setRawApprovals((prev) => [...prev, request]);
-      },
-    );
-    const cleanupResolved = appEvents.runs.onToolApprovalResolved(
-      ({ requestId }: { requestId: string }) => {
-        setRawApprovals((prev) =>
-          prev.filter((request) => request.requestId !== requestId),
-        );
-      },
-    );
+    let current = true;
+    let readRevision = 0;
+    const isCurrent = () => current && getTransport() === transport;
+    const update = (edit: (requests: ToolApprovalRequest[]) => ToolApprovalRequest[]) => {
+      if (!isCurrent()) return;
+      setState((previous) => ({ transport, approvals: edit(previous.transport === transport ? previous.approvals : []) }));
+    };
+    // Subscribe on the captured backend before reading so navigation cannot
+    // miss a request, or route a late old-backend push into the new backend.
+    const cleanupRequest = transport.subscribe(CHANNELS.runs.toolApprovalRequest, (payload) => {
+      if (!isCurrent()) return;
+      const request = payload as ToolApprovalRequest;
+      changesDuringRead.current?.set(request.requestId, request);
+      update((previous) => [...previous.filter((item) => item.requestId !== request.requestId), request]
+        .sort((a, b) => a.timestamp - b.timestamp));
+    });
+    const cleanupResolved = transport.subscribe(CHANNELS.runs.toolApprovalResolved, (payload) => {
+      if (!isCurrent()) return;
+      const { requestId } = payload as { requestId: string };
+      changesDuringRead.current?.set(requestId, null);
+      update((previous) => previous.filter((request) => request.requestId !== requestId));
+    });
+
+    const refresh = async () => {
+      if (!isCurrent() || transport.status() !== "connected") return;
+      const revision = ++readRevision;
+      const changes = new Map<string, ToolApprovalRequest | null>();
+      changesDuringRead.current = changes;
+      try {
+        const response: ServiceResponse<ToolApprovalRequest[]> = await appApi.runs.listPendingApprovals();
+        if (!isCurrent() || revision !== readRevision) return;
+        if (!response.success) throw new Error(response.error);
+        const restored = new Map(response.data.map((request) => [request.requestId, request]));
+        for (const [requestId, request] of changes) {
+          if (request) restored.set(requestId, request);
+          else restored.delete(requestId);
+        }
+        update(() => [...restored.values()].sort((a, b) => a.timestamp - b.timestamp));
+      } catch (error) {
+        if (isCurrent() && revision === readRevision) console.warn("[tool-approval] Failed to restore pending requests:", error);
+      } finally {
+        if (changesDuringRead.current === changes) changesDuringRead.current = null;
+      }
+    };
+    const cleanupStatus = transport.onStatusChange((status) => {
+      if (!isCurrent()) return;
+      if (status === "connected") void refresh();
+      else {
+        readRevision += 1;
+        changesDuringRead.current = null;
+      }
+    });
+    const onFocus = () => { void refresh(); };
+    window.addEventListener("focus", onFocus);
+    void refresh();
+
     return () => {
+      current = false;
+      changesDuringRead.current = null;
       cleanupRequest();
       cleanupResolved();
+      cleanupStatus();
+      window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [transport]);
 
-  // Derive the visible approval list: hide anything tied to a terminated or
-  // no-longer-visible run so stale entries are never rendered. This runs at
-  // render time (no effect + setState loop) which keeps React's lint happy.
+  const remove = useCallback((requestIds: readonly string[]) => {
+    if (getTransport() !== transport) return;
+    for (const requestId of requestIds) changesDuringRead.current?.set(requestId, null);
+    setState((previous) => previous.transport === transport
+      ? { transport, approvals: previous.approvals.filter((request) => !requestIds.includes(request.requestId)) }
+      : previous);
+  }, [transport]);
+
+  // Hide an old backend's state immediately, before effect cleanup/rebinding.
   const pendingApprovals = useMemo(() => {
-    if (!runs) return rawApprovals;
-    const liveRunIds = new Set<string>();
-    for (const r of runs) {
-      if (!TERMINAL_STATUSES.has(r.status)) liveRunIds.add(r.id);
-    }
-    return rawApprovals.filter((r) => liveRunIds.has(r.runId));
-  }, [rawApprovals, runs]);
-
-  // Also garbage-collect the underlying state whenever the filtered view
-  // would drop entries — keeps memory bounded for users who never act on
-  // requests and let runs finish naturally.
-  useEffect(() => {
-    if (!runs) return;
-    const liveRunIds = new Set<string>();
-    for (const r of runs) {
-      if (!TERMINAL_STATUSES.has(r.status)) liveRunIds.add(r.id);
-    }
-    // Schedule the prune as a microtask so the state update happens outside
-    // the current render pass. This avoids the `set-state-in-effect` lint
-    // pattern while still ensuring stale entries are released.
-    queueMicrotask(() => {
-      setRawApprovals((prev) => {
-        const next = prev.filter((r) => liveRunIds.has(r.runId));
-        return next.length === prev.length ? prev : next;
-      });
-    });
-  }, [runs]);
+    if (state.transport !== transport) return [];
+    if (!runs) return state.approvals;
+    const liveRunIds = new Set(runs.filter((run) => !TERMINAL_STATUSES.has(run.status)).map((run) => run.id));
+    return state.approvals.filter((request) => liveRunIds.has(request.runId));
+  }, [state, transport, runs]);
 
   const respond = useCallback(
     (requestId: string, approved: boolean, answer?: string) => {
-      appApi.runs.respondToolApproval({ requestId, approved, answer });
-      setRawApprovals((prev) =>
-        prev.filter((r) => r.requestId !== requestId),
-      );
+      if (getTransport() !== transport) return;
+      void appApi.runs.respondToolApproval({ requestId, approved, answer }).then((response) => {
+        if (!response.success) throw new Error(response.error);
+        remove([requestId]);
+      }).catch((error) => {
+        console.warn("[tool-approval] Failed to answer request:", error);
+      });
     },
-    [],
+    [transport, remove],
   );
 
   const dismissForRun = useCallback((runId: string) => {
-    setRawApprovals((prev) => prev.filter((r) => r.runId !== runId));
-  }, []);
+    remove(state.transport === transport ? state.approvals.filter((request) => request.runId === runId).map((request) => request.requestId) : []);
+  }, [state, transport, remove]);
 
   return { pendingApprovals, respond, dismissForRun };
 }

@@ -82,6 +82,9 @@ export const appApi = {
       CHANNELS.runs.executeReview,
     ),
     archive: method<typeof window.api.runs.archive>(CHANNELS.runs.archive),
+    listPendingApprovals: method<typeof window.api.runs.listPendingApprovals>(
+      CHANNELS.runs.listPendingApprovals,
+    ),
     respondToolApproval: method<typeof window.api.runs.respondToolApproval>(
       CHANNELS.runs.toolApprovalResponse,
     ),

@@ -36,12 +36,14 @@ describe("appApi", () => {
     ]);
   });
 
-  it("maps the two non-obvious channels correctly", async () => {
+  it("maps tool-call and approval methods to their channels", async () => {
     const t = fakeTransport();
     setTransport(t);
 
     await appApi.runs.getToolCalls("r1");
     await appApi.runs.respondToolApproval({ requestId: "q1", approved: true });
+    await appApi.runs.listPendingApprovals();
+    await appApi.runs.listPendingApprovals("r1");
 
     // getToolCalls lives on the runToolCalls namespace, not runs.getToolCalls
     expect(t.invoke).toHaveBeenCalledWith(CHANNELS.runToolCalls.getByRun, ["r1"]);
@@ -49,5 +51,7 @@ describe("appApi", () => {
     expect(t.invoke).toHaveBeenCalledWith(CHANNELS.runs.toolApprovalResponse, [
       { requestId: "q1", approved: true },
     ]);
+    expect(t.invoke).toHaveBeenCalledWith(CHANNELS.runs.listPendingApprovals, []);
+    expect(t.invoke).toHaveBeenCalledWith(CHANNELS.runs.listPendingApprovals, ["r1"]);
   });
 });
