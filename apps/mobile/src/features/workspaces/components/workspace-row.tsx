@@ -23,15 +23,24 @@ export function WorkspaceRow({
   onPress: () => void;
 }) {
   const { success: additions, danger: deletions } = useWorkspaceColors();
-  const detail = !workspace.pathExists
-    ? "Folder missing"
-    : (workspace.branch ?? workspaceStatusLabel(workspace.status) ?? null);
+  // Another computer's folder is never on this one; that is not "missing".
+  const folderMissing = !workspace.isReplica && !workspace.pathExists;
+  const detail = workspace.isReplica
+    ? "On another computer"
+    : folderMissing
+      ? "Folder missing"
+      : (workspace.branch ?? workspaceStatusLabel(workspace.status) ?? null);
   const hasDiff = workspace.diffAdditions !== null || workspace.diffDeletions !== null;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ selected }}
-      accessibilityLabel={[workspace.name, workspaceStatusLabel(workspace.status), workspace.branch]
+      accessibilityLabel={[
+        workspace.name,
+        workspaceStatusLabel(workspace.status),
+        workspace.branch,
+        workspace.isReplica ? "on another computer, read-only" : null,
+      ]
         .filter(Boolean)
         .join(", ")}
       onPress={onPress}
@@ -63,7 +72,7 @@ export function WorkspaceRow({
             <ThemedText
               variant="caption"
               numberOfLines={1}
-              style={{ flex: 1, color: workspace.pathExists ? colors.secondaryLabel : deletions }}
+              style={{ flex: 1, color: folderMissing ? deletions : colors.secondaryLabel }}
             >
               {detail}
             </ThemedText>

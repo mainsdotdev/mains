@@ -3,11 +3,17 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { MIGRATIONS, migrateDatabase } from "../src/db/migrations.ts";
-import { models } from "../src/db/schema.ts";
+import { models, runs, workspaces } from "../src/db/schema.ts";
 
 function syncModel(db, values) {
   // Generate the insert from syncModels' SQLite schema without native bindings.
   const query = drizzle(async () => ({ rows: [] })).insert(models).values(values).onConflictDoNothing().toSQL();
+  db.prepare(query.sql).run(...query.params);
+}
+
+function syncRow(db, table, values, set) {
+  const query = drizzle(async () => ({ rows: [] })).insert(table).values(values)
+    .onConflictDoUpdate({ target: [table.backendId, table.id], set }).toSQL();
   db.prepare(query.sql).run(...query.params);
 }
 
@@ -115,5 +121,26 @@ test("a failed schema upgrade rolls back its column and version so the next laun
     migrateDatabase(migrate);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, MIGRATIONS.length);
     assert.equal(db.prepare("PRAGMA table_info(models)").all().some((column) => column.name === "service_tiers_json"), true);
+  } finally { db.close(); }
+});
+
+test("upgrading keeps cached chats and workspaces local until a snapshot names their owner", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 15);
+    db.exec("INSERT INTO runs (backend_id, id, status, mode, provider_id, created_at, updated_at) VALUES ('mac', 'chat', 'succeeded', 'chat', 'codex', 1, 2)");
+    db.exec("INSERT INTO workspaces (backend_id, id, name) VALUES ('mac', 'ws', 'Repo')");
+    migrateDatabase(migrationDatabase(db));
+    assert.deepEqual({ ...db.prepare("SELECT owner_backend_id, is_replica FROM runs").get() }, { owner_backend_id: null, is_replica: 0 });
+    assert.deepEqual({ ...db.prepare("SELECT owner_backend_id, is_replica FROM workspaces").get() }, { owner_backend_id: null, is_replica: 0 });
+
+    // The next snapshot marks another computer's copies as replicas.
+    const owner = { ownerBackendId: "other-mac", isReplica: true };
+    syncRow(db, runs, { backendId: "mac", id: "chat", status: "succeeded", mode: "chat", providerId: "codex",
+      createdAt: new Date(1), updatedAt: new Date(2), ...owner }, owner);
+    syncRow(db, workspaces, { backendId: "mac", id: "ws", name: "Repo", ...owner }, owner);
+    assert.deepEqual({ ...db.prepare("SELECT owner_backend_id, is_replica FROM runs").get() }, { owner_backend_id: "other-mac", is_replica: 1 });
+    assert.deepEqual({ ...db.prepare("SELECT owner_backend_id, is_replica FROM workspaces").get() }, { owner_backend_id: "other-mac", is_replica: 1 });
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, MIGRATIONS.length);
   } finally { db.close(); }
 });

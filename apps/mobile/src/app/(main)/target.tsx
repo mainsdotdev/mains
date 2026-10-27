@@ -36,7 +36,8 @@ export default function TargetSheet() {
     db
       .select()
       .from(workspaces)
-      .where(and(eq(workspaces.backendId, backendId), eq(workspaces.isArchived, false)))
+      // Another computer's workspaces can't host a run started here.
+      .where(and(eq(workspaces.backendId, backendId), eq(workspaces.isArchived, false), eq(workspaces.isReplica, false)))
       .orderBy(asc(workspaces.name)), workspaces,
     [backendId],
   );

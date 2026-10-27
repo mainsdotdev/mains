@@ -117,7 +117,9 @@ export default function NewRunScreen() {
   const space = spaceQuery.data[0];
   const target = targetQuery.data[0];
   const isCode = space?.mode === "developer";
-  const workspace = workspaceQuery.data.find((w) => w.id === target?.workspaceId);
+  // A target saved before its workspace turned out to be another computer's
+  // counts as no workspace: this backend can't start a run in it.
+  const workspace = workspaceQuery.data.find((w) => w.id === target?.workspaceId && !w.isReplica);
   const collection = collectionQuery.data.find((c) => c.id === target?.collectionId);
   const project = projectQuery.data.find((p) => p.id === workspace?.projectId);
   const providerEnabled = space

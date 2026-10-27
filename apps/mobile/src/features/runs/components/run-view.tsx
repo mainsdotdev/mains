@@ -27,6 +27,7 @@ import { useRunOperations } from "../hooks/use-run-operations";
 import { AsciiLoader } from "./ascii-loader";
 import { ComposerBar, composerBottomPadding } from "./composer/composer-bar";
 import { PendingApprovalCard } from "./approvals/pending-approval-card";
+import { ReplicaBar } from "./replica-bar";
 import {
   FlyingPromptBubble,
   PROMPT_BUBBLE_ROW_PADDING,
@@ -90,13 +91,19 @@ export function RunView({
   const {
     loading: initialLoading,
     backend: { id: backendId, connected },
-    run: { record: run, isLive: runIsLive, providerId, mode, workspacePath },
+    run: { record: run, isLive: runIsLive, isReplica, providerId, mode, workspacePath },
     transcript: { items, streamingItems, thinking, history },
     approvals: { waiting, now },
     modelSelection,
   } = useRunData(runId, expectedProviderId);
   /** Sent, but the Mac has yet to answer with a run. */
   const starting = pending !== null && !run;
+  /**
+   * Running here, as far as this phone can tell. A replica's status is only as
+   * fresh as the owning computer's last sync, which may have gone offline mid-
+   * turn, so its "running" gets no live treatment.
+   */
+  const liveHere = Boolean(runIsLive) && !isReplica;
 
   // On home's first send this is a newly mounted composer. Repeating the
   // source text here keeps it continuously visible until the flying layer is
@@ -277,12 +284,13 @@ export function RunView({
             ...actionState,
             forkDisabled: turnIsActive || forking,
             // A fork starts a run on the Mac; without one in reach, the button
-            // has nothing to offer, so it stays off the row entirely.
-            onFork: connected ? fork : undefined,
+            // has nothing to offer, so it stays off the row entirely. Another
+            // computer's conversation can only be branched on that computer.
+            onFork: connected && !isReplica ? fork : undefined,
             onOpenFile: mode !== "developer" ? openTextFile : undefined,
           }
         : undefined,
-    [actionState, connected, fork, forking, mode, openTextFile, run, turnIsActive],
+    [actionState, connected, fork, forking, isReplica, mode, openTextFile, run, turnIsActive],
   );
 
   const listRef = useRef<ScrollView>(null);
@@ -573,7 +581,7 @@ export function RunView({
               // A local continuation already owns the new turn. Do not mark
               // the previous persisted turn live while that prompt flies in.
               isRunInProgress={
-                Boolean(runIsLive) && !history.end && !continuationPresentation && index === rows.length - 1
+                liveHere && !history.end && !continuationPresentation && index === rows.length - 1
               }
               actions={actions}
             />
@@ -596,7 +604,7 @@ export function RunView({
             key={row.key}
             row={row}
             providerId={providerId}
-            isRunInProgress={Boolean(runIsLive)}
+            isRunInProgress={liveHere}
             actions={actions}
           />
         ))}
@@ -611,7 +619,7 @@ export function RunView({
           </View>
         )}
         <View style={{ gap: spacing.md }}>
-          {(runIsLive && !history.end) || starting || continuationPresentation ? (
+          {(liveHere && !history.end) || starting || continuationPresentation ? (
             <AsciiLoader mode={mode} thinkingText={thinking} />
           ) : null}
           {waiting.map((approval) => (
@@ -665,47 +673,51 @@ export function RunView({
         ]}
         onLayout={(event) => setComposerBox(event.nativeEvent.layout.height)}
       >
-        <ComposerBar
-          reservedTop={topInset + topPadding + spacing.sm}
-          value={draft}
-          onChangeText={setDraft}
-          onSend={(origin) => void send(origin)}
-          // Only offered while there is something to stop, and only when the
-          // Mac is reachable to hear it.
-          onStop={runIsLive && connected ? () => void stopRun() : undefined}
-          sending={sending}
-          disabled={!connected || turnIsActive || !run}
-          error={sendError}
-          attachments={attachments}
-          onAttachmentsChange={setAttachments}
-          placeholder={placeholder}
-          model={
-            providerId && modelSelection.label
-              ? {
-                  label: modelSelection.label,
-                  effort: modelSelection.effortLabel,
-                  onPress: () => openModel(providerId),
-                }
-              : null
-          }
-          permission={
-            providerId && modelSelection.permissionLabel
-              ? { label: modelSelection.permissionLabel, onPress: () => openRunOptions(providerId) }
-              : null
-          }
-          providerId={providerId || undefined}
-          context={
-            backendId && providerId
-              ? {
-                  backendId,
-                  providerId,
-                  workspacePath,
-                  skills: contextSkills,
-                  onSkillsChange: setContextSkills,
-                }
-              : null
-          }
-        />
+        {isReplica ? (
+          <ReplicaBar />
+        ) : (
+          <ComposerBar
+            reservedTop={topInset + topPadding + spacing.sm}
+            value={draft}
+            onChangeText={setDraft}
+            onSend={(origin) => void send(origin)}
+            // Only offered while there is something to stop, and only when the
+            // Mac is reachable to hear it.
+            onStop={runIsLive && connected ? () => void stopRun() : undefined}
+            sending={sending}
+            disabled={!connected || turnIsActive || !run}
+            error={sendError}
+            attachments={attachments}
+            onAttachmentsChange={setAttachments}
+            placeholder={placeholder}
+            model={
+              providerId && modelSelection.label
+                ? {
+                    label: modelSelection.label,
+                    effort: modelSelection.effortLabel,
+                    onPress: () => openModel(providerId),
+                  }
+                : null
+            }
+            permission={
+              providerId && modelSelection.permissionLabel
+                ? { label: modelSelection.permissionLabel, onPress: () => openRunOptions(providerId) }
+                : null
+            }
+            providerId={providerId || undefined}
+            context={
+              backendId && providerId
+                ? {
+                    backendId,
+                    providerId,
+                    workspacePath,
+                    skills: contextSkills,
+                    onSkillsChange: setContextSkills,
+                  }
+                : null
+            }
+          />
+        )}
 
         {/*
           The way back down, over the composer and riding the keyboard with it.

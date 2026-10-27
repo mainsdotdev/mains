@@ -158,6 +158,8 @@ function upsertRun(backendId: string, run: RunResponse): void {
     isArchived: Boolean(run.isArchived),
     createdAt: toDate(run.createdAt) ?? new Date(0),
     updatedAt: toDate(run.updatedAt) ?? new Date(0),
+    ownerBackendId: run.ownerBackendId ?? null,
+    isReplica: run.isReplica === true,
   };
   runProjectionWrite(runs, () => db.insert(runs)
     .values({ backendId, id: run.id, ...set })
@@ -173,6 +175,8 @@ function upsertWorkspace(backendId: string, workspace: WorkspaceResponse): void 
     status: workspace.status ?? null,
     updatedAt: toDate(workspace.updatedAt),
     isArchived: Boolean(workspace.isArchived),
+    ownerBackendId: workspace.ownerBackendId ?? null,
+    isReplica: workspace.isReplica === true,
   };
   runProjectionWrite(workspaces, () => db.insert(workspaces)
     .values({ backendId, id: workspace.id, ...set })
@@ -742,10 +746,11 @@ export async function syncSnapshot(transport: WsTransport, backendId: string): P
 
   // What the Code sidebar prints beside each workspace. Both are best-effort:
   // a Mac that can't run git for one folder must not stall the snapshot.
+  // Another computer's workspace has no folder here to diff.
   await Promise.all([
     syncGitStates(transport, backendId).catch(() => {}),
     ...workspaceList
-      .filter((w) => !w.isArchived)
+      .filter((w) => !w.isArchived && !w.isReplica)
       .map((w) => syncDiffSummary(transport, backendId, w.id).catch(() => {})),
   ]);
 }

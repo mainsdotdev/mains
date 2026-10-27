@@ -295,6 +295,13 @@ export const MIGRATIONS: readonly (string | ((database: MigrationDatabase) => vo
       database.execSync("ALTER TABLE models ADD COLUMN service_tiers_json TEXT;");
     }
   },
+  // v17 — Bridge ownership: another computer's runs and workspaces are read-only here
+  `
+  ALTER TABLE runs ADD COLUMN owner_backend_id TEXT;
+  ALTER TABLE runs ADD COLUMN is_replica INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE workspaces ADD COLUMN owner_backend_id TEXT;
+  ALTER TABLE workspaces ADD COLUMN is_replica INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function migrateDatabase(database: MigrationDatabase): void {

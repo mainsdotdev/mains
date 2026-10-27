@@ -131,6 +131,8 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     run: {
       record: run,
       isLive: runIsLive,
+      /** Another computer's conversation (Bridge): read here, never continued. */
+      isReplica: run?.isReplica === true,
       providerId,
       mode: isModeId(run?.mode) ? run.mode : DEFAULT_MODE_ID,
       workspacePath: workspaceQuery.data[0]?.rootPath ?? null,

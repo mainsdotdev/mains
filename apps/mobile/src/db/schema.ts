@@ -213,6 +213,10 @@ export const workspaces = sqliteTable(
     /** Size of the last diff snapshot; null = no diff yet. */
     diffAdditions: integer("diff_additions"),
     diffDeletions: integer("diff_deletions"),
+    /** The backend that owns this workspace; another one's copy arrives through Bridge. */
+    ownerBackendId: text("owner_backend_id"),
+    /** Another computer's workspace: listed here, but runs can't be started in it. */
+    isReplica: integer("is_replica", { mode: "boolean" }).notNull().default(false),
   },
   (t) => [primaryKey({ columns: [t.backendId, t.id] })],
 );
@@ -250,6 +254,10 @@ export const runs = sqliteTable(
     isArchived: integer("is_archived", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+    /** The backend that executes this run; another one's copy arrives through Bridge. */
+    ownerBackendId: text("owner_backend_id"),
+    /** Another computer's conversation: readable here, never continued or forked. */
+    isReplica: integer("is_replica", { mode: "boolean" }).notNull().default(false),
   },
   (t) => [
     primaryKey({ columns: [t.backendId, t.id] }),

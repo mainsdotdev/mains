@@ -20,6 +20,7 @@ import {
   type WorkspaceRow as WorkspaceRecord,
 } from "@/db/schema";
 import { goHome } from "@/features/runs";
+import { placeChats } from "@/lib/chat-placement";
 import { colors, radius, spacing } from "@/theme";
 import {
   ProjectIcon,
@@ -136,14 +137,11 @@ export function Sidebar({ navigation }: { navigation: { closeDrawer(): void } })
     const chats = runList.data.filter(
       (run) => !space || (run.providerId === space.providerId && run.mode === space.mode),
     );
-    const byCollection = new Map<string, RunRecord[]>();
-    for (const run of chats) {
-      if (!run.collectionId) continue;
-      const bucket = byCollection.get(run.collectionId);
-      if (bucket) bucket.push(run);
-      else byCollection.set(run.collectionId, [run]);
-    }
     const groups = collectionList.data;
+    const { standalone, byCollection } = placeChats(
+      chats,
+      new Set(groups.map((collection) => collection.id)),
+    );
     if (groups.length > 0) {
       out.push({ kind: "header", key: "h-projects", title: "Projects" });
       for (const collection of groups) {
@@ -157,7 +155,7 @@ export function Sidebar({ navigation }: { navigation: { closeDrawer(): void } })
         for (const run of inside) out.push({ kind: "run", key: `${collection.id}/${run.id}`, run, nested: true });
       }
     }
-    const recents = chats.filter((run) => !run.collectionId).slice(0, RECENTS_LIMIT);
+    const recents = standalone.slice(0, RECENTS_LIMIT);
     out.push({ kind: "header", key: "h-recents", title: "Recents" });
     if (recents.length === 0) {
       out.push({ kind: "empty", key: "e-recents", text: "No chats yet." });
@@ -172,8 +170,9 @@ export function Sidebar({ navigation }: { navigation: { closeDrawer(): void } })
   };
 
   const openWorkspace = (workspace: WorkspaceRecord) => {
-    // Like the desktop, picking a workspace also makes it where new runs go.
-    if (space) {
+    // Like the desktop, picking a workspace also makes it where new runs go —
+    // unless it is another computer's, where this backend can't start one.
+    if (space && !workspace.isReplica) {
       setSpaceTarget(backendId, space.id, {
         workspaceId: workspace.id,
         collectionId: target?.collectionId ?? null,

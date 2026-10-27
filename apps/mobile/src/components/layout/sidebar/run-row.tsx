@@ -5,7 +5,7 @@ import type { RunRow as RunRecord } from "@/db/schema";
 import { runStatusLabel } from "@/lib/format";
 import { colors, radius, spacing } from "@/theme";
 
-import { ThemedText } from "@/components/ui";
+import { SFSymbol, ThemedText } from "@/components/ui";
 
 /** One run in a list: status dot, title, workspace · mode, and when. */
 export function RunRow({
@@ -21,7 +21,9 @@ export function RunRow({
   grouped?: boolean;
 }) {
   const router = useRouter();
-  const live = run.status === "running" || run.status === "queued";
+  // Another computer's status is only as fresh as its last sync, so a replica
+  // shows where it runs instead of a "Running" that may have ended long ago.
+  const live = !run.isReplica && (run.status === "running" || run.status === "queued");
   return (
     <Pressable
       accessibilityRole="button"
@@ -46,9 +48,15 @@ export function RunRow({
         </ThemedText>
 
       </View>
-      <ThemedText variant="caption" style={{ fontVariant: ["tabular-nums"] }}>
-        {live ? runStatusLabel(run.status) : null}
-      </ThemedText>
+      {run.isReplica ? (
+        <View accessible accessibilityLabel="On another computer, read-only">
+          <SFSymbol name="laptopcomputer" size={15} tint={colors.tertiaryLabel} />
+        </View>
+      ) : (
+        <ThemedText variant="caption" style={{ fontVariant: ["tabular-nums"] }}>
+          {live ? runStatusLabel(run.status) : null}
+        </ThemedText>
+      )}
     </Pressable>
   );
 }
