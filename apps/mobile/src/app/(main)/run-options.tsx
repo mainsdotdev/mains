@@ -21,7 +21,7 @@ type ModeKey = "fastMode" | "goalMode" | "planMode";
  * The run options sheet: how the agent may act. The permission modes, laid
  * out in full with what each allows, and the fast / goal / plan switches —
  * each shown only where the provider and model support it. These are the
- * conversation's next-message preferences. The model and its effort
+ * conversation's next-message preferences, filtered by its mode. The model and its effort
  * are the model sheet's; this one opens from the permission chip, so what
  * that chip names is the first thing on it.
  */
@@ -92,7 +92,7 @@ export default function RunOptionsSheet() {
               <Row
                 first
                 title="Fast mode"
-                trailing={<Toggle label="Fast mode" value={toggleValue("fastMode")} onChange={(v) => toggle("fastMode", v)} />}
+                trailing={<Toggle label="Fast mode" disabled={!selection.ready} value={toggleValue("fastMode")} onChange={(v) => toggle("fastMode", v)} />}
               />
             )}
             {selection.supportsGoalMode && (
@@ -100,7 +100,7 @@ export default function RunOptionsSheet() {
                 first={!showFastToggle}
                 title="Goal mode"
                 subtitle="Track this prompt as the thread's goal"
-                trailing={<Toggle label="Goal mode" value={toggleValue("goalMode")} onChange={(v) => toggle("goalMode", v)} />}
+                trailing={<Toggle label="Goal mode" disabled={!selection.ready} value={toggleValue("goalMode")} onChange={(v) => toggle("goalMode", v)} />}
               />
             )}
             {selection.supportsPlanMode && (
@@ -108,7 +108,7 @@ export default function RunOptionsSheet() {
                 first={!showFastToggle && !selection.supportsGoalMode}
                 title="Plan mode"
                 subtitle="Plan before executing"
-                trailing={<Toggle label="Plan mode" value={toggleValue("planMode")} onChange={(v) => toggle("planMode", v)} />}
+                trailing={<Toggle label="Plan mode" disabled={!selection.ready} value={toggleValue("planMode")} onChange={(v) => toggle("planMode", v)} />}
               />
             )}
           </Card>

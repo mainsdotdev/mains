@@ -27,6 +27,9 @@ import { useRunOperations } from "../hooks/use-run-operations";
 import { AsciiLoader } from "./ascii-loader";
 import { ComposerBar, composerBottomPadding } from "./composer/composer-bar";
 import { AsyncQuestionCard } from "./approvals/async-question-card";
+import { PlanProgress } from "./plan-progress";
+import { TurnChangesCard } from "./turn-changes-card";
+import { turnChangeFooters } from "../lib/run-progress";
 import { PendingApprovalCard } from "./approvals/pending-approval-card";
 import { ReplicaBar } from "./replica-bar";
 import { PromptSuggestionChips } from "./transcript/prompt-suggestion-chips";
@@ -84,7 +87,7 @@ export function RunView({
   const insets = useSafeAreaInsets();
   const router = useRouter();
   // Two sheets behind the composer's two chips: the model (and its effort)
-  // behind the model chip, how the agent may act behind the permission chip.
+  // behind the model chip; mode-appropriate controls behind Run options.
   const openModel = (providerId: string) =>
     router.push({ pathname: "/model", params: { providerId, runId } } as Href);
   const openRunOptions = (providerId: string) =>
@@ -94,7 +97,7 @@ export function RunView({
     loading: initialLoading,
     backend: { id: backendId, connected },
     run: { record: run, isLive: runIsLive, isReplica, providerId, mode, workspacePath },
-    transcript: { items, streamingItems, thinking, suggestions, history },
+    transcript: { items, turns, plan, streamingItems, thinking, suggestions, history },
     approvals: { waiting, questions, now },
     modelSelection,
   } = useRunData(runId, expectedProviderId);
@@ -144,6 +147,10 @@ export function RunView({
     runIsLive: Boolean(runIsLive),
     releaseComposerSource: clearComposerSource,
   });
+  const changeFooters = useMemo(
+    () => mode === "chat" ? new Map<string, typeof turns>() : turnChangeFooters(rows, turns, history.end === null),
+    [mode, rows, turns, history.end],
+  );
 
   const measurePromptDestination = (target: PromptMessageRect) => {
     if (!measuringLaunch) return;
@@ -306,10 +313,10 @@ export function RunView({
             // has nothing to offer, so it stays off the row entirely. Another
             // computer's conversation can only be branched on that computer.
             onFork: connected && !isReplica ? fork : undefined,
-            onOpenFile: mode !== "developer" ? openTextFile : undefined,
+            onOpenFile: openTextFile,
           }
         : undefined,
-    [actionState, connected, fork, forking, isReplica, mode, openTextFile, run, turnIsActive],
+    [actionState, connected, fork, forking, isReplica, openTextFile, run, turnIsActive],
   );
 
   // Offered only where picking one can lead somewhere: a settled run this
@@ -331,7 +338,9 @@ export function RunView({
   // Room for the keyboard under the transcript, as padding: a short transcript
   // stays where it is, a long one can still be scrolled clear of the keys.
   const keyboardInset = useKeyboardInset();
-  const composerHeight = 72 + insets.bottom;
+  // Includes the expanding plan, draft and attachments so the final rows stay visible.
+  const [composerBox, setComposerBox] = useState(0);
+  const composerHeight = Math.max(72 + insets.bottom, composerBox);
   /**
    * Where the scroll indicator runs: the strip of list the reader can actually
    * see. iOS already keeps it clear of the header and the home indicator; these
@@ -369,13 +378,6 @@ export function RunView({
   /** Whether the way back down is on screen; the ref keeps `onScroll` cheap. */
   const [awayFromEnd, setAwayFromEnd] = useState(false);
   const away = useRef(false);
-  /**
-   * The height of everything pinned to the bottom — the composer and the room
-   * left under it. Measured rather than assumed, because the bar grows with a
-   * long draft, an error line, or a strip of attachments, and the button that
-   * floats over it has to know where its top edge ended up.
-   */
-  const [composerBox, setComposerBox] = useState(0);
   /** Set a beat after the transcript first lands; only moves after that animate. */
   const placed = useRef(false);
   const placedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -527,6 +529,7 @@ export function RunView({
     <View ref={rootRef} collapsable={false} style={{ flex: 1 }}>
       {/* Whole turns keep their fold state within a bounded 30-turn window. */}
       <ScrollView
+        keyboardShouldPersistTaps="handled"
         ref={listRef}
         contentInsetAdjustmentBehavior="automatic"
         scrollToOverflowEnabled
@@ -620,6 +623,9 @@ export function RunView({
               }
               actions={actions}
             />
+            {changeFooters.get(row.key)?.map((turn) => turn.changes ? (
+              <TurnChangesCard key={turn.id} runId={runId} turnId={turn.id} turnIndex={turn.turnIndex} changes={turn.changes} />
+            ) : null)}
             </View>
           ))
         )}
@@ -724,6 +730,9 @@ export function RunView({
         ]}
         onLayout={(event) => setComposerBox(event.nativeEvent.layout.height)}
       >
+        {liveHere && plan && !history.end && !continuationPresentation ? (
+          <PlanProgress key={plan.providerTurnId} plan={plan} providerId={providerId} />
+        ) : null}
         {isReplica ? (
           <ReplicaBar />
         ) : (
@@ -750,9 +759,9 @@ export function RunView({
                   }
                 : null
             }
-            permission={
-              providerId && modelSelection.permissionLabel
-                ? { label: modelSelection.permissionLabel, onPress: () => openRunOptions(providerId) }
+            runOptions={
+              providerId && modelSelection.runOptionsLabel
+                ? { label: modelSelection.runOptionsLabel, accessibilityLabel: modelSelection.runOptionsAccessibilityLabel, onPress: () => openRunOptions(providerId) }
                 : null
             }
             providerId={providerId || undefined}

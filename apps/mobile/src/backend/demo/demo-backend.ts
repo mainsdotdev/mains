@@ -21,6 +21,8 @@ import type {
 } from "@mains/contracts/runs";
 import { historyWindow, compareHistoryCursors } from "@mains/contracts/run-history";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
+import type { ListRunOutputsPayload, ReadRunOutputPayload } from "@mains/contracts/run-outputs";
+import { demoOutputs, readDemoOutput } from "./demo-outputs";
 import { conversationSettingsFrom, snapshotRunSettingConfig, type ConversationSettings } from "@mains/contracts/run-settings";
 
 import type { DemoHandler } from "./demo-socket";
@@ -395,6 +397,16 @@ export class DemoBackend implements DemoHandler {
 
   invoke(channel: string, args: unknown[]): unknown {
     switch (channel) {
+      case CHANNELS.runs.listOutputs: {
+        const request = args[0] as ListRunOutputsPayload;
+        if (!this.runs.some((run) => run.id === request.runId)) throw new Error("Conversation not found");
+        return { items: request.offset ? [] : demoOutputs(request.runId).filter((item) => request.artifactId === undefined || item.artifactId === request.artifactId), nextOffset: null };
+      }
+      case CHANNELS.runs.readOutputFile: {
+        const request = args[0] as ReadRunOutputPayload;
+        if (!this.runs.some((run) => run.id === request.runId)) throw new Error("Conversation not found");
+        return readDemoOutput(request);
+      }
       case CHANNELS.backend.describe:
         return {
           backendId: snapshot.backend.backendId,
@@ -446,6 +458,7 @@ export class DemoBackend implements DemoHandler {
       }
       case CHANNELS.runs.readHistoryContent: {
         const request = args[0] as ReadRunHistoryContentPayload;
+        if (request.source === "turn-diff") throw new Error("This demo snapshot does not include stored turn diffs.");
         const artifact = this.artifacts.get(request.runId)?.find((row) => row.id === request.id);
         const call = this.toolCalls.get(request.runId)?.find((row) => row.id === request.id);
         if (request.source === "artifact" ? !artifact : !call) throw new Error("Content not found in this conversation");

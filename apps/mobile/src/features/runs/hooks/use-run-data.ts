@@ -11,7 +11,7 @@ import {
 import { db } from "@/db/client";
 import { cachedHistoryQueries } from "@/db/history-queries";
 import { useRunHistory } from "@/backend/run-history";
-import { pendingApprovals, runArtifacts, runs, toolCalls, workspaces } from "@/db/schema";
+import { pendingApprovals, runArtifacts, runTurns, runs, toolCalls, workspaces } from "@/db/schema";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { pendingAsyncQuestions } from "@/lib/async-questions";
 import { latestPromptSuggestions } from "@/lib/prompt-suggestions";
@@ -22,6 +22,7 @@ import { isModeId, DEFAULT_MODE_ID } from "@mains/contracts/modes";
 
 import { latestThinking } from "../lib/latest-thinking";
 import { projectStreamingTranscript } from "../lib/run-transcript-projection";
+import { activeRunPlan, readRunTurns } from "../lib/run-progress";
 
 /**
  * The read side of a run screen: its durable projection, transient assistant
@@ -59,6 +60,9 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
   const callQuery = useCoalescedLiveQuery(
     cached.calls, toolCalls, [backendId, runId],
   );
+  const turnQuery = useCoalescedLiveQuery(cached.turns, runTurns, [backendId, runId]);
+  const turns = useMemo(() => readRunTurns(turnQuery.data), [turnQuery.data]);
+  const plan = useMemo(() => activeRunPlan(turns, callQuery.data), [turns, callQuery.data]);
   const approvalQuery = useCoalescedLiveQuery(
     db
       .select()
@@ -143,6 +147,8 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     },
     transcript: {
       items,
+      turns,
+      plan,
       streamingItems: history.end ? [] : streamingItems,
       promptCount,
       thinking,

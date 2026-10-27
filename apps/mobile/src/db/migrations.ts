@@ -302,6 +302,31 @@ export const MIGRATIONS: readonly (string | ((database: MigrationDatabase) => vo
   ALTER TABLE workspaces ADD COLUMN owner_backend_id TEXT;
   ALTER TABLE workspaces ADD COLUMN is_replica INTEGER NOT NULL DEFAULT 0;
   `,
+  // v18 — form schemas and per-request permission limits on pending approvals
+  `
+  ALTER TABLE pending_approvals ADD COLUMN requested_schema_json TEXT;
+  ALTER TABLE pending_approvals ADD COLUMN suppress_always_allow_rule INTEGER NOT NULL DEFAULT 0;
+  `,
+  // v19 — compact execution progress and changes for the selected history window
+  `
+  ALTER TABLE run_turns ADD COLUMN id INTEGER;
+  ALTER TABLE run_turns ADD COLUMN created_at INTEGER;
+  ALTER TABLE run_turns ADD COLUMN metadata_json TEXT;
+  ALTER TABLE run_turns ADD COLUMN changes_json TEXT;
+  `,
+  // v20 — output descriptors and downloaded-file references (never file bodies)
+  `
+  CREATE TABLE run_outputs (
+    backend_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    artifact_id INTEGER NOT NULL,
+    descriptor_json TEXT NOT NULL,
+    version TEXT NOT NULL,
+    local_uri TEXT,
+    last_opened_at INTEGER,
+    PRIMARY KEY (backend_id, run_id, artifact_id)
+  );
+  `,
 ];
 
 export function migrateDatabase(database: MigrationDatabase): void {

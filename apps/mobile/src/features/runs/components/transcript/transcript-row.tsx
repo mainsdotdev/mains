@@ -35,6 +35,7 @@ import { PromptSegmentView } from "./prompt-chips";
 import { SubagentSummaryRow } from "../subagents/subagent-summary-row";
 import { ToolBlock } from "./tools/tool-block";
 import { HistoryContentLink } from "../history-content-link";
+import { OutputFileCard } from "../outputs/output-file-card";
 
 /**
  * What the action row under an agent message may do. Threaded down from the
@@ -114,6 +115,8 @@ export function TranscriptRow({
       return <SubagentSummaryRow runId={item.runId} agents={item.agents} />;
     case "images":
       return <ImageGallery images={item.images} />;
+    case "document":
+      return <OutputFileCard runId={item.runId} artifactId={item.artifactId} name={item.name} byteSize={item.byteSize} desktopOnly={item.desktopOnly} />;
     case "note":
       return (
         <View><ThemedText variant="monoCaption" selectable>

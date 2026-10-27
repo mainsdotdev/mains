@@ -94,7 +94,7 @@ export function ComposerBar({
   onAttachmentsChange,
   onStop,
   model,
-  permission,
+  runOptions,
   context,
   providerId,
   reservedTop,
@@ -117,8 +117,8 @@ export function ComposerBar({
   onStop?: () => void;
   /** The model pill: what is selected, its effort, and what tapping opens. */
   model?: { label: string; effort?: string | null; onPress: () => void } | null;
-  /** The permission-mode pill — worth seeing before sending from a phone. */
-  permission?: { label: string; onPress: () => void } | null;
+  /** Permissions in Code; speed and other supported options in Work/Chat. */
+  runOptions?: { label: string; accessibilityLabel: string; onPress: () => void } | null;
   /** Skills and commands behind the inline `@` / `/` / `$` triggers. */
   context?: ComposerContext | null;
   /** Tints the send button, the way the provider tints its prompt bubbles. */
@@ -485,10 +485,10 @@ export function ComposerBar({
             </Pill>
           ) : null}
 
-          {permission ? (
-            <Pill label={`Permissions: ${permission.label}`} onPress={permission.onPress}>
+          {runOptions ? (
+            <Pill label={runOptions.accessibilityLabel} onPress={runOptions.onPress}>
               <ThemedText variant="subhead" numberOfLines={1} style={{ fontWeight: "600" }}>
-                {permission.label}
+                {runOptions.label}
               </ThemedText>
             </Pill>
           ) : null}

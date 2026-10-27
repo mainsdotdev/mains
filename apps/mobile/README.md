@@ -86,6 +86,12 @@ npm run ios
 `ios:prebuild` replaces the generated `ios/` directory from the app config. Keep
 native customizations in config plugins so they survive regeneration.
 
+The local Expo module in `modules/mains-document-preview` supplies iOS Quick
+Look for PDF, Word, Excel and PowerPoint outputs. It autolinks during prebuild
+and CocoaPods installation. Rebuild the native client after adding or changing
+this module; an OTA JavaScript update cannot install it. Older clients still
+offer Share / Save to Files when native preview is unavailable.
+
 
 ## Current features
 
@@ -94,6 +100,17 @@ the iOS Keychain, reconnects automatically, and maintains a disposable SQLite
 projection of runs, workspaces, models, and conversation history. It can start,
 continue, fork, and stop runs, answer approval requests, and attach photos and
 skills. Demo Mode works on the phone without a backend.
+
+Conversation headers expose Outputs, and transcript document cards open the
+same file viewer. PDF and Office outputs use Quick Look; images, Markdown,
+TXT and CSV open in the app. Share / Save to Files keeps the original filename.
+Downloads are chunked, capped at 100 MiB per file, and cached separately from
+SQLite in a 200 MiB cache. Downloaded outputs can open offline until evicted.
+The backend must include `runs:listOutputs` and `runs:readOutputFile`; these
+read-only handlers expose selected conversation outputs without filesystem access.
+Demo Mode includes a small PDF and Markdown output for checking this flow.
+HTML and interactive visualization outputs currently show **See on desktop**
+without a mobile preview, download or share action.
 
 Model, effort, permissions, speed, Plan, and Goal belong to each conversation.
 Existing chats load and persist their next-message preferences through

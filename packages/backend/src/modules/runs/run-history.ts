@@ -18,7 +18,7 @@ export function validateHistoryRequest(payload: ReadRunHistoryPayload): void {
 
 export function validateHistoryContentRequest(payload: ReadRunHistoryContentPayload): void {
   if (!payload || typeof payload.runId !== "string" || !payload.runId ||
-    !["artifact", "tool-input", "tool-output"].includes(payload.source) ||
+    !["artifact", "tool-input", "tool-output", "turn-diff"].includes(payload.source) ||
     !Number.isSafeInteger(payload.id) || payload.id <= 0 ||
     (payload.offset != null && (!Number.isSafeInteger(payload.offset) || payload.offset < 0))) {
     throw new Error("Invalid conversation content request");

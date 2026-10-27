@@ -2758,6 +2758,13 @@ describe("runsService", () => {
 
       try {
         const files = await runsService.listRunOutputFiles("run-outputs");
+        const remote = await runsService.listOutputs({ runId: "run-outputs" });
+        expect(remote.items.map((item) => item.name).sort()).toEqual(["chart.csv", "notes.md"]);
+        expect(JSON.stringify(remote)).not.toContain(root);
+        const note = remote.items.find((item) => item.name === "notes.md")!;
+        expect(Buffer.from((await runsService.readOutputFile({ runId: "run-outputs", artifactId: note.artifactId, version: note.version, offset: 0 })).base64, "base64").toString()).toBe("# Notes");
+        await expect(runsService.readOutputFile({ runId: "different-conversation", artifactId: note.artifactId, version: note.version, offset: 0 })).rejects.toThrow();
+        await expect(runsService.readOutputFile({ runId: "run-outputs", artifactId: 9999999, version: note.version, offset: 0 })).rejects.toThrow("selected outputs");
 
         expect(files.map((file) => file.relativePath).sort()).toEqual([
           "notes.md",

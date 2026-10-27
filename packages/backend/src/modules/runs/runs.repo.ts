@@ -6,6 +6,7 @@ import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
 import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload, RunHistoryContentPage, RunHistoryCursor } from "@mains/contracts/runs";
 import { historyEndAfter } from "@mains/contracts/run-history";
+import { historyEntryTurn } from "@mains/contracts/run-progress";
 import { readAsyncQuestions, type AsyncQuestionAnswer } from "@mains/contracts/async-questions";
 import { historyWindow, compareHistoryCursors as compareCursor } from "./run-history";
 import type { SQLWrapper, SQL } from "drizzle-orm";
@@ -86,6 +87,13 @@ export const runsRepo = {
   },
   findHistoryContent(request: ReadRunHistoryContentPayload): RunHistoryContentPage | null {
     const offset = request.offset ?? 0;
+    if (request.source === "turn-diff") {
+      const row = getDb().select({
+        text: sql<string>`substr(${runTurnChanges.diffText}, ${offset + 1}, 8192)`,
+        totalChars: sql<number>`length(${runTurnChanges.diffText})`,
+      }).from(runTurnChanges).where(and(eq(runTurnChanges.runId, request.runId), eq(runTurnChanges.turnId, request.id))).get();
+      return row ? { ...row, offset, nextOffset: offset + 8192 < row.totalChars ? offset + 8192 : null } : null;
+    }
     const column = request.source === "artifact" ? runArtifacts.content
       : request.source === "tool-input" ? toolCalls.input : toolCalls.output;
     const table = request.source === "artifact" ? runArtifacts : toolCalls;
@@ -900,6 +908,7 @@ function mobileMetadata(column: SQLWrapper): SQL<string | null> {
       'source', substr(json_extract(${column}, '$.source'), 1, 512),
       'isFromSubagent', json(CASE WHEN json_extract(${column}, '$.isFromSubagent') = 1 THEN 'true' ELSE 'false' END),
       'parentToolUseId', substr(json_extract(${column}, '$.parentToolUseId'), 1, 512),
+      'turnId', CASE WHEN json_type(${column}, '$.turnId') = 'integer' THEN json_extract(${column}, '$.turnId') ELSE NULL END,
       'voice', json(CASE WHEN json_extract(${column}, '$.voice') = 1 THEN 'true' ELSE 'false' END),
       'voiceStartedAt', CASE WHEN json_type(${column}, '$.voiceStartedAt') IN ('integer', 'real')
         THEN json_extract(${column}, '$.voiceStartedAt') ELSE NULL END)
@@ -946,15 +955,28 @@ function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHis
     ...artifacts.map((row) => [`artifact:${row.id}`, row] as const),
     ...calls.map((row) => [`tool:${row.id}`, row] as const),
   ]);
+  const explicitTurnIds = [...byKey.values()].flatMap((row) => typeof row.metadata?.turnId === "number" ? [row.metadata.turnId] : []);
+  const latestTurn = selectMobileTurns(request.runId, undefined, true)[0];
+  const turns = keys.length ? selectMobileTurns(request.runId, {
+    first: Math.min(...keys.map((key) => key.timestamp)),
+    last: Math.max(...keys.map((key) => key.timestamp)),
+    ids: explicitTurnIds,
+  }) : [];
+  if (latestTurn && !turns.some((turn) => turn.id === latestTurn.id)) turns.push(latestTurn);
+  const retainedTurns = new Map<number, RunTurnResponse>(latestTurn ? [[latestTurn.id, latestTurn]] : []);
   // Rows are small, but many near-threshold rows or escaped Unicode can still
-  // exceed the byte budget. Stop at a boundary that the next request can cross.
-  let bytes = 0;
+  // exceed the byte budget. A row and its turn summary cross the boundary together.
+  let bytes = latestTurn ? Buffer.byteLength(JSON.stringify(latestTurn)) : 0;
   const kept: RunHistoryCursor[] = [];
   for (const key of keys) {
     const row = byKey.get(`${key.source}:${key.id}`)!;
-    const size = Buffer.byteLength(JSON.stringify(row));
+    const turn = historyEntryTurn(turns, key.timestamp,
+      typeof row.metadata?.turnId === "number" ? row.metadata.turnId : undefined);
+    const turnBytes = turn && !retainedTurns.has(turn.id) ? Buffer.byteLength(JSON.stringify(turn)) : 0;
+    const size = Buffer.byteLength(JSON.stringify(row)) + turnBytes;
     if (bytes + size > MOBILE_HISTORY_BYTES) break;
     bytes += size;
+    if (turn) retainedTurns.set(turn.id, turn);
     kept.push(key);
   }
   if (newer) kept.sort(compareCursor);
@@ -963,16 +985,39 @@ function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHis
   const start = kept[0] ?? null;
   const end = newer && kept.length && last && compareCursor(kept.at(-1)!, last) < 0
     ? historyEndAfter(kept.at(-1)!) : upper ?? null;
-  // The phone uses the latest turn's model for legacy conversations. Keep the
-  // small execution metadata, without a second copy of prompt/response bodies.
-  const latestTurn = db.select({ ...getTableColumns(runTurns),
-    promptContent: sql<string | null>`NULL`, responseContent: sql<string | null>`NULL`,
-    metadata: sql<string | null>`NULL`, modelUsage: sql<string | null>`NULL`,
-  }).from(runTurns).where(eq(runTurns.runId, request.runId)).orderBy(desc(runTurns.turnIndex)).limit(1).all();
   return { artifacts: artifacts.filter((row) => keep.has(`artifact:${row.id}`)),
-    toolCalls: calls.filter((row) => keep.has(`tool:${row.id}`)), turns: latestTurn.map((row) => mapTurnRowToResponse(row)), start, end, last: last ?? null,
+    toolCalls: calls.filter((row) => keep.has(`tool:${row.id}`)), turns: [...retainedTurns.values()].sort((a, b) => a.turnIndex - b.turnIndex), start, end, last: last ?? null,
     hasOlder: !!(first && start && compareCursor(first, start) < 0),
     hasNewer: !!(last && end && compareCursor(last, end) >= 0) };
+}
+
+/** Only compact progress and file summaries enter a phone page; patches stay in SQLite. */
+function selectMobileTurns(runId: string, range?: { first: number; last: number; ids: number[] }, latest = false): RunTurnResponse[] {
+  const time = sql`coalesce(${runTurns.startedAt}, ${runTurns.createdAt}) * 1000`;
+  const rows = getDb().select({
+    turn: { ...getTableColumns(runTurns),
+      promptContent: sql<string | null>`NULL`, responseContent: sql<string | null>`NULL`, modelUsage: sql<string | null>`NULL`,
+      metadata: sql<string | null>`CASE WHEN json_valid(${runTurns.metadata})
+        AND length(json_extract(${runTurns.metadata}, '$.codexPlan')) <= 16384
+        THEN json_object('codexPlan', json_extract(${runTurns.metadata}, '$.codexPlan')) ELSE NULL END`,
+    },
+    changes: { id: runTurnChanges.id,
+      filesJson: sql<string>`CASE WHEN length(${runTurnChanges.filesJson}) <= 8192 THEN ${runTurnChanges.filesJson} ELSE '[]' END`,
+      additions: runTurnChanges.additions, deletions: runTurnChanges.deletions,
+      truncated: runTurnChanges.truncated, undoneAt: runTurnChanges.undoneAt,
+    },
+    fileCount: sql<number>`coalesce(json_array_length(${runTurnChanges.filesJson}), 0)`,
+  }).from(runTurns).leftJoin(runTurnChanges, eq(runTurnChanges.turnId, runTurns.id))
+    .where(and(eq(runTurns.runId, runId), range ? sql`(
+      (${time} >= ${range.first} AND ${time} <= ${range.last})
+      OR ${runTurns.id} = (SELECT id FROM run_turns WHERE run_id = ${runId}
+        AND coalesce(started_at, created_at) * 1000 <= ${range.first} ORDER BY turn_index DESC LIMIT 1)
+      ${range.ids.length ? sql`OR ${inArray(runTurns.id, range.ids)}` : sql``}
+    )` : undefined))
+    .orderBy(latest ? desc(runTurns.turnIndex) : asc(runTurns.turnIndex))
+    .limit(latest ? 1 : MOBILE_HISTORY_ROWS + 1).all();
+  return rows.map((row) => mapTurnRowToResponse(row.turn, row.changes?.id
+    ? { ...mapTurnChangesSummary(row.changes), fileCount: row.fileCount } : null));
 }
 
 function historyCut(time: SQL, source: RunHistoryCursor["source"], id: SQLWrapper, cursor: RunHistoryCursor, before: boolean): SQL {

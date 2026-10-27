@@ -51,7 +51,7 @@ import { colors, radius, shadows, spacing, useProviderAccentPair } from "@/theme
 /** The round glass buttons' size, and the pills' height, along the top. */
 const CONTROL_HEIGHT = 46;
 /** Two 44-point targets plus the capsule's horizontal padding. */
-const RUN_TOOLBAR_WIDTH = 44 * 2 + spacing.xs * 2;
+const RUN_TOOLBAR_WIDTH = 44 * 3 + spacing.xs * 2;
 /** The connection pill under them, shown while the Mac is out of reach. */
 const PILL_HEIGHT = 30;
 
@@ -152,7 +152,7 @@ export default function NewRunScreen() {
   }));
 
   // Two sheets behind the composer's two chips: the model (and its effort)
-  // behind the model chip, how the agent may act behind the permission chip.
+  // behind the model chip; mode-appropriate controls behind Run options.
   const openModel = (providerId: string) =>
     router.push({ pathname: "/model", params: { providerId } } as Href);
   const openRunOptions = (providerId: string) =>
@@ -273,7 +273,7 @@ export default function NewRunScreen() {
             <ThemedText variant="headline" numberOfLines={1} style={{ flex: 1, marginHorizontal: spacing.md }}>
               {title ?? space?.name ?? "Run"}
             </ThemedText>
-            <RunToolbar onNewRun={() => homeRun.clear()} />
+            <RunToolbar runId={home.runId} onNewRun={() => homeRun.clear()} />
           </>
         ) : (
           <>
@@ -436,9 +436,9 @@ export default function NewRunScreen() {
                   }
                 : null
             }
-            permission={
-              space && modelSelection.permissionLabel
-                ? { label: modelSelection.permissionLabel, onPress: () => openRunOptions(space.providerId) }
+            runOptions={
+              space && modelSelection.runOptionsLabel
+                ? { label: modelSelection.runOptionsLabel, accessibilityLabel: modelSelection.runOptionsAccessibilityLabel, onPress: () => openRunOptions(space.providerId) }
                 : null
             }
             providerId={space?.providerId}
@@ -491,7 +491,8 @@ function ConnectionPill({ name, onPress }: { name: string; onPress: () => void }
  * The run screen's toolbar, drawn by hand: "new run" beside a menu, in one
  * glass capsule — what its native `Stack.Toolbar` renders under a header.
  */
-function RunToolbar({ onNewRun }: { onNewRun: () => void }) {
+function RunToolbar({ runId, onNewRun }: { runId: string | null; onNewRun: () => void }) {
+  const router = useRouter();
   return (
     <GlassSurface
       interactive
@@ -504,6 +505,10 @@ function RunToolbar({ onNewRun }: { onNewRun: () => void }) {
         paddingHorizontal: spacing.xs,
       }}
     >
+      <Pressable accessibilityRole="button" accessibilityLabel="Outputs" disabled={!runId}
+        onPress={() => router.push({ pathname: "/outputs", params: { runId: runId ?? "" } } as Href)} style={{ opacity: runId ? 1 : 0.4 }}>
+        <ToolbarGlyph icon="doc.on.doc" />
+      </Pressable>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="New run"

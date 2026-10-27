@@ -20,6 +20,7 @@ import {
   toolSummary,
 } from "@/lib/tool-output";
 import { resolveTool } from "@/lib/tool-registry";
+import { outputReferenceName } from "@/lib/output-reference";
 import { colors, spacing } from "@/theme";
 
 import { DiffStat, ToolCodeBody, ToolDetail, ToolDiffBody, ToolRow, ToolTextBody } from "./tool-row";
@@ -265,13 +266,7 @@ function markdownFileOpener(
 }
 
 function isMarkdownFilePath(filePath: string): boolean {
-  const withoutLocator = filePath
-    .trim()
-    .replace(/#L\d+(?:-\d+)?$/i, "")
-    .replace(/:\d+(?::\d+)?$/, "")
-    .split(/[?#]/)[0]
-    .toLowerCase();
-  return withoutLocator.endsWith(".md") || withoutLocator.endsWith(".markdown");
+  return outputReferenceName(filePath.trim()) !== null;
 }
 
 interface Todo {

@@ -36,9 +36,58 @@ function migrationDatabase(db) {
 }
 
 function seedVersion(db, version) {
-  for (const migration of MIGRATIONS.slice(0, version)) db.exec(migration);
+  for (const migration of MIGRATIONS.slice(0, version)) {
+    if (typeof migration === "string") db.exec(migration);
+    else migration(migrationDatabase(db));
+  }
   db.exec(`PRAGMA user_version = ${version}`);
 }
+
+test("upgrading a v17 phone preserves pending questions and adds form request metadata", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 17);
+    db.exec("INSERT INTO pending_approvals (backend_id, request_id, run_id, kind, tool_name, question, requested_at, expires_at) VALUES ('mac', 'question', 'run', 'ask_user', 'AskUser', 'Continue?', 1, 2)");
+    migrateDatabase(migrationDatabase(db));
+    const row = db.prepare("SELECT * FROM pending_approvals").get();
+    assert.equal(row.question, "Continue?");
+    assert.equal(row.requested_schema_json, null);
+    assert.equal(row.suppress_always_allow_rule, 0);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, MIGRATIONS.length);
+  } finally { db.close(); }
+});
+
+test("a v18 phone gains turn summaries without losing its existing chats or settings", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 18);
+    db.exec("INSERT INTO run_turns (backend_id, run_id, turn_index, status, model) VALUES ('mac', 'run', 0, 'completed', 'saved-model')");
+    db.exec("INSERT INTO preferences VALUES ('appearance', 'dark')");
+    migrateDatabase(migrationDatabase(db));
+    const row = db.prepare("SELECT * FROM run_turns").get();
+    assert.equal(row.model, "saved-model");
+    assert.equal(row.id, null);
+    assert.equal(row.metadata_json, null);
+    assert.equal(row.changes_json, null);
+    assert.equal(db.prepare("SELECT value FROM preferences WHERE key = 'appearance'").get().value, "dark");
+  } finally { db.close(); }
+});
+
+test("output cache migration preserves chats and separates file revisions by computer and conversation", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 19);
+    db.exec("INSERT INTO preferences VALUES ('appearance', 'dark')");
+    migrateDatabase(migrationDatabase(db));
+    const insert = db.prepare("INSERT INTO run_outputs (backend_id,run_id,artifact_id,descriptor_json,version,local_uri) VALUES (?,?,?,?,?,?)");
+    insert.run("a", "run", -1, "{}", "revision-a", "file:///a/report.pdf");
+    insert.run("b", "run", -1, "{}", "revision-b", "file:///b/report.pdf");
+    insert.run("a", "other-run", -1, "{}", "revision-c", null);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM run_outputs").get().n, 3);
+    assert.equal(db.prepare("SELECT value FROM preferences WHERE key='appearance'").get().value, "dark");
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, MIGRATIONS.length);
+  } finally { db.close(); }
+});
 
 test("upgrading a v14 phone preserves its chats and preferences while adding conversation settings", () => {
   const db = new DatabaseSync(":memory:");

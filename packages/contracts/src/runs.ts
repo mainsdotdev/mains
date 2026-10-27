@@ -58,7 +58,7 @@ export interface ReadRunHistoryPayload {
 
 export interface ReadRunHistoryContentPayload {
   runId: string;
-  source: "artifact" | "tool-input" | "tool-output";
+  source: "artifact" | "tool-input" | "tool-output" | "turn-diff";
   id: number;
   /** SQLite character offset, returned by the previous page. */
   offset?: number;
@@ -159,7 +159,31 @@ export interface RunTurnResponse {
   elapsedMs: number | null;
   status: RunTurnStatus;
   model: string | null;
+  /** Older paired backends may omit execution progress and turn changes. */
+  metadata?: Record<string, unknown> | null;
+  changes?: RunTurnChangesSummary | null;
   createdAt: Date;
+}
+
+export interface TurnFileChange {
+  path: string;
+  oldPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  shared?: boolean;
+}
+
+export interface RunTurnChangesSummary {
+  id: string;
+  files: TurnFileChange[];
+  /** Total count when a bounded phone preview omits the file list. */
+  fileCount?: number;
+  additions: number;
+  deletions: number;
+  truncated: boolean;
+  undoneAt: Date | null;
 }
 
 export interface ToolCallResponse {

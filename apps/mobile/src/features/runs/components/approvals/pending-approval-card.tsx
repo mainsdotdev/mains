@@ -17,6 +17,7 @@ import {
 } from "@/theme";
 
 import { Button, SFSymbol, ThemedText } from "@/components/ui";
+import { ElicitationForm } from "./elicitation-form";
 
 const VISIBLE_PARAMS_INITIAL = 4;
 const APPROVAL_META_KEYS = new Set([
@@ -198,8 +199,7 @@ export type ApprovalDecision = { approved: boolean; answer?: string };
 /**
  * An agent request waiting on the user, with the answer surface the desktop's
  * dialog offers — allow/deny for a tool, options or free text for a question,
- * open-and-accept for a URL elicitation. Form elicitations (schema-driven
- * fields) stay on the Mac for now; the card can only decline them.
+ * open-and-accept for a URL elicitation, and validated fields for an MCP form.
  */
 export function PendingApprovalCard({
   approval,
@@ -240,6 +240,7 @@ export function PendingApprovalCard({
       ? toolDisplay.message
       : approval.header || approval.question || approval.toolName;
   const isForm = approval.kind === "elicitation" && approval.elicitationMode !== "url";
+  const canAllowForRun = providerId === "codex" && !approval.suppressAlwaysAllowRule;
   const visibleParams = showAllParams
     ? toolDisplay.params
     : toolDisplay.params.slice(0, VISIBLE_PARAMS_INITIAL);
@@ -281,10 +282,10 @@ export function PendingApprovalCard({
 
   const footnote = !onRespond
     ? "Answer in Mains on your computer"
-    : isForm
-      ? "Fill this form in with Mains on your computer — the phone can only decline it."
-      : compact && approval.kind !== "tool_approval"
-        ? "Open the run to answer"
+    : compact && approval.kind !== "tool_approval"
+      ? "Open the run to answer"
+      : isForm
+        ? "Mains cancels this if unanswered."
         : "Mains denies this if unanswered.";
 
   const risk = toolDisplay.riskLevel ? riskColors(toolDisplay.riskLevel, hues, soft) : null;
@@ -365,7 +366,7 @@ export function PendingApprovalCard({
       {!compact && approval.kind !== "tool_approval" && approval.header && approval.question ? (
         <ThemedText variant="callout">{approval.question}</ThemedText>
       ) : null}
-      {preview && (approval.kind !== "tool_approval" || !toolDisplay.parsed) ? (
+      {!isForm && preview && (approval.kind !== "tool_approval" || !toolDisplay.parsed) ? (
         <ThemedText variant="mono" numberOfLines={compact ? 1 : 3} selectable>
           {preview}
         </ThemedText>
@@ -438,7 +439,7 @@ export function PendingApprovalCard({
       {/* ── Answer surface ── */}
       {onRespond && approval.kind === "tool_approval" && (
         <View style={{ gap: spacing.sm }}>
-          {providerId === "codex" ? (
+          {canAllowForRun ? (
             <Pressable
               accessibilityRole="checkbox"
               accessibilityState={{ checked: allowForRun, disabled: sending !== null }}
@@ -495,7 +496,7 @@ export function PendingApprovalCard({
               onPress={() =>
                 void respond("allow", {
                   approved: true,
-                  answer: allowForRun ? "acceptForSession" : undefined,
+                  answer: canAllowForRun && allowForRun ? "acceptForSession" : undefined,
                 })
               }
             />
@@ -589,7 +590,17 @@ export function PendingApprovalCard({
         </>
       )}
 
-      {onRespond && approval.kind === "elicitation" && !compact && (
+      {onRespond && isForm && !compact ? (
+        <ElicitationForm
+          key={`${approval.requestId}:${approval.requestedSchemaJson ?? ""}`}
+          schemaJson={approval.requestedSchemaJson}
+          providerId={providerId}
+          sending={sending}
+          onRespond={respond}
+        />
+      ) : null}
+
+      {onRespond && approval.kind === "elicitation" && !isForm && !compact && (
         <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: spacing.sm }}>
           <Button
             title="Decline"

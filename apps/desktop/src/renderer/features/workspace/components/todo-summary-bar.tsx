@@ -1,3 +1,5 @@
+import { type StructuralPlanSnapshot } from "@mains/contracts/run-progress";
+export { parseStructuralPlanSnapshot, type StructuralPlanSnapshot } from "@mains/contracts/run-progress";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { RunEvent } from "../types";
 import { resolveTool } from "../lib/resolve-tool";
@@ -20,60 +22,6 @@ export interface TodoItem {
   content: string;
   status: "completed" | "in_progress" | "pending";
   activeForm?: string;
-}
-
-export interface StructuralPlanSnapshot {
-  providerTurnId: string;
-  explanation?: string;
-  steps: Array<{
-    step: string;
-    status: TodoItem["status"];
-  }>;
-  updatedAt?: number;
-}
-
-export function parseStructuralPlanSnapshot(
-  value: unknown,
-): StructuralPlanSnapshot | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as Record<string, unknown>;
-  if (
-    typeof candidate.providerTurnId !== "string" ||
-    !Array.isArray(candidate.steps)
-  ) {
-    return null;
-  }
-
-  const steps = candidate.steps.flatMap((rawStep) => {
-    if (!rawStep || typeof rawStep !== "object") return [];
-    const step = rawStep as Record<string, unknown>;
-    if (
-      typeof step.step !== "string" ||
-      (
-        step.status !== "pending" &&
-        step.status !== "in_progress" &&
-        step.status !== "completed"
-      )
-    ) {
-      return [];
-    }
-    const status = step.status as TodoItem["status"];
-    return [{
-      step: step.step,
-      status,
-    }];
-  });
-
-  return {
-    providerTurnId: candidate.providerTurnId,
-    ...(typeof candidate.explanation === "string"
-      ? { explanation: candidate.explanation }
-      : {}),
-    steps,
-    ...(typeof candidate.updatedAt === "number"
-      ? { updatedAt: candidate.updatedAt }
-      : {}),
-  };
 }
 
 function parseEventInput(event: RunEvent): Record<string, unknown> | null {

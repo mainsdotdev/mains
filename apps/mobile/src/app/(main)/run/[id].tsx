@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter, type Href } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { View } from "react-native";
 
@@ -8,6 +8,7 @@ import { useRunTitle } from "@/lib/use-run-title";
 
 /** One run under a navigation bar: opened from a list, a search, or a fork. */
 export default function RunScreen() {
+  const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const runId = typeof id === "string" ? id : "";
   const headerHeight = useHeaderHeight();
@@ -21,6 +22,9 @@ export default function RunScreen() {
 
       {process.env.EXPO_OS === "ios" && (
         <Stack.Toolbar placement="right">
+          <Stack.Toolbar.Button icon="doc.on.doc" accessibilityLabel="Outputs" onPress={() => router.push({ pathname: "/outputs", params: { runId } } as Href)}>
+            Outputs
+          </Stack.Toolbar.Button>
           {/* Declared before the menu, so it sits to the left of it. */}
           <Stack.Toolbar.Button icon="square.and.pencil" accessibilityLabel="New run" onPress={goHome}>
             New run

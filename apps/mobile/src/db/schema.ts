@@ -26,6 +26,17 @@ export const backends = sqliteTable("backends", {
   lastSpaceId: text("last_space_id"),
 });
 
+/** Selected output metadata and verified local copies; binary data never enters SQLite. */
+export const runOutputs = sqliteTable("run_outputs", {
+  backendId: text("backend_id").notNull(),
+  runId: text("run_id").notNull(),
+  artifactId: integer("artifact_id").notNull(),
+  descriptorJson: text("descriptor_json").notNull(),
+  version: text("version").notNull(),
+  localUri: text("local_uri"),
+  lastOpenedAt: integer("last_opened_at", { mode: "timestamp_ms" }),
+}, (t) => [primaryKey({ columns: [t.backendId, t.runId, t.artifactId] })]);
+
 /** Spaces: a run's home on the Mac — provider + mode. Selected in the sidebar. */
 export const spaces = sqliteTable(
   "spaces",
@@ -271,6 +282,11 @@ export const runTurns = sqliteTable(
     backendId: text("backend_id").notNull(),
     runId: text("run_id").notNull(),
     turnIndex: integer("turn_index").notNull(),
+    /** Backend turn identity; null until an older cache is refreshed. */
+    id: integer("id"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }),
+    metadataJson: text("metadata_json"),
+    changesJson: text("changes_json"),
     promptContent: text("prompt_content"),
     responseContent: text("response_content"),
     status: text("status").notNull(),
@@ -363,6 +379,8 @@ export const pendingApprovals = sqliteTable(
     isOther: integer("is_other", { mode: "boolean" }).notNull().default(false),
     isSecret: integer("is_secret", { mode: "boolean" }).notNull().default(false),
     elicitationMode: text("elicitation_mode"),
+    requestedSchemaJson: text("requested_schema_json"),
+    suppressAlwaysAllowRule: integer("suppress_always_allow_rule", { mode: "boolean" }).notNull().default(false),
     url: text("url"),
   },
   (t) => [

@@ -39,6 +39,8 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // A single Markdown link, resolved and contained inside that Work/Chat run's
   // managed directory. This deliberately does not expose fileExplorer:*.
   CHANNELS.runs.readTextFile,
+  CHANNELS.runs.listOutputs,
+  CHANNELS.runs.readOutputFile,
   CHANNELS.runs.listPendingApprovals,
   CHANNELS.runTurns.getByRun,
   CHANNELS.runToolCalls.getByRun,

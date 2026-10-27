@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams } from "expo-router";
 
-import { MarkdownDocument } from "@/features/runs";
+import { OutputReference } from "@/features/runs";
 
 function titleFromPath(filePath: string): string {
   const withoutLocator = filePath
@@ -32,7 +32,7 @@ export default function DocumentScreen() {
   return (
     <>
       <Stack.Screen options={{ title: titleFromPath(filePath) }} />
-      <MarkdownDocument key={`${runId}:${filePath}`} runId={runId} filePath={filePath} />
+      <OutputReference key={`${runId}:${filePath}`} runId={runId} filePath={filePath} />
     </>
   );
 }

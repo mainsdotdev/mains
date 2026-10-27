@@ -49,6 +49,7 @@ import {
   providers,
   runArtifacts,
   runTurns,
+  runOutputs,
   runs,
   skills,
   spaceTargets,
@@ -66,6 +67,8 @@ import { snapshotRunSettingConfig, type ConversationSettings } from "@mains/cont
 import { ProtocolMismatchError } from "./connection-supervisor";
 import type { WsTransport } from "./ws-transport";
 import { historyRequest, historyLoaded, historyLoading, forgetHistory } from "./run-history";
+import { approvalRow } from "./approval-projection";
+import { turnRow } from "./turn-projection";
 
 /**
  * The sync layer: the only writer of the projection tables. It pulls snapshots
@@ -185,15 +188,7 @@ function upsertWorkspace(backendId: string, workspace: WorkspaceResponse): void 
 }
 
 function upsertTurn(backendId: string, turn: RunTurnResponse): void {
-  const set = {
-    promptContent: turn.promptContent,
-    responseContent: turn.responseContent,
-    status: turn.status,
-    startedAt: toDate(turn.startedAt),
-    endedAt: toDate(turn.endedAt),
-    elapsedMs: turn.elapsedMs,
-    model: turn.model,
-  };
+  const { backendId: _backend, runId: _run, turnIndex: _index, ...set } = turnRow(backendId, turn);
   runProjectionWrite(runTurns, () => db.insert(runTurns)
     .values({ backendId, runId: turn.runId, turnIndex: turn.turnIndex, ...set })
     .onConflictDoUpdate({
@@ -242,28 +237,6 @@ function upsertArtifact(backendId: string, runId: string, artifact: RunArtifactR
       set,
     })
     .run());
-}
-
-function approvalRow(backendId: string, request: ToolApprovalRequest, expiresAt: number) {
-  return {
-    backendId,
-    requestId: request.requestId,
-    runId: request.runId,
-    kind: request.kind,
-    toolName: request.toolName,
-    header: request.header ?? null,
-    question: request.question ?? null,
-    optionsJson: toJson(request.options),
-    multiSelect: Boolean(request.multiSelect),
-    description: request.description ?? null,
-    toolInputJson: toJson(request.toolInput),
-    requestedAt: new Date(request.timestamp),
-    expiresAt: new Date(expiresAt),
-    isOther: Boolean(request.isOther),
-    isSecret: Boolean(request.isSecret),
-    elicitationMode: request.elicitationMode ?? null,
-    url: request.url ?? null,
-  };
 }
 
 /** Drop one request locally — right after the phone answered it. */
@@ -996,6 +969,7 @@ export function runExists(backendId: string, runId: string): boolean {
 /** Drop everything cached for a backend (forgetting a Mac). */
 export function clearBackend(backendId: string): void {
   projectionTransaction(() => {
+    runProjectionWrite(runOutputs, () => db.delete(runOutputs).where(eq(runOutputs.backendId, backendId)).run());
     runProjectionWrite(aiDataConsents, () => db.delete(aiDataConsents).where(eq(aiDataConsents.backendId, backendId)).run());
     runProjectionWrite(spaceTargets, () => db.delete(spaceTargets).where(eq(spaceTargets.backendId, backendId)).run());
     runProjectionWrite(spaces, () => db.delete(spaces).where(eq(spaces.backendId, backendId)).run());

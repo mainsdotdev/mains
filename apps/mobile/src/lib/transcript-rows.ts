@@ -147,10 +147,10 @@ export function buildTurnRows(items: TranscriptItem[]): TurnRow[] {
     const last = expand(items, segments[segments.length - 1]);
 
     const breakout = previousAll.filter(
-      (item) => item.kind === "note" || item.kind === "images" || item.kind === "subagents",
+      (item) => item.kind === "note" || item.kind === "images" || item.kind === "document" || item.kind === "subagents",
     );
     const previous = previousAll.filter(
-      (item) => item.kind !== "note" && item.kind !== "images" && item.kind !== "subagents",
+      (item) => item.kind !== "note" && item.kind !== "images" && item.kind !== "document" && item.kind !== "subagents",
     );
 
     // Everything before the last segment was a note — there is nothing left to

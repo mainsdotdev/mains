@@ -45,6 +45,8 @@ export default function MainLayout() {
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="run/[id]" options={{ title: "" }} />
           <Stack.Screen name="document" options={{ title: "Document" }} />
+          <Stack.Screen name="outputs" options={{ title: "Outputs", presentation: "formSheet", sheetAllowedDetents: [0.62, 1], sheetGrabberVisible: true }} />
+          <Stack.Screen name="output/[artifactId]" options={{ title: "File" }} />
           <Stack.Screen name="workspace/[id]" options={{ title: "" }} />
           <Stack.Screen name="settings" options={{ title: "Settings", headerLargeTitle: true }} />
           <Stack.Screen

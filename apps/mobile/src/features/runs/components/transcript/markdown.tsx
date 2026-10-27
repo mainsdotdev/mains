@@ -9,6 +9,7 @@ import Animated, {
 
 import { parseMarkdown, type Block, type Inline, type ListItem } from "@/lib/markdown";
 import { prepareMathMarkdown } from "@/lib/math-markdown";
+import { outputReferenceName } from "@/lib/output-reference";
 import { colors, motion, radius, spacing, useBrandColors } from "@/theme";
 
 import MathMarkdown from "./math-markdown";
@@ -598,14 +599,7 @@ function InlineNode({
 
 /** A scheme-less Markdown path, matching the desktop's local-file link rule. */
 function isMarkdownFileHref(href: string): boolean {
-  if (!href || href.startsWith("#") || href.startsWith("//")) return false;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
-  const withoutLocator = href
-    .replace(/#L\d+(?:-\d+)?$/, "")
-    .replace(/:\d+(?::\d+)?$/, "")
-    .split(/[?#]/)[0]
-    .toLowerCase();
-  return withoutLocator.endsWith(".md") || withoutLocator.endsWith(".markdown");
+  return outputReferenceName(href) !== null;
 }
 
 /** A quiet tail: enough contrast to feel fluid, without making prose pulse. */

@@ -5,6 +5,8 @@ import { AppState } from "react-native";
 import { toWebSocketUrl } from "@mains/contracts/backend";
 import { setHistoryFollowing } from "./run-history";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { ListRunOutputsPayload, ReadRunOutputPayload, RunOutputsPage, RunOutputChunk } from "@mains/contracts/run-outputs";
+import { rememberOutputs, clearOutputCache } from "./output-cache";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type {
   AccountResponse,
@@ -289,6 +291,7 @@ class BackendSession {
     const backendId = this.snapshot.backend?.backendId;
     this.stop();
     await forgetPairedBackend();
+    if (backendId) clearOutputCache(backendId);
     if (backendId) clearBackend(backendId);
     this.publish({
       loaded: true,
@@ -657,6 +660,26 @@ class BackendSession {
   readHistoryContent(request: ReadRunHistoryContentPayload): Promise<RunHistoryContentPage> {
     if (!this.isConnected() || !this.transport) return Promise.reject(new Error("Connect to Mains to read the full content"));
     return readHistoryContent(this.transport, request);
+  }
+
+  async listRunOutputs(request: ListRunOutputsPayload): Promise<RunOutputsPage> {
+    const backendId = this.snapshot.backend?.backendId;
+    if (!backendId || !this.isConnected() || !this.transport) throw new Error("Connect to Mains on your computer to load its outputs");
+    const result = await this.transport.invoke(CHANNELS.runs.listOutputs, [request]);
+    if (!result.success) throw new Error(result.error);
+    if (this.snapshot.backend?.backendId !== backendId) throw new Error("The connected computer changed");
+    const page = result.data as RunOutputsPage;
+    rememberOutputs(backendId, page.items);
+    return page;
+  }
+
+  async readOutputFile(request: ReadRunOutputPayload, expectedBackendId = this.snapshot.backend?.backendId): Promise<RunOutputChunk> {
+    if (this.snapshot.backend?.backendId !== expectedBackendId) throw new Error("The connected computer changed");
+    if (!this.isConnected() || !this.transport) throw new Error("Connect to Mains on your computer to download this file");
+    const result = await this.transport.invoke(CHANNELS.runs.readOutputFile, [request]);
+    if (this.snapshot.backend?.backendId !== expectedBackendId) throw new Error("The connected computer changed");
+    if (!result.success) throw new Error(result.error);
+    return result.data as RunOutputChunk;
   }
 
   /** The transcript on screen — its events trigger refetches; others wait. */

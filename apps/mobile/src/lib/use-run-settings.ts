@@ -41,6 +41,7 @@ export function useRunSettings(backendId: string, providerId: string, runId: str
 
   return {
     settings,
+    mode: runQuery.data[0]?.mode ?? null,
     ready,
     saving: pending !== null,
     hint: error?.key === key ? error.message : null,
