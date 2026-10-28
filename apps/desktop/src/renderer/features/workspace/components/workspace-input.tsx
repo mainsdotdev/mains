@@ -617,6 +617,7 @@ export function WorkspaceInput({
       const key = codeSelectionChipKey(s);
       m.set(key, {
         key,
+        filePath: s.filePath,
         fileName: s.fileName,
         label: codeSelectionChipLabel(s),
       });

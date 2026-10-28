@@ -1,7 +1,7 @@
 import { useColorScheme, type ColorValue } from "react-native";
 
 import { iconTint, parseIcon } from "@mains/icons/registry";
-import { colors, mixToward } from "@/theme";
+import { useThemeColors, mixToward } from "@/theme";
 
 import { RegistryIcon } from "./registry-icon";
 import { SFSymbol } from "./sf-symbol";
@@ -44,6 +44,7 @@ const NAME_SOFTNESS = 0;
  * version of one that has.
  */
 export function useProjectNameColor(icon: string | null): ColorValue {
+  const colors = useThemeColors();
   const scheme = useColorScheme() === "dark" ? "dark" : "light";
   const parsed = parseIcon(icon);
   const tint = parsed?.type === "icon" ? iconTint(parsed.color, scheme) : undefined;

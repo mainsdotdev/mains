@@ -7,6 +7,8 @@ import { mapArtifactToEvent } from "../../lib/run-event-mappers";
 import { appApi } from "@/lib/transport";
 
 const documentViewer = vi.hoisted(() => ({ open: vi.fn() }));
+const { openFile } = vi.hoisted(() => ({ openFile: vi.fn() }));
+vi.mock("../../hooks/use-open-file-in-editor", () => ({ useOpenFileInEditor: () => openFile }));
 
 vi.hoisted(() => {
   Object.defineProperty(window, "matchMedia", { configurable: true, value: vi.fn(() => ({
@@ -52,6 +54,29 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
   }] };
 }
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+describe("prompt context files", () => {
+  it("opens a file shown below a sent prompt in the editor", () => {
+    const path = "/workspace/components/bridge-hero-section.tsx";
+    render(<InfoGroup group={prompt({ attachments: [], browserAnnotations: [],
+      files: [{ path, type: "file" }],
+    })} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "components/bridge-hero-section.tsx" }));
+    expect(openFile).toHaveBeenCalledExactlyOnceWith(path);
+  });
+
+  it("keeps context directories below sent prompts inert", () => {
+    const path = "/workspace/components";
+    render(<InfoGroup group={prompt({ attachments: [], browserAnnotations: [],
+      files: [{ path, type: "directory" }],
+    })} />);
+
+    fireEvent.click(screen.getByTitle(path));
+    expect(screen.queryByRole("button", { name: "workspace/components" })).toBeNull();
+    expect(openFile).not.toHaveBeenCalled();
+  });
+});
 
 describe("prompt document attachments", () => {
   it.each(["txt", "pdf", "docx"] as const)("opens a durable %s attachment from its card in the document preview", async (docType) => {

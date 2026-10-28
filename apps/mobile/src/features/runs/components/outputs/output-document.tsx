@@ -2,14 +2,15 @@ import { File, FileMode } from "expo-file-system";
 import { Image } from "expo-image";
 import { Stack, useRouter, type Href } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Share, ScrollView, View } from "react-native";
+import { ActivityIndicator, ScrollView, View } from "react-native";
 import type { RunFile } from "@mains/contracts/run-outputs";
 import { previewDocument } from "../../../../../modules/mains-document-preview";
 import { backendSession, useSession } from "@/backend/backend-session";
 import { cachedOutput, cachedAttachment, ensureRunFile, pinOutputFile } from "@/backend/output-cache";
 import { Button, ThemedText } from "@/components/ui";
 import { isDesktopOnlyOutput } from "@/lib/output-presentation";
-import { colors, spacing } from "@/theme";
+import { shareFile } from "@/lib/share-file";
+import { useThemeColors, spacing } from "@/theme";
 import { Markdown } from "../transcript/markdown";
 import { DesktopOutputNotice, outputSize } from "./output-file-card";
 
@@ -24,6 +25,7 @@ export function AttachmentDocument({ runId, attachmentId }: { runId: string; att
 }
 
 function RunFileDocument({ runId, artifactId, attachmentId }: { runId: string; artifactId?: number; attachmentId?: string }) {
+  const colors = useThemeColors();
   const router = useRouter();
   const session = useSession();
   const backendId = session.backend?.backendId ?? "";
@@ -37,9 +39,9 @@ function RunFileDocument({ runId, artifactId, attachmentId }: { runId: string; a
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [previewing, setPreviewing] = useState(false);
-  const preview = useCallback(async (uri: string, name: string) => {
+  const preview = useCallback(async (uri: string, name: string, mimeType?: string) => {
     setPreviewing(true); setError(null);
-    try { await previewDocument(uri, name); }
+    try { await previewDocument(uri, name, mimeType); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Could not open preview"); }
     finally { setPreviewing(false); }
   }, []);
@@ -71,7 +73,7 @@ function RunFileDocument({ runId, artifactId, attachmentId }: { runId: string; a
         value.truncated = output.byteSize > 128 * 1024;
       }
       setLoaded(value); setLoading(false);
-      if (output.previewType === "native") void preview(uri, output.name);
+      if (output.previewType === "native") void preview(uri, output.name, output.mimeType);
     }).catch((caught: unknown) => {
       if (!controller.signal.aborted) { setLoading(false); setError(caught instanceof Error ? caught.message : "Could not load this file"); }
     });
@@ -79,12 +81,12 @@ function RunFileDocument({ runId, artifactId, attachmentId }: { runId: string; a
   }, [artifactId, attachmentId, attempt, backendId, preview, runId]);
   const share = async () => {
     if (!loaded) return;
-    try { await Share.share({ url: loaded.uri }); }
+    try { await shareFile(loaded.uri, loaded.output.mimeType); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Could not share this file"); }
   };
   return <View style={{ flex: 1, backgroundColor: colors.systemBackground }}>
-    <Stack.Screen options={{ title: loaded?.output.name ?? desktopOutput?.name ?? "File", headerBackVisible: false }} />
-    <Stack.Toolbar placement="left"><Stack.Toolbar.Button icon="chevron.left" accessibilityLabel="Back" onPress={() => router.back()}>Back</Stack.Toolbar.Button></Stack.Toolbar>
+    <Stack.Screen options={{ title: loaded?.output.name ?? desktopOutput?.name ?? "File", headerBackVisible: process.env.EXPO_OS !== "ios" }} />
+    {process.env.EXPO_OS === "ios" ? <Stack.Toolbar placement="left"><Stack.Toolbar.Button icon="chevron.left" accessibilityLabel="Back" onPress={() => router.back()}>Back</Stack.Toolbar.Button></Stack.Toolbar> : null}
     <ScrollView contentInsetAdjustmentBehavior="automatic" minimumZoomScale={1} maximumZoomScale={loaded?.output.previewType === "image" ? 5 : 1}
       contentContainerStyle={{ flexGrow: 1, padding: spacing.lg, gap: spacing.md }}>
       {desktopOutput ? <DesktopOutputNotice name={desktopOutput.name} /> : null}
@@ -96,7 +98,7 @@ function RunFileDocument({ runId, artifactId, attachmentId }: { runId: string; a
       {loaded && ["native", "unsupported"].includes(loaded.output.previewType) ? <View style={{ flex: 1, justifyContent: "center", gap: spacing.md }}>
         <ThemedText variant="title3" style={{ textAlign: "center" }}>{loaded.output.name}</ThemedText>
         <ThemedText variant="subhead" style={{ textAlign: "center" }}>{outputSize(loaded.output.byteSize)} · Available offline</ThemedText>
-        {loaded.output.previewType === "native" ? <Button title="Open preview" variant="ghost" loading={previewing} onPress={() => void preview(loaded.uri, loaded.output.name)} /> : <ThemedText style={{ textAlign: "center" }}>Use Share to open this file in another app.</ThemedText>}
+        {loaded.output.previewType === "native" ? <Button title={process.env.EXPO_OS === "android" ? "Open in app" : "Open preview"} variant="ghost" loading={previewing} onPress={() => void preview(loaded.uri, loaded.output.name, loaded.output.mimeType)} /> : <ThemedText style={{ textAlign: "center" }}>Use Share to open this file in another app.</ThemedText>}
       </View> : null}
       {error ? <ThemedText variant="footnote" style={{ color: colors.systemRed }}>{error}</ThemedText> : null}
       {!loading && !loaded && !desktopOutput ? <Button title="Try again" onPress={() => setAttempt((value) => value + 1)} /> : null}

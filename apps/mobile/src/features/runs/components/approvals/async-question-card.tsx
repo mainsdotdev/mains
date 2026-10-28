@@ -7,7 +7,7 @@ import { waitForComposerSettings } from "@/backend/composer-settings";
 import { Button, ThemedText } from "@/components/ui";
 import { useAiDataConsent } from "@/features/ai-data-consent";
 import type { PendingAsyncQuestions } from "@/lib/async-questions";
-import { colors, radius, shadows, spacing, type, useProviderAccentPair } from "@/theme";
+import { useThemeColors, radius, shadows, spacing, type, useProviderAccentPair } from "@/theme";
 
 /**
  * Outcomes where the answer may have reached the Mac without a reply: the Mac's
@@ -36,6 +36,7 @@ export function AsyncQuestionCard({
   providerId: string;
   pending: PendingAsyncQuestions;
 }) {
+  const colors = useThemeColors();
   const session = useSession();
   const backendId = session.backend?.backendId ?? "";
   const connected = session.connection.kind === "connected";

@@ -11,7 +11,7 @@ import Animated, {
   type SharedValue,
 } from "react-native-reanimated";
 
-import { colors, useProviderAccent } from "@/theme";
+import { useThemeColors, useProviderAccent } from "@/theme";
 
 /**
  * The desktop's spinner family (`components/ui/ascii-spinner.tsx` and the
@@ -167,6 +167,7 @@ export function AsciiSpinner({
   /** An explicit tint, over the provider's. */
   color?: ColorValue;
 }) {
+  const colors = useThemeColors();
   const accent = useProviderAccent(providerId);
   const tint: ColorValue = color ?? (providerId ? accent : colors.label);
   const [twinkle] = useState(rollTwinkle);

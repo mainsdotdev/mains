@@ -9,10 +9,10 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { backendSession } from "@/backend/backend-session";
 import { Sidebar } from "@/components/layout/sidebar";
 import { applyStoredAppearance } from "@/lib/appearance";
-import { colors, useBrandColors } from "@/theme";
+import { useThemeColors, useBrandColors } from "@/theme";
 
 /*
-  The phone's light/dark override has to reach UIKit before the first view is
+  The phone's light/dark override has to reach native UI before the first view is
   created, so it runs here at module scope rather than from an effect inside
   the component — an effect fires after the first paint, which is the one frame
   that would show the phone's scheme before snapping to the stored choice.
@@ -26,6 +26,7 @@ applyStoredAppearance();
  * open (see `(main)/_layout.tsx`). No tabs.
  */
 export default function RootLayout() {
+  const colors = useThemeColors();
   const scheme = useColorScheme();
   const brand = useBrandColors();
 

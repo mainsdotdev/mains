@@ -1,10 +1,10 @@
 import { and, asc, eq } from "drizzle-orm";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Platform, Pressable, View } from "react-native";
 
 import { backendSession, useSession } from "@/backend/backend-session";
-import { AsciiSpinner, SFSymbol, ThemedText } from "@/components/ui";
+import { AsciiSpinner, SFSymbol, SheetScrollView, ThemedText } from "@/components/ui";
 import { db } from "@/db/client";
 import { runArtifacts, toolCalls, type ToolCallRow } from "@/db/schema";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
@@ -21,7 +21,7 @@ import {
 } from "@/lib/subagents";
 import { Markdown } from "../transcript/markdown";
 import { ToolCallDisplay } from "../transcript/tools/tool-call-display";
-import { colors, radius, shadows, spacing, useBrandColors, useStatusColors } from "@/theme";
+import { useThemeColors, radius, shadows, spacing, useBrandColors, useStatusColors } from "@/theme";
 
 function stateLabel(state: SubagentState): string {
   switch (state) {
@@ -86,6 +86,7 @@ function HeaderButton({
   symbol: string;
   onPress: () => void;
 }) {
+  const colors = useThemeColors();
   return (
     <Pressable
       accessibilityRole="button"
@@ -109,6 +110,7 @@ function HeaderButton({
 
 /** Native sheet containing the run's subagent list and drill-in detail. */
 export function SubagentsSheet() {
+  const colors = useThemeColors();
   const { runId: param } = useLocalSearchParams<{ runId: string }>();
   const runId = typeof param === "string" ? param : "";
   const session = useSession();
@@ -157,22 +159,14 @@ export function SubagentsSheet() {
   }
 
   return (
-    <ScrollView
-      contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={{
-        padding: spacing.md,
-        paddingTop: spacing.ms,
-        paddingBottom: spacing.xxl,
-        gap: spacing.md,
-      }}
-    >
+    <SheetScrollView>
       <Header title={`Subagents (${agents.length})`} />
       {agents.length > 0 ? (
         <View
           style={{
             borderRadius: radius.lg,
             borderCurve: "continuous",
-            backgroundColor: colors.cardSurface,
+            backgroundColor: Platform.OS === "android" ? colors.sheetCardSurface : colors.cardSurface,
             boxShadow: shadows.card,
             overflow: "hidden",
           }}
@@ -191,7 +185,7 @@ export function SubagentsSheet() {
           No subagents in this run.
         </ThemedText>
       )}
-    </ScrollView>
+    </SheetScrollView>
   );
 }
 
@@ -204,6 +198,7 @@ function SubagentRow({
   first: boolean;
   onPress: () => void;
 }) {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   const display = subagentDisplay(agent);
   return (
@@ -262,6 +257,7 @@ function SubagentDetail({
   artifacts: (typeof runArtifacts.$inferSelect)[];
   onBack: () => void;
 }) {
+  const colors = useThemeColors();
   const display = subagentDisplay(agent);
   const spawn = calls.find((call) => call.id === agent.id);
   const { subagent, task } = spawn ? toolCallMetadata(spawn) : {};
@@ -274,15 +270,7 @@ function SubagentDetail({
   const error = subagent?.error ?? task?.error;
 
   return (
-    <ScrollView
-      contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={{
-        padding: spacing.md,
-        paddingTop: spacing.ms,
-        paddingBottom: spacing.xxl,
-        gap: spacing.md,
-      }}
-    >
+    <SheetScrollView>
       <Header title={display.name} onBack={onBack} />
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
@@ -305,7 +293,7 @@ function SubagentDetail({
             padding: spacing.ms,
             borderRadius: radius.md,
             borderCurve: "continuous",
-            backgroundColor: colors.cardSurface,
+            backgroundColor: Platform.OS === "android" ? colors.sheetCardSurface : colors.cardSurface,
             boxShadow: shadows.card,
           }}
         >
@@ -360,6 +348,6 @@ function SubagentDetail({
           {error}
         </ThemedText>
       ) : null}
-    </ScrollView>
+    </SheetScrollView>
   );
 }

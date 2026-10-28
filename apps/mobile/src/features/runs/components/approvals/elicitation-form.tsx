@@ -8,7 +8,7 @@ import {
 
 import { Button, SFSymbol, ThemedText } from "@/components/ui";
 import { parseApprovalForm } from "@/lib/elicitation";
-import { colors, radius, spacing, type, useProviderAccentPair } from "@/theme";
+import { useThemeColors, radius, spacing, type, useProviderAccentPair } from "@/theme";
 
 import type { ApprovalDecision } from "./pending-approval-card";
 
@@ -19,6 +19,7 @@ export function ElicitationForm({ schemaJson, providerId, sending, onRespond }: 
   sending: string | null;
   onRespond: (action: string, decision: ApprovalDecision) => Promise<void>;
 }) {
+  const colors = useThemeColors();
   const provider = useProviderAccentPair(providerId);
   const { fields, unsupported } = useMemo(() => parseApprovalForm(schemaJson), [schemaJson]);
   const [values, setValues] = useState<ElicitationValues>(() => getElicitationDefaultValues(fields));

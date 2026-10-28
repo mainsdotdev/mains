@@ -1,7 +1,7 @@
 import { View } from "react-native";
 
 import { GlassSurface, SFSymbol, ThemedText } from "@/components/ui";
-import { colors, radius, spacing } from "@/theme";
+import { useThemeColors, radius, spacing } from "@/theme";
 
 /**
  * Another computer's conversation, reached through Bridge: it takes the
@@ -10,6 +10,7 @@ import { colors, radius, spacing } from "@/theme";
  * fork or stop it; this backend would refuse the request.
  */
 export function ReplicaBar() {
+  const colors = useThemeColors();
   return (
     <View style={{ paddingHorizontal: spacing.ms }}>
       <GlassSurface

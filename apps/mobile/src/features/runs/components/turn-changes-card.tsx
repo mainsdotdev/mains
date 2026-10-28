@@ -4,10 +4,12 @@ import { Pressable, StyleSheet, View } from "react-native";
 import type { RunTurnChangesSummary, TurnFileChange } from "@mains/contracts/runs";
 
 import { FileIcon, SFSymbol, ThemedText } from "@/components/ui";
-import { colors, radius, spacing } from "@/theme";
+import { useThemeColors, type ThemeColors, radius, spacing } from "@/theme";
 import { filePathLabel } from "../lib/file-path-label";
 
 function DiffCounts({ additions, deletions }: { additions: number; deletions: number }) {
+  const colors = useThemeColors();
+  const styles = createStyles(colors);
   return (
     <View style={styles.counts}>
       <ThemedText variant="caption" numberOfLines={1} style={styles.additions}>+{additions}</ThemedText>
@@ -17,6 +19,8 @@ function DiffCounts({ additions, deletions }: { additions: number; deletions: nu
 }
 
 function ChangedFile({ file, onPress }: { file: TurnFileChange; onPress: () => void }) {
+  const colors = useThemeColors();
+  const styles = createStyles(colors);
   const { name, directory } = filePathLabel(file.path);
   const status = file.status === "modified" ? "" : file.status;
   const context = [
@@ -45,6 +49,8 @@ function ChangedFile({ file, onPress }: { file: TurnFileChange; onPress: () => v
 export function TurnChangesCard({ backendId, runId, turnId, turnIndex, changes }: {
   backendId: string | null; runId: string; turnId: number; turnIndex: number; changes: RunTurnChangesSummary;
 }) {
+  const colors = useThemeColors();
+  const styles = createStyles(colors);
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   const count = changes.fileCount ?? changes.files.length;
@@ -73,7 +79,7 @@ export function TurnChangesCard({ backendId, runId, turnId, turnIndex, changes }
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   card: { marginTop: spacing.sm, backgroundColor: colors.fill, borderRadius: radius.lg, borderCurve: "continuous", overflow: "hidden" },
   header: { flexDirection: "row", alignItems: "center", gap: spacing.sm, padding: spacing.ms, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.separator },
   title: { flex: 1, color: colors.label, fontWeight: "600" },

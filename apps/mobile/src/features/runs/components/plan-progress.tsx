@@ -3,10 +3,11 @@ import { Pressable, ScrollView, View } from "react-native";
 import type { StructuralPlanSnapshot } from "@mains/contracts/run-progress";
 
 import { GlassSurface, SFSymbol, ThemedText } from "@/components/ui";
-import { colors, radius, spacing, useProviderAccent } from "@/theme";
+import { useThemeColors, radius, spacing, useProviderAccent } from "@/theme";
 
 /** A compact live checklist above the composer, expanded only when the reader asks. */
 export function PlanProgress({ plan, providerId }: { plan: StructuralPlanSnapshot; providerId: string }) {
+  const colors = useThemeColors();
   const [expanded, setExpanded] = useState(false);
   const accent = useProviderAccent(providerId);
   const completed = plan.steps.filter((step) => step.status === "completed").length;

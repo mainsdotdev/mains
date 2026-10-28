@@ -3,7 +3,7 @@ import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import type { ReactNode } from "react";
 import { StyleSheet, type StyleProp, View, type ViewStyle } from "react-native";
 
-import { colors } from "@/theme";
+import { useThemeColors } from "@/theme";
 
 /**
  * A floating layer over content: Liquid Glass on iOS 26+, system-material blur
@@ -25,6 +25,7 @@ export function GlassSurface({
   /** A wash over the glass (a translucent color). */
   tintColor?: string;
 }) {
+  const colors = useThemeColors();
   if (process.env.EXPO_OS === "ios") {
     if (isLiquidGlassAvailable()) {
       return (
@@ -47,7 +48,7 @@ export function GlassSurface({
     );
   }
   return (
-    <View style={[{ backgroundColor: colors.secondarySystemBackground }, style]}>
+    <View style={[{ backgroundColor: colors.secondarySystemBackground, overflow: "hidden" }, style]}>
       {tintColor ? (
         <View
           pointerEvents="none"

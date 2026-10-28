@@ -32,6 +32,7 @@ import { useAttachmentImage } from "../../lib/attachment-image";
 import { AttachmentImagePreview } from "../attachment-image-preview";
 import { useLazyGetAppsForFileQuery } from "@/lib/redux/api";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
+import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { useCapabilities } from "@/lib/platform";
 import { useSaveToAtlas } from "@/features/atlas/hooks/use-save-to-atlas";
@@ -44,6 +45,7 @@ import {
   PromptMarkdown,
   promptMessageMentionsFile,
   type PromptMarkdownSkill,
+  type PromptMarkdownFile,
 } from "../prompt-markdown";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import { readReviewComments } from "@mains/contracts/review-comments";
@@ -178,6 +180,22 @@ interface InfoGroupProps {
   runId?: string;
   providerId?: string;
   floatingChat?: boolean;
+}
+
+function PromptFileAttachment({ file }: { file: PromptMarkdownFile & { displayName: string } }) {
+  const openFile = useOpenFileInEditor();
+  const Chip = file.isDirectory ? "div" : Button;
+  return (
+    <Chip
+      type={file.isDirectory ? undefined : "button"}
+      onClick={file.isDirectory ? undefined : () => void openFile(file.fullPath)}
+      className={`flex items-center gap-1.5 px-2 py-1 rounded-xl bg-primary-200/40 dark:bg-primary-200/20 text-xs text-primary-800 dark:text-primary-200 ${file.isDirectory ? "" : "cursor-pointer focus-visible:ring-2 focus-visible:ring-accent/40"}`}
+      title={file.fullPath}
+    >
+      <Code className="size-3 dark:text-primary-300 text-primary-700" />
+      <Text as="span" size="inherit" tone="muted">{file.displayName}</Text>
+    </Chip>
+  );
 }
 
 function InfoGroupImpl({
@@ -406,16 +424,7 @@ function InfoGroupImpl({
                   </div>
                 ))}
                 {externalFiles.map((file) => (
-                  <div
-                    key={file.fullPath}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-primary-200/40 dark:bg-primary-200/20 text-xs text-primary-800 dark:text-primary-200"
-                    title={file.fullPath}
-                  >
-                    <Code className="size-3 dark:text-primary-300 text-primary-700" />
-                    <Text as="span" size="inherit" tone="muted">
-                      {file.displayName}
-                    </Text>
-                  </div>
+                  <PromptFileAttachment key={file.fullPath} file={file} />
                 ))}
               </div>
             )}

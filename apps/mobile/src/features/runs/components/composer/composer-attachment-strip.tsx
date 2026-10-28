@@ -9,7 +9,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import type { ComposerAttachment } from "@/lib/composer-attachments";
-import { colors, motion, radius, spacing } from "@/theme";
+import { useThemeColors, motion, radius, spacing } from "@/theme";
 
 import { SFSymbol, ThemedText } from "@/components/ui";
 
@@ -38,6 +38,7 @@ export function ComposerAttachmentStrip({
     frame: ComposerAttachmentPreviewFrame,
   ) => void;
 }) {
+  const colors = useThemeColors();
   const reduceMotion = useReducedMotion();
   if (attachments.length === 0) return null;
   const images = attachments.filter((attachment) => attachment.type === "image");
@@ -147,6 +148,7 @@ function ImageAttachmentPreview({
   transitioning: boolean;
   onLayout?: (id: string, frame: ComposerAttachmentPreviewFrame) => void;
 }) {
+  const colors = useThemeColors();
   const previewRef = useRef<View>(null);
 
   const measureInWindow = () => {

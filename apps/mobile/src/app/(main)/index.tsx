@@ -47,7 +47,7 @@ import { useModelSelection } from "@/lib/use-model-selection";
 import { useRunTitle } from "@/lib/use-run-title";
 import { db } from "@/db/client";
 import { collections, projects, providers, spaceTargets, spaces, workspaces } from "@/db/schema";
-import { colors, radius, shadows, spacing, useProviderAccentPair } from "@/theme";
+import { useThemeColors, radius, shadows, spacing, useProviderAccentPair } from "@/theme";
 
 /** The round glass buttons' size, and the pills' height, along the top. */
 const CONTROL_HEIGHT = 46;
@@ -67,6 +67,7 @@ const PILL_HEIGHT = 30;
  * same whether it began here or was opened from a list.
  */
 export default function NewRunScreen() {
+  const colors = useThemeColors();
   const navigation = useNavigation();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -461,6 +462,7 @@ export default function NewRunScreen() {
 
 /** The Mac's name and its state, as a pill that opens the settings behind it. */
 function ConnectionPill({ name, onPress }: { name: string; onPress: () => void }) {
+  const colors = useThemeColors();
   const session = useSession();
   return (
     <Pressable
@@ -519,7 +521,7 @@ function RunToolbar({ runId, onNewRun }: { runId: string | null; onNewRun: () =>
       </Pressable>
       {/* The menu owns the tap: its trigger is a plain view, not a pressable. */}
       <MenuView
-        actions={[{ id: "sync", title: "Sync now", image: "arrow.clockwise" }]}
+        actions={[{ id: "sync", title: "Sync now", image: process.env.EXPO_OS === "ios" ? "arrow.clockwise" : undefined }]}
         onPressAction={({ nativeEvent }) => {
           if (nativeEvent.event === "sync") void backendSession.refresh();
         }}
@@ -531,6 +533,7 @@ function RunToolbar({ runId, onNewRun }: { runId: string | null; onNewRun: () =>
 }
 
 function ToolbarGlyph({ icon }: { icon: ComponentProps<typeof SFSymbol>["name"] }) {
+  const colors = useThemeColors();
   return (
     <View
       accessibilityLabel={icon === "ellipsis" ? "More" : undefined}
@@ -560,6 +563,7 @@ function TargetChip({
   providerId?: string | null;
   onPress: () => void;
 }) {
+  const colors = useThemeColors();
   const provider = useProviderAccentPair(providerId);
   const tint = emphasized ? provider.accent : colors.secondaryLabel;
   return (

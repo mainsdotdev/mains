@@ -1,20 +1,21 @@
 import { and, asc, eq } from "drizzle-orm";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { useRouter } from "expo-router";
-import { Pressable, ScrollView, View } from "react-native";
+import { Platform, Pressable, View } from "react-native";
 
 import { useSession } from "@/backend/backend-session";
 import { setSpaceTarget } from "@/backend/sync";
-import { ProjectIcon, SFSymbol, ThemedText } from "@/components/ui";
+import { ProjectIcon, SFSymbol, SheetHeader, SheetScrollView, ThemedText } from "@/components/ui";
 import { db } from "@/db/client";
 import { collections, spaceTargets, spaces, workspaces } from "@/db/schema";
-import { colors, radius, shadows, spacing, useBrandColors } from "@/theme";
+import { useThemeColors, radius, shadows, spacing, useBrandColors } from "@/theme";
 
 /**
  * The run target sheet: a workspace for a Code space, an optional project
  * (collection) for Work/Chat. Remembered per space on this phone.
  */
 export default function TargetSheet() {
+  const colors = useThemeColors();
   const router = useRouter();
   const session = useSession();
   const backendId = session.backend?.backendId ?? "";
@@ -63,11 +64,15 @@ export default function TargetSheet() {
   };
 
   return (
-    <ScrollView
+    <SheetScrollView
       contentContainerStyle={{ padding: spacing.md, paddingTop: spacing.lg, gap: spacing.md, paddingBottom: spacing.xxl }}
     >
       <View style={{ gap: spacing.xxs }}>
-        <ThemedText variant="title2">{isCode ? "Workspace" : "Project"}</ThemedText>
+        {Platform.OS === "android" ? (
+          <SheetHeader title={isCode ? "Workspace" : "Project"} />
+        ) : (
+          <ThemedText variant="title2">{isCode ? "Workspace" : "Project"}</ThemedText>
+        )}
         <ThemedText variant="subhead">
           {isCode
             ? "Mains runs code inside a workspace on your computer."
@@ -79,7 +84,7 @@ export default function TargetSheet() {
         style={{
           borderRadius: radius.lg,
           borderCurve: "continuous",
-          backgroundColor: colors.cardSurface,
+          backgroundColor: Platform.OS === "android" ? colors.sheetCardSurface : colors.cardSurface,
           boxShadow: shadows.card,
           overflow: "hidden",
         }}
@@ -124,7 +129,7 @@ export default function TargetSheet() {
           </>
         )}
       </View>
-    </ScrollView>
+    </SheetScrollView>
   );
 }
 
@@ -145,6 +150,7 @@ function Row({
   onPress: () => void;
   first: boolean;
 }) {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   return (
     <View>

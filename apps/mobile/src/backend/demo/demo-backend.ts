@@ -26,6 +26,7 @@ import { demoOutputs, readDemoOutput, demoPromptAttachment, demoAttachmentFile, 
 import { conversationSettingsFrom, snapshotRunSettingConfig, type ConversationSettings } from "@mains/contracts/run-settings";
 
 import type { DemoHandler } from "./demo-socket";
+import { createDemoReview, DEMO_REVIEW_RUN_ID, readDemoTurnDiff } from "./demo-review";
 import rawSnapshot from "./demo-snapshot.json";
 import {
   demoScenarioForPrompt,
@@ -92,6 +93,9 @@ interface DemoSnapshot {
 }
 
 const snapshot = rawSnapshot as unknown as DemoSnapshot;
+const reviewTemplate = snapshot.runs.find((run) => run.providerId === "codex" && run.mode === "developer" &&
+  snapshot.workspaces.some((workspace) => workspace.id === run.workspaceId && workspace.name === "mains")) ??
+  snapshot.runs.find((run) => run.providerId === "codex" && run.mode === "developer") ?? snapshot.runs[0];
 
 /**
  * Keep the offline Codex demo representative even when its exported snapshot
@@ -325,11 +329,13 @@ const RUN_LIST_DEFAULT = 50;
 const now = () => new Date().toISOString();
 
 export class DemoBackend implements DemoHandler {
-  private readonly runs: DemoRun[] = snapshot.runs.map((run) => ({ ...run }));
+  private readonly review = createDemoReview(reviewTemplate);
+  private readonly runs: DemoRun[] = [this.review.run, ...snapshot.runs.map((run) => ({ ...run }))];
   private readonly artifacts = new Map<string, DemoArtifact[]>(
-    Object.entries(snapshot.artifacts).map(([runId, list]) => [runId, list.map((a, index) => a.kind === "user-prompt" && index === list.findIndex((item) => item.kind === "user-prompt")
+    [...Object.entries(snapshot.artifacts).map(([runId, list]): [string, DemoArtifact[]] => [runId, list.map((a, index) => a.kind === "user-prompt" && index === list.findIndex((item) => item.kind === "user-prompt")
       ? { ...a, metadata: { ...a.metadata, attachments: [...(Array.isArray(a.metadata?.attachments) ? a.metadata.attachments : []), demoPromptAttachment()] } }
       : { ...a })]),
+    [DEMO_REVIEW_RUN_ID, this.review.artifacts]],
   );
   private readonly toolCalls = new Map<string, DemoToolCall[]>(
     Object.entries(snapshot.toolCalls).map(([runId, list]) => [
@@ -344,7 +350,8 @@ export class DemoBackend implements DemoHandler {
     ]),
   );
   private readonly turns = new Map<string, (Json & { id: number })[]>(
-    Object.entries(snapshot.turns).map(([runId, list]) => [runId, list.map((t) => ({ ...t }))]),
+    [...Object.entries(snapshot.turns).map(([runId, list]): [string, (Json & { id: number })[]] => [runId, list.map((t) => ({ ...t }))]),
+      [DEMO_REVIEW_RUN_ID, this.review.turns]],
   );
   private readonly spaces = snapshot.spaces.map((space) => ({ ...space }));
   private readonly providers = snapshot.providers.map((provider) => ({
@@ -466,7 +473,7 @@ export class DemoBackend implements DemoHandler {
       }
       case CHANNELS.runs.readHistoryContent: {
         const request = args[0] as ReadRunHistoryContentPayload;
-        if (request.source === "turn-diff") throw new Error("This demo snapshot does not include stored turn diffs.");
+        if (request.source === "turn-diff") return readDemoTurnDiff(request.runId, request.id, request.offset);
         const artifact = this.artifacts.get(request.runId)?.find((row) => row.id === request.id);
         const call = this.toolCalls.get(request.runId)?.find((row) => row.id === request.id);
         if (request.source === "artifact" ? !artifact : !call) throw new Error("Content not found in this conversation");

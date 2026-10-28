@@ -2,13 +2,15 @@ import { useRouter, type Href } from "expo-router";
 import { Pressable, StyleSheet, View } from "react-native";
 import { SFSymbol, ThemedText } from "@/components/ui";
 import { isDesktopOnlyOutput } from "@/lib/output-presentation";
-import { colors, radius, spacing } from "@/theme";
+import { useThemeColors, type ThemeColors, radius, spacing } from "@/theme";
 
 export function outputSize(size: number): string {
   return size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.ceil(size / 1024)} KB` : `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function DesktopOutputNotice({ name }: { name: string }) {
+  const colors = useThemeColors();
+  const styles = createStyles(colors);
   return <View accessible accessibilityLabel={`${name}. See on desktop`} style={styles.card}>
     <SFSymbol name="desktopcomputer" size={20} tint={colors.secondaryLabel} />
     <View style={styles.text}>
@@ -28,6 +30,8 @@ export function OutputFileCard({ runId, artifactId, name, byteSize, saved = fals
 export function RunFileCard({ name, byteSize, saved = false, desktopOnly = false, status, onPress }: {
   name: string; byteSize?: number; saved?: boolean; desktopOnly?: boolean; status?: string; onPress?: () => void;
 }) {
+  const colors = useThemeColors();
+  const styles = createStyles(colors);
   if (desktopOnly || isDesktopOnlyOutput({ name })) return <DesktopOutputNotice name={name} />;
   return <Pressable accessibilityRole={onPress ? "button" : "text"} accessibilityLabel={`${onPress ? "Open " : ""}${name}${status ? `, ${status}` : saved ? ", available offline" : ""}`} disabled={!onPress}
     onPress={onPress}
@@ -41,7 +45,7 @@ export function RunFileCard({ name, byteSize, saved = false, desktopOnly = false
   </Pressable>;
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   card: {
     alignSelf: "stretch", flexDirection: "row", alignItems: "center", gap: spacing.sm,
     paddingHorizontal: spacing.ms, paddingVertical: spacing.sm, minHeight: 48,

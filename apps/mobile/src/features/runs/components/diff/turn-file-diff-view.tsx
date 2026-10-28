@@ -4,13 +4,15 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from "reac
 import { backendSession, useSession } from "@/backend/backend-session";
 import { ThemedText } from "@/components/ui";
 import { readTurnFileDiff, type FileDiffCursor, type FileDiffPage } from "@/lib/turn-file-diff";
-import { colors, spacing } from "@/theme";
+import { useThemeColors, type ThemeColors, spacing } from "@/theme";
 import { DiffBody } from "./diff-body";
 
 /** A selected file from one stored turn; only the visible diff page stays in memory. */
 export function TurnFileDiffView({ backendId, runId, turnId, filePath, oldPath }: {
   backendId: string; runId: string; turnId: number; filePath: string; oldPath?: string;
 }) {
+  const colors = useThemeColors();
+  const styles = createStyles(colors);
   const session = useSession();
   const currentBackend = session.backend?.backendId;
   const [part, setPart] = useState(0);
@@ -80,7 +82,7 @@ export function TurnFileDiffView({ backendId, runId, turnId, filePath, oldPath }
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.systemBackground },
   content: { padding: spacing.md, gap: spacing.md, paddingBottom: spacing.xxl },
   message: { gap: spacing.sm },

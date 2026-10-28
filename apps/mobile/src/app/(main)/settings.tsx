@@ -15,7 +15,7 @@ import { goHome } from "@/features/runs";
 import { endpointHost } from "@mains/contracts/backend";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { connectionDetail, connectionLabel, relativeTime } from "@/lib/format";
-import { colors, spacing } from "@/theme";
+import { useThemeColors, spacing } from "@/theme";
 
 /** How long "Copied" stays on the diagnostics row. */
 const COPIED_FOR_MS = 2000;
@@ -100,6 +100,7 @@ function diagnostics(session: SessionSnapshot): string {
  * the headline of the Mac's card, and what it calls for sits right under it.
  */
 export default function SettingsScreen() {
+  const colors = useThemeColors();
   const router = useRouter();
   const session = useSession();
   const { backend, connection, lastSyncedAt, refreshing } = session;

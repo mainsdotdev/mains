@@ -7,6 +7,7 @@
   },
   "dependencies": {
     "@expo/ui": "~57.0.26",
+    "@expo/vector-icons": "^15.0.2",
     "@mains/contracts": "file:../../packages/contracts",
     "@mains/icons": "file:../../packages/icons",
     "@react-native-masked-view/masked-view": "0.3.2",
@@ -14,20 +15,24 @@
     "drizzle-orm": "^0.45.2",
     "expo": "~57.0.31",
     "expo-blur": "~57.0.3",
+    "expo-build-properties": "~57.0.22",
     "expo-camera": "~57.0.6",
     "expo-clipboard": "~57.0.2",
     "expo-constants": "~57.0.21",
     "expo-dev-client": "~57.0.20",
     "expo-file-system": "~57.0.6",
+    "expo-font": "~57.0.4",
     "expo-glass-effect": "~57.0.4",
     "expo-haptics": "~57.0.3",
     "expo-image": "~57.0.5",
     "expo-image-picker": "~57.0.20",
+    "expo-intent-launcher": "~57.0.1",
     "expo-linking": "~57.0.13",
     "expo-media-library": "~57.0.5",
     "expo-network": "~57.0.3",
     "expo-router": "~57.0.29",
     "expo-secure-store": "~57.0.4",
+    "expo-sharing": "~57.0.24",
     "expo-splash-screen": "~57.0.10",
     "expo-sqlite": "~57.0.4",
     "expo-status-bar": "~57.0.1",
@@ -56,6 +61,7 @@
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.2",
+    "react-test-renderer": "19.2.3",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -71,7 +77,12 @@
     "build:preview": "npx eas-cli@latest build --platform ios --profile preview",
     "build:production": "npx eas-cli@latest build --platform ios --profile production",
     "release": "npx eas-cli@latest build --platform ios --profile production --auto-submit",
-    "licenses:generate": "node scripts/generate-third-party-notices.mjs"
+    "licenses:generate": "node scripts/generate-third-party-notices.mjs",
+    "android": "APP_VARIANT=development expo run:android",
+    "android:prebuild": "APP_VARIANT=development expo prebuild --platform android",
+    "build:android:development": "npx eas-cli@latest build --platform android --profile development",
+    "build:android:preview": "npx eas-cli@latest build --platform android --profile preview",
+    "build:android:production": "npx eas-cli@latest build --platform android --profile production"
   },
   "private": true
 }

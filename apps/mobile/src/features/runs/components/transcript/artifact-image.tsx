@@ -6,7 +6,7 @@ import { Pressable, ScrollView, useWindowDimensions } from "react-native";
 import { backendSession } from "@/backend/backend-session";
 import type { ArtifactImage } from "@mains/contracts/runs";
 import type { TranscriptImage } from "@/lib/transcript";
-import { colors, radius, spacing } from "@/theme";
+import { useThemeColors, radius, spacing } from "@/theme";
 
 import { ThemedText } from "@/components/ui";
 
@@ -90,6 +90,7 @@ function ArtifactImageView({
   /** A gallery tile: always `maxHeight` tall, as wide as its shape allows. */
   fixedHeight?: boolean;
 }) {
+  const colors = useThemeColors();
   const router = useRouter();
   const [state, setState] = useState<Loaded>({ status: "loading" });
   const [measured, setMeasured] = useState<Size | null>(null);

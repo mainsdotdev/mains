@@ -4,7 +4,7 @@ import { Pressable, View } from "react-native";
 import { AsciiSpinner, SFSymbol, ThemedText } from "@/components/ui";
 import type { ToolCallRow } from "@/db/schema";
 import { mergeToolCalls, summarizeToolBlock } from "@/lib/tool-groups";
-import { colors, spacing, useStatusColors } from "@/theme";
+import { useThemeColors, spacing, useStatusColors } from "@/theme";
 
 import { ToolCallDisplay } from "./tool-call-display";
 
@@ -38,6 +38,7 @@ function Block({
   calls: ToolCallRow[];
   onOpenFile?: (filePath: string) => void;
 }) {
+  const colors = useThemeColors();
   const summary = summarizeToolBlock(calls);
   const statusColors = useStatusColors();
   // Null until the user decides for themselves; then their choice sticks. Until

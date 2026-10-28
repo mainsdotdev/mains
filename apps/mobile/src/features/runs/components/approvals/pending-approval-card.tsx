@@ -6,7 +6,8 @@ import { Pressable, TextInput, View } from "react-native";
 import type { PendingApprovalRow } from "@/db/schema";
 import { toolInputPreview } from "@/lib/format";
 import {
-  colors,
+  useThemeColors,
+  type ThemeColors,
   radius,
   shadows,
   spacing,
@@ -150,6 +151,7 @@ function riskColors(
   level: NonNullable<ToolApprovalDisplay["riskLevel"]>,
   hues: ReturnType<typeof useSystemHues>,
   soft: (color: string) => string,
+  colors: ThemeColors,
 ) {
   switch (level) {
     case "high":
@@ -221,6 +223,7 @@ export function PendingApprovalCard({
   /** Absent → read-only card. */
   onRespond?: (decision: ApprovalDecision) => Promise<void>;
 }) {
+  const colors = useThemeColors();
   const provider = useProviderAccentPair(providerId);
   const hues = useSystemHues();
   const soft = useSoftTint();
@@ -288,7 +291,7 @@ export function PendingApprovalCard({
         ? "Mains cancels this if unanswered."
         : "Mains denies this if unanswered.";
 
-  const risk = toolDisplay.riskLevel ? riskColors(toolDisplay.riskLevel, hues, soft) : null;
+  const risk = toolDisplay.riskLevel ? riskColors(toolDisplay.riskLevel, hues, soft, colors) : null;
 
   const body = (
     <View

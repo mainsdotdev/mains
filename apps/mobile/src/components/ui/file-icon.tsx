@@ -1,11 +1,12 @@
 import { fileIconSvg } from "@mains/icons/file-icons";
 import { SvgXml } from "react-native-svg";
 
-import { colors } from "@/theme";
+import { useThemeColors } from "@/theme";
 import { SFSymbol } from "./sf-symbol";
 
 /** The desktop's file-type artwork and filename/config matching rules. */
 export function FileIcon({ path, size = 20 }: { path: string; size?: number }) {
+  const colors = useThemeColors();
   const xml = fileIconSvg(path);
   return xml ? (
     <SvgXml xml={xml} width={size} height={size} style={{ flexShrink: 0 }} accessibilityElementsHidden />

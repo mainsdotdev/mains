@@ -1,5 +1,4 @@
 import { useLocalSearchParams } from "expo-router";
-import { ScrollView } from "react-native";
 
 import { useSession } from "@/backend/backend-session";
 import {
@@ -8,9 +7,9 @@ import {
   SectionTitle,
   SheetHeader,
   SheetHint,
+  SheetScrollView,
   ThemedText,
   Toggle,
-  sheetContentStyle,
 } from "@/components/ui";
 import { useModelSelection } from "@/lib/use-model-selection";
 import { spacing } from "@/theme";
@@ -45,13 +44,13 @@ export default function RunOptionsSheet() {
   const anyMode = showFastToggle || selection.supportsGoalMode || selection.supportsPlanMode;
 
   return (
-    <ScrollView contentContainerStyle={sheetContentStyle}>
+    <SheetScrollView>
       <SheetHeader title="Run options" />
 
       {selection.permissionOptions.length > 0 && (
         <>
           <SectionTitle>Permissions</SectionTitle>
-          <Card>
+          <Card surface="sheet">
             {selection.permissionOptions.map((option, index) => (
               <Row
                 key={option.value}
@@ -72,7 +71,7 @@ export default function RunOptionsSheet() {
       {hasServiceTiers && (
         <>
           <SectionTitle>Speed</SectionTitle>
-          <Card>
+          <Card surface="sheet">
             <Row first title="Standard" selected={!selection.serviceTier || selection.serviceTier === "default"} disabled={!selection.ready}
               onPress={() => { void apply({ serviceTier: "default" }); }} />
             {selection.serviceTiers.map((tier) => (
@@ -87,7 +86,7 @@ export default function RunOptionsSheet() {
       {anyMode && (
         <>
           <SectionTitle>Modes</SectionTitle>
-          <Card>
+          <Card surface="sheet">
             {showFastToggle && (
               <Row
                 first
@@ -124,6 +123,6 @@ export default function RunOptionsSheet() {
       )}
 
       <SheetHint text={hint} />
-    </ScrollView>
+    </SheetScrollView>
   );
 }

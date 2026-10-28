@@ -3,7 +3,7 @@ import { Pressable, View } from "react-native";
 
 import { accordionLabel, type TurnRow } from "@/lib/transcript-rows";
 import type { TranscriptItem } from "@/lib/transcript";
-import { colors, spacing } from "@/theme";
+import { useThemeColors, spacing } from "@/theme";
 
 import { SFSymbol, ThemedText } from "@/components/ui";
 import { FileLinkProvider } from "./file-links";
@@ -86,6 +86,7 @@ function TurnAccordion({
   isRunInProgress: boolean;
   actions?: TranscriptActions;
 }) {
+  const colors = useThemeColors();
   const [open, setOpen] = useState(false);
 
   // A turn that goes live drops any earlier manual expansion, so the next

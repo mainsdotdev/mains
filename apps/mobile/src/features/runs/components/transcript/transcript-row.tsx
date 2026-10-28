@@ -18,7 +18,7 @@ import Animated, {
 import { parsePromptContent } from "@/lib/prompt-chips";
 import type { PromptImage, TranscriptItem } from "@/lib/transcript";
 import { useSmoothText } from "@/lib/use-smooth-text";
-import { colors, motion, radius, spacing, useProviderAccent } from "@/theme";
+import { useThemeColors, motion, radius, spacing, useProviderAccent } from "@/theme";
 import { ThemedText } from "@/components/ui";
 import type {
   PromptBubbleRect,
@@ -414,6 +414,7 @@ function FlyingPromptImage({
   progress: SharedValue<number>;
   reduceMotion: boolean;
 }) {
+  const colors = useThemeColors();
   const uri = usePromptImageUri(image);
   const animatedStyle = useAnimatedStyle(() => {
     const value = progress.value;
@@ -546,6 +547,7 @@ function PromptImageGrid({
   images: PromptImage[];
   onImageRef?: (key: string, view: View | null) => void;
 }) {
+  const colors = useThemeColors();
   const { width: windowWidth } = useWindowDimensions();
   const gridWidth = Math.min(PROMPT_IMAGE_MAX_WIDTH, windowWidth * 0.84);
   const tileWidth =
@@ -609,6 +611,7 @@ function promptBubbleRadius(item: Extract<TranscriptItem, { kind: "prompt" }>): 
 }
 
 function PromptBubbleText({ item }: { item: Extract<TranscriptItem, { kind: "prompt" }> }) {
+  const colors = useThemeColors();
   const { segments } = parsePromptContent(item.text, item.skills, item.files);
   return (
     <ThemedText variant="prose" selectable style={{ color: colors.onTint }}>

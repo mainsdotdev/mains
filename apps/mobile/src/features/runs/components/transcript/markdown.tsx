@@ -9,7 +9,7 @@ import Animated, {
 
 import { parseMarkdown, type Block, type Inline, type ListItem } from "@/lib/markdown";
 import { prepareMathMarkdown } from "@/lib/math-markdown";
-import { colors, motion, radius, spacing, useBrandColors } from "@/theme";
+import { useThemeColors, motion, radius, spacing, useBrandColors } from "@/theme";
 
 import { useFileLinkFilter } from "./file-links";
 import MathMarkdown from "./math-markdown";
@@ -146,6 +146,7 @@ function BlockView({
   onOpenFile?: (filePath: string) => void;
   presentation: MarkdownPresentation;
 }) {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   const isDocument = presentation === "document";
 
@@ -281,6 +282,7 @@ function ListRow({
   onOpenFile?: (filePath: string) => void;
   presentation: MarkdownPresentation;
 }) {
+  const colors = useThemeColors();
   const isDocument = presentation === "document";
   return (
     <View style={{ flexDirection: "row", gap: spacing.sm }}>
@@ -325,6 +327,7 @@ function CodeBlock({
   lang: string | null;
   presentation: MarkdownPresentation;
 }) {
+  const colors = useThemeColors();
   const isDocument = presentation === "document";
   return (
     <View
@@ -382,6 +385,7 @@ function Table({
   onOpenFile?: (filePath: string) => void;
   presentation: MarkdownPresentation;
 }) {
+  const colors = useThemeColors();
   const columns = Math.max(header.length, ...rows.map((r) => r.length), 1);
 
   if (presentation === "document" && columns === 2) {
@@ -453,6 +457,7 @@ function DocumentTable({
   tailNode: InlineTextLeaf | null;
   onOpenFile?: (filePath: string) => void;
 }) {
+  const colors = useThemeColors();
   return (
     <GlassSurface
       effect="regular"
@@ -543,6 +548,7 @@ function InlineNode({
   tailNode: InlineTextLeaf | null;
   onOpenFile?: (filePath: string) => void;
 }) {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   const canOpenFile = useFileLinkFilter();
 
@@ -576,7 +582,7 @@ function InlineNode({
       // the line when the span wraps, which leaves a slab hanging off the end of
       // every wrapped code span. The face change carries the distinction alone.
       return (
-        <Text style={{ fontFamily: "Menlo", color: colors.label }}>
+        <Text style={{ fontFamily: process.env.EXPO_OS === "ios" ? "Menlo" : "monospace", color: colors.label }}>
           {node === tailNode ? <StreamingTailText text={node.text} /> : node.text}
         </Text>
       );

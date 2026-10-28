@@ -3,7 +3,7 @@ import { Pressable, View } from "react-native";
 
 import type { RunRow as RunRecord } from "@/db/schema";
 import { runStatusLabel } from "@/lib/format";
-import { colors, radius, spacing } from "@/theme";
+import { useThemeColors, radius, spacing } from "@/theme";
 
 import { SFSymbol, ThemedText } from "@/components/ui";
 
@@ -20,6 +20,7 @@ export function RunRow({
   /** Grouped cells (inside a rounded container) vs plain rows (sidebar). */
   grouped?: boolean;
 }) {
+  const colors = useThemeColors();
   const router = useRouter();
   // Another computer's status is only as fresh as its last sync, so a replica
   // shows where it runs instead of a "Running" that may have ended long ago.

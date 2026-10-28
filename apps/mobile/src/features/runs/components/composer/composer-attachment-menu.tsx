@@ -20,7 +20,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { FullWindowOverlay } from "react-native-screens";
 
-import { colors, radius, shadows, spacing } from "@/theme";
+import { useThemeColors, radius, shadows, spacing } from "@/theme";
 import type { ComposerCameraCapture } from "@/lib/composer-attachments";
 import { dismissKeyboardAndWait } from "@/lib/keyboard-transition";
 
@@ -112,6 +112,7 @@ export function ComposerAttachmentMenu({
   onPhotosAdd: (assetIds: string[]) => Promise<void>;
   onError: (message: string) => void;
 }) {
+  const colors = useThemeColors();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const scheme = useColorScheme();
@@ -249,10 +250,10 @@ export function ComposerAttachmentMenu({
     openingPhotosRef.current = true;
     try {
       await dismissKeyboardAndWait(Keyboard);
-      const currentPermission = await MediaLibrary.getPermissionsAsync();
+      const currentPermission = await MediaLibrary.getPermissionsAsync(false, ["photo"]);
       const permission = currentPermission.granted
         ? currentPermission
-        : await MediaLibrary.requestPermissionsAsync();
+        : await MediaLibrary.requestPermissionsAsync(false, ["photo"]);
       // Refusing library access is not a dead end. The system picker runs out
       // of process and needs no permission at all, so a "no" here falls back
       // to it rather than leaving the row inert.

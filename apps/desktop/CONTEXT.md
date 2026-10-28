@@ -602,6 +602,8 @@ _Avoid_: re-deriving a variant's icon, provider id, config key, or capability wi
 
 Inline composer mentions open their attached resource: files use the existing editor navigation, plugins use `/plugins?provider=…&plugin=…`, and skills with a `SKILL.md` path open the Markdown document viewer. The shared rich input emits chip activation callbacks and keeps prompt serialization unchanged. Provider skill discovery registers exact resolved `SKILL.md` files as readable content, so global skills can be viewed without granting access to their directories or adding write access.
 
+Sent prompt mentions use the same destination rules and openers as composer mentions. Code-selection chips open their source file in both places while preserving the serialized line-range token; directories and mentions without a supported destination stay inert.
+
 The rich composer serializes Markdown for submission, while suggestion detection reads visible text up to the caret with chips and literal code/link regions treated as boundaries. Markdown paste and restored drafts end with an ordinary continuation line, so further typing can leave the last list, heading, quote or code block.
 
 **conversation settings**:

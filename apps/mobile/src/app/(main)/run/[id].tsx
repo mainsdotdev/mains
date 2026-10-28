@@ -3,7 +3,7 @@ import { useHeaderHeight } from "expo-router/react-navigation";
 import { View } from "react-native";
 
 import { backendSession } from "@/backend/backend-session";
-import { RunView, goHome, useRunHasOutputs } from "@/features/runs";
+import { RunView, RunHeaderActions, goHome, useRunHasOutputs } from "@/features/runs";
 import { useRunTitle } from "@/lib/use-run-title";
 
 /** One run under a navigation bar: opened from a list, a search, or a fork. */
@@ -17,7 +17,9 @@ export default function RunScreen() {
 
   return (
     <View style={{ flex: 1 }}>
-      <Stack.Screen options={{ title: title ?? "Run" }} />
+      <Stack.Screen options={{ title: title ?? "Run", ...(process.env.EXPO_OS === "android" ? {
+        headerRight: () => <RunHeaderActions runId={runId} hasOutputs={hasOutputs} />,
+      } : {}) }} />
 
       <RunView key={runId} runId={runId} topInset={headerHeight} />
 

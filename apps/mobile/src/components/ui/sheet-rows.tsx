@@ -1,7 +1,7 @@
 import { useRouter } from "expo-router";
-import { Pressable, Switch, View, type ViewStyle } from "react-native";
+import { Platform, Pressable, Switch, View, type ViewStyle } from "react-native";
 
-import { colors, radius, shadows, spacing, useBrandColors } from "@/theme";
+import { useThemeColors, radius, shadows, spacing, useBrandColors } from "@/theme";
 
 import { SFSymbol } from "./sf-symbol";
 import { ThemedText } from "./themed-text";
@@ -21,6 +21,7 @@ export const sheetContentStyle: ViewStyle = {
 };
 
 export function SheetHeader({ title }: { title: string }) {
+  const colors = useThemeColors();
   const router = useRouter();
   return (
     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
@@ -48,6 +49,7 @@ export function SheetHeader({ title }: { title: string }) {
 
 /** A grouped-list section caption, above its card. */
 export function SectionTitle({ children }: { children: string }) {
+  const colors = useThemeColors();
   return (
     <ThemedText
       variant="footnote"
@@ -60,6 +62,7 @@ export function SectionTitle({ children }: { children: string }) {
 
 /** The Mac's refusal, under the cards; nothing when there is none. */
 export function SheetHint({ text }: { text: string | null }) {
+  const colors = useThemeColors();
   if (!text) return null;
   return (
     <ThemedText variant="footnote" selectable style={{ textAlign: "center", color: colors.systemOrange }}>
@@ -73,13 +76,14 @@ export function Toggle({ value, onChange, label, disabled = false }: { value: bo
   return <Switch accessibilityLabel={label} disabled={disabled} value={value} onValueChange={onChange} trackColor={{ true: brand.accent }} />;
 }
 
-export function Card({ children }: { children: React.ReactNode }) {
+export function Card({ children, surface = "default" }: { children: React.ReactNode; surface?: "default" | "sheet" }) {
+  const colors = useThemeColors();
   return (
     <View
       style={{
         borderRadius: radius.lg,
         borderCurve: "continuous",
-        backgroundColor: colors.cardSurface,
+        backgroundColor: surface === "sheet" && Platform.OS === "android" ? colors.sheetCardSurface : colors.cardSurface,
         boxShadow: shadows.card,
         overflow: "hidden",
       }}
@@ -118,6 +122,7 @@ export function Row({
   first: boolean;
   onPress?: () => void;
 }) {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   return (
     <View>

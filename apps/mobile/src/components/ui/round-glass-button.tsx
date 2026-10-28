@@ -1,7 +1,7 @@
 import { isValidElement, type ReactElement } from "react";
 import { Pressable, View } from "react-native";
 
-import { colors, spacing, useBrandColors } from "@/theme";
+import { useThemeColors, spacing, useBrandColors } from "@/theme";
 
 import { GlassSurface } from "./glass-surface";
 import { SFSymbol } from "./sf-symbol";
@@ -26,6 +26,7 @@ export function RoundGlassButton({
   size?: number;
   onPress: () => void;
 }) {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} hitSlop={6}>

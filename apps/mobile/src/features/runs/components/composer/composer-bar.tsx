@@ -31,7 +31,7 @@ import {
   type ComposerCameraCapture,
 } from "@/lib/composer-attachments";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
-import { colors, radius, spacing, type, useProviderAccent } from "@/theme";
+import { useThemeColors, radius, spacing, type, useProviderAccent } from "@/theme";
 import { GlassSurface, SFSymbol, ThemedText } from "@/components/ui";
 import type {
   ComposerContext,
@@ -129,6 +129,7 @@ export function ComposerBar({
    */
   reservedTop?: number;
 }) {
+  const colors = useThemeColors();
   const accent = useProviderAccent(providerId);
   const canSend =
     !disabled && !sending && (value.trim().length > 0 || attachments.length > 0);

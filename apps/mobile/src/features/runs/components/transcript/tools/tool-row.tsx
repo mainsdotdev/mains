@@ -6,7 +6,7 @@ import { toPresentTense } from "@/lib/tool-registry";
 import type { Diff } from "@/lib/tool-output";
 import { DiffBody } from "../../diff/diff-body";
 import {
-  colors,
+  useThemeColors,
   radius,
   spacing,
   useStatusColors,
@@ -51,6 +51,7 @@ export function ToolRow({
   /** Expandable body; omitted when the call carries nothing to show. */
   children?: ReactNode;
 }) {
+  const colors = useThemeColors();
   const [expanded, setExpanded] = useState(false);
   const statusColors = useStatusColors();
 
@@ -117,6 +118,7 @@ export function ToolRow({
 
 /** The detail slot's default treatment: one truncating, quiet line. */
 export function ToolDetail({ children }: { children: string }) {
+  const colors = useThemeColors();
   return (
     <ThemedText variant="footnote" numberOfLines={1} style={{ color: colors.tertiaryLabel }}>
       {children}
@@ -126,6 +128,7 @@ export function ToolDetail({ children }: { children: string }) {
 
 /** A file-touching tool's `+5 −3`, in the colors a diff is read in. */
 export function DiffStat({ added, removed }: { added: number; removed: number }) {
+  const colors = useThemeColors();
   return (
     <ThemedText variant="caption2">
       {added > 0 ? (
@@ -145,6 +148,7 @@ export function DiffStat({ added, removed }: { added: number; removed: number })
 
 /** The card every expanded body sits on. */
 function BodyCard({ children }: { children: ReactNode }) {
+  const colors = useThemeColors();
   return (
     <View
       style={{
@@ -173,6 +177,7 @@ function MoreLines({ count }: { count: number }) {
  * columns survive; the vertical axis is capped, not scrolled.
  */
 export function ToolCodeBody({ text }: { text: string }) {
+  const colors = useThemeColors();
   const all = text.split("\n");
   const shown = all.slice(0, MAX_BODY_LINES);
   const hidden = all.length - shown.length;
@@ -195,6 +200,7 @@ export function ToolCodeBody({ text }: { text: string }) {
 
 /** Prose output (a shell's own summary, an MCP text result) — wrapped, not scrolled. */
 export function ToolTextBody({ text }: { text: string }) {
+  const colors = useThemeColors();
   return (
     <BodyCard>
       <View style={{ paddingHorizontal: spacing.ms }}>

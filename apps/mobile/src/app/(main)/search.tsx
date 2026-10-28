@@ -16,7 +16,7 @@ import { isModeId } from "@mains/contracts/modes";
 import { modeLabel } from "@mains/contracts/runs";
 import { relativeTime, runStatusLabel } from "@/lib/format";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
-import { colors, radius, spacing, type } from "@/theme";
+import { useThemeColors, radius, spacing, type } from "@/theme";
 import { WorkspaceRow } from "@/features/workspaces";
 
 /** The bar's controls share one height with the workspace screen's. */
@@ -33,6 +33,7 @@ const CHAT_LIMIT = 50;
  * saw one space's things, and half a screen of them under the keyboard.
  */
 export default function SearchScreen() {
+  const colors = useThemeColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const session = useSession();
@@ -267,6 +268,7 @@ function SectionHeader({ title }: { title: string }) {
 
 /** A chat among results: title, where it lives, and when — or its live status. */
 function ChatHit({ run, place, onPress }: { run: RunRecord; place: string; onPress: () => void }) {
+  const colors = useThemeColors();
   const live = run.status === "running" || run.status === "queued";
   return (
     <Pressable

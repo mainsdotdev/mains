@@ -1,18 +1,19 @@
 import { and, eq } from "drizzle-orm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, ScrollView, View } from "react-native";
+import { ActivityIndicator, View } from "react-native";
 import type { RunOutput } from "@mains/contracts/run-outputs";
 import { backendSession, useSession } from "@/backend/backend-session";
 import { cachedOutput } from "@/backend/output-cache";
-import { Button, ThemedText } from "@/components/ui";
+import { Button, SheetScrollView, ThemedText } from "@/components/ui";
 import { db } from "@/db/client";
 import { runOutputs, runs } from "@/db/schema";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { isDesktopOnlyOutput } from "@/lib/output-presentation";
-import { colors, spacing } from "@/theme";
+import { useThemeColors, spacing } from "@/theme";
 import { OutputFileCard } from "./output-file-card";
 
 export function OutputsPanel({ runId }: { runId: string }) {
+  const colors = useThemeColors();
   const session = useSession();
   const backendId = session.backend?.backendId ?? "";
   const connected = session.connection.kind === "connected";
@@ -60,7 +61,7 @@ export function OutputsPanel({ runId }: { runId: string }) {
   );
   const currentScope = loadedScope === JSON.stringify([backendId, runId]);
   const shown = connected && currentScope && items !== null ? items : saved;
-  return <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ padding: spacing.md, gap: spacing.md, paddingBottom: spacing.xxl }}>
+  return <SheetScrollView>
     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
       <ThemedText variant="subhead">Files delivered in this conversation</ThemedText>
       <Button title="Refresh" size="sm" variant="ghost" disabled={!connected || loading} onPress={() => void load()} />
@@ -71,5 +72,5 @@ export function OutputsPanel({ runId }: { runId: string }) {
     {error ? <ThemedText variant="footnote" style={{ color: colors.systemRed }}>{error}</ThemedText> : null}
     {loading ? <ActivityIndicator accessibilityLabel="Loading outputs" /> : null}
     {connected && currentScope && nextOffset !== null ? <Button title="Load more files" variant="secondary" disabled={loading} onPress={() => void load(nextOffset)} /> : null}
-  </ScrollView>;
+  </SheetScrollView>;
 }

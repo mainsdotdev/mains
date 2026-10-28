@@ -20,7 +20,7 @@ import {
   toolSummary,
 } from "@/lib/tool-output";
 import { resolveTool } from "@/lib/tool-registry";
-import { colors, spacing } from "@/theme";
+import { useThemeColors, spacing } from "@/theme";
 
 import { useFileLinkFilter } from "../file-links";
 import { DiffStat, ToolCodeBody, ToolDetail, ToolDiffBody, ToolRow, ToolTextBody } from "./tool-row";
@@ -285,6 +285,7 @@ function readTodos(params: Record<string, unknown>): Todo[] {
 }
 
 function TodoList({ todos }: { todos: Todo[] }) {
+  const colors = useThemeColors();
   return (
     <View style={{ gap: spacing.xs, paddingLeft: spacing.lg }}>
       {todos.map((todo, i) => {

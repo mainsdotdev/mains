@@ -4,7 +4,7 @@ import { Text, View, useColorScheme } from "react-native";
 import { ThemedText } from "@/components/ui";
 import { linesBetween, type Diff, type DiffHunk, type DiffLine } from "@/lib/tool-output";
 import { wordEmphasis } from "@/lib/word-diff";
-import { colors, radius, spacing, useSoftTint, useSystemHues, withAlpha } from "@/theme";
+import { useThemeColors, radius, spacing, useSoftTint, useSystemHues, withAlpha } from "@/theme";
 
 /** Menlo's advance at the `mono` step's 13pt, for sizing the line-number gutter. */
 const MONO_CHAR_WIDTH = 7.9;
@@ -20,6 +20,7 @@ const MONO_CHAR_WIDTH = 7.9;
  * scroller. The gutter is its own column, so wrapped text stays aligned.
  */
 export function DiffBody({ diff, maxLines }: { diff: Diff; maxLines?: number }) {
+  const colors = useThemeColors();
   const hues = useSystemHues();
   const soft = useSoftTint();
   const dark = useColorScheme() === "dark";

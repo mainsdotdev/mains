@@ -4,7 +4,7 @@ import Animated, { FadeIn } from "react-native-reanimated";
 
 import { ThemedText } from "@/components/ui";
 import type { PromptSuggestion } from "@/lib/prompt-suggestions";
-import { colors, motion, radius, spacing, useProviderAccentPair } from "@/theme";
+import { useThemeColors, motion, radius, spacing, useProviderAccentPair } from "@/theme";
 
 /**
  * The follow-ups the agent offered after its answer, on the side the user
@@ -21,6 +21,7 @@ export function PromptSuggestionChips({
   providerId: string;
   onSelect: (prompt: string) => void;
 }) {
+  const colors = useThemeColors();
   const { soft } = useProviderAccentPair(providerId);
   return (
     <Animated.View

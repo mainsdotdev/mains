@@ -1,6 +1,7 @@
 export { ComposerBar, composerBottomPadding } from "./components/composer/composer-bar";
 export { loadImage } from "./components/transcript/artifact-image";
 export { RunView } from "./components/run-view";
+export { RunHeaderActions } from "./components/run-header-actions";
 export { HistoryContentView } from "./components/history-content-view";
 export { TurnFileDiffView } from "./components/diff/turn-file-diff-view";
 export { MarkdownDocument } from "./components/document/markdown-document";

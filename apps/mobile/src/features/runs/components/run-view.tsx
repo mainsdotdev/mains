@@ -13,7 +13,7 @@ import type { ComposerAttachment } from "@/lib/composer-attachments";
 import { projectedPromptLandingY } from "@/lib/prompt-flight";
 import type { PromptSkill } from "@/lib/prompt-chips";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
-import { colors, motion, radius, shadows, spacing } from "@/theme";
+import { useThemeColors, motion, radius, shadows, spacing } from "@/theme";
 import type {
   ComposerSendOrigin,
   PendingPrompt,
@@ -70,6 +70,7 @@ export function RunView({
   /** Content padding beneath that inset, for controls floating over the list. */
   topPadding?: number;
 }) {
+  const colors = useThemeColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   // Two sheets behind the composer's two chips: the model (and its effort)

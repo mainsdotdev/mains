@@ -21,7 +21,7 @@ import {
 } from "@/db/schema";
 import { goHome } from "@/features/runs";
 import { placeChats } from "@/lib/chat-placement";
-import { colors, radius, spacing } from "@/theme";
+import { useThemeColors, radius, spacing } from "@/theme";
 import {
   ProjectIcon,
   RoundGlassButton,
@@ -46,6 +46,7 @@ const RECENTS_LIMIT = 20;
  * space switcher is pinned to the bottom next to Settings.
  */
 export function Sidebar({ navigation }: { navigation: { closeDrawer(): void } }) {
+  const colors = useThemeColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const session = useSession();
@@ -336,6 +337,7 @@ function GroupHeader({
   open: boolean;
   onPress: () => void;
 }) {
+  const colors = useThemeColors();
   const nameColor = useProjectNameColor(collection.icon);
   return (
     <Pressable

@@ -2,7 +2,7 @@ import { Pressable, View } from "react-native";
 
 import type { WorkspaceRow as WorkspaceRecord } from "@/db/schema";
 import { workspaceStatusLabel } from "@/lib/format";
-import { colors, radius, spacing, type, useWorkspaceColors } from "@/theme";
+import { useThemeColors, radius, spacing, type, useWorkspaceColors } from "@/theme";
 
 import { ProjectIcon, ThemedText, WorkspaceStatusIcon } from "@/components/ui";
 
@@ -22,6 +22,7 @@ export function WorkspaceRow({
   selected?: boolean;
   onPress: () => void;
 }) {
+  const colors = useThemeColors();
   const { success: additions, danger: deletions } = useWorkspaceColors();
   // Another computer's folder is never on this one; that is not "missing".
   const folderMissing = !workspace.isReplica && !workspace.pathExists;

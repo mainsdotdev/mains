@@ -16,7 +16,7 @@ import { runs, spaceTargets, spaces, workspaces, type RunRow as RunRecord } from
 import { relativeTime, runStatusLabel } from "@/lib/format";
 import { goHome } from "@/features/runs";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
-import { colors, radius, spacing, type, useBrandColors } from "@/theme";
+import { useThemeColors, radius, spacing, type, useBrandColors } from "@/theme";
 
 /** The bar's controls share one height, like the Codex app's search pill and compose button. */
 const BAR_HEIGHT = 52;
@@ -29,6 +29,7 @@ const BAR_HEIGHT = 52;
  * that starts a new run here.
  */
 export default function WorkspaceScreen() {
+  const colors = useThemeColors();
   const { id } = useLocalSearchParams<{ id: string }>();
   const workspaceId = typeof id === "string" ? id : "";
   const router = useRouter();
@@ -251,6 +252,7 @@ export default function WorkspaceScreen() {
 
 /** The navigation title: the workspace's name over its branch. */
 function HeaderTitle({ name, branch }: { name: string; branch: string | null }) {
+  const colors = useThemeColors();
   return (
     <View style={{ alignItems: "center" }}>
       <ThemedText variant="headline" numberOfLines={1}>
@@ -271,6 +273,7 @@ function runTitle(run: RunRecord): string {
 
 /** A run as a bare title, its age (or live status) on the right — the Codex list look. */
 function TitleRow({ run, onPress }: { run: RunRecord; onPress: () => void }) {
+  const colors = useThemeColors();
   // A replica's status is only as fresh as its last sync; show its age instead.
   const live = !run.isReplica && (run.status === "running" || run.status === "queued");
   const brand = useBrandColors();
