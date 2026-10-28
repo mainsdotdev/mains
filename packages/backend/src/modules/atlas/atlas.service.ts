@@ -142,9 +142,15 @@ async function runContext(runId: string, accountId: string) {
     roots: [...(root ? [root] : []), imageRoot, ...(codexImages ? [codexImages] : []),
       ...attachments.map((file) => path.dirname(file.path))] };
 }
+/** A Code conversation's replies mostly cite its repository's files (CONTEXT.md, CLAUDE.md, ...). The
+ * library lists only what such a run delivered on purpose; Save to Atlas still accepts any selected output. */
+function listedInLibrary(run: { mode?: string | null }, metadata: Record<string, unknown> | null | undefined) {
+  return run.mode !== "developer" || metadata?.outputRole === "deliverable" || metadata?.source === "codex_image_generation";
+}
 /** Another device's conversation offers the uploads and selected outputs Bridge synced
  * from it. Only their records are read: a card downloads its file when it opens. */
-async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeof runContext>>): Promise<AtlasGeneratedFile[]> {
+async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeof runContext>>,
+  libraryOnly: boolean): Promise<AtlasGeneratedFile[]> {
   const common = { runId: run.id, runTitle: run.title ?? "Conversation", collectionId: run.collectionId };
   const backendId = run.ownerBackendId ?? "";
   const replicaKey = (...identity: unknown[]) => createHash("sha256").update(JSON.stringify([run.id, ...identity])).digest("hex");
@@ -158,6 +164,7 @@ async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeo
       replica: { backendId, attachmentId: attachment.id } });
   }
   for (const output of await runsService.getOutputArtifacts(run.id)) {
+    if (libraryOnly && !listedInLibrary(run, output.metadata)) continue;
     const source = output.metadata?.path;
     const type = typeof source === "string" ? classify(source) : null;
     if (typeof source !== "string" || !type) continue;
@@ -172,14 +179,15 @@ async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeo
   }
   return [...new Map(result.map((item) => [item.sourceKey, item])).values()];
 }
-async function generatedForRun(runId: string, accountId: string, hashImages = true): Promise<AtlasGeneratedFile[]> {
+async function generatedForRun(runId: string, accountId: string, hashImages = true, libraryOnly = false): Promise<AtlasGeneratedFile[]> {
   const context = await runContext(runId, accountId);
   const { run, runsService, roots, attachments } = context;
   // Generated discovery walks this backend's execution folders.
-  if (run.isReplica) return replicaFilesForRun(context);
+  if (run.isReplica) return replicaFilesForRun(context, libraryOnly);
   const candidates = new Set<string>();
   for (const artifact of await runsService.getOutputArtifacts(runId)) {
-    if (artifact.metadata?.outputSelected && artifact.path) candidates.add(artifact.path);
+    if (artifact.metadata?.outputSelected && artifact.path && (!libraryOnly || listedInLibrary(run, artifact.metadata)))
+      candidates.add(artifact.path);
   }
   const uploads = new Map(attachments.map((file) => [file.path, file]));
   for (const [file, attachment] of uploads) if (!attachment.isBrowserAnnotation) candidates.add(file);
@@ -297,7 +305,7 @@ async function* generatedLibraryEntries(options: AtlasLibraryOptions, query: str
     const files: AtlasGeneratedFile[] = [];
     for (let index = 0; index < runs.length; index += 4) {
       const batch = await Promise.all(runs.slice(index, index + 4)
-        .map((run) => generatedForRun(run.id, options.accountId, false)));
+        .map((run) => generatedForRun(run.id, options.accountId, false, true)));
       files.push(...batch.flat());
     }
     files.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt) || a.sourceKey.localeCompare(b.sourceKey));
