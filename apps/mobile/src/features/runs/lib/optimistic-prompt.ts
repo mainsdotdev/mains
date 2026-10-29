@@ -79,6 +79,9 @@ function promptItem(
     skills: prompt.skills,
     files: [],
     images: promptImages(prompt.attachments),
+    documents: (prompt.attachments ?? []).filter((attachment) => attachment.type === "document").map((attachment) => ({
+      key: attachment.id, name: attachment.name, mimeType: attachment.mimeType, byteSize: attachment.size, runId: "", pending: true,
+    })),
   };
 }
 

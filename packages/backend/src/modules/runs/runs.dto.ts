@@ -315,6 +315,8 @@ export interface TurnFileChange extends TreeDiffFile {
 export interface RunTurnChangesSummary {
   id: string;
   files: TurnFileChange[];
+  /** Total count if a phone page omitted an oversized file preview. */
+  fileCount?: number;
   additions: number;
   deletions: number;
   /** Legacy records may have an incomplete patch; new records are stored in full. */

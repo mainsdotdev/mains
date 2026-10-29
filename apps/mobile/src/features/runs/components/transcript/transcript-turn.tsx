@@ -3,9 +3,10 @@ import { Pressable, View } from "react-native";
 
 import { accordionLabel, type TurnRow } from "@/lib/transcript-rows";
 import type { TranscriptItem } from "@/lib/transcript";
-import { colors, spacing } from "@/theme";
+import { useThemeColors, spacing } from "@/theme";
 
 import { SFSymbol, ThemedText } from "@/components/ui";
+import { FileLinkProvider } from "./file-links";
 import { TranscriptRow, type TranscriptActions, type TurnActions } from "./transcript-row";
 
 /**
@@ -29,10 +30,9 @@ export function TranscriptTurn({
   /** Passed through untouched to whichever rows hold an agent message. */
   actions?: TranscriptActions;
 }) {
-  if (row.kind === "flat") {
-    return <ItemList items={row.items} providerId={providerId} actions={actions} turn={turnOf(row.items)} />;
-  }
-  return (
+  const content = row.kind === "flat" ? (
+    <ItemList items={row.items} providerId={providerId} actions={actions} turn={turnOf(row.items)} />
+  ) : (
     <TurnAccordion
       row={row}
       providerId={providerId}
@@ -40,6 +40,10 @@ export function TranscriptTurn({
       actions={actions}
     />
   );
+  // File links deep inside Markdown and tool rows ask the conversation what it can open.
+  return actions?.canOpenFile ? (
+    <FileLinkProvider value={actions.canOpenFile}>{content}</FileLinkProvider>
+  ) : content;
 }
 
 /** What a turn's action row needs: which message ends the turn, and all of its text. */
@@ -82,6 +86,7 @@ function TurnAccordion({
   isRunInProgress: boolean;
   actions?: TranscriptActions;
 }) {
+  const colors = useThemeColors();
   const [open, setOpen] = useState(false);
 
   // A turn that goes live drops any earlier manual expansion, so the next

@@ -1,10 +1,11 @@
 import type { ColorValue } from "react-native";
 import Svg, { Circle, Defs, Mask, Path } from "react-native-svg";
 
-import { colors, useBrandColors, useWorkspaceColors } from "@/theme";
+import { useThemeColors, useBrandColors, useWorkspaceColors } from "@/theme";
 
 /** The desktop's status glyphs (`components/ui/icons/status-*.tsx`), on a 16-unit grid. */
 export function WorkspaceStatusIcon({ status, size = 16 }: { status: string | null | undefined; size?: number }) {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   const workspace = useWorkspaceColors();
   const tint: ColorValue = (() => {

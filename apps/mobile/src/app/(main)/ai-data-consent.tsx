@@ -1,7 +1,8 @@
 import * as Linking from "expo-linking";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, View } from "react-native";
+import { Alert, Pressable, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
   Button,
@@ -9,11 +10,11 @@ import {
   Row,
   SheetHeader,
   SheetHint,
+  SheetScrollView,
   ThemedText,
-  sheetContentStyle,
 } from "@/components/ui";
 import { useAiDataConsent } from "@/features/ai-data-consent";
-import { colors, spacing, useBrandColors, useProviderAccent } from "@/theme";
+import { useThemeColors, spacing, useBrandColors, useProviderAccent } from "@/theme";
 
 const MAINS_PRIVACY_URL = "https://mains.dev/privacy";
 
@@ -25,10 +26,12 @@ function openPolicy(label: string, url: string): void {
 
 /** The explicit third-party AI permission shown before any provider receives data. */
 export default function AiDataConsentSheet() {
+  const colors = useThemeColors();
   const router = useRouter();
   const { pending, allowPending, declinePending } = useAiDataConsent();
   const [error, setError] = useState<string | null>(null);
   const brand = useBrandColors();
+  const insets = useSafeAreaInsets();
   const providerAccent = useProviderAccent(pending?.disclosure.providerId);
 
   // A swipe-down or system back is a refusal too. Explicit allow/decline clears
@@ -55,9 +58,8 @@ export default function AiDataConsentSheet() {
 
   return (
     <View style={{ flex: 1 }}>
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={[sheetContentStyle, { paddingBottom: spacing.sm }]}
+      <SheetScrollView
+        contentContainerStyle={{ paddingBottom: spacing.sm }}
       >
         <SheetHeader title={isDemo ? "Demo data sharing" : "AI data sharing"} />
 
@@ -78,7 +80,7 @@ export default function AiDataConsentSheet() {
           </ThemedText>
         </View>
 
-        <Card>
+        <Card surface="sheet">
           <Row first title="Your message and chat history" />
           <Row first={false} title="Skills and instructions you attach" />
           <Row first={false} title="Files and tool results the agent uses" />
@@ -116,13 +118,13 @@ export default function AiDataConsentSheet() {
             </ThemedText>
           </Pressable>
         </View>
-      </ScrollView>
+      </SheetScrollView>
 
       <View
         style={{
           paddingHorizontal: spacing.md,
           paddingTop: spacing.sm,
-          paddingBottom: spacing.lg,
+          paddingBottom: Math.max(spacing.lg, insets.bottom + spacing.md),
           gap: spacing.sm,
         }}
       >

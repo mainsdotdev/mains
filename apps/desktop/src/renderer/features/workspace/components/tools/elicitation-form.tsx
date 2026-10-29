@@ -2,46 +2,15 @@ import { useId } from "react";
 import { Body, Caption, Checkbox, Input, NativeSelect, Text } from "@/components/ui";
 import {
   parseElicitationSchema,
-  validateElicitationFields,
-  type ElicitationContent,
   type ElicitationField,
-} from "@mains/backend/shared/mcp-elicitation";
+  type ElicitationValues,
+} from "@mains/contracts/mcp-elicitation";
 
-export type { ElicitationField } from "@mains/backend/shared/mcp-elicitation";
-export type ElicitationValues = Record<string, string | boolean | string[]>;
-export type BuildContentResult =
-  | { ok: true; content: ElicitationContent }
-  | { ok: false; missing: string[]; errors: Record<string, string> };
+export type { ElicitationField, ElicitationValues, BuildContentResult } from "@mains/contracts/mcp-elicitation";
+export { buildElicitationContent, getElicitationDefaultValues } from "@mains/contracts/mcp-elicitation";
 
 export function parseElicitationFields(schema?: Record<string, unknown>): ElicitationField[] {
   return parseElicitationSchema(schema).fields;
-}
-
-export function getElicitationDefaultValues(fields: ElicitationField[]): ElicitationValues {
-  return Object.fromEntries(fields.flatMap((field) => field.defaultValue === undefined ? [] : [[
-    field.name,
-    typeof field.defaultValue === "number" ? String(field.defaultValue)
-      : Array.isArray(field.defaultValue) ? [...field.defaultValue] : field.defaultValue,
-  ]]));
-}
-
-/** Convert input state to protocol types, then apply the same checks as the backend. */
-export function buildElicitationContent(fields: ElicitationField[], values: ElicitationValues): BuildContentResult {
-  const entries: Array<[string, unknown]> = [];
-  for (const field of fields) {
-    const raw = values[field.name];
-    if (field.type === "boolean") { entries.push([field.name, raw ?? false]); continue; }
-    if (field.type === "multiEnum") { entries.push([field.name, raw ?? []]); continue; }
-    const value = typeof raw === "string" && field.type !== "enum" ? raw.trim() : raw;
-    if (value === undefined || value === "") continue;
-    entries.push([field.name, field.type === "number" && typeof value === "string" ? Number(value) : value]);
-  }
-  const validation = validateElicitationFields(fields, Object.fromEntries(entries));
-  if (validation.ok) return validation;
-  return {
-    ...validation,
-    missing: fields.filter((field) => Object.prototype.hasOwnProperty.call(validation.errors, field.name)).map((field) => field.label),
-  };
 }
 
 const inputClass =

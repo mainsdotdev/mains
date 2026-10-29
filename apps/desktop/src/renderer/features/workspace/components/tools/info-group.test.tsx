@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import { groupEvents, type EventGroup } from "../../lib/group-events";
 import { mapArtifactToEvent } from "../../lib/run-event-mappers";
+import { appApi } from "@/lib/transport";
+
+const documentViewer = vi.hoisted(() => ({ open: vi.fn() }));
+const { openFile } = vi.hoisted(() => ({ openFile: vi.fn() }));
+vi.mock("../../hooks/use-open-file-in-editor", () => ({ useOpenFileInEditor: () => openFile }));
 
 vi.hoisted(() => {
   Object.defineProperty(window, "matchMedia", { configurable: true, value: vi.fn(() => ({
@@ -26,7 +31,7 @@ vi.mock("../../lib/attachment-image", () => ({
 vi.mock("../image-preview-modal", () => ({
   ImagePreviewModal: ({ name, src }: { name: string; src: string }) => <div role="dialog" aria-label={name}>{src}</div>,
 }));
-vi.mock("@/hooks/use-document-viewer", () => ({ useDocumentViewer: () => ({ openDocument: vi.fn() }) }));
+vi.mock("@/hooks/use-document-viewer", () => ({ useDocumentViewer: () => documentViewer }));
 vi.mock("@/lib/redux/api", () => ({ useLazyGetAppsForFileQuery: () => [vi.fn(), {}] }));
 vi.mock("@/hooks/use-suppress-browser-view", () => ({ useSuppressBrowserView: vi.fn() }));
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
@@ -48,7 +53,50 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
     ], ...metadata },
   }] };
 }
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+describe("prompt context files", () => {
+  it("opens a file shown below a sent prompt in the editor", () => {
+    const path = "/workspace/components/bridge-hero-section.tsx";
+    render(<InfoGroup group={prompt({ attachments: [], browserAnnotations: [],
+      files: [{ path, type: "file" }],
+    })} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "components/bridge-hero-section.tsx" }));
+    expect(openFile).toHaveBeenCalledExactlyOnceWith(path);
+  });
+
+  it("keeps context directories below sent prompts inert", () => {
+    const path = "/workspace/components";
+    render(<InfoGroup group={prompt({ attachments: [], browserAnnotations: [],
+      files: [{ path, type: "directory" }],
+    })} />);
+
+    fireEvent.click(screen.getByTitle(path));
+    expect(screen.queryByRole("button", { name: "workspace/components" })).toBeNull();
+    expect(openFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("prompt document attachments", () => {
+  it.each(["txt", "pdf", "docx"] as const)("opens a durable %s attachment from its card in the document preview", async (docType) => {
+    const name = `Özgeçmiş.${docType}`.normalize("NFD");
+    const attachmentId = "document-id";
+    const filePath = `/attachments/${attachmentId}/${name}`;
+    const resolve = vi.spyOn(appApi.runArtifacts, "resolveAttachmentPath")
+      .mockResolvedValue({ success: true, data: filePath });
+    render(<InfoGroup runId="run" group={prompt({ attachments: [{
+      attachmentId, name, type: "document", mimeType: "application/octet-stream",
+    }] })} />);
+
+    fireEvent.click(screen.getByRole("button", { name: `Open ${name}` }));
+
+    expect(resolve).toHaveBeenCalledWith({ runId: "run", attachmentId });
+    await waitFor(() => expect(documentViewer.open).toHaveBeenCalledWith({
+      path: filePath, fileName: name, docType,
+    }));
+  });
+});
 
 describe("Codex async questions", () => {
   it("keeps async question input out of the transcript card", () => {

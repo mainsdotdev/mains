@@ -162,6 +162,30 @@ esac
     expect(sdk.close).toHaveBeenCalledOnce();
   });
 
+  it("does not rewarm discovery from a query started before invalidation", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    let finish!: (models: Array<{ value: string; displayName: string }>) => void;
+    sdk.supportedModels.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const pending = driver.listModels!();
+    await vi.waitFor(() => expect(sdk.supportedModels).toHaveBeenCalledOnce());
+    driver.invalidateCatalogs?.();
+    finish([{ value: "old", displayName: "Old" }]);
+    await pending;
+
+    sdk.supportedModels.mockResolvedValue([{ value: "new", displayName: "New" }]);
+    expect(await driver.listModels!()).toEqual([expect.objectContaining({ id: "new" })]);
+    expect(sdk.supportedModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes cached commands after invalidation without keeping the control process alive", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    await driver.listCommands!(fixture);
+    sdk.initializationResult.mockResolvedValue({ commands: [{ name: "new-command", description: "New", argumentHint: "" }] });
+    driver.invalidateCatalogs?.();
+    expect(await driver.listCommands!(fixture)).toEqual([expect.objectContaining({ name: "new-command" })]);
+    expect(sdk.close).toHaveBeenCalledTimes(2);
+  });
+
   it("releases the control query when usage cannot be fetched", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     sdk.usage.mockRejectedValueOnce(new Error("Usage unavailable"));

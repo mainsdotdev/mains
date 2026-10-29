@@ -691,6 +691,9 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
    */
   updateConfig?(config: AdapterConfig): void;
 
+  /** Clear discovery caches without stopping running sessions or their processes. */
+  invalidateCatalogs?(): void;
+
   /**
    * List available models with their metadata.
    * @returns Promise resolving to array of ModelInfo
@@ -962,6 +965,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   updateConfig?(config: AdapterConfig): void;
 
   // ── Pass-through methods (Core delegates 1:1 to the matching WorkRunAdapter method) ──
+  invalidateCatalogs?(): void;
   shutdown?(): Promise<void>;
   canResumeSession?(runId: string): Promise<boolean>;
   archiveSession?(runId: string): Promise<void>;

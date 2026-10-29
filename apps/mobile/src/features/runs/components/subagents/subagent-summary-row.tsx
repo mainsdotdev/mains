@@ -3,7 +3,7 @@ import { Pressable, View } from "react-native";
 
 import { AsciiSpinner, BotIcon, CheckIcon, ThemedText } from "@/components/ui";
 import type { SessionSubagent } from "@/lib/subagents";
-import { colors, radius, shadows, spacing, useBrandColors, useStatusColors } from "@/theme";
+import { useThemeColors, radius, shadows, spacing, useBrandColors, useStatusColors } from "@/theme";
 
 function statusText(agents: SessionSubagent[]): string {
   const running = agents.filter((agent) => agent.state === "running").length;
@@ -23,6 +23,7 @@ export function SubagentSummaryRow({
   runId: string;
   agents: SessionSubagent[];
 }) {
+  const colors = useThemeColors();
   const router = useRouter();
   const brand = useBrandColors();
   const statusColors = useStatusColors();

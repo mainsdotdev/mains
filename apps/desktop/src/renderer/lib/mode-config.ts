@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { DEFAULT_MODE_ID, isModeId, type ModeId } from "../../shared/modes";
+import { MODE_COMPOSER_CONTROLS } from "@mains/contracts/modes";
 
 export type SidebarItemType = "workspace" | "chat";
 
@@ -113,9 +114,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showDeliverables: false,
     showTerminal: true,
     showChangesTab: true,
-    showPermissionControls: true,
-    showPlanControls: true,
-    showGoalControls: true,
+    ...MODE_COMPOSER_CONTROLS.developer,
     showTasksNav: true,
     showTabs: true,
     showPluginsButton: false,
@@ -147,9 +146,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showDeliverables: true,
     showTerminal: false,
     showChangesTab: false,
-    showPermissionControls: false,
-    showPlanControls: false,
-    showGoalControls: true,
+    ...MODE_COMPOSER_CONTROLS.work,
     showTasksNav: false,
     showTabs: false,
     showPluginsButton: true,
@@ -178,9 +175,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showDeliverables: false,
     showTerminal: false,
     showChangesTab: false,
-    showPermissionControls: false,
-    showPlanControls: false,
-    showGoalControls: false,
+    ...MODE_COMPOSER_CONTROLS.chat,
     showTasksNav: false,
     showTabs: false,
     showPluginsButton: false,

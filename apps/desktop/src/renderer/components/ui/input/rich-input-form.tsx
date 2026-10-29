@@ -44,6 +44,8 @@ export interface RichFileChipData {
 export interface RichCodeChipData {
   /** Unique key used as chip identity and serialized as `@<key>` (`<path>#L<start>-<end>`). */
   key: string;
+  /** Source file to open when this selection is activated. */
+  filePath?: string;
   /** Basename used to pick the file-type icon. */
   fileName: string;
   /** Short label rendered inside the chip (`file.ts:19-24`). */
@@ -328,6 +330,7 @@ function buildCodeChip(code: RichCodeChipData): HTMLSpanElement {
   const chip = document.createElement("span");
   chip.setAttribute(CODE_CHIP_ATTR, "true");
   chip.setAttribute(CODE_KEY_ATTR, code.key);
+  if (code.filePath) chip.setAttribute(FILE_PATH_ATTR, code.filePath);
   chip.contentEditable = "false";
   chip.title = code.key;
   chip.className =
@@ -343,6 +346,8 @@ function buildCodeChip(code: RichCodeChipData): HTMLSpanElement {
   label.className = "leading-none";
   label.textContent = code.label;
   chip.appendChild(label);
+
+  if (code.filePath) makeChipLink(chip);
 
   return chip;
 }
@@ -1008,7 +1013,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
 
     const activateChip = useCallback((target: EventTarget | null): boolean => {
       if (!(target instanceof Element)) return false;
-      const chip = target.closest<HTMLElement>(`[${CHIP_ATTR}], [${FILE_CHIP_ATTR}]`);
+      const chip = target.closest<HTMLElement>(`[${CHIP_ATTR}], [${FILE_CHIP_ATTR}], [${CODE_CHIP_ATTR}]`);
       if (!chip || !editorRef.current?.contains(chip) || chip.getAttribute("role") !== "link") return false;
       const name = chip.getAttribute(CHIP_NAME_ATTR);
       const path = chip.getAttribute(FILE_PATH_ATTR);

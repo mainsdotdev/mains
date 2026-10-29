@@ -491,6 +491,28 @@ describe("RichInputForm Mac app mentions", () => {
 });
 
 describe("RichInputForm mention navigation", () => {
+  it("opens a code selection's file by mouse and keyboard without changing its range or submitting", () => {
+    const onFileChipClick = vi.fn();
+    const onQueryChange = vi.fn();
+    const onSubmit = vi.fn();
+    const path = "/repo/hero.tsx";
+    const key = `${path}#L12-18`;
+    const query = `review @${key}`;
+    render(createElement(RichInputForm, { query, onQueryChange, onSubmit, onFileChipClick,
+      codeChipMap: new Map([[key, { key, filePath: path, fileName: "hero.tsx", label: "hero.tsx:12-18" }]]),
+    }));
+
+    const label = screen.getByText("hero.tsx:12-18");
+    fireEvent.click(label);
+    fireEvent.keyDown(label.closest("[data-code-chip]")!, { key: "Enter" });
+    expect(onFileChipClick.mock.calls).toEqual([[path], [path]]);
+    expect(onQueryChange).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    pastePlainText(screen.getByRole("textbox"), " update");
+    expect(onQueryChange).toHaveBeenLastCalledWith(`${query} update`);
+  });
+
   it("activates nested file and skill labels without changing or submitting the draft", () => {
     const onFileChipClick = vi.fn();
     const onSkillChipClick = vi.fn();

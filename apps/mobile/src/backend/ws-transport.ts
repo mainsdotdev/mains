@@ -63,6 +63,8 @@ export interface WsTransportOptions {
   token?: string | null;
   /** How long an invoke waits for its response before rejecting. Default 30s. */
   invokeTimeoutMs?: number;
+  /** Maximum wait for the WebSocket handshake. Default 10s. */
+  connectTimeoutMs?: number;
   /** Auto-reconnect after an unexpected close. Default true. */
   reconnect?: boolean;
   /** Base/max backoff for reconnect attempts. */
@@ -74,7 +76,7 @@ export interface WsTransportOptions {
    */
   isFatalClose?: (info: CloseInfo) => boolean;
   /** Schedules reconnect/backoff; defaults to setTimeout. Injectable for tests. */
-  schedule?: (fn: () => void, ms: number) => void;
+  schedule?: (fn: () => void, ms: number) => void | (() => void);
 }
 
 interface PendingInvoke {
@@ -94,6 +96,9 @@ export class WsTransport {
   private fatal = false;
   private reconnectAttempts = 0;
   private closeInfo: CloseInfo | null = null;
+  private socketGeneration = 0;
+  private cancelOpenTimeout: (() => void) | null = null;
+  private cancelReconnect: (() => void) | null = null;
 
   private nextId = 1;
   private readonly pending = new Map<number, PendingInvoke>();
@@ -106,11 +111,12 @@ export class WsTransport {
   private readonly factory: (url: string, protocols?: string[]) => WebSocketLike;
   private readonly token: string | null;
   private readonly invokeTimeoutMs: number;
+  private readonly connectTimeoutMs: number;
   private readonly reconnectEnabled: boolean;
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
   private readonly isFatalClose: ((info: CloseInfo) => boolean) | null;
-  private readonly schedule: (fn: () => void, ms: number) => void;
+  private readonly schedule: (fn: () => void, ms: number) => void | (() => void);
 
   constructor(
     url: string,
@@ -121,16 +127,22 @@ export class WsTransport {
     this.factory = options.factory ?? defaultFactory;
     this.token = options.token ?? null;
     this.invokeTimeoutMs = options.invokeTimeoutMs ?? 30_000;
+    this.connectTimeoutMs = options.connectTimeoutMs ?? 10_000;
     this.reconnectEnabled = options.reconnect ?? true;
     this.reconnectBaseMs = options.reconnectBaseMs ?? 500;
     this.reconnectMaxMs = options.reconnectMaxMs ?? 10_000;
     this.isFatalClose = options.isFatalClose ?? null;
-    this.schedule = options.schedule ?? ((fn, ms) => void setTimeout(fn, ms));
+    this.schedule = options.schedule ?? ((fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      return () => clearTimeout(timer);
+    });
   }
 
   /** Open the connection. Safe to call once; reconnection is automatic. */
   connect(): void {
-    if (this.disposed || this.socket) return;
+    if (this.disposed || this.fatal || this.socket) return;
+    this.cancelReconnect?.();
+    this.cancelReconnect = null;
     this.openSocket();
   }
 
@@ -150,17 +162,40 @@ export class WsTransport {
   }
 
   private openSocket(): void {
+    const generation = ++this.socketGeneration;
     this.setStatus(this.reconnectAttempts > 0 ? "reconnecting" : "connecting");
+    const fail = (info: CloseInfo, closeSocket = false) => {
+      if (this.disposed || generation !== this.socketGeneration) return;
+      this.socketGeneration++;
+      this.cancelOpenTimeout?.();
+      this.cancelOpenTimeout = null;
+      const current = this.socket;
+      this.socket = null;
+      // Invalidate callbacks first: native close can be synchronous or arrive late.
+      if (closeSocket) { try { current?.close(); } catch { /* already unavailable */ } }
+      this.closeInfo = info;
+      this.failAllPending(new Error(CLOSED_MESSAGE));
+      const fatal = this.isFatalClose?.(info) ?? false;
+      if (fatal) this.fatal = true;
+      for (const listener of this.closeListeners) listener(info, fatal);
+      if (fatal) { this.setStatus("offline"); return; }
+      this.scheduleReconnect();
+    };
     let socket: WebSocketLike;
     try {
       socket = this.factory(this.url, buildSubprotocols(this.token));
     } catch {
-      this.scheduleReconnect();
+      fail({ reason: "Could not open WebSocket" });
       return;
     }
     this.socket = socket;
+    let opened = false;
 
     socket.onopen = () => {
+      if (this.disposed || generation !== this.socketGeneration) return;
+      opened = true;
+      this.cancelOpenTimeout?.();
+      this.cancelOpenTimeout = null;
       this.reconnectAttempts = 0;
       this.closeInfo = null;
       this.setStatus("connected");
@@ -170,30 +205,19 @@ export class WsTransport {
         if (this.pending.has(id)) socket.send(frame);
       }
     };
-    socket.onmessage = (ev) => this.handleMessage(ev.data);
+    socket.onmessage = (ev) => {
+      if (!this.disposed && generation === this.socketGeneration) this.handleMessage(ev.data);
+    };
     socket.onerror = () => {
       // close handler drives reconnect; nothing extra needed here.
     };
-    socket.onclose = (ev) => {
-      if (this.socket === socket) this.socket = null;
-      const info: CloseInfo = { code: ev?.code, reason: ev?.reason };
-      this.closeInfo = info;
-      this.failAllPending(new Error(CLOSED_MESSAGE));
-      if (this.disposed) {
-        this.setStatus("offline");
-        return;
-      }
-      const fatal = this.isFatalClose?.(info) ?? false;
-      if (fatal) this.fatal = true;
-      // Every close is reported, not just status flips: a supervisor counting
-      // failed opens on one address needs to hear each one.
-      for (const listener of this.closeListeners) listener(info, fatal);
-      if (fatal) {
-        this.setStatus("offline");
-        return;
-      }
-      this.scheduleReconnect();
-    };
+    socket.onclose = (ev) => fail({ code: ev?.code, reason: ev?.reason });
+    if (this.connectTimeoutMs > 0) {
+      const cancel = this.schedule(() => {
+        if (!opened) fail({ reason: "Connection timed out" }, true);
+      }, this.connectTimeoutMs);
+      this.cancelOpenTimeout = typeof cancel === "function" ? cancel : null;
+    }
   }
 
   private scheduleReconnect(): void {
@@ -207,9 +231,13 @@ export class WsTransport {
       this.reconnectMaxMs,
     );
     this.reconnectAttempts += 1;
-    this.schedule(() => {
-      if (!this.disposed && !this.socket) this.openSocket();
+    const generation = this.socketGeneration;
+    this.cancelReconnect?.();
+    const cancel = this.schedule(() => {
+      this.cancelReconnect = null;
+      if (!this.disposed && !this.socket && generation === this.socketGeneration) this.openSocket();
     }, delay);
+    this.cancelReconnect = typeof cancel === "function" ? cancel : null;
   }
 
   private handleMessage(data: unknown): void {
@@ -327,14 +355,19 @@ export class WsTransport {
   /** Close the connection and stop reconnecting. */
   dispose(): void {
     this.disposed = true;
+    this.socketGeneration++;
+    this.cancelOpenTimeout?.();
+    this.cancelReconnect?.();
+    this.cancelOpenTimeout = this.cancelReconnect = null;
     this.failAllPending(new Error(DISPOSED_MESSAGE));
-    if (this.socket) {
+    const socket = this.socket;
+    this.socket = null;
+    if (socket) {
       try {
-        this.socket.close();
+        socket.close();
       } catch {
         /* ignore */
       }
-      this.socket = null;
     }
     this.setStatus("offline");
   }

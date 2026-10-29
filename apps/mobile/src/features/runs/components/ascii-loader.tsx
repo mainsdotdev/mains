@@ -11,7 +11,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { type ModeId } from "@mains/contracts/modes";
-import { colors, type } from "@/theme";
+import { useThemeColors, type } from "@/theme";
 
 /**
  * What the agent is said to be doing while a turn runs — the phone's port of
@@ -94,6 +94,7 @@ const SHINE_MS = 2000;
 const ASSUMED_WIDTH = 220;
 
 export function AsciiLoader({ mode, thinkingText }: { mode: ModeId; thinkingText?: string }) {
+  const colors = useThemeColors();
   const words = LOADER_WORDS[mode] ?? LOADER_WORDS.developer;
   const [word, setWord] = useState(() => pickWord(words));
 

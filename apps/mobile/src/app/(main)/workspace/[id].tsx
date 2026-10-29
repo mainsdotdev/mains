@@ -16,7 +16,7 @@ import { runs, spaceTargets, spaces, workspaces, type RunRow as RunRecord } from
 import { relativeTime, runStatusLabel } from "@/lib/format";
 import { goHome } from "@/features/runs";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
-import { colors, radius, spacing, type, useBrandColors } from "@/theme";
+import { useThemeColors, radius, spacing, type, useBrandColors } from "@/theme";
 
 /** The bar's controls share one height, like the Codex app's search pill and compose button. */
 const BAR_HEIGHT = 52;
@@ -29,6 +29,7 @@ const BAR_HEIGHT = 52;
  * that starts a new run here.
  */
 export default function WorkspaceScreen() {
+  const colors = useThemeColors();
   const { id } = useLocalSearchParams<{ id: string }>();
   const workspaceId = typeof id === "string" ? id : "";
   const router = useRouter();
@@ -70,6 +71,8 @@ export default function WorkspaceScreen() {
   const workspace = workspaceQuery.data[0];
   const space = spaceQuery.data[0];
   const target = targetQuery.data[0];
+  /** Another computer's workspace: its runs can be read here, not started. */
+  const readOnly = workspace?.isReplica === true;
 
   // The bar rides the keyboard: an absolutely positioned child sees none of
   // KeyboardAvoidingView's padding, so it follows the keyboard's height itself.
@@ -133,6 +136,16 @@ export default function WorkspaceScreen() {
           paddingTop: spacing.sm,
           paddingBottom: insets.bottom + BAR_HEIGHT + spacing.xl + keyboardInset,
         }}
+        ListHeaderComponent={
+          readOnly ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: spacing.sm }}>
+              <SFSymbol name="lock.fill" size={13} tint={colors.secondaryLabel} />
+              <ThemedText variant="footnote" style={{ flex: 1, color: colors.secondaryLabel }}>
+                Read-only · this workspace runs on another computer
+              </ThemedText>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
           <ThemedText variant="subhead" style={{ paddingVertical: spacing.md, fontWeight: 600 }}>
             {!session.backend
@@ -213,7 +226,7 @@ export default function WorkspaceScreen() {
               </View>
             )}
           </Pressable>
-        ) : (
+        ) : readOnly ? null : (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`New run in ${workspace?.name ?? "this workspace"}`}
@@ -239,6 +252,7 @@ export default function WorkspaceScreen() {
 
 /** The navigation title: the workspace's name over its branch. */
 function HeaderTitle({ name, branch }: { name: string; branch: string | null }) {
+  const colors = useThemeColors();
   return (
     <View style={{ alignItems: "center" }}>
       <ThemedText variant="headline" numberOfLines={1}>
@@ -259,7 +273,9 @@ function runTitle(run: RunRecord): string {
 
 /** A run as a bare title, its age (or live status) on the right — the Codex list look. */
 function TitleRow({ run, onPress }: { run: RunRecord; onPress: () => void }) {
-  const live = run.status === "running" || run.status === "queued";
+  const colors = useThemeColors();
+  // A replica's status is only as fresh as its last sync; show its age instead.
+  const live = !run.isReplica && (run.status === "running" || run.status === "queued");
   const brand = useBrandColors();
   return (
     <Pressable

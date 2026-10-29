@@ -47,7 +47,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     slug: "mains",
     owner: "okanbilal",
     version: "1.0.0",
-    platforms: ["ios"],
+    platforms: ["ios", "android"],
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: variant.scheme,
@@ -78,9 +78,25 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           : undefined,
       },
     },
+    android: {
+      package: variant.identifier,
+      allowBackup: false,
+      adaptiveIcon: {
+        foregroundImage: "./assets/images/splash-icon-light.png",
+        backgroundColor: "#ffffff",
+      },
+      blockedPermissions: ["android.permission.RECORD_AUDIO", "android.permission.READ_MEDIA_AUDIO", "android.permission.READ_MEDIA_VIDEO"],
+    },
     plugins: [
       "expo-router",
       "expo-image",
+      "expo-font",
+      "expo-sharing",
+      ["expo-build-properties", {
+        // Local development/preview pairing can use LAN HTTP/WebSockets.
+        // Production follows iOS and uses HTTPS/WSS endpoints.
+        android: { usesCleartextTraffic: allowsDevelopmentLan },
+      }],
       [
         "expo-image-picker",
         {
@@ -99,6 +115,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           // the system picker, so limited access is never a dead end and iOS
           // does not need to raise its own alert about it on every launch.
           preventAutomaticLimitedAccessAlert: true,
+          granularPermissions: ["photo"],
         },
       ],
       [
@@ -120,6 +137,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         "expo-camera",
         {
           cameraPermission: CAMERA_PERMISSION,
+          recordAudioAndroid: false,
         },
       ],
       [

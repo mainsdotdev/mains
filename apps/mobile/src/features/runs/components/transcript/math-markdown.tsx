@@ -12,7 +12,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { estimateMathMarkdownHeight } from "@/lib/math-markdown-layout";
-import { colors, spacing } from "@/theme";
+import { useThemeColors, type ThemeColors, spacing } from "@/theme";
 
 import MathMarkdownDom from "./math-markdown-dom";
 
@@ -26,6 +26,8 @@ const CONTENT_ENTER_MS = 420;
  * an estimated slot instead of letting the transcript collapse to zero.
  */
 export default function MathMarkdown({ source }: { source: string }) {
+  const colors = useThemeColors();
+  const styles = createStyles(colors);
   const colorScheme = useColorScheme();
   const { width, fontScale } = useWindowDimensions();
   const reduceMotion = useReducedMotion();
@@ -124,6 +126,8 @@ function MathMarkdownPlaceholder({
   height: number;
   opacity: SharedValue<number>;
 }) {
+  const colors = useThemeColors();
+  const styles = createStyles(colors);
   const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
   const lineCount = Math.max(3, Math.min(42, Math.round(height / 34)));
   const widths = ["92%", "76%", "86%", "64%", "81%"] as const;
@@ -149,7 +153,7 @@ function MathMarkdownPlaceholder({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   host: {
     position: "relative",
     width: "100%",

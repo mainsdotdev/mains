@@ -5,7 +5,7 @@ import {
   type ViewStyle,
 } from "react-native";
 
-import { colors, radius, spacing, useBrandColors } from "@/theme";
+import { useThemeColors, radius, spacing, useBrandColors } from "@/theme";
 
 import { ThemedText } from "./themed-text";
 
@@ -34,6 +34,7 @@ export function Button({
   style?: StyleProp<ViewStyle>;
   onPress?: () => void;
 }) {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   const palette = {
     primary: { background: brand.accent, text: brand.accentContrast },

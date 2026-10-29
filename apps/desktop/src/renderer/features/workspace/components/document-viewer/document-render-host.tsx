@@ -6,6 +6,7 @@ import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 import { DocumentFallback } from "./document-fallback";
 import { SheetTabs } from "./sheet-tabs";
 import type { PptxRenderController } from "./renderers/render-pptx";
+import type { DocxRenderController } from "./renderers/render-docx";
 
 type Status = "loading" | "ready" | "error";
 
@@ -191,6 +192,7 @@ export function DocumentRenderHost({
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const zoomRef = useRef(zoom);
   const pptxCtlRef = useRef<PptxRenderController | null>(null);
+  const docxCtlRef = useRef<DocxRenderController | null>(null);
 
   const [status, setStatus] = useState<Status>("loading");
   const [failure, setFailure] = useState<string | undefined>();
@@ -211,7 +213,8 @@ export function DocumentRenderHost({
   // Render whenever the signed URL or target document changes.
   useEffect(() => {
     const root = shadowRootRef.current;
-    if (!root) {
+    const viewport = hostRef.current;
+    if (!root || !viewport) {
       setStatus("loading");
       return;
     }
@@ -225,6 +228,8 @@ export function DocumentRenderHost({
     sheetCtlRef.current = null;
     pptxCtlRef.current?.destroy();
     pptxCtlRef.current = null;
+    docxCtlRef.current?.destroy();
+    docxCtlRef.current = null;
 
     void (async () => {
       // Reset shadow content and rebuild the zoom wrapper.
@@ -237,7 +242,7 @@ export function DocumentRenderHost({
       wrapper.className = isPresentation
         ? "doc-presentation-wrapper"
         : "doc-zoom-wrapper";
-      if (!isPresentation) {
+      if (!isPresentation && doc.docType !== "docx") {
         wrapper.style.transform = `scale(${zoomRef.current})`;
       }
       root.appendChild(wrapper);
@@ -263,7 +268,16 @@ export function DocumentRenderHost({
         const key = pickRenderer(doc.docType);
         if (key === "docx") {
           const { renderDocx } = await import("./renderers/render-docx");
-          await renderDocx(buf, wrapper);
+          const ctl = await renderDocx(buf, wrapper, {
+            viewport,
+            zoom: zoomRef.current,
+          });
+          if (cancelled) {
+            ctl.destroy();
+            return;
+          }
+          docxCtlRef.current = ctl;
+          ctl.setZoom(zoomRef.current);
         } else if (key === "xlsx") {
           const { renderXlsx } = await import("./renderers/render-xlsx");
           const ctl = await renderXlsx(buf, wrapper);
@@ -305,6 +319,8 @@ export function DocumentRenderHost({
       controller.abort();
       pptxCtlRef.current?.destroy();
       pptxCtlRef.current = null;
+      docxCtlRef.current?.destroy();
+      docxCtlRef.current = null;
     };
   }, [revision, doc.path, doc.docType]);
 
@@ -313,10 +329,12 @@ export function DocumentRenderHost({
     zoomRef.current = zoom;
     if (pptxCtlRef.current) {
       pptxCtlRef.current.setZoom(zoom);
-    } else if (wrapperRef.current) {
+    } else if (docxCtlRef.current) {
+      docxCtlRef.current.setZoom(zoom);
+    } else if (wrapperRef.current && doc.docType === "xlsx") {
       wrapperRef.current.style.transform = `scale(${zoom})`;
     }
-  }, [zoom]);
+  }, [zoom, doc.docType]);
 
   const onSelectSheet = (name: string) => {
     setActiveSheet(name);
@@ -326,15 +344,15 @@ export function DocumentRenderHost({
   const isPresentation = doc.docType === "pptx";
 
   return (
-    <div className="relative flex-1 min-h-0 flex flex-col bg-primary-100 dark:bg-primary-900">
+    <div className="relative flex-1 min-h-0 min-w-0 flex flex-col bg-primary-100 dark:bg-primary-900">
       <div
-        className={`relative flex-1 min-h-0 ${
+        className={`relative flex-1 min-h-0 min-w-0 ${
           isPresentation ? "overflow-hidden" : "overflow-auto p-3"
         }`}
       >
         <div
           ref={hostRef}
-          className={isPresentation ? "h-full min-h-0" : "min-h-full"}
+          className={isPresentation ? "h-full min-h-0" : "min-h-full min-w-0"}
         />
         {status === "loading" && (
           <Text

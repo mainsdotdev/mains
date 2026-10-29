@@ -27,6 +27,8 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { runsRepo } from "./runs.repo";
 import { validateHistoryContentRequest, validateHistoryRequest } from "./run-history";
+import { describeRunOutput, readRunOutputChunk, validateOutputReference } from "./run-output-files";
+import type { ListRunOutputsPayload, ReadRunOutputPayload, RunOutputsPage } from "@mains/contracts/run-outputs";
 import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload } from "@mains/contracts/runs";
 import { providersService } from "../providers";
 import { collectionsService } from "../collections";
@@ -91,6 +93,7 @@ import {
   resolveRunAttachment,
 } from "./run-attachment-storage";
 import { readAttachmentImage } from "./run-attachment-images";
+import { describeAttachmentFile, readAttachmentChunk } from "./run-attachment-download";
 import {
   resolveConversationSettings,
   validateConversationSettings,
@@ -206,6 +209,8 @@ const RAW_IMAGE_MIMES: Record<string, string> = {
   bmp: "image/bmp",
   svg: "image/svg+xml",
 };
+
+const outputReadSelections = new Map<string, { artifact: RunArtifactResponse; sourcePath: string; replica: boolean; expiresAt: number }>();
 
 async function selectedOutputArtifacts(run: RunResponse) {
   const terminal = run.status !== "running" && run.status !== "queued";
@@ -1446,6 +1451,40 @@ export const runsService = {
     ];
   },
 
+  async listOutputs(payload: ListRunOutputsPayload): Promise<RunOutputsPage> {
+    validateOutputReference(payload?.runId, payload?.artifactId);
+    const offset = payload.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid output page");
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Conversation not found");
+    const selected = (await runsService.getOutputArtifacts(run.id)).filter((row) => payload.artifactId === undefined || row.id === payload.artifactId);
+    const rows = selected.slice(offset, offset + 100);
+    const items = (await Promise.all(rows.map((row) => describeRunOutput(run.id, row, !!run.isReplica).catch(() => null)))).filter((row): row is NonNullable<typeof row> => row !== null);
+    return { items, nextOffset: offset + rows.length < selected.length ? offset + rows.length : null };
+  },
+
+  async readOutputFile(payload: ReadRunOutputPayload) {
+    validateOutputReference(payload?.runId, payload?.artifactId);
+    if (payload.artifactId === undefined || typeof payload.version !== "string" || !/^[a-f0-9]{64}$/.test(payload.version) ||
+      !Number.isSafeInteger(payload.offset) || payload.offset < 0) throw new Error("Invalid output download");
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Conversation not found");
+    const key = JSON.stringify([run.id, payload.artifactId, payload.version]);
+    let selection = payload.offset === 0 ? undefined : outputReadSelections.get(key);
+    if (!selection || selection.expiresAt < Date.now()) {
+      const artifact = (await runsService.getOutputArtifacts(run.id)).find((row) => row.id === payload.artifactId);
+      if (!artifact) throw new Error("File not found in this conversation's selected outputs");
+      const sourcePath = run.isReplica ? await runsService.resolveReplicaFile({ runId: run.id, artifactId: artifact.id }) : artifact.path;
+      if (!sourcePath) throw new Error("Output file is unavailable");
+      selection = { artifact, sourcePath, replica: !!run.isReplica, expiresAt: Date.now() + 300_000 };
+      outputReadSelections.set(key, selection);
+      if (outputReadSelections.size > 64) outputReadSelections.delete(outputReadSelections.keys().next().value!);
+    }
+    selection.expiresAt = Date.now() + 300_000;
+    const output = await describeRunOutput(run.id, selection.artifact, selection.replica);
+    return readRunOutputChunk(output, selection.sourcePath, payload, selection.replica);
+  },
+
   /**
    * Resolve one Markdown file named in agent prose. Paired devices get this
    * narrow read instead of fileExplorer access: only Work/Chat, only the
@@ -1915,6 +1954,8 @@ export const runsService = {
 
   listRunAttachmentFiles,
   listRunAttachmentRecords,
+  describeAttachmentFile,
+  readAttachmentChunk,
 
   async readAttachmentFile(
     payload: ResolveAttachmentPathPayload,

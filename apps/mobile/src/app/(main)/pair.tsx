@@ -18,7 +18,7 @@ import {
 } from "@mains/contracts/backend";
 import { startDemo } from "@/backend/demo/start";
 import { goHome } from "@/features/runs";
-import { colors, radius, shadows, spacing, type, useBrandColors } from "@/theme";
+import { useThemeColors, radius, shadows, spacing, type, useBrandColors } from "@/theme";
 
 type ScanState =
   | { kind: "scanning" }
@@ -42,6 +42,7 @@ function stateFromUrl(url: string | null): ScanState {
 }
 
 export default function PairScreen() {
+  const colors = useThemeColors();
   const router = useRouter();
   const brand = useBrandColors();
   const [permission, requestPermission] = useCameraPermissions();
@@ -277,6 +278,7 @@ function StatusPanel({
   onRetry: () => void;
   onPair: (link: PairingLink) => void;
 }) {
+  const colors = useThemeColors();
   const card = {
     padding: spacing.md,
     borderRadius: radius.lg,

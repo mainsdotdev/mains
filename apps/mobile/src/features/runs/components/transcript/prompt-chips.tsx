@@ -1,7 +1,7 @@
 import { Text } from "react-native";
 
 import type { PromptSegment } from "@/lib/prompt-chips";
-import { colors, useBrandColors } from "@/theme";
+import { useThemeColors, useBrandColors } from "@/theme";
 
 /**
  * A mention inside a prompt.
@@ -25,6 +25,7 @@ export function PromptMention({
   label: string;
   onAccent?: boolean;
 }) {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   return (
     <Text

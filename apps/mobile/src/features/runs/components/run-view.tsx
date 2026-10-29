@@ -13,7 +13,7 @@ import type { ComposerAttachment } from "@/lib/composer-attachments";
 import { projectedPromptLandingY } from "@/lib/prompt-flight";
 import type { PromptSkill } from "@/lib/prompt-chips";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
-import { colors, motion, radius, shadows, spacing } from "@/theme";
+import { useThemeColors, motion, radius, shadows, spacing } from "@/theme";
 import type {
   ComposerSendOrigin,
   PendingPrompt,
@@ -23,10 +23,17 @@ import type {
 import { useRunData } from "../hooks/use-run-data";
 import { useOptimisticPrompt } from "../hooks/use-optimistic-prompt";
 import { useRunOperations } from "../hooks/use-run-operations";
+import { TranscriptScroll, transcriptEnd, hasScrollMomentum, type ScrollDecision } from "../lib/transcript-scroll";
 
 import { AsciiLoader } from "./ascii-loader";
 import { ComposerBar, composerBottomPadding } from "./composer/composer-bar";
+import { AsyncQuestionCard } from "./approvals/async-question-card";
+import { PlanProgress } from "./plan-progress";
+import { TurnChangesCard } from "./turn-changes-card";
+import { turnChangeFooters } from "../lib/run-progress";
 import { PendingApprovalCard } from "./approvals/pending-approval-card";
+import { ReplicaBar } from "./replica-bar";
+import { PromptSuggestionChips } from "./transcript/prompt-suggestion-chips";
 import {
   FlyingPromptBubble,
   PROMPT_BUBBLE_ROW_PADDING,
@@ -34,21 +41,6 @@ import {
   type TranscriptActions,
 } from "./transcript/transcript-row";
 import { TranscriptTurn } from "./transcript/transcript-turn";
-
-/**
- * How far above the end a reader can rest and still count as following it. At
- * the true end the list sits a home-indicator inset *past* its content, so this
- * allows about a composer's height of drift before the chase lets go.
- */
-const PIN_DISTANCE = 80;
-
-/**
- * How far above the end the reader has to be before the way back down is
- * offered. Further than the chase threshold, so that letting go just shy of
- * the end — where the list still follows on its own — does not flash a button
- * for the one thing already happening.
- */
-const JUMP_DISTANCE = 220;
 
 /**
  * A run's conversation: its transcript, the agent's progress, any approval it
@@ -78,10 +70,11 @@ export function RunView({
   /** Content padding beneath that inset, for controls floating over the list. */
   topPadding?: number;
 }) {
+  const colors = useThemeColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   // Two sheets behind the composer's two chips: the model (and its effort)
-  // behind the model chip, how the agent may act behind the permission chip.
+  // behind the model chip; mode-appropriate controls behind Run options.
   const openModel = (providerId: string) =>
     router.push({ pathname: "/model", params: { providerId, runId } } as Href);
   const openRunOptions = (providerId: string) =>
@@ -90,13 +83,19 @@ export function RunView({
   const {
     loading: initialLoading,
     backend: { id: backendId, connected },
-    run: { record: run, isLive: runIsLive, providerId, mode, workspacePath },
-    transcript: { items, streamingItems, thinking, history },
-    approvals: { waiting, now },
+    run: { record: run, isLive: runIsLive, isReplica, providerId, mode, workspacePath, fileLinks },
+    transcript: { items, turns, plan, streamingItems, thinking, suggestions, history },
+    approvals: { waiting, questions, now },
     modelSelection,
   } = useRunData(runId, expectedProviderId);
   /** Sent, but the Mac has yet to answer with a run. */
   const starting = pending !== null && !run;
+  /**
+   * Running here, as far as this phone can tell. A replica's status is only as
+   * fresh as the owning computer's last sync, which may have gone offline mid-
+   * turn, so its "running" gets no live treatment.
+   */
+  const liveHere = Boolean(runIsLive) && !isReplica;
 
   // On home's first send this is a newly mounted composer. Repeating the
   // source text here keeps it continuously visible until the flying layer is
@@ -109,8 +108,9 @@ export function RunView({
     pending?.origin ? (pending.attachments ?? []) : [],
   );
   const rootRef = useRef<View>(null);
-  /** Following the end: cleared by a drag, restored by letting go near it. */
-  const pinned = useRef(true);
+  const metrics = useRef({ frame: 0, content: 0, offset: null as number | null });
+  /** A touch pauses chasing; moving away from the end enters history reading. */
+  const scrollIntent = useRef(new TranscriptScroll());
   const clearComposerSource = useCallback(() => {
     setDraft("");
     setContextSkills([]);
@@ -135,6 +135,10 @@ export function RunView({
     runIsLive: Boolean(runIsLive),
     releaseComposerSource: clearComposerSource,
   });
+  const changeFooters = useMemo(
+    () => mode === "chat" ? new Map<string, typeof turns>() : turnChangeFooters(rows, turns, history.end === null),
+    [mode, rows, turns, history.end],
+  );
 
   const measurePromptDestination = (target: PromptMessageRect) => {
     if (!measuringLaunch) return;
@@ -212,6 +216,8 @@ export function RunView({
 
   const {
     continueRun,
+    steerRun,
+    canSteer,
     forkRun,
     stopRun,
     sending,
@@ -222,8 +228,23 @@ export function RunView({
     turnIsActive,
     conversationSettings: modelSelection.settings,
   });
+  /** The composer feeds the running turn instead of waiting for it to end. */
+  const steering = liveHere && canSteer;
 
   const send = (origin: ComposerSendOrigin | null) => {
+    if (steering) {
+      void steerRun(
+        { sourceText: draft, contextSkills, attachments },
+        {
+          onAccepted: () => {
+            clearComposerSource();
+            scrollIntent.current.follow();
+            setHistoryFollowing(backendId, runId, true);
+          },
+        },
+      );
+      return;
+    }
     const sentDraft = draft;
     const sentContextSkills = contextSkills;
     const sentAttachments = attachments;
@@ -242,7 +263,7 @@ export function RunView({
             origin,
             attachments: sentAttachments,
           });
-          pinned.current = true;
+          scrollIntent.current.follow();
           setHistoryFollowing(backendId, runId, true);
         },
         onOptimisticRollback: () => {
@@ -277,20 +298,38 @@ export function RunView({
             ...actionState,
             forkDisabled: turnIsActive || forking,
             // A fork starts a run on the Mac; without one in reach, the button
-            // has nothing to offer, so it stays off the row entirely.
-            onFork: connected ? fork : undefined,
-            onOpenFile: mode !== "developer" ? openTextFile : undefined,
+            // has nothing to offer, so it stays off the row entirely. Another
+            // computer's conversation can only be branched on that computer.
+            onFork: connected && !isReplica ? fork : undefined,
+            onOpenFile: openTextFile,
+            canOpenFile: fileLinks,
           }
         : undefined,
-    [actionState, connected, fork, forking, mode, openTextFile, run, turnIsActive],
+    [actionState, connected, fileLinks, fork, forking, isReplica, openTextFile, run, turnIsActive],
   );
+
+  // Offered only where picking one can lead somewhere: a settled run this
+  // phone can continue, read at its end, with nothing typed or on its way yet.
+  // Typing replaces the offer, as picking one does.
+  const offerSuggestions =
+    suggestions.length > 0 &&
+    Boolean(run) &&
+    !isReplica &&
+    !runIsLive &&
+    connected &&
+    !history.end &&
+    !continuationPresentation &&
+    !sending &&
+    draft.length === 0;
 
   const listRef = useRef<ScrollView>(null);
 
   // Room for the keyboard under the transcript, as padding: a short transcript
   // stays where it is, a long one can still be scrolled clear of the keys.
   const keyboardInset = useKeyboardInset();
-  const composerHeight = 72 + insets.bottom;
+  // Includes the expanding plan, draft and attachments so the final rows stay visible.
+  const [composerBox, setComposerBox] = useState(0);
+  const composerHeight = Math.max(72 + insets.bottom, composerBox);
   /**
    * Where the scroll indicator runs: the strip of list the reader can actually
    * see. iOS already keeps it clear of the header and the home indicator; these
@@ -319,22 +358,13 @@ export function RunView({
   const rowLayouts = useRef(new Map<string, { y: number; height: number }>());
   const pageAnchor = useRef<{ key: string; offset: number; items: typeof items } | null>(null);
   const paging = useRef(false);
-  const dragging = useRef(false);
   useEffect(() => {
     const keys = new Set(rows.map((row) => row.key));
     for (const key of rowLayouts.current.keys()) if (!keys.has(key)) rowLayouts.current.delete(key);
   }, [rows]);
-  const metrics = useRef({ frame: 0, content: 0, offset: null as number | null });
   /** Whether the way back down is on screen; the ref keeps `onScroll` cheap. */
   const [awayFromEnd, setAwayFromEnd] = useState(false);
   const away = useRef(false);
-  /**
-   * The height of everything pinned to the bottom — the composer and the room
-   * left under it. Measured rather than assumed, because the bar grows with a
-   * long draft, an error line, or a strip of attachments, and the button that
-   * floats over it has to know where its top edge ended up.
-   */
-  const [composerBox, setComposerBox] = useState(0);
   /** Set a beat after the transcript first lands; only moves after that animate. */
   const placed = useRef(false);
   const placedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -352,20 +382,28 @@ export function RunView({
   const reviewJump = () => {
     const { frame, content, offset } = metrics.current;
     if (frame === 0 || content === 0 || offset === null) return;
-    const next = content - frame + bottomInset - offset > JUMP_DISTANCE;
+    const next = scrollIntent.current.showJump({ frame, content, offset, restOffset, bottomInset }, history.hasNewer);
     if (next === away.current) return;
     away.current = next;
     setAwayFromEnd(next);
   };
+  useEffect(() => {
+    const { frame, content, offset } = metrics.current;
+    if (frame === 0 || content === 0 || offset === null) return;
+    const next = scrollIntent.current.showJump({ frame, content, offset, restOffset, bottomInset }, history.hasNewer);
+    if (next === away.current) return;
+    away.current = next;
+    setAwayFromEnd(next);
+  }, [restOffset, bottomInset, history.hasNewer]);
 
   /** The scroll itself. Everything else that has to follow it lives in `place`. */
   const scrollIntoPlace = (animated: boolean) => {
     const { frame, content, offset } = metrics.current;
     if (frame === 0 || content === 0) return;
-    const end = content - frame + bottomInset;
+    if (scrollIntent.current.dragging) return;
     // A transcript that fits stays at rest under the header; scrolling a short
     // one "to the end" is what used to slide its first message off the top.
-    const max = Math.max(restOffset, end);
+    const max = transcriptEnd({ frame, content, offset, restOffset, bottomInset });
     // `null` means native has not reported its initial offset. Do not assume
     // it already equals `restOffset`: home's transparent floating header does
     // not always receive an automatic inset on its first native layout.
@@ -373,7 +411,7 @@ export function RunView({
     // Unpinned, the only move is back into range: when the content shrinks
     // under the reader — a turn folding as its run settles — iOS leaves the
     // offset past the end, showing nothing, until something scrolls.
-    if (!pinned.current && current !== null && current <= max) return;
+    if (!scrollIntent.current.pinned && current !== null && current <= max) return;
     if (current !== null && Math.abs(max - current) < 1) return;
     // An animated scroll reports its presentation offset through `onScroll`.
     // Writing the destination here would make a bubble measured mid-animation
@@ -397,8 +435,10 @@ export function RunView({
     if (paging.current || history.loading || !connected) return;
     paging.current = true;
     const toLatest = direction === "latest" || !history.loaded;
-    pinned.current = toLatest;
-    setHistoryFollowing(backendId, runId, pinned.current);
+    if (toLatest) scrollIntent.current.follow();
+    else scrollIntent.current.pause();
+    setHistoryFollowing(backendId, runId, toLatest);
+    reviewJump();
     const offset = metrics.current.offset ?? 0;
     const first = rows.find((row) => {
       const layout = rowLayouts.current.get(row.key);
@@ -409,32 +449,44 @@ export function RunView({
       : null;
     try {
       await backendSession.pageRunHistory(runId, direction);
+      // Identical-height pages need an explicit landing as no size event fires.
+      if (toLatest) place(true);
     } catch {
       pageAnchor.current = null;
+      if (toLatest && history.hasNewer) {
+        scrollIntent.current.pause();
+        setHistoryFollowing(backendId, runId, false);
+        reviewJump();
+      }
     } finally {
       paging.current = false;
     }
   };
   const jumpToEnd = () => {
-    if (history.end) { void pageHistory("latest"); return; }
-    pinned.current = true;
-    setHistoryFollowing(backendId, runId, true);
-    place(true);
+    if (paging.current || (history.hasNewer && (history.loading || !connected))) return;
+    pageAnchor.current = null;
+    const decision = scrollIntent.current.jump(history);
+    applyScrollDecision(decision);
+    if (!decision.page) place(true);
   };
 
-  /** Re-read whether the reader is at the end once a scroll comes to rest. */
-  const settle = (event: NativeScrollEvent) => {
-    const { contentOffset, contentSize, layoutMeasurement, targetContentOffset } = event;
-    // A fling reports where it will stop; judge by that rather than by where
-    // the finger left, or a flick up from the end would be chased straight back.
-    const y = targetContentOffset?.y ?? contentOffset.y;
-    pinned.current = contentSize.height - layoutMeasurement.height - y < PIN_DISTANCE && !history.hasNewer;
-    setHistoryFollowing(backendId, runId, pinned.current);
-    if (!paging.current && !pageAnchor.current) {
-      if (y < restOffset + 200 && history.hasOlder) void pageHistory("older");
-      else if (contentSize.height - layoutMeasurement.height - y < 100 && history.hasNewer) void pageHistory("newer");
-    }
-    dragging.current = false;
+  const geometry = (event?: NativeScrollEvent) => ({
+    frame: event?.layoutMeasurement.height ?? metrics.current.frame,
+    content: event?.contentSize.height ?? metrics.current.content,
+    offset: event?.contentOffset.y ?? metrics.current.offset,
+    restOffset, bottomInset,
+  });
+  const applyScrollDecision = (decision: ScrollDecision) => {
+    if (decision.following !== null) setHistoryFollowing(backendId, runId, decision.following);
+    if (decision.page && !paging.current && !pageAnchor.current) void pageHistory(decision.page);
+  };
+  const settle = (event: NativeScrollEvent, endDrag = false) => {
+    const momentum = endDrag && hasScrollMomentum(event.contentOffset.y, event.targetContentOffset?.y, event.velocity?.y);
+    applyScrollDecision(scrollIntent.current.settle({ ...geometry(event),
+      offset: endDrag ? event.targetContentOffset?.y ?? event.contentOffset.y : event.contentOffset.y,
+    }, history, momentum));
+    if (!scrollIntent.current.dragging && scrollIntent.current.pinned) place(true);
+    else reviewJump();
   };
 
   // The composer rides the keyboard itself, as the workspace screen's bar does:
@@ -450,7 +502,9 @@ export function RunView({
   const placeholder = !connected
     ? "Connect to Mains on your computer to continue this run"
     : runIsLive
-      ? "The agent is still working…"
+      ? steering
+        ? "Add to what the agent is working on…"
+        : "The agent is still working…"
       : !run
         ? starting
           ? "Starting the run…"
@@ -484,6 +538,7 @@ export function RunView({
     <View ref={rootRef} collapsable={false} style={{ flex: 1 }}>
       {/* Whole turns keep their fold state within a bounded 30-turn window. */}
       <ScrollView
+        keyboardShouldPersistTaps="handled"
         ref={listRef}
         contentInsetAdjustmentBehavior="automatic"
         scrollToOverflowEnabled
@@ -517,19 +572,13 @@ export function RunView({
         }}
         onScroll={(event) => {
           metrics.current.offset = event.nativeEvent.contentOffset.y;
+          if (!paging.current && !pageAnchor.current) applyScrollDecision(scrollIntent.current.move(geometry(event.nativeEvent), history));
           reviewJump();
-          if (dragging.current && !paging.current && !pageAnchor.current) {
-            const y = event.nativeEvent.contentOffset.y;
-            if (y < restOffset + 200 && history.hasOlder) void pageHistory("older");
-            else if (event.nativeEvent.contentSize.height - event.nativeEvent.layoutMeasurement.height - y < 100 && history.hasNewer) void pageHistory("newer");
-          }
         }}
-        onScrollBeginDrag={() => {
-          pinned.current = false;
-          dragging.current = true;
-          setHistoryFollowing(backendId, runId, false);
+        onScrollBeginDrag={(event) => {
+          applyScrollDecision(scrollIntent.current.beginDrag(geometry(event.nativeEvent)));
         }}
-        onScrollEndDrag={(event) => settle(event.nativeEvent)}
+        onScrollEndDrag={(event) => settle(event.nativeEvent, true)}
         onMomentumScrollEnd={(event) => settle(event.nativeEvent)}
       >
         {(history.hasOlder || history.error) && (
@@ -564,6 +613,7 @@ export function RunView({
                 const y = layout.y - anchor.offset;
                 pageAnchor.current = null;
                 metrics.current.offset = y;
+                scrollIntent.current.rebase(y);
                 listRef.current?.scrollTo({ y, animated: false });
               }
             }}>
@@ -573,10 +623,13 @@ export function RunView({
               // A local continuation already owns the new turn. Do not mark
               // the previous persisted turn live while that prompt flies in.
               isRunInProgress={
-                Boolean(runIsLive) && !history.end && !continuationPresentation && index === rows.length - 1
+                liveHere && !history.end && !continuationPresentation && index === rows.length - 1
               }
               actions={actions}
             />
+            {changeFooters.get(row.key)?.map((turn) => turn.changes ? (
+              <TurnChangesCard key={turn.id} backendId={backendId} runId={runId} turnId={turn.id} turnIndex={turn.turnIndex} changes={turn.changes} />
+            ) : null)}
             </View>
           ))
         )}
@@ -596,22 +649,20 @@ export function RunView({
             key={row.key}
             row={row}
             providerId={providerId}
-            isRunInProgress={Boolean(runIsLive)}
+            isRunInProgress={liveHere}
             actions={actions}
           />
         ))}
-        {history.end && (
-          <View style={{ gap: spacing.sm }}>
-            {history.hasNewer && <Pressable disabled={history.loading || !connected} onPress={() => void pageHistory("newer")}>
-              <ThemedText variant="subhead" style={{ textAlign: "center" }}>Load newer messages</ThemedText>
-            </Pressable>}
-            <Pressable disabled={history.loading || !connected} onPress={jumpToEnd}>
-              <ThemedText variant="subhead" style={{ textAlign: "center" }}>Jump to latest</ThemedText>
-            </Pressable>
-          </View>
-        )}
+        {offerSuggestions ? (
+          <PromptSuggestionChips suggestions={suggestions} providerId={providerId} onSelect={setDraft} />
+        ) : null}
+        {history.hasNewer ? (
+          <Pressable disabled={history.loading || !connected} onPress={() => void pageHistory("newer")}>
+            <ThemedText variant="subhead" style={{ textAlign: "center" }}>Load newer messages</ThemedText>
+          </Pressable>
+        ) : null}
         <View style={{ gap: spacing.md }}>
-          {(runIsLive && !history.end) || starting || continuationPresentation ? (
+          {(liveHere && !history.end) || starting || continuationPresentation ? (
             <AsciiLoader mode={mode} thinkingText={thinking} />
           ) : null}
           {waiting.map((approval) => (
@@ -630,6 +681,19 @@ export function RunView({
               }}
             />
           ))}
+          {/*
+            Codex's questions wait behind any real approval, as on the desktop,
+            and only where they can be answered: this computer's run, read at
+            its end, where whether a newer message moved on is known.
+          */}
+          {questions && waiting.length === 0 && !isReplica && !history.end ? (
+            <AsyncQuestionCard
+              key={questions.artifactId}
+              runId={runId}
+              providerId={providerId}
+              pending={questions}
+            />
+          ) : null}
           {run?.lastError ? (
             <View
               style={{
@@ -665,47 +729,54 @@ export function RunView({
         ]}
         onLayout={(event) => setComposerBox(event.nativeEvent.layout.height)}
       >
-        <ComposerBar
-          reservedTop={topInset + topPadding + spacing.sm}
-          value={draft}
-          onChangeText={setDraft}
-          onSend={(origin) => void send(origin)}
-          // Only offered while there is something to stop, and only when the
-          // Mac is reachable to hear it.
-          onStop={runIsLive && connected ? () => void stopRun() : undefined}
-          sending={sending}
-          disabled={!connected || turnIsActive || !run}
-          error={sendError}
-          attachments={attachments}
-          onAttachmentsChange={setAttachments}
-          placeholder={placeholder}
-          model={
-            providerId && modelSelection.label
-              ? {
-                  label: modelSelection.label,
-                  effort: modelSelection.effortLabel,
-                  onPress: () => openModel(providerId),
-                }
-              : null
-          }
-          permission={
-            providerId && modelSelection.permissionLabel
-              ? { label: modelSelection.permissionLabel, onPress: () => openRunOptions(providerId) }
-              : null
-          }
-          providerId={providerId || undefined}
-          context={
-            backendId && providerId
-              ? {
-                  backendId,
-                  providerId,
-                  workspacePath,
-                  skills: contextSkills,
-                  onSkillsChange: setContextSkills,
-                }
-              : null
-          }
-        />
+        {liveHere && plan && !history.end && !continuationPresentation ? (
+          <PlanProgress key={plan.providerTurnId} plan={plan} providerId={providerId} />
+        ) : null}
+        {isReplica ? (
+          <ReplicaBar />
+        ) : (
+          <ComposerBar
+            reservedTop={topInset + topPadding + spacing.sm}
+            value={draft}
+            onChangeText={setDraft}
+            onSend={(origin) => void send(origin)}
+            // Only offered while there is something to stop, and only when the
+            // Mac is reachable to hear it.
+            onStop={runIsLive && connected ? () => void stopRun() : undefined}
+            sending={sending}
+            disabled={!connected || !run || (turnIsActive && !steering)}
+            error={sendError}
+            attachments={attachments}
+            onAttachmentsChange={setAttachments}
+            placeholder={placeholder}
+            model={
+              providerId && modelSelection.label
+                ? {
+                    label: modelSelection.label,
+                    effort: modelSelection.effortLabel,
+                    onPress: () => openModel(providerId),
+                  }
+                : null
+            }
+            runOptions={
+              providerId && modelSelection.runOptionsLabel
+                ? { label: modelSelection.runOptionsLabel, accessibilityLabel: modelSelection.runOptionsAccessibilityLabel, onPress: () => openRunOptions(providerId) }
+                : null
+            }
+            providerId={providerId || undefined}
+            context={
+              backendId && providerId
+                ? {
+                    backendId,
+                    providerId,
+                    workspacePath,
+                    skills: contextSkills,
+                    onSkillsChange: setContextSkills,
+                  }
+                : null
+            }
+          />
+        )}
 
         {/*
           The way back down, over the composer and riding the keyboard with it.

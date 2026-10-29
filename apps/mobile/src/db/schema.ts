@@ -26,6 +26,28 @@ export const backends = sqliteTable("backends", {
   lastSpaceId: text("last_space_id"),
 });
 
+/** Selected output metadata and verified local copies; binary data never enters SQLite. */
+export const runOutputs = sqliteTable("run_outputs", {
+  backendId: text("backend_id").notNull(),
+  runId: text("run_id").notNull(),
+  artifactId: integer("artifact_id").notNull(),
+  descriptorJson: text("descriptor_json").notNull(),
+  version: text("version").notNull(),
+  localUri: text("local_uri"),
+  lastOpenedAt: integer("last_opened_at", { mode: "timestamp_ms" }),
+}, (t) => [primaryKey({ columns: [t.backendId, t.runId, t.artifactId] })]);
+
+/** Prompt originals share the bounded file cache, with attachment identities kept separate. */
+export const runAttachmentFiles = sqliteTable("run_attachment_files", {
+  backendId: text("backend_id").notNull(),
+  runId: text("run_id").notNull(),
+  attachmentId: text("attachment_id").notNull(),
+  descriptorJson: text("descriptor_json").notNull(),
+  version: text("version").notNull(),
+  localUri: text("local_uri"),
+  lastOpenedAt: integer("last_opened_at", { mode: "timestamp_ms" }),
+}, (t) => [primaryKey({ columns: [t.backendId, t.runId, t.attachmentId] })]);
+
 /** Spaces: a run's home on the Mac — provider + mode. Selected in the sidebar. */
 export const spaces = sqliteTable(
   "spaces",
@@ -213,6 +235,10 @@ export const workspaces = sqliteTable(
     /** Size of the last diff snapshot; null = no diff yet. */
     diffAdditions: integer("diff_additions"),
     diffDeletions: integer("diff_deletions"),
+    /** The backend that owns this workspace; another one's copy arrives through Bridge. */
+    ownerBackendId: text("owner_backend_id"),
+    /** Another computer's workspace: listed here, but runs can't be started in it. */
+    isReplica: integer("is_replica", { mode: "boolean" }).notNull().default(false),
   },
   (t) => [primaryKey({ columns: [t.backendId, t.id] })],
 );
@@ -250,6 +276,10 @@ export const runs = sqliteTable(
     isArchived: integer("is_archived", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+    /** The backend that executes this run; another one's copy arrives through Bridge. */
+    ownerBackendId: text("owner_backend_id"),
+    /** Another computer's conversation: readable here, never continued or forked. */
+    isReplica: integer("is_replica", { mode: "boolean" }).notNull().default(false),
   },
   (t) => [
     primaryKey({ columns: [t.backendId, t.id] }),
@@ -263,6 +293,11 @@ export const runTurns = sqliteTable(
     backendId: text("backend_id").notNull(),
     runId: text("run_id").notNull(),
     turnIndex: integer("turn_index").notNull(),
+    /** Backend turn identity; null until an older cache is refreshed. */
+    id: integer("id"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }),
+    metadataJson: text("metadata_json"),
+    changesJson: text("changes_json"),
     promptContent: text("prompt_content"),
     responseContent: text("response_content"),
     status: text("status").notNull(),
@@ -355,6 +390,8 @@ export const pendingApprovals = sqliteTable(
     isOther: integer("is_other", { mode: "boolean" }).notNull().default(false),
     isSecret: integer("is_secret", { mode: "boolean" }).notNull().default(false),
     elicitationMode: text("elicitation_mode"),
+    requestedSchemaJson: text("requested_schema_json"),
+    suppressAlwaysAllowRule: integer("suppress_always_allow_rule", { mode: "boolean" }).notNull().default(false),
     url: text("url"),
   },
   (t) => [

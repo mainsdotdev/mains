@@ -19,6 +19,7 @@ vi.mock("../projects", () => ({
 }));
 vi.mock("../runs", () => ({
   managedExecutionRoots: () => rows.managedRoots,
+  isStoredAttachmentFile: async () => false,
 }));
 vi.mock("../collections", () => ({
   collectionsService: { isStoredSourceFile: async () => false },

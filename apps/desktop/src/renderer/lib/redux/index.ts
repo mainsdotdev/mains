@@ -1,4 +1,5 @@
 import { configureStore } from "@reduxjs/toolkit";
+import { setupListeners } from "@reduxjs/toolkit/query";
 import {
   createMigrate,
   persistStore,
@@ -152,6 +153,10 @@ export const store = configureStore({
     }).concat(baseApi.middleware),
   devTools: process.env.NODE_ENV !== "production",
 });
+
+// Connect window focus/visibility and network events to RTK Query's refetch
+// policies. Register once for this renderer's shared store.
+setupListeners(store.dispatch);
 
 // When the active backend transport changes (local ↔ remote), clear cached
 // query data so the UI refetches everything from the newly-active backend.

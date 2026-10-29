@@ -1,8 +1,10 @@
 import { and, asc, eq } from "drizzle-orm";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 
+import { useSession } from "@/backend/backend-session";
 import { db } from "@/db/client";
-import { models } from "@/db/schema";
+import { models, spaces } from "@/db/schema";
+import { composerModeControls } from "./composer-mode";
 import { useRunSettings } from "./use-run-settings";
 
 import {
@@ -13,8 +15,6 @@ import {
   parseServiceTiers,
   permissionModesFor,
   permissionShortLabel,
-  supportsGoalMode,
-  supportsPlanToggle,
   runSettingsFromConfig,
 } from "./models";
 
@@ -24,6 +24,12 @@ import {
  * id these are the phone's draft preferences for a new conversation.
  */
 export function useModelSelection(backendId: string, providerId: string, runId?: string | null) {
+  const { selectedSpaceId } = useSession();
+  const spaceQuery = useCoalescedLiveQuery(
+    db.select({ mode: spaces.mode }).from(spaces).where(and(
+      eq(spaces.backendId, backendId), eq(spaces.id, selectedSpaceId ?? ""), eq(spaces.providerId, providerId),
+    )).limit(1), spaces, [backendId, selectedSpaceId, providerId],
+  );
   const modelQuery = useCoalescedLiveQuery(
     db
       .select()
@@ -34,6 +40,7 @@ export function useModelSelection(backendId: string, providerId: string, runId?:
     [backendId, providerId],
   );
   const conversation = useRunSettings(backendId, providerId, runId, modelQuery.data.find((model) => model.isDefault)?.id ?? modelQuery.data[0]?.id ?? "");
+  const controls = composerModeControls({ providerId, runId, runMode: conversation.mode, draftMode: spaceQuery.data[0]?.mode });
   const choice = conversation.settings.model;
   const list = dedupeModelsByPrettyName(modelQuery.data, providerId, choice);
   const selected =
@@ -48,9 +55,13 @@ export function useModelSelection(backendId: string, providerId: string, runId?:
   const serviceTiers = parseServiceTiers(selected?.serviceTiersJson).filter((tier) => tier.id !== "default");
   const storedTier = conversation.settings.config.serviceTier ?? "";
   const serviceTier = storedTier === "priority" && serviceTiers.some((tier) => tier.id === "fast") ? "fast" : storedTier;
+  const permissionLabel = controls.showPermissionControls && permissionMode ? permissionShortLabel(providerId, permissionMode) : null;
+  const hasRunOptions = controls.mode !== null && (permissionLabel || selected?.supportsFastMode || serviceTiers.length > 0 || controls.supportsGoalMode || controls.supportsPlanMode);
 
   return {
     ...conversation,
+    ...controls,
+    ready: conversation.ready && controls.mode !== null,
     models: list,
     selected,
     label: selected ? modelPrettyName(selected, providerId) : null,
@@ -59,15 +70,15 @@ export function useModelSelection(backendId: string, providerId: string, runId?:
     effortLabel: supportedLevels.length > 0 || effortLevel ? formatEffortLevel(effortLevel) : null,
     supportedLevels,
     permissionMode,
-    permissionLabel: permissionMode ? permissionShortLabel(providerId, permissionMode) : null,
-    permissionOptions: permissionModesFor(providerId),
+    permissionLabel,
+    permissionOptions: controls.showPermissionControls ? permissionModesFor(providerId) : [],
+    runOptionsLabel: hasRunOptions ? permissionLabel ?? "Options" : null,
+    runOptionsAccessibilityLabel: permissionLabel ? `Permissions: ${permissionLabel}` : "Run options",
     fastMode: settings.fastMode,
     supportsFastMode: selected?.supportsFastMode ?? false,
     serviceTier,
     serviceTiers,
     goalMode: settings.goalMode,
-    supportsGoalMode: supportsGoalMode(providerId),
     planMode: settings.planMode,
-    supportsPlanMode: supportsPlanToggle(providerId),
   };
 }

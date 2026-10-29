@@ -11,6 +11,7 @@ import { Apps, FileIconComponent } from "@/components/ui/icons";
 import { Button } from "@/components/ui";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useOpenComposerMention } from "../hooks/use-open-composer-mention";
+import { useOpenFileInEditor } from "../hooks/use-open-file-in-editor";
 import { composerSkillDestination } from "../lib/composer-mention";
 
 export interface PromptMarkdownSkill {
@@ -166,12 +167,13 @@ function PromptSkillChip({ skill, onOpen }: {
   const resolved = useLocalImageUrl(iconPath);
   const label = skill.displayName || skill.name;
   const tooltip = skill.shortDescription || skill.description || label;
-  const clickable = composerSkillDestination(skill)?.kind === "plugin";
+  const clickable = composerSkillDestination(skill) !== null;
   const Chip = clickable ? Button : "span";
 
   return (
     <Chip
-      className={`inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none text-accent hover:decoration-dotted hover:underline ${clickable ? "focus-visible:ring-2 focus-visible:ring-accent/40" : "cursor-default"}`}
+      type={clickable ? "button" : undefined}
+      className={`inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none text-accent hover:decoration-dotted hover:underline ${clickable ? "cursor-pointer focus-visible:ring-2 focus-visible:ring-accent/40" : "cursor-default"}`}
       style={
         skill.brandColor
           ? { color: `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))` }
@@ -203,6 +205,8 @@ function PromptSkillChip({ skill, onOpen }: {
 }
 
 function PromptFileChip({ file }: { file: PromptMarkdownFile }) {
+  const openFile = useOpenFileInEditor();
+  const Chip = file.isDirectory ? "span" : Button;
   const dotIndex = file.basename.lastIndexOf(".");
   const extension =
     dotIndex > 0 && dotIndex < file.basename.length - 1
@@ -210,8 +214,11 @@ function PromptFileChip({ file }: { file: PromptMarkdownFile }) {
       : undefined;
 
   return (
-    <span
-      className="inline-flex align-middle items-center gap-1 mb-0.5 mx-0.5 rounded-lg text-s font-medium leading-none select-none  text-accent hover:decoration-dotted hover:underline "
+    <Chip
+      type={file.isDirectory ? undefined : "button"}
+      onClick={file.isDirectory ? undefined : () => void openFile(file.fullPath)}
+      aria-label={file.isDirectory ? undefined : file.basename}
+      className={`inline-flex align-middle items-center gap-1 mb-0.5 mx-0.5 rounded-lg text-s font-medium leading-none select-none text-accent hover:decoration-dotted hover:underline ${file.isDirectory ? "" : "cursor-pointer focus-visible:ring-2 focus-visible:ring-accent/40"}`}
       title={file.fullPath}
     >
       <FileIconComponent
@@ -221,11 +228,12 @@ function PromptFileChip({ file }: { file: PromptMarkdownFile }) {
         className="size-3.5 shrink-0"
       />
       <span className="leading-none">{file.basename}</span>
-    </span>
+    </Chip>
   );
 }
 
 function PromptCodeChip({ token }: { token: string }) {
+  const openFile = useOpenFileInEditor();
   const hashIndex = token.lastIndexOf("#L");
   const fullPath = token.slice(0, hashIndex);
   const range = token.slice(hashIndex + 2);
@@ -237,8 +245,11 @@ function PromptCodeChip({ token }: { token: string }) {
       : undefined;
 
   return (
-    <span
-      className="inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none  text-accent hover:decoration-dotted hover:underline "
+    <Button
+      type="button"
+      onClick={() => void openFile(fullPath)}
+      aria-label={`${basename}:${range}`}
+      className="inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none text-accent hover:decoration-dotted hover:underline cursor-pointer focus-visible:ring-2 focus-visible:ring-accent/40"
       title={token}
     >
       <FileIconComponent
@@ -247,7 +258,7 @@ function PromptCodeChip({ token }: { token: string }) {
         className="size-3.5 shrink-0"
       />
       <span className="leading-none font-mono">{`${basename}:${range}`}</span>
-    </span>
+    </Button>
   );
 }
 

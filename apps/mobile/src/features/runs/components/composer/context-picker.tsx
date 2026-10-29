@@ -17,7 +17,7 @@ import {
   type PickerRow,
 } from "@/lib/context-picker";
 import type { CommandRow, SkillRow } from "@/db/schema";
-import { colors, radius, shadows, spacing, useSoftTint } from "@/theme";
+import { useThemeColors, radius, shadows, spacing, useSoftTint } from "@/theme";
 
 import { SFSymbol, ThemedText } from "@/components/ui";
 
@@ -64,6 +64,7 @@ export function ContextPicker({
   onSelect: (row: PickerRow) => void;
   onClose: () => void;
 }) {
+  const colors = useThemeColors();
   const skillQuery = useCoalescedLiveQuery(
     db
       .select()
@@ -253,6 +254,7 @@ export function ContextPicker({
 }
 
 function RowButton({ row, onPress }: { row: PickerRow; onPress: () => void }) {
+  const colors = useThemeColors();
   return (
     <Pressable
       accessibilityRole="button"
@@ -286,6 +288,7 @@ const SKILL_ICON_SIZE = 26;
  * to the next, and last to a sparkle.
  */
 function SkillIcon({ skill }: { skill: SkillRow }) {
+  const colors = useThemeColors();
   const [failed, setFailed] = useState<string[]>([]);
   const softTint = useSoftTint();
   const wash = skill.brandColor ? softTint(skill.brandColor) : colors.fill;
@@ -321,6 +324,7 @@ function SkillIcon({ skill }: { skill: SkillRow }) {
 }
 
 function SkillRowBody({ skill }: { skill: SkillRow }) {
+  const colors = useThemeColors();
   const badge = scopeLabel(skill.scope);
   const description = skill.shortDescription ?? skill.description;
 

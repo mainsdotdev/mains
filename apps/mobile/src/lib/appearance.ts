@@ -10,12 +10,10 @@ import { preferences } from "@/db/schema";
  * an override this app applies to itself.
  *
  * The override goes through `Appearance.setColorScheme`, which sets
- * `overrideUserInterfaceStyle` on the app's own windows. That is why nothing
- * else in the app has to know this module exists: `useColorScheme`, the iOS
- * semantic colors in `theme/colors.ts`, and every native view underneath all
- * resolve against the window's trait collection, so they follow the choice on
- * their own. Keep it that way — a component reading this preference to pick a
- * color is a component the system colors would have handled.
+ * `overrideUserInterfaceStyle` on iOS windows and AppCompat night mode on
+ * Android. Components subscribe through `useThemeColors` / `useColorScheme`.
+ * iOS retains native semantic colors; Android sends fresh palette values to
+ * existing view props. Components do not read the stored preference directly.
  */
 const PREFERENCES = ["system", "light", "dark"] as const;
 
@@ -49,8 +47,8 @@ export function appearancePreference(): AppearancePreference {
 }
 
 /**
- * Push the stored choice into UIKit. Call this before the first render — an
- * effect fires after the first paint, which is exactly the frame that would
+ * Push the stored choice into the native appearance before the first render.
+ * An effect fires after the first paint, which is exactly the frame that would
  * flash the phone's scheme before correcting itself.
  */
 export function applyStoredAppearance(): void {
