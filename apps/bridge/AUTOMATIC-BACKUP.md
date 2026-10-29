@@ -181,6 +181,12 @@ permission to delete the entire destination account.
    R2 binding access requires account R2 permissions. Limit tokens to the matching
    account and do not copy personal OAuth tokens into CI. The implementation
    only lists/reads source R2; deletion is called solely on the backup binding.
+   Each daily run first checks the CI token against the configured D1 metadata
+   endpoint with a GET. A rejected metadata read means account scope or D1 Read
+   access must be checked before granting broader permissions. If metadata reads
+   pass but export is denied, investigate the export permission separately.
+   This preflight prints only the environment, HTTP status and bounded numeric
+   provider codes; it never prints token values, provider messages or SQL.
    Confirm exact token permissions during the first manual run rather than
    granting all-account global credentials.
    Start with Account → D1 → Read, Account → Workers Scripts → Edit,
