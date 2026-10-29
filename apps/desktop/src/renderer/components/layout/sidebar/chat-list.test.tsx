@@ -103,7 +103,24 @@ describe("sidebar chat Page navigation", () => {
     await user.keyboard("{Enter}");
     expect(store.getState().workspace.pendingRunId).toBeNull();
     await user.click(screen.getByText(run.title!));
-    expect(screen.getByTestId("location").textContent).toBe(`/code/runs/${run.id}`);
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe(`/code/runs/${run.id}`));
+    expect(store.getState().workspace.pendingRunId).toBe(run.id);
+  });
+
+  it("waits for the chat's saved mode before navigating from its Page", async () => {
+    let finishModeSwitch!: () => void;
+    const switching = new Promise<void>((resolve) => { finishModeSwitch = resolve; });
+    mocks.updateSpace.mockReturnValue({ unwrap: () => switching });
+    const { store, user } = setup();
+    await user.click(screen.getByRole("button", { name: "Open page" }));
+    await user.click(screen.getByText(run.title!));
+    expect(mocks.updateSpace).toHaveBeenCalledExactlyOnceWith({
+      id: "page-space", payload: { mode: "work" },
+    });
+    expect(screen.getByTestId("location").textContent).toBe("/");
+    expect(store.getState().workspace.pendingRunId).toBeNull();
+    await act(async () => finishModeSwitch());
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe(`/code/runs/${run.id}`));
     expect(store.getState().workspace.pendingRunId).toBe(run.id);
   });
 
