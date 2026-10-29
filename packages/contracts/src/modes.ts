@@ -25,6 +25,17 @@ export function isModeId(value: unknown): value is ModeId {
   return typeof value === "string" && MODE_ID_SET.has(value);
 }
 
+/** Composer controls shared by the desktop and paired phone. */
+export const MODE_COMPOSER_CONTROLS = {
+  developer: { showPermissionControls: true, showPlanControls: true, showGoalControls: true },
+  work: { showPermissionControls: false, showPlanControls: false, showGoalControls: true },
+  chat: { showPermissionControls: false, showPlanControls: false, showGoalControls: false },
+} as const satisfies Record<ModeId, {
+  showPermissionControls: boolean;
+  showPlanControls: boolean;
+  showGoalControls: boolean;
+}>;
+
 // ─────────────────────────────────────────────────────────────
 // Which experiences each provider drives
 // ─────────────────────────────────────────────────────────────

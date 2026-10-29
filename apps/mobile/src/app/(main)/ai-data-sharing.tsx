@@ -12,10 +12,11 @@ import {
   revokeAiDataConsent,
   revokeAllAiDataConsents,
 } from "@/lib/ai-data-consent";
-import { colors, spacing } from "@/theme";
+import { useThemeColors, spacing } from "@/theme";
 
 /** Review and revoke the provider permissions stored on this phone. */
 export default function AiDataSharingScreen() {
+  const colors = useThemeColors();
   const session = useSession();
   const backendId = session.backend?.backendId ?? "";
   const consentQuery = useCoalescedLiveQuery(

@@ -1,5 +1,5 @@
 export {
-  colors,
+  useThemeColors,
   mixToward,
   useBrandColors,
   useProviderAccent,
@@ -10,6 +10,7 @@ export {
   useWorkspaceColors,
   withAlpha,
 } from "./colors";
+export type { ThemeColors } from "./colors";
 export { spacing } from "./spacing";
 export { type, type TypeVariant } from "./typography";
 export { radius } from "./radius";

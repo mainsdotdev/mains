@@ -1,6 +1,6 @@
 import { Pressable, View } from "react-native";
 
-import { colors, radius } from "@/theme";
+import { useThemeColors, radius } from "@/theme";
 
 import { GlassSurface, SFSymbol } from "@/components/ui";
 
@@ -23,6 +23,7 @@ export function ComposerPanelControl({
   onPress: () => void;
   style: { left?: number; right?: number; top?: number; bottom?: number };
 }) {
+  const colors = useThemeColors();
   return (
     <GlassSurface
       effect="clear"
@@ -68,6 +69,7 @@ export function ComposerPanelPill({
   style: { left?: number; right?: number; top?: number; bottom?: number };
   children: React.ReactNode;
 }) {
+  const colors = useThemeColors();
   return (
     <GlassSurface
       effect="clear"

@@ -5,7 +5,8 @@ import { useDrawerProgress } from "react-native-drawer-layout";
 import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated";
 
 import { AiDataConsentProvider } from "@/features/ai-data-consent";
-import { colors, shadows, useBrandColors } from "@/theme";
+import { nativeSheetOptions } from "@/components/ui";
+import { useThemeColors, shadows, useBrandColors } from "@/theme";
 
 /** Corner radius the main screen rounds into as the sidebar opens (≈ the device's). */
 const CARD_RADIUS = 44;
@@ -22,13 +23,14 @@ const CARD_DIM = { dark: "rgba(255,255,255,0.08)", light: "rgba(0,0,0,0.10)" };
  * own glass bar; the overview and settings use large titles, a run does not.
  */
 export default function MainLayout() {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   return (
     <AiDataConsentProvider>
       <SceneCard>
         <Stack
           screenOptions={{
-            headerTransparent: true,
+            headerTransparent: process.env.EXPO_OS === "ios",
             headerShadowVisible: false,
             headerLargeTitleShadowVisible: false,
             headerLargeStyle: { backgroundColor: "transparent" },
@@ -37,6 +39,7 @@ export default function MainLayout() {
             // The tint is for the back button; titles stay in the label color.
             headerTintColor: brand.accent,
             headerTitleStyle: { color: colors.label },
+            headerStyle: process.env.EXPO_OS === "android" ? { backgroundColor: colors.systemBackground } : undefined,
             headerLargeTitleStyle: { color: colors.label },
             contentStyle: { backgroundColor: colors.systemBackground },
           }}
@@ -45,6 +48,9 @@ export default function MainLayout() {
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="run/[id]" options={{ title: "" }} />
           <Stack.Screen name="document" options={{ title: "Document" }} />
+          <Stack.Screen name="outputs" options={{ ...nativeSheetOptions([0.62, 1], colors), title: "Outputs", headerShown: true, contentStyle: { backgroundColor: process.env.EXPO_OS === "android" ? colors.sheetBackground : colors.systemBackground } }} />
+          <Stack.Screen name="output/[artifactId]" options={{ title: "File" }} />
+          <Stack.Screen name="attachment/[attachmentId]" options={{ title: "Attachment" }} />
           <Stack.Screen name="workspace/[id]" options={{ title: "" }} />
           <Stack.Screen name="settings" options={{ title: "Settings", headerLargeTitle: true }} />
           <Stack.Screen
@@ -57,30 +63,18 @@ export default function MainLayout() {
           />
           <Stack.Screen
             name="target"
-            options={{
-              presentation: "formSheet",
-              headerShown: false,
-              sheetGrabberVisible: true,
-              sheetAllowedDetents: [0.5, 1],
-              // Transparent content = Liquid Glass sheet on iOS 26+.
-              contentStyle: { backgroundColor: "transparent" },
-            }}
+            options={nativeSheetOptions([0.5, 1], colors)}
           />
           <Stack.Screen
             name="model"
-            options={{
-              presentation: "formSheet",
-              headerShown: false,
-              sheetGrabberVisible: true,
-              sheetAllowedDetents: [0.62, 1],
-              contentStyle: { backgroundColor: "transparent" },
-            }}
+            options={nativeSheetOptions([0.62, 1], colors)}
           />
           <Stack.Screen
             name="search"
             options={{ presentation: "fullScreenModal", animation: "fade", headerShown: false }}
           />
           <Stack.Screen name="history-content" options={{ title: "Full content", headerLargeTitle: false }} />
+          <Stack.Screen name="file-diff" options={{ title: "Changes", headerLargeTitle: false }} />
           <Stack.Screen
             name="image/[artifactId]"
             options={{
@@ -92,33 +86,15 @@ export default function MainLayout() {
           />
           <Stack.Screen
             name="run-options"
-            options={{
-              presentation: "formSheet",
-              headerShown: false,
-              sheetGrabberVisible: true,
-              sheetAllowedDetents: [0.62, 1],
-              contentStyle: { backgroundColor: "transparent" },
-            }}
+            options={nativeSheetOptions([0.62, 1], colors)}
           />
           <Stack.Screen
             name="subagents"
-            options={{
-              presentation: "formSheet",
-              headerShown: false,
-              sheetGrabberVisible: true,
-              sheetAllowedDetents: [0.52, 1],
-              contentStyle: { backgroundColor: "transparent" },
-            }}
+            options={nativeSheetOptions([0.52, 1], colors)}
           />
           <Stack.Screen
             name="ai-data-consent"
-            options={{
-              presentation: "formSheet",
-              headerShown: false,
-              sheetGrabberVisible: true,
-              sheetAllowedDetents: [0.64, 1],
-              contentStyle: { backgroundColor: "transparent" },
-            }}
+            options={nativeSheetOptions([0.64, 1], colors)}
           />
         </Stack>
       </SceneCard>
@@ -133,6 +109,7 @@ export default function MainLayout() {
  * so a platform color can be used there.
  */
 function SceneCard({ children }: { children: ReactNode }) {
+  const colors = useThemeColors();
   const progress = useDrawerProgress();
   const scheme = useColorScheme();
   const rounding = useAnimatedStyle(() => ({

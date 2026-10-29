@@ -4,7 +4,7 @@ import { ScrollView, View } from "react-native";
 
 import { backendSession } from "@/backend/backend-session";
 import { ThemedText } from "@/components/ui";
-import { colors, spacing } from "@/theme";
+import { useThemeColors, spacing } from "@/theme";
 import type { RunTextFile } from "@mains/contracts/runs";
 
 import { Markdown } from "../transcript/markdown";
@@ -25,6 +25,7 @@ export function MarkdownDocument({
   runId: string;
   filePath: string;
 }) {
+  const colors = useThemeColors();
   const router = useRouter();
   const [state, setState] = useState<LoadedDocument>({ status: "loading" });
 
@@ -90,6 +91,7 @@ export function MarkdownDocument({
 }
 
 function DocumentMessage({ children }: { children: string }) {
+  const colors = useThemeColors();
   return (
     <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl }}>
       <ThemedText

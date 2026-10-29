@@ -248,6 +248,12 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
   // expire our own copy, which keeps the renderer's refetch meaningful.
   const MODELS_CACHE_TTL_MS = 60_000;
   let modelsCache: { models: ModelInfo[]; timestamp: number } | null = null;
+  let catalogGeneration = 0;
+  function invalidateCatalogs(): void {
+    catalogGeneration++;
+    modelsCache = null;
+    commandsCache.clear();
+  }
 
   // Per-run usage accumulator.
   const usageAccumulator = new Map<
@@ -553,8 +559,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     currentClientCwd = null;
     clientNeedsRestart = false;
     // Both are per-runtime/per-account, so a fresh client must re-read them.
-    modelsCache = null;
-    commandsCache.clear();
+    invalidateCatalogs();
 
     if (!current) return;
     logInfo(`Disposing Copilot client: ${reason}`);
@@ -1603,11 +1608,12 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         config[key as keyof CopilotAdapterConfig] !== updated[key as keyof CopilotAdapterConfig],
       )) {
         clientNeedsRestart = true;
-        modelsCache = null;
-        commandsCache.clear();
+        invalidateCatalogs();
       }
       adoptConfig(config, updated);
     },
+
+    invalidateCatalogs,
 
     async shutdown(): Promise<void> {
       toolCallIndex.clear();
@@ -1728,6 +1734,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     },
 
     async listCommands(workspacePath?: string): Promise<CommandInfo[]> {
+      const generation = catalogGeneration;
       const now = Date.now();
       const cacheKey = workspacePath ?? "__global__";
       const cached = commandsCache.get(cacheKey);
@@ -1757,7 +1764,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
             userFacing: true,
           }));
 
-        commandsCache.set(cacheKey, { commands, timestamp: now });
+        if (generation === catalogGeneration) commandsCache.set(cacheKey, { commands, timestamp: now });
         logInfo(`Listed ${commands.length} Copilot slash commands`);
         return commands;
       } catch (err) {
@@ -1782,6 +1789,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     // (e.g. Copilot Free), not a truncated response. Logged below so it is
     // diagnosable from the app log rather than looking like a failed call.
     async listModels(): Promise<ModelInfo[]> {
+      const generation = catalogGeneration;
       const now = Date.now();
       if (modelsCache && now - modelsCache.timestamp < MODELS_CACHE_TTL_MS) {
         return modelsCache.models;
@@ -1832,7 +1840,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           }),
         );
 
-        modelsCache = { models, timestamp: now };
+        if (generation === catalogGeneration) modelsCache = { models, timestamp: now };
         logInfo(
           `Listed ${models.length} Copilot model(s): ${models.map((m) => m.id).join(", ") || "(none)"}`,
         );
@@ -1883,8 +1891,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         if (identity !== lastAccountIdentity) {
           lastAccountIdentity = identity;
           clientNeedsRestart = !!client;
-          modelsCache = null;
-          commandsCache.clear();
+          invalidateCatalogs();
         }
       } catch (error) {
         logWarn(

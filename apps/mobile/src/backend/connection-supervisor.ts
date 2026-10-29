@@ -7,8 +7,9 @@ import type { WsTransport } from "./ws-transport";
  *
  *  - offline → drop the socket, wait for the network signal; no retry timers
  *  - app comes to the foreground → make sure a socket exists
- *  - an endpoint that never opens → rotate to the next one; a full cycle of
- *    failures → `unreachable`, retried on a slow timer and on any signal
+ *  - at most 30s of visible recovery, including initial snapshot sync
+ *  - failed endpoints rotate even if they previously worked; after recovery
+ *    fails, `unreachable` stays visible during slow, silent probes
  *  - the backend refused the token → `authBlocked`; nothing to retry until
  *    the user re-pairs
  *  - socket open ≠ connected: `onConnected` (describe + snapshot sync) must
@@ -56,6 +57,8 @@ export class ProtocolMismatchError extends Error {}
 const ATTEMPTS_PER_ENDPOINT = 3;
 /** How long to wait after every endpoint failed before trying the cycle again. */
 const UNREACHABLE_RETRY_MS = 30_000;
+const RECOVERY_WINDOW_MS = 30_000;
+const UNREACHABLE_REASON = "Could not reach Mains on your computer. Retrying automatically.";
 
 const defaultSchedule = (fn: () => void, ms: number) => {
   const timer = setTimeout(fn, ms);
@@ -71,6 +74,10 @@ export class ConnectionSupervisor {
   private unsubscribeTransport: (() => void)[] = [];
   private unsubscribeSignals: (() => void)[] = [];
   private cancelRetry: (() => void) | null = null;
+  private cancelRecovery: (() => void) | null = null;
+  /** Silent probes retain the unavailable state until the full sync succeeds. */
+  private quiet = false;
+  private syncAttempt = 0;
 
   private online = true;
   private active = true;
@@ -79,8 +86,10 @@ export class ConnectionSupervisor {
   private disposed = false;
   /** Bumped on every teardown so stale async callbacks can bail. */
   private generation = 0;
+  private readonly deps: SupervisorDeps;
 
-  constructor(private readonly deps: SupervisorDeps) {
+  constructor(deps: SupervisorDeps) {
+    this.deps = deps;
     this.schedule = deps.schedule ?? defaultSchedule;
   }
 
@@ -96,18 +105,23 @@ export class ConnectionSupervisor {
   async start(): Promise<void> {
     if (this.disposed) return;
     const { network, lifecycle } = this.deps.signals;
+    this.active = lifecycle.isActive();
+    let networkChanged = false;
     this.unsubscribeSignals.push(
       network.subscribe((online) => {
+        networkChanged = true;
         this.online = online;
-        this.evaluate();
+        if (online && this.state.kind !== "connected") this.retry();
+        else this.evaluate();
       }),
       lifecycle.subscribe((active) => {
         this.active = active;
-        if (active) this.evaluate();
+        if (active) this.retry();
+        else this.evaluate();
       }),
     );
-    this.active = lifecycle.isActive();
-    this.online = await network.isOnline().catch(() => true);
+    const online = await network.isOnline().catch(() => true);
+    if (!networkChanged) this.online = online;
     this.evaluate();
   }
 
@@ -118,6 +132,7 @@ export class ConnectionSupervisor {
       return; // needs re-pairing / an update, not another attempt
     }
     this.teardown();
+    this.quiet = false;
     this.failedEndpointsThisCycle = 0;
     this.evaluate();
   }
@@ -132,15 +147,20 @@ export class ConnectionSupervisor {
 
   private evaluate(): void {
     if (this.disposed) return;
+    // Losing network or backgrounding must not clear an authorization failure.
+    if (this.state.kind === "authBlocked" || this.state.kind === "incompatible") return;
     if (!this.online) {
       this.teardown();
       this.setState({ kind: "offline" });
       return;
     }
-    // Terminal states wait for the outside world (re-pair, app update).
-    if (this.state.kind === "authBlocked" || this.state.kind === "incompatible") {
+    if (!this.active) {
+      this.teardown();
+      // Keep command recovery waiting for foreground; idle means the session stopped.
+      this.setState({ kind: "offline" });
       return;
     }
+    if (this.cancelRetry && !this.transport) return;
     if (!this.transport) this.connect();
   }
 
@@ -151,24 +171,23 @@ export class ConnectionSupervisor {
       return;
     }
     const endpoint = endpoints[this.endpointIndex % endpoints.length];
+    this.ensureRecoveryDeadline();
     const generation = ++this.generation;
     const transport = this.deps.createTransport(endpoint);
     this.transport = transport;
-    this.setState({ kind: "connecting", endpoint });
+    if (!this.quiet) this.setState({ kind: "connecting", endpoint });
 
-    let everOpened = false;
     let failedOpens = 0;
     this.unsubscribeTransport = [
       transport.onStatusChange((status) => {
         if (generation !== this.generation) return;
         switch (status) {
           case "connected":
-            everOpened = true;
-            this.failedEndpointsThisCycle = 0;
+            failedOpens = 0;
             void this.runOnConnected(transport, endpoint, generation);
             return;
           case "reconnecting":
-            this.setState({ kind: "reconnecting", endpoint });
+            if (!this.quiet) this.setState({ kind: "reconnecting", endpoint });
             return;
           case "offline":
             if (transport.isFatal) {
@@ -183,12 +202,13 @@ export class ConnectionSupervisor {
             return;
         }
       }),
-      // An address that never opens is abandoned after a few tries; a socket
-      // that opened once and dropped keeps the transport's own backoff.
+      // A previously reachable address can disappear when Wi-Fi/IP changes too.
       transport.onClose((_info, fatal) => {
-        if (generation !== this.generation || fatal || everOpened) return;
+        if (generation !== this.generation || fatal) return;
+        this.syncAttempt++;
+        this.ensureRecoveryDeadline();
         failedOpens += 1;
-        if (failedOpens >= ATTEMPTS_PER_ENDPOINT) this.rotateEndpoint();
+        if (this.quiet || failedOpens >= ATTEMPTS_PER_ENDPOINT) this.rotateEndpoint();
       }),
     ];
     transport.connect();
@@ -199,25 +219,34 @@ export class ConnectionSupervisor {
     endpoint: string,
     generation: number,
   ): Promise<void> {
-    this.setState({ kind: "syncing", endpoint });
+    const attempt = ++this.syncAttempt;
+    if (!this.quiet) this.setState({ kind: "syncing", endpoint });
     try {
       const descriptor = await this.deps.onConnected(transport, endpoint);
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || attempt !== this.syncAttempt) return;
+      this.cancelRecovery?.();
+      this.cancelRecovery = null;
+      this.cancelRetry?.();
+      this.cancelRetry = null;
+      this.quiet = false;
+      this.failedEndpointsThisCycle = 0;
       this.setState({ kind: "connected", endpoint, descriptor });
     } catch (error) {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation || attempt !== this.syncAttempt) return;
       const reason = error instanceof Error ? error.message : String(error);
       if (error instanceof ProtocolMismatchError) {
         this.teardown();
         this.setState({ kind: "incompatible", reason });
         return;
       }
+      if (this.quiet) { this.parkUnreachable(true); return; }
       // The socket is fine but the first sync failed: keep the socket, show
       // the problem, and try the sync again shortly.
       this.setState({ kind: "unreachable", reason: `Sync failed: ${reason}` });
       this.cancelRetry?.();
       this.cancelRetry = this.schedule(() => {
-        if (generation === this.generation && transport.status() === "connected") {
+        this.cancelRetry = null;
+        if (generation === this.generation && attempt === this.syncAttempt && transport.status() === "connected") {
           void this.runOnConnected(transport, endpoint, generation);
         }
       }, 5_000);
@@ -225,23 +254,40 @@ export class ConnectionSupervisor {
   }
 
   private rotateEndpoint(): void {
-    this.teardown();
+    this.teardown(false);
     this.failedEndpointsThisCycle += 1;
     this.endpointIndex = (this.endpointIndex + 1) % this.deps.endpoints.length;
-    if (this.failedEndpointsThisCycle >= this.deps.endpoints.length) {
-      this.failedEndpointsThisCycle = 0;
-      this.setState({
-        kind: "unreachable",
-        reason: "Could not reach Mains on your computer at any of its addresses",
-      });
-      this.cancelRetry = this.schedule(() => this.evaluate(), UNREACHABLE_RETRY_MS);
+    if (this.quiet || this.failedEndpointsThisCycle >= this.deps.endpoints.length) {
+      this.parkUnreachable(false);
       return;
     }
     this.connect();
   }
 
-  private teardown(): void {
+  private ensureRecoveryDeadline(): void {
+    if (this.cancelRecovery) return;
+    this.cancelRecovery = this.schedule(() => {
+      this.cancelRecovery = null;
+      this.parkUnreachable(true);
+    }, RECOVERY_WINDOW_MS);
+  }
+
+  private parkUnreachable(advance: boolean): void {
+    this.teardown();
+    if (advance && this.deps.endpoints.length) this.endpointIndex = (this.endpointIndex + 1) % this.deps.endpoints.length;
+    this.quiet = true;
+    this.failedEndpointsThisCycle = 0;
+    this.setState({ kind: "unreachable", reason: UNREACHABLE_REASON });
+    this.cancelRetry = this.schedule(() => {
+      this.cancelRetry = null;
+      this.evaluate();
+    }, UNREACHABLE_RETRY_MS);
+  }
+
+  private teardown(clearRecovery = true): void {
     this.generation += 1;
+    this.syncAttempt++;
+    if (clearRecovery) { this.cancelRecovery?.(); this.cancelRecovery = null; }
     this.cancelRetry?.();
     this.cancelRetry = null;
     for (const unsubscribe of this.unsubscribeTransport) unsubscribe();

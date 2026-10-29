@@ -5,7 +5,7 @@ import { atlasService } from "../atlas";
 import { projectsService } from "../projects";
 import { collectionsService } from "../collections";
 import { bridgeService } from "../bridge";
-import { managedExecutionRoots } from "../runs";
+import { isStoredAttachmentFile, managedExecutionRoots } from "../runs";
 import { workspaceService } from "../workspace";
 import { isDiscoveredSkillDocument } from "../providers/skill-document-paths";
 
@@ -13,7 +13,7 @@ import { isDiscoveredSkillDocument } from "../providers/skill-document-paths";
 // Content roots
 //
 // The directories whose files the renderer may read and write. Exact registered
-// Collection source files are a read-only exception below.
+// Collection sources and retained prompt attachments are read-only exceptions below.
 //
 // The renderer renders markdown from sources nobody here controls — synced
 // issue bodies, agent and subagent reports — and a link in that markdown can
@@ -85,7 +85,7 @@ export async function assertWithinContentRoots(realPath: string): Promise<void> 
   throw new Error("Path is outside your workspaces");
 }
 
-/** Collection sources and discovered skill documents are read-only exceptions. */
+/** Registered source files, prompt attachments and skill documents are read-only exceptions. */
 export async function assertWithinReadableContentRoots(realPath: string): Promise<void> {
   if (isDiscoveredSkillDocument(realPath)) return;
   try {
@@ -96,6 +96,7 @@ export async function assertWithinReadableContentRoots(realPath: string): Promis
       throw error;
     }
   }
+  if (await isStoredAttachmentFile(realPath)) return;
   if (await collectionsService.isStoredSourceFile(realPath)) return;
   if (await atlasService.isStoredFile(realPath)) return;
   if (await bridgeService.isCachedFile(realPath)) return;

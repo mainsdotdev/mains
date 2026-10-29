@@ -1,4 +1,6 @@
 import { baseApi } from "./baseApi";
+import type { RootState } from "../index";
+import { providerAccountCacheKey, providerCatalogConfigKey } from "@mains/backend/shared/provider-catalog";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModelServiceTier } from "@mains/contracts/run-settings";
 import type { DetectedClis, ProviderCliInfo } from "@mains/contracts/provider-cli";
@@ -273,6 +275,18 @@ export interface CliUpdateResult {
   output: string;
 }
 
+function providerDiscoveryTags(id: string) {
+  return ([
+    "ProviderModels", "ProviderCommands", "ProviderSkills", "ProviderPlugins",
+    "ProviderInstalledPlugins", "ProviderRateLimits", "ProviderMemory",
+  ] as const).map((type) => ({ type, id }));
+}
+
+function cachedProvider(state: RootState, id: string): Provider | undefined {
+  return providersApi.endpoints.getProviderById.select(id)(state).data
+    ?? providersApi.endpoints.getProviders.select()(state).data?.find((provider) => provider.id === id);
+}
+
 export const providersApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     getProviders: builder.query<Provider[], void>({
@@ -325,6 +339,18 @@ export const providersApi = baseApi.injectEndpoints({
         "Providers",
         { type: "Providers", id },
       ],
+      async onQueryStarted({ id, payload }, { dispatch, getState, queryFulfilled }) {
+        if (!payload.config) return;
+        const previous = cachedProvider(getState() as RootState, id);
+        try {
+          const { data } = await queryFulfilled;
+          if (!previous || providerCatalogConfigKey(previous.config) !== providerCatalogConfigKey(data.config)) {
+            dispatch(baseApi.util.invalidateTags([
+              ...providerDiscoveryTags(id), { type: "ProviderAccountInfo", id },
+            ]));
+          }
+        } catch { /* A failed settings write leaves the existing catalogs valid. */ }
+      },
     }),
 
     deleteProvider: builder.mutation<void, string>({
@@ -414,6 +440,7 @@ export const providersApi = baseApi.injectEndpoints({
         args: [id, workspacePath],
       }),
       providesTags: (_result, _error, { id, workspacePath }) => [
+        { type: "ProviderCommands", id },
         { type: "ProviderCommands", id: `${id}:${workspacePath ?? ""}` },
       ],
     }),
@@ -427,6 +454,7 @@ export const providersApi = baseApi.injectEndpoints({
         args: [id, workspacePath],
       }),
       providesTags: (_result, _error, { id, workspacePath }) => [
+        { type: "ProviderSkills", id },
         { type: "ProviderSkills", id: `${id}:${workspacePath ?? ""}` },
       ],
     }),
@@ -437,6 +465,15 @@ export const providersApi = baseApi.injectEndpoints({
         args: [id],
       }),
       providesTags: (_result, _error, id) => [{ type: "ProviderAccountInfo", id }],
+      async onQueryStarted(id, { dispatch, getCacheEntry, queryFulfilled }) {
+        const previous = getCacheEntry().data;
+        try {
+          const { data } = await queryFulfilled;
+          if (!previous || providerAccountCacheKey(previous) !== providerAccountCacheKey(data)) {
+            dispatch(baseApi.util.invalidateTags(providerDiscoveryTags(id)));
+          }
+        } catch { /* Keep discovery after an unsuccessful account probe. */ }
+      },
       // Answering this spawns the provider CLI (version + auth status). The
       // composer subscribes to it as a signed-out preflight, so keep results
       // around well past the 60s default to avoid a CLI spawn per remount.
@@ -448,8 +485,9 @@ export const providersApi = baseApi.injectEndpoints({
         handler: CHANNELS.providers.updateCli,
         args: [id],
       }),
-      // After updating, the version/account info may change — refetch it.
-      invalidatesTags: (_result, _error, id) => [{ type: "ProviderAccountInfo", id }],
+      invalidatesTags: (result, _error, id) => result?.success
+        ? [...providerDiscoveryTags(id), { type: "ProviderAccountInfo", id }]
+        : [],
     }),
 
     getProviderPlugins: builder.query<PluginListResponse, string>({
@@ -490,6 +528,7 @@ export const providersApi = baseApi.injectEndpoints({
         handler: CHANNELS.providers.readPlugin,
         args: [providerId, pluginName, marketplacePath],
       }),
+      providesTags: (_result, _error, { providerId }) => [{ type: "ProviderPlugins", id: providerId }],
     }),
 
     installProviderPlugin: builder.mutation<
@@ -503,7 +542,8 @@ export const providersApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { providerId }) => [
         { type: "ProviderPlugins", id: providerId },
         { type: "ProviderInstalledPlugins", id: providerId },
-        "ProviderSkills",
+        { type: "ProviderSkills", id: providerId },
+        { type: "ProviderCommands", id: providerId },
       ],
     }),
 
@@ -515,7 +555,8 @@ export const providersApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { providerId }) => [
         { type: "ProviderPlugins", id: providerId },
         { type: "ProviderInstalledPlugins", id: providerId },
-        "ProviderSkills",
+        { type: "ProviderSkills", id: providerId },
+        { type: "ProviderCommands", id: providerId },
       ],
     }),
 
@@ -530,7 +571,8 @@ export const providersApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { providerId }) => [
         { type: "ProviderPlugins", id: providerId },
         { type: "ProviderInstalledPlugins", id: providerId },
-        "ProviderSkills",
+        { type: "ProviderSkills", id: providerId },
+        { type: "ProviderCommands", id: providerId },
       ],
     }),
 
@@ -542,7 +584,8 @@ export const providersApi = baseApi.injectEndpoints({
       invalidatesTags: (_r, _e, { providerId }) => [
         { type: "ProviderPlugins", id: providerId },
         { type: "ProviderInstalledPlugins", id: providerId },
-        "ProviderSkills",
+        { type: "ProviderSkills", id: providerId },
+        { type: "ProviderCommands", id: providerId },
       ],
     }),
 

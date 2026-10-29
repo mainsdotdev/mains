@@ -1,7 +1,7 @@
 import { Image } from "expo-image";
 import type { ColorValue, ImageStyle, StyleProp } from "react-native";
 
-import { colors } from "@/theme";
+import { useThemeColors } from "@/theme";
 
 /**
  * An SF Symbol (iOS). Renders nothing on platforms without symbol sources.
@@ -12,7 +12,7 @@ import { colors } from "@/theme";
 export function SFSymbol({
   name,
   size = 18,
-  tint = colors.label,
+  tint,
   style,
 }: {
   name: string;
@@ -20,10 +20,11 @@ export function SFSymbol({
   tint?: ColorValue;
   style?: StyleProp<ImageStyle>;
 }) {
+  const colors = useThemeColors();
   return (
     <Image
       source={`sf:${name}`}
-      tintColor={tint as string}
+      tintColor={(tint ?? colors.label) as string}
       contentFit="contain"
       style={[{ width: size, height: size }, style]}
     />

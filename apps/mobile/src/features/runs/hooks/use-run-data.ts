@@ -11,8 +11,11 @@ import {
 import { db } from "@/db/client";
 import { cachedHistoryQueries } from "@/db/history-queries";
 import { useRunHistory } from "@/backend/run-history";
-import { pendingApprovals, runArtifacts, runs, toolCalls, workspaces } from "@/db/schema";
+import { pendingApprovals, runArtifacts, runOutputs, runTurns, runs, toolCalls, workspaces } from "@/db/schema";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
+import { pendingAsyncQuestions } from "@/lib/async-questions";
+import { fileLinkFilter, knownOutputNames } from "@/lib/output-reference";
+import { latestPromptSuggestions } from "@/lib/prompt-suggestions";
 import { buildTranscript } from "@/lib/transcript";
 import { useModelSelection } from "@/lib/use-model-selection";
 import { useNow } from "@/lib/use-now";
@@ -20,6 +23,7 @@ import { isModeId, DEFAULT_MODE_ID } from "@mains/contracts/modes";
 
 import { latestThinking } from "../lib/latest-thinking";
 import { projectStreamingTranscript } from "../lib/run-transcript-projection";
+import { activeRunPlan, readRunTurns } from "../lib/run-progress";
 
 /**
  * The read side of a run screen: its durable projection, transient assistant
@@ -57,6 +61,9 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
   const callQuery = useCoalescedLiveQuery(
     cached.calls, toolCalls, [backendId, runId],
   );
+  const turnQuery = useCoalescedLiveQuery(cached.turns, runTurns, [backendId, runId]);
+  const turns = useMemo(() => readRunTurns(turnQuery.data), [turnQuery.data]);
+  const plan = useMemo(() => activeRunPlan(turns, callQuery.data), [turns, callQuery.data]);
   const approvalQuery = useCoalescedLiveQuery(
     db
       .select()
@@ -84,6 +91,24 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     () => buildTranscript(artifactQuery.data, callQuery.data),
     [artifactQuery.data, callQuery.data],
   );
+  const mode = isModeId(run?.mode) ? run.mode : DEFAULT_MODE_ID;
+  // Outputs listed before keep their links even when their turn is outside the window.
+  const outputQuery = useCoalescedLiveQuery(
+    db
+      .select({ descriptorJson: runOutputs.descriptorJson })
+      .from(runOutputs)
+      .where(and(eq(runOutputs.backendId, backendId), eq(runOutputs.runId, runId))),
+    runOutputs,
+    [backendId, runId],
+  );
+  const fileLinks = useMemo(
+    () => fileLinkFilter({
+      outputNames: knownOutputNames(items, outputQuery.data),
+      // Only Work/Chat runs have a folder of their own the Mac reads Markdown from.
+      markdownFallback: mode !== "developer",
+    }),
+    [items, mode, outputQuery.data],
+  );
   const streamingMessages = useStreamingMessages(runId);
   const { persistedResponseContents, streamingItems } = useMemo(
     () => projectStreamingTranscript(items, streamingMessages),
@@ -109,6 +134,8 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     [approvalQuery.data, now],
   );
   const thinking = useMemo(() => latestThinking([...artifactQuery.data].reverse()), [artifactQuery.data]);
+  const suggestions = useMemo(() => latestPromptSuggestions(artifactQuery.data), [artifactQuery.data]);
+  const asyncQuestions = useMemo(() => pendingAsyncQuestions(artifactQuery.data), [artifactQuery.data]);
   const modelSelection = useModelSelection(backendId, providerId, runId);
 
   const readingCache = [runQuery, artifactQuery, callQuery].some(
@@ -131,19 +158,29 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     run: {
       record: run,
       isLive: runIsLive,
+      /** Another computer's conversation (Bridge): read here, never continued. */
+      isReplica: run?.isReplica === true,
       providerId,
-      mode: isModeId(run?.mode) ? run.mode : DEFAULT_MODE_ID,
+      mode,
       workspacePath: workspaceQuery.data[0]?.rootPath ?? null,
+      /** Which file references in this transcript can open on the phone. */
+      fileLinks,
     },
     transcript: {
       items,
+      turns,
+      plan,
       streamingItems: history.end ? [] : streamingItems,
       promptCount,
       thinking,
+      /** Follow-ups offered after the latest answer, until the user's next message. */
+      suggestions,
       history,
     },
     approvals: {
       waiting: waitingApprovals,
+      /** Codex's end-of-turn questions still waiting on the user, if any. */
+      questions: asyncQuestions,
       now,
     },
     modelSelection,

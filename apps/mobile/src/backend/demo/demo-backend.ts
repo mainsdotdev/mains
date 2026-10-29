@@ -11,6 +11,8 @@ import type {
   RunHistoryCursor,
   ReadRunTextFilePayload,
   RunTextFile,
+  RunSteerPayload,
+  RunSteerResponse,
   SkillSummary,
   SpaceModePayload,
   StartRunPayload,
@@ -19,9 +21,12 @@ import type {
 } from "@mains/contracts/runs";
 import { historyWindow, compareHistoryCursors } from "@mains/contracts/run-history";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
+import type { ListRunOutputsPayload, ReadRunOutputPayload, ReadRunAttachmentPayload } from "@mains/contracts/run-outputs";
+import { demoOutputs, readDemoOutput, demoPromptAttachment, demoAttachmentFile, readDemoAttachment } from "./demo-outputs";
 import { conversationSettingsFrom, snapshotRunSettingConfig, type ConversationSettings } from "@mains/contracts/run-settings";
 
 import type { DemoHandler } from "./demo-socket";
+import { createDemoReview, DEMO_REVIEW_RUN_ID, readDemoTurnDiff } from "./demo-review";
 import rawSnapshot from "./demo-snapshot.json";
 import {
   demoScenarioForPrompt,
@@ -88,6 +93,9 @@ interface DemoSnapshot {
 }
 
 const snapshot = rawSnapshot as unknown as DemoSnapshot;
+const reviewTemplate = snapshot.runs.find((run) => run.providerId === "codex" && run.mode === "developer" &&
+  snapshot.workspaces.some((workspace) => workspace.id === run.workspaceId && workspace.name === "mains")) ??
+  snapshot.runs.find((run) => run.providerId === "codex" && run.mode === "developer") ?? snapshot.runs[0];
 
 /**
  * Keep the offline Codex demo representative even when its exported snapshot
@@ -321,9 +329,13 @@ const RUN_LIST_DEFAULT = 50;
 const now = () => new Date().toISOString();
 
 export class DemoBackend implements DemoHandler {
-  private readonly runs: DemoRun[] = snapshot.runs.map((run) => ({ ...run }));
+  private readonly review = createDemoReview(reviewTemplate);
+  private readonly runs: DemoRun[] = [this.review.run, ...snapshot.runs.map((run) => ({ ...run }))];
   private readonly artifacts = new Map<string, DemoArtifact[]>(
-    Object.entries(snapshot.artifacts).map(([runId, list]) => [runId, list.map((a) => ({ ...a }))]),
+    [...Object.entries(snapshot.artifacts).map(([runId, list]): [string, DemoArtifact[]] => [runId, list.map((a, index) => a.kind === "user-prompt" && index === list.findIndex((item) => item.kind === "user-prompt")
+      ? { ...a, metadata: { ...a.metadata, attachments: [...(Array.isArray(a.metadata?.attachments) ? a.metadata.attachments : []), demoPromptAttachment()] } }
+      : { ...a })]),
+    [DEMO_REVIEW_RUN_ID, this.review.artifacts]],
   );
   private readonly toolCalls = new Map<string, DemoToolCall[]>(
     Object.entries(snapshot.toolCalls).map(([runId, list]) => [
@@ -338,7 +350,8 @@ export class DemoBackend implements DemoHandler {
     ]),
   );
   private readonly turns = new Map<string, (Json & { id: number })[]>(
-    Object.entries(snapshot.turns).map(([runId, list]) => [runId, list.map((t) => ({ ...t }))]),
+    [...Object.entries(snapshot.turns).map(([runId, list]): [string, (Json & { id: number })[]] => [runId, list.map((t) => ({ ...t }))]),
+      [DEMO_REVIEW_RUN_ID, this.review.turns]],
   );
   private readonly spaces = snapshot.spaces.map((space) => ({ ...space }));
   private readonly providers = snapshot.providers.map((provider) => ({
@@ -393,6 +406,22 @@ export class DemoBackend implements DemoHandler {
 
   invoke(channel: string, args: unknown[]): unknown {
     switch (channel) {
+      case CHANNELS.runArtifacts.describeAttachmentFile:
+      case CHANNELS.runArtifacts.readAttachmentChunk: {
+        const request = args[0] as ReadRunAttachmentPayload;
+        if (!this.runs.some((run) => run.id === request.runId)) throw new Error("Conversation not found");
+        return channel === CHANNELS.runArtifacts.describeAttachmentFile ? demoAttachmentFile(request.runId, request.attachmentId) : readDemoAttachment(request);
+      }
+      case CHANNELS.runs.listOutputs: {
+        const request = args[0] as ListRunOutputsPayload;
+        if (!this.runs.some((run) => run.id === request.runId)) throw new Error("Conversation not found");
+        return { items: request.offset ? [] : demoOutputs(request.runId).filter((item) => request.artifactId === undefined || item.artifactId === request.artifactId), nextOffset: null };
+      }
+      case CHANNELS.runs.readOutputFile: {
+        const request = args[0] as ReadRunOutputPayload;
+        if (!this.runs.some((run) => run.id === request.runId)) throw new Error("Conversation not found");
+        return readDemoOutput(request);
+      }
       case CHANNELS.backend.describe:
         return {
           backendId: snapshot.backend.backendId,
@@ -444,6 +473,7 @@ export class DemoBackend implements DemoHandler {
       }
       case CHANNELS.runs.readHistoryContent: {
         const request = args[0] as ReadRunHistoryContentPayload;
+        if (request.source === "turn-diff") return readDemoTurnDiff(request.runId, request.id, request.offset);
         const artifact = this.artifacts.get(request.runId)?.find((row) => row.id === request.id);
         const call = this.toolCalls.get(request.runId)?.find((row) => row.id === request.id);
         if (request.source === "artifact" ? !artifact : !call) throw new Error("Content not found in this conversation");
@@ -510,6 +540,8 @@ export class DemoBackend implements DemoHandler {
         return this.execute(args[0] as StartRunPayload);
       case CHANNELS.runs.continue:
         return this.continueRun(args[0] as ContinueRunPayload);
+      case CHANNELS.runs.steer:
+        return this.steer(args[0] as RunSteerPayload);
       case CHANNELS.runs.fork:
         return this.fork(args[0] as ForkRunPayload);
       case CHANNELS.runs.abort:
@@ -632,6 +664,19 @@ export class DemoBackend implements DemoHandler {
       payload.contextSkills,
     );
     return { runId: run.id, resumed: true };
+  }
+
+  /** A message for the replay in flight, recorded as the Mac records a steer; the scenario plays on. */
+  private steer(payload: RunSteerPayload): RunSteerResponse {
+    const run = this.runs.find((r) => r.id === payload.runId);
+    if (!run) throw new Error("Run not found");
+    if (run.status !== "running") throw new Error("There is no active turn to steer. The message stays queued.");
+    this.appendArtifact(run, "user-prompt", payload.message, {
+      source: "user",
+      delivery: "steer",
+      clientUserMessageId: payload.clientUserMessageId,
+    });
+    return { runId: run.id, turnId: `demo-steer-${payload.clientUserMessageId}` };
   }
 
   private fork(payload: ForkRunPayload): { runId: string; sourceRunId: string } {

@@ -1042,7 +1042,16 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     // holds the writer lock on every thread it opened, so the next
     // `thread/resume` fails with "already has an active writer".
     updateConfig(next) {
+      if (config.binary !== (next as CodexAdapterConfig).binary) {
+        codexVersionPromise = null;
+        codexCompatibilityPromise = null;
+      }
       adoptConfig(config, next as CodexAdapterConfig);
+    },
+
+    invalidateCatalogs() {
+      catalogDefault = null;
+      capabilities.invalidateCatalogs();
     },
 
     async shutdown(): Promise<void> {

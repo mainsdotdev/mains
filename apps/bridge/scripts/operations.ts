@@ -16,7 +16,18 @@ export async function runWrangler(args: string[], target?: OperationsTarget): Pr
       ...(target ? ["--config", target.configPath, ...(!process.env.CLOUDFLARE_API_TOKEN ? ["--profile", target.profile] : [])] : [])],
     { env: { ...process.env, CI: "true" }, maxBuffer: 32 * 1024 * 1024, timeout: 120_000 });
     return stdout;
-  } catch { throw new OperationsError(`Wrangler ${args[0]} ${args[1] ?? ""} failed; no backup is complete until verification succeeds`); }
+  } catch (error) {
+    // Wrangler output can contain auth SQL, tokens and signed download URLs.
+    // Keep only bounded numeric codes so CI failures remain diagnosable.
+    const failure = (error ?? {}) as { code?: unknown; killed?: boolean; stdout?: unknown; stderr?: unknown };
+    const output = [failure.stdout, failure.stderr].filter((value): value is string => typeof value === "string").join("\n");
+    const codes = [...new Set([...output.matchAll(/\[code: ([1-9]\d{3,5})\]/g)].map((match) => match[1]))].slice(0, 4);
+    const details: string[] = [];
+    if (typeof failure.code === "number" && Number.isInteger(failure.code) && failure.code >= 0 && failure.code <= 255) details.push(`exit ${failure.code}`);
+    if (failure.killed) details.push("process terminated");
+    if (codes.length) details.push(`Cloudflare codes: ${codes.join(", ")}`);
+    throw new OperationsError(`Wrangler ${args[0]} ${args[1] ?? ""} failed${details.length ? ` (${details.join("; ")})` : ""}; no backup is complete until verification succeeds`);
+  }
 }
 
 /** The token is captured in memory, never printed/persisted or passed on argv.

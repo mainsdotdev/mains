@@ -15,7 +15,7 @@ import { goHome } from "@/features/runs";
 import { endpointHost } from "@mains/contracts/backend";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { connectionDetail, connectionLabel, relativeTime } from "@/lib/format";
-import { colors, spacing } from "@/theme";
+import { useThemeColors, spacing } from "@/theme";
 
 /** How long "Copied" stays on the diagnostics row. */
 const COPIED_FOR_MS = 2000;
@@ -46,7 +46,7 @@ function emailSupport(): void {
 function connectionHint(state: ConnectionState): string | null {
   switch (state.kind) {
     case "unreachable":
-      return "Make sure Mains is running on your computer and this phone can reach it — use the same Wi‑Fi, or Tailscale on both.";
+      return "Make sure your computer is awake and Mains is running. Use the same Wi‑Fi, or Tailscale on both devices.";
     case "authBlocked":
       return "Mains on your computer no longer accepts this phone. Create a new pairing link there.";
     case "incompatible":
@@ -100,6 +100,7 @@ function diagnostics(session: SessionSnapshot): string {
  * the headline of the Mac's card, and what it calls for sits right under it.
  */
 export default function SettingsScreen() {
+  const colors = useThemeColors();
   const router = useRouter();
   const session = useSession();
   const { backend, connection, lastSyncedAt, refreshing } = session;

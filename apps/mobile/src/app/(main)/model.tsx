@@ -1,9 +1,8 @@
 import { useLocalSearchParams } from "expo-router";
 import { useState } from "react";
-import { ScrollView } from "react-native";
 
 import { useSession } from "@/backend/backend-session";
-import { Card, Row, SheetHeader, SheetHint, ThemedText, sheetContentStyle } from "@/components/ui";
+import { Card, Row, SheetHeader, SheetHint, SheetScrollView, ThemedText } from "@/components/ui";
 import {
   effortOffAllowed,
   formatEffortLevel,
@@ -39,10 +38,10 @@ export default function ModelSheet() {
   const shownEffort = selection.effortLevel;
 
   return (
-    <ScrollView contentContainerStyle={sheetContentStyle}>
+    <SheetScrollView>
       <SheetHeader title="Model" />
 
-      <Card>
+      <Card surface="sheet">
         {selection.models.length === 0 ? (
           <ThemedText variant="subhead" style={{ padding: spacing.md }}>
             {session.connection.kind === "connected"
@@ -64,7 +63,7 @@ export default function ModelSheet() {
         )}
       </Card>
 
-      <Card>
+      <Card surface="sheet">
         <Row
           first
           title="Effort"
@@ -89,6 +88,6 @@ export default function ModelSheet() {
       </Card>
 
       <SheetHint text={hint} />
-    </ScrollView>
+    </SheetScrollView>
   );
 }

@@ -39,6 +39,8 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // A single Markdown link, resolved and contained inside that Work/Chat run's
   // managed directory. This deliberately does not expose fileExplorer:*.
   CHANNELS.runs.readTextFile,
+  CHANNELS.runs.listOutputs,
+  CHANNELS.runs.readOutputFile,
   CHANNELS.runs.listPendingApprovals,
   CHANNELS.runTurns.getByRun,
   CHANNELS.runToolCalls.getByRun,
@@ -49,6 +51,8 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.runArtifacts.readImage,
   CHANNELS.runArtifacts.readAttachmentImage,
   CHANNELS.runArtifacts.readAttachmentFile,
+  CHANNELS.runArtifacts.describeAttachmentFile,
+  CHANNELS.runArtifacts.readAttachmentChunk,
   CHANNELS.runContext.getByRun,
   CHANNELS.workspace.list,
   CHANNELS.workspace.get,
@@ -75,9 +79,9 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
 /**
  * Mutations a paired device may issue — only with a `commandId`, which the WS
  * router turns into exactly-once semantics through `command_receipts`. The
- * control loop's four verbs — answer a request, continue a run, start one,
- * branch one — plus the two picker writes the composer needs. Anything
- * touching files, git, terminal or settings stays out.
+ * control loop's verbs — answer a request or a question, continue or steer a
+ * run, start one, branch one, stop one — plus the picker writes the composer
+ * needs. Anything touching files, git, terminal or settings stays out.
  */
 export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   CHANNELS.runs.toolApprovalResponse,
@@ -90,6 +94,14 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   // Stopping a run you can already start and continue takes nothing further —
   // it only ends work the device itself asked for.
   CHANNELS.runs.abort,
+  // A message for the turn already running: the same payload and owner checks
+  // as a continuation, delivered before the turn ends rather than after it.
+  CHANNELS.runs.steer,
+  // Codex's end-of-turn questions. Answering one sends a formatted message
+  // through that same steer/continue seam; dismissing only records that the
+  // user chose not to answer.
+  CHANNELS.runs.answerAsyncQuestions,
+  CHANNELS.runs.dismissAsyncQuestions,
   // Only next-message model/config preferences; general runs:update stays private.
   CHANNELS.runs.updateConversationSettings,
   // The desktop's mode picker is a space update; the phone's works the same way.

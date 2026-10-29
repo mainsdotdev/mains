@@ -147,6 +147,9 @@ describe("backendService", () => {
       expect(PAIRED_DEVICE_CHANNELS.has("backend:describe")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:getAll")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:readTextFile")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("runArtifacts:readAttachmentFile")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("runArtifacts:describeAttachmentFile")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("runArtifacts:readAttachmentChunk")).toBe(true);
     });
   });
 
@@ -155,9 +158,12 @@ describe("backendService", () => {
       expect([...PAIRED_DEVICE_COMMANDS].sort()).toEqual([
         "providers:updateRunSettings",
         "runs:abort",
+        "runs:answerAsyncQuestions",
         "runs:continue",
+        "runs:dismissAsyncQuestions",
         "runs:execute",
         "runs:fork",
+        "runs:steer",
         "runs:toolApprovalResponse",
         "runs:updateConversationSettings",
         "space:update",

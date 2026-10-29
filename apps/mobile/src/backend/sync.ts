@@ -49,6 +49,8 @@ import {
   providers,
   runArtifacts,
   runTurns,
+  runOutputs,
+  runAttachmentFiles,
   runs,
   skills,
   spaceTargets,
@@ -66,6 +68,10 @@ import { snapshotRunSettingConfig, type ConversationSettings } from "@mains/cont
 import { ProtocolMismatchError } from "./connection-supervisor";
 import type { WsTransport } from "./ws-transport";
 import { historyRequest, historyLoaded, historyLoading, forgetHistory } from "./run-history";
+import { approvalRow } from "./approval-projection";
+import { forgetRunOutputs } from "./output-cache";
+import { confirmDeletedRuns } from "./output-retention";
+import { turnRow } from "./turn-projection";
 
 /**
  * The sync layer: the only writer of the projection tables. It pulls snapshots
@@ -158,6 +164,8 @@ function upsertRun(backendId: string, run: RunResponse): void {
     isArchived: Boolean(run.isArchived),
     createdAt: toDate(run.createdAt) ?? new Date(0),
     updatedAt: toDate(run.updatedAt) ?? new Date(0),
+    ownerBackendId: run.ownerBackendId ?? null,
+    isReplica: run.isReplica === true,
   };
   runProjectionWrite(runs, () => db.insert(runs)
     .values({ backendId, id: run.id, ...set })
@@ -173,6 +181,8 @@ function upsertWorkspace(backendId: string, workspace: WorkspaceResponse): void 
     status: workspace.status ?? null,
     updatedAt: toDate(workspace.updatedAt),
     isArchived: Boolean(workspace.isArchived),
+    ownerBackendId: workspace.ownerBackendId ?? null,
+    isReplica: workspace.isReplica === true,
   };
   runProjectionWrite(workspaces, () => db.insert(workspaces)
     .values({ backendId, id: workspace.id, ...set })
@@ -181,15 +191,7 @@ function upsertWorkspace(backendId: string, workspace: WorkspaceResponse): void 
 }
 
 function upsertTurn(backendId: string, turn: RunTurnResponse): void {
-  const set = {
-    promptContent: turn.promptContent,
-    responseContent: turn.responseContent,
-    status: turn.status,
-    startedAt: toDate(turn.startedAt),
-    endedAt: toDate(turn.endedAt),
-    elapsedMs: turn.elapsedMs,
-    model: turn.model,
-  };
+  const { backendId: _backend, runId: _run, turnIndex: _index, ...set } = turnRow(backendId, turn);
   runProjectionWrite(runTurns, () => db.insert(runTurns)
     .values({ backendId, runId: turn.runId, turnIndex: turn.turnIndex, ...set })
     .onConflictDoUpdate({
@@ -238,28 +240,6 @@ function upsertArtifact(backendId: string, runId: string, artifact: RunArtifactR
       set,
     })
     .run());
-}
-
-function approvalRow(backendId: string, request: ToolApprovalRequest, expiresAt: number) {
-  return {
-    backendId,
-    requestId: request.requestId,
-    runId: request.runId,
-    kind: request.kind,
-    toolName: request.toolName,
-    header: request.header ?? null,
-    question: request.question ?? null,
-    optionsJson: toJson(request.options),
-    multiSelect: Boolean(request.multiSelect),
-    description: request.description ?? null,
-    toolInputJson: toJson(request.toolInput),
-    requestedAt: new Date(request.timestamp),
-    expiresAt: new Date(expiresAt),
-    isOther: Boolean(request.isOther),
-    isSecret: Boolean(request.isSecret),
-    elicitationMode: request.elicitationMode ?? null,
-    url: request.url ?? null,
-  };
 }
 
 /** Drop one request locally — right after the phone answered it. */
@@ -317,6 +297,12 @@ function deleteRunLocally(backendId: string, runId: string): void {
     .where(and(eq(syncCursors.backendId, backendId), eq(syncCursors.runId, runId)))
     .run());
   runProjectionWrite(runs, () => db.delete(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).run());
+}
+
+/** The Mac says the run no longer exists: drop it and the files downloaded from it. */
+function deleteRunGone(backendId: string, runId: string): void {
+  deleteRunLocally(backendId, runId);
+  forgetRunOutputs(backendId, runId);
 }
 
 // ── Run targets: spaces, collections, providers ──
@@ -706,6 +692,7 @@ export function setSpaceTarget(
 
 /** The run list and workspace names: fetched together, applied in one transaction. */
 export async function syncSnapshot(transport: WsTransport, backendId: string): Promise<void> {
+  let staleWithOutputs: string[] = [];
   const [runList, workspaceList] = await Promise.all([
     invoke<RunResponse[]>(transport, CHANNELS.runs.getAll, [RUN_LIST_LIMIT]),
     invoke<WorkspaceResponse[]>(transport, CHANNELS.workspace.list),
@@ -733,6 +720,16 @@ export async function syncSnapshot(transport: WsTransport, backendId: string): P
       )
       .all();
     for (const { id } of stale) deleteRunLocally(backendId, id);
+    // Downloaded files outlive a run that merely aged out of the window; the
+    // ones whose run was deleted are settled below, once the Mac confirms it.
+    const staleIds = new Set(stale.map(({ id }) => id));
+    staleWithOutputs = [...new Set([...tx
+      .select({ runId: runOutputs.runId })
+      .from(runOutputs)
+      .where(eq(runOutputs.backendId, backendId))
+      .all(), ...tx.select({ runId: runAttachmentFiles.runId }).from(runAttachmentFiles).where(eq(runAttachmentFiles.backendId, backendId)).all()]
+      .map(({ runId }) => runId)
+      .filter((runId) => staleIds.has(runId)))];
 
     runProjectionWrite(backends, () => tx.update(backends)
       .set({ lastSyncedAt: new Date() })
@@ -740,12 +737,17 @@ export async function syncSnapshot(transport: WsTransport, backendId: string): P
       .run());
   });
 
+  const deleted = await confirmDeletedRuns(staleWithOutputs,
+    (runId) => invoke<RunResponse | null>(transport, CHANNELS.runs.getById, [runId]));
+  for (const runId of deleted) forgetRunOutputs(backendId, runId);
+
   // What the Code sidebar prints beside each workspace. Both are best-effort:
   // a Mac that can't run git for one folder must not stall the snapshot.
+  // Another computer's workspace has no folder here to diff.
   await Promise.all([
     syncGitStates(transport, backendId).catch(() => {}),
     ...workspaceList
-      .filter((w) => !w.isArchived)
+      .filter((w) => !w.isArchived && !w.isReplica)
       .map((w) => syncDiffSummary(transport, backendId, w.id).catch(() => {})),
   ]);
 }
@@ -822,7 +824,7 @@ async function syncRunOnce(transport: WsTransport, backendId: string, runId: str
   try {
     const run = await invoke<RunResponse | null>(transport, CHANNELS.runs.getById, [runId]);
     if (!run) {
-      deleteRunLocally(backendId, runId);
+      deleteRunGone(backendId, runId);
       return;
     }
     const [page, approvals] = await Promise.all([
@@ -881,7 +883,7 @@ export function syncRun(transport: WsTransport, backendId: string, runId: string
 async function syncRunRow(transport: WsTransport, backendId: string, runId: string): Promise<void> {
   const run = await invoke<RunResponse | null>(transport, CHANNELS.runs.getById, [runId]);
   if (run) upsertRun(backendId, run);
-  else deleteRunLocally(backendId, runId);
+  else deleteRunGone(backendId, runId);
 }
 
 // ── Events ──
@@ -991,6 +993,8 @@ export function runExists(backendId: string, runId: string): boolean {
 /** Drop everything cached for a backend (forgetting a Mac). */
 export function clearBackend(backendId: string): void {
   projectionTransaction(() => {
+    runProjectionWrite(runOutputs, () => db.delete(runOutputs).where(eq(runOutputs.backendId, backendId)).run());
+    runProjectionWrite(runAttachmentFiles, () => db.delete(runAttachmentFiles).where(eq(runAttachmentFiles.backendId, backendId)).run());
     runProjectionWrite(aiDataConsents, () => db.delete(aiDataConsents).where(eq(aiDataConsents.backendId, backendId)).run());
     runProjectionWrite(spaceTargets, () => db.delete(spaceTargets).where(eq(spaceTargets.backendId, backendId)).run());
     runProjectionWrite(spaces, () => db.delete(spaces).where(eq(spaces.backendId, backendId)).run());

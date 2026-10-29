@@ -18,7 +18,7 @@ import Animated, {
 import { parsePromptContent } from "@/lib/prompt-chips";
 import type { PromptImage, TranscriptItem } from "@/lib/transcript";
 import { useSmoothText } from "@/lib/use-smooth-text";
-import { colors, motion, radius, spacing, useProviderAccent } from "@/theme";
+import { useThemeColors, motion, radius, spacing, useProviderAccent } from "@/theme";
 import { ThemedText } from "@/components/ui";
 import type {
   PromptBubbleRect,
@@ -35,6 +35,8 @@ import { PromptSegmentView } from "./prompt-chips";
 import { SubagentSummaryRow } from "../subagents/subagent-summary-row";
 import { ToolBlock } from "./tools/tool-block";
 import { HistoryContentLink } from "../history-content-link";
+import { OutputFileCard } from "../outputs/output-file-card";
+import { PromptAttachmentCard } from "./prompt-attachment-card";
 
 /**
  * What the action row under an agent message may do. Threaded down from the
@@ -50,8 +52,10 @@ export interface TranscriptActions {
   onFork?: () => Promise<void>;
   /** A continuation is running, so preserve the fork button without accepting taps. */
   forkDisabled: boolean;
-  /** A Work/Chat Markdown link opens on its own native screen. */
+  /** A conversation's file link opens on its own native screen. */
   onOpenFile?: (filePath: string) => void;
+  /** Which file references link to `onOpenFile`; the rest stay plain text. */
+  canOpenFile?: (filePath: string) => boolean;
 }
 
 /**
@@ -114,6 +118,8 @@ export function TranscriptRow({
       return <SubagentSummaryRow runId={item.runId} agents={item.agents} />;
     case "images":
       return <ImageGallery images={item.images} />;
+    case "document":
+      return <OutputFileCard runId={item.runId} artifactId={item.artifactId} name={item.name} byteSize={item.byteSize} desktopOnly={item.desktopOnly} />;
     case "note":
       return (
         <View><ThemedText variant="monoCaption" selectable>
@@ -313,6 +319,9 @@ function PromptBubble({
         opacity: hidden ? 0 : 1,
       }}
     >
+      {item.documents?.length ? <View style={{ width: "100%", maxWidth: 260, gap: spacing.xs, marginBottom: spacing.xs }}>
+        {item.documents.map((document) => <PromptAttachmentCard key={document.key} document={document} />)}
+      </View> : null}
       {item.images.length > 0 ? (
         <View style={{ alignItems: "flex-end", gap: spacing.xs }}>
           <PromptImageGrid
@@ -405,6 +414,7 @@ function FlyingPromptImage({
   progress: SharedValue<number>;
   reduceMotion: boolean;
 }) {
+  const colors = useThemeColors();
   const uri = usePromptImageUri(image);
   const animatedStyle = useAnimatedStyle(() => {
     const value = progress.value;
@@ -537,6 +547,7 @@ function PromptImageGrid({
   images: PromptImage[];
   onImageRef?: (key: string, view: View | null) => void;
 }) {
+  const colors = useThemeColors();
   const { width: windowWidth } = useWindowDimensions();
   const gridWidth = Math.min(PROMPT_IMAGE_MAX_WIDTH, windowWidth * 0.84);
   const tileWidth =
@@ -600,6 +611,7 @@ function promptBubbleRadius(item: Extract<TranscriptItem, { kind: "prompt" }>): 
 }
 
 function PromptBubbleText({ item }: { item: Extract<TranscriptItem, { kind: "prompt" }> }) {
+  const colors = useThemeColors();
   const { segments } = parsePromptContent(item.text, item.skills, item.files);
   return (
     <ThemedText variant="prose" selectable style={{ color: colors.onTint }}>

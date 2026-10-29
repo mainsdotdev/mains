@@ -377,6 +377,38 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(fs.readFileSync(saved.path!, "utf8")).toBe("generated image");
     await expect(atlasService.saveFile({ accountId: "default", runId: "codex-run", path: unrelated })).rejects.toThrow("outside");
   });
+  it("keeps repository files cited by a Code conversation out of the library unless it delivered them", async () => {
+    createRun(db, { id: "code", mode: "developer", title: "MAI-295", status: "succeeded" });
+    const folder = root("code", "developer");
+    fs.mkdirSync(folder, { recursive: true });
+    const cited = path.join(folder, "CONTEXT.md");
+    const delivered = path.join(folder, "summary.pdf");
+    fs.writeFileSync(cited, "project context");
+    fs.writeFileSync(delivered, "report");
+    createRunArtifact(db, { runId: "code", kind: "document", metadata: JSON.stringify({ path: delivered, outputRole: "deliverable" }) });
+    createRunArtifact(db, { runId: "code", kind: "report", content: `Updated [CONTEXT.md](<${cited}>) and [summary](<${delivered}>)`,
+      metadata: JSON.stringify({ messagePhase: "final_answer" }) });
+    const [attachment] = (await prepareRunAttachments("code", [{ name: "screen.png", type: "image",
+      mimeType: "image/png", data: Buffer.from("uploaded original").toString("base64") }]))!;
+
+    const library = await atlasService.library({ accountId: "default", scope: "all" });
+    expect(library.items.map((entry) => entry.title).sort()).toEqual(["screen.png", "summary.pdf"]);
+    // The conversation's own file card still offers every selected output.
+    const generated = await atlasService.generated({ accountId: "default" });
+    expect(generated.items.map((item) => item.fileName)).toContain("CONTEXT.md");
+    await expect(atlasService.saveFile({ accountId: "default", runId: "code", path: cited })).resolves.toMatchObject({ title: "CONTEXT.md" });
+    expect(fs.existsSync(attachment.sourcePath)).toBe(true);
+  });
+  it("applies the same Code-conversation rule to another device's synced outputs", async () => {
+    createRun(db, { id: "replica-code", title: "MAI-296", ownerBackendId: "laptop", mode: "developer" });
+    const output = (id: number, name: string, metadata: object) => ({ id, runId: "replica-code", kind: "document", path: null,
+      content: "", blobData: null, entityId: null, contentHash: null, createdAt: new Date("2026-10-17T10:00:00Z"),
+      metadata: { outputSelected: true, path: `/Users/laptop/repo/${name}`, fileName: name, byteSize: 10, ...metadata } });
+    replicaOutputs.set("replica-code", [output(-1, "CLAUDE.md", {}), output(-2, "brief.pdf", { outputRole: "deliverable" })]);
+    try {
+      expect((await atlasService.library({ accountId: "default", scope: "generated" })).items.map((entry) => entry.title)).toEqual(["brief.pdf"]);
+    } finally { replicaOutputs.delete("replica-code"); }
+  });
   it("selects a native generated image when the completed reply contains no file reference", async () => {
     createRun(db, { id: "inline-image", providerId: "codex", mode: "work", status: "succeeded" });
     const image = path.join(directory, "generated-images", "inline-image", "generated.png");
@@ -435,7 +467,7 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(await resolveRunAttachment("annotation-fork", image.attachmentId!)).toMatchObject({ path: image.sourcePath });
   });
   it("lists another device's uploads and selected outputs from their records, without opening its files", async () => {
-    createRun(db, { id: "replica", title: "On the laptop", ownerBackendId: "laptop" });
+    createRun(db, { id: "replica", title: "On the laptop", ownerBackendId: "laptop", mode: "work" });
     const id = "b".repeat(64), hash = "c".repeat(64), source = "/Users/laptop/out/chart.png";
     db.insert(runAttachments).values({ id, name: "Screenshot.png", type: "image", mimeType: "image/png",
       storageKey: `attachments/${id}/Screenshot.png`, byteSize: 125636, contentHash: hash, createdAt: new Date("2026-10-16T09:00:00Z") }).run();

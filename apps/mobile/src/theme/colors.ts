@@ -1,95 +1,40 @@
 import { Color } from "expo-router";
-import { DynamicColorIOS, Platform, useColorScheme } from "react-native";
+import { DynamicColorIOS, Platform, useColorScheme, type ColorValue } from "react-native";
 
-/**
- * Platform semantic colors — resolved on-device, adapt to light/dark and
- * accessibility settings by themselves. These are static-safe: token files
- * may import them at module scope.
- */
-export const colors = {
-  label: Platform.select({
-    ios: Color.ios.label,
-    android: Color.android.dynamic.onSurface,
-    default: "#000000",
-  })!,
-  secondaryLabel: Platform.select({
-    ios: Color.ios.secondaryLabel,
-    android: Color.android.dynamic.onSurfaceVariant,
-    default: "#3c3c43",
-  })!,
-  tertiaryLabel: Platform.select({
-    ios: Color.ios.tertiaryLabel,
-    android: Color.android.dynamic.outline,
-    default: "#8e8e93",
-  })!,
-  separator: Platform.select({
-    ios: Color.ios.separator,
-    android: Color.android.dynamic.outlineVariant,
-    default: "#c6c6c8",
-  })!,
-  systemBackground: Platform.select({
-    ios: Color.ios.systemBackground,
-    android: Color.android.dynamic.surface,
-    default: "#ffffff",
-  })!,
-  secondarySystemBackground: Platform.select({
-    ios: Color.ios.secondarySystemBackground,
-    android: Color.android.dynamic.surfaceContainer,
-    default: "#f2f2f7",
-  })!,
-  tertiarySystemBackground: Platform.select({
-    ios: Color.ios.tertiarySystemBackground,
-    android: Color.android.dynamic.surfaceContainerHigh,
-    default: "#ffffff",
-  })!,
-  groupedBackground: Platform.select({
-    ios: Color.ios.systemGroupedBackground,
-    android: Color.android.dynamic.surface,
-    default: "#f2f2f7",
-  })!,
-  groupedCell: Platform.select({
-    ios: Color.ios.secondarySystemGroupedBackground,
-    android: Color.android.dynamic.surfaceContainer,
-    default: "#ffffff",
-  })!,
-  /**
-   * App cards sit on the main system background rather than iOS's grouped
-   * page background. A barely warm light surface preserves their shape
-   * without making them look elevated; dark mode keeps the native cell tone.
-   */
-  cardSurface: Platform.select({
-    ios: DynamicColorIOS({ light: "#F7F7F8", dark: "#1C1C1E" }),
-    android: Color.android.dynamic.surfaceContainer,
-    default: "#f7f7f8",
-  })!,
-  fill: Platform.select({
-    ios: Color.ios.systemFill,
-    android: Color.android.dynamic.surfaceVariant,
-    default: "rgba(120,120,128,0.2)",
-  })!,
-  systemBlue: Platform.select({
-    ios: Color.ios.systemBlue,
-    android: Color.android.dynamic.primary,
-    default: "#007aff",
-  })!,
-  systemGreen: Platform.select({
-    ios: Color.ios.systemGreen,
-    android: Color.android.dynamic.tertiary,
-    default: "#34c759",
-  })!,
-  systemRed: Platform.select({
-    ios: Color.ios.systemRed,
-    android: Color.android.dynamic.error,
-    default: "#ff3b30",
-  })!,
-  systemOrange: Platform.select({
-    ios: Color.ios.systemOrange,
-    android: Color.android.dynamic.tertiary,
-    default: "#ff9500",
-  })!,
-  // Deliberately fixed: text on a tinted (accent) surface stays white in both modes.
-  onTint: "#ffffff",
-};
+import { semanticPalette } from "./semantic-palette";
+
+export type ThemeColors = { readonly [Key in keyof typeof semanticPalette.light]: ColorValue };
+
+// iOS semantic references follow UIKit traits. Android Fabric resolves resource
+// references when props are applied, so its existing views need new hex props.
+const iosColors: ThemeColors = Platform.OS === "ios"
+  ? {
+      label: Color.ios.label,
+      secondaryLabel: Color.ios.secondaryLabel,
+      tertiaryLabel: Color.ios.tertiaryLabel,
+      separator: Color.ios.separator,
+      systemBackground: Color.ios.systemBackground,
+      secondarySystemBackground: Color.ios.secondarySystemBackground,
+      tertiarySystemBackground: Color.ios.tertiarySystemBackground,
+      groupedBackground: Color.ios.systemGroupedBackground,
+      groupedCell: Color.ios.secondarySystemGroupedBackground,
+      cardSurface: DynamicColorIOS({ light: "#F7F7F8", dark: "#1C1C1E" }),
+      sheetBackground: Color.ios.secondarySystemBackground,
+      sheetCardSurface: Color.ios.tertiarySystemBackground,
+      fill: Color.ios.systemFill,
+      systemBlue: Color.ios.systemBlue,
+      systemGreen: Color.ios.systemGreen,
+      systemRed: Color.ios.systemRed,
+      systemOrange: Color.ios.systemOrange,
+      onTint: "#ffffff",
+    }
+  : semanticPalette.light;
+
+/** Every consumer subscribes, including memoized text, cards and navigation. */
+export function useThemeColors(): ThemeColors {
+  const scheme = useColorScheme();
+  return Platform.OS === "ios" ? iosColors : semanticPalette[scheme === "dark" ? "dark" : "light"];
+}
 
 /**
  * Brand colors — the only place the phone borrows literal values from the
@@ -108,6 +53,7 @@ export function useBrandColors() {
 
 /** Run / tool-call status → color. Running borrows the brand accent. */
 export function useStatusColors() {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   return {
     running: brand.accent,

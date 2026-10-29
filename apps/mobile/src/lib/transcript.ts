@@ -1,9 +1,11 @@
 import type { RunArtifactRow, ToolCallRow } from "@/db/schema";
 
 import { parsePromptImages, type PromptImage } from "./prompt-images";
+import { parsePromptDocuments, type PromptDocument } from "./prompt-documents";
 
 import { promptFileFromPath, type PromptFile, type PromptSkill } from "./prompt-chips";
 import { partitionSubagentCalls, type SessionSubagent } from "./subagents";
+import { isDesktopOnlyOutput } from "./output-presentation";
 
 export type { PromptImage } from "./prompt-images";
 
@@ -17,8 +19,11 @@ type FullContent = { runId: string; id: number; source: "artifact" };
  *
  *  - "user-prompt"            → a prompt bubble
  *  - "thinking", subagent     → hidden (UI-only on desktop too)
- *  - "prompt_suggestion"      → hidden (no composer on the phone yet)
+ *  - "prompt_suggestion"      → not a row: the run screen offers the latest
+ *                               ones as follow-up chips after the answer
  *  - "image"                  → an image; the pixels are fetched on demand
+ *  - "document", "file"       → a file card, for selected outputs only
+ *  - "visualization"          → a "See on desktop" card
  *  - kind "log" artifacts     → hidden unless they are errors
  *  - anything else            → an assistant message
  *
@@ -28,7 +33,7 @@ type FullContent = { runId: string; id: number; source: "artifact" };
  * Consecutive images fold the same way, into one gallery — as the desktop's
  * `groupEvents` merges them.
  */
-export type TranscriptItem =
+export type TranscriptItem = (
   | {
       key: string;
       kind: "prompt";
@@ -40,6 +45,7 @@ export type TranscriptItem =
       files: PromptFile[];
       /** Image attachments shown above the user's text bubble. */
       images: PromptImage[];
+      documents?: PromptDocument[];
     }
   | { key: string; kind: "response"; text: string; at: number; fullContent?: FullContent }
   | { key: string; kind: "tools"; calls: ToolCallRow[]; at: number }
@@ -51,7 +57,9 @@ export type TranscriptItem =
       at: number;
     }
   | { key: string; kind: "images"; images: TranscriptImage[]; at: number }
-  | { key: string; kind: "note"; text: string; at: number; fullContent?: FullContent };
+  | { key: string; kind: "document"; runId: string; artifactId: number; name: string; byteSize?: number; desktopOnly?: boolean; at: number }
+  | { key: string; kind: "note"; text: string; at: number; fullContent?: FullContent }
+) & { turnId?: number };
 
 /** One image an agent produced. The Mac holds the file; the phone asks for pixels by id. */
 export interface TranscriptImage {
@@ -63,10 +71,17 @@ export interface TranscriptImage {
 /** Pre-fold shape: one entry per tool call or image, before consecutive ones merge. */
 type FlatItem =
   | Exclude<TranscriptItem, { kind: "tools" } | { kind: "images" }>
-  | { key: string; kind: "tool"; call: ToolCallRow; at: number }
-  | { key: string; kind: "image"; image: TranscriptImage; at: number };
+  | { key: string; kind: "tool"; call: ToolCallRow; at: number; turnId?: number }
+  | { key: string; kind: "image"; image: TranscriptImage; at: number; turnId?: number };
 
 interface ArtifactMetadata {
+  /** Set by the backend on a file its deliverable rules selected for this turn. */
+  outputSelected?: unknown;
+  title?: unknown;
+  mimeType?: unknown;
+  path?: unknown;
+  byteSize?: unknown;
+  turnId?: unknown;
   mobileContentDeferred?: unknown;
   level?: unknown;
   voice?: unknown;
@@ -81,7 +96,7 @@ interface ArtifactMetadata {
   fileName?: unknown;
 }
 
-function metadataOf(artifact: RunArtifactRow): ArtifactMetadata {
+function metadataOf(artifact: Pick<RunArtifactRow, "metadataJson">): ArtifactMetadata {
   if (!artifact.metadataJson) return {};
   try {
     const parsed: unknown = JSON.parse(artifact.metadataJson);
@@ -118,7 +133,8 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
       return null;
     case "user-prompt": {
       const images = parsePromptImages(meta.attachments, artifact.runId);
-      return artifact.content || images.length > 0
+      const documents = parsePromptDocuments(meta.attachments, artifact.runId);
+      return artifact.content || images.length > 0 || documents.length > 0
         ? {
             key,
             kind: "prompt",
@@ -128,6 +144,7 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
             skills: promptSkills(meta),
             files: promptFiles(meta),
             images,
+            documents,
           }
         : null;
     }
@@ -138,6 +155,24 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
           : (artifact.path?.split("/").pop() ?? "image");
       return { key, kind: "image", image: { artifactId: artifact.id, fileName,
         ...(artifact.id < 0 ? { runId: artifact.runId } : {}) }, at };
+    }
+    case "visualization":
+    case "document":
+    case "file": {
+      // The phone can download only selected outputs. A local conversation's
+      // page carries no other files, but another computer's (a Bridge replica)
+      // keeps its working copies and tool-written files: their cards would
+      // only open onto "no longer available", so they stay out.
+      if (artifact.kind !== "visualization" && meta.outputSelected !== true) return null;
+      const reference = artifact.path ?? meta.path;
+      if (typeof reference !== "string" && artifact.kind !== "visualization") return null;
+      const name = artifact.kind === "visualization" && typeof meta.title === "string" && meta.title
+        ? meta.title : typeof meta.fileName === "string" ? meta.fileName : typeof reference === "string" ? reference.split(/[\\/]/).pop() ?? "File" : "Interactive output";
+      const desktopOnly = isDesktopOnlyOutput({ name: typeof reference === "string" ? reference : name, kind: artifact.kind,
+        mimeType: typeof meta.mimeType === "string" ? meta.mimeType : undefined }) || isDesktopOnlyOutput({ name });
+      return { key, kind: "document", runId: artifact.runId, artifactId: artifact.id,
+        name, ...(desktopOnly ? { desktopOnly: true } : {}),
+        ...(typeof meta.byteSize === "number" ? { byteSize: meta.byteSize } : {}), at };
     }
     default: {
       const text = artifact.content ?? artifact.path ?? "";
@@ -174,11 +209,13 @@ export function buildTranscript(
   const flat: FlatItem[] = [];
   for (const artifact of artifacts) {
     const item = artifactItem(artifact);
-    if (item) flat.push(item);
+    const turnId = metadataOf(artifact).turnId;
+    if (item) flat.push({ ...item, ...(typeof turnId === "number" ? { turnId } : {}) });
   }
   const subagentPartition = partitionSubagentCalls(calls);
   for (const call of subagentPartition.visibleCalls) {
-    flat.push({ key: `tool-${call.id}`, kind: "tool", call, at: call.createdAt.getTime() });
+    const turnId = metadataOf(call).turnId;
+    flat.push({ key: `tool-${call.id}`, kind: "tool", call, at: call.createdAt.getTime(), ...(typeof turnId === "number" ? { turnId } : {}) });
   }
   if (
     subagentPartition.agents.length > 0 &&
@@ -193,6 +230,7 @@ export function buildTranscript(
         runId: first.runId,
         agents: subagentPartition.agents,
         at: subagentPartition.firstAt,
+        ...(typeof metadataOf(first).turnId === "number" ? { turnId: metadataOf(first).turnId as number } : {}),
       });
     }
   }
@@ -215,26 +253,26 @@ export function buildTranscript(
  */
 function foldRuns(flat: FlatItem[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
-  let tools: { key: string; kind: "tools"; calls: ToolCallRow[]; at: number } | null = null;
-  let images: { key: string; kind: "images"; images: TranscriptImage[]; at: number } | null = null;
+  let tools: Extract<TranscriptItem, { kind: "tools" }> | null = null;
+  let images: Extract<TranscriptItem, { kind: "images" }> | null = null;
 
   for (const item of flat) {
     if (item.kind === "tool") {
       images = null;
-      if (tools) {
+      if (tools && tools.turnId === item.turnId) {
         tools.calls.push(item.call);
       } else {
-        tools = { key: `tools-${item.call.id}`, kind: "tools", calls: [item.call], at: item.at };
+        tools = { key: `tools-${item.call.id}`, kind: "tools", calls: [item.call], at: item.at, ...(item.turnId !== undefined ? { turnId: item.turnId } : {}) };
         items.push(tools);
       }
       continue;
     }
     if (item.kind === "image") {
       tools = null;
-      if (images) {
+      if (images && images.turnId === item.turnId) {
         images.images.push(item.image);
       } else {
-        images = { key: `images-${item.image.artifactId}`, kind: "images", images: [item.image], at: item.at };
+        images = { key: `images-${item.image.artifactId}`, kind: "images", images: [item.image], at: item.at, ...(item.turnId !== undefined ? { turnId: item.turnId } : {}) };
         items.push(images);
       }
       continue;

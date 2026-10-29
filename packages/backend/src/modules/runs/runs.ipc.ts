@@ -26,6 +26,7 @@ import {
 } from "./user-input-broker";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { ListRunOutputsPayload, ReadRunOutputPayload, ReadRunAttachmentPayload } from "@mains/contracts/run-outputs";
 import type { AnswerAsyncQuestionsPayload, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import type { CreateRealtimeConversationPayload, RunRealtimeStartPayload, RunRealtimeStopPayload } from "@mains/contracts/realtime";
 import type {
@@ -50,6 +51,8 @@ export function registerRunsIpc(): void {
   ipcMain.handle(CHANNELS.runs.getHistory, (ctx: IpcInvokeContext, payload: ReadRunHistoryPayload) =>
     getHistory(ctx, ctx?.deviceId ? { ...payload, profile: "mobile" } : payload));
   ipcMain.handle(CHANNELS.runs.readHistoryContent, handle((payload: ReadRunHistoryContentPayload) => runsService.readHistoryContent(payload)));
+  ipcMain.handle(CHANNELS.runs.listOutputs, handle((payload: ListRunOutputsPayload) => runsService.listOutputs(payload)));
+  ipcMain.handle(CHANNELS.runs.readOutputFile, handle((payload: ReadRunOutputPayload) => runsService.readOutputFile(payload)));
   ipcMain.handle(CHANNELS.runs.createRealtimeConversation, handle((payload: CreateRealtimeConversationPayload) => runsService.createRealtimeConversation(payload)));
   ipcMain.handle(CHANNELS.runs.startRealtime, handle((payload: RunRealtimeStartPayload) => runsService.startRealtime(payload)));
   ipcMain.handle(CHANNELS.runs.stopRealtime, handle((payload: RunRealtimeStopPayload) => runsService.stopRealtime(payload)));
@@ -258,6 +261,10 @@ export function registerRunsIpc(): void {
     handle((payload: ResolveAttachmentPathPayload) => runsService.resolveAttachmentPath(payload)));
   ipcMain.handle(CHANNELS.runArtifacts.readAttachmentFile,
     handle((payload: ResolveAttachmentPathPayload) => runsService.readAttachmentFile(payload)));
+  ipcMain.handle(CHANNELS.runArtifacts.describeAttachmentFile,
+    handle((payload: ResolveAttachmentPathPayload) => runsService.describeAttachmentFile(payload)));
+  ipcMain.handle(CHANNELS.runArtifacts.readAttachmentChunk,
+    handle((payload: ReadRunAttachmentPayload) => runsService.readAttachmentChunk(payload)));
 
   ipcMain.handle(
     CHANNELS.runArtifacts.add,
@@ -324,6 +331,8 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.listActive,
     CHANNELS.runs.getExecutionRoot,
     CHANNELS.runs.listOutputFiles,
+    CHANNELS.runs.listOutputs,
+    CHANNELS.runs.readOutputFile,
     CHANNELS.runs.readTextFile,
     CHANNELS.runs.listRecent,
     CHANNELS.runs.getById,
@@ -364,6 +373,8 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runArtifacts.resolveAttachmentPath,
     CHANNELS.runArtifacts.resolveFilePath,
     CHANNELS.runArtifacts.readAttachmentFile,
+    CHANNELS.runArtifacts.describeAttachmentFile,
+    CHANNELS.runArtifacts.readAttachmentChunk,
     CHANNELS.runArtifacts.add,
     CHANNELS.runArtifacts.remove,
     CHANNELS.runToolCalls.getByRun,

@@ -2,11 +2,12 @@ import { View } from "react-native";
 
 import type { ConnectionState } from "@/backend/connection-supervisor";
 import { connectionLabel, connectionTone, type Tone } from "@/lib/format";
-import { colors, spacing, useBrandColors, useStatusColors } from "@/theme";
+import { useThemeColors, spacing, useBrandColors, useStatusColors } from "@/theme";
 
 import { ThemedText } from "@/components/ui";
 
 export function useToneColor(tone: Tone) {
+  const colors = useThemeColors();
   const brand = useBrandColors();
   return {
     accent: brand.accent,
@@ -18,6 +19,7 @@ export function useToneColor(tone: Tone) {
 
 /** A run's or tool call's status as a 7pt dot. */
 export function StatusDot({ status, size = 7 }: { status: string; size?: number }) {
+  const colors = useThemeColors();
   const statusColors = useStatusColors();
   const color =
     statusColors[status as keyof typeof statusColors] ?? colors.tertiaryLabel;

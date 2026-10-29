@@ -25,7 +25,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
-import { colors, motion, radius, shadows, spacing } from "@/theme";
+import { useThemeColors, motion, radius, shadows, spacing } from "@/theme";
 
 import type { ComposerCameraFrame } from "./composer-camera-panel";
 import { ComposerPanelControl, ComposerPanelPill } from "./composer-panel-control";
@@ -65,6 +65,7 @@ export function ComposerPhotosPanel({
   onClose: () => void;
   onError: (message: string) => void;
 }) {
+  const colors = useThemeColors();
   const collapseCompletionRef = useRef<(() => void) | null>(null);
   const exhaustedRef = useRef(false);
   const loadingRef = useRef(false);
@@ -393,6 +394,7 @@ function PhotoTile({
   size: number;
   onPress: () => void;
 }) {
+  const colors = useThemeColors();
   const selected = order >= 0;
   return (
     <Pressable

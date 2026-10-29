@@ -1,10 +1,10 @@
+import { shareFile } from "@/lib/share-file";
 import { File, Paths } from "expo-file-system";
 import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   Pressable,
-  Share,
   StyleSheet,
   View,
   useWindowDimensions,
@@ -105,7 +105,7 @@ export default function ImageViewerScreen() {
         `${base}-${artifactId}.${extensionFor(image.mime)}`,
       );
       await Promise.resolve(file.write(image.base64, { encoding: "base64" }));
-      await Share.share({ url: file.uri });
+      await shareFile(file.uri, image.mime);
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Could not share this image",

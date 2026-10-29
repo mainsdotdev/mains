@@ -1,7 +1,7 @@
 import { useColorScheme, View } from "react-native";
 
 import { iconTint, parseIcon } from "@mains/icons/registry";
-import { colors, useProviderAccent } from "@/theme";
+import { useThemeColors, useProviderAccent } from "@/theme";
 
 import { GlassSurface, RegistryIcon, ThemedText } from "@/components/ui";
 
@@ -37,6 +37,7 @@ export function SpaceGlyph({
   size?: number;
   selected?: boolean;
 }) {
+  const colors = useThemeColors();
   const selection = useProviderAccent(space.providerId);
   const scheme = useColorScheme() === "dark" ? "dark" : "light";
   const icon = parseIcon(space.icon);

@@ -56,6 +56,20 @@ async function originalPath(row: AttachmentRow, verifyHash = false): Promise<str
   return result;
 }
 
+/** Exact originals retained by a conversation are readable outside workspace roots. */
+export async function isStoredAttachmentFile(realPath: string): Promise<boolean> {
+  if (!path.isAbsolute(realPath)) return false;
+  try {
+    const root = await fs.realpath(attachmentRoot());
+    const parts = path.relative(root, realPath).split(path.sep);
+    if (parts.length !== 2 || !/^[a-f0-9]{64}$/.test(parts[0])) return false;
+    const row = runsRepo.findReferencedAttachment(parts[0]);
+    return !!row && await originalPath(row) === realPath;
+  } catch {
+    return false;
+  }
+}
+
 function prepared(row: AttachmentRow, sourcePath: string): FileAttachment {
   return { attachmentId: row.id, name: row.name, type: row.type, mimeType: row.mimeType, byteSize: row.byteSize, sourcePath };
 }

@@ -3,7 +3,7 @@ import * as Haptics from "expo-haptics";
 import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 
-import { colors, radius, spacing } from "@/theme";
+import { useThemeColors, radius, spacing } from "@/theme";
 
 import { CheckIcon, ClipboardIcon, ForkIcon } from "@/components/ui";
 
@@ -34,6 +34,7 @@ export function MessageActions({
   /** Keeps the settled fork point visible, but inert, while its next turn runs. */
   forkDisabled?: boolean;
 }) {
+  const colors = useThemeColors();
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
 

@@ -31,7 +31,7 @@ import {
   type ComposerCameraCapture,
 } from "@/lib/composer-attachments";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
-import { colors, radius, spacing, type, useProviderAccent } from "@/theme";
+import { useThemeColors, radius, spacing, type, useProviderAccent } from "@/theme";
 import { GlassSurface, SFSymbol, ThemedText } from "@/components/ui";
 import type {
   ComposerContext,
@@ -94,7 +94,7 @@ export function ComposerBar({
   onAttachmentsChange,
   onStop,
   model,
-  permission,
+  runOptions,
   context,
   providerId,
   reservedTop,
@@ -111,13 +111,14 @@ export function ComposerBar({
   onAttachmentsChange?: (attachments: ComposerAttachment[]) => void;
   /**
    * Given only while a run is in flight: the send button becomes a stop button,
-   * as it does on the desktop (`SendButton` swaps on `loading && onStop`).
+   * as it does on the desktop (`SendButton` swaps on `loading && onStop`) — or,
+   * with a message for a turn that accepts one, stays Send until it is sent.
    */
   onStop?: () => void;
   /** The model pill: what is selected, its effort, and what tapping opens. */
   model?: { label: string; effort?: string | null; onPress: () => void } | null;
-  /** The permission-mode pill — worth seeing before sending from a phone. */
-  permission?: { label: string; onPress: () => void } | null;
+  /** Permissions in Code; speed and other supported options in Work/Chat. */
+  runOptions?: { label: string; accessibilityLabel: string; onPress: () => void } | null;
   /** Skills and commands behind the inline `@` / `/` / `$` triggers. */
   context?: ComposerContext | null;
   /** Tints the send button, the way the provider tints its prompt bubbles. */
@@ -128,9 +129,13 @@ export function ComposerBar({
    */
   reservedTop?: number;
 }) {
+  const colors = useThemeColors();
   const accent = useProviderAccent(providerId);
   const canSend =
     !disabled && !sending && (value.trim().length > 0 || attachments.length > 0);
+  // While a run is in flight the button stops it — unless the running turn
+  // can take the message waiting here, which it then sends instead.
+  const stopping = onStop !== undefined && !canSend;
   const inputRef = useRef<TextInput>(null);
   const attachmentButtonRef = useRef<View>(null);
   const attachmentImageRefsRef = useRef(new Map<string, View>());
@@ -481,10 +486,10 @@ export function ComposerBar({
             </Pill>
           ) : null}
 
-          {permission ? (
-            <Pill label={`Permissions: ${permission.label}`} onPress={permission.onPress}>
+          {runOptions ? (
+            <Pill label={runOptions.accessibilityLabel} onPress={runOptions.onPress}>
               <ThemedText variant="subhead" numberOfLines={1} style={{ fontWeight: "600" }}>
-                {permission.label}
+                {runOptions.label}
               </ThemedText>
             </Pill>
           ) : null}
@@ -493,11 +498,11 @@ export function ComposerBar({
 
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={onStop ? "Stop run" : "Send"}
+            accessibilityLabel={stopping ? "Stop run" : "Send"}
             // Stopping stays available while the composer itself is disabled —
             // a run in flight is exactly when the field is closed for typing.
-            disabled={onStop ? false : !canSend}
-            onPress={onStop ?? sendFromInput}
+            disabled={stopping ? false : !canSend}
+            onPress={stopping ? onStop : sendFromInput}
             style={({ pressed }) => ({
               width: 36,
               height: 36,
@@ -512,8 +517,8 @@ export function ComposerBar({
             })}
           >
             <SFSymbol
-              name={onStop ? "stop.fill" : sending ? "ellipsis" : "arrow.up"}
-              size={onStop ? 13 : 16}
+              name={stopping ? "stop.fill" : sending ? "ellipsis" : "arrow.up"}
+              size={stopping ? 13 : 16}
               tint={colors.onTint}
             />
           </Pressable>

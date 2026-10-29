@@ -13,6 +13,8 @@ import { runsRepo } from "./runs.repo";
 import { startAttachmentMaintenance, stopAttachmentMaintenance } from "./run-attachment-maintenance";
 import { attachmentDescriptor, prepareRunAttachments, pruneAttachmentOrphans, pruneUnreferencedAttachments, resolveRunAttachment } from "./run-attachment-storage";
 import { readAttachmentImage } from "./run-attachment-images";
+import { describeAttachmentFile, readAttachmentChunk } from "./run-attachment-download";
+import { OUTPUT_CHUNK_BYTES } from "@mains/contracts/run-outputs";
 import { pruneImagePreviews } from "../imageProxy";
 
 let db: DatabaseInstance;
@@ -40,6 +42,52 @@ afterEach(async () => {
 });
 
 describe("durable prompt attachments", () => {
+  it("rechecks attachment ownership between chunks even when a fork retains the same cached original", async () => {
+    const run = createRun(db);
+    const fork = createRun(db);
+    const [item] = (await prepareRunAttachments(run.id, [{ name: "report.pdf", type: "document", mimeType: "application/pdf", data: Buffer.from("original").toString("base64") }]))!;
+    runsRepo.inheritAttachmentRefs(run.id, fork.id);
+    const file = await describeAttachmentFile({ runId: run.id, attachmentId: item.attachmentId });
+    await readAttachmentChunk({ runId: run.id, attachmentId: item.attachmentId, version: file.version, offset: 0 });
+    db.delete(runs).where(eq(runs.id, run.id)).run();
+    await expect(readAttachmentChunk({ runId: run.id, attachmentId: item.attachmentId, version: file.version, offset: 1 })).rejects.toThrow("not found");
+    expect(await describeAttachmentFile({ runId: fork.id, attachmentId: item.attachmentId })).toMatchObject({ name: "report.pdf", byteSize: 8 });
+  });
+
+  it("streams original documents by conversation and attachment identity without leaking paths", async () => {
+    const run = createRun(db);
+    const other = createRun(db);
+    const bytes = Buffer.alloc(OUTPUT_CHUNK_BYTES + 19, 193);
+    const items = (await prepareRunAttachments(run.id, [
+      { name: "report.pdf", type: "document", mimeType: "application/pdf", data: bytes.toString("base64") },
+      { name: "report.pdf", type: "document", mimeType: "application/pdf", data: Buffer.from("second").toString("base64") },
+    ]))!;
+    const file = await describeAttachmentFile({ runId: run.id, attachmentId: items[0].attachmentId });
+    expect(file).toMatchObject({ name: "report.pdf", byteSize: bytes.length, previewType: "native" });
+    expect(JSON.stringify(file)).not.toContain(directory);
+    const second = await describeAttachmentFile({ runId: run.id, attachmentId: items[1].attachmentId });
+    expect(second.attachmentId).not.toBe(file.attachmentId);
+    const received: Buffer[] = [];
+    let offset: number | null = 0;
+    while (offset !== null) {
+      const chunk = await readAttachmentChunk({ runId: run.id, attachmentId: file.attachmentId, version: file.version, offset });
+      const data = Buffer.from(chunk.base64, "base64");
+      expect(data.length).toBeLessThanOrEqual(OUTPUT_CHUNK_BYTES);
+      received.push(data); offset = chunk.nextOffset;
+    }
+    expect(Buffer.concat(received)).toEqual(bytes);
+    await expect(describeAttachmentFile({ runId: other.id, attachmentId: file.attachmentId })).rejects.toThrow("not found");
+    await expect(readAttachmentChunk({ runId: other.id, attachmentId: file.attachmentId, version: file.version, offset: 0 })).rejects.toThrow("not found");
+    for (const offset of [-1, 0.5, bytes.length + 1]) await expect(readAttachmentChunk({ runId: run.id, attachmentId: file.attachmentId, version: file.version, offset })).rejects.toThrow();
+    await expect(readAttachmentChunk({ runId: run.id, attachmentId: file.attachmentId, version: "b".repeat(64), offset: 0 })).rejects.toThrow("changed");
+    await fs.chmod(items[0].sourcePath, 0o600);
+    await fs.writeFile(items[0].sourcePath, Buffer.alloc(bytes.length, 2));
+    await expect(readAttachmentChunk({ runId: run.id, attachmentId: file.attachmentId, version: file.version, offset: 0 })).rejects.toThrow("changed");
+    await fs.unlink(items[0].sourcePath);
+    await fs.symlink(items[1].sourcePath, items[0].sourcePath);
+    await expect(describeAttachmentFile({ runId: run.id, attachmentId: file.attachmentId })).rejects.toThrow();
+  });
+
   it.each(["chat", "developer", "work"] as const)("stores originals and compact descriptors in %s", async (mode) => {
     const run = createRun(db, { mode });
     const capture = path.join(directory, "browser-captures", "screen.png");

@@ -1,13 +1,14 @@
 # mobile
 
-Expo/React Native client for controlling a Mains desktop backend from iOS. Android support is planned for a later release.
+Expo/React Native client for controlling a Mains backend from iOS and Android.
 
 ## Requirements
 
 - Node 24.20.0 (see `.node-version` or `.nvmrc`)
 - npm
 - An Expo account for cloud builds
-- Xcode when building the app locally
+- Xcode for local iOS builds
+- Android Studio, Android SDK Platform 36 and JDK 17 for local Android builds
 
 ## Development
 
@@ -32,6 +33,8 @@ For local native builds:
 
 ```bash
 npm run ios
+# Android device or ARM64 emulator:
+npm run android
 ```
 
 ## App variants
@@ -60,6 +63,11 @@ Then create builds with:
 npm run build:development
 npm run build:preview
 npm run build:production
+
+# Android: development client, installable preview APK, or store AAB
+npm run build:android:development
+npm run build:android:preview
+npm run build:android:production
 ```
 
 After Apple submission credentials are configured, build and upload the App Store binary with:
@@ -72,7 +80,14 @@ npm run release
 
 ## Native project policy
 
-This project uses Expo Continuous Native Generation. The `ios/` directory is generated and ignored. Keep native configuration in `app.config.ts` or config plugins so a clean prebuild remains reproducible.
+This project uses Expo Continuous Native Generation. The `ios/` and `android/` directories are generated and ignored. Keep native configuration in `app.config.ts` or config plugins so prebuild remains reproducible.
+
+Android uses the same variant identifiers as iOS, Material icons for the existing
+symbol names, and native header actions for conversation outputs and sync.
+Camera and photo access do not request microphone or video access. Android 13+
+requests only the photo permission, including the user's limited-photo choice.
+For terminal builds, set `JAVA_HOME` to JDK 17 and `ANDROID_HOME` to the SDK folder.
+`npm run android:prebuild` regenerates Android configuration without touching iOS.
 
 After upgrading native Expo/React Native packages, an existing `ios/Podfile.lock`
 can still pin the previous versions. If `npm run ios` fails at `pod install`
@@ -86,14 +101,53 @@ npm run ios
 `ios:prebuild` replaces the generated `ios/` directory from the app config. Keep
 native customizations in config plugins so they survive regeneration.
 
+The local Expo module in `modules/mains-document-preview` supplies iOS Quick
+Look for PDF, Word, Excel and PowerPoint outputs. It autolinks during prebuild
+and CocoaPods installation. Rebuild the native client after adding or changing
+this module; an OTA JavaScript update cannot install it. Older clients still
+offer Share / Save to Files when native preview is unavailable. Android opens
+downloaded PDF/Office files in a compatible installed application using a
+temporary read grant for that cache file. If no viewer is installed, the app
+offers sharing. Images and text/Markdown stay in the app. Android file sharing
+uses a content URI; iOS retains its existing share sheet.
+
 
 ## Current features
 
 The app pairs with a backend through its QR code, stores its device token in
-the iOS Keychain, reconnects automatically, and maintains a disposable SQLite
+platform SecureStore, reconnects automatically, and maintains a disposable SQLite
 projection of runs, workspaces, models, and conversation history. It can start,
 continue, fork, and stop runs, answer approval requests, and attach photos and
 skills. Demo Mode works on the phone without a backend.
+
+Connection attempts time out after 10 seconds. After at most 30 seconds of
+visible recovery, the app shows Unreachable and continues silent probes after
+30-second waits, rotating saved addresses. Try again, network recovery, and
+returning to the foreground trigger an immediate attempt. Offline/background
+states pause retry timers; authorization/version failures require re-pairing
+or an update instead of repeated attempts.
+
+Conversation headers expose Outputs, and transcript document cards open the
+same file viewer. PDF and Office outputs use Quick Look on iOS and a compatible
+installed viewer on Android; images, Markdown,
+TXT and CSV open in the app. Share / Save to Files keeps the original filename.
+Downloads are chunked, capped at 100 MiB per file, and cached separately from
+SQLite in a 200 MiB cache. Downloaded outputs can open offline until evicted.
+The backend must include `runs:listOutputs` and `runs:readOutputFile`; these
+read-only handlers expose selected conversation outputs without filesystem access.
+Demo Mode includes a small PDF and Markdown output for checking this flow.
+HTML and interactive visualization outputs currently show **See on desktop**
+without a mobile preview, download or share action.
+
+Documents sent from mobile or desktop also appear as cards on their user
+messages, including messages with no text. Cards open the same viewer and
+support sharing and cached offline copies. The backend must include
+`runArtifacts:describeAttachmentFile` and `runArtifacts:readAttachmentChunk`.
+Legacy uploads without a durable attachment id remain visible with Preview
+unavailable. Demo conversations include a bundled PDF attachment.
+For an older backend with only the original-file reader, known document
+attachments up to 2 MiB can still open. Larger files require an updated,
+restarted desktop backend; the phone displays that requirement explicitly.
 
 Model, effort, permissions, speed, Plan, and Goal belong to each conversation.
 Existing chats load and persist their next-message preferences through
@@ -117,6 +171,11 @@ phone caches also project bounded previews before the first render. Use a
 backend containing these handlers when testing this behavior; older backends
 may not support the full-content reader. Oversized responses/events have a
 separate device transport limit.
+
+Tap an edited file below a completed turn to open its saved diff, with line
+numbers, colored additions/deletions and word emphasis. Large diffs use bounded
+pages; binary changes stay on desktop. This uses the existing history-content
+reader and does not read or modify the current working tree.
 
 CI installs the mobile lockfile, runs its tests, typecheck and lint, verifies
 Expo package compatibility, and exports an iOS JavaScript bundle. Native builds

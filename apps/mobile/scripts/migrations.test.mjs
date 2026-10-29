@@ -3,11 +3,17 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { MIGRATIONS, migrateDatabase } from "../src/db/migrations.ts";
-import { models } from "../src/db/schema.ts";
+import { models, runs, workspaces } from "../src/db/schema.ts";
 
 function syncModel(db, values) {
   // Generate the insert from syncModels' SQLite schema without native bindings.
   const query = drizzle(async () => ({ rows: [] })).insert(models).values(values).onConflictDoNothing().toSQL();
+  db.prepare(query.sql).run(...query.params);
+}
+
+function syncRow(db, table, values, set) {
+  const query = drizzle(async () => ({ rows: [] })).insert(table).values(values)
+    .onConflictDoUpdate({ target: [table.backendId, table.id], set }).toSQL();
   db.prepare(query.sql).run(...query.params);
 }
 
@@ -30,9 +36,71 @@ function migrationDatabase(db) {
 }
 
 function seedVersion(db, version) {
-  for (const migration of MIGRATIONS.slice(0, version)) db.exec(migration);
+  for (const migration of MIGRATIONS.slice(0, version)) {
+    if (typeof migration === "string") db.exec(migration);
+    else migration(migrationDatabase(db));
+  }
   db.exec(`PRAGMA user_version = ${version}`);
 }
+
+test("upgrading a v17 phone preserves pending questions and adds form request metadata", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 17);
+    db.exec("INSERT INTO pending_approvals (backend_id, request_id, run_id, kind, tool_name, question, requested_at, expires_at) VALUES ('mac', 'question', 'run', 'ask_user', 'AskUser', 'Continue?', 1, 2)");
+    migrateDatabase(migrationDatabase(db));
+    const row = db.prepare("SELECT * FROM pending_approvals").get();
+    assert.equal(row.question, "Continue?");
+    assert.equal(row.requested_schema_json, null);
+    assert.equal(row.suppress_always_allow_rule, 0);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, MIGRATIONS.length);
+  } finally { db.close(); }
+});
+
+test("a v18 phone gains turn summaries without losing its existing chats or settings", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 18);
+    db.exec("INSERT INTO run_turns (backend_id, run_id, turn_index, status, model) VALUES ('mac', 'run', 0, 'completed', 'saved-model')");
+    db.exec("INSERT INTO preferences VALUES ('appearance', 'dark')");
+    migrateDatabase(migrationDatabase(db));
+    const row = db.prepare("SELECT * FROM run_turns").get();
+    assert.equal(row.model, "saved-model");
+    assert.equal(row.id, null);
+    assert.equal(row.metadata_json, null);
+    assert.equal(row.changes_json, null);
+    assert.equal(db.prepare("SELECT value FROM preferences WHERE key = 'appearance'").get().value, "dark");
+  } finally { db.close(); }
+});
+
+test("output cache migration preserves chats and separates file revisions by computer and conversation", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 19);
+    db.exec("INSERT INTO preferences VALUES ('appearance', 'dark')");
+    migrateDatabase(migrationDatabase(db));
+    const insert = db.prepare("INSERT INTO run_outputs (backend_id,run_id,artifact_id,descriptor_json,version,local_uri) VALUES (?,?,?,?,?,?)");
+    insert.run("a", "run", -1, "{}", "revision-a", "file:///a/report.pdf");
+    insert.run("b", "run", -1, "{}", "revision-b", "file:///b/report.pdf");
+    insert.run("a", "other-run", -1, "{}", "revision-c", null);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM run_outputs").get().n, 3);
+    assert.equal(db.prepare("SELECT value FROM preferences WHERE key='appearance'").get().value, "dark");
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, MIGRATIONS.length);
+  } finally { db.close(); }
+});
+
+test("a v20 phone keeps its downloaded outputs while attachment copies are isolated by identity and owner", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 20);
+    db.exec("INSERT INTO run_outputs (backend_id,run_id,artifact_id,descriptor_json,version,local_uri) VALUES ('mac','run',-1,'{}','v','file:///output.pdf')");
+    migrateDatabase(migrationDatabase(db));
+    const insert = db.prepare("INSERT INTO run_attachment_files (backend_id,run_id,attachment_id,descriptor_json,version,local_uri) VALUES (?,?,?,?,?,?)");
+    for (const [backend, run, id] of [["a","run","one"],["b","run","one"],["a","other","one"],["a","run","two"]]) insert.run(backend, run, id, "{}", "revision", null);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM run_attachment_files").get().n, 4);
+    assert.equal(db.prepare("SELECT local_uri FROM run_outputs").get().local_uri, "file:///output.pdf");
+  } finally { db.close(); }
+});
 
 test("upgrading a v14 phone preserves its chats and preferences while adding conversation settings", () => {
   const db = new DatabaseSync(":memory:");
@@ -115,5 +183,26 @@ test("a failed schema upgrade rolls back its column and version so the next laun
     migrateDatabase(migrate);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, MIGRATIONS.length);
     assert.equal(db.prepare("PRAGMA table_info(models)").all().some((column) => column.name === "service_tiers_json"), true);
+  } finally { db.close(); }
+});
+
+test("upgrading keeps cached chats and workspaces local until a snapshot names their owner", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 15);
+    db.exec("INSERT INTO runs (backend_id, id, status, mode, provider_id, created_at, updated_at) VALUES ('mac', 'chat', 'succeeded', 'chat', 'codex', 1, 2)");
+    db.exec("INSERT INTO workspaces (backend_id, id, name) VALUES ('mac', 'ws', 'Repo')");
+    migrateDatabase(migrationDatabase(db));
+    assert.deepEqual({ ...db.prepare("SELECT owner_backend_id, is_replica FROM runs").get() }, { owner_backend_id: null, is_replica: 0 });
+    assert.deepEqual({ ...db.prepare("SELECT owner_backend_id, is_replica FROM workspaces").get() }, { owner_backend_id: null, is_replica: 0 });
+
+    // The next snapshot marks another computer's copies as replicas.
+    const owner = { ownerBackendId: "other-mac", isReplica: true };
+    syncRow(db, runs, { backendId: "mac", id: "chat", status: "succeeded", mode: "chat", providerId: "codex",
+      createdAt: new Date(1), updatedAt: new Date(2), ...owner }, owner);
+    syncRow(db, workspaces, { backendId: "mac", id: "ws", name: "Repo", ...owner }, owner);
+    assert.deepEqual({ ...db.prepare("SELECT owner_backend_id, is_replica FROM runs").get() }, { owner_backend_id: "other-mac", is_replica: 1 });
+    assert.deepEqual({ ...db.prepare("SELECT owner_backend_id, is_replica FROM workspaces").get() }, { owner_backend_id: "other-mac", is_replica: 1 });
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, MIGRATIONS.length);
   } finally { db.close(); }
 });

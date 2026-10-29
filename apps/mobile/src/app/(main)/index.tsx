@@ -32,6 +32,7 @@ import {
   composerBottomPadding,
   homeRun,
   useHomeRun,
+  useRunHasOutputs,
   type ComposerSendOrigin,
 } from "@/features/runs";
 import { ModeMenu } from "@/features/spaces";
@@ -46,12 +47,10 @@ import { useModelSelection } from "@/lib/use-model-selection";
 import { useRunTitle } from "@/lib/use-run-title";
 import { db } from "@/db/client";
 import { collections, projects, providers, spaceTargets, spaces, workspaces } from "@/db/schema";
-import { colors, radius, shadows, spacing, useProviderAccentPair } from "@/theme";
+import { useThemeColors, radius, shadows, spacing, useProviderAccentPair } from "@/theme";
 
 /** The round glass buttons' size, and the pills' height, along the top. */
 const CONTROL_HEIGHT = 46;
-/** Two 44-point targets plus the capsule's horizontal padding. */
-const RUN_TOOLBAR_WIDTH = 44 * 2 + spacing.xs * 2;
 /** The connection pill under them, shown while the Mac is out of reach. */
 const PILL_HEIGHT = 30;
 
@@ -68,6 +67,7 @@ const PILL_HEIGHT = 30;
  * same whether it began here or was opened from a list.
  */
 export default function NewRunScreen() {
+  const colors = useThemeColors();
   const navigation = useNavigation();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -117,7 +117,9 @@ export default function NewRunScreen() {
   const space = spaceQuery.data[0];
   const target = targetQuery.data[0];
   const isCode = space?.mode === "developer";
-  const workspace = workspaceQuery.data.find((w) => w.id === target?.workspaceId);
+  // A target saved before its workspace turned out to be another computer's
+  // counts as no workspace: this backend can't start a run in it.
+  const workspace = workspaceQuery.data.find((w) => w.id === target?.workspaceId && !w.isReplica);
   const collection = collectionQuery.data.find((c) => c.id === target?.collectionId);
   const project = projectQuery.data.find((p) => p.id === workspace?.projectId);
   const providerEnabled = space
@@ -150,7 +152,7 @@ export default function NewRunScreen() {
   }));
 
   // Two sheets behind the composer's two chips: the model (and its effort)
-  // behind the model chip, how the agent may act behind the permission chip.
+  // behind the model chip; mode-appropriate controls behind Run options.
   const openModel = (providerId: string) =>
     router.push({ pathname: "/model", params: { providerId } } as Href);
   const openRunOptions = (providerId: string) =>
@@ -271,7 +273,7 @@ export default function NewRunScreen() {
             <ThemedText variant="headline" numberOfLines={1} style={{ flex: 1, marginHorizontal: spacing.md }}>
               {title ?? space?.name ?? "Run"}
             </ThemedText>
-            <RunToolbar onNewRun={() => homeRun.clear()} />
+            <RunToolbar runId={home.runId} onNewRun={() => homeRun.clear()} />
           </>
         ) : (
           <>
@@ -434,9 +436,9 @@ export default function NewRunScreen() {
                   }
                 : null
             }
-            permission={
-              space && modelSelection.permissionLabel
-                ? { label: modelSelection.permissionLabel, onPress: () => openRunOptions(space.providerId) }
+            runOptions={
+              space && modelSelection.runOptionsLabel
+                ? { label: modelSelection.runOptionsLabel, accessibilityLabel: modelSelection.runOptionsAccessibilityLabel, onPress: () => openRunOptions(space.providerId) }
                 : null
             }
             providerId={space?.providerId}
@@ -460,6 +462,7 @@ export default function NewRunScreen() {
 
 /** The Mac's name and its state, as a pill that opens the settings behind it. */
 function ConnectionPill({ name, onPress }: { name: string; onPress: () => void }) {
+  const colors = useThemeColors();
   const session = useSession();
   return (
     <Pressable
@@ -489,12 +492,14 @@ function ConnectionPill({ name, onPress }: { name: string; onPress: () => void }
  * The run screen's toolbar, drawn by hand: "new run" beside a menu, in one
  * glass capsule — what its native `Stack.Toolbar` renders under a header.
  */
-function RunToolbar({ onNewRun }: { onNewRun: () => void }) {
+function RunToolbar({ runId, onNewRun }: { runId: string | null; onNewRun: () => void }) {
+  const router = useRouter();
+  const hasOutputs = useRunHasOutputs(runId ?? "");
   return (
     <GlassSurface
       interactive
       style={{
-        width: RUN_TOOLBAR_WIDTH,
+        width: 44 * (hasOutputs ? 3 : 2) + spacing.xs * 2,
         height: CONTROL_HEIGHT,
         borderRadius: radius.full,
         flexDirection: "row",
@@ -502,6 +507,10 @@ function RunToolbar({ onNewRun }: { onNewRun: () => void }) {
         paddingHorizontal: spacing.xs,
       }}
     >
+      {hasOutputs ? <Pressable accessibilityRole="button" accessibilityLabel="Outputs"
+        onPress={() => router.push({ pathname: "/outputs", params: { runId: runId ?? "" } } as Href)} style={{ opacity: runId ? 1 : 0.4 }}>
+        <ToolbarGlyph icon="doc.on.doc" />
+      </Pressable> : null}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="New run"
@@ -512,7 +521,7 @@ function RunToolbar({ onNewRun }: { onNewRun: () => void }) {
       </Pressable>
       {/* The menu owns the tap: its trigger is a plain view, not a pressable. */}
       <MenuView
-        actions={[{ id: "sync", title: "Sync now", image: "arrow.clockwise" }]}
+        actions={[{ id: "sync", title: "Sync now", image: process.env.EXPO_OS === "ios" ? "arrow.clockwise" : undefined }]}
         onPressAction={({ nativeEvent }) => {
           if (nativeEvent.event === "sync") void backendSession.refresh();
         }}
@@ -524,6 +533,7 @@ function RunToolbar({ onNewRun }: { onNewRun: () => void }) {
 }
 
 function ToolbarGlyph({ icon }: { icon: ComponentProps<typeof SFSymbol>["name"] }) {
+  const colors = useThemeColors();
   return (
     <View
       accessibilityLabel={icon === "ellipsis" ? "More" : undefined}
@@ -553,6 +563,7 @@ function TargetChip({
   providerId?: string | null;
   onPress: () => void;
 }) {
+  const colors = useThemeColors();
   const provider = useProviderAccentPair(providerId);
   const tint = emphasized ? provider.accent : colors.secondaryLabel;
   return (

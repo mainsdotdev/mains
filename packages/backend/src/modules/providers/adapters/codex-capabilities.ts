@@ -1653,6 +1653,7 @@ export function createCodexCapabilities(
 
   return {
     listModels,
+    invalidateCatalogs: invalidatePluginCaches,
     listRealtimeVoices,
     getAccountInfo,
     getRateLimits,

@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { toolCalls } from "../../db/schema";
+import { runTurnChanges, toolCalls } from "../../db/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "../../../test/setup-db";
 import { createRun, createRunArtifact, createRunTurn, createToolCall } from "../../../test/factories";
@@ -200,5 +200,57 @@ describe("conversation history pages", () => {
     expect(() => validateHistoryRequest({ runId: "r", cursor: { ...cursor, id: NaN } })).toThrow("Invalid history cursor");
     expect(() => validateHistoryRequest({ runId: "r", cursor, end: { ...cursor, timestamp: 0 } })).toThrow("Invalid history window");
     expect(() => validateHistoryContentRequest({ runId: "r", source: "artifact", id: 1, offset: -1 })).toThrow("Invalid conversation content");
+  });
+
+  it("sends the active plan and visible turn summaries without bodies or stored patches", () => {
+    const files = [{ path: "src/app.ts", status: "modified", additions: 3, deletions: 1, binary: false }];
+    const first = createRunTurn(db, { runId: "r", turnIndex: 0, status: "completed", startedAt: at(0), endedAt: at(1), createdAt: at(0) });
+    const plan = { providerTurnId: "native-turn", steps: [{ step: "Verify the change", status: "in_progress" }] };
+    const active = createRunTurn(db, { runId: "r", turnIndex: 1, status: "active", startedAt: at(2), createdAt: at(2), metadata: JSON.stringify({ codexPlan: plan, internal: "private" }) });
+    for (const item of [first, active]) createRunArtifact(db, { runId: "r", kind: "report", content: "reply", createdAt: item.startedAt!, metadata: JSON.stringify({ turnId: item.id }) });
+    db.insert(runTurnChanges).values({ id: "changes", runId: "r", turnId: first.id, filesJson: JSON.stringify(files), additions: 3, deletions: 1, diffText: "patch".repeat(100_000) }).run();
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile" });
+    expect(page.turns).toHaveLength(2);
+    expect(page.turns[0].changes).toMatchObject({ files, additions: 3, deletions: 1, fileCount: 1 });
+    expect(page.turns[1].metadata).toEqual({ codexPlan: plan });
+    expect(page.turns.every((item) => item.promptContent === null && item.responseContent === null)).toBe(true);
+    expect(JSON.stringify(page)).not.toContain("patchpatch");
+  });
+
+  it("reads a stored turn patch in bounded Unicode chunks and checks the owning run", () => {
+    const item = createRunTurn(db, { runId: "r" });
+    const diffText = "diff --git a/file b/file\n" + "😀+new line\n".repeat(3000);
+    db.insert(runTurnChanges).values({ id: "changes", runId: "r", turnId: item.id, filesJson: "[]", diffText }).run();
+    let restored = "", offset: number | null = 0;
+    while (offset !== null) {
+      const page: RunHistoryContentPage = runsRepo.findHistoryContent({ runId: "r", source: "turn-diff", id: item.id, offset })!;
+      expect(Array.from(page.text).length).toBeLessThanOrEqual(8192);
+      restored += page.text;
+      offset = page.nextOffset;
+    }
+    expect(restored).toBe(diffText);
+    expect(runsRepo.findHistoryContent({ runId: "another-run", source: "turn-diff", id: item.id })).toBeNull();
+    expect(() => validateHistoryContentRequest({ runId: "r", source: "turn-diff", id: item.id, offset: -1 })).toThrow();
+  });
+
+  it("budgets turn summaries together with rows and keeps oversized file counts accurate", () => {
+    const largeFiles = Array.from({ length: 400 }, (_, i) => ({ path: `file-${i}`, status: "modified", additions: 1, deletions: 0, binary: false }));
+    const plan = { providerTurnId: "native", steps: [{ step: "\u0001".repeat(2000), status: "pending" }] };
+    for (let i = 0; i < 120; i++) {
+      const item = createRunTurn(db, { runId: "r", turnIndex: i, startedAt: at(i), createdAt: at(i), metadata: JSON.stringify({ codexPlan: plan }) });
+      createRunArtifact(db, { runId: "r", kind: "report", content: "\u0001".repeat(2000), createdAt: at(i), metadata: JSON.stringify({ turnId: item.id }) });
+      db.insert(runTurnChanges).values({ id: `changes-${i}`, runId: "r", turnId: item.id, filesJson: JSON.stringify(largeFiles), diffText: "huge".repeat(100_000) }).run();
+    }
+    let page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile" });
+    const seen = new Set(page.artifacts.map((row) => row.id));
+    for (let i = 0; i < 10; i++) {
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(1024 * 1024);
+      expect(page.turns.at(-1)?.changes).toMatchObject({ files: [], fileCount: 400 });
+      for (const artifact of page.artifacts) expect(page.turns.some((item) => item.id === artifact.metadata?.turnId)).toBe(true);
+      if (!page.hasOlder) break;
+      page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", direction: "older", cursor: page.start! });
+      page.artifacts.forEach((row) => seen.add(row.id));
+    }
+    expect(seen.size).toBe(120);
   });
 });
