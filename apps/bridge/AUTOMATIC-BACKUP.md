@@ -189,9 +189,14 @@ permission to delete the entire destination account.
    provider codes; it never prints token values, provider messages or SQL.
    Confirm exact token permissions during the first manual run rather than
    granting all-account global credentials.
-   Start with Account → D1 → Read, Account → Workers Scripts → Edit,
+   Use Account → D1 → Edit, Account → Workers Scripts → Edit,
    Account → Workers R2 Storage → Edit, Account → Account Settings → Read,
-   scoped to the one matching account. Restrict each GitHub environment's
+   scoped to the one matching account. D1 Read passes the metadata preflight,
+   but the remote export endpoint rejects it with authentication error `10000`.
+   D1 Edit was verified against the same staging CI token without rotating it:
+   [successful export and backup](https://github.com/mainsdotdev/mains/actions/runs/40870725993).
+   This permission also allows D1 writes, so retain the separate environment
+   tokens and restrict each GitHub environment's
    deployment branch policy to `main`; do not expose these secrets to PR builds.
 4. Set environment variable `BRIDGE_BACKUP_PUBLIC_KEY` to the complete matching
    **public** PEM. Publish both workflows on the repository default branch, run
