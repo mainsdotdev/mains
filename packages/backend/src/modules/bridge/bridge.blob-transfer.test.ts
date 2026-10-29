@@ -21,7 +21,7 @@ describe("Bridge chunk inactivity timeout", () => {
     const response = await requestBridgeChunk(url, { signal: new AbortController().signal, idleTimeoutMs: 300 });
     expect(await response.text()).toBe("part".repeat(10));
   });
-  it("uploads a full chunk to a slow reader beyond the inactivity window", async () => {
+  it("uploads a full chunk to a slow reader", async () => {
     let received = 0;
     const url = await server((request, response) => {
       request.on("data", (bytes: Buffer) => {
@@ -30,9 +30,24 @@ describe("Bridge chunk inactivity timeout", () => {
       request.on("end", () => response.writeHead(204).end());
     });
     const body = Buffer.alloc(4 * 1024 * 1024, 7);
-    const response = await requestBridgeChunk(url, { body, signal: new AbortController().signal, idleTimeoutMs: 300 });
+    // TCP backpressure can batch observable write progress, especially on a busy runner.
+    // Exercise the real upload deadline; the delayed-receipt case checks its grace separately.
+    const response = await requestBridgeChunk(url, { body, signal: new AbortController().signal });
     expect(response.status).toBe(204); expect(received).toBe(body.length);
-  });
+  }, 15_000);
+  it("waits beyond the inactivity window for an upload receipt", async () => {
+    const idleTimeoutMs = 1_000;
+    let received = 0;
+    const url = await server((request, response) => {
+      request.on("data", (bytes: Buffer) => { received += bytes.length; });
+      // Deliberately defer the receipt after the whole body arrives, independent of
+      // OS socket buffering or how the server splits the upload into data events.
+      request.on("end", () => setTimeout(() => response.writeHead(204).end(), idleTimeoutMs + 100).unref());
+    });
+    const body = Buffer.alloc(64 * 1024, 7);
+    const response = await requestBridgeChunk(url, { body, signal: new AbortController().signal, idleTimeoutMs });
+    expect(response.status).toBe(204); expect(received).toBe(body.length);
+  }, 10_000);
   it("aborts a stalled body after headers have arrived", async () => {
     const url = await server((_request, response) => { response.writeHead(200); response.write("partial"); });
     const response = await requestBridgeChunk(url, { signal: new AbortController().signal, idleTimeoutMs: 100 });
