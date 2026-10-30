@@ -20,6 +20,7 @@ import type { CodexAppServer } from "./codex-app-server.client";
 import {
   createCodexEventMapper,
   createCodexEventRunState,
+  formatCodexError,
   type CodexEventRunState,
   type CodexSubAgentRunMeta,
 } from "./codex-event-mapper";
@@ -758,30 +759,19 @@ export function createCodexRunCoordinator(
             status: resolvedStatus,
             error:
               resolvedStatus === "failed"
-                ? timeoutError ??
-                  (
-                    turn?.error as
-                      | { message?: string }
-                      | undefined
-                  )?.message ??
-                  "Turn failed"
+                ? timeoutError ?? formatCodexError(turn?.error, "Turn failed")
                 : undefined,
           });
         } else if (method === "error") {
+          const errorThreadId = requestThreadId(params);
+          if (errorThreadId && state?.threadId && errorThreadId !== state.threadId) return;
           const errorParams =
             params as Record<string, unknown> | undefined;
           const willRetry = errorParams?.willRetry as
             | boolean
             | undefined;
           if (!willRetry) {
-            const message =
-              (
-                errorParams?.error as
-                  | { message?: string }
-                  | undefined
-              )?.message ??
-              (errorParams?.message as string) ??
-              "Error";
+            const message = formatCodexError(errorParams?.error ?? errorParams?.message, "Error");
             finalize({ status: "failed", error: message });
           }
         }

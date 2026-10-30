@@ -866,13 +866,26 @@ export function createCodexCapabilities(
   async function listModels(): Promise<ModelInfo[]> {
     try {
       const server = await options.ensureServer();
-      const result = await server.sendRequest("model/list", {});
-      if (!Array.isArray(result.data)) {
-        logger.warn("Invalid models response from app-server");
-        return [];
-      }
+      const catalog: CodexAppServerResult<"model/list">["data"] = [];
+      const cursors = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        const page: CodexAppServerResult<"model/list"> = await server.sendRequest(
+          "model/list", cursor ? { cursor } : {},
+        );
+        if (!Array.isArray(page.data)) {
+          logger.warn("Invalid models response from app-server");
+          return [];
+        }
+        catalog.push(...page.data);
+        cursor = page.nextCursor;
+        if (cursor) {
+          if (cursors.has(cursor)) throw new Error("Codex model catalog returned a repeated pagination cursor");
+          cursors.add(cursor);
+        }
+      } while (cursor);
 
-      const models = result.data
+      const models = catalog
         .filter((model) => !model.hidden)
         .map((model): ModelInfo => {
           const effortLevels = model.supportedReasoningEfforts.map(

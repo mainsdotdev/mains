@@ -119,6 +119,7 @@ async function waitForDriverEvent(
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   approvalHarness.requests.length = 0;
   approvalHarness.formAnswer = undefined;
   delete process.env.MAINS_CODEX_FIXTURE_LOG;
@@ -140,6 +141,75 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  describe("input acceptance history", () => {
+    function turn(id: string, clientId: string) {
+      return { id, rootTurnId: null, itemsView: "full", status: "completed", error: null,
+        startedAt: 1, completedAt: 2, durationMs: 1000,
+        items: [{ type: "userMessage", id: `message-${id}`, clientId,
+          content: [{ type: "text", text: "The same prompt", text_elements: [] }] }],
+      };
+    }
+
+    function setup(pages: unknown[]) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-input-history-"));
+      tempDirs.push(dir);
+      const logPath = path.join(dir, "protocol.jsonl");
+      vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+      vi.stubEnv("MAINS_CODEX_FIXTURE_HISTORY_PAGES", JSON.stringify(pages));
+      const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+      drivers.push(driver);
+      return { driver, logPath };
+    }
+
+    it.each(["0.153.0", "0.166.0"])("finds accepted input by identity on a later page with CLI %s", async (version) => {
+      vi.stubEnv("MAINS_CODEX_FIXTURE_VERSION", version);
+      const { driver, logPath } = setup([
+        { cursor: null, result: { data: [turn("decoy", "another-input")], nextCursor: "empty-page" } },
+        { cursor: "empty-page", result: { data: [], nextCursor: "older-page" } },
+        { cursor: "older-page", result: { data: [turn("accepted-turn", "input-1")], nextCursor: null } },
+      ]);
+      await expect(driver.getInputStatus!("run-1", "input-1", "stored-thread"))
+        .resolves.toEqual({ accepted: true, turnId: "accepted-turn" });
+      const messages = readProtocolLog(logPath);
+      expect(messages.filter((message) => message.method === "thread/turns/list").map((message) => message.params))
+        .toEqual([undefined, "empty-page", "older-page"].map((cursor) => ({
+          threadId: "stored-thread", limit: 50, sortDirection: "desc", itemsView: "full",
+          ...(cursor ? { cursor } : {}),
+        })));
+      expect(messages.some((message) => message.method === "thread/read")).toBe(false);
+    });
+
+    it("reports unaccepted input only after the last history page", async () => {
+      const { driver, logPath } = setup([
+        { cursor: null, result: { data: [turn("decoy", "another-input")], nextCursor: "last-page" } },
+        { cursor: "last-page", result: { data: [], nextCursor: null } },
+      ]);
+      await expect(driver.getInputStatus!("run-1", "input-1", "stored-thread")).resolves.toEqual({ accepted: false });
+      expect(readProtocolLog(logPath).filter((message) => message.method === "thread/turns/list")).toHaveLength(2);
+    });
+
+    it("stops reading as soon as acceptance is confirmed", async () => {
+      const { driver, logPath } = setup([
+        { cursor: null, result: { data: [turn("accepted-turn", "input-1")], nextCursor: "unneeded-page" } },
+        { cursor: "unneeded-page", error: { code: -32603, message: "History unavailable" } },
+      ]);
+      await expect(driver.getInputStatus!("run-1", "input-1", "stored-thread"))
+        .resolves.toEqual({ accepted: true, turnId: "accepted-turn" });
+      expect(readProtocolLog(logPath).filter((message) => message.method === "thread/turns/list")).toHaveLength(1);
+    });
+
+    it.each(["error", "repeated cursor"])("keeps acceptance unknown on a later history page's %s", async (failure) => {
+      const { driver } = setup([
+        { cursor: null, result: { data: [], nextCursor: "next-page" } },
+        failure === "error"
+          ? { cursor: "next-page", error: { code: -32603, message: "History unavailable" } }
+          : { cursor: "next-page", result: { data: [], nextCursor: "next-page" } },
+      ]);
+      await expect(driver.getInputStatus!("run-1", "input-1", "stored-thread"))
+        .rejects.toThrow(failure === "error" ? "History unavailable" : "repeated pagination cursor");
+    });
+  });
+
   it("distinguishes explicit goal controls from automatic goal lifecycle mutations", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-goal-origin-"));
     tempDirs.push(dir);

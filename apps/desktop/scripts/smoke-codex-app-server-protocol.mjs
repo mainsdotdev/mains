@@ -194,12 +194,18 @@ try {
   assertContains("ClientRequest.ts", [
     '"method": "initialize"',
     '"method": "thread/start"',
+    '"method": "thread/turns/list"',
     '"method": "turn/start"',
     '"method": "turn/steer"',
     '"method": "skills/list"',
     '"method": "account/rateLimits/read"',
     '"method": "plugin/list"',
   ]);
+  assertContains("v2/ThreadTurnsListParams.ts", [
+    "threadId: string", "cursor?: string | null", "itemsView?: TurnItemsView | null",
+  ]);
+  assertContains("v2/ThreadTurnsListResponse.ts", ["data: Array<Turn>", "nextCursor: string | null"]);
+  assertContains("v2/ModelListParams.ts", ["cursor?: string | null"]);
   assertContains("v2/SkillsListParams.ts", [
     "cwds?: Array<string>",
     "forceReload?: boolean",

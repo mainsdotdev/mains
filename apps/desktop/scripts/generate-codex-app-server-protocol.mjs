@@ -77,6 +77,8 @@ const roots = [
   "v2/ThreadGoalSetResponse.ts",
   "v2/ThreadReadParams.ts",
   "v2/ThreadReadResponse.ts",
+  "v2/ThreadTurnsListParams.ts",
+  "v2/ThreadTurnsListResponse.ts",
   "v2/ThreadRealtimeStartParams.ts",
   "v2/ThreadRealtimeStartResponse.ts",
   "v2/ThreadRealtimeStopParams.ts",

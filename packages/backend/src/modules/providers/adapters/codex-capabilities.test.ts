@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServer } from "./codex-app-server.client";
 import { createCodexCapabilities } from "./codex-capabilities";
 
@@ -60,6 +60,56 @@ afterEach(async () => {
 });
 
 describe("Codex capabilities", () => {
+  it("collects every model page, including an empty intermediate page, before mapping the catalog", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-model-pages-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    const server = await startServer(logPath, {
+      MAINS_CODEX_FIXTURE_MODEL_PAGES: JSON.stringify([
+        { cursor: null, result: { data: [{ id: "first-model" }], nextCursor: "empty-page" } },
+        { cursor: "empty-page", result: { data: [], nextCursor: "last-page" } },
+        { cursor: "last-page", result: { data: [
+          { id: "hidden-model", hidden: true },
+          { id: "last-model", supportedReasoningEfforts: [{ reasoningEffort: "ultra", description: "Thorough" }],
+            serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Fastest" }] },
+        ], nextCursor: null } },
+      ]),
+    });
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server, getRunningServer: () => server,
+      getCliHealth: async () => ({ version: "0.166.0", channel: null, outdated: false, compatibility: "supported" }),
+    });
+
+    const models = await capabilities.listModels();
+    expect(models.map((model) => model.id)).toEqual(["first-model", "last-model"]);
+    expect(models[1]).toMatchObject({ supportedEffortLevels: ["ultra"], supportsFastMode: true,
+      serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Fastest" }] });
+    expect(readProtocolLog(logPath).filter((message) => message.method === "model/list")
+      .map((message) => message.params)).toEqual([{}, { cursor: "empty-page" }, { cursor: "last-page" }]);
+  });
+
+  it.each(["error", "repeated cursor"])("discards a partial model catalog on a later page's %s", async (failure) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-model-page-failure-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    const server = await startServer(logPath, {
+      MAINS_CODEX_FIXTURE_MODEL_PAGES: JSON.stringify([
+        { cursor: null, result: { data: [{ id: "partial-model" }], nextCursor: "next-page" } },
+        failure === "error"
+          ? { cursor: "next-page", error: { code: -32603, message: "Catalog unavailable" } }
+          : { cursor: "next-page", result: { data: [], nextCursor: "next-page" } },
+      ]),
+    });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server, getRunningServer: () => server, logger,
+      getCliHealth: async () => ({ version: "0.166.0", channel: null, outdated: false, compatibility: "supported" }),
+    });
+    await expect(capabilities.listModels()).resolves.toEqual([]);
+    expect(logger.error).toHaveBeenCalled();
+    expect(readProtocolLog(logPath).filter((message) => message.method === "model/list")).toHaveLength(2);
+  });
+
   it.each([
     { kind: "gcp", account: { type: "gcp" } },
     { kind: "chatgpt", account: { type: "chatgpt", email: "codex@example.com", planType: "pro", workspaceName: "Mains team" } },

@@ -44,6 +44,27 @@ function optionalString(value: unknown): string | undefined {
     : undefined;
 }
 
+/** The transcript and final run failure share the same user-facing guidance. */
+export function formatCodexError(error: unknown, fallback = "Codex request failed"): string {
+  const payload = objectRecord(error);
+  switch (payload?.codexErrorInfo ?? payload?.codex_error_info) {
+    case "modelNotFound":
+      return "The selected Codex model is unavailable. Choose another model and try again.";
+    case "policyCapacityUnavailable":
+      return "Codex capacity is unavailable under the current policy. Try again later.";
+    case "unauthorized":
+      return "Codex authentication failed. Sign in again or check your API credentials, then retry.";
+    case "serverOverloaded":
+      return "Codex is temporarily overloaded. Try again shortly.";
+    default:
+      return optionalString(payload?.message) ?? optionalString(error) ?? fallback;
+  }
+}
+
+const PARENT_STATUS_NOTIFICATIONS = new Set([
+  "error", "model/rerouted", "modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted",
+]);
+
 /**
  * Prefer the tool descriptor's captured MCP App UI resource, while keeping
  * older item and result metadata readable for persisted threads.
@@ -318,6 +339,8 @@ interface Usage {
 export interface CodexEventRunState {
   threadId: string | null;
   turnId: string | null;
+  /** Survives usage flushing until this projection state is released. */
+  reportedErrors?: Set<string>;
   currentMessageItemId: string | null;
   agentMessageBuffer: string;
   /** Prevents completed-item replay from duplicating persisted assistant text. */
@@ -603,6 +626,29 @@ export function createCodexEventMapper(
     cachedInputTokens: number;
     cacheWriteTokens: number;
   }>>();
+  const reroutedModels = new Map<string, Map<string, string>>();
+
+  function mapError(error: unknown, runId: string, turnId: string | undefined, willRetry: boolean, ts: number): WorkRunEvent[] {
+    const payload = objectRecord(error);
+    const rawMessage = optionalString(payload?.message) ?? optionalString(error) ?? "unknown";
+    const codexErrorInfo = payload?.codexErrorInfo ?? payload?.codex_error_info;
+    const additionalDetails = optionalString(payload?.additionalDetails ?? payload?.additional_details);
+    const key = JSON.stringify([turnId, willRetry, codexErrorInfo, rawMessage, additionalDetails]);
+    const state = getRunState(runId);
+    const reported = state ? (state.reportedErrors ??= new Set<string>()) : new Set<string>();
+    if (reported.has(key)) return [];
+    reported.add(key);
+    return [{
+      type: "log", level: willRetry ? "warn" : "error", ts,
+      message: willRetry ? `Codex will retry: ${rawMessage}` : `Codex error: ${formatCodexError(error, rawMessage)}`,
+      metadata: {
+        source: "codex_error", rawMessage, willRetry,
+        ...(turnId ? { providerTurnId: turnId } : {}),
+        ...(codexErrorInfo != null ? { codexErrorInfo } : {}),
+        ...(additionalDetails ? { additionalDetails } : {}),
+      },
+    }];
+  }
 
   function getOrCreateUsage(runId: string) {
     if (!usageAccumulator.has(runId)) {
@@ -624,6 +670,7 @@ export function createCodexEventMapper(
     const acc = usageAccumulator.get(runId);
     usageAccumulator.delete(runId);
     usageSnapshots.delete(runId);
+    reroutedModels.delete(runId);
     if (!acc || (acc.inputTokens === 0 && acc.outputTokens === 0)) {
       return undefined;
     }
@@ -1532,6 +1579,25 @@ export function createCodexEventMapper(
     const ts = Date.now();
     const events: WorkRunEvent[] = [];
     const p = params as Record<string, unknown> | undefined;
+    const threadId = optionalString(p?.threadId ?? p?.thread_id);
+    const providerTurnId = optionalString(p?.turnId ?? p?.turn_id ?? objectRecord(p?.turn)?.id);
+    const runState = getRunState(runId);
+    const parentThreadId = runState?.threadId;
+    if (PARENT_STATUS_NOTIFICATIONS.has(method) && threadId && parentThreadId && threadId !== parentThreadId) {
+      const child = runState?.subAgents.get(threadId);
+      if (method === "error" && p?.willRetry !== true && child) {
+        const error = p?.error ?? p?.message;
+        const settled = settleSubAgent(child, threadId, "failed", ts, {
+          error: formatCodexError(error),
+          extraMetadata: { source: "codex_error", providerTurnId,
+            codexErrorInfo: objectRecord(error)?.codexErrorInfo,
+          },
+        });
+        if (settled) events.push(settled);
+      }
+      return events;
+    }
+    model = (providerTurnId ? reroutedModels.get(runId)?.get(providerTurnId) : undefined) ?? model;
 
     switch (method) {
       case "thread/started": {
@@ -1760,9 +1826,8 @@ export function createCodexEventMapper(
 
         const turn = p?.turn as Record<string, unknown> | undefined;
         const status = (turn?.status ?? p?.status) as string | undefined;
-        const error = turn?.error as { message?: string } | undefined;
-        if (status === "failed" && error?.message) {
-          events.push({ type: "log", message: `Codex turn failed: ${error.message}`, level: "error", ts });
+        if (status === "failed" && turn?.error) {
+          events.push(...mapError(turn.error, runId, providerTurnId, false, ts));
         }
         break;
       }
@@ -2092,8 +2157,44 @@ export function createCodexEventMapper(
         break;
 
       case "error": {
-        const msg = (p?.error as { message?: string })?.message ?? p?.message ?? "unknown";
-        events.push({ type: "log", message: `Codex error: ${msg}`, level: "error", ts });
+        events.push(...mapError(p?.error ?? p?.message, runId, providerTurnId, p?.willRetry === true, ts));
+        break;
+      }
+
+      case "model/rerouted": {
+        const fromModel = optionalString(p?.fromModel);
+        const toModel = optionalString(p?.toModel);
+        if (!fromModel || !toModel) break;
+        if (providerTurnId) {
+          let models = reroutedModels.get(runId);
+          if (!models) {
+            models = new Map();
+            reroutedModels.set(runId, models);
+          }
+          models.set(providerTurnId, toModel);
+        }
+        events.push({
+          type: "log", level: "info", message: `Codex switched from ${fromModel} to ${toModel}.`, ts,
+          metadata: { source: "codex_model_rerouted", fromModel, toModel,
+            ...(providerTurnId ? { providerTurnId } : {}),
+            ...(typeof p?.reason === "string" ? { reason: p.reason } : {}),
+          },
+        });
+        break;
+      }
+
+      case "modelProvider/authRecoveryStarted":
+      case "modelProvider/authRecoveryCompleted": {
+        const started = method.endsWith("Started");
+        const message = optionalString(p?.message);
+        events.push({
+          type: "log", level: started ? "warn" : "info", ts,
+          message: message ?? (started ? "Codex is renewing authentication." : "Codex authentication recovery finished."),
+          metadata: { source: "codex_auth_recovery", phase: started ? "started" : "completed",
+            ...(typeof p?.provider === "string" ? { provider: p.provider } : {}),
+            ...(providerTurnId ? { providerTurnId } : {}),
+          },
+        });
         break;
       }
 
@@ -3415,10 +3516,12 @@ export function createCodexEventMapper(
     discardRun(runId: string): void {
       usageAccumulator.delete(runId);
       usageSnapshots.delete(runId);
+      reroutedModels.delete(runId);
     },
     clear(): void {
       usageAccumulator.clear();
       usageSnapshots.clear();
+      reroutedModels.clear();
     },
   };
 }

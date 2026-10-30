@@ -74,6 +74,110 @@ afterEach(() => {
 });
 
 describe("Codex event mapper", () => {
+  it.each([
+    ["modelNotFound", "Choose another model"],
+    ["policyCapacityUnavailable", "Try again later"],
+    ["unauthorized", "Sign in again"],
+  ])("explains %s and retains the native error details", (code, guidance) => {
+    const { mapper } = createHarness();
+    const events = mapper.mapNotification("error", {
+      threadId: "thread-parent", turnId: "turn-1", willRetry: false,
+      error: { message: "Native failure", codexErrorInfo: code, additionalDetails: "Provider diagnostic" },
+    }, "run-1");
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "log", level: "error", message: expect.stringContaining(guidance),
+      metadata: expect.objectContaining({ source: "codex_error", providerTurnId: "turn-1",
+        codexErrorInfo: code, rawMessage: "Native failure", additionalDetails: "Provider diagnostic", willRetry: false }),
+    }));
+  });
+
+  it("shows retryable errors as warnings and retains unknown error messages", () => {
+    const { mapper } = createHarness();
+    expect(mapper.mapNotification("error", {
+      threadId: "thread-parent", turnId: "turn-1", willRetry: true,
+      error: { message: "Temporarily disconnected", codexErrorInfo: "futureError" },
+    }, "run-1")).toContainEqual(expect.objectContaining({
+      type: "log", level: "warn", message: expect.stringContaining("retry"),
+      metadata: expect.objectContaining({ willRetry: true, codexErrorInfo: "futureError" }),
+    }));
+    expect(mapper.mapNotification("error", {
+      threadId: "thread-parent", turnId: "turn-1", willRetry: false,
+      error: { message: "Provider's specific failure", codexErrorInfo: "futureError" },
+    }, "run-1")).toContainEqual(expect.objectContaining({
+      type: "log", level: "error", message: expect.stringContaining("Provider's specific failure"),
+    }));
+  });
+
+  it.each([false, true])("reports a terminal error once even when usage was already flushed: %s", (flush) => {
+    const { mapper } = createHarness();
+    const error = { message: "Model unavailable", codexErrorInfo: "modelNotFound" };
+    const first = mapper.mapNotification("error", { threadId: "thread-parent", turnId: "turn-1", error, willRetry: false }, "run-1");
+    if (flush) mapper.flushUsage("run-1");
+    const events = [
+      ...first,
+      ...mapper.mapNotification("turn/completed", { threadId: "thread-parent", turn: { id: "turn-1", status: "failed", error } }, "run-1"),
+    ];
+    expect(events.filter((event) => event.type === "log" && event.level === "error"))
+      .toEqual([expect.objectContaining({ message: expect.stringContaining("Choose another model") })]);
+  });
+
+  it("explains a failed turn even when no error notification preceded it", () => {
+    const { mapper } = createHarness();
+    expect(mapper.mapNotification("turn/completed", {
+      threadId: "thread-parent", turn: { id: "turn-1", status: "failed",
+        error: { message: "No capacity", codexErrorInfo: "policyCapacityUnavailable" } },
+    }, "run-1")).toContainEqual(expect.objectContaining({
+      type: "log", level: "error", message: expect.stringContaining("Try again later"),
+      metadata: expect.objectContaining({ codexErrorInfo: "policyCapacityUnavailable", providerTurnId: "turn-1" }),
+    }));
+  });
+
+  it("reports model rerouting and attributes subsequent usage to the effective model", () => {
+    const { mapper } = createHarness();
+    expect(mapper.mapNotification("model/rerouted", {
+      threadId: "thread-parent", turnId: "turn-1", fromModel: "requested-model", toModel: "actual-model", reason: "highRiskCyberActivity",
+    }, "run-1", "requested-model")).toContainEqual(expect.objectContaining({
+      type: "log", level: "info", message: expect.stringContaining("actual-model"),
+      metadata: expect.objectContaining({ source: "codex_model_rerouted", fromModel: "requested-model", toModel: "actual-model" }),
+    }));
+    const events = mapper.mapNotification("thread/tokenUsage/updated", {
+      threadId: "thread-parent", turnId: "turn-1",
+      tokenUsage: { last: { inputTokens: 10, outputTokens: 2, totalTokens: 12 }, modelContextWindow: 100 },
+    }, "run-1", "requested-model");
+    expect(events).toContainEqual(expect.objectContaining({ type: "context_usage", model: "actual-model" }));
+    expect(mapper.flushUsage("run-1")).toMatchObject({ model: "actual-model", inputTokens: 10, outputTokens: 2 });
+  });
+
+  it("makes both authentication recovery phases readable without claiming successful sign-in", () => {
+    const { mapper } = createHarness();
+    const started = mapper.mapNotification("modelProvider/authRecoveryStarted", {
+      threadId: "thread-parent", turnId: "turn-1", provider: "openai", message: "Renewing credentials",
+    }, "run-1");
+    const completed = mapper.mapNotification("modelProvider/authRecoveryCompleted", {
+      threadId: "thread-parent", turnId: "turn-1", provider: "openai", message: "Credentials could not be renewed",
+    }, "run-1");
+    expect(started).toContainEqual(expect.objectContaining({ type: "log", level: "warn",
+      message: expect.stringContaining("Renewing credentials"),
+      metadata: expect.objectContaining({ source: "codex_auth_recovery", phase: "started", provider: "openai" }),
+    }));
+    expect(completed).toContainEqual(expect.objectContaining({ type: "log",
+      message: expect.stringContaining("Credentials could not be renewed"),
+      metadata: expect.objectContaining({ source: "codex_auth_recovery", phase: "completed" }),
+    }));
+    expect([...started, ...completed].some((event) => event.type === "status")).toBe(false);
+  });
+
+  it.each(["error", "model/rerouted", "modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted"])(
+    "keeps a child's %s out of the parent status timeline", (method) => {
+      const { mapper } = createHarness();
+      expect(mapper.mapNotification(method, {
+        threadId: "thread-child", turnId: "child-turn", willRetry: false,
+        error: { message: "Child failed", codexErrorInfo: "modelNotFound" },
+        fromModel: "old", toModel: "new", provider: "openai", message: "Child credentials",
+      }, "run-1")).toEqual([]);
+    },
+  );
+
   it.each(["contextCompaction", "context_compaction"])("persists %s lifecycle once per phase", (type) => {
     const { mapper } = createHarness();
     const params = { threadId: "thread-parent", item: { type, id: "compact-1" } };

@@ -32,6 +32,46 @@ function liveRun() {
 }
 
 describe("Codex active input delivery", () => {
+  it.each(["error", "turn/completed"])("returns actionable failure guidance from %s", async (method) => {
+    const h = liveRun();
+    const error = { message: "Native model failure", codexErrorInfo: "modelNotFound" };
+    h.notify(method, method === "error"
+      ? { threadId: "parent", turnId: "turn-parent", willRetry: false, error }
+      : { threadId: "parent", turn: { id: "turn-parent", status: "failed", error } });
+    expect(await h.finished).toMatchObject({ status: "failed", summary: expect.stringContaining("Choose another model") });
+    h.coordinator.shutdown();
+  });
+
+  it("keeps retry and authentication recovery nonterminal", async () => {
+    const h = liveRun();
+    h.notify("error", { threadId: "parent", turnId: "turn-parent", willRetry: true,
+      error: { message: "Expired credentials", codexErrorInfo: "unauthorized" } });
+    h.notify("modelProvider/authRecoveryStarted", { threadId: "parent", turnId: "turn-parent", provider: "openai", message: "Refreshing credentials" });
+    h.notify("modelProvider/authRecoveryCompleted", { threadId: "parent", turnId: "turn-parent", provider: "openai", message: "Credentials renewed" });
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+    expect(await h.finished).toMatchObject({ status: "succeeded" });
+    expect(h.events).toContainEqual(expect.objectContaining({ type: "log", level: "warn",
+      metadata: expect.objectContaining({ willRetry: true }),
+    }));
+    h.coordinator.shutdown();
+  });
+
+  it("does not fail the parent when a subagent reports a nonretryable error", async () => {
+    const h = liveRun();
+    h.notify("thread/started", { thread: { id: "child", parentThreadId: "parent" } });
+    h.notify("item/completed", { threadId: "parent", item: {
+      type: "subAgentActivity", id: "spawn-child", kind: "started", agentThreadId: "child", agentPath: "/root/child",
+    } });
+    h.notify("turn/started", { threadId: "child", turn: { id: "child-turn", status: "inProgress" } });
+    h.notify("error", { threadId: "child", turnId: "child-turn", willRetry: false,
+      error: { message: "Child model missing", codexErrorInfo: "modelNotFound" } });
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+    expect(await h.finished).toMatchObject({ status: "succeeded" });
+    expect(h.events.filter((event) => event.type === "subagent" && event.phase === "failed"))
+      .toEqual([expect.objectContaining({ agentId: "child", error: expect.stringContaining("Choose another model") })]);
+    h.coordinator.shutdown();
+  });
+
   it("binds steer to the parent turn and waits for ACK projection before completion", async () => {
     const h = liveRun();
     h.notify("thread/started", { thread: { id: "child", parentThreadId: "parent" } });

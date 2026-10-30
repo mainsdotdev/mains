@@ -59,6 +59,8 @@ import type { ThreadGoalSetParams } from "./generated/v2/ThreadGoalSetParams";
 import type { ThreadGoalSetResponse } from "./generated/v2/ThreadGoalSetResponse";
 import type { ThreadReadParams } from "./generated/v2/ThreadReadParams";
 import type { ThreadReadResponse } from "./generated/v2/ThreadReadResponse";
+import type { ThreadTurnsListParams } from "./generated/v2/ThreadTurnsListParams";
+import type { ThreadTurnsListResponse } from "./generated/v2/ThreadTurnsListResponse";
 import type { ThreadResumeParams } from "./generated/v2/ThreadResumeParams";
 import type { ThreadResumeResponse } from "./generated/v2/ThreadResumeResponse";
 import type { ThreadStartParams } from "./generated/v2/ThreadStartParams";
@@ -151,6 +153,7 @@ export interface CodexAppServerRpc {
   "thread/goal/get": RpcMethod<ThreadGoalGetParams, ThreadGoalGetResponse>;
   "thread/goal/set": RpcMethod<ThreadGoalSetParams, ThreadGoalSetResponse>;
   "thread/read": RpcMethod<ThreadReadParams, ThreadReadResponse>;
+  "thread/turns/list": RpcMethod<ThreadTurnsListParams, ThreadTurnsListResponse>;
   "thread/realtime/start": RpcMethod<ThreadRealtimeStartParams, ThreadRealtimeStartResponse>;
   "thread/realtime/stop": RpcMethod<ThreadRealtimeStopParams, ThreadRealtimeStopResponse>;
   "thread/realtime/listVoices": RpcMethod<ThreadRealtimeListVoicesParams, ThreadRealtimeListVoicesResponse>;

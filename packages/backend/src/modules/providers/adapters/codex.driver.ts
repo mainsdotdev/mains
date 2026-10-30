@@ -52,7 +52,7 @@ import { logWorkspaceActivity } from "../../workspace";
 // through the SaveReview/SaveFinding tools.
 import { workspaceRepo } from "../../workspace/workspace.repo";
 import { adoptConfig, createLogger, resolveCatalogDefaultId } from "./adapter.shared";
-import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
+import type { CodexAppServerParams, CodexAppServerResult } from "./codex-app-server-protocol/rpc";
 import { CodexAppServer } from "./codex-app-server.client";
 import { codexMcpResourceTarget, createCodexMcpApps } from "./codex-mcp-apps";
 import {
@@ -901,10 +901,23 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       const threadId = runCoordinator.getSessionThread(runId) ?? sessionId;
       if (!threadId) return { accepted: false };
       const server = await ensureServer();
-      const { thread } = await server.sendRequest("thread/read", { threadId, includeTurns: true });
-      const turn = thread.turns.find((turn) => turn.items.some((item) =>
-        item.type === "userMessage" && item.clientId === clientUserMessageId));
-      return { accepted: !!turn, ...(turn ? { turnId: turn.id } : {}) };
+      const cursors = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        const page: CodexAppServerResult<"thread/turns/list"> = await server.sendRequest("thread/turns/list", {
+          threadId, limit: 50, sortDirection: "desc", itemsView: "full",
+          ...(cursor ? { cursor } : {}),
+        });
+        const turn = page.data.find((turn) => turn.items.some((item) =>
+          item.type === "userMessage" && item.clientId === clientUserMessageId));
+        if (turn) return { accepted: true, turnId: turn.id };
+        cursor = page.nextCursor;
+        if (cursor) {
+          if (cursors.has(cursor)) throw new Error("Codex history returned a repeated pagination cursor");
+          cursors.add(cursor);
+        }
+      } while (cursor);
+      return { accepted: false };
     },
 
     async executePrompt(
