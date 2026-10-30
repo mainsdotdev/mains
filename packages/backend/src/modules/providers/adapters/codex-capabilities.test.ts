@@ -60,6 +60,23 @@ afterEach(async () => {
 });
 
 describe("Codex capabilities", () => {
+  it.each([
+    { kind: "gcp", account: { type: "gcp" } },
+    { kind: "chatgpt", account: { type: "chatgpt", email: "codex@example.com", planType: "pro", workspaceName: "Mains team" } },
+  ])("retains the current $kind account contract", async ({ kind, account }) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-account-"));
+    tempDirs.push(dir);
+    const server = await startServer(path.join(dir, "protocol.jsonl"), {
+      MAINS_CODEX_FIXTURE_ACCOUNT: kind,
+      MAINS_CODEX_FIXTURE_WORKSPACE_NAME: "Mains team",
+    });
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server, getRunningServer: () => server,
+      getCliHealth: async () => ({ version: "0.166.0", channel: null, outdated: false, compatibility: "supported" }),
+    });
+    await expect(capabilities.getAccountInfo()).resolves.toMatchObject({ account, requiresOpenaiAuth: false });
+  });
+
   it("discovers project plugins and isolates installed-plugin caches across workspaces", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-project-plugins-"));
     tempDirs.push(dir);

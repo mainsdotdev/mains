@@ -65,6 +65,7 @@ function createHarness(state = createRunState()) {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   restoreRuntime?.();
   restoreRuntime = null;
   for (const dir of tempDirs.splice(0)) {
@@ -203,6 +204,55 @@ describe("Codex event mapper", () => {
 
     expect(events.filter((event) => event.type === "artifact" && event.kind === "image"))
       .toEqual([expect.objectContaining({ path: savedPath })]);
+  });
+
+  it("preserves file-backed generation metadata and uses the configured Codex image directory", () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-file-image-"));
+    tempDirs.push(codexHome);
+    vi.stubEnv("CODEX_HOME", codexHome);
+    const savedPath = path.join(codexHome, "generated_images", "image.png");
+    fs.mkdirSync(path.dirname(savedPath));
+    fs.writeFileSync(savedPath, Buffer.from(ONE_PIXEL_PNG, "base64"));
+    const inputImages = [{ path: path.join(codexHome, "reference.png"), sha256: "a".repeat(64) }];
+    const { mapper } = createHarness();
+    const params = {
+      threadId: "thread-parent",
+      item: {
+        id: "file-image-1", type: "imageGeneration", status: "completed",
+        fileId: "file-generated-1", generationId: "generation-1", inputImages,
+        savedPath, transparentBackground: true,
+      },
+    };
+
+    const events = mapper.mapNotification("item/completed", params, "run-1");
+    expect(events.filter((event) => event.type === "artifact" && event.kind === "image"))
+      .toEqual([expect.objectContaining({
+        path: savedPath,
+        metadata: expect.objectContaining({
+          fileId: "file-generated-1", generationId: "generation-1", inputImages,
+          transparentBackground: true,
+        }),
+      })]);
+    expect(mapper.mapNotification("item/completed", params, "run-1")
+      .some((event) => event.type === "artifact" && event.kind === "image")).toBe(false);
+  });
+
+  it("retains a remote-only file reference without treating its identifier as a path or base64", () => {
+    const { mapper } = createHarness();
+    const events = mapper.mapNotification("item/completed", {
+      threadId: "thread-parent",
+      item: {
+        id: "remote-image-1", type: "imageGeneration", status: "completed",
+        fileId: "file-remote-1", generationId: "generation-1",
+      },
+    }, "run-1");
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "log", level: "warn",
+      message: "Codex generated an image, but its remote file has no local copy available",
+      metadata: expect.objectContaining({ fileId: "file-remote-1", generationId: "generation-1" }),
+    }));
+    expect(events.some((event) => event.type === "artifact" && event.kind === "image")).toBe(false);
   });
 
   it("reports an unavailable result without persisting base64 or a broken image card", () => {

@@ -6,7 +6,7 @@ import process from "node:process";
 import { setTimeout } from "node:timers";
 
 const fixtureCliVersion =
-  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.163.0";
+  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.166.0";
 
 if (process.argv.includes("--version")) {
   process.stdout.write(`codex-cli ${fixtureCliVersion}\n`);
@@ -755,11 +755,14 @@ input.on("line", (line) => {
               type: "amazonBedrock",
               usesCodexManagedCredentials: true,
             }
-          : {
-              type: "chatgpt",
-              email: "codex@example.com",
-              planType: "pro",
-            },
+          : process.env.MAINS_CODEX_FIXTURE_ACCOUNT === "gcp"
+            ? { type: "gcp" }
+            : {
+                type: "chatgpt",
+                email: "codex@example.com",
+                planType: "pro",
+                workspaceName: process.env.MAINS_CODEX_FIXTURE_WORKSPACE_NAME ?? null,
+              },
         requiresOpenaiAuth: false,
       });
       break;

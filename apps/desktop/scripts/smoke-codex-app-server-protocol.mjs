@@ -250,6 +250,13 @@ try {
     assertContains("v2/TurnStartParams.ts", ["parentTurnId?: string | null", "rootTurnId?: string | null"]);
     assertContains("v2/ThreadItem.ts", ['"type": "subAgentActivity"', "model: string | null", "reasoningEffort: ReasoningEffort | null"]);
   }
+  if (compareVersions(versionOutput, "0.166.0") >= 0) {
+    assertContains("ImageGenerationItem.ts", [
+      "fileId: string", "result: string", "generationId: string | null",
+      "inputImages?: Array<ImageGenerationInputImage>",
+    ]);
+    assertContains("v2/Account.ts", ['"type": "gcp"', "workspaceName: string | null"]);
+  }
   assertContains("v2/McpResourceReadParams.ts", [
     "threadId?: string | null",
     "originCallId?: string | null",

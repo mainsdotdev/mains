@@ -1949,9 +1949,13 @@ export interface AccountInfo {
     type: "chatgpt";
     email: string | null;
     planType: string;
+    /** Selected workspace; omitted by older Codex app-server versions. */
+    workspaceName?: string | null;
   } | {
     type: "amazonBedrock";
     usesCodexManagedCredentials: boolean;
+  } | {
+    type: "gcp";
   } | {
     type: "cursor";
     email: string;

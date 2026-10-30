@@ -495,11 +495,30 @@ export function mapImageGenerationLifecycle(
   return events;
 }
 
-// The app-server result is base64 image data. savedPath is optional, so a
-// completed item must be materialized before the existing path-based image
-// artifact UI can display it. Match Codex's 32 MiB generated-image limit.
+// Inline results contain base64; newer items may instead carry an opaque
+// fileId. Only savedPath or inline bytes can supply a local image: app-server
+// does not expose the attachment store's file-reference resolver.
+// Match Codex's 32 MiB generated-image limit.
 const MAX_GENERATED_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_GENERATED_IMAGE_BASE64_LENGTH = Math.ceil(MAX_GENERATED_IMAGE_BYTES / 3) * 4;
+
+function generatedImageMetadata(item: ThreadItem): Record<string, unknown> {
+  const fileId = optionalString(item.fileId ?? item.file_id);
+  const generationId = optionalString(item.generationId ?? item.generation_id);
+  const rawInputs = item.inputImages ?? item.input_images;
+  const inputImages = Array.isArray(rawInputs) ? rawInputs.flatMap((value) => {
+    const input = objectRecord(value);
+    return typeof input?.path === "string" && typeof input.sha256 === "string"
+      && /^[a-f0-9]{64}$/.test(input.sha256)
+      ? [{ path: input.path, sha256: input.sha256 }]
+      : [];
+  }) : [];
+  return {
+    ...(fileId ? { fileId } : {}),
+    ...(generationId ? { generationId } : {}),
+    ...(inputImages.length ? { inputImages } : {}),
+  };
+}
 
 function inlineGeneratedImage(result: unknown): { bytes: Buffer; extension: string } | null {
   if (typeof result !== "string") return null;
@@ -755,7 +774,8 @@ export function createCodexEventMapper(
   }
 
   function codexGeneratedImageDir(): string {
-    return path.join(os.homedir(), ".codex", "generated_images");
+    const codexHome = process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
+    return path.resolve(codexHome, "generated_images");
   }
 
   /** Codex stores images from all its threads under this shared directory. */
@@ -793,6 +813,7 @@ export function createCodexEventMapper(
     const rs = getRunState(runId);
     if (!rs) return;
 
+    const metadata = generatedImageMetadata(item);
     const savedPath = optionalString(item.savedPath ?? item.saved_path);
     let filePath: string | null = null;
     if (savedPath && path.isAbsolute(savedPath)) {
@@ -810,7 +831,7 @@ export function createCodexEventMapper(
             stat.size <= MAX_GENERATED_IMAGE_BYTES
           ) filePath = resolved;
         } catch {
-          // Remote or missing savedPath: use the inline result instead.
+          // Missing savedPath: use inline bytes when this item supplies them.
         }
       }
     }
@@ -818,9 +839,11 @@ export function createCodexEventMapper(
     if (!filePath) {
       events.push({
         type: "log",
-        level: "error",
-        message: "Codex generated an image, but its output could not be displayed",
-        metadata: { itemId: item.id },
+        level: metadata.fileId ? "warn" : "error",
+        message: metadata.fileId
+          ? "Codex generated an image, but its remote file has no local copy available"
+          : "Codex generated an image, but its output could not be displayed",
+        metadata: { source: "codex_image_generation", itemId: item.id, ...metadata },
         ts,
       });
       return;
@@ -836,6 +859,7 @@ export function createCodexEventMapper(
         kind: "image",
         source: "codex_image_generation",
         itemId: item.id,
+        ...metadata,
         path: filePath,
         fileName: path.basename(filePath),
         ...(typeof transparentBackground === "boolean"

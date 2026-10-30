@@ -3,12 +3,14 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
+import type { AccountInfo } from "@/lib/redux/api/providersApi";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   setMemorySetting: vi.fn(),
   resetMemories: vi.fn(),
+  accountInfo: undefined as AccountInfo | undefined,
   voiceCatalog: vi.fn(() => ({ data: undefined as RealtimeVoiceCatalog | undefined })),
   voiceSettings: vi.fn((_props: { catalog?: RealtimeVoiceCatalog | null }) => null),
   memorySettings: {
@@ -24,7 +26,7 @@ vi.mock("@/lib/transport", () => ({
 vi.mock("@/lib/redux/hooks", () => ({ useAppDispatch: () => vi.fn() }));
 vi.mock("@/lib/redux/api", () => ({
   useGetProviderRateLimitsQuery: () => ({ data: undefined, isLoading: false }),
-  useGetProviderAccountInfoQuery: () => ({ data: undefined, isLoading: false }),
+  useGetProviderAccountInfoQuery: () => ({ data: mocks.accountInfo, isLoading: false }),
   useGetProviderRealtimeVoicesQuery: mocks.voiceCatalog,
   useConsumeProviderRateLimitResetCreditMutation: () => [vi.fn(), { isLoading: false }],
   useGetCodexMemorySettingsQuery: () => ({ data: mocks.memorySettings, isLoading: false, isFetching: false, error: null }),
@@ -41,7 +43,8 @@ vi.mock("./provider-settings-shared", () => ({
     updating: false,
   }),
   ProviderSettingsLayout: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  ProviderAccountSection: () => null,
+  ProviderAccountSection: ({ signedIn }: { signedIn: { title: string; description: string; plan: string } | null }) =>
+    signedIn ? <div>{signedIn.title}<span>{signedIn.description}</span><span>{signedIn.plan}</span></div> : null,
   ProviderCliSection: () => null,
   ProviderUsageSection: () => null,
   selectedSchemaLabel: () => "None",
@@ -53,6 +56,7 @@ import CodexSettings from "./codex";
 
 beforeEach(() => {
   mocks.updateConfig.mockClear();
+  mocks.accountInfo = undefined;
   mocks.voiceCatalog.mockReset().mockReturnValue({ data: undefined });
   mocks.voiceSettings.mockClear();
   mocks.setMemorySetting.mockReset().mockReturnValue({ unwrap: async () => undefined });
@@ -61,6 +65,25 @@ beforeEach(() => {
   mocks.memorySettings.memoriesEnabled = true;
   mocks.memorySettings.allowToolAssistedChats = true;
   HTMLElement.prototype.scrollIntoView = vi.fn();
+});
+
+describe("Codex account settings", () => {
+  it("shows a Google Cloud account as connected", () => {
+    mocks.accountInfo = { account: { type: "gcp" }, requiresOpenaiAuth: false };
+    render(<CodexSettings />);
+    expect(screen.getByText("Google Cloud")).toBeTruthy();
+    expect(screen.getByText("Google Cloud credentials")).toBeTruthy();
+  });
+
+  it("shows the selected ChatGPT workspace when app-server reports it", () => {
+    mocks.accountInfo = {
+      account: { type: "chatgpt", email: "codex@example.com", planType: "pro", workspaceName: "Mains team" },
+      requiresOpenaiAuth: false,
+    };
+    render(<CodexSettings />);
+    expect(screen.getByText("Mains team")).toBeTruthy();
+    expect(screen.getByText("Pro")).toBeTruthy();
+  });
 });
 
 describe("Codex voice settings", () => {
