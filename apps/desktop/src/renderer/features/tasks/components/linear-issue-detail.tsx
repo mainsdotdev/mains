@@ -1,12 +1,5 @@
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
-
-import { markdownComponents } from "@/components/markdown-components";
 import {
   Button,
-  Caption,
   CircleSpinner,
   Heading2,
   Text,
@@ -17,7 +10,7 @@ import {
   type IssueDetailReference,
   type IssueWithEntity,
 } from "@/lib/redux/api";
-import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
+import { IssueBody, IssueProperties } from "./issue-properties";
 
 function safeColor(value: string | null | undefined, fallback = "#8a8f98") {
   return value && /^#[\da-f]{6}$/i.test(value) ? value : fallback;
@@ -26,26 +19,6 @@ function safeColor(value: string | null | undefined, fallback = "#8a8f98") {
 function openExternal(url: string) {
   void window.api.shell.openExternal(url);
 }
-
-function Markdown({ children }: { children: string }) {
-  return (
-    <Text
-      as="div"
-      size="s"
-      tone="secondary"
-      className="prose prose-sm dark:prose-invert max-w-none wrap-break-word"
-    >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]]}
-        components={markdownComponents}
-      >
-        {children}
-      </ReactMarkdown>
-    </Text>
-  );
-}
-
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
@@ -84,47 +57,20 @@ export function LinearIssueDetailContent({ issue }: { issue: IssueWithEntity }) 
     synced.entityId,
   );
 
-  const title = detail?.title || entity.title || `Issue #${synced.number ?? "?"}`;
+  const title = detail?.title || entity.title || `Issue ${synced.identifier ?? ""}`.trim();
   const description = detail?.description ?? entity.body;
-  const stateName = detail?.state.name ?? synced.state;
-  const stateColor = safeColor(detail?.state.color);
-  const assignee = detail?.assignee?.name ?? synced.assignee;
 
   return (
     <div className="h-full overflow-y-auto noscrollbar">
-      <div className="max-w-210 mx-auto pt-12 pb-24 px-6 space-y-6">
-        <div className="space-y-3">
-          <div className="flex items-start gap-3">
-            <Heading2 className="min-w-0 flex-1 wrap-break-word">{title}</Heading2>
-            {isLoading && <CircleSpinner className="size-4 mt-1.5" />}
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            {assignee && (
-              <Text as="span" size="sm" tone="subtle">
-                Assigned to{" "}
-                <Text as="span" size="inherit" tone="muted" weight="medium">
-                  {assignee}
-                </Text>
-              </Text>
-            )}
-            <span className="inline-flex capitalize items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-primary-100 dark:bg-primary-800 text-primary-600 dark:text-primary-400">
-              <span
-                className="size-2 rounded-full"
-                style={{ backgroundColor: stateColor }}
-              />
-              {stateName}
-            </span>
-          </div>
-
+      <div className="space-y-6 px-8 pt-8 pb-24">
+        <div className="flex items-start gap-3">
+          <Heading2 className="min-w-0 flex-1 wrap-break-word">{title}</Heading2>
+          {isLoading && <CircleSpinner className="size-4 mt-1.5" />}
         </div>
+        <IssueProperties issue={issue} />
 
-
-        <div className="space-y-2">
-          {description ? (
-            <Markdown>{description}</Markdown>
-          ) : (
-            <Caption>Details not synced yet or no description provided.</Caption>
-          )}
+        <div className="border-t border-primary/20 pt-6 dark:border-primary/10">
+          <IssueBody markdown={description} />
         </div>
 
         {isError && (

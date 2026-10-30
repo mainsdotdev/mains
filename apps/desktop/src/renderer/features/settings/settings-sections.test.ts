@@ -71,6 +71,15 @@ describe("Settings sections", () => {
     );
   });
 
+  it("keeps Connections out of the Settings navigation", async () => {
+    vi.resetModules();
+    const { SETTINGS_MAIN_NAV_ITEMS } = await import("./settings-sections");
+
+    expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).not.toContain(
+      "connections",
+    );
+  });
+
   it("keeps the local-only Lens page out of web navigation", async () => {
     vi.resetModules();
     const { SETTINGS_MAIN_NAV_ITEMS } = await import("./settings-sections");

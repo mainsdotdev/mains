@@ -12,6 +12,10 @@ export default function SettingsPage() {
   if (searchParams.get("section") === "bridge") {
     return <Navigate to="/bridge" replace />;
   }
+  // Connections are hidden from Settings for now; /tasks owns them.
+  if (searchParams.get("section") === "connections") {
+    return <Navigate to="/tasks" replace />;
+  }
 
   const activeSection = getSettingsRouteId(searchParams.get("section"));
   const section = getSettingsSection(activeSection);

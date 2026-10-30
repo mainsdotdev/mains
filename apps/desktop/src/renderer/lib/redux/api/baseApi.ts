@@ -59,6 +59,8 @@ export const baseApi = createApi({
     'Entity',
     'Task',
     'Issue',
+    'IssueStatus',
+    'IssueStates',
     'Account',
     'Spaces',
     'AppSettings',

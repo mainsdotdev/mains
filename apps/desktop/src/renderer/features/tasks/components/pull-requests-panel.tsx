@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   useGetPrAvailabilityQuery,
   useGetSelectedResourcesQuery,
@@ -19,7 +18,10 @@ import {
   Text,
 } from "@/components/ui";
 import { Close, Layers, Search, Trash } from "@/components/ui/icons";
+import GitHubModal from "@/features/settings/components/connections/github/github-modal";
 import { useClickOutside } from "@/hooks/use-click-outside";
+import { useIsMobile } from "@/lib/platform";
+import type { TasksScope } from "../lib/scope";
 import {
   FilterChoiceSection,
   FilterSection,
@@ -44,16 +46,46 @@ const LIFECYCLE_FILTERS: { value: PrLifecycle; label: string }[] = [
 ];
 
 interface PullRequestsPanelProps {
+  /** Connection / resource picked in the sidebar. */
+  scope: TasksScope;
   selectedNodeId: string | null;
   /** `null` clears the drawer — the list has nothing left to point at. */
   onSelectPr: (pr: PullRequestSummary | null) => void;
 }
 
-export function PullRequestsPanel({
+/**
+ * The connect modal lives out here, not in the "not connected" branch below:
+ * saving the token flips availability to connected, which swaps that branch
+ * for the list — a modal inside it would vanish mid-wizard, before the user
+ * has picked their repositories.
+ */
+export function PullRequestsPanel(props: PullRequestsPanelProps) {
+  const [connectOpen, setConnectOpen] = useState(false);
+  const { data: availability, refetch } = useGetPrAvailabilityQuery(undefined, {
+    refetchOnMountOrArgChange: 30,
+  });
+
+  return (
+    <>
+      <PullRequestsList {...props} onConnect={() => setConnectOpen(true)} />
+      <GitHubModal
+        open={connectOpen}
+        onClose={() => setConnectOpen(false)}
+        isConnected={availability?.connected === true}
+        onSuccess={() => void refetch()}
+      />
+    </>
+  );
+}
+
+function PullRequestsList({
+  scope,
   selectedNodeId,
   onSelectPr,
-}: PullRequestsPanelProps) {
-  const navigate = useNavigate();
+  onConnect,
+}: PullRequestsPanelProps & { onConnect: () => void }) {  // The sidebar owns repository scoping on desktop; without it (mobile) the
+  // facet menu's Repository section is the only way to narrow by repo.
+  const showScopeFacets = useIsMobile();
   const [relationship, setRelationship] = useState<PrRelationship>("all");
   const [lifecycle, setLifecycle] = useState<PrLifecycle>("all");
   const [text, setText] = useState("");
@@ -83,15 +115,36 @@ export function PullRequestsPanel({
   const { data: availability, isLoading: availabilityLoading } =
     useGetPrAvailabilityQuery(undefined, { refetchOnMountOrArgChange: 30 });
 
+  // Facet options are the repos selected on the GitHub connection — the same
+  // set the search is scoped to by default — plus anything present in the
+  // loaded rows (covers the no-selection global fallback).
+  const { data: selectedResources } = useGetSelectedResourcesQuery("github");
+
+  // The sidebar picks a resource by id; the search wants its `owner/repo`
+  // slug. Until the resources load the slug is unknown, so the search waits
+  // rather than flashing every repo's PRs first.
+  const scopedToRepo = scope.provider === "github" && scope.resourceId !== null;
+  const scopeSlug = scopedToRepo
+    ? selectedResources?.items.find((resource) => resource?.id === scope.resourceId)
+        ?.fullName
+    : undefined;
+  const scopePending = scopedToRepo && !selectedResources;
+  // A stale scope (repo no longer linked) has no slug and widens to all repos.
+  const searchRepos = useMemo(
+    () =>
+      scopeSlug ? [scopeSlug] : showScopeFacets ? [...repoFilters].sort() : [],
+    [scopeSlug, showScopeFacets, repoFilters],
+  );
+
   const filters = useMemo(
     () => ({
       relationship,
       lifecycle,
       text: debouncedText || undefined,
-      ...(repoFilters.length > 0 ? { repos: [...repoFilters].sort() } : {}),
+      ...(searchRepos.length > 0 ? { repos: searchRepos } : {}),
       pageSize: PAGE_SIZE,
     }),
-    [relationship, lifecycle, debouncedText, repoFilters],
+    [relationship, lifecycle, debouncedText, searchRepos],
   );
 
   const connected = availability?.connected === true && !availability.error;
@@ -105,7 +158,7 @@ export function PullRequestsPanel({
     isError,
     refetch,
   } = useSearchPullRequestsQuery(filters, {
-    skip: !connected,
+    skip: !connected || scopePending,
     refetchOnMountOrArgChange: 30,
   });
 
@@ -135,11 +188,6 @@ export function PullRequestsPanel({
     ? extraPages[extraPages.length - 1]
     : firstPage;
   const hasNextPage = lastPage?.hasNextPage === true && lastPage.endCursor;
-
-  // Facet options are the repos selected on the GitHub connection — the same
-  // set the search is scoped to by default — plus anything present in the
-  // loaded rows (covers the no-selection global fallback).
-  const { data: selectedResources } = useGetSelectedResourcesQuery("github");
 
   const repoOptions = useMemo(() => {
     const counts = new Map<string, number>();
@@ -220,11 +268,8 @@ export function PullRequestsPanel({
             were asked to review.
           </Body>
         )}
-        <Button
-          variant="primary"
-          onClick={() => navigate("/settings?section=connections")}
-        >
-          Open Connections
+        <Button variant="primary" onClick={onConnect}>
+          {availability?.error ? "Manage GitHub" : "Connect GitHub"}
         </Button>
       </div>
     );
@@ -309,17 +354,21 @@ export function PullRequestsPanel({
                     value={lifecycle}
                     onSelect={setLifecycle}
                   />
-                  <div
-                    role="separator"
-                    aria-orientation="horizontal"
-                    className="mx-3.5 h-px bg-primary-200/70 dark:bg-primary-700/40"
-                  />
-                  <FilterSection
-                    title="Repository"
-                    entries={repoOptions}
-                    selected={repoFilters}
-                    onToggle={toggleRepoFilter}
-                  />
+                  {showScopeFacets && (
+                    <>
+                      <div
+                        role="separator"
+                        aria-orientation="horizontal"
+                        className="mx-3.5 h-px bg-primary-200/70 dark:bg-primary-700/40"
+                      />
+                      <FilterSection
+                        title="Repository"
+                        entries={repoOptions}
+                        selected={repoFilters}
+                        onToggle={toggleRepoFilter}
+                      />
+                    </>
+                  )}
                   {activeFilterCount > 0 && (
                     <div className="px-3 pt-2">
                       <Button

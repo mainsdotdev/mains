@@ -5,6 +5,7 @@ import { SidebarFooter } from "./sidebar-footer";
 import { SidebarContent } from "./sidebar-content";
 import { NavigationRail } from "./navigation-rail";
 import { AtlasSidebar } from "@/features/atlas/components/atlas-sidebar";
+import { TasksSidebar } from "@/features/tasks/components/tasks-sidebar";
 import DeleteConfirmationModal from "./delete-confirmation-modal";
 import NewButton from "./new-button";
 import SettingsView from "./settings-view";
@@ -48,6 +49,7 @@ import {
   hasSidebarPanel,
   isAtlasRoute,
   isSettingsRoute,
+  isTasksRoute,
   isWorkspaceRoute,
 } from "@/lib/layout";
 import { Clock } from "@/components/ui/icons/space";
@@ -256,11 +258,13 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     location.pathname.startsWith("/plugins/");
   const isPulseRoute =
     location.pathname === "/pulse" || location.pathname.startsWith("/pulse/");
-  const isTasksRoute =
-    location.pathname === "/tasks" || location.pathname.startsWith("/tasks/");
+  const tasksRoute = isTasksRoute(location.pathname);
   const isBridgeRoute =
     location.pathname === "/bridge" || location.pathname.startsWith("/bridge/");
   const isPluginsDisabledForAgent = !spaceProvider.supportsPlugins;
+  // Mobile keeps the home list: its drawer is also where Pulse/Plugins/Bridge
+  // are reached from, and the page's own filter menu covers the scope there.
+  const showTasksSidebar = tasksRoute && !isMobile && modeConfig.showTasksNav;
 
   const handleModeChange = (mode: ModeId) => {
     if (!activeSpace || mode === activeSpace.mode) return;
@@ -318,7 +322,9 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           pointerEvents: panelHidden ? "none" : "auto",
         }}
         role="complementary"
-        aria-label={atlasRoute ? "Atlas sidebar" : "Workspace sidebar"}
+        aria-label={
+          atlasRoute ? "Atlas sidebar" : showTasksSidebar ? "Tasks sidebar" : "Workspace sidebar"
+        }
         aria-hidden={panelHidden}
         inert={panelHidden}
       >
@@ -326,6 +332,8 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           <SettingsView onClose={handleCloseSettings} />
         ) : atlasRoute ? (
           <AtlasSidebar />
+        ) : showTasksSidebar ? (
+          <TasksSidebar />
         ) : (
           <div className="h-full overflow-hidden flex flex-col">
             <SidebarHeader
@@ -355,16 +363,16 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                   variant="subtle"
                   tooltip="Issues and pull requests"
                   className={`justify-start flex items-center gap-2 w-full rounded-xl transition-colors ${
-                    isTasksRoute
+                    tasksRoute
                       ? "bg-primary/50 glass-outline dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
                       : ""
                   }`}
                   onClick={() => navigate("/tasks")}
-                  aria-current={isTasksRoute ? "page" : undefined}
+                  aria-current={tasksRoute ? "page" : undefined}
                 >
                   <Box
                     className={`w-4 h-4 -ml-1 ${
-                      isTasksRoute
+                      tasksRoute
                         ? "text-primary-950 dark:text-primary"
                         : "text-primary-900 dark:text-primary-100"
                     }`}
@@ -373,7 +381,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                     as="span"
                     size="s"
                     weight="normal"
-                    tone={isTasksRoute ? "contrast" : "default"}
+                    tone={tasksRoute ? "contrast" : "default"}
                   >
                     Tasks
                   </Text>

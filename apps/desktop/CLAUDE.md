@@ -185,6 +185,8 @@ Core tables:
 - `workspaces` — Local repos with status tracking (backlog → todo → in_progress → in_review → done → canceled → duplicate)
 - `entities` — Unified canonical content (tasks, issues, etc.)
 - `tasks` / `issues` — Domain-specific views on entities
+- `issueStatuses` — Mains' own issue statuses, each `open` or `closed`; `issues.state` keeps the provider's raw state name, `issues.statusId` the mapped status the inbox filters on (see CONTEXT.md "issue status")
+- `issueStatusMappings` / `syncCursors` — owned by `sync`: the user's provider-state → status overrides, and each incremental fetcher's last sync per resource
 - `signals` — Lightweight notification/event records surfaced in the UI
 - `connections` / `connectionTokens` / `connectionResources` / `connectionStates` — External service connections, encrypted token blobs, linked resources, integration state
 - `spaces` — User-defined UI/prompt configurations; `providerId` (agent engine) and `mode` (developer/work/chat) drive `/code`. Which modes a provider offers lives in `PROVIDER_MODES` (`@mains/contracts/modes`) — claude and codex drive all three, copilot and cursor are developer-only for now
@@ -203,6 +205,7 @@ Core tables:
 - `sync.service.ts` — Orchestrates fetching from all connections
 - `connections/` — Provider-specific fetchers (GitHub, GitLab, Linear, Jira, Asana, Trello, Sentry), each with tests
 - Produces `EntityInput[]` which gets persisted to the `entities` table
+- Issue fetchers are **incremental**: `sync_cursors` holds each resource's last sync, the next run asks only for changes (closed issues included) and pages up to 1000 items; they throw rather than return `[]` on failure (see CONTEXT.md "sync cursor"). Manual sync lives in the Tasks sidebar
 
 **Workspace System** (`../../packages/backend/src/modules/workspace/`)
 - Aggregate module: workspaces + activity + diffs + reviews + findings under one 6-file layout and one `workspace:*` channel namespace

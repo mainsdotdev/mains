@@ -12,8 +12,9 @@ import { PullRequestsPanel } from "@/features/tasks/components/pull-requests-pan
 import { DetailDrawer } from "@/features/tasks/components/detail-drawer";
 import { PrDetail } from "@/features/tasks/components/pr-detail";
 import { IssueDetail } from "@/features/tasks/components/issue-detail";
-
-type TasksTab = "issues" | "pull_requests";
+import { StatusMappingButton } from "@/features/tasks/components/status-mapping";
+import { useTasksScope } from "@/features/tasks/hooks/use-tasks-scope";
+import type { TasksTab } from "@/features/tasks/lib/scope";
 
 type TasksDetail =
   | { kind: "pr"; pr: PullRequestSummary }
@@ -25,15 +26,16 @@ const TABS: { value: TasksTab; label: string }[] = [
 ];
 
 export default function TasksPage() {
-  const [tab, setTab] = useState<TasksTab>("issues");
+  // Tab and sidebar scope live in the URL; the sidebar writes the same params.
+  const { tab, scope, setTab } = useTasksScope();
   // The panels auto-select their top row whenever this is empty or stale, so
   // the always-open drawer only shows the empty state on a genuinely empty list.
   const [detail, setDetail] = useState<TasksDetail | null>(null);
 
   const switchTab = (next: TasksTab) => {
-    setTab(next);
     // The drawer belongs to the tab that opened it.
     if (next !== tab) setDetail(null);
+    setTab(next);
   };
 
   const selectPr = useCallback(
@@ -55,11 +57,15 @@ export default function TasksPage() {
       <div className="flex-1 min-w-0 bg-primary dark:bg-primary-950">
         <div className="h-full max-w-240 mx-auto px-2 pt-16 flex flex-col min-h-0">
           <div className="px-6 shrink-0">
-            <header className="mb-6">
-              <Heading3>Tasks</Heading3>
-              <Muted className="mt-1">
-                Issues and pull requests across your connections.
-              </Muted>
+            <header className="mb-6 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                {/* Just the page name — the sidebar shows what is selected. */}
+                <Heading3>Tasks</Heading3>
+                <Muted className="mt-1">
+                  Issues and pull requests across your connections.
+                </Muted>
+              </div>
+              {tab === "issues" && <StatusMappingButton scope={scope} />}
             </header>
 
             <SegmentedTabs
@@ -81,6 +87,7 @@ export default function TasksPage() {
           >
             {tab === "issues" ? (
               <IssuesPanel
+                scope={scope}
                 activeEntityId={
                   detail?.kind === "issue" ? detail.issue.issue.entityId : null
                 }
@@ -88,6 +95,7 @@ export default function TasksPage() {
               />
             ) : (
               <PullRequestsPanel
+                scope={scope}
                 selectedNodeId={detail?.kind === "pr" ? detail.pr.nodeId : null}
                 onSelectPr={selectPr}
               />

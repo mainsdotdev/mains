@@ -15,11 +15,12 @@ import type {
   ResourceFetcher,
   ResourceFetcherArgs,
 } from "../sync.dto";
-import { normalizeLimit, normalizeDateToIso } from "../sync.connection-utils";
+import { collectPages, normalizeLimit, normalizeDateToIso } from "../sync.connection-utils";
+import { statusFromName } from "../sync.issue-status";
+import { labelColorMap, priorityFromName } from "../sync.issue-display";
 
 const ASANA_BASE_URL = "https://app.asana.com/api/1.0";
 const MAX_ITEMS_PER_PAGE = 100;
-const DEFAULT_LIMIT = 50;
 
 // ─────────────────────────────────────────────────────────────
 // Types (kept here for the asana_project sync flow + the
@@ -37,14 +38,29 @@ interface AsanaTask {
   completed_at: string | null;
   due_on: string | null;
   due_at: string | null;
-  assignee: { gid: string; name: string } | null;
+  assignee: { gid: string; name: string; photo?: { image_60x60?: string } | null } | null;
   projects: Array<{ gid: string; name: string }>;
+  memberships?: Array<{
+    project?: { gid: string };
+    section?: { gid: string; name: string } | null;
+  }>;
   workspace: { gid: string; name: string };
-  tags: Array<{ gid: string; name: string }>;
+  tags: Array<{ gid: string; name: string; color?: string | null }>;
+  custom_fields?: Array<{ name?: string; enum_value?: { name?: string } | null }>;
+}
+
+/**
+ * Asana has no built-in priority; many projects add a "Priority" custom field
+ * (High / Medium / Low), which reads onto the shared scale.
+ */
+function priorityOf(task: AsanaTask): number {
+  const field = task.custom_fields?.find((f) => f.name?.trim().toLowerCase() === "priority");
+  return priorityFromName(field?.enum_value?.name);
 }
 
 interface AsanaTasksResponse {
   data: AsanaTask[];
+  next_page?: { offset: string } | null;
 }
 
 export interface AsanaProjectInfo {
@@ -61,6 +77,17 @@ export interface AsanaProjectInfo {
 // ─────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * The bucket Asana files a project's section-less tasks under. It isn't a
+ * section anyone made, so it is no workflow state: such tasks are open until
+ * completed, like in a project without sections.
+ */
+const DEFAULT_SECTION_NAME = "(no section)";
+
+function isDefaultSection(section: { name: string }): boolean {
+  return section.name === DEFAULT_SECTION_NAME;
+}
 
 function buildAuthHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, Accept: "application/json" };
@@ -110,19 +137,20 @@ export const asanaTasksFetcher: ResourceFetcher = {
   id: "asana:tasks",
   provider: "asana",
   resourceKind: "asana_project",
-  defaultLimit: DEFAULT_LIMIT,
+  defaultLimit: 1000,
+  incremental: true,
 
   async fetchForResource({
     resource,
     secrets,
     limit,
     connectionId,
+    since,
   }: ResourceFetcherArgs): Promise<EntityInput[]> {
     const token = secrets.accessToken;
-    if (!token) return [];
+    if (!token) throw new Error("Asana connection has no access token");
 
     const projectGid = resource.externalId;
-    const normalizedLimit = normalizeLimit(limit, 1, MAX_ITEMS_PER_PAGE);
 
     const optFields = [
       "gid",
@@ -137,28 +165,51 @@ export const asanaTasksFetcher: ResourceFetcher = {
       "due_at",
       "assignee.name",
       "assignee.gid",
+      "assignee.photo.image_60x60",
       "projects.gid",
       "projects.name",
+      "memberships.project.gid",
+      "memberships.section.gid",
+      "memberships.section.name",
       "workspace.gid",
       "workspace.name",
       "tags.name",
       "tags.gid",
+      "tags.color",
+      "custom_fields.name",
+      "custom_fields.enum_value.name",
     ].join(",");
 
-    const url = `${ASANA_BASE_URL}/projects/${projectGid}/tasks?opt_fields=${optFields}&completed_since=now&limit=${normalizedLimit}`;
-    const response = await fetch(url, { headers: buildAuthHeaders(token) });
+    // Open tasks come from the project's task list; changes need the
+    // `/tasks` search, the one endpoint with `modified_since` — and without
+    // `completed_since` it returns completed tasks too, so closures arrive.
+    const baseUrl = since
+      ? `${ASANA_BASE_URL}/tasks?project=${projectGid}&modified_since=${encodeURIComponent(since.toISOString())}&opt_fields=${optFields}`
+      : `${ASANA_BASE_URL}/projects/${projectGid}/tasks?opt_fields=${optFields}&completed_since=now`;
 
-    if (!response.ok) {
-      const error = await response.text();
-      console.error(`Asana API error (${response.status}):`, error);
-      return [];
-    }
+    const tasks = await collectPages<AsanaTask, string>(limit, "", async (offset, pageSize) => {
+      const url = `${baseUrl}&limit=${normalizeLimit(pageSize, 1, MAX_ITEMS_PER_PAGE)}${
+        offset ? `&offset=${encodeURIComponent(offset)}` : ""
+      }`;
+      const response = await fetch(url, { headers: buildAuthHeaders(token) });
 
-    const data = (await response.json()) as AsanaTasksResponse;
+      if (!response.ok) {
+        const error = await response.text();
+        console.error(`Asana API error (${response.status}):`, error);
+        throw new Error(`Asana API error: ${response.status}`);
+      }
 
-    return data.data.map((task): EntityInput => {
+      const data = (await response.json()) as AsanaTasksResponse;
+      return { items: data.data, next: data.next_page?.offset ?? null };
+    });
+
+    return tasks.map((task): EntityInput => {
       const workspaceGid = task.workspace?.gid || "";
       const tagNames = (task.tags || []).map((t) => t.name);
+      // A task's section in this project is its workflow state — a column
+      // the user named. A task can sit in several projects; take this one's.
+      const membership = task.memberships?.find((m) => m.project?.gid === projectGid)?.section;
+      const section = membership && !isDefaultSection(membership) ? membership : null;
 
       return {
         kind: "issue",
@@ -178,17 +229,48 @@ export const asanaTasksFetcher: ResourceFetcher = {
           completed: task.completed,
           completedAt: task.completed_at,
           dueOn: task.due_on,
-          dueAt: task.due_at,
+          // The exact time when set, else the day — the shared due date.
+          dueAt: task.due_at ?? task.due_on ?? null,
           assignee: task.assignee?.name || null,
+          assigneeAvatarUrl: task.assignee?.photo?.image_60x60 ?? null,
+          // Tasks have no handle of their own; the gid is no name for people.
+          identifier: null,
+          labelColors: labelColorMap(task.tags || []),
+          priorityLevel: priorityOf(task),
           modifiedAt: task.modified_at
             ? new Date(task.modified_at).toISOString()
             : null,
           labels: tagNames,
           repo: projectGid,
           number: parseInt(task.gid, 10) || 0,
-          state: task.completed ? "completed" : "open",
+          state: section?.name ?? (task.completed ? "completed" : "open"),
+          stateId: section?.gid ?? null,
+          statusId: task.completed ? "done" : statusFromName(section?.name),
         },
       };
     });
+  },
+
+  async listStates({ resource, secrets }) {
+    const token = secrets.accessToken;
+    if (!token) throw new Error("Asana connection has no access token");
+
+    const response = await fetch(
+      `${ASANA_BASE_URL}/projects/${resource.externalId}/sections?opt_fields=name&limit=${MAX_ITEMS_PER_PAGE}`,
+      { headers: buildAuthHeaders(token) },
+    );
+    if (!response.ok) {
+      const error = await response.text();
+      console.error(`Asana API error (${response.status}):`, error);
+      throw new Error(`Asana API error: ${response.status}`);
+    }
+
+    const { data } = (await response.json()) as { data: Array<{ gid: string; name: string }> };
+    return data.filter((section) => !isDefaultSection(section)).map((section) => ({
+      id: section.gid,
+      name: section.name,
+      color: null,
+      defaultStatusId: statusFromName(section.name),
+    }));
   },
 };

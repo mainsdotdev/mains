@@ -36,23 +36,62 @@ function mockResponse(body: unknown, ok = true, status = 200) {
 }
 
 describe("gitlabIssuesFetcher", () => {
-  it("returns [] when no token in secrets", async () => {
-    const result = await gitlabIssuesFetcher.fetchForResource({
-      ...baseArgs,
-      secrets: {},
-      resource: validResource,
-    });
-    expect(result).toEqual([]);
+  it("is incremental", () => {
+    expect(gitlabIssuesFetcher.incremental).toBe(true);
+  });
+
+  it("throws without a token, so the runner keeps its cursor", async () => {
+    await expect(
+      gitlabIssuesFetcher.fetchForResource({ ...baseArgs, secrets: {}, resource: validResource }),
+    ).rejects.toThrow(/token/);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("returns [] when API responds with non-ok status", async () => {
+  it("throws when the API responds with a non-ok status", async () => {
     mockFetch.mockResolvedValue(mockResponse({}, false, 500));
-    const result = await gitlabIssuesFetcher.fetchForResource({
+    await expect(
+      gitlabIssuesFetcher.fetchForResource({ ...baseArgs, resource: validResource }),
+    ).rejects.toThrow(/500/);
+  });
+
+  it("asks for opened issues without a cursor, every state since one", async () => {
+    mockFetch.mockResolvedValue(mockResponse([]));
+    await gitlabIssuesFetcher.fetchForResource({ ...baseArgs, resource: validResource, since: null });
+    expect(mockFetch.mock.calls[0][0]).toContain("state=opened");
+
+    await gitlabIssuesFetcher.fetchForResource({
       ...baseArgs,
       resource: validResource,
+      since: new Date("2025-03-01T00:00:00Z"),
     });
-    expect(result).toEqual([]);
+    expect(mockFetch.mock.calls[1][0]).toContain(
+      `state=all&updated_after=${encodeURIComponent("2025-03-01T00:00:00.000Z")}`,
+    );
+  });
+
+  it("pages until a short page", async () => {
+    const issue = (iid: number) => ({
+      iid,
+      title: `#${iid}`,
+      description: null,
+      web_url: `https://gitlab.example.com/g/p/-/issues/${iid}`,
+      state: "opened",
+      created_at: "2025-01-01T00:00:00Z",
+      labels: [],
+      assignee: null,
+    });
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(Array.from({ length: 100 }, (_, i) => issue(i + 1))))
+      .mockResolvedValueOnce(mockResponse([issue(101)]));
+
+    const result = await gitlabIssuesFetcher.fetchForResource({
+      ...baseArgs,
+      limit: 1000,
+      resource: validResource,
+    });
+
+    expect(result).toHaveLength(101);
+    expect(mockFetch.mock.calls[1][0]).toContain("per_page=100&page=2");
   });
 
   it("uses metadata.domain when building URL", async () => {
@@ -90,8 +129,11 @@ describe("gitlabIssuesFetcher", () => {
           web_url: "https://gitlab.example.com/group/proj/-/issues/17",
           created_at: "2025-01-01T00:00:00Z",
           state: "opened",
-          labels: ["bug", "regression"],
-          assignee: { username: "alice" },
+          // `with_labels_details` turns labels into objects with colors.
+          labels: [{ name: "bug", color: "#d9534f" }, { name: "regression", color: "#ad8d43" }],
+          assignee: { username: "alice", avatar_url: "https://gitlab.example.com/a.png" },
+          milestone: { title: "v2.0" },
+          due_date: "2025-03-01",
         },
       ]),
     );
@@ -110,9 +152,17 @@ describe("gitlabIssuesFetcher", () => {
         iid: 17,
         labels: ["bug", "regression"],
         state: "opened",
+        stateId: "opened",
+        statusId: "todo",
         assignee: "alice",
+        identifier: "#17",
+        labelColors: { bug: "#d9534f", regression: "#ad8d43" },
+        assigneeAvatarUrl: "https://gitlab.example.com/a.png",
+        group: { name: "v2.0", color: null },
+        dueAt: "2025-03-01",
       },
     });
+    expect(mockFetch.mock.calls[0][0]).toContain("with_labels_details=true");
   });
 
   it("rewrites relative upload URLs in body", async () => {

@@ -365,12 +365,33 @@ describe("entitiesRepo", () => {
       expect(result).toHaveLength(1);
     });
 
-    it("filters by state", async () => {
-      createIssue(db, { entity: { id: "i1" }, issue: { provider: "github", state: "open" } });
-      createIssue(db, { entity: { id: "i2" }, issue: { provider: "github", state: "closed" } });
+    it("filters by status category, not the provider's state name", async () => {
+      // Linear-style custom state names: none of them is literally "open".
+      createIssue(db, { entity: { id: "i1" }, issue: { provider: "linear", state: "Todo", statusId: "todo" } });
+      createIssue(db, { entity: { id: "i2" }, issue: { provider: "linear", state: "Ready for QA", statusId: "in_review" } });
+      createIssue(db, { entity: { id: "i3" }, issue: { provider: "linear", state: "Shipped", statusId: "done" } });
+      createIssue(db, { entity: { id: "i4" }, issue: { provider: "linear", state: "Won't do", statusId: "canceled" } });
 
-      const result = await entitiesRepo.findAllIssues({ state: "closed" });
-      expect(result).toHaveLength(1);
+      const open = await entitiesRepo.findAllIssues({ category: "open" });
+      expect(open.map((row) => row.entity.id).sort()).toEqual(["i1", "i2"]);
+
+      const closed = await entitiesRepo.findAllIssues({ category: "closed" });
+      expect(closed.map((row) => row.entity.id).sort()).toEqual(["i3", "i4"]);
+    });
+
+    it("reads an unknown status id as open rather than dropping the issue", async () => {
+      createIssue(db, { entity: { id: "i1" }, issue: { provider: "github", state: "open", statusId: "gone" } });
+
+      const open = await entitiesRepo.findAllIssues({ category: "open" });
+      expect(open).toHaveLength(1);
+    });
+
+    it("lists open issues before closed ones", async () => {
+      createIssue(db, { entity: { id: "i1" }, issue: { provider: "github", state: "closed", statusId: "done", number: 2 } });
+      createIssue(db, { entity: { id: "i2" }, issue: { provider: "github", state: "open", statusId: "todo", number: 1 } });
+
+      const result = await entitiesRepo.findAllIssues();
+      expect(result.map((row) => row.entity.id)).toEqual(["i2", "i1"]);
     });
 
     it("filters by repo", async () => {
@@ -379,6 +400,21 @@ describe("entitiesRepo", () => {
 
       const result = await entitiesRepo.findAllIssues({ repo: "owner/repo-a" });
       expect(result).toHaveLength(1);
+    });
+  });
+
+  describe("findAllIssueStatuses", () => {
+    it("lists the seeded statuses in order, with their categories", async () => {
+      const statuses = await entitiesRepo.findAllIssueStatuses();
+      expect(statuses.map((s) => [s.id, s.category])).toEqual([
+        ["backlog", "open"],
+        ["todo", "open"],
+        ["in_progress", "open"],
+        ["in_review", "open"],
+        ["done", "closed"],
+        ["canceled", "closed"],
+      ]);
+      expect(statuses[2].name).toBe("In progress");
     });
   });
 

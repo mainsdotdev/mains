@@ -12,6 +12,27 @@ export interface CheckboxProps
   className?: string;
 }
 
+/**
+ * The checkbox's box alone, for rows that own the click themselves — a menu
+ * item can't hold a real input. `Checkbox` draws the same box.
+ */
+export function CheckboxMark({ checked, className }: { checked: boolean; className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "pointer-events-none flex size-4 shrink-0 items-center justify-center rounded-md glass-outline transition-[color,background-color,box-shadow] duration-200",
+        checked
+          ? "bg-primary-800 dark:bg-primary-200 glass-fill-primary dark:glass-fill-primary-800"
+          : "bg-primary-100 dark:bg-primary-800 glass-fill-primary dark:glass-fill-primary-800",
+        className,
+      )}
+    >
+      {checked && <Check className="size-3 text-primary dark:text-primary-900" />}
+    </span>
+  );
+}
+
 export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
   (
     {
@@ -40,22 +61,14 @@ export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
           className="peer absolute inset-0 z-10 size-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
           {...inputProps}
         />
-        <span
-          aria-hidden="true"
+        <CheckboxMark
+          checked={checked}
           className={cn(
-            "pointer-events-none flex size-4 items-center justify-center rounded-md glass-outline transition-[color,background-color,box-shadow] duration-200",
             "peer-focus-visible:ring-2 peer-focus-visible:ring-accent peer-focus-visible:ring-offset-2",
-            checked
-              ? "bg-primary-800 dark:bg-primary-200 glass-fill-primary dark:glass-fill-primary-800"
-              : "bg-primary-100 dark:bg-primary-800 glass-fill-primary dark:glass-fill-primary-800",
             !disabled &&
               "group-hover:glass-fill-primary-800 dark:group-hover:glass-fill-primary-200",
           )}
-        >
-          {checked && (
-            <Check className="size-3 text-primary dark:text-primary-900" />
-          )}
-        </span>
+        />
       </span>
     );
   },

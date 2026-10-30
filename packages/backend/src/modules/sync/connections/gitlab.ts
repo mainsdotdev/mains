@@ -3,7 +3,9 @@ import type {
   ResourceFetcher,
   ResourceFetcherArgs,
 } from "../sync.dto";
-import { normalizeLimit, normalizeDateToIso } from "../sync.connection-utils";
+import { collectPages, normalizeLimit, normalizeDateToIso } from "../sync.connection-utils";
+import { statusFromOpenClosed } from "../sync.issue-status";
+import { labelColorMap } from "../sync.issue-display";
 
 const MAX_ITEMS_PER_PAGE = 100;
 const DEFAULT_DOMAIN = "gitlab.com";
@@ -16,9 +18,17 @@ function getBaseUrl(domain: string): string {
   return `https://${cleanDomain}/api/v4`;
 }
 
+/** Label names — plain strings, or `{ name, color }` with `with_labels_details`. */
 function extractLabels(labels: unknown): string[] {
   if (!Array.isArray(labels)) return [];
-  return labels.filter((s): s is string => typeof s === "string");
+  return labels
+    .map((l) => (typeof l === "string" ? l : (l as { name?: string })?.name))
+    .filter((s): s is string => typeof s === "string");
+}
+
+function labelObjects(labels: unknown): Array<{ name?: string | null; color?: string | null }> {
+  if (!Array.isArray(labels)) return [];
+  return labels.filter((l): l is { name?: string; color?: string } => typeof l === "object" && l !== null);
 }
 
 /**
@@ -54,7 +64,8 @@ export const gitlabIssuesFetcher: ResourceFetcher = {
   id: "gitlab:issues",
   provider: "gitlab",
   resourceKind: "gitlab_project",
-  defaultLimit: 50,
+  defaultLimit: 1000,
+  incremental: true,
 
   async fetchForResource({
     resource,
@@ -62,28 +73,39 @@ export const gitlabIssuesFetcher: ResourceFetcher = {
     metadata,
     limit,
     connectionId,
+    since,
   }: ResourceFetcherArgs): Promise<EntityInput[]> {
     const token = requireToken(secrets);
-    if (!token) return [];
+    if (!token) throw new Error("GitLab connection has no token");
 
     const domain = getDomain(metadata);
     const projectId = resource.externalId;
+    // Page numbers index fixed-size pages, so the size can't shrink per page.
     const perPage = normalizeLimit(limit, 1, MAX_ITEMS_PER_PAGE);
+    // With `since`, every state — so closed issues come back.
+    const filter = since
+      ? `state=all&updated_after=${encodeURIComponent(since.toISOString())}`
+      : "state=opened";
+    // Label objects carry their colors; plain names don't.
+    const query = `${filter}&with_labels_details=true`;
 
-    const response = await fetch(
-      `${getBaseUrl(domain)}/projects/${encodeURIComponent(projectId)}/issues?state=opened&per_page=${perPage}`,
-      {
-        headers: { "PRIVATE-TOKEN": token, Accept: "application/json" },
-      },
-    );
+    const issues = await collectPages(limit, 1, async (page) => {
+      const response = await fetch(
+        `${getBaseUrl(domain)}/projects/${encodeURIComponent(projectId)}/issues?${query}&per_page=${perPage}&page=${page}`,
+        {
+          headers: { "PRIVATE-TOKEN": token, Accept: "application/json" },
+        },
+      );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`GitLab API error (${response.status}):`, errorText);
-      return [];
-    }
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`GitLab API error (${response.status}):`, errorText);
+        throw new Error(`GitLab API error: ${response.status}`);
+      }
 
-    const issues = (await response.json()) as Array<Record<string, unknown>>;
+      const items = (await response.json()) as Array<Record<string, unknown>>;
+      return { items, next: items.length < perPage ? null : page + 1 };
+    });
 
     return issues.map((issue): EntityInput => {
       const resolvedBody = resolveGitlabBody(
@@ -107,10 +129,21 @@ export const gitlabIssuesFetcher: ResourceFetcher = {
           provider: "gitlab",
           iid: issue.iid as number,
           projectId,
+          identifier: `#${issue.iid}`,
           labels: extractLabels(issue.labels),
+          labelColors: labelColorMap(labelObjects(issue.labels)),
           state: issue.state as string,
+          stateId: issue.state as string,
+          statusId: statusFromOpenClosed(issue.state as string),
+          closedAt: (issue.closed_at as string | null) ?? null,
           assignee:
             (issue.assignee as { username?: string } | null)?.username || null,
+          assigneeAvatarUrl:
+            (issue.assignee as { avatar_url?: string } | null)?.avatar_url ?? null,
+          group: (issue.milestone as { title?: string } | null)?.title
+            ? { name: (issue.milestone as { title: string }).title, color: null }
+            : null,
+          dueAt: (issue.due_date as string | null) ?? null,
         },
       };
     });

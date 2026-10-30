@@ -36,32 +36,74 @@ function mockResponse(body: unknown, ok = true, status = 200) {
 }
 
 describe("trelloCardsFetcher.fetchForResource", () => {
-  it("returns [] when token or apiKey missing", async () => {
-    const r1 = await trelloCardsFetcher.fetchForResource({
-      ...baseArgs,
-      secrets: { apiKey: "key" },
-      resource: validResource,
-    });
-    const r2 = await trelloCardsFetcher.fetchForResource({
-      ...baseArgs,
-      secrets: { token: "tok" },
-      resource: validResource,
-    });
-    expect(r1).toEqual([]);
-    expect(r2).toEqual([]);
+  it("is incremental", () => {
+    expect(trelloCardsFetcher.incremental).toBe(true);
+  });
+
+  it("throws when token or apiKey is missing, so the runner keeps its cursor", async () => {
+    await expect(
+      trelloCardsFetcher.fetchForResource({ ...baseArgs, secrets: { apiKey: "key" }, resource: validResource }),
+    ).rejects.toThrow();
+    await expect(
+      trelloCardsFetcher.fetchForResource({ ...baseArgs, secrets: { token: "tok" }, resource: validResource }),
+    ).rejects.toThrow();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("returns [] when cards endpoint responds non-ok", async () => {
+  it("throws when the cards endpoint responds non-ok", async () => {
     mockFetch
       .mockResolvedValueOnce(mockResponse([])) // lists endpoint
       .mockResolvedValueOnce(mockResponse({}, false, 500)); // cards endpoint
 
+    await expect(
+      trelloCardsFetcher.fetchForResource({ ...baseArgs, resource: validResource }),
+    ).rejects.toThrow(/500/);
+  });
+
+  it("throws when the lists endpoint fails, rather than sync every card as todo", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({}, false, 500));
+    await expect(
+      trelloCardsFetcher.fetchForResource({ ...baseArgs, resource: validResource }),
+    ).rejects.toThrow(/500/);
+  });
+
+  it("adds cards archived since the cursor, closed and without a list state", async () => {
+    const card = (id: string, idShort: number, closed: boolean, dateLastActivity: string) => ({
+      id,
+      name: id,
+      desc: "",
+      shortUrl: `https://trello.com/c/${id}`,
+      idShort,
+      shortLink: id,
+      dateLastActivity,
+      closed,
+      due: null,
+      dueComplete: false,
+      labels: [],
+      idMembers: [],
+      idList: "list-1",
+    });
+    mockFetch
+      .mockResolvedValueOnce(mockResponse([{ id: "list-1", name: "Doing", closed: false }]))
+      .mockResolvedValueOnce(mockResponse([card("open-1", 1, false, "2025-03-02T00:00:00Z")]))
+      .mockResolvedValueOnce(
+        mockResponse([
+          card("archived-new", 2, true, "2025-03-02T00:00:00Z"),
+          card("archived-old", 3, true, "2025-01-01T00:00:00Z"),
+        ]),
+      );
+
     const result = await trelloCardsFetcher.fetchForResource({
       ...baseArgs,
       resource: validResource,
+      since: new Date("2025-03-01T00:00:00Z"),
     });
-    expect(result).toEqual([]);
+
+    expect(mockFetch.mock.calls[2][0]).toContain("filter=closed");
+    expect(result.map((r) => r.metadata)).toEqual([
+      expect.objectContaining({ cardId: "open-1", state: "Doing", statusId: "in_progress" }),
+      expect.objectContaining({ cardId: "archived-new", state: "Archived", stateId: null, statusId: "done" }),
+    ]);
   });
 
   it("normalizes cards with list names", async () => {
@@ -88,6 +130,7 @@ describe("trelloCardsFetcher.fetchForResource", () => {
             labels: [{ id: "l1", name: "bug", color: "red" }],
             idMembers: ["u1"],
             idList: "list-1",
+            members: [{ fullName: "Alice Doe", avatarUrl: "https://trello-members.s3/abc" }],
           },
         ]),
       );
@@ -110,9 +153,48 @@ describe("trelloCardsFetcher.fetchForResource", () => {
         listName: "Doing",
         labels: ["bug"],
         memberCount: 1,
-        state: "open",
+        // The list is the card's workflow state.
+        state: "Doing",
+        stateId: "list-1",
+        statusId: "in_progress",
+        identifier: "#5",
+        labelColors: { bug: "#f87168" },
+        assignee: "Alice Doe",
+        assigneeAvatarUrl: "https://trello-members.s3/abc/50.png",
       },
     });
+    expect(mockFetch.mock.calls[1][0]).toContain("members=true");
+  });
+
+  it("closes a card that sits in a Done list", async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse([{ id: "list-2", name: "Done", closed: false }]))
+      .mockResolvedValueOnce(
+        mockResponse([
+          {
+            id: "card-2",
+            name: "Ship it",
+            desc: "",
+            shortUrl: "https://trello.com/c/def",
+            idShort: 6,
+            shortLink: "def",
+            dateLastActivity: "2025-01-01T00:00:00Z",
+            closed: false,
+            due: null,
+            dueComplete: false,
+            labels: [],
+            idMembers: [],
+            idList: "list-2",
+          },
+        ]),
+      );
+
+    const [card] = await trelloCardsFetcher.fetchForResource({
+      ...baseArgs,
+      resource: validResource,
+    });
+
+    expect(card.metadata).toMatchObject({ state: "Done", stateId: "list-2", statusId: "done" });
   });
 
   it("passes apiKey and token as query params", async () => {
@@ -128,6 +210,30 @@ describe("trelloCardsFetcher.fetchForResource", () => {
     const cardsCall = mockFetch.mock.calls[1][0] as string;
     expect(cardsCall).toContain("key=trello_key");
     expect(cardsCall).toContain("token=trello_token");
+  });
+});
+
+describe("trelloCardsFetcher.listStates", () => {
+  it("lists the board's open lists, guessing a status from each name", async () => {
+    mockFetch.mockResolvedValue(
+      mockResponse([
+        { id: "l1", name: "Backlog", closed: false },
+        { id: "l2", name: "Doing", closed: false },
+        { id: "l3", name: "Done", closed: false },
+      ]),
+    );
+
+    const states = await trelloCardsFetcher.listStates!({
+      resource: validResource,
+      secrets: baseArgs.secrets,
+      metadata: {},
+    });
+
+    expect(states).toEqual([
+      { id: "l1", name: "Backlog", color: null, defaultStatusId: "backlog" },
+      { id: "l2", name: "Doing", color: null, defaultStatusId: "in_progress" },
+      { id: "l3", name: "Done", color: null, defaultStatusId: "done" },
+    ]);
   });
 });
 

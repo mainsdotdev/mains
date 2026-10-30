@@ -15,11 +15,11 @@ import type {
   ResourceFetcher,
   ResourceFetcherArgs,
 } from "../sync.dto";
-import { normalizeLimit, normalizeDateToIso } from "../sync.connection-utils";
+import { normalizeDateToIso } from "../sync.connection-utils";
+import { statusFromName } from "../sync.issue-status";
+import { labelColorMap } from "../sync.issue-display";
 
 const TRELLO_BASE_URL = "https://api.trello.com/1";
-const MAX_ITEMS_PER_PAGE = 100;
-const DEFAULT_LIMIT = 50;
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -45,6 +45,13 @@ interface TrelloCard {
   labels: TrelloLabel[];
   idMembers: string[];
   idList: string;
+  /** With `members=true`: the card's members, first one shown as its assignee. */
+  members?: Array<{ fullName?: string; avatarUrl?: string | null }>;
+}
+
+/** Trello hands out an avatar base URL; the size is a path suffix. */
+function avatarOf(member: { avatarUrl?: string | null } | undefined): string | null {
+  return member?.avatarUrl ? `${member.avatarUrl}/50.png` : null;
 }
 
 interface TrelloList {
@@ -77,20 +84,23 @@ async function fetchBoardLists(
   apiKey: string,
   token: string,
 ): Promise<Map<string, string>> {
-  try {
-    const authParams = buildAuthParams(apiKey, token);
-    const response = await fetch(
-      `${TRELLO_BASE_URL}/boards/${boardId}/lists?${authParams}&fields=id,name,closed&filter=open`,
-      { headers: { Accept: "application/json" } },
-    );
-    if (!response.ok) return new Map();
-    const lists = (await response.json()) as TrelloList[];
-    const m = new Map<string, string>();
-    for (const list of lists) m.set(list.id, list.name);
-    return m;
-  } catch {
-    return new Map();
+  // A card's list is its state, so a failed lookup must fail the fetch —
+  // otherwise every card would sync as "todo".
+  const authParams = buildAuthParams(apiKey, token);
+  const lists = await getJson<TrelloList[]>(
+    `${TRELLO_BASE_URL}/boards/${boardId}/lists?${authParams}&fields=id,name,closed&filter=open`,
+  );
+  return new Map(lists.map((list) => [list.id, list.name]));
+}
+
+async function getJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!response.ok) {
+    const error = await response.text();
+    console.error(`Trello API error (${response.status}):`, error);
+    throw new Error(`Trello API error: ${response.status}`);
   }
+  return (await response.json()) as T;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -123,38 +133,42 @@ export const trelloCardsFetcher: ResourceFetcher = {
   id: "trello:cards",
   provider: "trello",
   resourceKind: "trello_board",
-  defaultLimit: DEFAULT_LIMIT,
+  defaultLimit: 1000,
+  incremental: true,
 
   async fetchForResource({
     resource,
     secrets,
     limit,
     connectionId,
+    since,
   }: ResourceFetcherArgs): Promise<EntityInput[]> {
     const token = secrets.token;
     const apiKey = secrets.apiKey;
-    if (!token || !apiKey) return [];
+    if (!token || !apiKey) throw new Error("Trello connection is missing its token or API key");
 
     const boardId = resource.externalId;
-    const normalizedLimit = normalizeLimit(limit, 1, MAX_ITEMS_PER_PAGE);
     const authParams = buildAuthParams(apiKey, token);
 
     const listMap = await fetchBoardLists(boardId, apiKey, token);
 
+    // Members ride along on the card request instead of a lookup per board.
     const fields =
-      "id,name,desc,shortUrl,idShort,shortLink,dateLastActivity,closed,due,dueComplete,labels,idMembers,idList";
-    const response = await fetch(
-      `${TRELLO_BASE_URL}/boards/${boardId}/cards?${authParams}&fields=${fields}&filter=open&limit=${normalizedLimit}`,
-      { headers: { Accept: "application/json" } },
+      "id,name,desc,shortUrl,idShort,shortLink,dateLastActivity,closed,due,dueComplete,labels,idMembers,idList&members=true&member_fields=fullName,avatarUrl";
+    // Trello returns a board's cards in one response. A card moved between
+    // lists is still open, so the open set is fetched every time; archiving
+    // takes a card out of it, so changes add the cards archived since.
+    const open = await getJson<TrelloCard[]>(
+      `${TRELLO_BASE_URL}/boards/${boardId}/cards?${authParams}&fields=${fields}&filter=open`,
     );
-
-    if (!response.ok) {
-      const error = await response.text();
-      console.error(`Trello API error (${response.status}):`, error);
-      return [];
-    }
-
-    const cards = (await response.json()) as TrelloCard[];
+    const archived = since
+      ? (
+          await getJson<TrelloCard[]>(
+            `${TRELLO_BASE_URL}/boards/${boardId}/cards?${authParams}&fields=${fields}&filter=closed`,
+          )
+        ).filter((card) => new Date(card.dateLastActivity) >= since)
+      : [];
+    const cards = [...open, ...archived].slice(0, limit);
 
     return cards.map((card): EntityInput => {
       const labelNames = (card.labels || [])
@@ -184,11 +198,35 @@ export const trelloCardsFetcher: ResourceFetcher = {
           listName,
           labels: labelNames,
           memberCount: card.idMembers?.length || 0,
+          identifier: `#${card.idShort}`,
+          labelColors: labelColorMap(card.labels || []),
+          assignee: card.members?.[0]?.fullName || null,
+          assigneeAvatarUrl: avatarOf(card.members?.[0]),
+          dueAt: card.due,
           repo: boardId,
           number: card.idShort,
-          state: card.closed ? "closed" : "open",
+          // A card's list is its workflow state — a column the user named.
+          // Archiving isn't a list, so an archived card has no state id for
+          // a list mapping to reopen it by.
+          state: card.closed ? "Archived" : (listName ?? "open"),
+          stateId: card.closed ? null : card.idList,
+          statusId: card.closed ? "done" : statusFromName(listName),
         },
       };
     });
+  },
+
+  async listStates({ resource, secrets }) {
+    const token = secrets.token;
+    const apiKey = secrets.apiKey;
+    if (!token || !apiKey) throw new Error("Trello connection is missing its token or API key");
+
+    const lists = await fetchBoardLists(resource.externalId, apiKey, token);
+    return [...lists].map(([id, name]) => ({
+      id,
+      name,
+      color: null,
+      defaultStatusId: statusFromName(name),
+    }));
   },
 };

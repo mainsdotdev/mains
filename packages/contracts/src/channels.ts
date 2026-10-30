@@ -283,6 +283,7 @@ export const CHANNELS = {
     getAll: "issues:getAll",
     getById: "issues:getById",
     getDetail: "issues:getDetail",
+    listStatuses: "issues:listStatuses",
     update: "issues:update",
   },
   projects: {
@@ -489,7 +490,9 @@ export const CHANNELS = {
     getDashboard: "stats:getDashboard",
   },
   sync: {
+    listIssueStates: "sync:listIssueStates",
     runEntitySync: "sync:runEntitySync",
+    setIssueStatusMapping: "sync:setIssueStatusMapping",
   },
   tasks: {
     create: "tasks:create",
