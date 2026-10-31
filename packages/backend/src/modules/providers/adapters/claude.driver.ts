@@ -903,6 +903,8 @@ interface ClaudeSession {
     lastFastModeState?: FastModeState;
     lastAssistantError?: string;
     sawRateLimitNotice?: boolean;
+    /** `system/init`'s protocol capabilities, for features checked mid-turn. */
+    capabilities?: string[];
   };
   /** Per-run tool-call correlation index (toolCallId → toolName/input). */
   toolCallIndex: Map<string, { toolName: string; input?: unknown; startedAt?: number }>;
@@ -1069,6 +1071,46 @@ interface ClaudePermissionBridgeOptions {
   restrictedToolset?: boolean;
   requestApproval?: ApprovalRequester;
   cancelApproval?: (requestId: string) => void;
+  /**
+   * Whether the session's CLI takes `annotations[question].unanswered` on an
+   * AskUserQuestion answer. Read on every decision: the capability arrives on
+   * `system/init`, after the bridge is built.
+   */
+  acceptsUnansweredQuestions?: () => boolean;
+}
+
+/** Advertised in `system/init` by a CLI that takes `annotations[question].unanswered`. */
+const ASK_USER_UNANSWERED_CAPABILITY = "ask_user_question_unanswered_v1";
+
+/** What the model reads for a question the user closed without answering. */
+const DISMISSED_QUESTION_ANSWER = "The user dismissed this question without answering.";
+
+interface AskedQuestion {
+  question?: string;
+  header?: string;
+  options?: Array<{ label: string; description?: string }>;
+  multiSelect?: boolean;
+}
+
+/**
+ * AskUserQuestion's answer when the user closes the card. Questions answered
+ * before it keep their answers. The model only reads `answers`;
+ * `annotations[question].unanswered` records how the rest ended for the
+ * transcript.
+ */
+function dismissedQuestionsInput(
+  toolInput: Record<string, unknown>,
+  answered: Record<string, string>,
+): Record<string, unknown> {
+  const questions = (toolInput.questions ?? []) as AskedQuestion[];
+  const answers = { ...answered };
+  const annotations: Record<string, { unanswered: "dismissed" }> = {};
+  for (const { question } of questions) {
+    if (!question || Object.prototype.hasOwnProperty.call(answered, question)) continue;
+    answers[question] = DISMISSED_QUESTION_ANSWER;
+    annotations[question] = { unanswered: "dismissed" };
+  }
+  return { ...toolInput, answers, annotations };
 }
 
 interface PermissionDecision {
@@ -1092,6 +1134,7 @@ export function createClaudePermissionBridge({
   restrictedToolset = false,
   requestApproval = requestToolApproval,
   cancelApproval = cancelPendingRequest,
+  acceptsUnansweredQuestions = () => false,
 }: ClaudePermissionBridgeOptions): {
   canUseTool: SDKCanUseTool;
 } {
@@ -1145,46 +1188,11 @@ export function createClaudePermissionBridge({
       timestamp: Date.now(),
     };
 
-    if (isAskUser) {
-      const questions = toolInput.questions as
-        | Array<{
-            question?: string;
-            options?: Array<{ label: string; description?: string }>;
-            multiSelect?: boolean;
-          }>
-        | undefined;
-      if (questions && questions.length > 0) {
-        const first = questions[0];
-        req.question = first.question;
-        req.options = first.options;
-        req.multiSelect = first.multiSelect;
-      }
-    }
+    if (isAskUser) return askQuestions(req, toolInput, context.signal);
 
-    let resolveAbort: (() => void) | undefined;
-    const aborted = new Promise<null>((resolve) => {
-      resolveAbort = () => resolve(null);
-      context.signal.addEventListener("abort", resolveAbort, { once: true });
-    });
-
-    let response: ToolApprovalResponse | null;
-    try {
-      response = await Promise.race([requestApproval(req), aborted]);
-    } finally {
-      if (resolveAbort) context.signal.removeEventListener("abort", resolveAbort);
-    }
-
-    if (!response) {
-      // The SDK may close a control stream while a permission request is
-      // parked (for example during background-agent handoff). Resolve the
-      // broker entry as well so the renderer never retains a ghost dialog.
-      cancelApproval(requestId);
-      return { allowed: false, reason: "Permission request aborted" };
-    }
-
-    if (!response.approved) {
-      return { allowed: false, reason: "User denied permission" };
-    }
+    const response = await waitForUser(req, context.signal);
+    if (!response) return { allowed: false, reason: "Permission request aborted" };
+    if (!response.approved) return { allowed: false, reason: "User denied permission" };
 
     if (isPlanReview) {
       // Updating the persisted provider config only affects future queries.
@@ -1207,19 +1215,67 @@ export function createClaudePermissionBridge({
       };
     }
 
-    if (isAskUser && response.answer !== undefined) {
-      const askedQuestions = (toolInput.questions ?? []) as Array<{ question?: string }>;
-      const answers: Record<string, string> = {};
-      for (const question of askedQuestions) {
-        if (question.question) answers[question.question] = response.answer;
-      }
-      return {
-        allowed: true,
-        updatedInput: { questions: askedQuestions, answers },
-      };
-    }
-
     return { allowed: true, updatedInput: toolInput };
+  }
+
+  /** Parks `req` with the broker until the user answers, or null once the SDK aborts. */
+  async function waitForUser(req: ToolApprovalRequest, signal: AbortSignal): Promise<ToolApprovalResponse | null> {
+    if (signal.aborted) return null;
+    let resolveAbort: (() => void) | undefined;
+    const aborted = new Promise<null>((resolve) => {
+      resolveAbort = () => resolve(null);
+      signal.addEventListener("abort", resolveAbort, { once: true });
+    });
+
+    let response: ToolApprovalResponse | null;
+    try {
+      response = await Promise.race([requestApproval(req), aborted]);
+    } finally {
+      if (resolveAbort) signal.removeEventListener("abort", resolveAbort);
+    }
+    // The SDK may close a control stream while a permission request is
+    // parked (for example during background-agent handoff). Resolve the
+    // broker entry as well so the renderer never retains a ghost dialog.
+    if (!response) cancelApproval(req.requestId);
+    return response;
+  }
+
+  /**
+   * AskUserQuestion can ask up to four questions; the dialog shows one, so
+   * they go to the user in turn, each answer keyed by its own question. Past
+   * the first, a question parks under `<requestId>-q<n>`, which the broker
+   * still cancels with the SDK request.
+   */
+  async function askQuestions(
+    req: ToolApprovalRequest,
+    toolInput: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<PermissionDecision> {
+    const questions = (toolInput.questions ?? []) as AskedQuestion[];
+    const answers: Record<string, string> = {};
+    for (const [index, asked] of questions.entries()) {
+      const position = questions.length > 1 ? `${index + 1} of ${questions.length}` : undefined;
+      const response = await waitForUser({
+        ...req,
+        requestId: index === 0 ? req.requestId : `${req.requestId}-q${index}`,
+        header: [asked.header ?? req.header, position].filter(Boolean).join(" · ") || undefined,
+        question: asked.question,
+        options: asked.options,
+        multiSelect: asked.multiSelect,
+        timestamp: Date.now(),
+      }, signal);
+      if (!response) return { allowed: false, reason: "Permission request aborted" };
+      if (!response.approved) {
+        // Dismissing a question is not a refusal. A CLI that takes it gets the
+        // rest back unanswered, instead of a tool failing as denied.
+        if (acceptsUnansweredQuestions()) {
+          return { allowed: true, updatedInput: dismissedQuestionsInput(toolInput, answers) };
+        }
+        return { allowed: false, reason: "User denied permission" };
+      }
+      if (asked.question && response.answer !== undefined) answers[asked.question] = response.answer;
+    }
+    return { allowed: true, updatedInput: { ...toolInput, answers } };
   }
 
   const canUseTool: SDKCanUseTool = async (toolName, toolInput, options) => {
@@ -1821,8 +1877,30 @@ export function buildClaudeMcpCatalog(statuses: unknown[]): ClaudeMcpCatalog {
 }
 
 /**
- * Shape an MCP tool result the way an app widget reads it. The CLI hands the
- * content over as a single string, where MCP has a list of content blocks.
+ * The `mcp_call` control request behind an app's tool call. The result goes
+ * back to the app, not to a model, so `result_not_for_model` asks for the
+ * server's own content blocks: no single-string content, resized images,
+ * truncation or saved-file note in place of the result. A CLI without
+ * `mcp_call_result_not_for_model_v1` ignores the member and answers in the
+ * model-facing shape, which `toMcpCallToolResult` still reads.
+ */
+export function buildMcpAppCallRequest(
+  server: string,
+  tool: string,
+  args?: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    subtype: "mcp_call",
+    tool: mcpToolWireName(server, tool),
+    ...(args !== undefined ? { arguments: args } : {}),
+    result_not_for_model: true,
+  };
+}
+
+/**
+ * Shape an MCP tool result the way an app widget reads it. A model turn's
+ * result (and an app call on an older CLI) hands the content over as a single
+ * string, where MCP has a list of content blocks.
  */
 export function toMcpCallToolResult(raw: unknown, fallbackContent?: unknown): McpAppCallToolResult | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -2079,6 +2157,18 @@ function isDetachedClaudeToolResult(value: unknown): boolean {
     (value as { detachedToolCall?: unknown }).detachedToolCall === true;
 }
 
+/**
+ * AskUserQuestion's own result: answers and annotations keyed by question,
+ * which the model-facing text only paraphrases. PostToolUse reports the same
+ * object; a subagent's question never reaches that hook.
+ */
+function askUserQuestionResult(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { answers } = value as { answers?: unknown };
+  return answers !== null && typeof answers === "object" && !Array.isArray(answers)
+    ? value as Record<string, unknown> : undefined;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Event mapping: SDKMessage → WorkRunEvent[]
 //
@@ -2227,9 +2317,12 @@ export function mapSDKMessage(
           const appResult =
             (mcpApp || omittedMcpResult) && soleToolResult
               ? toMcpCallToolResult(userMsg.tool_use_result, block.content) : undefined;
+          const questionResult =
+            prev?.toolName === "AskUserQuestion" && soleToolResult && !block.is_error
+              ? askUserQuestionResult(userMsg.tool_use_result) : undefined;
           const output = appResult
             ? { ...appResult, ...(block.is_error ? { isError: true } : {}) }
-            : block.content;
+            : questionResult ?? block.content;
           const error = block.is_error ? safeJson(block.content) : undefined;
           const resultMeta = userMsg.tool_result_meta?.find((meta) => meta.id === toolUseId);
           const nonExecutionKind = resultMeta?.non_execution_kind;
@@ -3181,6 +3274,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           allowedTools: effectiveAllowedTools,
           permissionMode: livePermissionMode,
           restrictedToolset: !!toolPolicy?.allowedTools,
+          acceptsUnansweredQuestions: () =>
+            liveSessions.get(runId)?.state.capabilities?.includes(ASK_USER_UNANSWERED_CAPABILITY) ?? false,
         })
       : null;
 
@@ -4062,9 +4157,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
               cs.options.model,
             );
 
-            // MCP Apps: learn which tools carry a UI before their calls are mapped.
             if (msg.type === "system" && (msg as SDKSystemMessage).subtype === "init") {
-              if (supportsClaudeMcpApps((msg as SDKSystemMessage).capabilities)) {
+              const { capabilities } = msg as SDKSystemMessage;
+              cs.state.capabilities = capabilities;
+              // MCP Apps: learn which tools carry a UI before their calls are mapped.
+              if (supportsClaudeMcpApps(capabilities)) {
                 cs.mcpApps ??= { catalog: { known: new Set(), apps: new Map() } };
                 await refreshMcpCatalog(cs);
               }
@@ -4315,11 +4412,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         }
         const statuses = await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
         assertMcpToolCallableFromApp(statuses, request.server, request.tool);
-        return query.request({
-          subtype: "mcp_call",
-          tool: mcpToolWireName(request.server, request.tool),
-          ...(request.arguments !== undefined ? { arguments: request.arguments } : {}),
-        });
+        return query.request(buildMcpAppCallRequest(request.server, request.tool, request.arguments));
       });
       // The control reply wraps the tool result in `response`.
       const result = toMcpCallToolResult((raw as { response?: unknown } | null)?.response ?? raw);

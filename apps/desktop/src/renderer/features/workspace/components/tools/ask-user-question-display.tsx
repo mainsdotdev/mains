@@ -23,7 +23,24 @@ export interface AskUserQuestionParams {
 
 interface AskUserQuestionOutput {
   questions?: QuestionItem[];
+  /** Keyed by question text (Claude) or by question index (the others). */
   answers?: Record<string, string | string[]>;
+  /** Claude: per-question notes, keyed by question text. */
+  annotations?: Record<string, { unanswered?: unknown } | undefined>;
+}
+
+/** How Claude reports a question that ended without an answer. */
+const UNANSWERED_LABELS: Record<string, string> = {
+  dismissed: "Dismissed",
+  skipped: "Skipped",
+  replied_in_chat: "Answered in chat",
+};
+
+/** Claude joins a multi-select answer's labels with ", ". */
+function pickedLabels(answer: string | string[] | undefined, multiSelect?: boolean): string[] {
+  if (answer == null) return [];
+  if (Array.isArray(answer)) return answer;
+  return multiSelect ? answer.split(", ") : [answer];
 }
 
 export function AskUserQuestionDisplay({
@@ -47,6 +64,7 @@ export function AskUserQuestionDisplay({
     ? parsed.questions
     : fromParams;
   const answers = parsed?.answers;
+  const annotations = parsed?.annotations;
   const header =
     questions[0]?.header ??
     questions[0]?.question ??
@@ -74,7 +92,11 @@ export function AskUserQuestionDisplay({
         <ToolCollapse isExpanded={isExpanded}>
           <ToolOutputBody as="div" className="text-xs font-sans space-y-3">
             {questions.map((q, qi) => {
-              const selectedAnswer = answers?.[String(qi)];
+              const unansweredKind = annotations?.[q.question]?.unanswered;
+              const unanswered = typeof unansweredKind === "string" ? UNANSWERED_LABELS[unansweredKind] : undefined;
+              // An unanswered question's answer is only the text the model read.
+              const selectedAnswer = unanswered ? undefined : answers?.[q.question] ?? answers?.[String(qi)];
+              const picked = pickedLabels(selectedAnswer, q.multiSelect);
 
               return (
                 <div key={qi} className="space-y-2">
@@ -85,10 +107,7 @@ export function AskUserQuestionDisplay({
                   {q.options && q.options.length > 0 && (
                     <div className="space-y-1.5">
                       {q.options.map((opt) => {
-                        const isSelected =
-                          selectedAnswer === opt.label ||
-                          (Array.isArray(selectedAnswer) &&
-                            selectedAnswer.includes(opt.label));
+                        const isSelected = picked.includes(opt.label);
 
                         return (
                           <div
@@ -122,8 +141,12 @@ export function AskUserQuestionDisplay({
                       })}
                     </div>
                   )}
-                  {!q.options?.some((option) => selectedAnswer === option.label ||
-                    Array.isArray(selectedAnswer) && selectedAnswer.includes(option.label)) &&
+                  {unanswered && (
+                    <Text as="div" size="inherit" tone="faint" className="px-2">
+                      {unanswered}
+                    </Text>
+                  )}
+                  {!q.options?.some((option) => picked.includes(option.label)) &&
                     selectedAnswer != null &&
                     String(selectedAnswer).trim() !== "" && (
                     <div className="flex items-start gap-2 rounded px-2 py-1.5 bg-primary/80 dark:bg-success/10">
@@ -167,6 +190,9 @@ function parseOutput(output: unknown): AskUserQuestionOutput | null {
         ? (obj.questions as QuestionItem[])
         : undefined,
       answers,
+      annotations: typeof obj.annotations === "object" && obj.annotations !== null
+        ? (obj.annotations as AskUserQuestionOutput["annotations"])
+        : undefined,
     };
   }
 

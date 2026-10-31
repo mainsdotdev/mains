@@ -39,6 +39,7 @@ import {
   buildClaudeMcpCatalog,
   toMcpCallToolResult,
   assertMcpToolCallableFromApp,
+  buildMcpAppCallRequest,
   waitForClaudeMcpServer,
 } from "./claude.driver";
 import type { ClaudeTaskIndex, SDKSystemMessage } from "./claude.driver";
@@ -716,6 +717,115 @@ describe("claude.driver / permission bridge", () => {
       }),
     );
     expect(permissionMode.current).toBe("acceptEdits");
+  });
+
+  describe("AskUserQuestion with several questions", () => {
+    const questions = [
+      { question: "Which database?", header: "Database", options: [], multiSelect: false },
+      { question: "Add tests?", header: "Tests", options: [], multiSelect: false },
+    ];
+
+    function ask(
+      requestApproval: NonNullable<Parameters<typeof createClaudePermissionBridge>[0]["requestApproval"]>,
+      { acceptsUnansweredQuestions, signal = new AbortController().signal, cancelApproval = vi.fn() }: {
+        acceptsUnansweredQuestions?: () => boolean; signal?: AbortSignal; cancelApproval?: (requestId: string) => void;
+      } = {},
+    ) {
+      const bridge = createClaudePermissionBridge({
+        runId: "run-ask", allowedTools: new Set(),
+        permissionMode: createClaudePermissionModeRef("default"), requestApproval, cancelApproval,
+        ...(acceptsUnansweredQuestions ? { acceptsUnansweredQuestions } : {}),
+      });
+      return bridge.canUseTool("AskUserQuestion", { questions }, {
+        signal, toolUseID: "tool-ask", requestId: "ask-1",
+      });
+    }
+
+    function dismiss(acceptsUnansweredQuestions?: () => boolean) {
+      return ask(vi.fn().mockResolvedValue({ requestId: "ask-1", approved: false }), { acceptsUnansweredQuestions });
+    }
+
+    it("asks each question in turn and keys each answer by its own question", async () => {
+      const requestApproval = vi.fn()
+        .mockResolvedValueOnce({ requestId: "ask-1", approved: true, answer: "Postgres" })
+        .mockResolvedValueOnce({ requestId: "ask-1-q1", approved: true, answer: "Yes" });
+
+      await expect(ask(requestApproval)).resolves.toEqual({
+        behavior: "allow",
+        updatedInput: { questions, answers: { "Which database?": "Postgres", "Add tests?": "Yes" } },
+        toolUseID: "tool-ask",
+      });
+      expect(requestApproval.mock.calls.map(([request]) => [request.requestId, request.header, request.question]))
+        .toEqual([
+          ["ask-1", "Database · 1 of 2", "Which database?"],
+          ["ask-1-q1", "Tests · 2 of 2", "Add tests?"],
+        ]);
+    });
+
+    it("keeps the answers given before a later question is dismissed", async () => {
+      const requestApproval = vi.fn()
+        .mockResolvedValueOnce({ requestId: "ask-1", approved: true, answer: "Postgres" })
+        .mockResolvedValueOnce({ requestId: "ask-1-q1", approved: false });
+
+      await expect(ask(requestApproval, { acceptsUnansweredQuestions: () => true })).resolves.toEqual({
+        behavior: "allow",
+        updatedInput: {
+          questions,
+          answers: {
+            "Which database?": "Postgres",
+            "Add tests?": "The user dismissed this question without answering.",
+          },
+          annotations: { "Add tests?": { unanswered: "dismissed" } },
+        },
+        toolUseID: "tool-ask",
+      });
+    });
+
+    it("cancels the question it is parked on when the SDK aborts", async () => {
+      const abortController = new AbortController();
+      const cancelApproval = vi.fn();
+      const requestApproval = vi.fn()
+        .mockResolvedValueOnce({ requestId: "ask-1", approved: true, answer: "Postgres" })
+        .mockReturnValueOnce(new Promise<never>(() => {}));
+
+      const result = ask(requestApproval, { signal: abortController.signal, cancelApproval });
+      await vi.waitFor(() => expect(requestApproval).toHaveBeenCalledTimes(2));
+      abortController.abort();
+
+      await expect(result).resolves.toEqual({
+        behavior: "deny", message: "Permission request aborted", toolUseID: "tool-ask",
+      });
+      expect(cancelApproval).toHaveBeenCalledExactlyOnceWith("ask-1-q1");
+    });
+
+    it("comes back unanswered where the CLI takes it, not as a denied tool", async () => {
+      await expect(dismiss(() => true)).resolves.toEqual({
+        behavior: "allow",
+        updatedInput: {
+          questions,
+          answers: {
+            "Which database?": "The user dismissed this question without answering.",
+            "Add tests?": "The user dismissed this question without answering.",
+          },
+          annotations: {
+            "Which database?": { unanswered: "dismissed" },
+            "Add tests?": { unanswered: "dismissed" },
+          },
+        },
+        toolUseID: "tool-ask",
+      });
+    });
+
+    it("stays a denial for a CLI that does not advertise the capability", async () => {
+      // An older CLI on a strict host refuses an answer carrying the annotation.
+      for (const accepts of [undefined, () => false]) {
+        await expect(dismiss(accepts)).resolves.toEqual({
+          behavior: "deny",
+          message: "User denied permission",
+          toolUseID: "tool-ask",
+        });
+      }
+    });
   });
 
   it("cancels a parked broker request when the SDK permission stream aborts", async () => {
@@ -3075,6 +3185,31 @@ describe("claude.driver / MCP Apps", () => {
     expect(toMcpCallToolResult(null)).toBeUndefined();
   });
 
+  it("asks the CLI for the server's own result on an app's tool call", () => {
+    expect(buildMcpAppCallRequest("weather", "refresh", { city: "Istanbul" })).toEqual({
+      subtype: "mcp_call",
+      tool: "mcp__weather__refresh",
+      arguments: { city: "Istanbul" },
+      result_not_for_model: true,
+    });
+    expect(buildMcpAppCallRequest("weather", "refresh")).not.toHaveProperty("arguments");
+  });
+
+  it("passes a result not shaped for a model through as MCP content blocks", () => {
+    // An mcp_call reply with result_not_for_model: MCP's own image block and the
+    // text beside structuredContent, both of which a model turn would rework.
+    const raw = {
+      content: [
+        { type: "text", text: "Forecast" },
+        { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+      ],
+      structuredContent: { city: "Istanbul", tempC: 22 },
+      _meta: { probe: "result-meta" },
+    };
+
+    expect(toMcpCallToolResult(raw)).toEqual(raw);
+  });
+
   it("keeps the omission marker, resource links and available text without synthesizing structured data", () => {
     const links = [{ uri: "file:///tmp/result.json", name: "Full result" }];
     expect(toMcpCallToolResult({ structuredContentOmitted: true, resourceLinks: links, _meta: { keep: true } }, "Text preview"))
@@ -3223,6 +3358,25 @@ describe("claude.driver / MCP Apps", () => {
       cs.toolCallIndex.set("toolu_1", { toolName: "Read" });
       const [complete] = mapSDKMessage({ ...toolResult, tool_use_result: { structuredContentOmitted: true } }, cs);
       expect(complete).toMatchObject({ output: '{"city":"Istanbul","tempC":22}' });
+    });
+
+    it("completes AskUserQuestion with its answers keyed by question, not the model's text", () => {
+      const answered = {
+        questions: [{ question: "Which database?", header: "Database", options: [], multiSelect: false }],
+        answers: { "Which database?": "The user dismissed this question without answering." },
+        annotations: { "Which database?": { unanswered: "dismissed" } },
+      };
+      const text = "The user answered: ...";
+      const askResult = { ...toolResult, tool_use_result: answered, message: {
+        role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: text }],
+      } };
+      const cs = makeClaudeSession();
+      cs.toolCallIndex.set("toolu_1", { toolName: "AskUserQuestion" });
+      expect(mapSDKMessage(askResult, cs)[0]).toMatchObject({ toolName: "AskUserQuestion", output: answered });
+
+      // Without the SDK's result object the text is all there is.
+      cs.toolCallIndex.set("toolu_1", { toolName: "AskUserQuestion" });
+      expect(mapSDKMessage({ ...askResult, tool_use_result: undefined }, cs)[0]).toMatchObject({ output: text });
     });
   });
 });
