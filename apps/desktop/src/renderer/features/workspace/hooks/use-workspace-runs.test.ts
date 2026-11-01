@@ -115,6 +115,17 @@ beforeEach(() => {
 });
 
 describe("working chats created from voice", () => {
+  it("restores explicitly opened chats outside the recent page without admitting another workspace", async () => {
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [runA] });
+    const older = { ...runA, id: "older-open-chat" };
+    mocks.getById.mockImplementation(async (id: string) => ({ success: true, data: id === older.id ? older : runB }));
+    const view = renderHook(() => useWorkspaceRuns("ws-a", "codex", "developer", undefined, [],
+      { retainedRunIds: [older.id, runB.id] }));
+    await waitFor(() => expect(view.result.current.runs.map((chat) => chat.id)).toEqual([runA.id, older.id]));
+    expect(view.result.current.activeRunId).toBe(runA.id);
+    expect(mocks.getHistory).not.toHaveBeenCalledWith(expect.objectContaining({ runId: older.id }));
+    view.unmount();
+  });
   it("refreshes a directly opened chat when a phone changes its conversation settings", async () => {
     const selected = { ...runA, accountId: "default", workspaceId: undefined, mode: "work" as const,
       configSnapshot: { conversationSettings: { model: "model-a", config: { modelReasoningEffort: "medium" } } } };

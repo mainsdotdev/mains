@@ -73,6 +73,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   const sidebarConfig = useSidebarConfig();
   const modeConfig = useModeConfig();
   const isChatShell = sidebarConfig.itemType === "chat";
+  const showProjectChats = useAppSelector((state) => state.appSettings.developerSidebarView === "chats");
   const sidebarPanelRoute = hasSidebarPanel(location.pathname);
   const isHomeRoute = isWorkspaceRoute(location.pathname);
   const settingsRoute = isSettingsRoute(location.pathname);
@@ -140,7 +141,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     gitStateByWorkspaceId,
     isLoadingWorkspaces,
     handleRefreshConnections,
-  } = useSidebarData({ searchQuery });
+  } = useSidebarData({ searchQuery: !isChatShell && showProjectChats ? "" : searchQuery });
   // Picking a local folder uses a native dialog, which can't run from the web
   // client (it would open on the headless backend). Hide the folder-picker entry.
   const { nativeDialogs } = useCapabilities();

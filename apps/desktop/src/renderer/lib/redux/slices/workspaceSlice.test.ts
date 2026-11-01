@@ -3,6 +3,7 @@ import reducer, {
   activateWorkspaceView,
   openReviewTab,
   closeReviewTab,
+  closeRunTab,
   setReviewRunId,
   setReviewFileReviewed,
   setReviewFileCollapsed,
@@ -121,6 +122,23 @@ describe("workspaceSlice — composer context", () => {
 describe("workspaceSlice — saved workspace views", () => {
   const activate = (key: string, workspaceId: string) =>
     activateWorkspaceView({ key, workspaceId, providerId: "codex" });
+
+  it("remembers explicitly open chats per workspace, deduplicates selection and preserves closed-chat drafts", () => {
+    let state = reducer(undefined, activate("space/ws-a", "ws-a"));
+    state = reducer(state, setActiveTab("run-a"));
+    state = reducer(state, setActiveTab("run-a"));
+    state = reducer(state, setActiveTab("run-b"));
+    state = reducer(state, setDraftText({ key: "draft-b", text: "unsent" }));
+    state = reducer(state, setActiveTab("run-a"));
+    state = reducer(state, closeRunTab("run-b"));
+    expect(state.openRunIds).toEqual(["run-a"]);
+    expect(state.draftTextByKey["draft-b"]).toBe("unsent");
+    state = reducer(state, activate("space/ws-b", "ws-b"));
+    state = reducer(state, setActiveTab("other-workspace-run"));
+    state = reducer(state, activate("space/ws-a", "ws-a"));
+    expect(state.openRunIds).toEqual(["run-a"]);
+    expect(state.activeTab).toBe("run-a");
+  });
 
   it("restores the selected file, tab, explorer and sidebar for each workspace", () => {
     let state = reducer(undefined, activate("space/ws-a", "ws-a"));

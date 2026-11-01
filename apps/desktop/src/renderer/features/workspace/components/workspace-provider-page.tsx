@@ -482,11 +482,13 @@ function InteractiveWorkspaceProviderPage({
 
   const tabBar = useMemo(
     () =>
-      // Developer workspaces use their full strip; Work/Chat get one chat tab below.
-      !modeConfig.showTabs || ws.showEmptyState || ws.isEmptyStatePending ? null : (
+      // Project chat navigation keeps one conversation tab without a create action.
+      !modeConfig.showTabs || (!ws.useProjectChats && (ws.showEmptyState || ws.isEmptyStatePending)) ? null : (
         <WorkspaceTabs
           variant={variant}
-          runs={ws.runs}
+          runs={ws.tabRuns}
+          conversationPresentation={ws.useProjectChats ? "single" : "tabs"}
+          onArchiveRun={ws.useProjectChats ? ws.handleArchiveRun : undefined}
           activeTab={ws.activeTab}
           hasSelectedFile={!!ws.selectedFile}
           fileName={ws.selectedFile?.name}
@@ -518,7 +520,9 @@ function InteractiveWorkspaceProviderPage({
       modeConfig.showTabs,
       ws.showEmptyState,
       ws.isEmptyStatePending,
-      ws.runs,
+      ws.tabRuns,
+      ws.useProjectChats,
+      ws.handleArchiveRun,
       ws.activeTab,
       ws.selectedFile,
       ws.openIssueTabs,
@@ -552,7 +556,7 @@ function InteractiveWorkspaceProviderPage({
     openSignalTabs: ws.openSignalTabs,
     openNoteTabs: ws.openNoteTabs,
     reviewTabOpen: ws.reviewTabOpen,
-    runs: ws.runs,
+    runs: ws.tabRuns,
     showNewRunTab: ws.showNewRunTab,
   });
 

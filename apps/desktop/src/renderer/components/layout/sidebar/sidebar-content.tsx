@@ -1,6 +1,8 @@
 import type { CSSProperties, MouseEvent } from "react";
 import WorkspacesList from "./workspace-list";
 import { SidebarChatList } from "./chat-list";
+import { DeveloperChatList } from "./developer-chat-list";
+import { useAppSelector } from "@/lib/redux/hooks";
 import { useSidebarConfig } from "@/hooks/use-sidebar-config";
 import type { PendingWorkspaceClone } from "@/hooks/use-sidebar-actions";
 import type {
@@ -43,9 +45,10 @@ export function SidebarContent({
   onCreateCollection,
   onCloneRepository,
 }: SidebarContentProps) {
-  // The one list-swap point: developer lists workspaces, the chat shell
-  // (work/chat modes) lists chats grouped by project.
+  // Developer can list workspaces or project chats. Work/Chat keeps its own
+  // collection-based sidebar independently of that preference.
   const { itemType } = useSidebarConfig();
+  const showProjectChats = useAppSelector((state) => state.appSettings.developerSidebarView === "chats");
 
   return (
     <div
@@ -59,6 +62,10 @@ export function SidebarContent({
             onNewChatInCollection={onNewChatInCollection}
             onCreateCollection={onCreateCollection}
           />
+        ) : showProjectChats ? (
+          <DeveloperChatList workspaces={workspaces} isLoadingWorkspaces={isLoadingWorkspaces} gitStateByWorkspaceId={gitStateByWorkspaceId}
+            searchQuery={searchQuery} pendingClones={pendingClones} onCancelClone={onCancelClone}
+            onRetryClone={onRetryClone} onDismissClone={onDismissClone} />
         ) : (
           <WorkspacesList
             onCloneRepository={onCloneRepository}

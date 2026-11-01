@@ -15,11 +15,13 @@ import { useIsMobile } from "@/lib/platform";
 import { ProviderIcon } from "./provider-icon";
 import { MobileTabSwitcher, type MobileTab } from "./mobile-tab-switcher";
 import { isPreviewableImagePath } from "../lib/previewable-image";
+import { ConversationTab } from "./conversation-tab";
 
 const EMPTY_NOTE_TABS: ReviewTabType[] = [];
 
 interface WorkspaceTabsProps {
   runs: Run[];
+  conversationPresentation?: "tabs" | "single";
   reviewTabOpen?: boolean;
   onSelectReviewTab?: () => void;
   onCloseReviewTab?: (event: React.MouseEvent) => void;
@@ -32,6 +34,7 @@ interface WorkspaceTabsProps {
   onSelectEditorTab: () => void;
   onSelectRunTab: (runId: string) => void;
   onCloseTab: (runId: string) => void;
+  onArchiveRun?: (runId: string) => void;
   onRenameRun: (runId: string, newTitle: string) => void;
   onNewRun: () => void;
   onSelectIssueTab: (entityId: string) => void;
@@ -49,6 +52,7 @@ interface WorkspaceTabsProps {
 
 export function WorkspaceTabs({
   runs,
+  conversationPresentation = "tabs",
   reviewTabOpen = false,
   onSelectReviewTab,
   onCloseReviewTab,
@@ -62,6 +66,7 @@ export function WorkspaceTabs({
   onSelectEditorTab,
   onSelectRunTab,
   onCloseTab,
+  onArchiveRun,
   onRenameRun,
   onNewRun,
   onSelectIssueTab,
@@ -76,8 +81,21 @@ export function WorkspaceTabs({
   onCloseNewRunTab,
 }: WorkspaceTabsProps) {
   const isMobile = useIsMobile();
+  const showConversationTabs = conversationPresentation === "tabs";
+  const hasWorkspaceTabs = !!hasSelectedFile || !!issueTabs.length || !!signalTabs.length || !!noteTabs.length || reviewTabOpen;
+  const visibleRuns = showConversationTabs ? runs : [];
+  const showDraftTab = showConversationTabs && showNewRunTab;
+  const conversation = showNewRunTab ? undefined : runs[0];
+  const conversationTab = !showConversationTabs && <ConversationTab
+    title={conversation ? getTabTitle(conversation) : "New chat"}
+    run={conversation}
+    variant={variant ?? "codex"}
+    isActive={conversation ? activeTab === conversation.id : activeTab === "new-run"}
+    isFirst={!hasWorkspaceTabs}
+    onSelect={() => conversation ? onSelectRunTab(conversation.id) : onSelectNewRunTab?.()}
+  />;
 
-  if (isMobile) {
+  if (isMobile && (showConversationTabs || hasWorkspaceTabs)) {
     // Mirrors the previous ternary's final fallback (undefined → Codex).
     const { icon: MobileProviderIcon, accentClassName } = getProviderVariant(variant ?? "codex");
     const providerIcon = (
@@ -132,37 +150,41 @@ export function WorkspaceTabs({
     });
     if (reviewTabOpen) mobileTabs.push({ id: "review", label: "Review", icon: <Review className="size-4" />, group: "Review",
       onSelect: () => onSelectReviewTab?.(), onClose: onCloseReviewTab });
-    runs.forEach((r) => {
+    const mobileRuns = showConversationTabs ? runs : conversation ? [conversation] : [];
+    mobileRuns.forEach((r) => {
       mobileTabs.push({
         id: r.id,
         label: getTabTitle(r),
         icon: providerIcon,
         group: "Runs",
         onSelect: () => onSelectRunTab(r.id),
-        onClose: () => onCloseTab(r.id),
+        onClose: showConversationTabs ? () => onCloseTab(r.id) : undefined,
       });
     });
-    if (showNewRunTab) {
+    if (showNewRunTab || (!showConversationTabs && !conversation)) {
       mobileTabs.push({
         id: "new-run",
-        label: "New Run",
+        label: showConversationTabs ? "New Run" : "New chat",
         icon: providerIcon,
         group: "Runs",
         onSelect: () => onSelectNewRunTab?.(),
-        onClose: (e) => onCloseNewRunTab?.(e),
+        onClose: showConversationTabs ? (e) => onCloseNewRunTab?.(e) : undefined,
       });
     }
     return (
       <MobileTabSwitcher
         tabs={mobileTabs}
         activeTab={activeTab}
-        onNewRun={onNewRun}
+        onNewRun={showConversationTabs ? onNewRun : undefined}
       />
     );
   }
 
   return (
-    <TabStrip activeKey={activeTab} createAction={
+    <TabStrip activeKey={activeTab}
+      role={showConversationTabs ? undefined : "tablist"}
+      aria-label={showConversationTabs ? undefined : "Workspace tabs"}
+      createAction={showConversationTabs &&
       <Button variant="icon" onClick={onNewRun} className="p-1! rounded-lg hover:bg-primary/5!" title="New run" aria-label="New run">
         <Plus className="size-4.5" />
       </Button>
@@ -225,7 +247,8 @@ export function WorkspaceTabs({
           role="tab" ariaLabel="Review" label="Review" icon={<Review className="size-4" />}
           onClick={() => onSelectReviewTab?.()} onClose={onCloseReviewTab} closeLabel="Close Review tab" />}
 
-        {runs.map((run, i) => (
+        {conversationTab}
+        {visibleRuns.map((run, i) => (
           <RunTab
             variant={variant}
             key={run.id}
@@ -234,11 +257,12 @@ export function WorkspaceTabs({
             isFirst={!hasSelectedFile && issueTabs.length === 0 && signalTabs.length === 0 && noteTabs.length === 0 && !reviewTabOpen && i === 0}
             onClick={() => onSelectRunTab(run.id)}
             onClose={() => onCloseTab(run.id)}
+            onArchive={onArchiveRun ? () => onArchiveRun(run.id) : undefined}
             onRename={(newTitle) => onRenameRun(run.id, newTitle)}
             title={getTabTitle(run)}
           />
         ))}
-        {showNewRunTab && (
+        {showDraftTab && (
           <div className="animate-slide-in-left flex shrink basis-(--shell-tab-width) min-w-(--shell-tab-min-width)">
             <NewRunTab
               variant={variant!}

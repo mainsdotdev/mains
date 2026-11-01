@@ -67,6 +67,7 @@ export { default as Linear } from "./linear";
 export { default as External } from "./external";
 export { default as Finder } from "./finder";
 export { default as Branch } from "./branch";
+export { default as Worktree } from "./worktree";
 export { default as Jira } from "./jira";
 export { default as Asana } from "./asana";
 export { default as SelectOption } from "./select-option";

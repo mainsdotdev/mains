@@ -71,16 +71,20 @@ export function TasksSidebar() {
     });
   };
 
-  // Only issue trackers belong here; monitoring/security connections stay in Settings.
-  const issueConnections = useMemo(
+  // The PR tab only lists GitHub and GitLab; GitLab keeps its support placeholder.
+  const visibleConnections = useMemo(
     () =>
       connectionStates
-        .filter((connection) => connection.category === "issues")
+        .filter(
+          (connection) =>
+            connection.category === "issues" &&
+            (tab === "issues" || connection.id === "github" || connection.id === "gitlab"),
+        )
         .sort((a, b) => a.sortOrder - b.sortOrder),
-    [connectionStates],
+    [connectionStates, tab],
   );
-  const connected = issueConnections.filter((connection) => connection.isConnected);
-  const available = issueConnections.filter((connection) => !connection.isConnected);
+  const connected = visibleConnections.filter((connection) => connection.isConnected);
+  const available = visibleConnections.filter((connection) => !connection.isConnected);
 
   const counts = useMemo(() => issueScopeCounts(issues), [issues]);
   const countsCapped = issues.length >= OPEN_ISSUES_QUERY.limit;
@@ -259,9 +263,9 @@ function ConnectionGroup({
         onClick: onManage,
       }}
     >
-      <nav aria-label={`${connection.displayName} scope`} className="space-y-0.5 pb-1 pl-3">
+      <nav aria-label={`${connection.displayName} scope`} className="space-y-0.5 pb-1 [&>button]:pl-7">
         {unsupported ? (
-          <Text size="xs" tone="subtle" className="block px-2 py-1.5">
+          <Text size="xs" tone="subtle" className="block pl-7 pr-2 py-1.5">
             No pull request support yet
           </Text>
         ) : (

@@ -17,7 +17,7 @@ const STATUS_REFRESH_INTERVAL_MS = 10_000;
  * starts, `runs:statusChanged` flips the running dot. Recheck pending runs
  * after a missed push, and catch up when returning from another sidebar.
  */
-export function useRecentChats() {
+export function useRecentChats({ limit }: { limit?: number } = {}) {
   const dispatch = useAppDispatch();
   const { activeSpace } = useActiveSpace();
   const { data: account } = useGetAccountQuery();
@@ -28,11 +28,17 @@ export function useRecentChats() {
       accountId: account?.id ?? "",
       providerId: activeSpace?.providerId ?? "",
       mode,
+      ...(limit === undefined ? {} : { limit }),
     },
     { skip: !canQuery, refetchOnMountOrArgChange: true },
   );
   const { refetch } = query;
-  const hasPendingRuns = query.currentData?.some(
+  // A larger page may retain the previous page, but never another account,
+  // provider or mode's cached chats while that experience is switching.
+  const data = query.currentData ?? (limit !== undefined && query.data?.every((run) =>
+    run.accountId === account?.id && run.providerId === activeSpace?.providerId && run.mode === mode)
+    ? query.data : undefined);
+  const hasPendingRuns = data?.some(
     (run) => run.status === "running" || run.status === "queued",
   ) ?? false;
 
@@ -60,5 +66,5 @@ export function useRecentChats() {
 
   // RTK Query's `data` can retain the previous args while a provider/mode
   // switch loads. Never flash another experience's chats in the new sidebar.
-  return { ...query, data: query.currentData };
+  return { ...query, data };
 }

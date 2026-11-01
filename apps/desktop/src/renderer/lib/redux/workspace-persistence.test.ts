@@ -9,6 +9,8 @@ import workspaceReducer, {
   rememberRunSettings,
   beginRunSettingsIntent,
   setSelectedFile,
+  setActiveTab,
+  closeRunTab,
   setReviewFileReviewed,
   setReviewFileCollapsed,
 } from "./slices/workspaceSlice";
@@ -46,6 +48,38 @@ async function persistedWorkspace(storage: ReturnType<typeof memoryStorage>) {
   });
   return { store, persistor };
 }
+
+describe("workspace persistence — open chats", () => {
+  it("restores open and closed tab choices after restart and workspace changes", async () => {
+    const storage = memoryStorage();
+    const first = await persistedWorkspace(storage);
+    const activate = (id: string) => activateWorkspaceView({ key: id, workspaceId: id, providerId: "codex" });
+    first.store.dispatch(activate("ws-a"));
+    first.store.dispatch(setActiveTab("run-a"));
+    first.store.dispatch(setActiveTab("closed-chat"));
+    first.store.dispatch(setActiveTab("run-a"));
+    first.store.dispatch(closeRunTab("closed-chat"));
+    first.store.dispatch(activate("ws-b"));
+    first.store.dispatch(setActiveTab("run-b"));
+    await first.persistor.flush(); first.persistor.pause();
+    const restored = await persistedWorkspace(storage);
+    expect(restored.store.getState().openRunIds).toEqual(["run-b"]);
+    restored.store.dispatch(activate("ws-a"));
+    expect(restored.store.getState().openRunIds).toEqual(["run-a"]);
+    restored.persistor.pause();
+  });
+
+  it("retains an older build's selected chat when enabling the project chat sidebar", async () => {
+    const storage = memoryStorage();
+    await storage.setItem("persist:workspace", JSON.stringify({
+      activeTab: JSON.stringify("existing-chat"),
+      _persist: JSON.stringify({ version: 1, rehydrated: true }),
+    }));
+    const restored = await persistedWorkspace(storage);
+    expect(restored.store.getState().openRunIds).toEqual(["existing-chat"]);
+    restored.persistor.pause();
+  });
+});
 
 describe("workspace persistence — generated diffs", () => {
   it("does not save a selected diff without its transient content", async () => {

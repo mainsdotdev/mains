@@ -1,4 +1,4 @@
-import { Archive, Option, Edit } from "@/components/ui/icons";
+import { Archive, Close, Option, Edit } from "@/components/ui/icons";
 import type { Run } from "../types";
 import { cn } from "@/lib/cn";
 import { PROVIDER_VARIANTS, type ProviderVariant } from "@/lib/provider-variants";
@@ -18,6 +18,7 @@ interface RunTabProps {
   isFirst?: boolean;
   onClick: () => void;
   onClose: () => void;
+  onArchive?: () => void;
   onRename: (newTitle: string) => void;
   title: string;
   variant?: "copilot" | "claude" | "codex" | "cursor";
@@ -46,7 +47,7 @@ export function TabIcon({ run, variant, isActive, live }: { run: Pick<Run, "stat
   );
 }
 
-export function RunTab({ run, isActive, isFirst, onClick, onClose, onRename, title, variant = "copilot" }: RunTabProps) {
+export function RunTab({ run, isActive, isFirst, onClick, onClose, onArchive, onRename, title, variant = "copilot" }: RunTabProps) {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
@@ -102,8 +103,8 @@ export function RunTab({ run, isActive, isFirst, onClick, onClose, onRename, tit
 
   const handleArchive = useCallback(() => {
     setIsDropdownOpen(false);
-    onClose();
-  }, [onClose]);
+    (onArchive ?? onClose)();
+  }, [onArchive, onClose]);
 
   const label = isRenaming ? (
     <Input
@@ -129,6 +130,7 @@ export function RunTab({ run, isActive, isFirst, onClick, onClose, onRename, tit
         isFirst={isFirst}
         onClick={onClick}
         onClose={handleOptionsClick}
+        closeLabel="Chat options"
         icon={<TabIcon run={run} variant={variant} isActive={isActive} />}
         label={label}
         tooltip={isRenaming ? undefined : run.title || run.goal || title}
@@ -142,6 +144,10 @@ export function RunTab({ run, isActive, isFirst, onClick, onClose, onRename, tit
         minWidth={140}
         origin={dropdownOrigin}
       >
+        {onArchive && <DropdownMenuItem onClick={() => { setIsDropdownOpen(false); onClose(); }}>
+          <Close className="size-3.5" />
+          <span>Close tab</span>
+        </DropdownMenuItem>}
         <DropdownMenuItem onClick={handleRenameStart}>
           <Edit className="size-3.5" />
           <span>Rename</span>

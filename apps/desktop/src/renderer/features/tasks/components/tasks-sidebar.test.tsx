@@ -148,12 +148,23 @@ describe("TasksSidebar", () => {
     expect(search()).toBe("?provider=linear");
   });
 
-  it("explains that non-GitHub connections have no pull requests yet", () => {
+  it("only lists GitHub and GitLab on the pull request tab, keeping GitLab's placeholder", () => {
+    mocks.connections.push(
+      connection("gitlab", "GitLab", true),
+      connection("asana", "Asana", true),
+      connection("trello", "Trello", true),
+    );
     renderSidebar("/tasks?tab=pull_requests");
     expect(screen.getByText("All pull requests")).toBeTruthy();
-    expect(screen.getByLabelText("Linear scope").textContent).toContain(
+    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.getByText("GitLab")).toBeTruthy();
+    expect(screen.getByLabelText("GitLab scope").textContent).toContain(
       "No pull request support yet",
     );
+    for (const provider of ["Linear", "Asana", "Trello", "Jira", "Sentry"]) {
+      expect(screen.queryByText(provider)).toBeNull();
+    }
+    expect(screen.queryByRole("button", { name: /Add connection/ })).toBeNull();
     // GitHub keeps its rows, without issue counts.
     expect(screen.getByRole("button", { name: /^acme\/api$/ })).toBeTruthy();
   });

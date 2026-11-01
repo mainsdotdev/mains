@@ -37,6 +37,7 @@ export interface DocumentViewerDoc {
 export type ThemePreference = "light" | "dark" | "system";
 
 export type WorkspaceGrouping = "none" | "status" | "project";
+export type DeveloperSidebarView = "workspaces" | "chats";
 
 /** Which origins a sidebar list shows. At least one stays on. */
 export type WorkspaceListSources = { local: boolean; bridge: boolean };
@@ -125,6 +126,8 @@ export interface AppSettingsState {
   bottomTerminalOpen: boolean;
   /** How the sidebar workspace list is grouped. */
   workspaceListGrouping: WorkspaceGrouping;
+  /** Optional project/chat sidebar; workspace navigation remains the default. */
+  developerSidebarView: DeveloperSidebarView;
   /** Which origins the sidebar workspace list includes. */
   workspaceListSources: WorkspaceListSources;
   /** Which origins the chat sidebar includes. Independent of the workspace list. */
@@ -165,6 +168,7 @@ const initialState: AppSettingsState = {
   codeFontFamily: "",
   bottomTerminalOpen: false,
   workspaceListGrouping: "project",
+  developerSidebarView: "workspaces",
   workspaceListSources: DEFAULT_WORKSPACE_LIST_SOURCES,
   chatListSources: DEFAULT_WORKSPACE_LIST_SOURCES,
   workspaceGroupExpanded: {},
@@ -176,6 +180,9 @@ const appSettingsSlice = createSlice({
   name: "appSettings",
   initialState,
   reducers: {
+    setDeveloperSidebarView: (state, action: PayloadAction<DeveloperSidebarView>) => {
+      state.developerSidebarView = action.payload;
+    },
     transferRightPaneContext: (state, action: PayloadAction<{ fromKey: string; toKey: string }>) => {
       const { fromKey, toKey } = action.payload;
       if (state.activeRightPaneContextKey !== fromKey || fromKey === toKey) return;
@@ -436,6 +443,7 @@ const appSettingsSlice = createSlice({
 });
 
 export const {
+  setDeveloperSidebarView,
   setRightPaneContextKey,
   transferRightPaneContext,
   forgetRunRightPane,

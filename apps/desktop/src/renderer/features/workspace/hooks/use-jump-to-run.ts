@@ -45,9 +45,6 @@ export function useJumpToRun(): (run: RunJumpTarget) => Promise<void> {
         return;
       }
 
-      dispatch(setPendingRunId(run.id));
-      dispatch(setSelectedCollectionId(run.collectionId));
-
       const needsSpaceSwitch = target.spaceId !== activeSpaceId;
       if (needsSpaceSwitch || target.modeSwitch) {
         try {
@@ -71,6 +68,10 @@ export function useJumpToRun(): (run: RunJumpTarget) => Promise<void> {
         }
       }
 
+      // The outgoing space must not consume this request while a space/mode
+      // switch is still in flight, or keep it after a failed switch.
+      dispatch(setPendingRunId(run.id));
+      dispatch(setSelectedCollectionId(run.collectionId));
       navigate(
         run.mode === "developer" && run.workspaceId
           ? `${WORKSPACE_BASE_PATH}/${run.workspaceId}`

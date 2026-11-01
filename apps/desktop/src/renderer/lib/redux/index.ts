@@ -81,6 +81,7 @@ const appSettingsPersistConfig = {
     // and survives tab switches and restarts.
     "subagentPanelCollapsed",
     "workspaceListGrouping",
+    "developerSidebarView",
     "workspaceListSources",
     "chatListSources",
     "workspaceGroupExpanded",

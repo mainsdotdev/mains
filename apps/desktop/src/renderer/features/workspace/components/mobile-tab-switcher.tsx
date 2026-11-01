@@ -35,7 +35,7 @@ export function MobileTabSwitcher({
 }: {
   tabs: MobileTab[];
   activeTab: string;
-  onNewRun: () => void;
+  onNewRun?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isOpen, setIsOpen] = useState(false);
@@ -128,7 +128,7 @@ export function MobileTabSwitcher({
             );
           })}
 
-          <div className="mt-1 border-t border-primary-200/60 pt-1 dark:border-primary-800/30">
+          {onNewRun && <div className="mt-1 border-t border-primary-200/60 pt-1 dark:border-primary-800/30">
             <Button
               type="button"
               role="menuitem"
@@ -141,7 +141,7 @@ export function MobileTabSwitcher({
               <Plus className="size-4 shrink-0" />
               <span className="flex-1 text-left">New run</span>
             </Button>
-          </div>
+          </div>}
         </div>
       </DropdownWrapper>
     </div>
