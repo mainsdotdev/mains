@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { McpAppEntrypoint, McpAppIcon } from "@mains/contracts/mcp-apps";
-import type { McpAppCallToolResult, McpAppExtensionSession, PluginInfo } from "../../../../shared/adapter.types";
+import type { McpAppCallToolResult, McpAppExtensionSession, PluginInfo } from "../../../../../shared/adapter.types";
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 import type { McpServerStatus } from "./codex-app-server-protocol/generated/v2/McpServerStatus";

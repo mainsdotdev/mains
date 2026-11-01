@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexMcpApps, discoverMcpAppEntrypoints, installedMcpAppEntrypoints } from "./codex-mcp-apps";
-import type { PluginInfo } from "../../../../shared/adapter.types";
+import type { PluginInfo } from "../../../../../shared/adapter.types";
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { McpServerStatus } from "./codex-app-server-protocol/generated/v2/McpServerStatus";
 

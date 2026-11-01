@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputRoot = path.join(
   desktopRoot,
-  "../../packages/backend/src/modules/providers/adapters/codex-app-server-protocol/generated",
+  "../../packages/backend/src/modules/providers/adapters/codex/codex-app-server-protocol/generated",
 );
 const codexBinary = process.env.CODEX_BINARY || "codex";
 const temporaryRoot = fs.mkdtempSync(

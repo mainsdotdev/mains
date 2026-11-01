@@ -1,5 +1,5 @@
-import type { FileAttachment, WorkRunContextItem, WorkRunRequest } from "../../../../shared/adapter.types";
-import { appendPromptSections, formatContextSection, attachmentPromptParts } from "./adapter.shared";
+import type { FileAttachment, WorkRunContextItem, WorkRunRequest } from "../../../../../shared/adapter.types";
+import { appendPromptSections, formatContextSection, attachmentPromptParts } from "../adapter.shared";
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 import type { CodexSubAgentRunMeta } from "./codex-event-mapper";
 

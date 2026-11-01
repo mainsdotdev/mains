@@ -2,20 +2,20 @@ import { DEFAULT_MODE_ID, MODE_IDS, type ModeId } from "@mains/contracts/modes";
 import type {
   ToolApprovalRequest,
   ToolApprovalResponse,
-} from "../../runs/runs.dto";
-import { requestToolApproval } from "../../runs/user-input-broker";
-import { guardsService } from "../../guards/guards.service";
-import type { MainsToolContext } from "./mains-tools.core";
+} from "../../../runs/runs.dto";
+import { requestToolApproval } from "../../../runs/user-input-broker";
+import { guardsService } from "../../../guards/guards.service";
+import type { MainsToolContext } from "../mains-tools.core";
 import {
   dispatchMainsTool,
   toCodexDynamicTools,
-} from "./mains-tools.registry";
+} from "../mains-tools.registry";
 import {
   createLogger,
   type AdapterLogger,
-} from "./adapter.shared";
-import { getBackendRuntime } from "../../../runtime/backend-runtime";
-import { parseElicitationSchema, validateElicitationContent } from "../../../../shared/mcp-elicitation";
+} from "../adapter.shared";
+import { getBackendRuntime } from "../../../../runtime/backend-runtime";
+import { parseElicitationSchema, validateElicitationContent } from "../../../../../shared/mcp-elicitation";
 
 export interface CodexServerResponder {
   respondToRequest(

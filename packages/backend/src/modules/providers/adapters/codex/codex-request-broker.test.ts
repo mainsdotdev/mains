@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   ToolApprovalRequest,
   ToolApprovalResponse,
-} from "../../runs/runs.dto";
+} from "../../../runs/runs.dto";
 import {
   createCodexRequestBroker,
   type CodexRequestRunState,

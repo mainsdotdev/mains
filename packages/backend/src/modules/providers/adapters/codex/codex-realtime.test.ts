@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RunRealtimeEvent } from "@mains/contracts/realtime";
-import type { RealtimeWorkHandlers, WorkRunRealtimeRequest } from "../../../../shared/adapter.types";
+import type { RealtimeWorkHandlers, WorkRunRealtimeRequest } from "../../../../../shared/adapter.types";
 import type { CodexRunCoordinator } from "./codex-run-coordinator";
 import type { CodexSessionAcquisition } from "./codex-session-acquisition";
 import { createCodexRealtime } from "./codex-realtime";

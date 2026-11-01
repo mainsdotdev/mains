@@ -21,8 +21,8 @@ import { z } from "zod";
 import { handleAtlasReadPage, handleAtlasCreatePage, handleAtlasUpdatePage, handleAtlasListCovers } from "./atlas-tools";
 import type { Tool as CopilotTool } from "@github/copilot-sdk";
 import { PROVIDER_IDS, type ProviderId } from "@mains/contracts/provider-ids";
-import type { JsonValue } from "./codex-app-server-protocol/generated/serde_json/JsonValue";
-import type { DynamicToolSpec } from "./codex-app-server-protocol/generated/v2/DynamicToolSpec";
+import type { JsonValue } from "./codex/codex-app-server-protocol/generated/serde_json/JsonValue";
+import type { DynamicToolSpec } from "./codex/codex-app-server-protocol/generated/v2/DynamicToolSpec";
 import { DEFAULT_MODE_ID, providerSupportsMode, type ModeId } from "@mains/contracts/modes";
 import {
   TOOL_DESCRIPTIONS,

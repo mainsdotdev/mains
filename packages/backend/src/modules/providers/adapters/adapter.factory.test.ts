@@ -7,7 +7,7 @@ const createClaudeDriver = vi.fn();
 const createCopilotDriver = vi.fn();
 const createCursorDriver = vi.fn();
 
-vi.mock("./codex.driver", () => ({ createCodexDriver: (c: any) => createCodexDriver(c) }));
+vi.mock("./codex/codex.driver", () => ({ createCodexDriver: (c: any) => createCodexDriver(c) }));
 vi.mock("./claude.driver", () => ({ createClaudeDriver: (c: any) => createClaudeDriver(c) }));
 vi.mock("./copilot.driver", () => ({ createCopilotDriver: (c: any) => createCopilotDriver(c) }));
 vi.mock("./cursor.driver", () => ({ createCursorDriver: (c: any) => createCursorDriver(c) }));

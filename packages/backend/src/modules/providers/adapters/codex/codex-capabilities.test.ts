@@ -7,7 +7,7 @@ import { createCodexCapabilities } from "./codex-capabilities";
 
 const fixtureBinary = path.resolve(
   __dirname,
-  "../../../../test/fixtures/fake-codex-app-server.mjs",
+  "../../../../../test/fixtures/fake-codex-app-server.mjs",
 );
 
 const servers: CodexAppServer[] = [];

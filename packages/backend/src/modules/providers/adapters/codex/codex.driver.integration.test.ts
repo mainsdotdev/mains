@@ -2,10 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WorkRunRequest } from "../../../../shared/adapter.types";
-import { runsRepo } from "../../runs/runs.repo";
-import * as mainsTools from "./mains-tools.registry";
-import { registerEventSink } from "../../../ipc-kit/event-bus";
+import type { WorkRunRequest } from "../../../../../shared/adapter.types";
+import { runsRepo } from "../../../runs/runs.repo";
+import * as mainsTools from "../mains-tools.registry";
+import { registerEventSink } from "../../../../ipc-kit/event-bus";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
 
@@ -21,7 +21,7 @@ const approvalHarness = vi.hoisted(() => ({
   formAnswer: undefined as string | undefined,
 }));
 
-vi.mock("../../runs/user-input-broker", () => ({
+vi.mock("../../../runs/user-input-broker", () => ({
   cancelPendingRequest: vi.fn(),
   cancelPendingRequests: vi.fn(),
   requestToolApproval: vi.fn(async (request: Record<string, unknown>) => {
@@ -41,7 +41,7 @@ import {
 
 const fixtureBinary = path.resolve(
   __dirname,
-  "../../../../test/fixtures/fake-codex-app-server.mjs",
+  "../../../../../test/fixtures/fake-codex-app-server.mjs",
 );
 
 /** One minor above the tested schema — the "forward-compatible" branch. */

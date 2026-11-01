@@ -16,15 +16,15 @@ import type {
   PluginScope,
   RateLimitInfo,
   SkillInfo,
-} from "../../../../shared/adapter.types";
+} from "../../../../../shared/adapter.types";
 import {
   filterCodexModelsForUsage,
-} from "../../../../shared/codex-model-availability";
-import { getPluginInstallBlockReason } from "../../../../shared/plugin-install-availability";
+} from "../../../../../shared/codex-model-availability";
+import { getPluginInstallBlockReason } from "../../../../../shared/plugin-install-availability";
 import {
   createLogger,
   type AdapterLogger,
-} from "./adapter.shared";
+} from "../adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { CodexAppServerResult } from "./codex-app-server-protocol/rpc";
 import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";

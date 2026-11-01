@@ -8,11 +8,11 @@ import type {
   WorkRunPlanStep,
   WorkRunPlanUpdateEvent,
   WorkRunUsage,
-} from "../../../../shared/adapter.types";
-import type { MainsToolContext } from "./mains-tools.core";
-import { safeJson } from "./adapter.shared";
+} from "../../../../../shared/adapter.types";
+import type { MainsToolContext } from "../mains-tools.core";
+import { safeJson } from "../adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
-import { managedRunImageDir } from "../../runs/run-execution";
+import { managedRunImageDir } from "../../../runs/run-execution";
 
 export interface CodexThreadItem {
   id: string;

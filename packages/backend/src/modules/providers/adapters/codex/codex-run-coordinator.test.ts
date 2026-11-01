@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCodexRunCoordinator } from "./codex-run-coordinator";
 import type { CodexAppServer } from "./codex-app-server.client";
-import type { WorkRunEvent } from "../../../../shared/adapter.types";
+import type { WorkRunEvent } from "../../../../../shared/adapter.types";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

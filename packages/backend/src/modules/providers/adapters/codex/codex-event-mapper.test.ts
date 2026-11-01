@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WorkRunEvent } from "../../../../shared/adapter.types";
-import { installTestBackendRuntime } from "../../../../test/backend-runtime";
-import { imageProxyService, serveLocalImage } from "../../imageProxy";
+import type { WorkRunEvent } from "../../../../../shared/adapter.types";
+import { installTestBackendRuntime } from "../../../../../test/backend-runtime";
+import { imageProxyService, serveLocalImage } from "../../../imageProxy";
 import {
   createCodexEventMapper,
   SUB_THREAD_TOOL_ITEM_TYPES,

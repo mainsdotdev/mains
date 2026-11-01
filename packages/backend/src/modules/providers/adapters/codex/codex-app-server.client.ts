@@ -1,9 +1,9 @@
 import type { ChildProcess } from "node:child_process";
-import { spawnProvider as spawn, killProviderProcess } from "./provider-process";
+import { spawnProvider as spawn, killProviderProcess } from "../provider-process";
 import {
   createLogger,
   type AdapterLogger,
-} from "./adapter.shared";
+} from "../adapter.shared";
 import type {
   CodexAppServerMethod,
   CodexAppServerParams,

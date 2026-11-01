@@ -1,4 +1,4 @@
-import { providerProcessPath, providerLoginCommand } from "../providers.utils";
+import { providerProcessPath, providerLoginCommand } from "../../providers.utils";
 // ─────────────────────────────────────────────────────────────
 // OpenAI Codex ProviderDriver
 //
@@ -19,17 +19,17 @@ import { providerProcessPath, providerLoginCommand } from "../providers.utils";
 // right `turn/start` or `review/start` request.
 // ─────────────────────────────────────────────────────────────
 
-import { spawnProvider as spawn, killProviderProcess } from "./provider-process";
+import { spawnProvider as spawn, killProviderProcess } from "../provider-process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { findCodexBinaryPath } from "../providers.utils";
+import { findCodexBinaryPath } from "../../providers.utils";
 import { CHANNELS } from "@mains/contracts/channels";
-import { emit } from "../../../ipc-kit";
+import { emit } from "../../../../ipc-kit";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
 import type { McpServerOauthLoginCompletedNotification } from "./codex-app-server-protocol/generated/v2/McpServerOauthLoginCompletedNotification";
-import { getBackendRuntime } from "../../../runtime/backend-runtime";
+import { getBackendRuntime } from "../../../../runtime/backend-runtime";
 import type {
   CliUpdateResult,
   AccountInfo,
@@ -41,17 +41,17 @@ import type {
   ProviderDriver,
   RateLimitInfo,
   WorkRunContextItem,
-} from "../../../../shared/adapter.types";
+} from "../../../../../shared/adapter.types";
 import {
   getCodexReserveModelSlugs,
-} from "../../../../shared/codex-model-availability";
-import { runsRepo } from "../../runs/runs.repo";
-import { logWorkspaceActivity } from "../../workspace";
+} from "../../../../../shared/codex-model-availability";
+import { runsRepo } from "../../../runs/runs.repo";
+import { logWorkspaceActivity } from "../../../workspace";
 // Direct repo import — a known driver egress-seam leak (see CONTEXT.md
 // "Repos are module-internal"); goes away when review persistence routes
 // through the SaveReview/SaveFinding tools.
-import { workspaceRepo } from "../../workspace/workspace.repo";
-import { adoptConfig, createLogger, resolveCatalogDefaultId } from "./adapter.shared";
+import { workspaceRepo } from "../../../workspace/workspace.repo";
+import { adoptConfig, createLogger, resolveCatalogDefaultId } from "../adapter.shared";
 import type { CodexAppServerParams, CodexAppServerResult } from "./codex-app-server-protocol/rpc";
 import { CodexAppServer } from "./codex-app-server.client";
 import { codexMcpResourceTarget, createCodexMcpApps } from "./codex-mcp-apps";

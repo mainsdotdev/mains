@@ -25,7 +25,7 @@ import type {
   ConnectorOverview,
 } from "../../../../shared/adapter.types";
 import { createClaudeDriver } from "./claude.driver";
-import { createCodexDriver } from "./codex.driver";
+import { createCodexDriver } from "./codex/codex.driver";
 import { createCopilotDriver } from "./copilot.driver";
 import { createCursorDriver } from "./cursor.driver";
 import { createWorkRunAdapter } from "./work-run-core";

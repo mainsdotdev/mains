@@ -90,7 +90,7 @@ import {
 import {
   createCodexEventMapper,
   type CodexEventRunState,
-} from "../providers/adapters/codex-event-mapper";
+} from "../providers/adapters/codex/codex-event-mapper";
 
 describe("RunSession", () => {
   beforeEach(() => {

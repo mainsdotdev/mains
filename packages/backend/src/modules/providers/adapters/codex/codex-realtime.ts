@@ -1,5 +1,5 @@
 import type { RunRealtimeEvent, RunRealtimeUpdate } from "@mains/contracts/realtime";
-import type { RealtimeWorkHandlers, WorkRunRealtimeRequest } from "../../../../shared/adapter.types";
+import type { RealtimeWorkHandlers, WorkRunRealtimeRequest } from "../../../../../shared/adapter.types";
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { CodexRunCoordinator } from "./codex-run-coordinator";
 import type { CodexSessionAcquisition } from "./codex-session-acquisition";

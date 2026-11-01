@@ -1,5 +1,5 @@
 import { buildCodexTurnInput } from "./codex-turn-input";
-import { resolveProviderTurnLineage } from "../../../../shared/provider-turn-lineage";
+import { resolveProviderTurnLineage } from "../../../../../shared/provider-turn-lineage";
 import type {
   AcquiredSession,
   CodexAdapterConfig,
@@ -10,17 +10,17 @@ import type {
   WorkRunRequest,
   WorkRunReviewRequest,
   WorkRunRealtimeRequest,
-} from "../../../../shared/adapter.types";
+} from "../../../../../shared/adapter.types";
 import {
   createLogger,
   type AdapterLogger,
-} from "./adapter.shared";
+} from "../adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { CollaborationMode } from "./codex-app-server-protocol/generated/CollaborationMode";
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
-import type { MainsToolContext } from "./mains-tools.core";
-import { toCodexDynamicTools } from "./mains-tools.registry";
-import { MainsMcpStdioServer } from "./mains-mcp-server";
+import type { MainsToolContext } from "../mains-tools.core";
+import { toCodexDynamicTools } from "../mains-tools.registry";
+import { MainsMcpStdioServer } from "../mains-mcp-server";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import type {
   CodexRunCoordinator,

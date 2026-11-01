@@ -5,17 +5,17 @@ import type {
   WorkRunEventHandler,
   WorkRunSteerRequest,
   RealtimeWorkHandlers,
-} from "../../../../shared/adapter.types";
+} from "../../../../../shared/adapter.types";
 import {
   cancelPendingRequest,
   cancelPendingRequests,
-} from "../../runs/user-input-broker";
+} from "../../../runs/user-input-broker";
 import {
   createLogger,
   extractArtifactsFromToolOutput,
   emitUserPromptArtifact,
   type AdapterLogger,
-} from "./adapter.shared";
+} from "../adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
 import {
   createCodexEventMapper,
@@ -24,7 +24,7 @@ import {
   type CodexEventRunState,
   type CodexSubAgentRunMeta,
 } from "./codex-event-mapper";
-import type { MainsToolContext } from "./mains-tools.core";
+import type { MainsToolContext } from "../mains-tools.core";
 import { createCodexRequestBroker } from "./codex-request-broker";
 import { buildCodexTurnInput } from "./codex-turn-input";
 
