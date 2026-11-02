@@ -24,10 +24,10 @@ import type {
   ConnectorOAuthStartResult,
   ConnectorOverview,
 } from "../../../../shared/adapter.types";
-import { createClaudeDriver } from "./claude.driver";
+import { createClaudeDriver } from "./claude/claude.driver";
 import { createCodexDriver } from "./codex/codex.driver";
-import { createCopilotDriver } from "./copilot.driver";
-import { createCursorDriver } from "./cursor.driver";
+import { createCopilotDriver } from "./copilot/copilot.driver";
+import { createCursorDriver } from "./cursor/cursor.driver";
 import { createWorkRunAdapter } from "./work-run-core";
 import {
   PROVIDER_IDS,

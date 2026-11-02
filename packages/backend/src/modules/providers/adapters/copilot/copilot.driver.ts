@@ -1,4 +1,4 @@
-import { providerProcessPath } from "../providers.utils";
+import { providerProcessPath } from "../../providers.utils";
 // ─────────────────────────────────────────────────────────────
 // Copilot ProviderDriver
 //
@@ -18,7 +18,7 @@ import { providerProcessPath } from "../providers.utils";
 
 import path from "node:path";
 import os from "node:os";
-import { spawnProvider as spawn } from "./provider-process";
+import { spawnProvider as spawn } from "../provider-process";
 import type {
   CopilotClient as CopilotClientInterface,
   CopilotClientOptions,
@@ -37,7 +37,7 @@ import {
   copilotAuthLoginCommand,
   copilotRuntimeArgs,
   resolveCopilotRuntime,
-} from "../providers.utils";
+} from "../../providers.utils";
 import type {
   AccountInfo,
   AcquiredSession,
@@ -56,12 +56,12 @@ import type {
   WorkRunRequest,
   WorkRunToolPolicy,
   WorkRunUsage,
-} from "../../../../shared/adapter.types";
+} from "../../../../../shared/adapter.types";
 import type { ModeId } from "@mains/contracts/modes";
 import {
   requestToolApproval,
-} from "../../runs/user-input-broker";
-import type { ToolApprovalRequest } from "../../runs/runs.dto";
+} from "../../../runs/user-input-broker";
+import type { ToolApprovalRequest } from "../../../runs/runs.dto";
 import {
   adoptConfig,
   createLogger,
@@ -70,10 +70,10 @@ import {
   formatContextSection,
   appendPromptSections,
   resolveCatalogDefaultId,
-} from "./adapter.shared";
-import type { MainsToolContext } from "./mains-tools.core";
-import { toCopilotTools } from "./mains-tools.registry";
-import { guardsService } from "../../guards/guards.service";
+} from "../adapter.shared";
+import type { MainsToolContext } from "../mains-tools.core";
+import { toCopilotTools } from "../mains-tools.registry";
+import { guardsService } from "../../../guards/guards.service";
 import { copilotApprovalInput, mapCopilotPermissionApproval } from "./copilot-approval";
 
 // ─────────────────────────────────────────────────────────────

@@ -3,16 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installTestBackendRuntime } from "../../../../test/backend-runtime";
+import { installTestBackendRuntime } from "../../../../../test/backend-runtime";
 import {
   clearClaudeCliCache,
   detectInstalledClis,
   resolveClaudeRuntime,
-} from "../providers.utils";
+} from "../../providers.utils";
 import { createClaudeDriver, mapSDKMessage } from "./claude.driver";
-import { runsRepo } from "../../runs/runs.repo";
-import { bridgeService } from "../../bridge";
-import type { WorkRunEvent } from "../../../../shared/adapter.types";
+import { runsRepo } from "../../../runs/runs.repo";
+import { bridgeService } from "../../../bridge";
+import type { WorkRunEvent } from "../../../../../shared/adapter.types";
 
 const sdk = vi.hoisted(() => ({
   query: vi.fn(),
@@ -32,10 +32,10 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   deleteSession: undefined,
   getSessionMessages: sdk.getSessionMessages,
 }));
-vi.mock("../../guards/guards.service", () => ({
+vi.mock("../../../guards/guards.service", () => ({
   guardsService: { buildClaudeGuardHook: vi.fn().mockResolvedValue(null) },
 }));
-vi.mock("../../bridge", () => ({ bridgeService: { mirrorClaudeSession: vi.fn().mockResolvedValue(undefined) } }));
+vi.mock("../../../bridge", () => ({ bridgeService: { mirrorClaudeSession: vi.fn().mockResolvedValue(undefined) } }));
 
 describe("Claude runtime without a system CLI", () => {
   let fixture: string;

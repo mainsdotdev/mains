@@ -1,5 +1,5 @@
 import { pickRunSettingConfig } from "@mains/contracts/run-settings";
-import { bridgeService } from "../../bridge";
+import { bridgeService } from "../../../bridge";
 // ─────────────────────────────────────────────────────────────
 // Claude ProviderDriver
 //
@@ -28,7 +28,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
-import { spawnProvider as spawn } from "./provider-process";
+import { spawnProvider as spawn } from "../provider-process";
 import type {
   AcquiredSession,
   AgentsConfig,
@@ -59,12 +59,12 @@ import type {
   WorkRunTaskEvent,
   WorkRunToolPolicy,
   WorkRunUsage,
-} from "../../../../shared/adapter.types";
+} from "../../../../../shared/adapter.types";
 import {
   claudeAuthLoginCommand,
   resolveClaudeRuntime,
-} from "../providers.utils";
-import { AGENT_ID_IN_RESULT } from "../../../../shared/subagent";
+} from "../../providers.utils";
+import { AGENT_ID_IN_RESULT } from "../../../../../shared/subagent";
 import type { ModeId } from "@mains/contracts/modes";
 import {
   DEFAULT_CLAUDE_PERMISSION_MODE,
@@ -73,9 +73,9 @@ import {
 import {
   cancelPendingRequest,
   requestToolApproval,
-} from "../../runs/user-input-broker";
-import type { ToolApprovalRequest, ToolApprovalResponse } from "../../runs/runs.dto";
-import { runsRepo } from "../../runs/runs.repo";
+} from "../../../runs/user-input-broker";
+import type { ToolApprovalRequest, ToolApprovalResponse } from "../../../runs/runs.dto";
+import { runsRepo } from "../../../runs/runs.repo";
 import {
   adoptConfig,
   createLogger,
@@ -88,11 +88,11 @@ import {
   formatContextSection,
   appendPromptSections,
   resolveCatalogDefaultId,
-} from "./adapter.shared";
+} from "../adapter.shared";
 import { createClaudeTurnInput, isClaudeUserInput } from "./claude-turn-input";
-import type { MainsToolContext } from "./mains-tools.core";
-import { toClaudeTools } from "./mains-tools.registry";
-import { guardsService } from "../../guards/guards.service";
+import type { MainsToolContext } from "../mains-tools.core";
+import { toClaudeTools } from "../mains-tools.registry";
+import { guardsService } from "../../../guards/guards.service";
 
 // ─────────────────────────────────────────────────────────────
 // SDK type sketches (the SDK is loaded via dynamic import to keep the

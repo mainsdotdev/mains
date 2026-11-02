@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installTestBackendRuntime } from "../../../../test/backend-runtime";
-import { copilotAuthLoginCommand, detectInstalledClis, resolveCopilotRuntime } from "../providers.utils";
+import { installTestBackendRuntime } from "../../../../../test/backend-runtime";
+import { copilotAuthLoginCommand, detectInstalledClis, resolveCopilotRuntime } from "../../providers.utils";
 import { createCopilotDriver } from "./copilot.driver";
-import type { CopilotAdapterConfig } from "../../../../shared/adapter.types";
+import type { CopilotAdapterConfig } from "../../../../../shared/adapter.types";
 
 const sdk = vi.hoisted(() => ({
   authenticated: true,

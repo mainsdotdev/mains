@@ -24,7 +24,7 @@ import {
   parseCursorCommands,
   type CursorConfigOption,
 } from "./cursor.driver";
-import { resolveCatalogDefaultId } from "./adapter.shared";
+import { resolveCatalogDefaultId } from "../adapter.shared";
 
 describe("cursor.driver / session mode", () => {
   it("explicitly resets a resumed plan session back to agent mode", async () => {

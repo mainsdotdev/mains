@@ -1,4 +1,4 @@
-import { providerProcessPath, providerLoginCommand } from "../providers.utils";
+import { providerProcessPath, providerLoginCommand } from "../../providers.utils";
 // ─────────────────────────────────────────────────────────────
 // Cursor ProviderDriver
 //
@@ -21,16 +21,16 @@ import { providerProcessPath, providerLoginCommand } from "../providers.utils";
 // ─────────────────────────────────────────────────────────────
 
 import type { ChildProcess } from "node:child_process";
-import { spawnProvider as spawn, killProviderProcess } from "./provider-process";
+import { spawnProvider as spawn, killProviderProcess } from "../provider-process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "@mains/contracts/channels";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
-import { emit } from "../../../ipc-kit";
-import { getBackendRuntime } from "../../../runtime/backend-runtime";
-import { findCursorBinaryPath } from "../providers.utils";
+import { emit } from "../../../../ipc-kit";
+import { getBackendRuntime } from "../../../../runtime/backend-runtime";
+import { findCursorBinaryPath } from "../../providers.utils";
 import type {
   AcquiredSession,
   CliUpdateResult,
@@ -47,9 +47,9 @@ import type {
   WorkRunForkRequest,
   WorkRunPlanStep,
   WorkRunRequest,
-} from "../../../../shared/adapter.types";
-import { requestToolApproval } from "../../runs/user-input-broker";
-import { runsRepo } from "../../runs/runs.repo";
+} from "../../../../../shared/adapter.types";
+import { requestToolApproval } from "../../../runs/user-input-broker";
+import { runsRepo } from "../../../runs/runs.repo";
 import {
   adoptConfig,
   createLogger,
@@ -57,11 +57,11 @@ import {
   attachmentPromptParts,
   formatContextSection,
   resolveCatalogDefaultId,
-} from "./adapter.shared";
-import { MainsMcpStdioServer } from "./mains-mcp-server";
+} from "../adapter.shared";
+import { MainsMcpStdioServer } from "../mains-mcp-server";
 import { CURSOR_CLOSED_ITERABLE_DIAGNOSTIC, CursorMessageStream } from "./cursor-message-stream";
 import type { ModeId } from "@mains/contracts/modes";
-import type { MainsToolContext } from "./mains-tools.core";
+import type { MainsToolContext } from "../mains-tools.core";
 
 // ─────────────────────────────────────────────────────────────
 // JSON-RPC types

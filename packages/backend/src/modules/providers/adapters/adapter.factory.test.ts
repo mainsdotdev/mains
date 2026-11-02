@@ -8,9 +8,9 @@ const createCopilotDriver = vi.fn();
 const createCursorDriver = vi.fn();
 
 vi.mock("./codex/codex.driver", () => ({ createCodexDriver: (c: any) => createCodexDriver(c) }));
-vi.mock("./claude.driver", () => ({ createClaudeDriver: (c: any) => createClaudeDriver(c) }));
-vi.mock("./copilot.driver", () => ({ createCopilotDriver: (c: any) => createCopilotDriver(c) }));
-vi.mock("./cursor.driver", () => ({ createCursorDriver: (c: any) => createCursorDriver(c) }));
+vi.mock("./claude/claude.driver", () => ({ createClaudeDriver: (c: any) => createClaudeDriver(c) }));
+vi.mock("./copilot/copilot.driver", () => ({ createCopilotDriver: (c: any) => createCopilotDriver(c) }));
+vi.mock("./cursor/cursor.driver", () => ({ createCursorDriver: (c: any) => createCursorDriver(c) }));
 
 import {
   clearAdapterCache,

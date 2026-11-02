@@ -1,17 +1,17 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkRunEvent, WorkRunEventHandler } from "../../../../shared/adapter.types";
+import type { WorkRunEvent, WorkRunEventHandler } from "../../../../../shared/adapter.types";
 import { createCursorDriver } from "./cursor.driver";
-import { createWorkRunAdapter } from "./work-run-core";
+import { createWorkRunAdapter } from "../work-run-core";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), updateRun: vi.fn(), approval: vi.fn(), bridges: [] as Array<{ isRunning: boolean }> }));
 vi.mock("node:child_process", async (original) => ({
   ...await original<typeof import("node:child_process")>(), spawn: mocks.spawn,
 }));
-vi.mock("../../runs/runs.repo", () => ({ runsRepo: { updateRun: mocks.updateRun } }));
-vi.mock("../../runs/user-input-broker", () => ({ requestToolApproval: mocks.approval, cancelPendingRequests: vi.fn() }));
-vi.mock("./mains-mcp-server", () => ({
+vi.mock("../../../runs/runs.repo", () => ({ runsRepo: { updateRun: mocks.updateRun } }));
+vi.mock("../../../runs/user-input-broker", () => ({ requestToolApproval: mocks.approval, cancelPendingRequests: vi.fn() }));
+vi.mock("../mains-mcp-server", () => ({
   MainsMcpStdioServer: class {
     isRunning = true;
     constructor() { mocks.bridges.push(this); }

@@ -1,5 +1,5 @@
 import type { PermissionRequest } from "@github/copilot-sdk";
-import type { ToolApprovalRequest } from "../../runs/runs.dto";
+import type { ToolApprovalRequest } from "../../../runs/runs.dto";
 
 type ApprovalDetails = Pick<ToolApprovalRequest, "toolName" | "toolInput" | "header" | "question" | "description">;
 

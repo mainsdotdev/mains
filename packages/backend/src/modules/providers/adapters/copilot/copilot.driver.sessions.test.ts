@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CopilotClientOptions, PermissionRequest, SessionConfig } from "@github/copilot-sdk";
-import type { CopilotAdapterConfig, WorkRunEvent, WorkRunRequest } from "../../../../shared/adapter.types";
-import { installTestBackendRuntime } from "../../../../test/backend-runtime";
+import type { CopilotAdapterConfig, WorkRunEvent, WorkRunRequest } from "../../../../../shared/adapter.types";
+import { installTestBackendRuntime } from "../../../../../test/backend-runtime";
 import { createCopilotDriver } from "./copilot.driver";
 
 const sdk = vi.hoisted(() => ({
@@ -22,8 +22,8 @@ const CATALOGUE = [
 ];
 const approvals = vi.hoisted(() => ({ request: vi.fn(), guard: vi.fn() }));
 
-vi.mock("../../runs/user-input-broker", () => ({ requestToolApproval: approvals.request }));
-vi.mock("../../guards/guards.service", () => ({ guardsService: { buildCopilotGuardHook: approvals.guard } }));
+vi.mock("../../../runs/user-input-broker", () => ({ requestToolApproval: approvals.request }));
+vi.mock("../../../guards/guards.service", () => ({ guardsService: { buildCopilotGuardHook: approvals.guard } }));
 
 vi.mock("@github/copilot-sdk", () => {
   function session(config: { model?: string }) {

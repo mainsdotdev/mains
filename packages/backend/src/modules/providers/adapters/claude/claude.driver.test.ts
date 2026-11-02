@@ -47,7 +47,7 @@ import fs from "node:fs";
 import {
   ALLOWED_TOOLS_SET,
   DEFAULT_ALLOWED_TOOLS,
-} from "./adapter.shared";
+} from "../adapter.shared";
 
 const DEFAULT_TIMEOUT = 6_000_000;
 const INHERITED_PERMISSION_SETTINGS = {
