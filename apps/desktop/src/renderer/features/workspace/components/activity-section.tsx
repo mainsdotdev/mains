@@ -281,7 +281,7 @@ export function ActivitySection({ workspaceId }: ActivitySectionProps) {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 px-3">
-      <div className="flex-1 overflow-y-auto noscrollbar">
+      <div className="flex-1 overflow-y-auto overscroll-none noscrollbar">
         {activities.map((activity, index) => (
           <ActivityEntry
             key={activity.id}

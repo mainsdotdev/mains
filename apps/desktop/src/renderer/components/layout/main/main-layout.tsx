@@ -11,7 +11,7 @@ export function MainLayout({ children, className }: MainLayoutProps) {
   const { windowsWindowChrome } = useCapabilities();
   return (
     // `--app-frame` comes from index.css, or from the app theme in force.
-    <div className={cn("app-root flex flex-col h-screen bg-(--app-frame) transition-colors duration-300 ease-in-out", className)}
+    <div className={cn("app-root flex flex-col h-screen overflow-hidden overscroll-none bg-(--app-frame) transition-colors duration-300 ease-in-out", className)}
       style={windowsWindowChrome ? { paddingTop: "env(titlebar-area-height, 38px)" } : undefined}>
       <DragRegion nativeTitleBar={windowsWindowChrome} />
       {/* Fixed panels use the client viewport below Windows' native buttons. */}

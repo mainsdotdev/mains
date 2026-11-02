@@ -139,7 +139,7 @@ export function TasksSidebar() {
         />
       </nav>
 
-      <div className="min-h-0 flex-1 overflow-y-auto noscrollbar px-3">
+      <div className="scroll-bounce min-h-0 flex-1 overflow-y-auto noscrollbar px-3">
         {connected.map((connection) => (
           <ConnectionGroup
             key={connection.id}

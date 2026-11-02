@@ -90,7 +90,7 @@ export function MainContent({
         className={`flex-1 min-h-0 overflow-hidden ${contentRounding} ${transparentSurface ? "bg-transparent" : "bg-primary dark:bg-primary-950"}`}
       >
         <div
-          className="h-full overflow-auto"
+          className="h-full overflow-auto overscroll-none"
           style={
             {
               "--content-inset-right": contentInsetRight ?? "0px",

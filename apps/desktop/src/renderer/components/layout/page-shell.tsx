@@ -26,7 +26,7 @@ export function PageShell({
   return (
     <div
       className={cn(
-        "h-full max-w-240 mx-auto px-2 overflow-y-auto noscrollbar bg-primary dark:bg-primary-950",
+        "scroll-bounce h-full max-w-240 mx-auto px-2 overflow-y-auto noscrollbar bg-primary dark:bg-primary-950",
         bottomPadded ? "py-16" : "pt-16",
         className,
       )}

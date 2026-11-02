@@ -194,7 +194,7 @@ export function DiffSection({
       </div>
 
       {/* File list */}
-      <div className="flex-1 overflow-y-auto noscrollbar space-y-1">
+      <div className="flex-1 overflow-y-auto overscroll-none noscrollbar space-y-1">
         {diff.files.map((filePath, index) => {
           const fileName = filePath.split("/").pop() || filePath;
           const dirPath = filePath.includes("/")

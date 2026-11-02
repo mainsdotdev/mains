@@ -337,6 +337,11 @@ html:not(.app-ready) *::after {
   user-select: none;
 } */
 
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -1197,6 +1202,16 @@ html.mains-web.dark #root {
   scrollbar-width: none;
 
   &::-webkit-scrollbar { display: none; }
+}
+
+/* Chromium rubber-bands a nested scroller only when that scroller is
+   composited. On macOS, LCD text keeps a translucent list on the main
+   thread, so the leftover delta bounces the window. scroll-position
+   promotes the box onto the compositor. contain keeps that bounce in
+   the box: a hard pull must not chain into the window. */
+.scroll-bounce {
+  will-change: scroll-position;
+  overscroll-behavior-y: contain;
 }
 
 /* Shooting star border effect */

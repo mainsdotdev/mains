@@ -850,7 +850,7 @@ function InteractiveWorkspaceProviderPage({
         browser panel is a native view layered above the renderer). */}
     <div
       data-workspace-route=""
-      className={`relative flex flex-col h-full ${routeTopRounding} overflow-hidden`}
+      className={`relative flex flex-col h-full ${routeTopRounding} overflow-hidden overscroll-none`}
     >
       {/* Separate painted panes leave the translucent shell visible between chat and terminal. */}
       <div
@@ -906,7 +906,7 @@ function InteractiveWorkspaceProviderPage({
           setChatHost={setReviewChatHost} onCommentAdded={showReviewChat} />
           : floatingPanel.isExpanded ? null : useCenteredPromptLayout ? (
           <div
-            className={`flex h-full min-h-0 flex-col items-center justify-center-safe gap-4 overflow-y-auto py-10 noscrollbar ${CONTENT_COLUMN_GUTTER}`}
+            className={`flex h-full min-h-0 flex-col items-center justify-center-safe gap-4 overflow-y-auto overscroll-none py-10 noscrollbar ${CONTENT_COLUMN_GUTTER}`}
           >
             <WorkspaceEmptyState />
             <div className="w-full flex flex-col items-center gap-2">

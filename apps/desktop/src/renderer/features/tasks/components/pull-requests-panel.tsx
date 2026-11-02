@@ -388,7 +388,7 @@ function PullRequestsList({
       </div>
 
       {/* Scrolling list — rows fade out as they slide under the controls */}
-      <div className="flex-1 min-h-0 overflow-y-auto noscrollbar px-6 pt-3 pb-16 mask-[linear-gradient(to_bottom,transparent,black_1.75rem)]">
+      <div className="scroll-bounce flex-1 min-h-0 overflow-y-auto noscrollbar px-6 pt-3 pb-16 mask-[linear-gradient(to_bottom,transparent,black_1.75rem)]">
         {isError ? (
           <div className="flex flex-col items-center gap-2 py-10">
             <Body size="xs" tone="secondary">

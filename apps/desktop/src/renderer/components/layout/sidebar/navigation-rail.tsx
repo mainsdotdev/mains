@@ -85,7 +85,7 @@ export function NavigationRail({
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-(--z-panel) flex flex-col items-center mt-11 mb-1.25 mx-1.25 p-1.5 rounded-2xl ${translucent ? "bg-transparent" : "dark:bg-primary-950 bg-primary"}`}
+      className={`fixed inset-y-0 left-0 z-(--z-panel) flex flex-col items-center overflow-hidden overscroll-none mt-11 mb-1.25 mx-1.25 p-1.5 rounded-2xl ${translucent ? "bg-transparent" : "dark:bg-primary-950 bg-primary"}`}
       style={
         {
           width: "var(--nav-rail-width)",
@@ -94,7 +94,7 @@ export function NavigationRail({
       }
       aria-label="Primary navigation"
     >
-      <nav className="flex min-h-0 flex-col items-center gap-2 overflow-y-auto" aria-label="Pages">
+      <nav className="scroll-bounce flex min-h-0 flex-col items-center gap-2 overflow-y-auto" aria-label="Pages">
         <Button
           variant="bare"
           className={buttonClass(homeActive)}

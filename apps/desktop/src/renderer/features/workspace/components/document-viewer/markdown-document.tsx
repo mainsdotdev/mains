@@ -113,7 +113,7 @@ export function MarkdownDocument({ path, docType = "md" }: { path: string; docTy
   }
 
   return (
-    <Text as="div" size="sm" className="flex-1 overflow-auto px-7 py-5">
+    <Text as="div" size="sm" className="flex-1 overflow-auto overscroll-none px-7 py-5">
       {document.frontmatter && (
         <section aria-label="Metadata" className="@container/metadata mb-6 rounded-2xl  bg-primary-100/50 p-3 glass-surface dark:bg-primary-900/50">
           <Text as="h2" size="xs" tone="subtle" weight="medium" className="mb-3">Metadata</Text>
