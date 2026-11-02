@@ -268,14 +268,17 @@ describe("WorkspaceProviderPage while changing spaces", () => {
       showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false, showInput: true, goal: "", uploadedFiles: [] };
     renderPage();
     const pending = screen.getByRole("button", { name: "Answer pending questions" });
+    const composer = screen.getByTestId("pinned-input");
     expect(screen.queryByRole("textbox", { name: "Custom answer" })).toBeNull();
+    expect(composer.closest("[hidden]")).toBeNull();
     expect(screen.getByTestId("events").compareDocumentPosition(pending) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(pending.compareDocumentPosition(screen.getByTestId("pinned-input")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pending.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(pending);
     const option = screen.getByRole("button", { name: "Staging" });
     expect(screen.getByRole("textbox", { name: "Custom answer" })).toBeTruthy();
     expect(screen.getByTestId("events").compareDocumentPosition(option) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(option.compareDocumentPosition(screen.getByTestId("pinned-input")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(option.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(composer.closest("[hidden]")).toBeTruthy();
   });
 
   it.each([true, false])("consumes floating annotations in the parent only after an accepted send (%s)", async (accepted) => {

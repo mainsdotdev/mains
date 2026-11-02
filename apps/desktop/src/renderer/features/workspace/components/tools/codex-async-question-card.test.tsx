@@ -6,7 +6,7 @@ import type { Run, RunEvent } from "../../types";
 import type { ToolApprovalRequest } from "../../hooks/use-tool-approval";
 import { mapArtifactToEvent } from "../../lib/run-event-mappers";
 import { CodexAsyncQuestionCard } from "./codex-async-question-card";
-import { AsyncQuestionDialogProvider, RunInputDialog } from "./async-question-dialog";
+import { AsyncQuestionDialogProvider, ComposerSlot, RunInputDialog } from "./async-question-dialog";
 
 const mocks = vi.hoisted(() => {
   Object.defineProperty(window, "matchMedia", { configurable: true, value: vi.fn(() => ({
@@ -142,6 +142,25 @@ describe("Codex async questions in the existing approval dialog", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("button", { name: "Answer" })).toBeNull();
     expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps the composer mounted behind an open question card", () => {
+    const event = mapArtifactToEvent({ id: 12, runId: "run", kind: "report", content: "Questions",
+      metadata: { source: "codex_async_questions", questions, turnId: 1 } });
+    const view = render(<AsyncQuestionDialogProvider ownerKey="local/run" runId="run" runStatus="running"
+      turns={[{ id: 1, status: "active" }]} events={[event]}>
+      <ComposerSlot onRespond={mocks.nativeRespond} variant="codex">
+        <input aria-label="Composer draft" defaultValue="keep me" />
+      </ComposerSlot>
+    </AsyncQuestionDialogProvider>);
+    const draft = screen.getByRole("textbox", { name: "Composer draft", hidden: true });
+    expect(draft.closest("[hidden]")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Custom answer" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.getByRole("textbox", { name: "Composer draft" })).toBe(draft);
+    expect((draft as HTMLInputElement).value).toBe("keep me");
+    expect(draft.closest("[hidden]")).toBeNull();
+    view.unmount();
   });
 
   it("gives real approvals priority and routes their replies to the native responder", () => {

@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from "react";
-import { ArrowUp, Question } from "@/components/ui/icons";
+import { ArrowUp, ChevronLeft, Close, Question } from "@/components/ui/icons";
 import { Body, Button, Caption, Checkbox, Input, Text } from "@/components/ui";
 import {
   ElicitationForm,
@@ -225,6 +225,14 @@ function Eyebrow({ children }: { children: React.ReactNode }) {
   );
 }
 
+function CloseControl({ onClick, disabled, className }: { onClick: () => void; disabled?: boolean; className?: string }) {
+  return (
+    <Button variant="icon" iconSize="sm" aria-label="Close" className={className} onClick={onClick} disabled={disabled}>
+      <Close className="size-3.5" />
+    </Button>
+  );
+}
+
 /** One `label: value` line in the tool's parameter list. */
 function ParamRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -312,6 +320,21 @@ function ToolApprovalDialogContents({
     onRespond(request.requestId, false);
   }, [request.requestId, onRespond]);
 
+  // Codex dismisses a question with an empty answer. Cursor has a distinct
+  // skipped outcome, which is approval with no answer. Claude and Copilot
+  // dismissals are not skips, and an async question card only closes locally.
+  const skipQuestion = request.kind === "ask_user" && !questionControls && (variant === "codex" || variant === "cursor");
+  const questionDismissLabel = skipQuestion ? "Skip" : "Dismiss";
+  const handleQuestionDismiss = useCallback(() => {
+    if (questionControls?.busy) return;
+    if (variant === "cursor" && !questionControls) {
+      onRespond(request.requestId, true);
+      return;
+    }
+    onRespond(request.requestId, false);
+  }, [questionControls, variant, onRespond, request.requestId]);
+  const submitsOnChoose = request.kind === "ask_user" && !questionControls && !request.multiSelect;
+
   const handleSubmitAnswer = useCallback(() => {
     if (questionControls) {
       if (!questionControls.busy && questionControls.value.trim()) {
@@ -349,6 +372,15 @@ function ToolApprovalDialogContents({
     [request.multiSelect, questionControls],
   );
 
+  const chooseOption = useCallback((label: string) => {
+    if (questionControls?.busy || questionControls?.readOnly) return;
+    if (!questionControls && !request.multiSelect) {
+      onRespond(request.requestId, true, label);
+      return;
+    }
+    toggleOption(label);
+  }, [questionControls, request.multiSelect, request.requestId, onRespond, toggleOption]);
+
   const canSubmit =
     questionControls ? questionControls.value.trim().length > 0
       : selectedOptions.length > 0 || (!isCursor && freeText.trim().length > 0);
@@ -357,7 +389,7 @@ function ToolApprovalDialogContents({
     const isUrlMode = request.elicitationMode === "url" && !!request.url;
     return (
       <div
-        className="mx-auto mb-1 flex max-w-210 flex-col overflow-hidden rounded-2xl glass-surface"
+        className="mx-auto mb-1 flex w-full max-w-210 flex-col overflow-hidden rounded-[28px] glass-surface"
         style={{ maxHeight }}
       >
         <div className="flex shrink-0 gap-3 px-3.5 pb-2 pt-3.5 sm:px-4 sm:pt-4">
@@ -380,6 +412,7 @@ function ToolApprovalDialogContents({
               </Caption>
             )}
           </div>
+          <CloseControl className="shrink-0" onClick={() => onRespond(request.requestId, false, "cancel")} />
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain noscrollbar">
@@ -428,7 +461,7 @@ function ToolApprovalDialogContents({
 
   if (request.kind === "ask_user") {
     return (
-      <div className="mx-auto mb-1 flex max-w-210 flex-col overflow-hidden rounded-3xl glass-surface" style={{ maxHeight }}>
+      <div className="mx-auto mb-1 flex w-full max-w-210 flex-col overflow-hidden rounded-[28px] glass-surface" style={{ maxHeight }}>
           <div className="flex shrink-0 gap-3 px-3.5 pb-2 pt-3.5 sm:px-4 sm:pt-4">
             <Question className="mt-0.5 size-4 shrink-0 text-primary-600 dark:text-primary-400" />
             <div className="min-w-0 flex-1 space-y-2">
@@ -454,38 +487,41 @@ function ToolApprovalDialogContents({
                 {request.question || "The agent is asking a question."}
               </Body>
             </div>
+            <CloseControl
+              className="shrink-0"
+              disabled={questionControls?.busy}
+              onClick={handleQuestionDismiss}
+            />
           </div>
 
           {request.options && request.options.length > 0 && (
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain noscrollbar px-3.5 pb-3 sm:px-4">
-              {request.options.map((opt) => {
+              {request.options.map((opt, index) => {
                 const isSelected = questionControls ? questionControls.value === opt.label : selectedOptions.includes(opt.label);
                 return (
                   <Button
                     key={opt.label}
                     type="button"
-                    onClick={() => toggleOption(opt.label)}
-                    aria-pressed={isSelected}
+                    onClick={() => chooseOption(opt.label)}
+                    aria-pressed={submitsOnChoose ? undefined : isSelected}
                     disabled={questionControls?.busy || questionControls?.readOnly}
-                    className={`flex w-full gap-2.5 rounded-xl  px-2.5 py-2.5 text-left text-xs transition-colors ${
+                    className={`flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-xs transition-colors ${
                       isSelected
                         ? " dark:bg-success/5 bg-success/10"
                         : " bg-primary-100/30 hover:border-primary-300/70 dark:bg-primary/2 dark:hover:border-primary-600/50"
                     }`}
                   >
                     <span
-                      className={`mt-0.5 flex size-4 shrink-0 items-center justify-center glass-outline rounded-md ${
+                      className={`mt-0.5 flex size-4 shrink-0 items-center justify-center glass-outline rounded-full ${
                         isSelected
                           ? " bg-success text-primary "
                           : " bg-primary-50 dark:border-primary-600 dark:bg-primary-900/50"
                       }`}
                       aria-hidden
                     >
-                      {isSelected && (
-                        <Text as="span" size="t" tone="inherit" weight="bold" className="leading-none">
-                          ✓
-                        </Text>
-                      )}
+                      <Text as="span" size="t" tone="inherit" weight="bold" className="leading-none">
+                        {isSelected ? "✓" : index + 1}
+                      </Text>
                     </span>
                     <div className="min-w-0 flex-1">
                       <Text
@@ -502,6 +538,9 @@ function ToolApprovalDialogContents({
                         </Text>
                       )}
                     </div>
+                    {submitsOnChoose && (
+                      <ChevronLeft aria-hidden className="mt-0.5 size-3.5 shrink-0 rotate-180 text-primary-400" />
+                    )}
                   </Button>
                 );
               })}
@@ -542,21 +581,23 @@ function ToolApprovalDialogContents({
                 <Button
                   variant="primary"
                   className="min-w-18  text-primary-700 hover:bg-primary-200/40  dark:text-primary-300 dark:hover:bg-primary-800/50"
-                  onClick={handleDeny}
+                  onClick={handleQuestionDismiss}
                   autoFocus={request.defaultToNo}
                   disabled={questionControls?.busy}
                 >
-                  Dismiss
+                  {questionDismissLabel}
                 </Button>
-                <Button
-                  variant="submit"
-                  className="min-w-18 font-semibold shadow-sm disabled:opacity-45"
-                  onClick={handleSubmitAnswer}
-                  disabled={!canSubmit || questionControls?.busy}
-                  isLoading={questionControls?.busy}
-                >
-                  {questionControls?.submitLabel ?? "Submit"}
-                </Button>
+                {!(submitsOnChoose && isCursor) && (
+                  <Button
+                    variant="submit"
+                    className="min-w-18 font-semibold shadow-sm disabled:opacity-45"
+                    onClick={handleSubmitAnswer}
+                    disabled={!canSubmit || questionControls?.busy}
+                    isLoading={questionControls?.busy}
+                  >
+                    {questionControls?.submitLabel ?? "Submit"}
+                  </Button>
+                )}
               </div>
             </div>
             {questionControls?.error && <Caption role="alert" tone="danger" className="mt-2 block">{questionControls.error}</Caption>}
@@ -608,7 +649,7 @@ function ToolApprovalDialogContents({
   const hasBody = showRichPreview || paramEntries.length > 0 || !!subtitle;
 
   return (
-    <div className="mr-auto mb-1 flex max-w-210 flex-col overflow-hidden rounded-2xl glass-surface" style={{ maxHeight }}>
+    <div className="mx-auto mb-1 flex w-full max-w-210 flex-col overflow-hidden rounded-[28px] glass-surface" style={{ maxHeight }}>
       <div className="flex shrink-0 items-center gap-2 px-4 pb-1 pt-3.5">
         <Text as="span" size="inherit" tone="subtle">
           {headerIcon}
@@ -623,6 +664,7 @@ function ToolApprovalDialogContents({
             {riskLevel} risk
           </span>
         )}
+        <CloseControl className={riskLevel && RISK_LEVEL_STYLES[riskLevel] ? undefined : "ml-auto"} onClick={handleDeny} />
       </div>
 
       <div className="shrink-0 px-4 pb-3 pt-0.5">

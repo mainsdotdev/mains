@@ -36,7 +36,7 @@ import { FloatingChatOverlay } from "@/features/workspace/components/floating-ch
 import { ComposerSendTargetSelect } from "@/features/workspace/components/composer-send-target-select";
 import { WorkspaceInput } from "@/features/workspace/components/workspace-input";
 import { WorkspaceEvents } from "@/features/workspace/components/workspace-events";
-import { AsyncQuestionDialogProvider, RunInputDialog } from "@/features/workspace/components/tools/async-question-dialog";
+import { AsyncQuestionDialogProvider, ComposerSlot } from "@/features/workspace/components/tools/async-question-dialog";
 import { PluginLogoProvider } from "@/features/workspace/hooks/use-plugin-logos";
 import { useConversationSettings } from "@/features/workspace/hooks/use-conversation-settings";
 import {
@@ -396,6 +396,7 @@ function AtlasWorkingChat({
         update={update}
         activity={activity}
         composer={
+          <ComposerSlot request={approval} onRespond={respond} variant={variant} maxHeight="30dvh" dialogClassName="px-3 pb-2">
           <WorkspaceInput
             goal={state.draft}
             onGoalChange={(draft) => update({ draft })}
@@ -425,6 +426,7 @@ function AtlasWorkingChat({
             inputLabel="Page instruction"
             sendLabel="Send page instruction"
           />
+          </ComposerSlot>
         }
 
       >
@@ -452,16 +454,6 @@ function AtlasWorkingChat({
               isSubmitting={submitting}
               variant={variant}
               floatingChat
-            />
-          </div>
-        )}
-        {runId && (
-          <div className="shrink-0 px-3 pb-2">
-            <RunInputDialog
-              request={approval}
-              onRespond={respond}
-              variant={variant}
-              maxHeight="30dvh"
             />
           </div>
         )}
