@@ -61,6 +61,13 @@ export function buildPerFileDiffHashes(diffText: string): Map<string, string> {
   return result;
 }
 
+/**
+ * What happened to one file. "untracked" is not here: a staged-new file and an
+ * untracked one render the same hunk, so that split needs the snapshot's
+ * untracked list, applied by the caller. Mirrors the renderer's `parse-diff`.
+ */
+export type DiffFileStatus = "added" | "deleted" | "renamed" | "modified";
+
 export interface FileDiffStat {
   additions: number;
   deletions: number;
@@ -70,6 +77,9 @@ export interface FileDiffStat {
    * destroying anything need to tell the two apart.
    */
   isNew: boolean;
+  status: DiffFileStatus;
+  /** Path the file had at the base ref — only set when `status` is "renamed". */
+  oldPath?: string;
 }
 
 /**
@@ -89,22 +99,50 @@ export function parsePerFileDiffStats(
   for (const chunk of diffText.split(/^(?=diff --git )/m)) {
     const header = chunk.match(/^diff --git a\/(.+?) b\/(.+)/);
     if (!header) continue;
+    const oldPath = header[1].trim();
+    const newPath = header[2].trim();
     let additions = 0;
     let deletions = 0;
-    // git writes "new file mode <mode>"; the synthetic hunks this module
-    // generates for untracked files carry the same marker.
-    const isNew = /^new file/m.test(chunk);
     for (const line of chunk.split("\n")) {
       // `+++`/`---` are the file headers, not content lines.
       if (line.startsWith("+++") || line.startsWith("---")) continue;
       if (line.startsWith("+")) additions++;
       else if (line.startsWith("-")) deletions++;
     }
-    const stat = { additions, deletions, isNew };
-    result.set(header[2].trim(), stat);
-    if (header[1] !== header[2]) result.set(header[1].trim(), stat);
+    const status = readChangeStatus(chunk, oldPath, newPath);
+    const stat: FileDiffStat = {
+      additions,
+      deletions,
+      isNew: status === "added",
+      status,
+    };
+    if (status === "renamed") stat.oldPath = oldPath;
+    result.set(newPath, stat);
+    if (oldPath !== newPath) result.set(oldPath, stat);
   }
   return result;
+}
+
+/**
+ * git writes an explicit `new file` / `deleted file` / `rename from` marker;
+ * the `/dev/null` side of the `---`/`+++` header is the fallback for diffs
+ * produced without those markers — including the synthetic hunks
+ * `captureDiffSnapshot` writes for untracked files. Same rules as the
+ * renderer's `readChangeStatus`.
+ */
+function readChangeStatus(
+  section: string,
+  oldPath: string,
+  newPath: string,
+): DiffFileStatus {
+  if (/^deleted file/m.test(section) || /^\+\+\+ \/dev\/null/m.test(section)) {
+    return "deleted";
+  }
+  if (/^new file/m.test(section) || /^--- \/dev\/null/m.test(section)) {
+    return "added";
+  }
+  if (/^rename from /m.test(section) || oldPath !== newPath) return "renamed";
+  return "modified";
 }
 
 // ─────────────────────────────────────────────────────────────
