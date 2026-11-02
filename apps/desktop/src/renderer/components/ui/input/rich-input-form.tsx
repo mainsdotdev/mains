@@ -12,7 +12,7 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { markdownComponents } from "@/components/markdown-components";
-import { Box, FileIconComponent } from "@/components/ui/icons";
+import { Box, Close, FileIconComponent } from "@/components/ui/icons";
 import { applySignedSrc } from "@/lib/local-image-url";
 import { useIsMobile, isWeb } from "@/lib/platform";
 import Text from "../text";
@@ -113,6 +113,14 @@ const FILE_PATH_ATTR = "data-file-path";
 const CODE_CHIP_ATTR = "data-code-chip";
 const CODE_KEY_ATTR = "data-code-key";
 const CHIP_KEY_SEP = "";
+const CHIP_LABEL_ATTR = "data-chip-label";
+const CHIP_CLICKABLE_ATTR = "data-chip-clickable";
+const CHIP_REMOVE_ATTR = "data-chip-remove";
+const MENTION_CHIP_SELECTOR = `[${CHIP_ATTR}], [${FILE_CHIP_ATTR}], [${CODE_CHIP_ATTR}]`;
+
+const chipRemoveMarkup = renderToStaticMarkup(
+  <Close aria-hidden="true" className="pointer-events-none size-3.5" />,
+);
 
 const composerMarkdownComponents: Components = {
   ...markdownComponents,
@@ -222,6 +230,38 @@ function removeRendererWhitespace(fragment: DocumentFragment) {
   }
 }
 
+function createChipIconSlot(label: string): { iconSlot: HTMLSpanElement; glyph: HTMLSpanElement } {
+  const iconSlot = document.createElement("span");
+  iconSlot.className = "relative inline-flex size-3.5 shrink-0 items-center justify-center";
+
+  const glyph = document.createElement("span");
+  glyph.setAttribute("aria-hidden", "true");
+  glyph.className =
+    "inline-flex size-full items-center justify-center overflow-hidden rounded-sm transition-opacity group-hover/chip:opacity-0 [@media(hover:none)]:opacity-0";
+  iconSlot.appendChild(glyph);
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.tabIndex = -1;
+  remove.draggable = false;
+  remove.setAttribute(CHIP_REMOVE_ATTR, "true");
+  remove.setAttribute("aria-label", `Remove ${label}`);
+  remove.className =
+    "absolute inset-0 inline-flex cursor-pointer items-center justify-center rounded-sm text-current opacity-0 pointer-events-none transition-opacity group-hover/chip:opacity-100 group-hover/chip:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto";
+  remove.innerHTML = chipRemoveMarkup;
+  iconSlot.appendChild(remove);
+
+  return { iconSlot, glyph };
+}
+
+function appendChipLabel(chip: HTMLElement, labelText: string) {
+  const label = document.createElement("span");
+  label.setAttribute(CHIP_LABEL_ATTR, "true");
+  label.className = "leading-none";
+  label.textContent = labelText;
+  chip.appendChild(label);
+}
+
 function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   const chip = document.createElement("span");
   chip.setAttribute(CHIP_ATTR, "true");
@@ -231,18 +271,16 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   // Fixed height + leading-none + align-middle so the line box height stays constant
   // regardless of whether the chip carries an icon — keeps the caret height consistent.
   chip.className =
-    "inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none " +
+    "group/chip inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline " +
     " cursor-default";
   if (skill.brandColor) {
     chip.style.color = `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))`;
   }
 
+  const labelText = skill.displayName || skill.name;
   // Icon slot is always present (even as an empty 14×14 spacer) so chip width/height stay stable.
-  const iconSlot = document.createElement("span");
-  iconSlot.className =
-    "inline-flex items-center justify-center size-3.5 shrink-0 rounded-sm overflow-hidden";
-
+  const { iconSlot, glyph } = createChipIconSlot(labelText);
   const iconPath = skill.iconLarge || skill.iconSmall;
   if (iconPath) {
     const img = document.createElement("img");
@@ -254,20 +292,15 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
     img.draggable = false;
     img.onerror = () => {
       // Swap to the Sparkles placeholder so a missing asset doesn't render a broken-image glyph.
-      img.remove();
-      iconSlot.innerHTML = sparklesIconMarkup;
+      glyph.innerHTML = sparklesIconMarkup;
     };
-    iconSlot.appendChild(img);
+    glyph.appendChild(img);
     applySignedSrc(img, iconPath);
   } else {
-    iconSlot.innerHTML = sparklesIconMarkup;
+    glyph.innerHTML = sparklesIconMarkup;
   }
   chip.appendChild(iconSlot);
-
-  const label = document.createElement("span");
-  label.className = "leading-none";
-  label.textContent = skill.displayName || skill.name;
-  chip.appendChild(label);
+  appendChipLabel(chip, labelText);
 
   if (skill.clickable) makeChipLink(chip);
 
@@ -275,10 +308,13 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
 }
 
 function makeChipLink(chip: HTMLSpanElement) {
-  chip.setAttribute("role", "link");
-  chip.tabIndex = 0;
+  const label = chip.querySelector(`[${CHIP_LABEL_ATTR}]`);
+  const link = label instanceof HTMLElement ? label : chip;
+  link.setAttribute("role", "link");
+  link.tabIndex = 0;
+  chip.setAttribute(CHIP_CLICKABLE_ATTR, "true");
   chip.classList.replace("cursor-default", "cursor-pointer");
-  chip.classList.add("focus-visible:outline", "focus-visible:outline-accent");
+  link.classList.add("rounded-sm", "focus-visible:outline", "focus-visible:outline-accent");
 }
 
 const fileIconMarkupCache = new Map<string, string>();
@@ -308,18 +344,13 @@ function buildFileChip(file: RichFileChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = file.path;
   chip.className =
-    "inline-flex align-middle items-center gap-1 h-6 mx-0.5 text-accent hover:decoration-dotted hover:underline rounded-lg text-s font-medium leading-none select-none " +
+    "group/chip inline-flex align-middle items-center gap-1 h-6 mx-0.5 text-accent hover:decoration-dotted hover:underline rounded-lg text-s font-medium leading-none select-none " +
     "  cursor-default";
 
-  const iconSlot = document.createElement("span");
-  iconSlot.className = "inline-flex items-center justify-center size-3.5 shrink-0";
-  iconSlot.innerHTML = getFileIconMarkup(file.basename, file.isDirectory);
+  const { iconSlot, glyph } = createChipIconSlot(file.basename);
+  glyph.innerHTML = getFileIconMarkup(file.basename, file.isDirectory);
   chip.appendChild(iconSlot);
-
-  const label = document.createElement("span");
-  label.className = "leading-none";
-  label.textContent = file.basename;
-  chip.appendChild(label);
+  appendChipLabel(chip, file.basename);
 
   if (file.clickable && !file.isDirectory) makeChipLink(chip);
 
@@ -334,18 +365,13 @@ function buildCodeChip(code: RichCodeChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = code.key;
   chip.className =
-    "inline-flex align-middle items-center gap-1  mb-0.5 h-6 mx-0.5 text-accent hover:underline rounded-lg text-s font-medium leading-none select-none " +
+    "group/chip inline-flex align-middle items-center gap-1  mb-0.5 h-6 mx-0.5 text-accent hover:underline rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline cursor-default";
 
-  const iconSlot = document.createElement("span");
-  iconSlot.className = "inline-flex items-center justify-center size-3.5 shrink-0";
-  iconSlot.innerHTML = getFileIconMarkup(code.fileName);
+  const { iconSlot, glyph } = createChipIconSlot(code.label);
+  glyph.innerHTML = getFileIconMarkup(code.fileName);
   chip.appendChild(iconSlot);
-
-  const label = document.createElement("span");
-  label.className = "leading-none";
-  label.textContent = code.label;
-  chip.appendChild(label);
+  appendChipLabel(chip, code.label);
 
   if (code.filePath) makeChipLink(chip);
 
@@ -812,6 +838,55 @@ function collectCodeChipKeys(root: HTMLElement): string[] {
   return keys;
 }
 
+function childIndex(node: Node): number {
+  const parent = node.parentNode;
+  if (!parent) return 0;
+  return Array.prototype.indexOf.call(parent.childNodes, node);
+}
+
+function asText(node: Node | null): Text | null {
+  return node?.nodeType === Node.TEXT_NODE ? (node as Text) : null;
+}
+
+/** Drop the chip and one neighboring separator space, then leave the caret where it stood. */
+function removeMentionChip(chip: HTMLElement, root: HTMLElement) {
+  const parent = chip.parentNode;
+  if (!parent) return;
+  const next = chip.nextSibling;
+  const previous = chip.previousSibling;
+  chip.remove();
+
+  const nextText = asText(next);
+  const previousText = asText(previous);
+  if (nextText?.isConnected && nextText.data.startsWith(" ")) {
+    nextText.deleteData(0, 1);
+  } else if (previousText?.isConnected && previousText.data.endsWith(" ")) {
+    previousText.deleteData(previousText.data.length - 1, 1);
+  }
+
+  root.focus();
+  const range = document.createRange();
+  if (nextText?.isConnected) {
+    range.setStart(nextText, 0);
+  } else if (next?.parentNode) {
+    range.setStart(next.parentNode, childIndex(next));
+  } else if (previousText?.isConnected) {
+    range.setStart(previousText, previousText.data.length);
+  } else if (previous?.parentNode) {
+    range.setStart(previous.parentNode, childIndex(previous) + 1);
+  } else if (parent.isConnected) {
+    range.setStart(parent, parent.childNodes.length);
+  } else {
+    placeCaretAtEnd(root);
+    return;
+  }
+  range.collapse(true);
+  const selection = window.getSelection();
+  if (!selection) return;
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>(
   function RichInputForm(
     {
@@ -1011,10 +1086,24 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       [fireChange],
     );
 
+    const removeChip = useCallback((target: EventTarget | null): boolean => {
+      if (disabled) return false;
+      if (!(target instanceof Element)) return false;
+      const button = target.closest<HTMLElement>(`[${CHIP_REMOVE_ATTR}]`);
+      const root = editorRef.current;
+      if (!button || !root?.contains(button)) return false;
+      const chip = button.closest<HTMLElement>(MENTION_CHIP_SELECTOR);
+      if (!chip) return false;
+      removeMentionChip(chip, root);
+      fireChange();
+      return true;
+    }, [disabled, fireChange]);
+
     const activateChip = useCallback((target: EventTarget | null): boolean => {
       if (!(target instanceof Element)) return false;
-      const chip = target.closest<HTMLElement>(`[${CHIP_ATTR}], [${FILE_CHIP_ATTR}], [${CODE_CHIP_ATTR}]`);
-      if (!chip || !editorRef.current?.contains(chip) || chip.getAttribute("role") !== "link") return false;
+      if (target.closest(`[${CHIP_REMOVE_ATTR}]`)) return false;
+      const chip = target.closest<HTMLElement>(MENTION_CHIP_SELECTOR);
+      if (!chip || !editorRef.current?.contains(chip) || chip.getAttribute(CHIP_CLICKABLE_ATTR) !== "true") return false;
       const name = chip.getAttribute(CHIP_NAME_ATTR);
       const path = chip.getAttribute(FILE_PATH_ATTR);
       if (name && onSkillChipClick) {
@@ -1099,7 +1188,19 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           contentEditable={!disabled}
           suppressContentEditableWarning
           onInput={fireChange}
+          onPointerDown={(e) => {
+            if (e.button !== 0 || e.pointerType === "touch") return;
+            if (!(e.target instanceof Element) || !e.target.closest(`[${CHIP_REMOVE_ATTR}]`)) return;
+            // Keep the editor focused so the caret can land where the chip was.
+            e.preventDefault();
+            e.stopPropagation();
+          }}
           onClick={(e) => {
+            if (removeChip(e.target)) {
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
             if (activateChip(e.target)) {
               e.preventDefault();
               e.stopPropagation();
