@@ -6,9 +6,14 @@ import {
   type ConversationSettings,
 } from "@mains/contracts/run-settings";
 import type { UpdateRunSettingsPayload } from "@mains/contracts/runs";
-import { parseEffortLevels, parseServiceTiers, pickDefaultEffort, runSettingsFromConfig } from "./models";
+import { isEffortCoupled, parseEffortLevels, parseServiceTiers, pickDefaultEffort, runSettingsFromConfig } from "./models";
 
-export type ComposerSettingsPatch = UpdateRunSettingsPayload & { model?: string; serviceTier?: string };
+export type ComposerSettingsPatch = UpdateRunSettingsPayload & {
+  model?: string;
+  serviceTier?: string;
+  /** Claude models with no effort levels. An effort patch still owns thinking when both are set. */
+  thinkingMode?: boolean;
+};
 
 /** A deliberate model selection must carry compatible effort and speed together. */
 export function modelSelectionPatch(providerId: string, settings: ConversationSettings, model: {
@@ -99,6 +104,13 @@ export function patchConversationSettings(providerId: string, settings: Conversa
       config.effortLevel = level;
       config.thinkingMode = !!level;
       config.ultracode = false;
+    }
+  } else if (patch.thinkingMode !== undefined) {
+    config.thinkingMode = patch.thinkingMode;
+    if (!patch.thinkingMode) {
+      config.ultracode = false;
+      if (isEffortCoupled(providerId)) config.modelReasoningEffort = "";
+      else config.effortLevel = "";
     }
   }
   if (patch.permissionMode !== undefined) {

@@ -173,6 +173,115 @@ export function pickDefaultEffort(supported: readonly string[] | undefined, pref
   return best ?? supported[supported.length - 1];
 }
 
+/** How many models the sheet shows before "Show more". */
+export const MODEL_PICKER_PREVIEW = 5;
+
+/**
+ * The catalogue slice that fits above the effort control. The selected model
+ * stays in that slice even when it sorts later, so collapsing the list never
+ * hides the checkmark.
+ */
+export function previewModels<T extends { id: string }>(
+  models: readonly T[],
+  selectedId: string | undefined,
+  expanded: boolean,
+): { visible: readonly T[]; hiddenCount: number; canFold: boolean } {
+  const canFold = models.length > MODEL_PICKER_PREVIEW;
+  if (expanded || !canFold) return { visible: models, hiddenCount: 0, canFold };
+  const hiddenCount = models.length - MODEL_PICKER_PREVIEW;
+  const selectedIndex = selectedId === undefined ? -1 : models.findIndex((model) => model.id === selectedId);
+  if (selectedIndex < MODEL_PICKER_PREVIEW) {
+    return { visible: models.slice(0, MODEL_PICKER_PREVIEW), hiddenCount, canFold };
+  }
+  const selected = models[selectedIndex];
+  const others = models.filter((model) => model.id !== selected.id).slice(0, MODEL_PICKER_PREVIEW - 1);
+  return { visible: [selected, ...others], hiddenCount, canFold };
+}
+
+/** A stepped slider stops being finger-sized past this many stops. */
+const EFFORT_SLIDER_STOP_LIMIT = 6;
+
+/**
+ * What the model sheet draws under the catalogue.
+ * `thinking` is Claude with no advertised levels. `toggle` is a single level
+ * plus Off. `slider` is a short ranked scale. `list` is that scale once it
+ * no longer fits a thumb. `hidden` means there is nothing to choose.
+ */
+export type EffortControl =
+  | { kind: "hidden" }
+  | { kind: "thinking"; on: boolean }
+  | { kind: "toggle"; on: boolean; level: string }
+  | { kind: "slider"; stops: readonly string[] }
+  | { kind: "list"; options: readonly string[] };
+
+/** Known levels in rank order, then any catalogue-only ids (Codex's `ultra`). Ultracode is never a stop. */
+export function orderEffortLevels(levels: readonly string[]): string[] {
+  const rank = EFFORT_LEVELS as readonly string[];
+  const known = rank.filter((level) => levels.includes(level));
+  const extra: string[] = [];
+  for (const level of levels) {
+    if (!level || level === "ultracode" || known.includes(level) || extra.includes(level)) continue;
+    extra.push(level);
+  }
+  return [...known, ...extra];
+}
+
+export function effortControlFor(
+  providerId: string,
+  supported: readonly string[],
+  effortLevel: string,
+  thinkingMode: boolean,
+): EffortControl {
+  const levels = orderEffortLevels(supported);
+  if (levels.length === 0) {
+    return providerId === "claude_code" ? { kind: "thinking", on: thinkingMode } : { kind: "hidden" };
+  }
+  if (levels.length === 1) {
+    return effortOffAllowed(providerId)
+      ? { kind: "toggle", on: effortLevel === levels[0] || effortLevel === "ultracode", level: levels[0] }
+      : { kind: "hidden" };
+  }
+  const stops = [...(effortOffAllowed(providerId) ? [""] : []), ...levels];
+  if (stops.length > EFFORT_SLIDER_STOP_LIMIT) return { kind: "list", options: stops };
+  return { kind: "slider", stops };
+}
+
+/** Claude keeps Ultracode beside the scale, never as its top stop. */
+export function modelOffersUltracode(providerId: string, supported: readonly string[]): boolean {
+  return providerId === "claude_code" && supported.includes("xhigh");
+}
+
+/** Where the thumb rests. Ultracode parks on Extra High; an unknown stored level uses the nearest ranked stop. */
+export function effortStopIndex(stops: readonly string[], effortLevel: string): number {
+  if (stops.length === 0) return 0;
+  if (effortLevel === "ultracode") {
+    const extraHigh = stops.indexOf("xhigh");
+    return extraHigh >= 0 ? extraHigh : stops.length - 1;
+  }
+  const exact = stops.indexOf(effortLevel);
+  if (exact >= 0) return exact;
+  const nearest = stops.indexOf(pickDefaultEffort(stops.filter((stop) => stop.length > 0), effortLevel));
+  return nearest >= 0 ? nearest : 0;
+}
+
+/** The composer's short effort text. Thinking that is off stays blank, matching the desktop model button. */
+export function effortChoiceLabel(control: EffortControl, effortLevel: string): string | null {
+  switch (control.kind) {
+    case "hidden":
+      return null;
+    case "thinking":
+      return control.on ? "On" : null;
+    case "toggle":
+    case "slider":
+    case "list":
+      return formatEffortLevel(effortLevel);
+    default: {
+      const unreachable: never = control;
+      return unreachable;
+    }
+  }
+}
+
 /**
  * The name the desktop prints for a model: Cursor's ids are spelled out, the
  * rest show their display name. Older Claude catalogues carry a fuller name in

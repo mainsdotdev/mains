@@ -9,7 +9,8 @@ import { useRunSettings } from "./use-run-settings";
 
 import {
   dedupeModelsByPrettyName,
-  formatEffortLevel,
+  effortChoiceLabel,
+  effortControlFor,
   modelPrettyName,
   parseEffortLevels,
   parseServiceTiers,
@@ -50,7 +51,12 @@ export function useModelSelection(backendId: string, providerId: string, runId?:
     } : null);
   const settings = runSettingsFromConfig(providerId, conversation.settings.config as Record<string, unknown>);
   const effortLevel = settings.effortLevel;
+  const thinkingMode = settings.thinkingMode;
   const supportedLevels = parseEffortLevels(selected?.effortLevels);
+  const effortLabel = effortChoiceLabel(
+    effortControlFor(providerId, supportedLevels, effortLevel, thinkingMode),
+    effortLevel,
+  );
   const permissionMode = settings.permissionMode;
   const serviceTiers = parseServiceTiers(selected?.serviceTiersJson).filter((tier) => tier.id !== "default");
   const storedTier = conversation.settings.config.serviceTier ?? "";
@@ -66,8 +72,9 @@ export function useModelSelection(backendId: string, providerId: string, runId?:
     selected,
     label: selected ? modelPrettyName(selected, providerId) : null,
     effortLevel,
-    /** Null when the selected model has no effort levels — nothing to show. */
-    effortLabel: supportedLevels.length > 0 || effortLevel ? formatEffortLevel(effortLevel) : null,
+    thinkingMode,
+    /** Null when this model has nothing to choose, or its thinking switch is off. */
+    effortLabel,
     supportedLevels,
     permissionMode,
     permissionLabel,
