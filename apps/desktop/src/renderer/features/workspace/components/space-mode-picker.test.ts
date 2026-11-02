@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from "react";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyboardShortcutsProvider } from "@/providers/keyboard-shortcuts-provider";
@@ -22,9 +22,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function radios() {
+  return ["Code", "Work", "Chat"].map((name) => screen.getByRole("radio", { name }));
+}
+
 describe("SpaceModePicker", () => {
-  it("shows all three modes, descriptions, shortcuts, and the active fill", async () => {
-    const user = userEvent.setup();
+  it("shows three modes and writes the label only on the selected one", () => {
     render(
       createElement(SpaceModePicker, {
         value: "work",
@@ -32,27 +35,18 @@ describe("SpaceModePicker", () => {
       }),
     );
 
-    const trigger = screen.getByRole("button", { name: "Current mode: Work" });
-    expect(screen.queryByRole("menu", { name: "Choose mode" })).toBeNull();
-
-    await user.click(trigger);
-
-    const menu = screen.getByRole("menu", { name: "Choose mode" });
-    const choices = within(menu).getAllByRole("menuitemradio");
-    expect(choices.map((choice) => choice.textContent)).toEqual([
-      "CodeShape and ship your codebase⌘ 1",
-      "WorkTurn tasks into finished work⌘ 2",
-      "ChatThink, explore, and get answers⌘ 3",
-    ]);
-    expect(choices.map((choice) => choice.getAttribute("aria-checked"))).toEqual([
-      "false",
-      "true",
-      "false",
-    ]);
-    expect(document.activeElement).toBe(choices[1]);
+    const [code, work, chat] = radios();
+    expect(code.getAttribute("aria-checked")).toBe("false");
+    expect(work.getAttribute("aria-checked")).toBe("true");
+    expect(chat.getAttribute("aria-checked")).toBe("false");
+    expect(code.querySelector("[data-mode-label]")?.getAttribute("data-open")).toBe("false");
+    expect(work.querySelector("[data-mode-label]")?.getAttribute("data-open")).toBe("true");
+    expect(chat.querySelector("[data-mode-label]")?.getAttribute("data-open")).toBe("false");
+    expect(work.querySelector("[data-mode-label]")?.textContent?.trim()).toBe("Work");
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("becomes a label for a provider that drives one experience", async () => {
+  it("becomes a label for a provider that drives one experience", () => {
     // Copilot and Cursor are Developer-only for now. A list of one is not a
     // choice, so the pill stays to say which experience is running and stops
     // being a control.
@@ -65,22 +59,7 @@ describe("SpaceModePicker", () => {
     );
 
     expect(screen.getByText("Code")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Current mode/ })).toBeNull();
-  });
-
-  it("keeps the product and mode labels in one sidebar trigger", () => {
-    render(
-      createElement(SpaceModePicker, {
-        value: "developer",
-        prefixLabel: "Mains",
-        appearance: "sidebar",
-        onChange: vi.fn(),
-      }),
-    );
-
-    expect(
-      screen.getByRole("button", { name: "Current mode: Code" }).textContent,
-    ).toBe("MainsCode");
+    expect(screen.queryByRole("radio")).toBeNull();
   });
 
   it("ignores the shortcut for a mode the provider does not drive", () => {
@@ -102,7 +81,7 @@ describe("SpaceModePicker", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("changes mode and closes the chooser", async () => {
+  it("changes mode from the icon that was not selected", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(
@@ -116,11 +95,9 @@ describe("SpaceModePicker", () => {
       ),
     );
 
-    await user.click(screen.getByRole("button", { name: "Current mode: Work" }));
-    await user.click(screen.getByRole("menuitemradio", { name: "Chat" }));
+    await user.click(screen.getByRole("radio", { name: "Chat" }));
 
     expect(onChange).toHaveBeenCalledExactlyOnceWith("chat");
-    expect(screen.queryByRole("menu", { name: "Choose mode" })).toBeNull();
   });
 
   it("keeps the active mode selectable without firing a redundant change", async () => {
@@ -133,11 +110,9 @@ describe("SpaceModePicker", () => {
       }),
     );
 
-    await user.click(screen.getByRole("button", { name: "Current mode: Work" }));
-    await user.click(screen.getByRole("menuitemradio", { name: "Work" }));
+    await user.click(screen.getByRole("radio", { name: "Work" }));
 
     expect(onChange).not.toHaveBeenCalled();
-    expect(screen.queryByRole("menu", { name: "Choose mode" })).toBeNull();
   });
 
   it("switches modes with Command+1/2/3", () => {
@@ -156,20 +131,5 @@ describe("SpaceModePicker", () => {
     fireEvent.keyDown(window, { key: "3", code: "Digit3", metaKey: true });
 
     expect(onChange).toHaveBeenCalledExactlyOnceWith("chat");
-  });
-
-  it("dismisses the dropdown with Escape", async () => {
-    const user = userEvent.setup();
-    render(
-      createElement(SpaceModePicker, {
-        value: "chat",
-        onChange: vi.fn(),
-      }),
-    );
-
-    await user.click(screen.getByRole("button", { name: "Current mode: Chat" }));
-    fireEvent.keyDown(document, { key: "Escape" });
-
-    expect(screen.queryByRole("menu", { name: "Choose mode" })).toBeNull();
   });
 });

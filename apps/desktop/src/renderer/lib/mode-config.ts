@@ -44,7 +44,7 @@ export interface ModeConfigDescriptor {
   mode: ModeId;
   /** Human-facing name for the mode picker. */
   label: string;
-  /** Supporting copy shown under the mode name in the picker menu. */
+  /** Supporting copy: the switcher's tooltip, and the command menu subtitle. */
   description: string;
   sidebar: ModeSidebarConfig;
   /**

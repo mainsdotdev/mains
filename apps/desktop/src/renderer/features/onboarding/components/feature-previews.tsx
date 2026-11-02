@@ -12,6 +12,7 @@ import {
 import { PanelItem } from "@/features/workspace/components/session-panel/panel-item";
 import { ShinePlaceholder } from "@/features/workspace/components/session-panel/git-actions/controls";
 import { MODE_CONFIGS } from "@/lib/mode-config";
+import { MODE_ICONS } from "@/lib/mode-icons";
 import type { ModeId } from "@mains/contracts/modes";
 import { cn } from "@/lib/cn";
 import { AsciiSpinner, Text } from "@/components/ui";
@@ -323,65 +324,47 @@ export function ComposerPreview({
   );
 }
 
-export interface ModesPreviewItem {
-  mode: ModeId;
-  shortcut: string;
-}
-
 /**
- * The sidebar mode picker, drawn open: the `Mains <mode>` trigger with the
- * menu below it. Mirrors `space-mode-picker.tsx`'s `sidebar` appearance —
- * same trigger, same label + description + shortcut row, same surfaces — as a
- * still picture. Labels and descriptions come from `MODE_CONFIGS`, so the
- * copy can't drift from the real menu. The real menu is a `DropdownMenuItem`
- * per row, which is always a button; the rows here repeat its classes instead.
- *
- * The first item is the one selected at rest. On hover the selection steps
- * through the menu and the trigger's label rolls along with it — both run the
- * same loop, so they stay in step.
+ * The sidebar mode switcher, drawn as a picture. Mirrors
+ * `space-mode-picker.tsx`: three icons, and only the current one wears its
+ * label. Labels come from `MODE_CONFIGS`. On hover the selection steps through
+ * Code, Work, and Chat; at rest, and with reduced motion, Code is selected.
  */
-export function ModesPreview({
-  prefixLabel,
-  items,
-}: {
-  prefixLabel: string;
-  items: ModesPreviewItem[];
-}) {
+export function ModesPreview({ modes }: { modes: ModeId[] }) {
   return (
-    <div aria-hidden className="w-65 origin-top scale-90 select-none">
-      <span className="flex h-8 w-fit items-center gap-1.5 rounded-xl bg-primary/80 px-2 text-base font-medium text-primary-800 dark:bg-primary/5 dark:text-primary-200">
-        <span className="shrink-0 font-semibold tracking-tight">{prefixLabel}</span>
-        <span className="h-lh overflow-hidden font-normal tracking-tight">
+    <div aria-hidden className="origin-top scale-90 select-none">
+      <span className="inline-grid">
+        {modes.map((selected, index) => (
           <span
-            className={cn("preview-motion flex flex-col", `preview-cycle-${items.length}`)}
-            style={stepStyle("y", `${-100 / items.length}%`)}
+            key={selected}
+            className={cn(
+              "col-start-1 row-start-1 flex w-max items-center gap-1",
+              modes.length === 3 && "preview-motion preview-swap-3",
+              index > 0 && "opacity-0",
+            )}
+            style={{ animationDelay: slotDelay(index, 3, SWAP_DURATION) }}
           >
-            {items.map((item) => (
-              <span key={item.mode}>{MODE_CONFIGS[item.mode].label}</span>
-            ))}
+            {modes.map((mode) => {
+              const Icon = MODE_ICONS[mode];
+              const on = mode === selected;
+              return (
+                <span
+                  key={mode}
+                  className={cn(
+                    "flex h-8 items-center rounded-full",
+                    on
+                      ? "gap-1.5 bg-primary-200/90 px-2.5 text-s font-medium tracking-tight text-primary-900 dark:bg-primary-800/80 dark:text-primary-50"
+                      : "size-8 justify-center text-primary-500 dark:text-primary-400",
+                  )}
+                >
+                  <Icon className="size-4 shrink-0" />
+                  {on ? MODE_CONFIGS[mode].label : null}
+                </span>
+              );
+            })}
           </span>
-        </span>
-        <ArrowUp className="size-3.5 shrink-0 rotate-180 text-primary-500 dark:text-primary-400" />
+        ))}
       </span>
-      <div className="mt-1.5 overflow-hidden rounded-2xl p-1.5 glass-input">
-        <CyclingRows gap="0.125rem" selectionClassName="rounded-xl bg-primary-200/40 dark:bg-primary/5">
-          {items.map((item) => (
-            <div key={item.mode} className="flex items-center gap-4 rounded-xl px-3 py-1.5">
-              <span className="min-w-0 flex-1">
-                <span className="block text-s font-medium text-primary-950 dark:text-primary-50">
-                  {MODE_CONFIGS[item.mode].label}
-                </span>
-                <span className="mt-0.5 block truncate text-xs text-primary-500 dark:text-primary-400">
-                  {MODE_CONFIGS[item.mode].description}
-                </span>
-              </span>
-              <span className="shrink-0 text-xs text-primary-500 dark:text-primary-400">
-                {item.shortcut}
-              </span>
-            </div>
-          ))}
-        </CyclingRows>
-      </div>
     </div>
   );
 }
