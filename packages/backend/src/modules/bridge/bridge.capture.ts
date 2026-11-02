@@ -113,7 +113,11 @@ export function installBridgeCapture(sqlite: SQLiteInstance): void {
         BEGIN SELECT RAISE(ABORT,'A deleted Bridge identity cannot be reused'); END;`);
       for (const [register, columns] of Object.entries(def.registers)) {
         for (const event of ["INSERT", "UPDATE"]) {
-          const changed = event === "UPDATE" ? ` AND (${columns.map((col) => `OLD.${quote(col)} IS NOT NEW.${quote(col)}`).join(" OR ")}${table === "run_attachments" ? ` OR NOT EXISTS(SELECT 1 FROM bridge_row_clock WHERE table_name='run_attachments' AND pk=NEW.id)` : ""})` : "";
+          // A prefix delete nulls parent pointers locally. That is not a new revision, and other
+          // backends reject any rewrite of a published one. The tombstone is what they apply.
+          const watched = table === "atlas_page_revisions"
+            ? columns.filter((col) => col !== "parent_revision_id" && col !== "merged_revision_id") : columns;
+          const changed = event === "UPDATE" ? ` AND (${watched.map((col) => `OLD.${quote(col)} IS NOT NEW.${quote(col)}`).join(" OR ")}${table === "run_attachments" ? ` OR NOT EXISTS(SELECT 1 FROM bridge_row_clock WHERE table_name='run_attachments' AND pk=NEW.id)` : ""})` : "";
           sqlite.exec(`DROP TRIGGER IF EXISTS ${quote(`bridge_${table}_${register}_${event.toLowerCase()}`)};
             CREATE TRIGGER ${quote(`bridge_${table}_${register}_${event.toLowerCase()}`)} AFTER ${event} ON ${quote(table)}
             WHEN ${eligibleSql(table, "NEW")}${changed}

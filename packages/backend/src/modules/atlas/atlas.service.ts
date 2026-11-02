@@ -13,7 +13,7 @@ import { bridgeService } from "../bridge";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { atlasRepo, type AtlasRecord, type RevisionRecord } from "./atlas.repo";
 import { pageContent } from "./atlas.blocks";
-import { continuesSession, historyCheckpoints } from "./atlas.history";
+import { continuesSession, historyCheckpoints, historyPrefix } from "./atlas.history";
 import { metadataPatch, readMetadata } from "./atlas.metadata";
 import { ATLAS_COVER_SOURCE_PREFIX, coverPreset, isCoverId } from "@mains/contracts/atlas-covers";
 import { readCoverPreset } from "./atlas.covers";
@@ -76,14 +76,21 @@ function pageFor(item: AtlasRecord): AtlasPage {
     .map((row) => { const { blocks: _blocks, markdown: _markdown, ...summary } = revision(row); return summary; }) };
 }
 /**
- * Keep only what history shows. Replicated Pages are skipped inside the repo: their revisions are frozen
- * because other backends may build on them. Best effort, since a failed cleanup must never fail a save.
+ * Keep what history can still show. A replicated Page can only lose the prefix older than the newest
+ * sessions: those rows are already published, so survivors are not rewired. A local Page also drops the
+ * autosaves hidden inside a session and points each survivor at its nearest surviving ancestor.
+ * Best effort, since a failed cleanup must never fail a save.
  */
 function pruneHistory(item: AtlasRecord) {
   try {
-    if (item.kind !== "page" || !item.currentRevisionId || atlasRepo.anyReplicated(item.id)) return;
+    if (item.kind !== "page" || !item.currentRevisionId) return;
     const rows = atlasRepo.revisions(item.id, -1);
     const pinned = new Set([item.currentRevisionId, ...atlasRepo.conflicts(item.id, item.currentRevisionId).map((row) => row.id)]);
+    if (atlasRepo.anyReplicated(item.id)) {
+      const drop = historyPrefix(rows, pinned).map((row) => row.id);
+      if (drop.length) atlasRepo.prune(item.id, drop, []);
+      return;
+    }
     const kept = new Set(historyCheckpoints(rows, pinned).map((row) => row.id));
     const drop = rows.filter((row) => !kept.has(row.id)).map((row) => row.id);
     if (!drop.length) return;

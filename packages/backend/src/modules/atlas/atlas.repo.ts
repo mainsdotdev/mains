@@ -156,31 +156,41 @@ export const atlasRepo = {
             eq(atlasItems.version, create ? 0 : expectedVersion), sql`${atlasItems.trashedAt} IS NULL`)).run();
         if (!updated.changes) throw new Error("This page changed elsewhere. Reload the latest version before saving.");
       }
-      // A rewritten head only adds references: a file dropped meanwhile stays protected until the revision goes.
-      if (fileIds.length) db.insert(atlasPageFileRefs)
-        .values([...new Set(fileIds.map((fileId) => {
-          const file = atlasRepo.find(fileId, item.accountId);
-          if (!file || file.kind === "page") throw new Error("Embedded Atlas file unavailable");
-          return file.id;
-        }))].map((fileId) => ({ revisionId, fileId }))).onConflictDoNothing().run();
+      const embedded = [...new Set(fileIds.map((fileId) => {
+        const file = atlasRepo.find(fileId, item.accountId);
+        if (!file || file.kind === "page") throw new Error("Embedded Atlas file unavailable");
+        return file.id;
+      }))];
+      // A rewritten head is the only copy of this session, so its file list matches the page now.
+      // A new revision only adds its own references and leaves earlier revisions untouched.
+      if (rewrite) db.delete(atlasPageFileRefs).where(eq(atlasPageFileRefs.revisionId, revisionId)).run();
+      if (embedded.length) db.insert(atlasPageFileRefs)
+        .values(embedded.map((fileId) => ({ revisionId, fileId }))).onConflictDoNothing().run();
       // A failed presentation write must roll back the revision and version too.
       if (metadata !== undefined) atlasRepo.update(item.id, item.accountId, {}, metadata);
     });
   },
   /**
-   * Delete revisions, first pointing each surviving one at its nearest surviving ancestor. Without that a
-   * survivor whose only children were deleted would read as an unresolved conflict branch.
+   * Delete revisions. A local page is relinked first, so a survivor whose children were removed does not
+   * read as an unresolved conflict. A replicated page only accepts a prefix (`relink` empty): published
+   * rows cannot be rewired, and the database nulls the one parent pointer the prefix was holding.
    */
   prune(itemId: string, drop: string[], relink: { id: string; parentRevisionId: string | null; mergedRevisionId: string | null }[]) {
     const db = getDb();
     db.transaction(() => {
-      // Replicated revisions cannot be changed or removed locally: other backends may build on them.
-      if (atlasRepo.anyReplicated(itemId)) return;
+      if (atlasRepo.anyReplicated(itemId) && relink.length) return;
       for (const { id, ...links } of relink)
         db.update(atlasPageRevisions).set(links).where(and(eq(atlasPageRevisions.id, id), eq(atlasPageRevisions.itemId, itemId))).run();
       for (let start = 0; start < drop.length; start += 500)
         db.delete(atlasPageRevisions).where(and(eq(atlasPageRevisions.itemId, itemId),
           inArray(atlasPageRevisions.id, drop.slice(start, start + 500)))).run();
+      // The first publication of a survivor must not name a parent this delete just removed.
+      // A row that has already been acknowledged is left alone: the receiver drops that parent itself.
+      db.run(sql`UPDATE bridge_row_clock SET values_json=json_set(values_json,
+        '$.parent_revision_id', (SELECT parent_revision_id FROM atlas_page_revisions WHERE id=bridge_row_clock.pk),
+        '$.merged_revision_id', (SELECT merged_revision_id FROM atlas_page_revisions WHERE id=bridge_row_clock.pk))
+        WHERE table_name='atlas_page_revisions' AND register='row' AND dirty=1 AND synced_seq IS NULL
+          AND pk IN (SELECT id FROM atlas_page_revisions WHERE item_id=${itemId})`);
     });
   },
   referenced(id: string) {

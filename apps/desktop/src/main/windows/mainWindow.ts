@@ -116,7 +116,9 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
     },
     ...(process.platform === "darwin" ? {
       titleBarStyle: "hiddenInset" as const,
-      trafficLightPosition: { x: 16, y: 16 },
+      // y is the top of the lights. 18 centers their 14px circles on the
+      // shell header (5px inset + 40px row), in line with the sidebar button.
+      trafficLightPosition: { x: 16, y: 18 },
       transparent: true,
       vibrancy: "fullscreen-ui" as const,
       visualEffectState: "active" as const,

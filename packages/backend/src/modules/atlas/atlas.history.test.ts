@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HISTORY_CHECKPOINTS, SESSION_IDLE_MS, SESSION_MAX_MS, continuesSession, historyCheckpoints } from "./atlas.history";
+import { HISTORY_CHECKPOINTS, SESSION_IDLE_MS, SESSION_MAX_MS, continuesSession, historyCheckpoints, historyPrefix } from "./atlas.history";
 
 const NOW = Date.UTC(2026, 9, 22, 12);
 const minute = 60_000;
@@ -47,6 +47,22 @@ describe("historyCheckpoints", () => {
 
   it("returns nothing for an empty history", () => {
     expect(historyCheckpoints([], none)).toEqual([]);
+  });
+});
+
+describe("historyPrefix", () => {
+  it("drops sessions older than the retained window and keeps autosaves inside it", () => {
+    const recent = [row("head", 0), row("mid", 1), row("older-in-session", 2)];
+    const keptSessions = Array.from({ length: HISTORY_CHECKPOINTS - 1 }, (_, index) => row(`k${index}`, 120 * (index + 1)));
+    const dropped = [row("old", 120 * (HISTORY_CHECKPOINTS + 1)), row("older", 120 * (HISTORY_CHECKPOINTS + 2))];
+    const rows = [...recent, ...keptSessions, ...dropped];
+    expect(ids(historyPrefix(rows, none))).toEqual(["old", "older"]);
+    expect(ids(historyCheckpoints(rows, none))).toEqual(["head", ...keptSessions.map((entry) => entry.id)]);
+  });
+
+  it("keeps a pinned revision that sits beyond the window", () => {
+    const rows = Array.from({ length: HISTORY_CHECKPOINTS + 2 }, (_, index) => row(`s${index}`, index * 120));
+    expect(ids(historyPrefix(rows, new Set(["s11"])))).toEqual(["s10"]);
   });
 });
 
