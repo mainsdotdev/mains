@@ -9,6 +9,7 @@ import {
   DropdownMenuSub,
   Input,
   Text,
+  Tooltip,
 } from "@/components/ui";
 import {
   Archive,
@@ -19,6 +20,7 @@ import {
   Pin,
   PinFilled,
   Trash,
+  Worktree,
 } from "@/components/ui/icons";
 import type { Collection, RecentRun } from "@/lib/redux/api";
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
@@ -27,6 +29,7 @@ import { ProjectIcon } from "./project-icon";
 import { SidebarItemHoverCard } from "./sidebar-item-hover-card";
 import type { BridgeBackendInfo } from "@mains/contracts/bridge";
 import { DeviceBadge } from "@/features/bridge/components/device-badge";
+import { SIDEBAR_PROJECT_CHILD_ROW_CLASS } from "@/lib/sidebar-layout";
 
 /** What the row prints — title, else the goal's first line. */
 export function chatLabel(run: Pick<RecentRun, "title" | "goal">): string {
@@ -41,6 +44,8 @@ export function chatLabel(run: Pick<RecentRun, "title" | "goal">): string {
 }
 
 interface ChatItemProps {
+  inProject?: boolean;
+  workspaceContext?: { branch: string | null; isWorktree: boolean };
   device?: BridgeBackendInfo;
   run: RecentRun;
   variant: AsciiSpinnerVariant;
@@ -55,9 +60,9 @@ interface ChatItemProps {
   onRename: (title: string) => void;
   collections: Collection[];
   onMove: (collectionId: string | null) => void;
-  /** Pinned chats are hoisted into their own group above the projects. */
-  isPinned: boolean;
-  onTogglePin: () => void;
+  /** Pinning is available only for Work and Chat conversations. */
+  isPinned?: boolean;
+  onTogglePin?: () => void;
 }
 
 export function ChatItem({
@@ -72,10 +77,13 @@ export function ChatItem({
   onRename,
   collections,
   onMove,
-  isPinned,
+  isPinned = false,
   onTogglePin,
+  workspaceContext,
+  inProject = false,
 }: ChatItemProps) {
   const isLive = (run.status === "running" || run.status === "queued") && (!run.isReplica || device?.online === true);
+  const canPin = run.mode !== "developer" && !!onTogglePin;
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [menuPosition, setMenuPosition] = useState({
     x: 0,
@@ -130,12 +138,13 @@ export function ChatItem({
       title={label}
       updatedAt={run.updatedAt}
       description={
+        workspaceContext ? workspaceContext.branch ?? undefined :
         collections.find((collection) => collection.id === run.collectionId)
           ?.name ?? getModeConfig(run.mode).label
       }
       disabled={isEditing || isMenuOpen}
       actions={run.isReplica ? [] : [
-        {
+        ...(canPin ? [{
           label: isPinned ? "Unpin chat" : "Pin chat",
           icon: isPinned ? (
             <PinFilled className="size-4" />
@@ -143,8 +152,8 @@ export function ChatItem({
             <Pin className="size-4" />
           ),
           pressed: isPinned,
-          onSelect: onTogglePin,
-        },
+          onSelect: () => onTogglePin?.(),
+        }] : []),
         {
           label: "Rename chat",
           icon: <Edit className="size-4" />,
@@ -176,17 +185,16 @@ export function ChatItem({
             onSelect();
           }
         }}
-        className={`group/chat w-full flex items-center gap-1.5 pl-2.5 pr-2.5 py-1 rounded-[10px] cursor-pointer transition-colors ${
+        className={`group/chat relative w-full flex items-center gap-1.5 ${inProject ? SIDEBAR_PROJECT_CHILD_ROW_CLASS : "px-2.5 py-1"} rounded-[10px] cursor-pointer transition-colors ${
           isActive
             ? "bg-primary/50 glass-outline-soft glass-outline dark:bg-primary/5"
             : "hover:bg-primary/50 dark:hover:bg-primary/5"
         }`}
       >
         {isLive && (
-          // The slot reserves width in the flow; the spinner itself is taken
-          // out of it. A box with no in-flow content cannot set the row's
-          // height, so a live chat and an idle one measure exactly the same.
-          <span className="relative shrink-0 w-3 self-stretch">
+          // Project rows place the spinner in the existing indent so titles
+          // stay aligned. The spinner never contributes to the row's height.
+          <span className={inProject ? "absolute bottom-0 left-2.5 top-0 w-3" : "relative shrink-0 w-3 self-stretch"}>
             <span className="absolute inset-0 flex items-center justify-center">
               <AsciiSpinner variant={variant} kind="circle" />
             </span>
@@ -250,18 +258,23 @@ export function ChatItem({
             </Text>
           )}
         </span>
+        {workspaceContext?.isWorktree && <Tooltip content={`Worktree${workspaceContext.branch ? ` · ${workspaceContext.branch}` : ""}`} position="right">
+          <span role="img" aria-label={`Worktree${workspaceContext.branch ? `: ${workspaceContext.branch}` : ""}`} className="flex shrink-0 items-center text-purple-500 dark:text-purple-400">
+            <Worktree className="size-3.5" aria-hidden="true" />
+          </span>
+        </Tooltip>}
         {run.isReplica && device && <DeviceBadge backend={device} compact />}
         {!run.isReplica && <div
           className={`ml-auto flex items-center gap-1 shrink-0 ${
             isEditing ? "hidden" : ""
           }`}
         >
-          <Button
+          {canPin && <Button
             variant="icon" iconSize="xs"
             tooltip={isPinned ? "Unpin chat" : "Pin chat"}
             onClick={(e) => {
               e.stopPropagation();
-              onTogglePin();
+              onTogglePin?.();
             }}
             className="hidden group-hover/chat:flex"
             aria-label={isPinned ? "Unpin chat" : "Pin chat"}
@@ -274,7 +287,7 @@ export function ChatItem({
             ) : (
               <Pin className="w-3.5 h-3.5" />
             )}
-          </Button>
+          </Button>}
           <Button
             variant="icon" iconSize="xs"
             ref={triggerRef}
@@ -299,16 +312,16 @@ export function ChatItem({
           <Edit className="size-3.5" />
           <span>Rename</span>
         </DropdownMenuItem>
-        <DropdownMenuItem
+        {canPin && <DropdownMenuItem
           onClick={() => {
             setIsMenuOpen(false);
-            onTogglePin();
+            onTogglePin?.();
           }}
         >
           <Pin className="size-3.5" />
           <span>{isPinned ? "Unpin" : "Pin"}</span>
-        </DropdownMenuItem>
-        <DropdownMenuSub
+        </DropdownMenuItem>}
+        {run.mode !== "developer" && <DropdownMenuSub
           label={
             <>
               <OpenWith className="size-3.5" />
@@ -340,7 +353,7 @@ export function ChatItem({
               <span className="truncate">{collection.name}</span>
             </DropdownMenuItem>
           ))}
-        </DropdownMenuSub>
+        </DropdownMenuSub>}
         <DropdownMenuItem
           onClick={() => {
             setIsMenuOpen(false);

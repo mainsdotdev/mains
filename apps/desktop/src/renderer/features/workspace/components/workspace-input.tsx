@@ -137,6 +137,8 @@ interface WorkspaceInputProps {
   onGoalChange: (value: string) => void;
   onSubmit: () => void;
   disabled?: boolean;
+  /** A blocking approval card is covering this composer. Keep the draft, ignore focus. */
+  suspended?: boolean;
   sendDisabled?: boolean;
   allowVoice?: boolean;
   showGoalButton?: boolean;
@@ -185,6 +187,7 @@ export function WorkspaceInput({
   onGoalChange,
   onSubmit,
   disabled = false,
+  suspended = false,
   sendDisabled: externalSendDisabled = false,
   allowVoice = true,
   showGoalButton = true,
@@ -226,10 +229,10 @@ export function WorkspaceInput({
   const voice = useRealtimeVoice();
   const inputRef = useRef<RichInputFormHandle>(null);
   useEffect(() => {
-    if (layout !== "floating" || !floatingAutoFocus) return;
+    if (suspended || layout !== "floating" || !floatingAutoFocus) return;
     const frame = requestAnimationFrame(() => inputRef.current?.focus({ caret: "end" }));
     return () => cancelAnimationFrame(frame);
-  }, [layout, floatingAutoFocus]);
+  }, [suspended, layout, floatingAutoFocus]);
   const unifiedContextDropdownRef = useRef<HTMLDivElement>(null);
   const pluginsButtonRef = useRef<HTMLButtonElement>(null);
   const {
@@ -320,19 +323,19 @@ export function WorkspaceInput({
   useKeyboardShortcut(
     "app.focusComposer",
     () => inputRef.current?.focus(),
-    { allowInEditable: true },
+    { allowInEditable: true, enabled: !suspended },
   );
   const focusComposerShortcut = keyboardShortcutLabel(
     useKeyboardShortcutBinding("app.focusComposer"),
   );
 
   useEffect(() => {
-    if (!isNewRunTabActive) return;
+    if (suspended || !isNewRunTabActive) return;
     const id = requestAnimationFrame(() => {
       inputRef.current?.focus();
     });
     return () => cancelAnimationFrame(id);
-  }, [isNewRunTabActive]);
+  }, [suspended, isNewRunTabActive]);
 
   // Interactive visualizations never submit autonomously. A drill-down action
   // places its proposed follow-up in the composer so the user can review,
@@ -342,6 +345,7 @@ export function WorkspaceInput({
       const detail = (event as CustomEvent<VisualizationFollowUpDetail>).detail;
       if (!detail?.prompt) return;
       onGoalChange(detail.prompt);
+      if (suspended) return;
       requestAnimationFrame(() => inputRef.current?.focus());
     };
     window.addEventListener(
@@ -354,7 +358,7 @@ export function WorkspaceInput({
         handleVisualizationFollowUp,
       );
     };
-  }, [onGoalChange]);
+  }, [onGoalChange, suspended]);
 
   const [unifiedMenu, updateUnifiedMenu] = useReducer(
     (prev: UnifiedMenuState, next: Partial<UnifiedMenuState>) => {
@@ -386,6 +390,7 @@ export function WorkspaceInput({
 
   // Detect @ / context menu when goal is set externally (e.g. quick actions)
   useEffect(() => {
+    if (suspended) return;
     if (/^\/add-dir\s+/.test(goal)) {
       updateUnifiedMenu({ visible: false, filter: "" });
       return;
@@ -401,7 +406,7 @@ export function WorkspaceInput({
       updateUnifiedMenu({ filter: atMatch[1], visible: true, trigger: "@" });
       inputRef.current?.focus();
     }
-  }, [goal]);
+  }, [goal, suspended]);
 
   const handleGoalChange = useCallback(
     (value: string) => {

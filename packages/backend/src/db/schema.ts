@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm/sqlite-core";
 import { PROVIDER_IDS, SUPPORTED_PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { DEFAULT_MODE_ID, MODE_IDS } from "@mains/contracts/modes";
+import { ISSUE_STATUS_CATEGORIES } from "@mains/contracts/issue-status";
 
 /* -----------------------------
    ACCOUNTS / SETTINGS
@@ -1167,6 +1168,23 @@ export const connectionResources = sqliteTable(
   ],
 );
 
+/**
+ * When an incremental fetcher last synced a resource (owned by the `sync`
+ * module). The next run asks the provider only for what changed since then —
+ * closed issues included, which an open-only fetch never sees again.
+ */
+export const syncCursors = sqliteTable(
+  "sync_cursors",
+  {
+    fetcherId: text("fetcher_id").notNull(), // ResourceFetcher.id, e.g. "linear:issues"
+    resourceId: text("resource_id")
+      .notNull()
+      .references(() => connectionResources.id, { onDelete: "cascade" }),
+    syncedAt: integer("synced_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.fetcherId, t.resourceId] })],
+);
+
 /* -----------------------------
    SPACES / CONNECTION STATE
 ------------------------------ */
@@ -1357,6 +1375,50 @@ export const tasks = sqliteTable(
   ],
 );
 
+/**
+ * Mains' own issue statuses (`@mains/contracts/issue-status`). The defaults are
+ * seeded by the migration that created the table. `category` is what the inbox
+ * filters and counts on.
+ */
+export const issueStatuses = sqliteTable("issue_statuses", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  category: text("category", { enum: ISSUE_STATUS_CATEGORIES }).notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+/**
+ * The user's override of how sync maps one provider workflow state onto a
+ * Mains status, per resource (owned by the `sync` module). Without a row, sync
+ * keeps its automatic pick. Applied when issues are written, and re-applied
+ * to existing issues whenever a mapping changes.
+ */
+export const issueStatusMappings = sqliteTable(
+  "issue_status_mappings",
+  {
+    resourceId: text("resource_id")
+      .notNull()
+      .references(() => connectionResources.id, { onDelete: "cascade" }),
+    stateId: text("state_id").notNull(), // issues.state_id
+    statusId: text("status_id")
+      .notNull()
+      .references(() => issueStatuses.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [primaryKey({ columns: [t.resourceId, t.stateId] })],
+);
+
 export const issues = sqliteTable(
   "issues",
   {
@@ -1365,16 +1427,36 @@ export const issues = sqliteTable(
       .references(() => entities.id, { onDelete: "cascade" }),
 
     provider: text("provider").notNull(), // github|linear|jira
-    state: text("state").notNull(), // open|closed|in_progress|...
+    // The provider's own workflow state, as the user named it ("Todo", "Ready
+    // for QA", a Trello list). A display label — never filter on it.
+    state: text("state").notNull(),
+    // The provider's stable id for `state` (Linear state, Jira status, Trello
+    // list, Asana section), which survives the user renaming it.
+    stateId: text("state_id"),
+    // → issue_statuses.id. No FK: SQLite cannot add a NOT NULL column with a
+    // reference to an existing table; sync only writes ids it knows.
+    statusId: text("status_id").notNull().default("todo"),
     number: integer("number"), // github issue no
+    // What the provider shows as the issue's handle: "MAI-200", "PROJ-12",
+    // "#42". Null where there is none (Asana).
+    identifier: text("identifier"),
     repo: text("repo"), // owner/name or project key
     assignee: text("assignee"),
-    labels: text("labels"), // JSON array
+    assigneeAvatarUrl: text("assignee_avatar_url"),
+    labels: text("labels"), // JSON array of names
+    labelColors: text("label_colors"), // JSON object: label name → "#rrggbb"
+    // The provider's grouping above the issue: a Linear project, a GitHub /
+    // GitLab milestone, a Jira epic.
+    groupName: text("group_name"),
+    groupColor: text("group_color"), // "#rrggbb"
+    dueAt: integer("due_at", { mode: "timestamp" }),
     closedAt: integer("closed_at", { mode: "timestamp" }),
+    // Linear's scale for every provider: 0 none, 1 urgent, 2 high, 3 medium, 4 low.
     priority: integer("priority").notNull().default(0),
   },
   (t) => [
     index("idx_issues_provider_state").on(t.provider, t.state),
+    index("idx_issues_status").on(t.statusId),
     index("idx_issues_repo").on(t.repo),
     check(
       "check_issues_labels_json",

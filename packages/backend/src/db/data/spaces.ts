@@ -78,4 +78,18 @@ export const seedSpaces: SeedSpace[] = [
     mode: "developer",
     sortOrder: 3,
   },
+  {
+    id: "opencode",
+    name: "OpenCode",
+    slug: "opencode",
+    icon: "icon:opencode",
+    systemPrompt: "",
+    themeConfig: {
+      lightBackground: "#ffffffb3",
+      darkBackground: "#00000070",
+    },
+    providerId: PROVIDER_IDS.opencode,
+    mode: "developer",
+    sortOrder: 4,
+  },
 ];

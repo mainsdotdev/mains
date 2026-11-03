@@ -32,7 +32,7 @@ import {
 import { getTransport } from "@/lib/transport";
 import { WorkspaceInput } from "@/features/workspace/components/workspace-input";
 import { WorkspaceEvents } from "@/features/workspace/components/workspace-events";
-import { AsyncQuestionDialogProvider, RunInputDialog } from "@/features/workspace/components/tools/async-question-dialog";
+import { AsyncQuestionDialogProvider, ComposerSlot } from "@/features/workspace/components/tools/async-question-dialog";
 import { PluginLogoProvider } from "@/features/workspace/hooks/use-plugin-logos";
 import { useConversationSettings } from "@/features/workspace/hooks/use-conversation-settings";
 import { useWorkspaceRuns } from "@/features/workspace/hooks/use-workspace-runs";
@@ -506,20 +506,12 @@ function ImageComposer({
                 variant="codex"
               />
             </div>
-            {ws.activeRunId && (
-              <div className="mx-auto w-full max-w-210 px-4 pb-3">
-                <RunInputDialog
-                  request={approval}
-                  onRespond={respond}
-                  variant="codex"
-                  maxHeight="30dvh"
-                />
-              </div>
-            )}
             <div className="shrink-0 px-5 pb-4">
               {skillNotice}
               {ws.error && <Text role="alert">{ws.error}</Text>}
-              {composer}
+              <ComposerSlot request={approval} onRespond={respond} variant="codex" maxHeight="30dvh">
+                {composer}
+              </ComposerSlot>
             </div>
           </>
         ) : (

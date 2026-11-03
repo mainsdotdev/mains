@@ -38,7 +38,7 @@ export function providerColor(providerId: string): string {
   const provider = providerDescriptor(providerId);
   // Monochrome brand colors do not make readable chart series in both themes.
   const colors = { claude: "var(--color-claude)", codex: "var(--viz-cat-1)",
-    copilot: "var(--viz-cat-5)", cursor: "var(--viz-cat-3)" };
+    copilot: "var(--viz-cat-5)", cursor: "var(--viz-cat-3)", opencode: "var(--viz-cat-2)" };
   return provider ? colors[provider.variant] : "var(--color-primary-500)";
 }
 

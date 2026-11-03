@@ -1,48 +1,52 @@
-import { useRef, useState } from "react";
-import { Button, DropdownMenu, DropdownMenuItem } from "@/components/ui";
-import { ArrowUp } from "@/components/ui/icons";
-import { MODE_IDS, providerModes, type ModeId } from "../../../../shared/modes";
+import { Button } from "@/components/ui";
+import { MODE_ICONS } from "@/lib/mode-icons";
 import { MODE_CONFIGS } from "@/lib/mode-config";
 import {
   useKeyboardShortcut,
   useKeyboardShortcutBinding,
 } from "@/providers/keyboard-shortcuts-provider";
-import { formatKeyboardShortcut } from "../../../../shared/keyboard-shortcuts";
-
-/**
- * Shape and type shared by the trigger and the static label. The outline is
- * the trigger's alone — an unclickable pill shouldn't wear a control's border.
- */
-const MODE_PILL =
-  "flex h-7 items-center rounded-2xl px-3 text-s font-medium text-primary-900 dark:text-primary-100";
+import { MODE_IDS, providerModes, type ModeId } from "../../../../shared/modes";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface SpaceModePickerProps {
   value: ModeId;
   onChange: (mode: ModeId) => void;
-  /** Optional product label rendered inside the same hover surface. */
-  prefixLabel?: string;
-  /** Sidebar headers use a roomier, borderless trigger than the titlebar pill. */
-  appearance?: "pill" | "sidebar";
   /**
    * The space's provider. Not every agent drives every experience — a provider
-   * with one mode has nothing to pick, so the whole control disappears rather
-   * than offering a list of one. Omitted = unrestricted.
+   * with one mode has nothing to pick, so the control becomes the current
+   * mode's label rather than a row of one. Omitted = unrestricted.
    */
   providerId?: string;
 }
 
+const ICON = "size-4 shrink-0";
+
+const FOCUS = "focus-visible:ring-2 focus-visible:ring-accent/40";
+
+/** Shared shape. Width comes from the label track, so the row slides instead of jumping. */
+const BUTTON =
+  `flex h-8 items-center rounded-full px-2 text-s font-medium tracking-tight transition-[color,background-color,padding] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${FOCUS}`;
+
+/** Selected experience: icon and its name, in one pill. */
+const SELECTED =
+  "bg-primary-200/90 text-primary-900 dark:bg-primary-800/80 dark:text-primary-50";
+
+/** The other experiences stay icon-only until they are the current one. */
+const IDLE =
+  "text-primary-500 hover:bg-primary-200/70 hover:text-primary-800 dark:text-primary-400 dark:hover:bg-primary-800/70 dark:hover:text-primary-100";
+
+/** The name is always mounted; the track collapses so opening and closing ease. */
+const LABEL_TRACK =
+  "grid transition-[grid-template-columns,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none";
+
 /**
- * Dropdown for the active space mode. All three modes remain visible;
- * the current one carries the radio state (so it is what the menu focuses on
- * open, and what a screen reader announces as checked) without a check glyph
- * next to the mode dot. Command+1/2/3 selects Code/Work/Chat.
+ * Code, Work, and Chat as one row. The current mode wears its label; the
+ * others are icons. Command+1/2/3 still selects them.
  */
 export function SpaceModePicker({
   value,
   onChange,
   providerId,
-  prefixLabel,
-  appearance = "pill",
 }: SpaceModePickerProps) {
   // Shortcut numbers stay tied to the full list (⌘1 is always Code), so a
   // narrowed provider skips its keys rather than renumbering the rest.
@@ -55,54 +59,9 @@ export function SpaceModePicker({
     work: workShortcut,
     chat: chatShortcut,
   };
-  const options = MODE_IDS.filter((mode) => available.includes(mode)).map(
-    (mode) => ({
-      mode,
-      shortcutLabel: formatKeyboardShortcut(shortcutByMode[mode]).join(" "),
-    }),
-  );
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [isOpen, setIsOpen] = useState(false);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const label = MODE_CONFIGS[value].label;
-  const triggerClassName =
-    appearance === "sidebar"
-      ? "flex h-8 min-w-0 items-center gap-1.5 rounded-xl px-2 text-base font-medium text-primary-800 hover:bg-primary/50 dark:text-primary-200 dark:hover:bg-primary/5"
-      : `${MODE_PILL} glass-outline`;
-  const staticClassName =
-    appearance === "sidebar"
-      ? "flex h-8 min-w-0 items-center rounded-xl px-2 text-base font-medium text-primary-800 dark:text-primary-200"
-      : MODE_PILL;
-  const pickerLabel = (
-    <>
-      {prefixLabel && (
-        <span className="shrink-0 tracking-tight font-semibold text-primary-800 dark:text-primary-200">
-          {prefixLabel}
-        </span>
-      )}
-      <span
-        className={`truncate tracking-tight ${appearance === "sidebar" ? "font-normal" : "font-medium"}`}
-      >
-        {label}
-      </span>
-    </>
-  );
-
-  const handleTriggerClick = () => {
-    if (isOpen) {
-      setIsOpen(false);
-      return;
-    }
-
-    const rect = triggerRef.current?.getBoundingClientRect();
-    if (rect) {
-      setPosition({ x: rect.left, y: rect.bottom + 6 });
-    }
-    setIsOpen(true);
-  };
+  const options = MODE_IDS.filter((mode) => available.includes(mode));
 
   const handleModeChange = (mode: ModeId) => {
-    setIsOpen(false);
     if (mode !== value) onChange(mode);
   };
 
@@ -119,80 +78,53 @@ export function SpaceModePicker({
     allowInEditable: true,
   });
 
-  // One mode is not a choice — the label stays so the surrounding shell keeps
-  // saying which experience is running without presenting a fake dropdown.
+  const CurrentIcon = MODE_ICONS[value];
+  const currentLabel = MODE_CONFIGS[value].label;
+
+  // One mode is not a choice — the pill stays so the shell still says which
+  // experience is running, without a control that cannot switch.
   if (options.length < 2) {
-    return <span className={`${staticClassName} gap-1.5`}>{pickerLabel}</span>;
+    return (
+      <span className={`${BUTTON} ${SELECTED}`}>
+        <CurrentIcon aria-hidden="true" className={ICON} />
+        <span className="pl-1.5">{currentLabel}</span>
+      </span>
+    );
   }
 
   return (
-    <>
-      <Button
-        ref={triggerRef}
-        aria-label={`Current mode: ${MODE_CONFIGS[value].label}`}
-        aria-haspopup="menu"
-        aria-expanded={isOpen}
-        onMouseDown={(event) => event.stopPropagation()}
-        onClick={handleTriggerClick}
-        className={`${triggerClassName} transition-colors ${
-          isOpen
-            ? "bg-primary/80 dark:bg-primary/5"
-            : appearance === "pill"
-              ? "hover:bg-primary/80 dark:hover:bg-primary/5"
-              : ""
-        }`}
-      >
-        {pickerLabel}
-        {appearance === "sidebar" && (
-          <ArrowUp
-            aria-hidden="true"
-            className="size-3.5 shrink-0 text-primary-500 transition-transform duration-200 dark:text-primary-400 rotate-180"
-          />
-        )}
-      </Button>
-
-      <DropdownMenu
-        isOpen={isOpen}
-        aria-label="Choose mode"
-        position={position}
-        onClose={() => setIsOpen(false)}
-        minWidth={260}
-        origin="top-left"
-        initialFocus="selected"
-        className="glass-input! space-y-0.5"
-      >
-        {options.map(({ mode, shortcutLabel }) => {
-          return (
-            <DropdownMenuItem
-              key={mode}
-              className="gap-4 px-3 py-1.5"
-              selected={mode === value}
-              indicator="none"
-              onClick={() => handleModeChange(mode)}
+    <div role="radiogroup" aria-label="Choose mode" className="flex items-center gap-1">
+      {options.map((mode, index) => {
+        const selected = mode === value;
+        const label = MODE_CONFIGS[mode].label;
+        const Icon = MODE_ICONS[mode];
+        const shortcut = keyboardShortcutLabel(shortcutByMode[mode]);
+        return (
+          <Button
+            key={mode}
+            variant="bare"
+            role="radio"
+            aria-checked={selected}
+            aria-label={label}
+            tooltip={MODE_CONFIGS[mode].description}
+            tooltipShortcut={shortcut || undefined}
+            tooltipPosition={index === 0 ? "bottom-right" : "bottom"}
+            onClick={() => handleModeChange(mode)}
+            className={`${BUTTON} ${selected ? SELECTED : IDLE}`}
+          >
+            <Icon aria-hidden="true" className={ICON} />
+            <span
+              data-mode-label
+              data-open={selected ? "true" : "false"}
+              className={`${LABEL_TRACK} ${selected ? "grid-cols-[1fr] opacity-100" : "grid-cols-[0fr] opacity-0"}`}
             >
-              <span className="min-w-0 flex-1 text-left">
-                <span className="block text-s font-medium text-primary-950 dark:text-primary-50">
-                  {MODE_CONFIGS[mode].label}
-                </span>
-                <span
-                  aria-hidden="true"
-                  className="mt-0.5 block truncate text-xs font-normal text-primary-500 dark:text-primary-400"
-                >
-                  {MODE_CONFIGS[mode].description}
-                </span>
+              <span className="min-w-0 overflow-hidden">
+                <span className="block whitespace-nowrap pl-1.5">{label}</span>
               </span>
-              {shortcutLabel && (
-                <span
-                  aria-hidden="true"
-                  className="shrink-0 text-xs text-primary-500 dark:text-primary-400"
-                >
-                  {shortcutLabel}
-                </span>
-              )}
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenu>
-    </>
+            </span>
+          </Button>
+        );
+      })}
+    </div>
   );
 }

@@ -20,6 +20,7 @@ export interface DetectedClis {
   copilot: boolean;
   codex: boolean;
   cursor: boolean;
+  opencode: boolean;
   claudeSource?: ProviderCliSource;
   copilotSource?: ProviderCliSource;
 }

@@ -5,13 +5,21 @@ import type {
   ResourceFetcher,
   ResourceFetcherArgs,
 } from "../sync.dto";
-import { normalizeLimit, normalizeDateToIso } from "../sync.connection-utils";
+import { collectPages, normalizeLimit, normalizeDateToIso } from "../sync.connection-utils";
+import { statusFromOpenClosed } from "../sync.issue-status";
+import { labelColorMap } from "../sync.issue-display";
 
 const MAX_ITEMS_PER_PAGE = 100;
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────
+/** The issue's labels that carry a color (the API gives plain strings for some). */
+function labelObjects(labels: unknown): Array<{ name?: string | null; color?: string | null }> {
+  if (!Array.isArray(labels)) return [];
+  return labels.filter((l): l is { name?: string; color?: string } => typeof l === "object" && l !== null);
+}
+
 function extractLabels(labels: unknown): string[] {
   if (!Array.isArray(labels)) return [];
   return labels
@@ -38,32 +46,46 @@ export const githubIssuesFetcher: ResourceFetcher = {
   id: "github:issues",
   provider: "github",
   resourceKind: "github_repo",
-  defaultLimit: 50,
+  defaultLimit: 1000,
+  incremental: true,
 
   async fetchForResource({
     resource,
     secrets,
     limit,
     connectionId,
+    since,
   }: ResourceFetcherArgs): Promise<EntityInput[]> {
     const token = requireToken(secrets);
-    if (!token) return [];
+    if (!token) throw new Error("GitHub connection has no token");
 
     const parsed = parseRepoIdentifier(resource.externalId);
-    if (!parsed) return [];
+    if (!parsed) throw new Error(`Not an owner/repo identifier: ${resource.externalId}`);
     const { owner, repo } = parsed;
 
     const octokit = new Octokit({ auth: token });
-    const items = await octokit.issues.listForRepo({
-      owner,
-      repo,
-      state: "open",
-      per_page: normalizeLimit(limit, 1, MAX_ITEMS_PER_PAGE),
+    // Page numbers index fixed-size pages, so the size can't shrink per page.
+    const perPage = normalizeLimit(limit, 1, MAX_ITEMS_PER_PAGE);
+    // `since` filters on update time; with it, closed issues come back too.
+    const items = await collectPages(limit, 1, async (page) => {
+      const response = await octokit.issues.listForRepo({
+        owner,
+        repo,
+        state: since ? "all" : "open",
+        ...(since ? { since: since.toISOString() } : {}),
+        per_page: perPage,
+        page,
+      });
+      return {
+        items: response.data,
+        next: response.data.length < perPage ? null : page + 1,
+      };
     });
 
     const repoId = `${owner}/${repo}`;
 
-    return items.data
+    // The issues endpoint lists pull requests too.
+    return items
       .filter((i) => !i.pull_request)
       .map((i): EntityInput => ({
         kind: "issue",
@@ -79,9 +101,16 @@ export const githubIssuesFetcher: ResourceFetcher = {
           provider: "github",
           number: i.number,
           repo: repoId,
+          identifier: `#${i.number}`,
           labels: extractLabels(i.labels),
+          labelColors: labelColorMap(labelObjects(i.labels)),
           state: i.state,
+          stateId: i.state,
+          statusId: statusFromOpenClosed(i.state, i.state_reason),
+          closedAt: i.closed_at ?? null,
           assignee: i.assignee?.login || null,
+          assigneeAvatarUrl: i.assignee?.avatar_url ?? null,
+          group: i.milestone ? { name: i.milestone.title, color: null } : null,
         },
       }));
   },

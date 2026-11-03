@@ -300,6 +300,12 @@ describe("groupEvents — subagent machinery stays out of the chat", () => {
 });
 
 describe("groupEvents / warning and error logs", () => {
+  it.each(["codex_auth_recovery", "codex_model_rerouted"])("keeps long %s status messages visible", (source) => {
+    const event = ev({ id: "provider-status", type: "log", content: "Provider status details ".repeat(20),
+      metadata: { level: "info", source } });
+    expect(groupEvents([event]).flatMap((group) => group.events)).toContain(event);
+  });
+
   function shown(level: string, content: string): boolean {
     return groupEvents([ev({ id: "l1", type: "log", content, metadata: { level } })]).some(
       (group) => group.events.some((event) => event.id === "l1"),

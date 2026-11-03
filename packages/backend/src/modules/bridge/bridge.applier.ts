@@ -232,10 +232,19 @@ function materialize(store: BridgeStore, table: string, pk: string, owner: strin
     values.version = (store.sqlite.prepare("SELECT coalesce(max(version),0)+1 AS version FROM atlas_page_revisions WHERE item_id=?").get(values.item_id) as { version: number }).version;
   }
   if (table === "atlas_items") {
-    const current = values.current_revision_id
+    let current = values.current_revision_id
       ? store.sqlite.prepare("SELECT version,item_id FROM atlas_page_revisions WHERE id=?").get(values.current_revision_id) as { version: number; item_id: string } | undefined
       : undefined;
     if (current && current.item_id !== pk) throw new BridgeRecordRejected("Atlas revision belongs to a different Page");
+    // A missing revision leaves the pointer empty until it arrives. If this Page already has one,
+    // keep it: the missing id may have been rejected and will never fill the pending link.
+    if (!current && existing?.current_revision_id) {
+      const kept = store.sqlite.prepare("SELECT version,item_id FROM atlas_page_revisions WHERE id=?").get(existing.current_revision_id) as { version: number; item_id: string } | undefined;
+      if (kept?.item_id === pk) {
+        values.current_revision_id = existing.current_revision_id;
+        current = kept;
+      }
+    }
     values.version = current?.version ?? 0;
     values.updated_at = Math.floor(Date.now() / 1000);
   }

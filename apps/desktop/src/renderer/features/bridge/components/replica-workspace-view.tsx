@@ -35,6 +35,7 @@ import { useWorkspaceRouteTopRounding } from "@/hooks/use-workspace-route-top-ro
 import { ReplicaViewContext } from "@/hooks/use-replica-view";
 import { WorkspaceEvents } from "@/features/workspace/components/workspace-events";
 import { BaseTab } from "@/features/workspace/components/base-tab";
+import { ConversationTab } from "@/features/workspace/components/conversation-tab";
 import { TabIcon } from "@/features/workspace/components/run-tab";
 import {
   TodoSummaryBar,
@@ -66,16 +67,29 @@ function ReplicaTabs({
   status,
   fallbackVariant,
   onSelect,
+  singleConversation = false,
 }: {
   runs: Run[];
   activeRunId: string | undefined;
   status: BridgeStatus | undefined;
   fallbackVariant: ProviderVariant;
   onSelect(id: string): void;
+  singleConversation?: boolean;
 }) {
   // An expanded browser owns the surface, so the chat tab drops its selected
   // fill the same way Chat and Work do. Clicking it returns to the chat.
   const { isExpanded, toggleExpanded } = useBrowserPanel();
+  if (singleConversation) {
+    const current = runs.find((row) => row.id === activeRunId);
+    const owner = current ? bridgeBackend(status, current.ownerBackendId) : undefined;
+    return <TabStrip activeKey={activeRunId} role="tablist" aria-label="Chat tabs"
+      className="relative z-(--z-panel-toggle) h-(--shell-header-height)">
+      <ConversationTab isFirst title={current ? chatLabel(current) : "New chat"} run={current}
+      variant={current ? runVariant(current, fallbackVariant) : fallbackVariant} isActive={!!current}
+      live={current && owner ? isReplicaLive(current, owner) : false}
+      onSelect={() => { if (current) onSelect(current.id); }} />
+    </TabStrip>;
+  }
   return (
     <TabStrip
       activeKey={activeRunId}
@@ -133,6 +147,7 @@ export function ReplicaWorkspaceView({
     (state) => state.backends.activeBackendId ?? "local",
   );
   const activeTab = useAppSelector((state) => state.workspace.activeTab);
+  const useProjectChats = useAppSelector((state) => state.appSettings.developerSidebarView === "chats");
   const pendingRunId = useAppSelector((state) => state.workspace.pendingRunId);
   const { activeSpaceId } = useActiveSpace();
   const routeTopRounding = useWorkspaceRouteTopRounding();
@@ -165,6 +180,7 @@ export function ReplicaWorkspaceView({
       ? initialRun
       : workspaceRuns.find((row) => row.id === requested));
   const activeRunId = run?.id;
+  const singleConversation = useProjectChats && (run?.mode ?? "developer") === "developer";
   const { status, run: hydration } = useBridgeRun(activeRunId, true);
   const owner = bridgeBackend(
     status,
@@ -228,13 +244,14 @@ export function ReplicaWorkspaceView({
           status={status}
           fallbackVariant={variant}
           onSelect={selectTab}
+          singleConversation={singleConversation}
         />
       ) : null,
-    [tabs, activeRunId, status, variant, selectTab],
+    [tabs, activeRunId, status, variant, selectTab, singleConversation],
   );
   useSetMainHeader(
     header,
-    !!header && !browserExpanded && tabs[0]?.id === activeRunId,
+    !!header && !browserExpanded && (singleConversation || tabs[0]?.id === activeRunId),
     loadingList,
   );
   const visibleRun = run

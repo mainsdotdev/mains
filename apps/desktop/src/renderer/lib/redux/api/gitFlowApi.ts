@@ -16,10 +16,21 @@ export interface GitFlowStatus {
   additions: number;
   deletions: number;
   changedFiles: number;
-  /** The changed files with their own line counts, from the same snapshot as the totals. */
+  /** The changed files with their line counts and status, from the same snapshot as the totals. */
   files: ChangedFile[];
   isDefaultBranch: boolean;
 }
+
+/**
+ * Same letters the Changes tab paints. Kept in step with
+ * `ChangedFileStatus` on the git-flow service.
+ */
+export type ChangedFileStatus =
+  | "added"
+  | "untracked"
+  | "deleted"
+  | "renamed"
+  | "modified";
 
 export interface ChangedFile {
   /** Repo-relative path. */
@@ -28,6 +39,9 @@ export interface ChangedFile {
   deletions: number;
   /** Created since the last commit — discarding it deletes it. */
   isNew: boolean;
+  status: ChangedFileStatus;
+  /** Previous path when `status` is "renamed". */
+  oldPath?: string;
 }
 
 export interface PublishPreflight {

@@ -78,4 +78,23 @@ describe("accessible select and dropdown primitives", () => {
     expect(submenuMarkup).toContain('aria-haspopup="menu"');
     expect(submenuMarkup).toContain('aria-expanded="false"');
   });
+
+  it("draws a bordered box, not an empty check column, for checkbox items", () => {
+    const item = (selected: boolean) =>
+      renderToStaticMarkup(
+        createElement(
+          DropdownMenuItem,
+          { onClick: () => undefined, selected, selection: "multiple", indicator: "checkbox" },
+          "Bug",
+        ),
+      );
+
+    expect(item(false)).toContain('role="menuitemcheckbox"');
+    expect(item(false)).toContain("glass-outline");
+    // No hidden check reserving space, and no real input nested in the button.
+    expect(item(false)).not.toContain("opacity-0");
+    expect(item(false)).not.toContain("<input");
+    expect(item(true)).toContain('aria-checked="true"');
+    expect(item(true)).toContain("<svg");
+  });
 });

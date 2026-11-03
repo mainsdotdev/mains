@@ -28,7 +28,7 @@ import {
   recordWorkspaceDiff,
 } from "../workspace";
 import { runSessionRegistry } from "../runs/run-session-registry";
-import { gitService, parsePerFileDiffStats } from "../git";
+import { gitService, parsePerFileDiffStats, type DiffFileStatus } from "../git";
 import { projectsService } from "../projects";
 import { appSettingsService } from "../appSettings";
 import { prAttachmentStorage } from "./pr-attachment-storage";
@@ -71,6 +71,9 @@ function diffForPrompt(diff: string): string {
 const RECENT_SUBJECT_COUNT = 10;
 const MAX_SUBJECT_CHARS = 150;
 
+/** Same letters the Changes tab paints. "untracked" refines "added". */
+export type ChangedFileStatus = DiffFileStatus | "untracked";
+
 /** A file in the working tree's diff, as the session panel lists it. */
 export interface ChangedFile {
   /** Repo-relative path. */
@@ -79,6 +82,9 @@ export interface ChangedFile {
   deletions: number;
   /** Created since the last commit — discarding it deletes it. */
   isNew: boolean;
+  status: ChangedFileStatus;
+  /** Previous path when `status` is "renamed". */
+  oldPath?: string;
 }
 
 /** Live snapshot the commit panel renders (branch, stats, push state). */
@@ -95,10 +101,10 @@ export interface GitFlowStatus {
   deletions: number;
   changedFiles: number;
   /**
-   * The changed files with their own line counts, from the same snapshot the
-   * totals come from. Paths and counts only: this status is refetched
-   * throughout a run, and shipping the diff text with it would be paying for a
-   * payload nothing on this screen renders.
+   * The changed files with their own line counts and status letter, from the
+   * same snapshot the totals come from. Paths, counts, and status only: this
+   * status is refetched throughout a run, and shipping the diff text with it
+   * would be paying for a payload nothing on this screen renders.
    */
   files: ChangedFile[];
   /** True when the current branch is the repo's default — PR creation is
@@ -711,12 +717,24 @@ export const gitFlowService = {
         .catch(() => null);
       if (snapshot) {
         const perFile = parsePerFileDiffStats(snapshot.diffText);
-        files = snapshot.files.map((path) => ({
-          path,
-          additions: perFile.get(path)?.additions ?? 0,
-          deletions: perFile.get(path)?.deletions ?? 0,
-          isNew: perFile.get(path)?.isNew ?? false,
-        }));
+        const untracked = new Set(snapshot.untrackedFiles);
+        files = snapshot.files.map((path) => {
+          const stat = perFile.get(path);
+          // A staged-new file and an untracked one share an "added" hunk.
+          const status: ChangedFileStatus =
+            stat?.status === "added" && untracked.has(path)
+              ? "untracked"
+              : (stat?.status ?? "modified");
+          const file: ChangedFile = {
+            path,
+            additions: stat?.additions ?? 0,
+            deletions: stat?.deletions ?? 0,
+            isNew: status === "added" || status === "untracked",
+            status,
+          };
+          if (status === "renamed" && stat?.oldPath) file.oldPath = stat.oldPath;
+          return file;
+        });
         changedFiles = snapshot.files.length;
         const parsed = parseShortstat(snapshot.shortstat);
         additions = parsed.additions;

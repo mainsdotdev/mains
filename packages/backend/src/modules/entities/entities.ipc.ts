@@ -88,6 +88,11 @@ export function registerEntitiesHandlers(): void {
   );
 
   ipcMain.handle(
+    CHANNELS.issues.listStatuses,
+    handle(() => entitiesService.listIssueStatuses()),
+  );
+
+  ipcMain.handle(
     CHANNELS.issues.getById,
     handle((entityId: string) => entitiesService.getIssueById(entityId)),
   );
@@ -157,6 +162,7 @@ export function unregisterEntitiesHandlers(): void {
     CHANNELS.tasks.update,
     CHANNELS.tasks.delete,
     CHANNELS.issues.getAll,
+    CHANNELS.issues.listStatuses,
     CHANNELS.issues.getById,
     CHANNELS.issues.getDetail,
     CHANNELS.issues.create,

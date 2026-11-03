@@ -337,7 +337,7 @@ export default function CodexSettings() {
           account?.type === "chatgpt"
             ? {
                 title: account.email ?? "ChatGPT account",
-                description: account.type,
+                description: account.workspaceName || account.type,
                 plan:
                   account.planType.charAt(0).toUpperCase() +
                   account.planType.slice(1),
@@ -350,7 +350,13 @@ export default function CodexSettings() {
                     ? "Managed credentials"
                     : "AWS credentials",
                 }
-            : null
+              : account?.type === "gcp"
+                ? {
+                    title: "Google Cloud",
+                    description: account.type,
+                    plan: "Google Cloud credentials",
+                  }
+                : null
         }
         isApiKey={account?.type === "apiKey"}
         notSignedInDescription="Sign in to Codex to view account details"

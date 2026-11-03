@@ -73,7 +73,7 @@ export function PreviewPanel({ reserveLayoutControls = false }: { reserveLayoutC
   useKeyboardShortcut("browser.newTab", () => { void browser.newTab().catch((error) => toast.error(String(error))); }, { enabled: preview.isOpen, allowInEditable: true });
 
   return <div id="preview-panel" data-preview-panel="" role="complementary" aria-label="Preview panel" aria-hidden={!preview.isOpen}
-    inert={!preview.isOpen} className="fixed inset-y-0 right-0 z-(--z-overlay) overflow-hidden transition-[width,transform,opacity] duration-150 ease-out motion-reduce:transition-none"
+    inert={!preview.isOpen} className="fixed inset-y-0 right-0 z-(--z-overlay) overflow-hidden overscroll-none transition-[width,transform,opacity] duration-150 ease-out motion-reduce:transition-none"
     style={{ display: isVisible ? undefined : "none", width: isMobile ? "100vw" : preview.isExpanded
       ? "calc(100% - var(--content-left) + var(--spacing) * 1.25)" : `var(${BROWSER_PANEL_WIDTH_VAR})`,
       transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)", opacity: isAnimatedIn ? 1 : 0 }}>
@@ -115,7 +115,7 @@ export function PreviewPanel({ reserveLayoutControls = false }: { reserveLayoutC
         </TabStrip>
       </ShellHeader>
       <div id="preview-content" role="tabpanel" aria-labelledby={preview.activeTab ? `preview-tab-${preview.activeTab.id}` : undefined}
-        className="relative min-h-0 flex-1 overflow-hidden rounded-2xl rounded-tl-none bg-primary dark:bg-primary-950">
+        className="relative min-h-0 flex-1 overflow-hidden overscroll-none rounded-2xl rounded-tl-none bg-primary dark:bg-primary-950">
         <BrowserPanel embedded />
         <DocumentViewerPanel />
         <McpAppPanel />

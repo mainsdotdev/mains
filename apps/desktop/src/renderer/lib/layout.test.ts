@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { hasSidebarPanel, shouldHideRightPanel, shouldHideWorkspacePanels } from "./layout";
 
 describe("hasSidebarPanel", () => {
-  it("keeps the list panel for conversations, settings and Atlas", () => {
-    for (const route of ["/", "/code", "/code/runs/123", "/code/workspace-id", "/settings", "/atlas", "/atlas/page-id"]) {
+  it("keeps the list panel for conversations, settings, Atlas and Tasks", () => {
+    for (const route of ["/", "/code", "/code/runs/123", "/code/workspace-id", "/settings", "/atlas", "/atlas/page-id", "/tasks"]) {
       expect(hasSidebarPanel(route)).toBe(true);
     }
+    expect(hasSidebarPanel("/tasks-other")).toBe(false);
   });
 
   it("keeps workspace tools out of the Atlas library and editor", () => {
@@ -20,7 +21,7 @@ describe("hasSidebarPanel", () => {
   });
 
   it("gives standalone pages the rail and full content width", () => {
-    for (const route of ["/tasks", "/pulse", "/plugins", "/bridge", "/relay", "/unknown"]) {
+    for (const route of ["/pulse", "/plugins", "/bridge", "/relay", "/unknown"]) {
       expect(hasSidebarPanel(route)).toBe(false);
     }
   });

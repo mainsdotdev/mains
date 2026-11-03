@@ -1,3 +1,4 @@
+import type { IssueStatus, IssueStatusCategory } from "@mains/contracts/issue-status";
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 
@@ -74,12 +75,27 @@ export interface Issue {
 export interface IssueRecord {
   entityId: string;
   provider: string;
+  /** The provider's own state name ("Todo", a Trello list) — a label only. */
   state: string;
+  /** The provider's stable id for `state`. */
+  stateId: string | null;
+  /** Mains' issue status (`@mains/contracts/issue-status`) mapped from `state`. */
+  statusId: string;
+  /** The provider's handle: "MAI-200", "PROJ-12", "#42"; null for Asana. */
+  identifier: string | null;
+  assigneeAvatarUrl: string | null;
+  /** JSON object: label name → "#rrggbb". */
+  labelColors: string | null;
+  /** Linear project, GitHub/GitLab milestone, Jira epic. */
+  groupName: string | null;
+  groupColor: string | null;
+  dueAt: string | null;
   number: number | null;
   repo: string | null;
   assignee: string | null;
   labels: string | null;
   closedAt: string | null;
+  /** 0 none, 1 urgent, 2 high, 3 medium, 4 low — for every provider. */
   priority: number;
 }
 
@@ -337,13 +353,19 @@ export const entitiesApi = baseApi.injectEndpoints({
     // typed to the {issue, entity} rows the repo join actually returns.
     getIssuesInbox: builder.query<
       IssueWithEntity[],
-      { provider?: string; state?: string; limit?: number }
+      { provider?: string; category?: IssueStatusCategory; limit?: number }
     >({
       query: (params) => ({
         handler: CHANNELS.issues.getAll,
         args: [params],
       }),
       providesTags: ["Issue"],
+    }),
+
+    /** Mains' own issue statuses, in display order. */
+    getIssueStatuses: builder.query<IssueStatus[], void>({
+      query: () => ({ handler: CHANNELS.issues.listStatuses }),
+      providesTags: ["IssueStatus"],
     }),
 
   }),
@@ -369,4 +391,5 @@ export const {
   useUpdateIssueStateMutation,
   useGetIssuesByRepoQuery,
   useGetIssuesInboxQuery,
+  useGetIssueStatusesQuery,
 } = entitiesApi;

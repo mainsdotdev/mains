@@ -536,7 +536,7 @@ export const FileExplorer = memo(function FileExplorer({
           ref={resultsRef}
           role="tree"
           aria-label="Content search results"
-          className="flex-1 overflow-auto py-1 space-y-0.5 noscrollbar"
+          className="flex-1 overflow-auto overscroll-none py-1 space-y-0.5 noscrollbar"
         >
           {textSearch.error ? (
             <Text as="div" size="xs" tone="danger" className="px-2 py-2">{textSearch.error}</Text>
@@ -578,7 +578,7 @@ export const FileExplorer = memo(function FileExplorer({
           ref={resultsRef}
           role="listbox"
           aria-label="File search results"
-          className="flex-1 overflow-auto py-1 space-y-0.5 noscrollbar"
+          className="flex-1 overflow-auto overscroll-none py-1 space-y-0.5 noscrollbar"
         >
           {searchError ? (
             <Text as="div" size="xs" tone="subtle" className="px-2 py-2">{searchError}</Text>
@@ -650,7 +650,7 @@ export const FileExplorer = memo(function FileExplorer({
         <div
           role="tree"
           aria-label="File explorer"
-          className="flex-1 overflow-auto  space-y-0.5 noscrollbar"
+          className="flex-1 overflow-auto overscroll-none space-y-0.5 noscrollbar"
         >
           {tree.children?.map((child, index) => (
             <FileTreeNode

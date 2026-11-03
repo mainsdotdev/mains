@@ -1,0 +1,5697 @@
+import { pickRunSettingConfig } from "@mains/contracts/run-settings";
+import { bridgeService } from "../../../bridge";
+// ─────────────────────────────────────────────────────────────
+// Claude ProviderDriver
+//
+// SDK-specific seam for Anthropic's @anthropic-ai/claude-agent-sdk. The SDK
+// spawns the Claude Code CLI subprocess and exposes an AsyncGenerator
+// (SDKQuery) that streams messages.
+//
+// Differences from cursor/copilot drivers (worth noting because they shape
+// the Driver interface usage):
+//
+//   - SessionId is assigned by the driver, not read out of the stream: a new
+//     or forked session is opened on an id we generate, so AcquiredSession
+//     carries it and Core persists it before the first token. The stream is
+//     still watched for a mismatch, which would mean the CLI ignored the id.
+//   - SDK has both AbortController and `query.interrupt()`. Driver wires the
+//     incoming AbortSignal to fire both.
+//   - Per-run streaming buffers (text + thinking deltas, tool-call correlation
+//     index) live on the Session object for cleanup safety. The old adapter
+//     held them in factory closure scope which leaked across concurrent runs.
+//
+// Long-lived caches (models / commands / skills, the SDK loader itself) stay
+// in the factory closure as cross-run state.
+// ─────────────────────────────────────────────────────────────
+
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { randomUUID } from "node:crypto";
+import { spawnProvider as spawn } from "../provider-process";
+import type {
+  AcquiredSession,
+  AgentsConfig,
+  CliUpdateResult,
+  ClaudeCodeAdapterConfig,
+  AccountInfo,
+  CommandInfo,
+  DriverOutcome,
+  HookMatcher,
+  HooksConfig,
+  McpAppCallToolResult,
+  McpAppResourceContent,
+  ModelInfo,
+  PluginDetail,
+  PluginListResponse,
+  MarketplaceInfo,
+  ProviderDriver,
+  RateLimitInfo,
+  SkillInfo,
+  WorkRunContextItem,
+  WorkRunContextUsageCategory,
+  WorkRunContinueRequest,
+  WorkRunEvent,
+  WorkRunEventHandler,
+  WorkRunForkRequest,
+  WorkRunRequest,
+  WorkRunSteerRequest,
+  WorkRunTaskEvent,
+  WorkRunToolPolicy,
+  WorkRunUsage,
+} from "../../../../../shared/adapter.types";
+import {
+  claudeAuthLoginCommand,
+  resolveClaudeRuntime,
+} from "../../providers.utils";
+import { AGENT_ID_IN_RESULT } from "../../../../../shared/subagent";
+import type { ModeId } from "@mains/contracts/modes";
+import {
+  DEFAULT_CLAUDE_PERMISSION_MODE,
+  isClaudePermissionMode,
+} from "@mains/contracts/claude-permission-modes";
+import {
+  cancelPendingRequest,
+  requestToolApproval,
+} from "../../../runs/user-input-broker";
+import type { ToolApprovalRequest, ToolApprovalResponse } from "../../../runs/runs.dto";
+import { runsRepo } from "../../../runs/runs.repo";
+import {
+  adoptConfig,
+  createLogger,
+  ALLOWED_TOOLS_SET,
+  couldModifyFiles,
+  resolveEffectiveAllowedTools,
+  safeJson,
+  emitUserPromptArtifact,
+  extractArtifactsFromToolOutput,
+  formatContextSection,
+  appendPromptSections,
+  resolveCatalogDefaultId,
+} from "../adapter.shared";
+import { createClaudeTurnInput, isClaudeUserInput } from "./claude-turn-input";
+import type { MainsToolContext } from "../mains-tools.core";
+import { toClaudeTools } from "../mains-tools.registry";
+import { guardsService } from "../../../guards/guards.service";
+
+// ─────────────────────────────────────────────────────────────
+// SDK type sketches (the SDK is loaded via dynamic import to keep the
+// driver compilable without the package installed)
+// ─────────────────────────────────────────────────────────────
+
+interface SDKHookMatcher {
+  matcher?: string;
+  hooks: Array<
+    (
+      input: Record<string, unknown>,
+      toolUseId: string | null,
+      context: { signal: AbortSignal },
+    ) => Promise<Record<string, unknown>>
+  >;
+  timeout?: number;
+}
+
+type SDKHooksConfig = {
+  [key: string]: SDKHookMatcher[];
+};
+
+interface SDKAgentDefinition {
+  description: string;
+  prompt: string;
+  tools?: string[];
+  disallowedTools?: string[];
+  model?: string;
+  mcpServers?: (string | Record<string, unknown>)[];
+  skills?: string[];
+  initialPrompt?: string;
+  maxTurns?: number;
+  criticalSystemReminder_EXPERIMENTAL?: string;
+}
+
+type SDKAgentsConfig = Record<string, SDKAgentDefinition>;
+
+interface McpStdioServerConfig {
+  type?: "stdio";
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+interface McpHttpServerConfig {
+  type: "http";
+  url: string;
+  headers?: Record<string, string>;
+}
+
+interface McpSSEServerConfig {
+  type: "sse";
+  url: string;
+  headers?: Record<string, string>;
+}
+
+type McpServerConfig =
+  | McpStdioServerConfig
+  | McpHttpServerConfig
+  | McpSSEServerConfig
+  | Record<string, unknown>;
+
+interface SDKOptions {
+  outputFormat?: { type: "json_schema"; schema: Record<string, unknown> };
+  model?: string;
+  continue?: boolean;
+  pathToClaudeCodeExecutable?: string;
+  executable?: "node" | "bun" | "deno";
+  executableArgs?: string[];
+  env?: Record<string, string | undefined>;
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
+  allowDangerouslySkipPermissions?: boolean;
+  cwd?: string;
+  resume?: string;
+  forkSession?: boolean;
+  /**
+   * Opens the conversation on a caller-chosen UUID instead of an auto-generated
+   * one. Legal on its own or alongside `forkSession`; the CLI exits with an
+   * error if it is combined with a bare `resume`.
+   */
+  sessionId?: string;
+  abortController?: AbortController;
+  additionalDirectories?: string[];
+  agents?: SDKAgentsConfig;
+  maxTurns?: number;
+  systemPrompt?:
+    | string
+    | { type: "preset"; preset: "claude_code"; append?: string; snapshot?: boolean };
+  settingSources?: Array<"user" | "project" | "local">;
+  hooks?: SDKHooksConfig;
+  mcpServers?: Record<string, McpServerConfig>;
+  thinking?:
+    | { type: "adaptive" }
+    | { type: "enabled"; budgetTokens?: number }
+    | { type: "disabled" };
+  effort?: ("low" | "medium" | "high" | "xhigh" | "max") | number;
+  settings?: string | Record<string, unknown>;
+  promptSuggestions?: boolean;
+  includePartialMessages?: boolean;
+  extraArgs?: Record<string, string | null>;
+  plugins?: Array<{ type: "local"; path: string; skipMcpDiscovery?: boolean }>;
+  canUseTool?: SDKCanUseTool;
+  onElicitation?: SDKOnElicitation;
+}
+
+/**
+ * MCP elicitation — a server asking the user for input (form fields, or a URL
+ * to authenticate at). When no callback is supplied the SDK declines every
+ * request automatically, so the server's flow fails with nothing shown to the
+ * user.
+ */
+interface SDKElicitationRequest {
+  serverName: string;
+  message: string;
+  mode?: "form" | "url";
+  url?: string;
+  elicitationId?: string;
+  requestedSchema?: Record<string, unknown>;
+  title?: string;
+  displayName?: string;
+  description?: string;
+}
+
+/** MCP `ElicitResult`. `content` is required by the server when accepting a form. */
+interface SDKElicitationResult {
+  action: "accept" | "decline" | "cancel";
+  content?: Record<string, string | number | boolean | string[]>;
+}
+
+type SDKOnElicitation = (
+  request: SDKElicitationRequest,
+  options: { signal: AbortSignal },
+) => Promise<SDKElicitationResult>;
+
+function isSDKPermissionMode(
+  value: unknown,
+): value is NonNullable<SDKOptions["permissionMode"]> {
+  return isClaudePermissionMode(value);
+}
+
+export function buildClaudePermissionModeOptions(
+  permissionMode: NonNullable<SDKOptions["permissionMode"]>,
+  canUseTool?: SDKCanUseTool,
+  toolPolicy?: WorkRunToolPolicy | null,
+): Pick<
+  SDKOptions,
+  | "permissionMode"
+  | "allowDangerouslySkipPermissions"
+  | "allowedTools"
+  | "disallowedTools"
+  | "canUseTool"
+  | "settings"
+> {
+  const effectiveAllowedTools = resolveEffectiveAllowedTools(toolPolicy);
+  return {
+    permissionMode,
+    allowedTools: effectiveAllowedTools,
+    ...(toolPolicy && toolPolicy.disallowedTools.length > 0
+      ? { disallowedTools: [...toolPolicy.disallowedTools] }
+      : {}),
+    // Build the run-scoped permission snapshot here. buildOptions materializes
+    // it to disk because Workflow children do not inherit the inline form.
+    settings: {
+      permissions: {
+        allow: [...effectiveAllowedTools],
+        ...(toolPolicy && toolPolicy.disallowedTools.length > 0
+          ? { deny: [...toolPolicy.disallowedTools] }
+          : {}),
+      },
+    },
+    ...(permissionMode === "bypassPermissions"
+      ? { allowDangerouslySkipPermissions: true }
+      : {}),
+    // Normal bypass calls shadow this callback, but detached agents still
+    // forward permission requests that require an application decision.
+    ...(canUseTool ? { canUseTool } : {}),
+  };
+}
+
+/**
+ * Decide whether a run may open its session on an id we chose.
+ *
+ * The CLI accepts one for a fresh session and for a fork ("a custom ID for the
+ * forked session"), but exits with an error when it is combined with a plain
+ * resume — measured: `--session-id can only be used with --continue or --resume
+ * if --fork-session is also specified`. A resume already knows its id anyway.
+ */
+export function buildClaudeSessionIdOptions(args: {
+  newSessionId?: string;
+  resumeSessionId?: string;
+  forkSession?: boolean;
+}): Pick<SDKOptions, "sessionId"> {
+  const { newSessionId, resumeSessionId, forkSession } = args;
+  if (!newSessionId) return {};
+  if (resumeSessionId && !forkSession) return {};
+  return { sessionId: newSessionId };
+}
+
+interface SDKCanUseToolOptions {
+  signal: AbortSignal;
+  suggestions?: unknown[];
+  blockedPath?: string;
+  decisionReason?: string;
+  title?: string;
+  displayName?: string;
+  description?: string;
+  defaultToNo?: boolean;
+  suppressAlwaysAllowRule?: boolean;
+  toolUseID: string;
+  agentID?: string;
+  requestId: string;
+  matchedAskRule?: {
+    source: string;
+    toolName: string;
+    ruleContent?: string;
+  };
+}
+
+type SDKPermissionResult =
+  | {
+      behavior: "allow";
+      updatedInput?: Record<string, unknown>;
+      updatedPermissions?: unknown[];
+      toolUseID?: string;
+    }
+  | {
+      behavior: "deny";
+      message: string;
+      interrupt?: boolean;
+      toolUseID?: string;
+    };
+
+type SDKCanUseTool = (
+  toolName: string,
+  input: Record<string, unknown>,
+  options: SDKCanUseToolOptions,
+) => Promise<SDKPermissionResult | null>;
+
+interface SDKMessageContent {
+  type: string;
+  text?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  id?: string;
+}
+
+/**
+ * Reply to the `get_context_usage` control request — the CLI's own `/context`
+ * report, structured. This is the meter's live source.
+ *
+ * Claude Code >= 2.1.268 stamps each category with its `kind`, the same
+ * classification the `/context` message payload below carries. An older CLI
+ * (a configured binary) leaves it off: deferred rows are flagged, and the two
+ * rows that are space rather than content are identified only by name.
+ */
+export interface SDKContextUsageResponse {
+  totalTokens: number;
+  maxTokens: number;
+  percentage: number;
+  model: string;
+  isAutoCompactEnabled?: boolean;
+  autoCompactThreshold?: number;
+  categories?: { name: string; tokens: number; isDeferred?: boolean; kind?: string }[];
+}
+
+/**
+ * Context snapshot carried on an assistant message (Agent SDK >= 0.3.233).
+ *
+ * Per the CLI's own schema this rides *only* the synthetic message that answers
+ * `/context` — never an ordinary assistant turn — so it covers the case where a
+ * run invokes that command, and `getContextUsage()` covers everything else.
+ *
+ * `raw_max_tokens` is the *resolved autocompact window* — the model's believed
+ * limit, or a smaller compaction-policy window (e.g. the 200K boundary on
+ * 1M-window models) — so `percentage` is already measured against the boundary
+ * the meter cares about. `total_tokens` is unclamped and may exceed it.
+ */
+export interface SDKContextUsage {
+  model: string;
+  total_tokens: number;
+  raw_max_tokens: number;
+  percentage: number;
+  /** Partition of the window; see WorkRunContextUsageCategory for the kinds. */
+  categories?: { name: string; tokens: number; kind: string }[];
+}
+
+/** Why an assistant turn failed. Also carried on `system:api_retry`. */
+type SDKAssistantMessageError =
+  | "authentication_failed"
+  | "oauth_org_not_allowed"
+  | "billing_error"
+  | "rate_limit"
+  | "overloaded"
+  | "invalid_request"
+  | "model_not_found"
+  | "server_error"
+  | "unknown"
+  | "max_output_tokens";
+
+interface SDKAssistantMessage {
+  type: "assistant";
+  uuid: string;
+  session_id: string;
+  message: { id?: string; role: "assistant"; model?: string; content: SDKMessageContent[] };
+  parent_tool_use_id: string | null;
+  /** Stable subagent task id; absent on main-thread messages. */
+  agent_id?: string;
+  subagent_type?: string;
+  /**
+   * Set when the API call behind this turn failed. Without it an auth or
+   * billing failure is indistinguishable from the agent saying nothing.
+   */
+  error?: SDKAssistantMessageError;
+  /** Agent SDK >= 0.3.233; absent on older CLI binaries. */
+  context_usage?: SDKContextUsage;
+}
+
+interface SDKUserMessage {
+  type: "user";
+  uuid?: string;
+  session_id: string;
+  message: {
+    role: "user";
+    content:
+      | string
+      | Array<{
+          type: string;
+          text?: string;
+          tool_use_id?: string;
+          content?: unknown;
+          is_error?: boolean;
+        }>;
+  };
+  parent_tool_use_id: string | null;
+  agent_id?: string;
+  tool_result_meta?: Array<{
+    id: string;
+    non_execution_kind: string;
+    user_feedback?: string;
+  }>;
+  /**
+   * The tool's own result, beside the tool_result block the model reads. For an
+   * MCP tool it keeps what the block drops: `structuredContent` and `_meta`.
+   */
+  tool_use_result?: unknown;
+}
+
+interface SDKModelUsage {
+  costUSD: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** Already counted inside outputTokens; absent from CLIs that predate it. */
+  thinkingTokens?: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  webSearchRequests: number;
+  contextWindow: number;
+  maxOutputTokens: number;
+}
+
+interface SDKPermissionDenial {
+  tool_name: string;
+  tool_use_id: string;
+  tool_input: Record<string, unknown>;
+}
+
+type FastModeState = "off" | "cooldown" | "on";
+
+/** Why fast mode can't serve. Absent when nothing is blocking it. */
+type FastModeDisabledReason =
+  | "free"
+  | "preference"
+  | "extra_usage_disabled"
+  | "network_error"
+  | "unknown"
+  | "not_first_party"
+  | "disabled_by_env"
+  | "model_not_allowed"
+  | "sdk_opt_in_required"
+  | "pending";
+
+interface SDKResultBase {
+  type: "result";
+  uuid: string;
+  session_id: string;
+  duration_ms: number;
+  duration_api_ms: number;
+  is_error: boolean;
+  num_turns: number;
+  total_cost_usd: number;
+  stop_reason: string | null;
+  modelUsage: Record<string, SDKModelUsage>;
+  permission_denials: SDKPermissionDenial[];
+  fast_mode_state?: FastModeState;
+  fast_mode_disabled_reason?: FastModeDisabledReason;
+}
+
+interface SDKResultSuccess extends SDKResultBase {
+  subtype: "success";
+  result: string;
+  structured_output?: unknown;
+}
+
+interface SDKResultError extends SDKResultBase {
+  subtype:
+    | "error_during_execution"
+    | "error_max_turns"
+    | "error_max_budget_usd"
+    | "error_max_structured_output_retries";
+  errors: string[];
+}
+
+type SDKResultMessage = SDKResultSuccess | SDKResultError;
+
+interface ClaudeTurnModelMessage {
+  type?: unknown;
+  subtype?: unknown;
+  scope?: unknown;
+  parent_tool_use_id?: unknown;
+  agent_id?: unknown;
+  message?: { model?: unknown };
+  model?: unknown;
+  fallback_model?: unknown;
+  modelUsage?: Record<string, { contextWindow?: unknown }>;
+}
+
+function cleanModel(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Resolve the main conversation model from a stream without trusting usage-key order. */
+export function resolveClaudeTurnModel(
+  currentModel: string | undefined,
+  message: ClaudeTurnModelMessage,
+  configuredModel?: string,
+): string | undefined {
+  if (message.type === "assistant" && message.parent_tool_use_id === null && !message.agent_id) {
+    const assistantModel = cleanModel(message.message?.model);
+    if (assistantModel) return assistantModel;
+  }
+
+  if (message.type === "system" && message.subtype === "init") {
+    const initializedModel = cleanModel(message.model);
+    if (initializedModel) return initializedModel;
+  }
+
+  if (
+    message.type === "system" &&
+    message.subtype === "model_refusal_fallback" &&
+    message.scope !== "local"
+  ) {
+    const fallbackModel = cleanModel(message.fallback_model);
+    if (fallbackModel) return fallbackModel;
+  }
+
+  const current = cleanModel(currentModel);
+  if (current) return current;
+  if (message.type !== "result" || !message.modelUsage) return undefined;
+
+  const entries = Object.entries(message.modelUsage);
+  if (entries.length === 1) return entries[0]?.[0];
+
+  const configured = cleanModel(configuredModel);
+  const exactConfigured = entries.find(
+    ([name]) => name.toLowerCase() === configured?.toLowerCase(),
+  );
+  if (exactConfigured) return exactConfigured[0];
+
+  const rankedByWindow = entries
+    .map(([name, usage]) => ({
+      name,
+      contextWindow:
+        typeof usage.contextWindow === "number" ? usage.contextWindow : 0,
+    }))
+    .sort((a, b) => b.contextWindow - a.contextWindow);
+  if (
+    rankedByWindow[0] &&
+    rankedByWindow[0].contextWindow > (rankedByWindow[1]?.contextWindow ?? 0)
+  ) {
+    return rankedByWindow[0].name;
+  }
+
+  // Multiple equally plausible models are safer left unknown than mislabeled.
+  return undefined;
+}
+
+export interface SDKSystemMessage {
+  type: "system";
+  subtype:
+    | "init"
+    | "compact_boundary"
+    | "api_retry"
+    | "status"
+    | "plugin_install"
+    | "task_started"
+    | "task_progress"
+    | "task_updated"
+    | "task_notification"
+    | "background_tasks_changed"
+    | "model_refusal_fallback"
+    | "model_refusal_no_fallback"
+    | "permission_denied"
+    | "informational"
+    | "notification";
+  uuid: string;
+  session_id: string;
+  model?: string;
+  cwd?: string;
+  tools?: string[];
+  permissionMode?: string;
+  agents?: string[];
+  apiKeySource?: string;
+  betas?: string[];
+  claude_code_version?: string;
+  mcp_servers?: { name: string; status: string }[];
+  slash_commands?: string[];
+  output_style?: string;
+  skills?: string[];
+  // subtype: "init"
+  plugins?: { name: string; path: string }[];
+  /** Protocol features the CLI supports, e.g. `mcp_read_resource_v1`. */
+  capabilities?: string[];
+  fast_mode_state?: FastModeState;
+  fast_mode_disabled_reason?: FastModeDisabledReason;
+  // subtype: "compact_boundary"
+  compact_metadata?: {
+    trigger: "manual" | "auto";
+    pre_tokens: number;
+    post_tokens?: number;
+    duration_ms?: number;
+  };
+  // subtype: "api_retry"
+  attempt?: number;
+  max_retries?: number;
+  retry_delay_ms?: number;
+  error_status?: number | null;
+  // subtype: "plugin_install"
+  status?: "started" | "installed" | "failed" | "completed" | "stopped";
+  name?: string;
+  /**
+   * Two shapes behind one field name: free-form prose on "plugin_install", and
+   * an SDKAssistantMessageError code on "api_retry".
+   */
+  error?: string;
+  // subtypes: "task_started" | "task_progress" | "task_updated" | "task_notification"
+  task_id?: string;
+  run_id?: string;
+  parent_task_id?: string;
+  is_backgrounded?: boolean;
+  ambient?: boolean;
+  tool_use_id?: string;
+  description?: string;
+  subagent_type?: string;
+  task_type?: string;
+  last_tool_name?: string;
+  summary?: string;
+  output_file?: string;
+  skip_transcript?: boolean;
+  usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number };
+  // subtype: "task_updated" — a wire-safe subset of the changed task fields
+  patch?: {
+    status?: "pending" | "running" | "completed" | "failed" | "killed" | "paused";
+    description?: string;
+    end_time?: number;
+    error?: string;
+    is_backgrounded?: boolean;
+  };
+  // subtype: "background_tasks_changed" — full replacement, not a delta
+  tasks?: SDKBackgroundTask[];
+  // subtypes: "model_refusal_fallback" | "model_refusal_no_fallback"
+  original_model?: string;
+  fallback_model?: string;
+  api_refusal_category?: string | null;
+  api_refusal_explanation?: string | null;
+  // subtypes: "model_refusal_*" | "informational" | "notification"
+  content?: string;
+  // subtype: "permission_denied"
+  tool_name?: string;
+  decision_reason?: string;
+  agent_id?: string;
+  message?: string;
+  // subtype: "informational"
+  level?: "info" | "notice" | "suggestion" | "warning";
+  prevent_continuation?: boolean;
+  // subtype: "notification"
+  text?: string;
+  priority?: "low" | "medium" | "high" | "immediate";
+}
+
+interface SDKBackgroundTask {
+  task_id: string;
+  run_id?: string;
+  task_type: string;
+  subagent_type?: string;
+  description: string;
+  parent_task_id?: string;
+  ambient?: boolean;
+}
+
+interface SDKRateLimitInfo {
+  status: "allowed" | "allowed_warning" | "rejected";
+  resetsAt?: number;
+  rateLimitType?: "five_hour" | "seven_day" | "seven_day_opus" | "seven_day_sonnet" | "overage";
+  utilization?: number;
+}
+
+interface SDKUsageWindow {
+  /** The /usage response uses 0-100, unlike rate_limit_event's 0-1 share. */
+  utilization?: number | null;
+  resets_at?: string | null;
+}
+
+interface SDKUsageResponse {
+  subscription_type?: string | null;
+  rate_limits_available?: boolean;
+  rate_limits?: {
+    five_hour?: SDKUsageWindow | null;
+    seven_day?: SDKUsageWindow | null;
+    seven_day_oauth_apps?: SDKUsageWindow | null;
+    seven_day_opus?: SDKUsageWindow | null;
+    seven_day_sonnet?: SDKUsageWindow | null;
+    model_scoped?: Array<SDKUsageWindow & { display_name: string }>;
+    extra_usage?: { is_enabled: boolean; utilization?: number | null } | null;
+  } | null;
+}
+
+interface SDKRateLimitEvent {
+  type: "rate_limit_event";
+  rate_limit_info: SDKRateLimitInfo;
+  uuid: string;
+  session_id: string;
+}
+
+interface SDKRawStreamEvent {
+  type: string;
+  index?: number;
+  content_block?: { type: string; [key: string]: unknown };
+  delta?: {
+    type?: string;
+    text?: string;
+    thinking?: string;
+    partial_json?: string;
+    [key: string]: unknown;
+  };
+  message?: { id?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+interface SDKPartialAssistantMessage {
+  type: "stream_event";
+  event: SDKRawStreamEvent;
+  parent_tool_use_id: string | null;
+  uuid: string;
+  session_id: string;
+}
+
+type SDKMessage =
+  | SDKAssistantMessage
+  | SDKUserMessage
+  | SDKResultMessage
+  | SDKSystemMessage
+  | SDKRateLimitEvent
+  | SDKPartialAssistantMessage
+  | { type: string; session_id?: string; [key: string]: unknown };
+
+interface SDKModelInfo {
+  value: string;
+  displayName: string;
+  description: string;
+  supportsFastMode?: boolean;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: ("low" | "medium" | "high" | "xhigh" | "max")[];
+  supportsAutoMode?: boolean;
+  supportsAdaptiveThinking?: boolean;
+}
+
+interface SDKSlashCommand {
+  name: string;
+  description: string;
+  argumentHint: string;
+  aliases?: string[];
+}
+
+interface SDKInitializationResult {
+  commands: SDKSlashCommand[];
+  output_style: string;
+  available_output_styles: string[];
+  models: SDKModelInfo[];
+  account: { email?: string; organization?: string };
+}
+
+/** Subset of the SDK's SDKSessionInfo we read for the auto-title. */
+interface SDKSessionInfoLite {
+  sessionId: string;
+  /** Display title: customTitle || aiTitle || lastPrompt || firstPrompt. */
+  summary: string;
+  /** User-set title via /rename. */
+  customTitle?: string;
+  /** First meaningful user prompt — used to detect "no AI title yet". */
+  firstPrompt?: string;
+  /** Where the session ran — an MCP host for its apps runs there too. */
+  cwd?: string;
+}
+
+interface SDKQuery extends AsyncGenerator<SDKMessage, void> {
+  interrupt(): Promise<void>;
+  /** Runtime control method, not yet exposed in the SDK's public type surface. */
+  cancelAsyncMessage?(uuid: string): Promise<boolean>;
+  /** Forcefully ends the query and terminates the CLI subprocess. */
+  close(): void;
+  rewindFiles(userMessageUuid: string, options?: { dryRun?: boolean }): Promise<unknown>;
+  getContextUsage(): Promise<SDKContextUsageResponse>;
+  setPermissionMode(mode: string): Promise<void>;
+  setModel(model?: string): Promise<void>;
+  setMaxThinkingTokens(maxThinkingTokens: number | null): Promise<void>;
+  initializationResult(): Promise<SDKInitializationResult>;
+  supportedCommands(): Promise<SDKSlashCommand[]>;
+  supportedModels(): Promise<SDKModelInfo[]>;
+  mcpServerStatus(): Promise<unknown[]>;
+  /** Read an MCP Apps `ui://` resource from a server the CLI dialed (SDK alpha). */
+  readMcpResource?(serverName: string, uri: string): Promise<{ contents: McpAppResourceContent[] }>;
+  /**
+   * Send a raw control request. Not in the SDK's types: it is the only way to
+   * reach `mcp_call`, which the protocol declares but no public method wraps.
+   */
+  request?(request: Record<string, unknown>): Promise<unknown>;
+  /** The `/usage` control request, experimental in the SDK. */
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?(opts?: {
+    skipBehaviors?: boolean;
+  }): Promise<unknown>;
+  accountInfo(): Promise<{
+    email?: string;
+    organization?: string;
+    subscriptionType?: string;
+    apiKeySource?: string;
+    tokenSource?: string;
+  }>;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Per-run session state (handed back to Core as opaque `session`)
+// ─────────────────────────────────────────────────────────────
+
+/** Stable task identity, current execution and its call anchor, including ended parents. */
+export type ClaudeTaskIndex = Map<string, {
+  toolUseId?: string;
+  originalToolUseId?: string;
+  providerRunId?: string;
+  description?: string;
+  subagentType?: string;
+  taskType?: string;
+  parentTaskId?: string | null;
+  isBackgrounded?: boolean;
+  ambient?: boolean;
+  terminal?: boolean;
+  notified?: boolean;
+}>;
+
+type ClaudeSDKPermissionMode = NonNullable<SDKOptions["permissionMode"]>;
+
+/**
+ * The session's live permission mode. A run starts in one mode, but the CLI
+ * moves the session mid-run — the model calls EnterPlanMode, an applied plan
+ * switches modes — so the permission bridge judges each request by where the
+ * session is now, not where it started.
+ */
+export interface ClaudePermissionModeRef {
+  current: ClaudeSDKPermissionMode;
+  /** The mode plan mode was entered from: where an applied plan returns. */
+  beforePlan?: ClaudeSDKPermissionMode;
+}
+
+export function createClaudePermissionModeRef(
+  initial: ClaudeSDKPermissionMode,
+): ClaudePermissionModeRef {
+  return { current: initial };
+}
+
+function setClaudePermissionMode(
+  ref: ClaudePermissionModeRef,
+  next: ClaudeSDKPermissionMode,
+): void {
+  if (next !== "plan") delete ref.beforePlan;
+  else if (ref.current !== "plan") ref.beforePlan = ref.current;
+  ref.current = next;
+}
+
+interface ClaudeSession {
+  runId: string;
+  options: SDKOptions;
+  abortController: AbortController;
+  /** Live permission mode, shared with this session's permission bridge. */
+  permissionMode: ClaudePermissionModeRef;
+  /** On-disk flag-settings snapshot inherited by dynamic Workflow agents. */
+  runtimeSettingsPath?: string;
+  /** Whether this run asked for fast mode — the CLI only reports on it. */
+  fastModeRequested: boolean;
+  /** Mutable: set during streaming. */
+  state: {
+    sessionId?: string;
+    lastStopReason?: string | null;
+    lastUsage?: WorkRunUsage;
+    terminalToolNonExecutionKind?: string;
+    hasAssistantContent: boolean;
+    lastAssistantMessage?: { id: string; hasText: boolean; hasTools: boolean };
+    lastFastModeState?: FastModeState;
+    lastAssistantError?: string;
+    sawRateLimitNotice?: boolean;
+    /** `system/init`'s protocol capabilities, for features checked mid-turn. */
+    capabilities?: string[];
+  };
+  /** Per-run tool-call correlation index (toolCallId → toolName/input). */
+  toolCallIndex: Map<string, { toolName: string; input?: unknown; startedAt?: number }>;
+  /**
+   * Per-run task correlation index (taskId → spawning tool_use_id).
+   *
+   * `system:task_updated` carries only `task_id` — no `tool_use_id` — so the
+   * anchor has to be remembered from `task_started` for later phases to attach
+   * to the right tool call.
+   */
+  taskIndex: ClaudeTaskIndex;
+  /** Full live-background level; absent until this CLI reports one. */
+  backgroundTasks?: Map<string, SDKBackgroundTask>;
+  /** Per-(runId, blockIndex) streaming text buffers. */
+  partialTextBuffers: Map<string, string>;
+  /** Per-(runId, blockIndex) streaming thinking buffers. */
+  partialThinkingBuffers: Map<string, string>;
+  /** SDK query — created lazily in executePrompt because the prompt is supplied there. */
+  query?: SDKQuery;
+  input?: ReturnType<typeof createClaudeTurnInput>;
+  onEvent?: WorkRunEventHandler;
+  initialInput?: { uuid: string; onAccepted?: (turnId: string) => Promise<void> };
+  /** True for start/fork (a fresh run that owns its title), false for continue. */
+  isInitial: boolean;
+  /**
+   * The session's MCP tools and the UIs they declare. Set at system/init when
+   * the CLI can serve MCP Apps; absent otherwise, so no tool call carries an app.
+   */
+  mcpApps?: { catalog: ClaudeMcpCatalog; refreshing?: Promise<void> };
+}
+
+const { info: logInfo, warn: logWarn, error: logError } = createLogger("[ClaudeDriver]");
+
+/**
+ * Wire name of the subagent tool.
+ *
+ * The CLI names this tool in two layers and they do not agree: the registry
+ * calls it `Task` (that is what system/init's tool list reports and what
+ * permission rules and DEFAULT_ALLOWED_TOOLS match), while the `tool_use`
+ * blocks it emits name it `Agent`. Event mapping only ever sees wire names, so
+ * matching `Task` here would never fire.
+ */
+const SUBAGENT_TOOL_NAME = "Agent";
+
+/**
+ * Flatten an Agent tool_result into display text.
+ *
+ * The SDK returns the subagent's result as an array of content blocks —
+ * `[{type:"text",text:"…report…"},{type:"text",text:"agentId: … subagent_tokens: …"}]`
+ * — where the last block is continuation bookkeeping, not report. Persisting
+ * that raw JSON made the panel/tab show `[{"type":"text"…` verbatim. Text
+ * blocks are joined for display, the bookkeeping block is dropped, and the
+ * agentId it carries is extracted on the way out.
+ */
+export function normalizeSubagentOutput(output: unknown): {
+  text?: string;
+  agentId?: string;
+} {
+  const texts: string[] = Array.isArray(output)
+    ? output.flatMap((block) => {
+        const b = block as Record<string, unknown> | null;
+        return b && b.type === "text" && typeof b.text === "string" ? [b.text] : [];
+      })
+    : typeof output === "string"
+      ? [output]
+      : output !== undefined && output !== null
+        ? [safeJson(output)]
+        : [];
+
+  let agentId: string | undefined;
+  const visible: string[] = [];
+  for (const text of texts) {
+    const agentIdMatch = text.match(AGENT_ID_IN_RESULT);
+    if (agentIdMatch) agentId = agentIdMatch[1];
+    // A block that IS the bookkeeping (starts with "agentId:") is dropped;
+    // a report that merely mentions an agentId inline stays visible.
+    if (/^\s*agentId:/i.test(text)) continue;
+    visible.push(text);
+  }
+  return { text: visible.join("\n\n").trim() || undefined, agentId };
+}
+
+/**
+ * The SDK's launch acknowledgement for a backgrounded agent, as prose —
+ * there is no structured marker on the tool_result for this (checked against
+ * the tool_result content blocks the SDK emits), so this string IS the
+ * contract. SDK-coupled: if the wording changes, background agents degrade to
+ * the old behavior (ack read as a report / early green check) rather than
+ * losing data — the pinned test on this constant is the tripwire.
+ */
+export const BACKGROUND_LAUNCH_ACK = /^Async agent launched\b/i;
+
+/**
+ * Build the terminal `subagent` event for a finished subagent tool call.
+ * Shared by the `user` tool_result path (what the SDK actually sends) and the
+ * bare `tool_result` fallback in the default branch.
+ */
+export function buildSubagentCompletionEvent(args: {
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  toolUseId?: string;
+  agentId?: string;
+  providerRunId?: string;
+  ts: number;
+}): WorkRunEvent {
+  const { input, output, error, toolUseId, ts } = args;
+  const taskInput = input as Record<string, unknown> | undefined;
+  const subagentType = (taskInput?.subagent_type as string) || "general-purpose";
+  const { text, agentId: parsedAgentId } = normalizeSubagentOutput(output);
+  const agentId = args.agentId ?? parsedAgentId;
+
+  // A backgrounded agent's tool_result is only the LAUNCH ACK — the agent is
+  // still working, and its real outcome arrives later as a task_notification.
+  // Marking this "completed" showed a green check the moment the agent
+  // spawned, with the ack persisted as its "report". The structured
+  // run_in_background input wins whenever the model supplied it; the prose
+  // match is only the fallback for the (observed, common) case where the CLI
+  // backgrounds the agent without that flag ever appearing in the input.
+  const isLaunchAck =
+    !error &&
+    (taskInput?.run_in_background === true ||
+      BACKGROUND_LAUNCH_ACK.test(text ?? ""));
+  if (isLaunchAck) {
+    return {
+      type: "subagent",
+      phase: "running",
+      agentType: subagentType,
+      agentId,
+      providerRunId: args.providerRunId,
+      parentToolUseId: toolUseId || undefined,
+      ts,
+      metadata: { toolCallId: toolUseId || undefined },
+    };
+  }
+
+  return {
+    type: "subagent",
+    phase: error ? "failed" : "completed",
+    agentType: subagentType,
+    agentId,
+    providerRunId: args.providerRunId,
+    parentToolUseId: toolUseId || undefined,
+    result: text,
+    error,
+    ts,
+    metadata: { toolCallId: toolUseId || undefined },
+  };
+}
+
+type ApprovalRequester = (request: ToolApprovalRequest) => Promise<ToolApprovalResponse>;
+
+interface ClaudePermissionBridgeOptions {
+  runId: string;
+  allowedTools: Set<string>;
+  /** Read on every decision — see ClaudePermissionModeRef. */
+  permissionMode: ClaudePermissionModeRef;
+  /**
+   * True when the run's tool policy *replaced* the default allowlist rather
+   * than trimming it — a mode that ships its own tool set (chat). MCP tools
+   * then lose their blanket trust: a mode that removed Write must not get it
+   * back through a filesystem MCP server the space happens to have attached.
+   */
+  restrictedToolset?: boolean;
+  requestApproval?: ApprovalRequester;
+  cancelApproval?: (requestId: string) => void;
+  /**
+   * Whether the session's CLI takes `annotations[question].unanswered` on an
+   * AskUserQuestion answer. Read on every decision: the capability arrives on
+   * `system/init`, after the bridge is built.
+   */
+  acceptsUnansweredQuestions?: () => boolean;
+}
+
+/** Advertised in `system/init` by a CLI that takes `annotations[question].unanswered`. */
+const ASK_USER_UNANSWERED_CAPABILITY = "ask_user_question_unanswered_v1";
+
+/** What the model reads for a question the user closed without answering. */
+const DISMISSED_QUESTION_ANSWER = "The user dismissed this question without answering.";
+
+interface AskedQuestion {
+  question?: string;
+  header?: string;
+  options?: Array<{ label: string; description?: string }>;
+  multiSelect?: boolean;
+}
+
+/**
+ * AskUserQuestion's answer when the user closes the card. Questions answered
+ * before it keep their answers. The model only reads `answers`;
+ * `annotations[question].unanswered` records how the rest ended for the
+ * transcript.
+ */
+function dismissedQuestionsInput(
+  toolInput: Record<string, unknown>,
+  answered: Record<string, string>,
+): Record<string, unknown> {
+  const questions = (toolInput.questions ?? []) as AskedQuestion[];
+  const answers = { ...answered };
+  const annotations: Record<string, { unanswered: "dismissed" }> = {};
+  for (const { question } of questions) {
+    if (!question || Object.prototype.hasOwnProperty.call(answered, question)) continue;
+    answers[question] = DISMISSED_QUESTION_ANSWER;
+    annotations[question] = { unanswered: "dismissed" };
+  }
+  return { ...toolInput, answers, annotations };
+}
+
+interface PermissionDecision {
+  allowed: boolean;
+  updatedInput?: Record<string, unknown>;
+  updatedPermissions?: unknown[];
+  reason?: string;
+}
+
+/**
+ * Build the SDK permission callback used by both foreground and background
+ * agents. Do not mirror this through an in-process PreToolUse hook: dynamic
+ * Workflow children inherit the hook registration but cannot invoke the
+ * parent's callback, so their tool calls are cancelled before permission rules
+ * or canUseTool can settle them.
+ */
+export function createClaudePermissionBridge({
+  runId,
+  allowedTools,
+  permissionMode,
+  restrictedToolset = false,
+  requestApproval = requestToolApproval,
+  cancelApproval = cancelPendingRequest,
+  acceptsUnansweredQuestions = () => false,
+}: ClaudePermissionBridgeOptions): {
+  canUseTool: SDKCanUseTool;
+} {
+  async function decide(
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    context: SDKCanUseToolOptions,
+  ): Promise<PermissionDecision> {
+    const isAskUser = toolName === "AskUserQuestion";
+    const isPlanReview = toolName === "ExitPlanMode";
+    const mode = permissionMode.current;
+
+    // AskUserQuestion and the plan review are interactions, not permission
+    // gates — the user is the one answering — so they must still reach the
+    // renderer even in bypass mode.
+    // The `mcp__` shortcut is the pre-approval an MCP server earns by being
+    // configured at all — but only while the run is on the default toolset.
+    // Under a replacement allowlist it falls through to the approval dialog,
+    // matching the copilot driver's pre-tool hook.
+    // While the session plans, nothing waves a file change through: the SDK
+    // (>= 0.3.269) asks here about plan-mode writes even under
+    // allowDangerouslySkipPermissions, and the plan is not approved yet.
+    const bypass = mode === "bypassPermissions" && !isAskUser && !isPlanReview;
+    const mcpTrusted = !restrictedToolset && toolName.startsWith("mcp__");
+    const planGated = mode === "plan" && couldModifyFiles(toolName);
+    // A provider's guarded prompt or an explicit ask rule still needs the
+    // user's decision, including managed connectors in a bypass run.
+    const requiresUserApproval = context.defaultToNo === true ||
+      context.suppressAlwaysAllowRule === true || !!context.matchedAskRule;
+    if (!planGated && !requiresUserApproval && (bypass || allowedTools.has(toolName) || mcpTrusted)) {
+      return { allowed: true, updatedInput: toolInput };
+    }
+
+    if (context.signal.aborted) {
+      return { allowed: false, reason: "Request aborted" };
+    }
+
+    const requestId =
+      context.requestId || `${runId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const req: ToolApprovalRequest = {
+      requestId,
+      runId,
+      toolName,
+      toolInput,
+      kind: isAskUser ? "ask_user" : "tool_approval",
+      header: context.displayName,
+      question: context.title,
+      description: context.description ?? context.decisionReason,
+      defaultToNo: context.defaultToNo,
+      suppressAlwaysAllowRule: context.suppressAlwaysAllowRule,
+      timestamp: Date.now(),
+    };
+
+    if (isAskUser) return askQuestions(req, toolInput, context.signal);
+
+    const response = await waitForUser(req, context.signal);
+    if (!response) return { allowed: false, reason: "Permission request aborted" };
+    if (!response.approved) return { allowed: false, reason: "User denied permission" };
+
+    if (isPlanReview) {
+      // Updating the persisted provider config only affects future queries.
+      // Move the currently running Claude SDK session out of plan mode too:
+      // back to the mode it planned from (a bypass run stays bypass), or to
+      // the UI's "Edit" selection when the run itself started in plan mode.
+      const { current, beforePlan } = permissionMode;
+      const nextMode = beforePlan ?? (current === "plan" ? "acceptEdits" : current);
+      setClaudePermissionMode(permissionMode, nextMode);
+      return {
+        allowed: true,
+        updatedInput: toolInput,
+        updatedPermissions: [
+          {
+            type: "setMode",
+            mode: nextMode,
+            destination: "session",
+          },
+        ],
+      };
+    }
+
+    return { allowed: true, updatedInput: toolInput };
+  }
+
+  /** Parks `req` with the broker until the user answers, or null once the SDK aborts. */
+  async function waitForUser(req: ToolApprovalRequest, signal: AbortSignal): Promise<ToolApprovalResponse | null> {
+    if (signal.aborted) return null;
+    let resolveAbort: (() => void) | undefined;
+    const aborted = new Promise<null>((resolve) => {
+      resolveAbort = () => resolve(null);
+      signal.addEventListener("abort", resolveAbort, { once: true });
+    });
+
+    let response: ToolApprovalResponse | null;
+    try {
+      response = await Promise.race([requestApproval(req), aborted]);
+    } finally {
+      if (resolveAbort) signal.removeEventListener("abort", resolveAbort);
+    }
+    // The SDK may close a control stream while a permission request is
+    // parked (for example during background-agent handoff). Resolve the
+    // broker entry as well so the renderer never retains a ghost dialog.
+    if (!response) cancelApproval(req.requestId);
+    return response;
+  }
+
+  /**
+   * AskUserQuestion can ask up to four questions; the dialog shows one, so
+   * they go to the user in turn, each answer keyed by its own question. Past
+   * the first, a question parks under `<requestId>-q<n>`, which the broker
+   * still cancels with the SDK request.
+   */
+  async function askQuestions(
+    req: ToolApprovalRequest,
+    toolInput: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<PermissionDecision> {
+    const questions = (toolInput.questions ?? []) as AskedQuestion[];
+    const answers: Record<string, string> = {};
+    for (const [index, asked] of questions.entries()) {
+      const position = questions.length > 1 ? `${index + 1} of ${questions.length}` : undefined;
+      const response = await waitForUser({
+        ...req,
+        requestId: index === 0 ? req.requestId : `${req.requestId}-q${index}`,
+        header: [asked.header ?? req.header, position].filter(Boolean).join(" · ") || undefined,
+        question: asked.question,
+        options: asked.options,
+        multiSelect: asked.multiSelect,
+        timestamp: Date.now(),
+      }, signal);
+      if (!response) return { allowed: false, reason: "Permission request aborted" };
+      if (!response.approved) {
+        // Dismissing a question is not a refusal. A CLI that takes it gets the
+        // rest back unanswered, instead of a tool failing as denied.
+        if (acceptsUnansweredQuestions()) {
+          return { allowed: true, updatedInput: dismissedQuestionsInput(toolInput, answers) };
+        }
+        return { allowed: false, reason: "User denied permission" };
+      }
+      if (asked.question && response.answer !== undefined) answers[asked.question] = response.answer;
+    }
+    return { allowed: true, updatedInput: { ...toolInput, answers } };
+  }
+
+  const canUseTool: SDKCanUseTool = async (toolName, toolInput, options) => {
+    const decision = await decide(toolName, toolInput, options);
+    if (!decision.allowed) {
+      return {
+        behavior: "deny",
+        message: decision.reason || "Permission denied",
+        toolUseID: options.toolUseID,
+      };
+    }
+    return {
+      behavior: "allow",
+      updatedInput: decision.updatedInput ?? toolInput,
+      ...(decision.updatedPermissions
+        ? { updatedPermissions: decision.updatedPermissions }
+        : {}),
+      toolUseID: options.toolUseID,
+    };
+  };
+
+  return { canUseTool };
+}
+
+/** Narrow arbitrary JSON to the value types MCP allows in an elicitation result. */
+function coerceElicitationContent(
+  parsed: unknown,
+): Record<string, string | number | boolean | string[]> | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const out: Record<string, string | number | boolean | string[]> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      out[key] = value;
+    } else if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+      out[key] = value as string[];
+    }
+    // Anything else (nested objects, nulls) is not expressible — drop it rather
+    // than sending a payload the server will reject wholesale.
+  }
+  return out;
+}
+
+/**
+ * Bridge MCP elicitation requests to the same approval broker that already
+ * backs tool approvals and AskUserQuestion.
+ *
+ * Without this the SDK auto-declines every elicitation, so an MCP server that
+ * needs a form filled or an auth URL visited fails with nothing shown to the
+ * user — the failure mode this exists to remove.
+ */
+export function createClaudeElicitationHandler({
+  runId,
+  requestApproval = requestToolApproval,
+  cancelApproval = cancelPendingRequest,
+}: {
+  runId: string;
+  requestApproval?: ApprovalRequester;
+  cancelApproval?: (requestId: string) => void;
+}): SDKOnElicitation {
+  return async (request, options) => {
+    if (options.signal.aborted) return { action: "cancel" };
+
+    const requestId = `${runId}-elicit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const mode = request.mode ?? (request.url ? "url" : "form");
+    const req: ToolApprovalRequest = {
+      requestId,
+      runId,
+      // The dialog's title slot; the server name is the most identifying label.
+      toolName: request.displayName || request.serverName,
+      kind: "elicitation",
+      header: request.title,
+      question: request.message,
+      description: request.description,
+      serverName: request.serverName,
+      elicitationMode: mode,
+      url: request.url,
+      requestedSchema: request.requestedSchema,
+      timestamp: Date.now(),
+    };
+
+    let resolveAbort: (() => void) | undefined;
+    const aborted = new Promise<null>((resolve) => {
+      resolveAbort = () => resolve(null);
+      options.signal.addEventListener("abort", resolveAbort, { once: true });
+    });
+
+    let response: ToolApprovalResponse | null;
+    try {
+      response = await Promise.race([requestApproval(req), aborted]);
+    } finally {
+      if (resolveAbort) options.signal.removeEventListener("abort", resolveAbort);
+    }
+
+    if (!response) {
+      // Settle the broker entry too, so the renderer never keeps a ghost dialog.
+      cancelApproval(requestId);
+      return { action: "cancel" };
+    }
+    if (response.answer === "cancel") return { action: "cancel" };
+    if (!response.approved) return { action: "decline" };
+
+    if (mode === "url") return { action: "accept" };
+
+    const content = response.answer
+      ? coerceElicitationContent(safeParseJson(response.answer))
+      : null;
+    if (!content) {
+      // Accepting with content we know is wrong turns into an opaque server-side
+      // validation error; declining reports the real problem — we could not
+      // collect the fields.
+      logWarn("Elicitation accepted without usable form content; declining");
+      return { action: "decline" };
+    }
+    return { action: "accept", content };
+  };
+}
+
+function safeParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Why an assistant turn failed, in words a user can act on, and how loudly to
+ * say it. `warn` is for what the CLI retries on its own; `error` is for what
+ * stays broken until someone does something about it.
+ */
+const ASSISTANT_ERRORS: Record<
+  SDKAssistantMessageError,
+  { text: string; level: "warn" | "error" }
+> = {
+  authentication_failed: { text: "authentication failed — sign in again", level: "error" },
+  oauth_org_not_allowed: { text: "this organization does not allow this login", level: "error" },
+  billing_error: { text: "billing problem on this account", level: "error" },
+  invalid_request: { text: "the request was rejected as invalid", level: "error" },
+  model_not_found: { text: "the selected model is unavailable", level: "error" },
+  unknown: { text: "the request failed", level: "error" },
+  rate_limit: { text: "rate limited", level: "warn" },
+  overloaded: { text: "the API is overloaded", level: "warn" },
+  server_error: { text: "the API returned a server error", level: "warn" },
+  max_output_tokens: { text: "the response hit the output token limit", level: "warn" },
+};
+
+function describeAssistantError(code: string | undefined): { text: string; level: "warn" | "error" } | null {
+  if (!code) return null;
+  return ASSISTANT_ERRORS[code as SDKAssistantMessageError] ?? null;
+}
+
+/**
+ * Report an assistant turn that failed.
+ *
+ * The CLI still emits the assistant message, just with no content and this flag
+ * set, so an auth or billing failure otherwise reads as the agent going quiet.
+ * Repeats of the same code are collapsed — a run can retry an overload many
+ * times, and one line per attempt buries the rest of the transcript.
+ */
+export function buildAssistantErrorEvent(
+  args: { error?: string; lastError?: string; sawRateLimitNotice?: boolean },
+  ts: number,
+): WorkRunEvent | null {
+  const { error, lastError, sawRateLimitNotice } = args;
+  if (!error || error === lastError) return null;
+  // `rate_limit_event` has its own line, carrying the scope and the reset time
+  // this one cannot. Repeating it here would say strictly less, twice.
+  if (error === "rate_limit" && sawRateLimitNotice) return null;
+  const described = describeAssistantError(error);
+  return {
+    type: "log",
+    message: `[api] ${described?.text ?? error}`,
+    level: described?.level ?? "error",
+    ts,
+    metadata: { source: "assistant_error", error },
+  };
+}
+
+/**
+ * Why the CLI would not serve fast mode, in words a user can act on.
+ *
+ * `sdk_opt_in_required` is absent on purpose: it means nothing asked for fast
+ * mode, which is not a failure and never reaches the reporter below.
+ */
+const FAST_MODE_REASONS: Record<FastModeDisabledReason, string> = {
+  extra_usage_disabled: "extra usage is turned off for this account",
+  free: "not available on the free plan",
+  model_not_allowed: "the selected model does not support it",
+  not_first_party: "not available on this API provider",
+  disabled_by_env: "disabled by an environment variable",
+  preference: "turned off in Claude Code settings",
+  network_error: "the availability check failed",
+  pending: "the availability check has not finished",
+  sdk_opt_in_required: "the request did not opt in",
+  unknown: "the CLI did not say why",
+};
+
+/**
+ * Report fast mode failing to engage.
+ *
+ * The CLI accepts the request and then silently serves at standard speed, so
+ * without this the button reads "on" for a whole run that never ran fast. Only
+ * speaks when the run actually asked for it, and only when the state changes,
+ * since init and result both carry it.
+ */
+export function buildFastModeEvent(
+  args: {
+    requested: boolean;
+    state?: FastModeState;
+    reason?: FastModeDisabledReason;
+    lastState?: FastModeState;
+  },
+  ts: number,
+): WorkRunEvent | null {
+  const { requested, state, reason, lastState } = args;
+  if (!requested || !state || state === lastState) return null;
+  if (state === "on") {
+    return {
+      type: "log",
+      message: "[fast-mode] active",
+      level: "info",
+      ts,
+      metadata: { source: "fast_mode", state },
+    };
+  }
+  const detail =
+    state === "cooldown"
+      ? "paused after a rate limit"
+      : reason
+        ? FAST_MODE_REASONS[reason]
+        : undefined;
+  return {
+    type: "log",
+    message: `[fast-mode] requested but not active${detail ? ` — ${detail}` : ""}`,
+    level: "warn",
+    ts,
+    metadata: { source: "fast_mode", state, reason },
+  };
+}
+
+const CONTEXT_USAGE_KINDS = new Set(["used", "free", "buffer", "deferred"]);
+
+/** The kinds come off a subprocess, so an unknown one is not trusted. */
+function isContextUsageKind(value: unknown): value is WorkRunContextUsageCategory["kind"] {
+  return typeof value === "string" && CONTEXT_USAGE_KINDS.has(value);
+}
+
+/**
+ * The two category names that are space rather than content.
+ *
+ * Only consulted for a row without a kind the meter knows (an older CLI). A
+ * rename upstream degrades gracefully — the row keeps its real tokens and just
+ * renders as an ordinary category instead of as empty space.
+ */
+const FREE_CATEGORY_NAME = "free space";
+const BUFFER_CATEGORY_NAME = "autocompact buffer";
+
+/**
+ * Map the `get_context_usage` control reply to the renderer's meter event.
+ *
+ * `maxTokens` is the window `percentage` was computed against, so the meter
+ * measures the same thing the CLI's `/context` report does.
+ */
+export function mapContextUsageResponse(
+  response: SDKContextUsageResponse | null | undefined,
+  ts: number,
+): WorkRunEvent | null {
+  if (!response || !(response.maxTokens > 0)) return null;
+  const categories = response.categories
+    ?.filter((category) => category.tokens > 0)
+    .map((category) => {
+      if (isContextUsageKind(category.kind)) {
+        return { name: category.name, tokens: category.tokens, kind: category.kind };
+      }
+      const name = category.name.trim().toLowerCase();
+      const kind: WorkRunContextUsageCategory["kind"] = category.isDeferred
+        ? "deferred"
+        : name === FREE_CATEGORY_NAME
+          ? "free"
+          : name === BUFFER_CATEGORY_NAME
+            ? "buffer"
+            : "used";
+      return { name: category.name, tokens: category.tokens, kind };
+    });
+  return {
+    type: "context_usage",
+    totalTokens: response.totalTokens,
+    maxTokens: response.maxTokens,
+    percentage: response.percentage,
+    model: response.model,
+    ...(response.isAutoCompactEnabled !== undefined
+      ? { isAutoCompactEnabled: response.isAutoCompactEnabled }
+      : {}),
+    ...(response.autoCompactThreshold !== undefined
+      ? { autoCompactThreshold: response.autoCompactThreshold }
+      : {}),
+    ...(categories?.length ? { categories } : {}),
+    ts,
+  };
+}
+
+/**
+ * Map the `/context` message snapshot to the renderer's meter event.
+ *
+ * Returns null when there is nothing meaningful to show: a subagent message
+ * (its window is not the main conversation's), an older CLI that sends no
+ * snapshot, or a snapshot with no window to measure against. `total_tokens` is
+ * passed through unclamped — it can exceed the window, and the meter clamps.
+ */
+export function buildContextUsageEvent(
+  msg: { context_usage?: SDKContextUsage; parent_tool_use_id: string | null; agent_id?: string },
+  ts: number,
+): WorkRunEvent | null {
+  const ctx = msg.context_usage;
+  if (!ctx || msg.parent_tool_use_id || msg.agent_id || !(ctx.raw_max_tokens > 0)) return null;
+  // Unknown kinds are dropped rather than widening the renderer's union — a row
+  // it can't classify has no place to go.
+  const categories = ctx.categories
+    ?.filter(
+      (c): c is WorkRunContextUsageCategory => c.tokens > 0 && isContextUsageKind(c.kind),
+    )
+    .map((c) => ({ name: c.name, tokens: c.tokens, kind: c.kind }));
+  return {
+    type: "context_usage",
+    totalTokens: ctx.total_tokens,
+    maxTokens: ctx.raw_max_tokens,
+    percentage: ctx.percentage,
+    model: ctx.model,
+    ...(categories?.length ? { categories } : {}),
+    ts,
+  };
+}
+
+/**
+ * A session's cost and per-model usage totals, as the CLI holds them.
+ *
+ * Since CLI 2.1.277 a resumed or forked session does not start its totals at
+ * zero: it continues from the totals its transcript saved, so a `result`
+ * carries the whole session's spend rather than this query's. Every Mains turn
+ * is its own query — a continue resumes, a fork forks — and turn costs are
+ * summed downstream, so a turn is booked as its result minus the totals the
+ * session held when the query opened.
+ */
+export interface ClaudeSessionTotals {
+  costUsd: number;
+  modelUsage: Record<string, SDKModelUsage>;
+}
+
+/** Map the `/usage` control reply to the session's totals; null when it carries none. */
+export function mapClaudeSessionTotals(response: unknown): ClaudeSessionTotals | null {
+  const session = (response as { session?: { total_cost_usd?: unknown; model_usage?: unknown } } | null)
+    ?.session;
+  if (!session || typeof session.total_cost_usd !== "number") return null;
+  const modelUsage =
+    session.model_usage && typeof session.model_usage === "object"
+      ? (session.model_usage as Record<string, SDKModelUsage>)
+      : {};
+  return { costUsd: session.total_cost_usd, modelUsage };
+}
+
+/** Map account allowances separately from the /usage response's session totals. */
+export function mapClaudeRateLimits(response: unknown): RateLimitInfo | null {
+  const usage = response as SDKUsageResponse | null | undefined;
+  const limits = usage?.rate_limits;
+  if (usage?.rate_limits_available === false || !limits || typeof limits !== "object") return null;
+
+  const buckets: NonNullable<RateLimitInfo["rateLimitsByLimitId"]> = {};
+  function addWindow(
+    limitId: string,
+    label: string,
+    window: SDKUsageWindow | null | undefined,
+    windowDurationMins?: number,
+  ): void {
+    const percent = window?.utilization;
+    // Null means unknown, including on a plan that does not include this meter.
+    if (typeof percent !== "number" || !Number.isFinite(percent)) return;
+    const resetMs = typeof window?.resets_at === "string" ? Date.parse(window.resets_at) : NaN;
+    buckets[limitId] = {
+      limitId,
+      limitName: label,
+      primary: {
+        label,
+        usedPercent: Math.max(0, Math.min(100, Math.round(percent))),
+        ...(windowDurationMins !== undefined ? { windowDurationMins } : {}),
+        ...(Number.isFinite(resetMs) ? { resetsAt: Math.floor(resetMs / 1000) } : {}),
+      },
+    };
+  }
+
+  const weeklyMins = 7 * 24 * 60;
+  addWindow("five_hour", "5 hour usage limit", limits.five_hour, 5 * 60);
+  addWindow("seven_day", "Weekly usage limit", limits.seven_day, weeklyMins);
+  addWindow("seven_day_oauth_apps", "OAuth apps weekly usage limit", limits.seven_day_oauth_apps, weeklyMins);
+  addWindow("seven_day_opus", "Opus weekly usage limit", limits.seven_day_opus, weeklyMins);
+  addWindow("seven_day_sonnet", "Sonnet weekly usage limit", limits.seven_day_sonnet, weeklyMins);
+  if (Array.isArray(limits.model_scoped)) {
+    for (const window of limits.model_scoped) {
+      const name = typeof window?.display_name === "string" ? window.display_name.trim() : "";
+      if (!name) continue;
+      const model = name.toLowerCase();
+      // A scoped row may repeat an older named meter; keep only its fresh value.
+      const limitId = model === "opus" || model === "sonnet" ? `seven_day_${model}` : `model:${model}`;
+      addWindow(limitId, `${name} weekly usage limit`, window, weeklyMins);
+    }
+  }
+  if (limits.extra_usage?.is_enabled === true) {
+    addWindow("extra_usage", "Extra usage", limits.extra_usage);
+  }
+  if (Object.keys(buckets).length === 0) return null;
+
+  return {
+    ...(typeof usage?.subscription_type === "string" ? { planType: usage.subscription_type } : {}),
+    primary: buckets.five_hour?.primary,
+    secondary: buckets.seven_day?.primary,
+    rateLimitsByLimitId: buckets,
+  };
+}
+
+/** The fields that accumulate; `contextWindow` and `maxOutputTokens` describe the model. */
+const ADDITIVE_MODEL_USAGE_FIELDS = [
+  "costUSD",
+  "inputTokens",
+  "outputTokens",
+  "thinkingTokens",
+  "cacheReadInputTokens",
+  "cacheCreationInputTokens",
+  "webSearchRequests",
+] as const;
+
+/**
+ * This query's share of a `result`'s cumulative totals.
+ *
+ * Without a baseline the result is taken as it is: a new session starts at
+ * zero, and a CLI that could not report its totals leaves nothing to subtract.
+ * A result below its baseline means the totals were reset mid-query (`/clear`
+ * resets them), so it already counts from zero. Models only earlier turns used
+ * drop out rather than riding along as zero rows.
+ */
+export function subtractClaudeSessionTotals(
+  result: { total_cost_usd: number; modelUsage?: Record<string, SDKModelUsage> },
+  baseline: ClaudeSessionTotals | null,
+): ClaudeSessionTotals {
+  const modelUsage = result.modelUsage ?? {};
+  if (!baseline || result.total_cost_usd < baseline.costUsd) {
+    return { costUsd: result.total_cost_usd, modelUsage };
+  }
+  const own: Record<string, SDKModelUsage> = {};
+  for (const [model, usage] of Object.entries(modelUsage)) {
+    const before = baseline.modelUsage[model];
+    if (!before) {
+      own[model] = usage;
+      continue;
+    }
+    const entry = { ...usage };
+    let used = false;
+    for (const field of ADDITIVE_MODEL_USAGE_FIELDS) {
+      // An optional field the CLI did not send stays absent.
+      if (usage[field] === undefined) continue;
+      const value = Math.max(0, usage[field] - (before[field] ?? 0));
+      entry[field] = value;
+      if (value > 0) used = true;
+    }
+    if (used) own[model] = entry;
+  }
+  return { costUsd: result.total_cost_usd - baseline.costUsd, modelUsage: own };
+}
+
+const SESSION_TOTALS_TIMEOUT_MS = 5_000;
+
+/**
+ * Read the session's totals before the query's first result.
+ *
+ * The `/usage` control request is the only reader, and the SDK marks it
+ * experimental, so it is feature-detected. Asked for as the query opens, it
+ * answers with what the CLI loaded from the transcript; `skipBehaviors` skips
+ * the local transcript scan the reply does not need. Any failure books the
+ * turn at its raw result, which then includes earlier turns — hence the warning.
+ */
+async function readClaudeSessionTotals(query: SDKQuery): Promise<ClaudeSessionTotals | null> {
+  if (typeof query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== "function") {
+    logWarn("CLI cannot report session totals; this turn's cost will include earlier turns");
+    return null;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const totals = await Promise.race([
+      query
+        .usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })
+        .then(mapClaudeSessionTotals),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), SESSION_TOTALS_TIMEOUT_MS);
+      }),
+    ]);
+    if (!totals) logWarn("No session totals from the CLI; this turn's cost will include earlier turns");
+    return totals;
+  } catch (err) {
+    logWarn(
+      "Failed to read session totals; this turn's cost will include earlier turns:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// MCP Apps (SEP-1865)
+// ─────────────────────────────────────────────────────────────
+
+/** Both are needed: one says which tool has a UI, the other reads that UI. */
+const MCP_APPS_CAPABILITIES = ["mcp_tool_ui_meta_v1", "mcp_read_resource_v1"];
+
+export function supportsClaudeMcpApps(capabilities: string[] | undefined): boolean {
+  return MCP_APPS_CAPABILITIES.every((capability) => capabilities?.includes(capability));
+}
+
+/** The CLI's own rule for names inside `mcp__<server>__<tool>`. */
+function normalizeMcpName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/** The name a tool_use block carries for an MCP tool. */
+export function mcpToolWireName(server: string, tool: string): string {
+  return `mcp__${normalizeMcpName(server)}__${normalizeMcpName(tool)}`;
+}
+
+/** An MCP tool that declares a `ui://` resource, keyed by its wire name. */
+export interface ClaudeMcpAppTool {
+  /** Server name as `mcpServerStatus()` reports it — what resource reads take. */
+  server: string;
+  tool: string;
+  resourceUri: string;
+}
+
+export interface ClaudeMcpCatalog {
+  /** Every MCP tool the CLI has reported, UI or not — so a miss means "ask again". */
+  known: Set<string>;
+  apps: Map<string, ClaudeMcpAppTool>;
+}
+
+interface McpStatusTool {
+  name?: unknown;
+  _meta?: { ui?: { resourceUri?: unknown; visibility?: unknown }; "ui/resourceUri"?: unknown };
+}
+
+interface McpStatusServer {
+  name?: unknown;
+  status?: unknown;
+  source?: unknown;
+  tools?: McpStatusTool[];
+}
+
+/** Wait for this server's initial connection without reconnecting or replaying a tool call. */
+export async function waitForClaudeMcpServer(
+  readStatuses: () => Promise<unknown[]>,
+  serverName: string,
+): Promise<unknown[]> {
+  const deadline = Date.now() + 30_000;
+  let statuses = await readStatuses();
+  while (
+    (statuses as McpStatusServer[]).find((server) => server?.name === serverName)?.status === "pending" &&
+    Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, deadline - Date.now())));
+    statuses = await readStatuses();
+  }
+  return statuses;
+}
+
+function mcpToolResourceUri(tool: McpStatusTool): string | undefined {
+  const uri = tool._meta?.ui?.resourceUri ?? tool._meta?.["ui/resourceUri"];
+  return typeof uri === "string" && uri.startsWith("ui://") ? uri : undefined;
+}
+
+/**
+ * Index `mcpServerStatus()` by wire name. In-process SDK servers are left out:
+ * the CLI refuses to read their resources, and mains registers no UI on them.
+ */
+export function buildClaudeMcpCatalog(statuses: unknown[]): ClaudeMcpCatalog {
+  const catalog: ClaudeMcpCatalog = { known: new Set(), apps: new Map() };
+  for (const status of statuses as McpStatusServer[]) {
+    if (typeof status?.name !== "string" || status.source === "sdk") continue;
+    for (const tool of Array.isArray(status.tools) ? status.tools : []) {
+      if (typeof tool?.name !== "string") continue;
+      const wireName = mcpToolWireName(status.name, tool.name);
+      catalog.known.add(wireName);
+      const resourceUri = mcpToolResourceUri(tool);
+      if (resourceUri) {
+        catalog.apps.set(wireName, { server: status.name, tool: tool.name, resourceUri });
+      }
+    }
+  }
+  return catalog;
+}
+
+/**
+ * The `mcp_call` control request behind an app's tool call. The result goes
+ * back to the app, not to a model, so `result_not_for_model` asks for the
+ * server's own content blocks: no single-string content, resized images,
+ * truncation or saved-file note in place of the result. A CLI without
+ * `mcp_call_result_not_for_model_v1` ignores the member and answers in the
+ * model-facing shape, which `toMcpCallToolResult` still reads.
+ */
+export function buildMcpAppCallRequest(
+  server: string,
+  tool: string,
+  args?: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    subtype: "mcp_call",
+    tool: mcpToolWireName(server, tool),
+    ...(args !== undefined ? { arguments: args } : {}),
+    result_not_for_model: true,
+  };
+}
+
+/**
+ * Shape an MCP tool result the way an app widget reads it. A model turn's
+ * result (and an app call on an older CLI) hands the content over as a single
+ * string, where MCP has a list of content blocks.
+ */
+export function toMcpCallToolResult(raw: unknown, fallbackContent?: unknown): McpAppCallToolResult | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    // Text-only MCP tools may have no SDK result envelope. Their model-facing
+    // content is still the complete app result, without structured data to add.
+    const content = Array.isArray(raw) ? raw : fallbackContent;
+    if (Array.isArray(content)) return { content: [...content] };
+    if (typeof content === "string") return { content: [{ type: "text", text: content }] };
+    return undefined;
+  }
+  const result = raw as Record<string, unknown>;
+  const body = result.content === undefined || result.content === "" ||
+    (Array.isArray(result.content) && result.content.length === 0)
+    ? fallbackContent ?? result.content : result.content;
+  const omitted = result.structuredContentOmitted === true;
+  const content =
+    typeof body === "string"
+      ? [{ type: "text", text: body }]
+      : Array.isArray(body)
+        ? [...body]
+        : [];
+  if (omitted && fallbackContent !== undefined) {
+    // The model-facing preview can name the saved full-result file even when
+    // the SDK's surviving text contains only the original output prefix.
+    const fallback = typeof fallbackContent === "string" ? [{ type: "text", text: fallbackContent }]
+      : Array.isArray(fallbackContent) ? fallbackContent : [];
+    const seen = new Set(content.flatMap((block) => block?.type === "text" && typeof block.text === "string" ? [block.text] : []));
+    for (const block of fallback) {
+      if (block?.type === "text" && typeof block.text === "string" && block.text && !seen.has(block.text)) {
+        content.push({ type: "text", text: block.text });
+        seen.add(block.text);
+      }
+    }
+  }
+  return {
+    content,
+    ...(!omitted && result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+    ...(omitted ? { structuredContentOmitted: true } : {}),
+    ...(Array.isArray(result.resourceLinks) ? { resourceLinks: result.resourceLinks } : {}),
+    ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
+    ...(result._meta !== undefined ? { _meta: result._meta } : {}),
+  };
+}
+
+/**
+ * Refuse an app's tool call the MCP Apps rules do not allow. The app is
+ * untrusted page content and `mcp_call` skips permission checks, so the tool
+ * must be one its own server reports, and not one it keeps for the model
+ * (`visibility` without "app"). An unconnected server fails closed.
+ */
+export function assertMcpToolCallableFromApp(
+  statuses: unknown[],
+  server: string,
+  tool: string,
+): void {
+  const status = (statuses as McpStatusServer[]).find((s) => s?.name === server);
+  if (!status || status.source === "sdk") {
+    throw new Error(`MCP server "${server}" is not available`);
+  }
+  if (status.status !== "connected") {
+    throw new Error(`MCP server "${server}" is not connected`);
+  }
+  const entry = status.tools?.find((t) => t?.name === tool);
+  if (!entry) {
+    throw new Error(`MCP server "${server}" has no tool "${tool}"`);
+  }
+  const visibility = entry._meta?.ui?.visibility;
+  if (Array.isArray(visibility) && !visibility.includes("app")) {
+    throw new Error(`Tool "${tool}" is not available to apps`);
+  }
+}
+
+/** Identity outlives completion: ended parents and later runs still reference it. */
+function taskEventBase(taskId: string, taskIndex: ClaudeTaskIndex, ts: number) {
+  const task = taskIndex.get(taskId);
+  return {
+    type: "task" as const,
+    taskId,
+    toolCallId: task?.toolUseId,
+    providerRunId: task?.providerRunId,
+    parentTaskId: task?.parentTaskId,
+    parentToolCallId: task?.parentTaskId === null
+      ? null : task?.parentTaskId ? taskIndex.get(task.parentTaskId)?.toolUseId : undefined,
+    description: task?.description,
+    subagentType: task?.subagentType,
+    taskType: task?.taskType,
+    isBackgrounded: task?.isBackgrounded,
+    ambient: task?.ambient,
+    ts,
+  };
+}
+
+/**
+ * Map task edges using both stable task identity and native execution identity.
+ * Progress from a later run cannot borrow the earlier run's call anchor.
+ * Older CLIs without run_id retain the task_started/tool_use_id fallback.
+ */
+export function mapTaskMessage(
+  msg: SDKSystemMessage,
+  taskIndex: ClaudeTaskIndex,
+  ts: number,
+): WorkRunTaskEvent | null {
+  const taskId = msg.task_id;
+  if (!taskId) return null;
+  const known = taskIndex.get(taskId);
+  if (msg.run_id && known?.providerRunId && msg.run_id < known.providerRunId) return null;
+  if (!msg.run_id && known?.providerRunId && msg.tool_use_id && known.toolUseId && msg.tool_use_id !== known.toolUseId) return null;
+
+  const newExecution = !!(msg.run_id && known && (!known.providerRunId || msg.run_id > known.providerRunId));
+  const legacyStart = msg.subtype === "task_started" && !msg.run_id && !known?.providerRunId;
+  const task: NonNullable<ReturnType<ClaudeTaskIndex["get"]>> = legacyStart ? {} : newExecution
+    ? { originalToolUseId: known?.originalToolUseId ?? known?.toolUseId,
+      parentTaskId: known?.parentTaskId, taskType: known?.taskType, subagentType: known?.subagentType }
+    : { ...known };
+  if (task.terminal && msg.subtype !== "task_notification") return null;
+  if (task.notified && msg.subtype === "task_notification") return null;
+
+  task.providerRunId = msg.run_id ?? task.providerRunId;
+  task.toolUseId = msg.tool_use_id ?? task.toolUseId ??
+    (msg.subtype === "task_started" && msg.run_id ? task.originalToolUseId : undefined);
+  task.originalToolUseId ??= task.toolUseId;
+  task.description = msg.patch?.description ?? msg.description ?? task.description;
+  task.subagentType = msg.subagent_type ?? task.subagentType;
+  task.taskType = msg.task_type ?? task.taskType;
+  task.parentTaskId = msg.parent_task_id ?? task.parentTaskId;
+  task.isBackgrounded = msg.patch?.is_backgrounded ?? msg.is_backgrounded ?? task.isBackgrounded;
+  task.ambient = msg.ambient ?? task.ambient;
+  if (msg.subtype === "task_notification") {
+    task.terminal = true;
+    task.notified = true;
+  } else if (msg.subtype === "task_updated" && ["completed", "failed", "killed"].includes(msg.patch?.status ?? "")) {
+    task.terminal = true;
+  }
+  taskIndex.set(taskId, task);
+  if (!task.toolUseId) return null;
+
+  const base = { ...taskEventBase(taskId, taskIndex, ts), skipTranscript: msg.skip_transcript };
+  const usage = msg.usage
+    ? { totalTokens: msg.usage.total_tokens, toolUses: msg.usage.tool_uses, durationMs: msg.usage.duration_ms }
+    : undefined;
+  switch (msg.subtype) {
+    case "task_started":
+      return { ...base, phase: "started", status: "running" };
+    case "task_progress":
+      return { ...base, phase: "progress", status: "running", usage, lastToolName: msg.last_tool_name, summary: msg.summary };
+    case "task_updated":
+      return { ...base, phase: "updated", status: msg.patch?.status, error: msg.patch?.error };
+    case "task_notification": {
+      const status = msg.status === "completed" || msg.status === "failed" || msg.status === "stopped" ? msg.status : undefined;
+      return { ...base, phase: "completed", status, summary: msg.summary, outputFile: msg.output_file,
+        usage, error: status === "failed" ? msg.summary : undefined };
+    }
+    default:
+      return null;
+  }
+}
+
+function sameTaskExecution(task: { providerRunId?: string }, background: SDKBackgroundTask): boolean {
+  return task.providerRunId === background.run_id;
+}
+
+/** Full membership is independent of edge ordering; absence supplies no outcome. */
+function mapBackgroundTasksMessage(msg: SDKSystemMessage, cs: ClaudeSession, ts: number): WorkRunTaskEvent[] {
+  const events: WorkRunTaskEvent[] = [];
+  cs.backgroundTasks = new Map((msg.tasks ?? []).map((task) => [task.task_id, task]));
+  for (const background of cs.backgroundTasks.values()) {
+    const known = cs.taskIndex.get(background.task_id);
+    if (background.run_id && known?.providerRunId && background.run_id < known.providerRunId) continue;
+    const newExecution = !!(background.run_id && known && (!known.providerRunId || background.run_id > known.providerRunId));
+    cs.taskIndex.set(background.task_id, {
+      ...(newExecution ? { originalToolUseId: known?.originalToolUseId ?? known?.toolUseId } : known),
+      providerRunId: background.run_id ?? known?.providerRunId,
+      description: background.description,
+      subagentType: background.subagent_type ?? known?.subagentType,
+      taskType: background.task_type,
+      parentTaskId: background.parent_task_id ?? null,
+      isBackgrounded: true,
+      ambient: background.ambient ?? false,
+    });
+  }
+  for (const [taskId, task] of cs.taskIndex) {
+    if (!task.toolUseId) continue;
+    const background = cs.backgroundTasks.get(taskId);
+    // A stale snapshot member cannot update the current execution's activity.
+    if (background && !sameTaskExecution(task, background)) continue;
+    if (!background && !task.isBackgrounded) continue;
+    events.push({ ...taskEventBase(taskId, cs.taskIndex, ts), phase: task.notified ? "completed" : "updated", backgroundActive: !!background });
+  }
+  return events;
+}
+
+/** Native agent identity also classifies messages whose legacy parent field is absent. */
+function claudeMessageOrigin(msg: { agent_id?: string; parent_tool_use_id: string | null }, cs: ClaudeSession) {
+  const task = msg.agent_id ? cs.taskIndex?.get(msg.agent_id) : undefined;
+  const parentToolUseId = msg.parent_tool_use_id || task?.toolUseId;
+  return {
+    isFromSubagent: !!(msg.agent_id || msg.parent_tool_use_id),
+    parentToolUseId,
+    ...(msg.agent_id ? { agentId: msg.agent_id } : {}),
+    // A message explicitly anchored to an older call must not inherit the new run id.
+    ...(task && (!msg.parent_tool_use_id || msg.parent_tool_use_id === task.toolUseId)
+      ? { providerRunId: task.providerRunId, parentTaskId: task.parentTaskId } : {}),
+  };
+}
+
+/**
+ * Dynamic Workflow agents run in a separate runtime and Claude Code 2.1.218
+ * does not propagate inline SDK flag settings to them. A settings file path is
+ * propagated, so materialize the per-run snapshot instead of mutating user or
+ * project settings.
+ */
+export function writeClaudeRuntimeSettings(
+  settings: Record<string, unknown>,
+): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-claude-settings-"));
+  try {
+    fs.chmodSync(dir, 0o700);
+    const settingsPath = path.join(dir, "settings.json");
+    fs.writeFileSync(settingsPath, JSON.stringify(settings), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    return settingsPath;
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export function removeClaudeRuntimeSettings(settingsPath?: string): void {
+  if (!settingsPath) return;
+  const settingsDir = path.dirname(settingsPath);
+  if (
+    path.dirname(settingsDir) !== os.tmpdir() ||
+    !path.basename(settingsDir).startsWith("mains-claude-settings-") ||
+    path.basename(settingsPath) !== "settings.json"
+  ) {
+    logWarn("Refusing to remove an unrecognized runtime settings path");
+    return;
+  }
+  try {
+    fs.rmSync(settingsDir, { recursive: true, force: true });
+  } catch (error) {
+    logWarn(
+      "Failed to remove runtime settings snapshot:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+/** A handoff acknowledgement, not the web tool's eventual output. */
+function isDetachedClaudeToolResult(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    (value as { detachedToolCall?: unknown }).detachedToolCall === true;
+}
+
+/**
+ * AskUserQuestion's own result: answers and annotations keyed by question,
+ * which the model-facing text only paraphrases. PostToolUse reports the same
+ * object; a subagent's question never reaches that hook.
+ */
+function askUserQuestionResult(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { answers } = value as { answers?: unknown };
+  return answers !== null && typeof answers === "object" && !Array.isArray(answers)
+    ? value as Record<string, unknown> : undefined;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Event mapping: SDKMessage → WorkRunEvent[]
+//
+// Module-scope (not factory-scope) on purpose: it reads only the per-run
+// session object and module helpers, and being importable is what makes the
+// subagent event sequence testable.
+// ─────────────────────────────────────────────────────────────
+
+export function mapSDKMessage(
+  msg: SDKMessage,
+  cs: ClaudeSession,
+): WorkRunEvent[] {
+  const events: WorkRunEvent[] = [];
+  const ts = Date.now();
+
+  switch (msg.type) {
+    case "assistant": {
+      const assistantMsg = msg as SDKAssistantMessage;
+      const origin = claudeMessageOrigin(assistantMsg, cs);
+      const { isFromSubagent } = origin;
+      const providerMessageId = assistantMsg.message?.id || assistantMsg.uuid;
+      // The CLI can emit several blocks sharing one API message id. A child
+      // message must not replace the main agent's final-answer candidate.
+      if (!isFromSubagent && providerMessageId) {
+        if (cs.state.lastAssistantMessage?.id !== providerMessageId) {
+          cs.state.lastAssistantMessage = { id: providerMessageId, hasText: false, hasTools: false };
+        }
+        const candidate = cs.state.lastAssistantMessage;
+        candidate.hasText ||= assistantMsg.message?.content?.some((block) => block.type === "text" && !!block.text) ?? false;
+        candidate.hasTools ||= assistantMsg.message?.content?.some((block) => block.type === "tool_use") ?? false;
+      } else if (!isFromSubagent) {
+        delete cs.state.lastAssistantMessage;
+      }
+
+      const errorEvent = buildAssistantErrorEvent(
+        {
+          error: assistantMsg.error,
+          lastError: cs.state.lastAssistantError,
+          sawRateLimitNotice: cs.state.sawRateLimitNotice,
+        },
+        ts,
+      );
+      if (errorEvent) events.push(errorEvent.type === "log" && isFromSubagent
+        ? { ...errorEvent, metadata: { ...errorEvent.metadata, ...origin } } : errorEvent);
+      // A turn that came back clean ends the episode, so the next failure of the
+      // same kind is reported again instead of being read as a repeat.
+      if (!isFromSubagent) cs.state.lastAssistantError = assistantMsg.error;
+
+      if (assistantMsg.message?.content) {
+        for (const block of assistantMsg.message.content) {
+          if (block.type === "text" && block.text) {
+            events.push({
+              type: "artifact",
+              kind: "report",
+              content: block.text,
+              metadata: {
+                source: "assistant.message",
+                ...(providerMessageId ? { providerMessageId, messagePhase: "commentary" } : {}),
+                ...origin,
+              },
+            });
+          }
+
+          if (block.type === "tool_use" && block.name) {
+            const toolCallId = block.id || `${block.name}-${ts}`;
+            cs.toolCallIndex.set(toolCallId, {
+              toolName: block.name,
+              input: block.input,
+              startedAt: ts,
+            });
+            const mcpApp = cs.mcpApps?.catalog.apps.get(block.name);
+            events.push({
+              type: "tool_call",
+              toolName: block.name,
+              input: block.input as Record<string, unknown> | undefined,
+              startedAt: ts,
+              metadata: {
+                phase: "start",
+                toolCallId,
+                rawType: msg.type,
+                ...origin,
+                ...(mcpApp ? { mcpApp: { ...mcpApp, originCallId: toolCallId } } : {}),
+              },
+            });
+
+            if (block.name === SUBAGENT_TOOL_NAME) {
+              const taskInput = block.input as Record<string, unknown> | undefined;
+              const subagentType =
+                (taskInput?.subagent_type as string) || "general-purpose";
+              const subagentPrompt = taskInput?.prompt as string | undefined;
+
+              events.push({
+                type: "subagent",
+                phase: "invoked",
+                agentType: subagentType,
+                parentToolUseId: toolCallId,
+                prompt: subagentPrompt,
+                ts,
+                metadata: {
+                  toolCallId,
+                  description: taskInput?.description as string | undefined,
+                  model: taskInput?.model as string | undefined,
+                  runInBackground: taskInput?.run_in_background as boolean | undefined,
+                },
+              });
+            }
+          }
+        }
+      }
+      break;
+    }
+
+    case "user": {
+      const userMsg = msg as SDKUserMessage;
+      const content = userMsg.message?.content;
+      const origin = claudeMessageOrigin(userMsg, cs);
+
+      let userContent: string | undefined;
+      if (typeof content === "string") {
+        userContent = content;
+      } else if (Array.isArray(content)) {
+        // Tool results arrive as `tool_result` content blocks inside user
+        // messages. This is the ONLY completion signal for subagent tool
+        // calls — they never trigger the PostToolUse hook — so without this
+        // they stay `running` in the DB until the run-end sweep. Emit a
+        // `complete` event per block so the status flips running → done.
+        const { isFromSubagent } = origin;
+        // `tool_use_result` is one per message, so it belongs to a block only
+        // when the message carries a single result.
+        const soleToolResult =
+          content.filter((block) => block?.type === "tool_result").length === 1;
+        for (const block of content) {
+          if (block?.type !== "tool_result") continue;
+          const toolUseId: string = block.tool_use_id || "";
+          const prev = toolUseId ? cs.toolCallIndex.get(toolUseId) : undefined;
+          // A priority message can detach a web call. Its real result follows
+          // in a later turn of this stream, still carrying the same call id.
+          // The message-level result belongs to a block only when it is sole.
+          if (!block.is_error && soleToolResult && isDetachedClaudeToolResult(userMsg.tool_use_result)) continue;
+          const mcpApp = prev ? cs.mcpApps?.catalog.apps.get(prev.toolName) : undefined;
+          // The SDK's result carries app data and omission flags that the
+          // model-facing block drops. Ordinary MCP output keeps its old shape
+          // unless the SDK explicitly reports missing structured content.
+          const rawResult = userMsg.tool_use_result as Record<string, unknown> | undefined;
+          const omittedMcpResult = prev?.toolName.startsWith("mcp__") && rawResult?.structuredContentOmitted === true;
+          const appResult =
+            (mcpApp || omittedMcpResult) && soleToolResult
+              ? toMcpCallToolResult(userMsg.tool_use_result, block.content) : undefined;
+          const questionResult =
+            prev?.toolName === "AskUserQuestion" && soleToolResult && !block.is_error
+              ? askUserQuestionResult(userMsg.tool_use_result) : undefined;
+          const output = appResult
+            ? { ...appResult, ...(block.is_error ? { isError: true } : {}) }
+            : questionResult ?? block.content;
+          const error = block.is_error ? safeJson(block.content) : undefined;
+          const resultMeta = userMsg.tool_result_meta?.find((meta) => meta.id === toolUseId);
+          const nonExecutionKind = resultMeta?.non_execution_kind;
+          if (nonExecutionKind) {
+            cs.state.terminalToolNonExecutionKind = nonExecutionKind;
+          } else if (!block.is_error) {
+            delete cs.state.terminalToolNonExecutionKind;
+          }
+          if (toolUseId) cs.toolCallIndex.delete(toolUseId);
+          if (prev?.toolName === "EnterPlanMode" && !block.is_error && !isFromSubagent) {
+            setClaudePermissionMode(cs.permissionMode, "plan");
+          }
+          events.push({
+            type: "tool_call",
+            toolName: prev?.toolName || "unknown",
+            input: prev?.input as Record<string, unknown> | undefined,
+            output,
+            error,
+            endedAt: ts,
+            metadata: {
+              phase: "complete",
+              toolCallId: toolUseId || undefined,
+              rawType: msg.type,
+              ...origin,
+              nonExecutionKind,
+              userFeedback: resultMeta?.user_feedback,
+              ...(mcpApp ? { mcpApp: { ...mcpApp, originCallId: toolUseId } } : {}),
+            },
+          });
+
+          // A subagent's result arrives here — as a tool_result block inside a
+          // user message — never as a bare `tool_result` message. The default
+          // branch below also builds this event, but for a message shape the
+          // SDK does not send, so this is the path that actually fires.
+          if (prev?.toolName === SUBAGENT_TOOL_NAME) {
+            const task = [...(cs.taskIndex ?? [])].find(([, entry]) => entry.toolUseId === toolUseId);
+            events.push(
+              buildSubagentCompletionEvent({
+                input: prev.input,
+                output,
+                error,
+                toolUseId,
+                agentId: task?.[0],
+                providerRunId: task?.[1].providerRunId,
+                ts,
+              }),
+            );
+          }
+        }
+        userContent = content.map((c) => c.text || "").filter(Boolean).join("\n");
+      }
+
+      if (userContent && userContent.trim().length > 0) {
+        const isContinuationSummary = userContent.includes("continued from a previous conversation");
+        if (isContinuationSummary) {
+          events.push({
+            type: "artifact",
+            kind: "report",
+            content: userContent,
+            metadata: { source: "continuation-summary", ...origin },
+          });
+        } else {
+          events.push({
+            type: "log",
+            message: userContent,
+            level: "sdk-user",
+            ts,
+            ...(origin.isFromSubagent ? { metadata: origin } : {}),
+          });
+        }
+      }
+      break;
+    }
+
+    case "system": {
+      const systemMsg = msg as SDKSystemMessage;
+      // The CLI reports the session's mode on init and on every change.
+      if (
+        (systemMsg.subtype === "init" || systemMsg.subtype === "status") &&
+        isSDKPermissionMode(systemMsg.permissionMode)
+      ) {
+        setClaudePermissionMode(cs.permissionMode, systemMsg.permissionMode);
+      }
+      if (systemMsg.subtype === "init") {
+        // A new CLI process has no inherited live-background membership.
+        cs.backgroundTasks = undefined;
+        const plugins = systemMsg.plugins ?? [];
+        const pluginPart = plugins.length
+          ? ` · ${plugins.length} plugin${plugins.length === 1 ? "" : "s"}: ${plugins.map((p) => p.name).join(", ")}`
+          : "";
+        events.push({
+          type: "log",
+          message: `[system] Session initialized with model: ${systemMsg.model || "unknown"}${pluginPart}`,
+          level: "start",
+          ts,
+          ...(plugins.length ? { metadata: { source: "init", plugins } } : {}),
+        });
+        const fastModeEvent = buildFastModeEvent(
+          {
+            requested: cs.fastModeRequested,
+            state: systemMsg.fast_mode_state,
+            reason: systemMsg.fast_mode_disabled_reason,
+            lastState: cs.state.lastFastModeState,
+          },
+          ts,
+        );
+        if (fastModeEvent) {
+          cs.state.lastFastModeState = systemMsg.fast_mode_state;
+          events.push(fastModeEvent);
+        }
+      } else if (systemMsg.subtype === "compact_boundary") {
+        const meta = systemMsg.compact_metadata;
+        const trigger = meta?.trigger ?? "auto";
+        const pre = meta?.pre_tokens;
+        const post = meta?.post_tokens;
+        const tokenPart =
+          typeof pre === "number"
+            ? ` (${pre.toLocaleString()}${typeof post === "number" ? ` → ${post.toLocaleString()}` : ""} tokens)`
+            : "";
+        events.push({
+          type: "log",
+          message: `[context] Conversation compacted${tokenPart} — ${trigger} trigger`,
+          level: "info",
+          ts,
+          metadata: { source: "compact_boundary", ...meta },
+        });
+      } else if (systemMsg.subtype === "api_retry") {
+        const attempt = systemMsg.attempt;
+        const maxRetries = systemMsg.max_retries;
+        const delayMs = systemMsg.retry_delay_ms;
+        const attemptPart =
+          typeof attempt === "number" && typeof maxRetries === "number"
+            ? ` (${attempt}/${maxRetries})`
+            : "";
+        const delayPart =
+          typeof delayMs === "number" ? ` — retrying in ${Math.round(delayMs / 1000)}s` : "";
+        const statusPart =
+          systemMsg.error_status != null ? ` [HTTP ${systemMsg.error_status}]` : "";
+        // On this subtype `error` is a failure code, not prose — saying which
+        // one is the difference between "retrying" and "retrying, and here is
+        // why it will keep failing".
+        const described = describeAssistantError(systemMsg.error);
+        const reasonPart = described ? `: ${described.text}` : "";
+        events.push({
+          type: "log",
+          message: `[api] Request failed${reasonPart}${statusPart}${attemptPart}${delayPart}`,
+          level: "warn",
+          ts,
+          metadata: {
+            source: "api_retry",
+            attempt,
+            maxRetries,
+            retryDelayMs: delayMs,
+            errorStatus: systemMsg.error_status,
+            error: systemMsg.error,
+          },
+        });
+      } else if (systemMsg.subtype === "plugin_install") {
+        const status = systemMsg.status;
+        const namePart = systemMsg.name ? ` ${systemMsg.name}` : "";
+        const errorPart = systemMsg.error ? `: ${systemMsg.error}` : "";
+        // started/completed bracket the whole sync; installed/failed are per-plugin.
+        events.push({
+          type: "log",
+          message: `[plugin] ${status ?? "install"}${namePart}${errorPart}`,
+          level: status === "failed" ? "error" : "info",
+          ts,
+          metadata: {
+            source: "plugin_install",
+            status,
+            name: systemMsg.name,
+            error: systemMsg.error,
+          },
+        });
+      } else if (
+        systemMsg.subtype === "task_started" ||
+        systemMsg.subtype === "task_progress" ||
+        systemMsg.subtype === "task_updated" ||
+        systemMsg.subtype === "task_notification"
+      ) {
+        const background = systemMsg.task_id ? cs.backgroundTasks?.get(systemMsg.task_id) : undefined;
+        const matchingBackground = background && background.run_id === systemMsg.run_id;
+        const taskEvent = mapTaskMessage(matchingBackground ? {
+          ...systemMsg,
+          parent_task_id: systemMsg.parent_task_id ?? background.parent_task_id,
+          is_backgrounded: systemMsg.is_backgrounded ?? true,
+          ambient: systemMsg.ambient ?? background.ambient ?? false,
+        } : systemMsg, cs.taskIndex, ts);
+        if (taskEvent) events.push({ ...taskEvent, ...(matchingBackground ? { backgroundActive: true } : {}) });
+      } else if (systemMsg.subtype === "background_tasks_changed") {
+        events.push(...mapBackgroundTasksMessage(systemMsg, cs, ts));
+      } else if (systemMsg.subtype === "model_refusal_fallback") {
+        // The model declined and the CLI moved the turn to another one. Without
+        // this the swap is invisible and the run silently answers on a model the
+        // user did not pick.
+        const category = systemMsg.api_refusal_category
+          ? ` (${systemMsg.api_refusal_category})`
+          : "";
+        events.push({
+          type: "log",
+          message: `[model] ${systemMsg.original_model ?? "the model"} declined${category} — continuing on ${systemMsg.fallback_model ?? "a fallback model"}`,
+          level: "warn",
+          ts,
+          metadata: {
+            source: "model_refusal_fallback",
+            originalModel: systemMsg.original_model,
+            fallbackModel: systemMsg.fallback_model,
+            category: systemMsg.api_refusal_category,
+            explanation: systemMsg.api_refusal_explanation,
+          },
+        });
+      } else if (systemMsg.subtype === "model_refusal_no_fallback") {
+        const category = systemMsg.api_refusal_category
+          ? ` (${systemMsg.api_refusal_category})`
+          : "";
+        events.push({
+          type: "log",
+          message: `[model] ${systemMsg.original_model ?? "the model"} declined${category} and no fallback was available`,
+          level: "error",
+          ts,
+          metadata: {
+            source: "model_refusal_no_fallback",
+            originalModel: systemMsg.original_model,
+            category: systemMsg.api_refusal_category,
+            explanation: systemMsg.api_refusal_explanation,
+          },
+        });
+      } else if (systemMsg.subtype === "permission_denied") {
+        // A rule denied the call before canUseTool could ask, so the approval
+        // dialog never appears and the refusal has no other way to surface.
+        const reason = systemMsg.decision_reason ?? systemMsg.message;
+        events.push({
+          type: "log",
+          message: `[permission] ${systemMsg.tool_name ?? "tool"} denied${reason ? ` — ${reason}` : ""}`,
+          level: "warn",
+          ts,
+          metadata: {
+            source: "permission_denied",
+            toolName: systemMsg.tool_name,
+            toolUseId: systemMsg.tool_use_id,
+            agentId: systemMsg.agent_id,
+            reason,
+          },
+        });
+      } else if (systemMsg.subtype === "informational" && systemMsg.content) {
+        events.push({
+          type: "log",
+          message: systemMsg.content,
+          level: systemMsg.level === "warning" ? "warn" : "info",
+          ts,
+          metadata: {
+            source: "informational",
+            informationalLevel: systemMsg.level,
+            preventContinuation: systemMsg.prevent_continuation,
+          },
+        });
+      } else if (systemMsg.subtype === "notification" && systemMsg.text) {
+        // Low/medium are ambient CLI chrome; only what the CLI itself marks
+        // urgent is worth a transcript line.
+        if (systemMsg.priority === "high" || systemMsg.priority === "immediate") {
+          events.push({
+            type: "log",
+            message: `[notice] ${systemMsg.text}`,
+            level: "warn",
+            ts,
+            metadata: { source: "notification", priority: systemMsg.priority },
+          });
+        }
+      }
+      // Every other system subtype (thinking_tokens, session_state_changed,
+      // hook_*, memory_recall, files_persisted, commands_changed, …) is CLI
+      // bookkeeping with no reader here, and is dropped rather than logged.
+      break;
+    }
+
+    case "rate_limit_event": {
+      const rl = (msg as SDKRateLimitEvent).rate_limit_info;
+      if (rl) {
+        const util =
+          typeof rl.utilization === "number" ? ` (${Math.round(rl.utilization * 100)}% used)` : "";
+        const resets =
+          typeof rl.resetsAt === "number"
+            ? ` — resets ${new Date(rl.resetsAt * 1000).toLocaleTimeString()}`
+            : "";
+        const scope = rl.rateLimitType ? ` [${rl.rateLimitType}]` : "";
+        // Only a rejection earns a transcript line. `allowed_warning` fires on
+        // every turn once you are anywhere near the limit, so it landed twice
+        // per message in warn styling to say something you cannot act on
+        // mid-run. A percentage belongs in ambient UI — where Codex and Copilot
+        // already show it — not in the middle of a conversation.
+        if (rl.status === "rejected") {
+          // Remembered so the turn's own `rate_limit` error does not repeat what
+          // this line already said with the scope and the reset time attached.
+          cs.state.sawRateLimitNotice = true;
+          events.push({
+            type: "log",
+            message: `[rate-limit] Rate limit reached${scope}${util}${resets}`,
+            level: "error",
+            ts,
+            metadata: { source: "rate_limit_event", ...rl },
+          });
+        }
+      }
+      break;
+    }
+
+    case "result": {
+      const resultMsg = msg as SDKResultMessage;
+      const isFinal = resultMsg.subtype === "success" && !resultMsg.is_error &&
+        (resultMsg.stop_reason == null || resultMsg.stop_reason === "end_turn" || resultMsg.stop_reason === "stop_sequence");
+
+      if (
+        resultMsg.subtype === "success" &&
+        resultMsg.result &&
+        !cs.state.hasAssistantContent
+      ) {
+        events.push({
+          type: "artifact",
+          kind: "report",
+          content: resultMsg.result,
+          metadata: { source: "result.message", ...(isFinal ? { messagePhase: "final_answer" } : {}) },
+        });
+      }
+
+      const finalMessage = cs.state.lastAssistantMessage;
+      if (isFinal && resultMsg.subtype === "success" && resultMsg.result &&
+        finalMessage?.hasText && !finalMessage.hasTools) {
+        events.push({ type: "message_phase", messageId: finalMessage.id, phase: "final_answer", ts });
+      }
+      delete cs.state.lastAssistantMessage;
+
+      if (resultMsg.stop_reason && resultMsg.stop_reason !== "end_turn") {
+        events.push({
+          type: "log",
+          message: `[stop_reason] ${resultMsg.stop_reason}`,
+          level: resultMsg.stop_reason === "refusal" ? "error" : "info",
+          ts,
+        });
+      }
+
+      if (resultMsg.subtype !== "success" && resultMsg.is_error) {
+        events.push({
+          type: "log",
+          message: `[error] ${resultMsg.errors.join(", ")}`,
+          level: "error",
+          ts,
+        });
+      }
+
+      // Also checked here: fast mode can drop to cooldown mid-run after a rate
+      // limit, long after init reported it active.
+      const fastModeEvent = buildFastModeEvent(
+        {
+          requested: cs.fastModeRequested,
+          state: resultMsg.fast_mode_state,
+          reason: resultMsg.fast_mode_disabled_reason,
+          lastState: cs.state.lastFastModeState,
+        },
+        ts,
+      );
+      if (fastModeEvent) {
+        cs.state.lastFastModeState = resultMsg.fast_mode_state;
+        events.push(fastModeEvent);
+      }
+      break;
+    }
+
+    case "tool_progress": {
+      // A heartbeat for a long-running tool call. The only part worth a line is
+      // a subagent quietly retrying — everything else would spam the transcript.
+      const progress = msg as {
+        tool_name?: string;
+        subagent_retry?: {
+          attempt: number;
+          max_retries: number;
+          error_category?: string;
+        };
+      };
+      const retry = progress.subagent_retry;
+      if (retry) {
+        const category = retry.error_category ? ` (${retry.error_category})` : "";
+        events.push({
+          type: "log",
+          message: `[subagent] retrying ${progress.tool_name ?? "call"}${category} — attempt ${retry.attempt}/${retry.max_retries}`,
+          level: "warn",
+          ts,
+          metadata: { source: "subagent_retry", ...retry },
+        });
+      }
+      break;
+    }
+
+    case "tool_use_summary": {
+      const summary = (msg as { summary?: string }).summary;
+      if (summary) {
+        events.push({
+          type: "log",
+          message: summary,
+          level: "info",
+          ts,
+          metadata: { source: "tool_use_summary" },
+        });
+      }
+      break;
+    }
+
+    case "prompt_suggestion": {
+      const suggestionMsg = msg as { type: "prompt_suggestion"; suggestion: string };
+      if (suggestionMsg.suggestion) {
+        events.push({
+          type: "prompt_suggestion",
+          suggestion: suggestionMsg.suggestion,
+          ts,
+        });
+      }
+      break;
+    }
+
+    case "stream_event": {
+      const partialMsg = msg as SDKPartialAssistantMessage;
+      const event = partialMsg.event;
+      if (!event) break;
+
+      // Skip subagent streams — they would pollute the parent timeline
+      if (partialMsg.parent_tool_use_id) break;
+
+      const blockIndex = typeof event.index === "number" ? event.index : -1;
+
+      if (event.type === "content_block_delta" && event.delta && blockIndex >= 0) {
+        const bufferKey = `${cs.runId}-${blockIndex}`;
+
+        if (event.delta.type === "text_delta" && event.delta.text) {
+          const next = (cs.partialTextBuffers.get(bufferKey) ?? "") + event.delta.text;
+          cs.partialTextBuffers.set(bufferKey, next);
+          events.push({
+            type: "artifact",
+            kind: "report",
+            content: next,
+            metadata: { source: "agent_message_streaming" },
+            ephemeral: true,
+            streamId: `claude-msg-${cs.runId}-${blockIndex}`,
+          });
+        } else if (event.delta.type === "thinking_delta" && event.delta.thinking) {
+          const next = (cs.partialThinkingBuffers.get(bufferKey) ?? "") + event.delta.thinking;
+          cs.partialThinkingBuffers.set(bufferKey, next);
+          events.push({
+            type: "artifact",
+            kind: "report",
+            content: next,
+            metadata: { source: "agent_thinking_streaming" },
+            ephemeral: true,
+            streamId: `claude-think-${cs.runId}-${blockIndex}`,
+          });
+        }
+      } else if (event.type === "content_block_stop" && blockIndex >= 0) {
+        const key = `${cs.runId}-${blockIndex}`;
+        // Thinking lane has no DB-persisted counterpart, so the content-match filter
+        // in the renderer won't auto-clear it. Push an empty update.
+        if (cs.partialThinkingBuffers.has(key)) {
+          events.push({
+            type: "artifact",
+            kind: "report",
+            content: "",
+            metadata: { source: "agent_thinking_streaming" },
+            ephemeral: true,
+            streamId: `claude-think-${cs.runId}-${blockIndex}`,
+          });
+        }
+        cs.partialTextBuffers.delete(key);
+        cs.partialThinkingBuffers.delete(key);
+      } else if (event.type === "message_stop") {
+        for (const key of cs.partialTextBuffers.keys()) {
+          if (key.startsWith(`${cs.runId}-`)) cs.partialTextBuffers.delete(key);
+        }
+        for (const key of cs.partialThinkingBuffers.keys()) {
+          if (key.startsWith(`${cs.runId}-`)) cs.partialThinkingBuffers.delete(key);
+        }
+      }
+      break;
+    }
+
+    default: {
+      // Tool result-style messages (tool_use_id correlation).
+      //
+      // Requiring an actual payload matters: `tool_progress` heartbeats also
+      // carry a tool_use_id, and treating one as a result would close a still-
+      // running tool call and drop it from toolCallIndex, so the real result
+      // would later resolve to toolName "unknown".
+      const anyMsg = msg as any;
+      const looksLikeToolResult =
+        anyMsg.type === "tool_result" ||
+        (anyMsg.tool_use_id !== undefined &&
+          (anyMsg.content !== undefined || anyMsg.result !== undefined));
+      if (looksLikeToolResult) {
+        const toolUseId = anyMsg.tool_use_id || "";
+        const prev = toolUseId ? cs.toolCallIndex.get(toolUseId) : undefined;
+
+        const toolName = prev?.toolName || "unknown";
+        const input = prev?.input;
+        const output = anyMsg.content || anyMsg.result;
+        if (!anyMsg.is_error && isDetachedClaudeToolResult(anyMsg.tool_use_result ?? output)) break;
+        const error = anyMsg.is_error ? String(output) : undefined;
+
+        if (toolUseId) cs.toolCallIndex.delete(toolUseId);
+
+        events.push({
+          type: "tool_call",
+          toolName,
+          input: input as Record<string, unknown> | undefined,
+          output,
+          error,
+          endedAt: ts,
+          metadata: {
+            phase: "complete",
+            toolCallId: toolUseId || undefined,
+            rawType: msg.type,
+          },
+        });
+
+        if (toolName === SUBAGENT_TOOL_NAME) {
+          events.push(
+            buildSubagentCompletionEvent({ input, output, error, toolUseId, ts }),
+          );
+        }
+      } else {
+        // The net for a message type this driver has never seen. Bounded: an
+        // unknown payload can be arbitrarily large, and a transcript line is a
+        // poor place to discover that.
+        const dump = safeJson(msg);
+        events.push({
+          type: "log",
+          message: `[event] ${msg.type}: ${dump.length > 500 ? `${dump.slice(0, 500)}…` : dump}`,
+          level: "info",
+          ts,
+        });
+      }
+    }
+  }
+
+  return events;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Driver factory
+// ─────────────────────────────────────────────────────────────
+
+export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDriver {
+  // SDK loader state
+  let sdkLoaded = false;
+  let loadError: Error | null = null;
+  let queryFn:
+    | ((options: { prompt: string | AsyncIterable<unknown>; options?: SDKOptions }) => SDKQuery)
+    | null = null;
+  let createSdkMcpServerFn: ((...args: any[]) => any) | null = null;
+  let toolFn: ((...args: any[]) => any) | null = null;
+  // Standalone SDK fn that reads a persisted session's info (incl. the CLI's
+  // auto-generated aiTitle) from the JSONL transcript. Used for run titling.
+  let getSessionInfoFn:
+    | ((sessionId: string, options?: { dir?: string }) => Promise<SDKSessionInfoLite | undefined>)
+    | null = null;
+  let getSessionMessagesFn:
+    | ((sessionId: string, options?: { dir?: string }) => Promise<Array<{
+        type: string; uuid: string; message: unknown; parent_tool_use_id?: string | null;
+        parent_agent_id?: string | null;
+      }>>)
+    | null = null;
+  // Standalone SDK fn that removes a persisted session: `{sessionId}.jsonl` plus
+  // the `{sessionId}/` subagent-transcript subdirectory. Clearing our own DB
+  // column does not touch either, so without this the transcripts accumulate.
+  let deleteSdkSessionFn:
+    | ((sessionId: string, options?: { dir?: string }) => Promise<void>)
+    | null = null;
+
+  // Cross-run TTL caches
+  let cachedModels: ModelInfo[] | null = null;
+  let cachedModelsTimestamp = 0;
+  const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+  const commandsCache = new Map<
+    string,
+    { commands: CommandInfo[]; timestamp: number }
+  >();
+  const COMMANDS_CACHE_TTL_MS = 10 * 60 * 1000;
+
+  const skillsCache = new Map<string, { skills: SkillInfo[]; timestamp: number }>();
+  const SKILLS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+  // Plugins are fetched via the `claude plugin` CLI subcommands; `--available`
+  // can trigger a remote marketplace sync, so cache the result.
+  let cachedPlugins: PluginListResponse | null = null;
+  let cachedPluginsTimestamp = 0;
+  const PLUGINS_CACHE_TTL_MS = 5 * 60 * 1000;
+  // Late reads may finish for their caller, but cannot rewarm a retired catalog.
+  let catalogGeneration = 0;
+
+  // A plugin change adds/removes commands, skills, and agents — so installing or
+  // uninstalling one must invalidate those caches too, not just the plugin list.
+  function invalidatePluginCaches(): void {
+    catalogGeneration++;
+    cachedPlugins = null;
+    cachedPluginsTimestamp = 0;
+    commandsCache.clear();
+    skillsCache.clear();
+  }
+
+  // Cross-run sessionId memo (resume lookup avoids hitting the DB every time)
+  const sessionIdMemo = new Map<string, string>();
+
+  // MCP Apps reach a run's MCP servers after the fact, from the widget. While a
+  // turn streams they go through its query; otherwise through an MCP host.
+  const liveSessions = new Map<string, ClaudeSession>();
+  /** runId → the cwd its session ran in, for an MCP host that serves it later. */
+  const runCwdMemo = new Map<string, string>();
+  /**
+   * cwd → an idle CLI process that only answers control requests — no prompt
+   * ever reaches it, so no model turn runs. Keyed by cwd because that is what
+   * decides which MCP servers a session configures.
+   */
+  const mcpHosts = new Map<string, { query: SDKQuery; release: () => void; idleTimer?: NodeJS.Timeout }>();
+  // Each host is a whole CLI process (~250 MB), so they are few and short-lived.
+  const MCP_HOST_IDLE_MS = 2 * 60 * 1000;
+  const MAX_MCP_HOSTS = 3;
+
+  // ─────────────────────────────────────────────────────────────
+  // SDK loader
+  // ─────────────────────────────────────────────────────────────
+
+  async function ensureSDK(): Promise<void> {
+    if (loadError) throw loadError;
+    if (sdkLoaded) return;
+
+    try {
+      const ClaudeSDK = await import("@anthropic-ai/claude-agent-sdk").catch(() => null);
+
+      if (!ClaudeSDK) {
+        throw new Error(
+          "Claude Agent SDK (@anthropic-ai/claude-agent-sdk) is not installed. " +
+            "Please install it to use the Claude provider: npm install @anthropic-ai/claude-agent-sdk",
+        );
+      }
+
+      const query = (ClaudeSDK as any).query;
+      if (!query) {
+        throw new Error(
+          "Could not find query() in @anthropic-ai/claude-agent-sdk. " +
+            "Make sure you have the latest version installed.",
+        );
+      }
+
+      queryFn = query;
+      createSdkMcpServerFn = (ClaudeSDK as any).createSdkMcpServer ?? null;
+      toolFn = (ClaudeSDK as any).tool ?? null;
+      getSessionInfoFn = (ClaudeSDK as any).getSessionInfo ?? null;
+      getSessionMessagesFn = (ClaudeSDK as any).getSessionMessages ?? null;
+      deleteSdkSessionFn = (ClaudeSDK as any).deleteSession ?? null;
+      sdkLoaded = true;
+      logInfo("SDK loaded successfully");
+    } catch (error) {
+      loadError = error instanceof Error ? error : new Error(String(error));
+      logError("Failed to load SDK:", loadError.message);
+      throw loadError;
+    }
+  }
+
+  function getModel(requestModel?: string | null): string {
+    return requestModel || config.defaultModel || "claude-opus-4-8";
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Hook builders
+  // ─────────────────────────────────────────────────────────────
+
+  function buildPostToolUseHook(onEvent: WorkRunEventHandler, runId: string): SDKHookMatcher {
+    return {
+      hooks: [
+        async (
+          input: Record<string, unknown>,
+          toolUseId: string | null,
+        ): Promise<Record<string, unknown>> => {
+          const toolName = (input.tool_name as string) || "unknown";
+          const toolResponse = input.tool_response;
+          if (isDetachedClaudeToolResult(toolResponse)) return {};
+
+          // MCP results must use the SDK's user-message envelope: size caps
+          // and omission flags are applied after PostToolUse, and the first
+          // completion is the one retained by RunSession.
+          if (toolName.startsWith("mcp__")) return {};
+          const session = liveSessions.get(runId);
+          if (session && (await mcpAppToolFor(session, toolName))) return {};
+
+          if (toolResponse !== undefined) {
+            await onEvent({
+              type: "tool_call",
+              toolName,
+              output: toolResponse,
+              endedAt: Date.now(),
+              metadata: {
+                phase: "complete",
+                toolCallId: toolUseId || undefined,
+              },
+            });
+          }
+
+          return {};
+        },
+      ],
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Hooks / agents config merging + SDK conversion
+  // ─────────────────────────────────────────────────────────────
+
+  function mergeAgentsConfig(
+    configAgents?: AgentsConfig,
+    runAgents?: AgentsConfig,
+  ): AgentsConfig | undefined {
+    if (!configAgents && !runAgents) return undefined;
+    if (!configAgents) return runAgents;
+    if (!runAgents) return configAgents;
+    return { ...configAgents, ...runAgents };
+  }
+
+  function convertAgentsConfig(agents: AgentsConfig): SDKAgentsConfig {
+    const sdkAgents: SDKAgentsConfig = {};
+    for (const [agentName, agentDef] of Object.entries(agents)) {
+      sdkAgents[agentName] = {
+        description: agentDef.description,
+        prompt: agentDef.prompt,
+        tools: agentDef.tools,
+        disallowedTools: agentDef.disallowedTools,
+        model: agentDef.model,
+        mcpServers: agentDef.mcpServers,
+        skills: agentDef.skills,
+        initialPrompt: agentDef.initialPrompt,
+        maxTurns: agentDef.maxTurns,
+        criticalSystemReminder_EXPERIMENTAL: agentDef.criticalSystemReminder_EXPERIMENTAL,
+      };
+    }
+    return sdkAgents;
+  }
+
+  function mergeHooksConfig(
+    configHooks?: HooksConfig,
+    runHooks?: HooksConfig,
+  ): HooksConfig | undefined {
+    if (!configHooks && !runHooks) return undefined;
+    if (!configHooks) return runHooks;
+    if (!runHooks) return configHooks;
+
+    const merged: HooksConfig = { ...configHooks };
+    for (const [eventName, matchers] of Object.entries(runHooks)) {
+      const key = eventName as keyof HooksConfig;
+      if (merged[key]) {
+        merged[key] = [...merged[key]!, ...(matchers || [])];
+      } else {
+        merged[key] = matchers;
+      }
+    }
+    return merged;
+  }
+
+  function convertHooksConfig(hooks: HooksConfig): SDKHooksConfig {
+    const sdkHooks: SDKHooksConfig = {};
+    for (const [eventName, matchers] of Object.entries(hooks)) {
+      if (!matchers || matchers.length === 0) continue;
+      sdkHooks[eventName] = matchers.map((matcher: HookMatcher) => ({
+        matcher: matcher.matcher,
+        hooks: matcher.hooks.map(
+          (hookFn) =>
+            async (
+              input: Record<string, unknown>,
+              toolUseId: string | null,
+              context: { signal: AbortSignal },
+            ) => {
+              try {
+                const result = await hookFn(input as any, toolUseId, context);
+                return result as Record<string, unknown>;
+              } catch (error) {
+                logError(`Hook error in ${eventName}:`, error);
+                return {};
+              }
+            },
+        ),
+        timeout: matcher.timeout,
+      }));
+    }
+    return sdkHooks;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Mains MCP server (in-process)
+  // ─────────────────────────────────────────────────────────────
+
+  function buildMainsMcpServer(
+    workspaceId: string | null,
+    rootPath: string | null,
+    runId: string | null,
+    mode?: ModeId,
+  ): any {
+    const ctx: MainsToolContext = { workspaceId, rootPath, runId };
+
+    const tools = toClaudeTools(ctx, mode);
+    if (tools.length === 0) return null;
+    return createSdkMcpServerFn!({
+      name: "mains",
+      version: "1.0.0",
+      tools: tools.map((t) =>
+        toolFn!(t.name, t.description, t.shape, t.handler),
+      ),
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // SDK options builder
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * What every CLI process needs, a run or an MCP host: the executable, an env
+   * that signs in through the CLI, the setting sources, and local plugins.
+   */
+  function buildProcessOptions(): SDKOptions {
+    const runtime = resolveClaudeRuntime(config.binary);
+    if (!runtime) {
+      throw new Error("Claude is unavailable. Reinstall Mains to restore its bundled Claude runtime.");
+    }
+    if (config.binary && runtime.source === "bundled") {
+      logWarn(
+        `Configured binary path "${config.binary}" is not a valid executable; using the SDK-bundled Claude CLI`,
+      );
+    }
+    logInfo(`Using ${runtime.source} Claude CLI at:`, runtime.path);
+
+    // Strip API key/auth token when using CLI (subscription mode) so the subprocess
+    // uses CLI login session rather than API billing.
+    const cleanEnv: Record<string, string | undefined> = {
+      ...process.env,
+      // Advertise the host's MCP Apps support when the CLI connects to servers.
+      CLAUDE_CODE_MCP_APPS_HOST: "1",
+    };
+    delete cleanEnv.ANTHROPIC_API_KEY;
+    delete cleanEnv.ANTHROPIC_AUTH_TOKEN;
+
+    const options: SDKOptions = {
+      pathToClaudeCodeExecutable: runtime.path,
+      env: cleanEnv,
+      settingSources: config.settingSources ?? ["user", "project", "local"],
+    };
+
+    if (config.plugins && config.plugins.length > 0) {
+      options.plugins = config.plugins.map((p) => ({
+        type: "local" as const,
+        path: p.path,
+        ...(p.skipMcpDiscovery !== undefined ? { skipMcpDiscovery: p.skipMcpDiscovery } : {}),
+      }));
+      logInfo(`Loading ${options.plugins.length} local plugin(s)`);
+    }
+
+    return options;
+  }
+
+  /** Read CLI metadata without sending a model turn; always release its process. */
+  async function withControlQuery<T>(
+    read: (query: SDKQuery) => Promise<T>,
+    cwd?: string,
+  ): Promise<T> {
+    await ensureSDK();
+    if (!queryFn) throw new Error("Claude SDK not properly initialized");
+    const options = buildProcessOptions();
+    if (cwd) options.cwd = cwd;
+    const query = queryFn({ prompt: "", options });
+    try {
+      return await read(query);
+    } finally {
+      query.close();
+    }
+  }
+
+  async function buildOptions(args: {
+    model: string;
+    workspacePath?: string;
+    abortController?: AbortController;
+    resumeSessionId?: string;
+    runHooks?: HooksConfig;
+    runAgents?: AgentsConfig;
+    runId?: string;
+    workspaceId?: string | null;
+    forkSession?: boolean;
+    /** UUID to open the new (or forked) session on. Omitted when resuming. */
+    newSessionId?: string;
+    onEvent?: WorkRunEventHandler;
+    permissionMode?: NonNullable<SDKOptions["permissionMode"]>;
+    /**
+     * Receives the run's resolved mode and becomes the permission bridge's live
+     * view of it — hand the same object to newSession so the stream updates it.
+     */
+    permissionModeRef?: ClaudePermissionModeRef;
+    /** Mode/space instruction delta, appended to the claude_code preset. */
+    extraInstructions?: string | null;
+    /** Output style pinned when the conversation was created. */
+    outputStyle?: string;
+    /** Experience mode — filters which mains tools the MCP server exposes. */
+    mode?: ModeId;
+    /** Per-run tool policy from the mode harness. */
+    toolPolicy?: WorkRunToolPolicy | null;
+    additionalDirectories?: string[];
+    configSnapshot?: Record<string, unknown> | null;
+  }): Promise<SDKOptions> {
+    const {
+      model,
+      workspacePath,
+      abortController,
+      resumeSessionId,
+      runHooks,
+      runAgents,
+      runId,
+      workspaceId,
+      forkSession,
+      newSessionId,
+      onEvent,
+      permissionMode: runPermissionMode,
+      permissionModeRef,
+      extraInstructions,
+      outputStyle,
+      mode,
+      toolPolicy,
+      additionalDirectories,
+    } = args;
+
+    const runConfig = { ...config, ...pickRunSettingConfig(args.configSnapshot ?? {}) } as ClaudeCodeAdapterConfig;
+    const processOptions = buildProcessOptions();
+    const permissionMode =
+      runPermissionMode ?? runConfig.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE;
+    const settingSources = processOptions.settingSources!;
+    // The bridge auto-allows this set, so it must see the *effective* list —
+    // handing it the global default would auto-approve tools the run's policy
+    // just denied.
+    const effectiveAllowedTools = toolPolicy
+      ? new Set(resolveEffectiveAllowedTools(toolPolicy))
+      : ALLOWED_TOOLS_SET;
+    // A run that starts in plan mode has no mode it planned *from* — applying
+    // its plan lands on "Edit" — so this seeds the ref rather than switching it.
+    const livePermissionMode = permissionModeRef ?? createClaudePermissionModeRef(permissionMode);
+    livePermissionMode.current = permissionMode;
+    delete livePermissionMode.beforePlan;
+    const permissionBridge = runId
+      ? createClaudePermissionBridge({
+          runId,
+          allowedTools: effectiveAllowedTools,
+          permissionMode: livePermissionMode,
+          restrictedToolset: !!toolPolicy?.allowedTools,
+          acceptsUnansweredQuestions: () =>
+            liveSessions.get(runId)?.state.capabilities?.includes(ASK_USER_UNANSWERED_CAPABILITY) ?? false,
+        })
+      : null;
+
+    const mcpServers = readMcpServersFromSettings(settingSources, workspacePath);
+    if (!mcpServers["mains"] && createSdkMcpServerFn && toolFn) {
+      const mainsServer = buildMainsMcpServer(workspaceId ?? null, workspacePath ?? null, runId ?? null, mode);
+      if (mainsServer) {
+        mcpServers["mains"] = mainsServer;
+        logInfo("Injected mains MCP server (in-process)");
+      }
+    }
+
+    const options: SDKOptions = {
+      ...processOptions,
+      model,
+      ...buildClaudePermissionModeOptions(
+        permissionMode,
+        permissionBridge?.canUseTool,
+        toolPolicy,
+      ),
+      abortController,
+    };
+
+    if (outputStyle) {
+      options.settings = {
+        ...((options.settings as Record<string, unknown>) || {}),
+        outputStyle,
+      };
+    }
+
+    if (Object.keys(mcpServers).length > 0) {
+      options.mcpServers = mcpServers;
+    }
+
+    if (workspacePath) options.cwd = workspacePath;
+    const grantedDirectories = additionalDirectories ?? runConfig.additionalDirectories;
+    if (grantedDirectories?.length) options.additionalDirectories = grantedDirectories;
+
+    if (resumeSessionId) {
+      options.resume = resumeSessionId;
+      if (forkSession) options.forkSession = true;
+    }
+
+    Object.assign(
+      options,
+      buildClaudeSessionIdOptions({ newSessionId, resumeSessionId, forkSession }),
+    );
+
+    const mergedAgents = mergeAgentsConfig(runConfig.agents, runAgents);
+    if (mergedAgents && Object.keys(mergedAgents).length > 0) {
+      options.agents = convertAgentsConfig(mergedAgents);
+    }
+
+    const mergedHooks = mergeHooksConfig(runConfig.hooks, runHooks);
+    if (mergedHooks && Object.keys(mergedHooks).length > 0) {
+      options.hooks = convertHooksConfig(mergedHooks);
+    }
+
+    if (runConfig.structuredOutputsSelectedId && runConfig.structuredOutputs) {
+      const entry = runConfig.structuredOutputs[runConfig.structuredOutputsSelectedId];
+      if (entry?.schema) {
+        options.outputFormat = { type: "json_schema", schema: entry.schema };
+      }
+    }
+
+    // ultracode implies xhigh effort, and the API rejects xhigh outright when
+    // thinking is disabled ("effort 'xhigh' is not supported when thinking is
+    // disabled on this model"). A stale `thinkingMode: false` alongside
+    // `ultracode: true` must therefore not reach the CLI — ultracode wins.
+    const thinkingEnabled = !!runConfig.thinkingMode || !!runConfig.ultracode;
+    if (thinkingEnabled) {
+      // A fixed token budget takes precedence over adaptive thinking. Useful on
+      // models without adaptive support, or to cap cost/latency.
+      options.thinking =
+        typeof runConfig.thinkingBudgetTokens === "number" && runConfig.thinkingBudgetTokens > 0
+          ? { type: "enabled", budgetTokens: runConfig.thinkingBudgetTokens }
+          : { type: "adaptive" };
+    } else {
+      options.thinking = { type: "disabled" };
+    }
+    if (runConfig.ultracode) {
+      // ultracode = xhigh effort + automatic dynamic-workflow orchestration.
+      // The CLI applies xhigh itself, so we must NOT also send a conflicting
+      // options.effort ("ultracode" is not a valid EffortLevel). Delivered via
+      // the same settings passthrough fastMode uses below.
+      options.settings = {
+        ...((options.settings as Record<string, unknown>) || {}),
+        ultracode: true,
+      };
+    } else if (thinkingEnabled && runConfig.effortLevel) {
+      options.effort = runConfig.effortLevel;
+    }
+    if (runConfig.ultracode === false) {
+      options.settings = { ...((options.settings as Record<string, unknown>) || {}), ultracode: false };
+    }
+
+    if (runConfig.fastMode !== undefined) {
+      options.settings = {
+        ...((options.settings as Record<string, unknown>) || {}),
+        fastMode: runConfig.fastMode,
+      };
+    }
+
+    options.promptSuggestions = true;
+    options.includePartialMessages = true;
+
+    // Without a handler the SDK declines every MCP elicitation automatically,
+    // so a server asking for a form or an auth URL fails silently.
+    if (runId) {
+      options.onElicitation = createClaudeElicitationHandler({ runId });
+    }
+
+    {
+      const guardHook = await guardsService.buildClaudeGuardHook();
+      if (guardHook) {
+        if (!options.hooks) options.hooks = {};
+        if (!options.hooks.PreToolUse) options.hooks.PreToolUse = [];
+        options.hooks.PreToolUse.push(guardHook);
+      }
+    }
+
+    if (runId && onEvent) {
+      if (!options.hooks) options.hooks = {};
+      if (!options.hooks.PostToolUse) options.hooks.PostToolUse = [];
+      options.hooks.PostToolUse.push(buildPostToolUseHook(onEvent, runId));
+    }
+
+    // Ordinary chats retain their initial system rendering. Page chats refresh
+    // their title/version after the editor saves, including on resumed sessions.
+    options.systemPrompt = {
+      type: "preset",
+      preset: "claude_code",
+      ...(extraInstructions ? { append: extraInstructions } : {}),
+      snapshot: typeof args.configSnapshot?.atlasPageId !== "string",
+    };
+
+    if (runId && options.settings && typeof options.settings !== "string") {
+      options.settings = writeClaudeRuntimeSettings(options.settings);
+    }
+
+    return options;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Prompt building
+  // ─────────────────────────────────────────────────────────────
+
+  /** User-pinned skill names ($) — filesystem metadata is enough; prompt only echoes names for transparency. */
+  function prependPinnedSkillsToPrompt(
+    prompt: string,
+    skills: WorkRunRequest["skills"],
+  ): string {
+    if (!skills?.length) return prompt;
+    const tokens = skills.map((s) => `${s.name}`).join(" ");
+    return `${tokens}\n\n${prompt}`;
+  }
+
+  function buildStartPrompt(request: WorkRunRequest): string {
+    let prompt = request.goal;
+    if (request.context && request.context.length > 0) {
+      const contextParts = formatContextSection(request.context);
+      prompt = `Context:\n${contextParts}\n\n---\n\n ${request.goal}`;
+    }
+    prompt = appendPromptSections(prompt, {
+      contextIssues: request.contextIssues,
+      contextSignals: request.contextSignals,
+      contextFiles: request.contextFiles,
+      attachments: request.attachments,
+      runId: request.runId,
+    });
+    return prependPinnedSkillsToPrompt(prompt, request.skills);
+  }
+
+  function buildContinuePrompt(request: WorkRunContinueRequest | WorkRunSteerRequest): string {
+    let prompt = request.message;
+    if (request.context && request.context.length > 0) {
+      const contextParts = formatContextSection(request.context);
+      prompt = `Context:\n${contextParts}\n\n---\n\n${request.message}`;
+    }
+    prompt = appendPromptSections(prompt, {
+      contextIssues: request.contextIssues,
+      contextSignals: request.contextSignals,
+      contextFiles: request.contextFiles,
+      attachments: request.attachments,
+      runId: request.runId,
+    });
+    return prependPinnedSkillsToPrompt(prompt, request.skills);
+  }
+
+  function buildForkPrompt(request: WorkRunForkRequest): string {
+    let prompt = request.message;
+    if (request.context && request.context.length > 0) {
+      const contextParts = formatContextSection(request.context);
+      prompt = `Context:\n${contextParts}\n\n---\n\n${request.message}`;
+    }
+    return appendPromptSections(prompt, {
+      attachments: request.attachments,
+      runId: request.runId,
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Disk skills discovery (shared between listSkills and listCommands filtering)
+  // ─────────────────────────────────────────────────────────────
+
+  async function fetchDiskSkills(workspacePath?: string): Promise<SkillInfo[]> {
+    const generation = catalogGeneration;
+    const cacheKey = workspacePath ?? "__global__";
+    const now = Date.now();
+    const cached = skillsCache.get(cacheKey);
+    if (cached && now - cached.timestamp < SKILLS_CACHE_TTL_MS) {
+      return cached.skills;
+    }
+
+    try {
+      const settingSources = config.settingSources ?? ["user", "project", "local"];
+      const skills: SkillInfo[] = [];
+
+      if (settingSources.includes("user")) {
+        const userSkillsDir = path.join(os.homedir(), ".claude", "skills");
+        const userSkills = await discoverSkillsFromDirectory(userSkillsDir, "user");
+        skills.push(...userSkills);
+      }
+
+      if (settingSources.includes("project") && workspacePath) {
+        const projectSkillsDir = path.join(workspacePath, ".claude", "skills");
+        const projectSkills = await discoverSkillsFromDirectory(projectSkillsDir, "project");
+        skills.push(...projectSkills);
+      }
+
+      if (generation === catalogGeneration) skillsCache.set(cacheKey, { skills, timestamp: now });
+      return skills;
+    } catch (error) {
+      logError("Failed to discover skills:", error);
+      return [];
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Acquisition helpers
+  // ─────────────────────────────────────────────────────────────
+
+  function newSession(
+    runId: string,
+    options: SDKOptions,
+    abortController: AbortController,
+    isInitial: boolean,
+    permissionMode: ClaudePermissionModeRef,
+    fastModeRequested = !!config.fastMode,
+  ): ClaudeSession {
+    return {
+      runId,
+      options,
+      abortController,
+      permissionMode,
+      runtimeSettingsPath:
+        typeof options.settings === "string" ? options.settings : undefined,
+      fastModeRequested,
+      isInitial,
+      state: { hasAssistantContent: false },
+      toolCallIndex: new Map(),
+      taskIndex: new Map(),
+      partialTextBuffers: new Map(),
+      partialThinkingBuffers: new Map(),
+    };
+  }
+
+  /**
+   * Read the CLI's auto-generated session title (aiTitle) from the persisted
+   * transcript. The CLI writes aiTitle asynchronously right after the first
+   * turn, so this retries briefly. Returns null when only the first prompt is
+   * available (no AI/custom title yet) — callers keep the provisional title.
+   */
+  async function readAutoTitle(sessionId: string, dir?: string): Promise<string | null> {
+    if (!getSessionInfoFn) return null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const info = await getSessionInfoFn(sessionId, dir ? { dir } : undefined);
+        if (info?.summary && info.summary !== info.firstPrompt) {
+          const title = info.summary.trim();
+          if (title) return title.length > 80 ? title.slice(0, 80) : title;
+        }
+      } catch (err) {
+        logWarn(
+          `readAutoTitle attempt ${attempt + 1} failed:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+    return null;
+  }
+
+  async function lookupSessionId(runId: string): Promise<string | undefined> {
+    const memo = sessionIdMemo.get(runId);
+    if (memo) return memo;
+    try {
+      const run = await runsRepo.findRunById(runId);
+      if (run?.sessionId) {
+        sessionIdMemo.set(runId, run.sessionId);
+        return run.sessionId;
+      }
+    } catch {
+      /* ignore */
+    }
+    return undefined;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // MCP Apps
+  // ─────────────────────────────────────────────────────────────
+
+  /** Re-read the session's MCP tools; concurrent callers share one request. */
+  function refreshMcpCatalog(cs: ClaudeSession): Promise<void> {
+    const mcpApps = cs.mcpApps;
+    if (!mcpApps || !cs.query) return Promise.resolve();
+    mcpApps.refreshing ??= cs.query
+      .mcpServerStatus()
+      .then((statuses) => {
+        mcpApps.catalog = buildClaudeMcpCatalog(statuses);
+      })
+      .catch((err) => {
+        logWarn("Failed to read MCP tools for apps:", err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        mcpApps.refreshing = undefined;
+      });
+    return mcpApps.refreshing;
+  }
+
+  /**
+   * The app an MCP tool declares, if any. A tool the catalog has not seen — its
+   * server was still connecting at init — triggers one re-read.
+   */
+  async function mcpAppToolFor(
+    cs: ClaudeSession,
+    toolName: string,
+  ): Promise<ClaudeMcpAppTool | undefined> {
+    if (!cs.mcpApps || !toolName.startsWith("mcp__")) return undefined;
+    if (!cs.mcpApps.catalog.known.has(toolName)) await refreshMcpCatalog(cs);
+    return cs.mcpApps.catalog.apps.get(toolName);
+  }
+
+  /** The directory a run's session ran in, which decides its MCP servers. */
+  async function resolveRunCwd(runId: string): Promise<string> {
+    const cwd = liveSessions.get(runId)?.options.cwd ?? runCwdMemo.get(runId);
+    if (cwd) return cwd;
+    // After a restart the transcript is the record: it keeps the session's cwd.
+    const sessionId = await lookupSessionId(runId);
+    const info = sessionId && getSessionInfoFn ? await getSessionInfoFn(sessionId) : undefined;
+    if (!info?.cwd) throw new Error("Cannot find where this run's session ran");
+    runCwdMemo.set(runId, info.cwd);
+    return info.cwd;
+  }
+
+  function closeMcpHost(cwd: string): void {
+    const host = mcpHosts.get(cwd);
+    if (!host) return;
+    mcpHosts.delete(cwd);
+    if (host.idleTimer) clearTimeout(host.idleTimer);
+    host.release();
+    try {
+      host.query.close();
+    } catch (err) {
+      logWarn("Failed to close MCP host:", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /** The MCP host for a cwd, started on first use and closed after it idles. */
+  async function mcpHostFor(cwd: string): Promise<SDKQuery> {
+    let host = mcpHosts.get(cwd);
+    if (host) {
+      mcpHosts.delete(cwd); // re-insert: Map order is the eviction order
+    } else {
+      await ensureSDK();
+      if (!queryFn) throw new Error("Claude SDK not properly initialized");
+      while (mcpHosts.size >= MAX_MCP_HOSTS) {
+        closeMcpHost(mcpHosts.keys().next().value as string);
+      }
+      let release!: () => void;
+      const idle = new Promise<void>((resolve) => (release = resolve));
+      // A prompt that never yields keeps stdin open and the process idle.
+      const noPrompt: AsyncIterable<never> = {
+        [Symbol.asyncIterator]: () => ({
+          next: () => idle.then(() => ({ done: true as const, value: undefined })),
+        }),
+      };
+      const options = buildProcessOptions();
+      options.cwd = cwd;
+      const mcpServers = readMcpServersFromSettings(options.settingSources!, cwd);
+      if (Object.keys(mcpServers).length > 0) options.mcpServers = mcpServers;
+      const query = queryFn({ prompt: noPrompt, options });
+      host = { query, release };
+    }
+    mcpHosts.set(cwd, host);
+    if (host.idleTimer) clearTimeout(host.idleTimer);
+    host.idleTimer = setTimeout(() => closeMcpHost(cwd), MCP_HOST_IDLE_MS);
+    host.idleTimer.unref?.();
+    return host.query;
+  }
+
+  /**
+   * Run an MCP control request for a run: through its live turn when there is
+   * one, otherwise through the MCP host for its cwd. A turn that closed under
+   * the request falls through to the host; any other failure is the answer.
+   */
+  async function withMcpQuery<T>(runId: string, fn: (query: SDKQuery) => Promise<T>): Promise<T> {
+    const live = liveSessions.get(runId)?.query;
+    if (live) {
+      try {
+        return await fn(live);
+      } catch (err) {
+        if (!/closed/i.test(err instanceof Error ? err.message : String(err))) throw err;
+      }
+    }
+    const cwd = await resolveRunCwd(runId);
+    try {
+      return await fn(await mcpHostFor(cwd));
+    } catch (err) {
+      // A host that died answers every request with the same error; drop it.
+      if (/closed/i.test(err instanceof Error ? err.message : String(err))) closeMcpHost(cwd);
+      throw err;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // CLI helpers (the same executable and authentication environment as runs)
+  // ─────────────────────────────────────────────────────────────
+
+  /** Run a one-shot `claude <args>` CLI command. */
+  function runClaudeCli(
+    args: string[],
+    timeoutMs: number,
+    cwd?: string,
+  ): Promise<{ stdout: string; stderr: string; code: number | null }> {
+    const runtime = resolveClaudeRuntime(config.binary);
+    if (!runtime) {
+      return Promise.resolve({ stdout: "", stderr: "Claude CLI not found", code: null });
+    }
+    return new Promise((resolve) => {
+      const child = spawn(runtime.path, args, {
+        env: { ...buildProcessOptions().env, HOME: os.homedir() },
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: timeoutMs,
+        // project/local scope ops resolve the scope relative to cwd; run them in
+        // the directory the plugin was installed from.
+        ...(cwd ? { cwd } : {}),
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (d: Buffer) => (stdout += d.toString()));
+      child.stderr?.on("data", (d: Buffer) => (stderr += d.toString()));
+      child.on("close", (code) => resolve({ stdout, stderr, code }));
+      child.on("error", (err) =>
+        resolve({ stdout, stderr: String(err instanceof Error ? err.message : err), code: null }),
+      );
+    });
+  }
+
+  /** Read the installed Claude Code version (e.g. "2.1.159" from "2.1.159 (Claude Code)"). */
+  async function getClaudeVersion(): Promise<string | null> {
+    try {
+      const { stdout } = await runClaudeCli(["--version"], 8000);
+      const match = stdout.trim().match(/(\d+\.\d+\.\d+[^\s]*)/);
+      return match ? match[1] : stdout.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read login state via `claude auth status --json`. Returns undefined when
+   * the CLI predates the `auth` subcommand (or output is unparseable) so the
+   * caller can fall back to the SDK control query; null means definitively
+   * signed out.
+   */
+  async function readAccountFromAuthStatus(): Promise<
+    AccountInfo["account"] | undefined
+  > {
+    const { stdout } = await runClaudeCli(["auth", "status", "--json"], 15000);
+    // A signed-out status can exit non-zero but still print JSON — parse
+    // stdout regardless of exit code.
+    const jsonStart = stdout.indexOf("{");
+    if (jsonStart === -1) return undefined;
+    try {
+      const status = JSON.parse(stdout.slice(jsonStart));
+      if (typeof status?.loggedIn !== "boolean") return undefined;
+      if (!status.loggedIn) return null;
+      if (typeof status.email === "string" && status.email) {
+        return {
+          type: "claude",
+          email: status.email,
+          planType: status.subscriptionType ?? status.orgName ?? "",
+        };
+      }
+      return { type: "apiKey" };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * One-shot, tool-free text generation via a cheap model. Shared by the
+   * generateText() and generateTitle() driver methods.
+   */
+  async function generateOneShotText(
+    prompt: string,
+    opts?: { system?: string; model?: string },
+  ): Promise<string> {
+    await ensureSDK();
+    if (!queryFn) throw new Error("Claude SDK not properly initialized");
+
+    const options = await buildOptions({
+      model: opts?.model ?? "claude-haiku-4-5-20251001",
+    });
+    // Strip the MCP servers buildOptions injects so the model is never tempted
+    // to call a tool — with no tools available it just answers. maxTurns gets a
+    // little slack (not 1) so a stray first-message hiccup can't trip
+    // "error_max_turns" before the final text lands; without tools it still
+    // finishes in a single turn normally.
+    options.maxTurns = 6;
+    options.allowedTools = [];
+    options.disallowedTools = ["*"];
+    options.mcpServers = {};
+    options.systemPrompt =
+      opts?.system ??
+      "You are a helpful assistant. Follow the user's instructions exactly and output only what is requested.";
+
+    let text = "";
+    try {
+      const query = queryFn({ prompt, options });
+      for await (const msg of query) {
+        if (msg.type === "assistant") {
+          const assistantMsg = msg as {
+            message?: { content?: Array<{ type: string; text?: string }> };
+          };
+          for (const block of assistantMsg.message?.content ?? []) {
+            if (block.type === "text" && block.text) text += block.text;
+          }
+        }
+      }
+    } catch (err) {
+      // The SDK throws on error results (e.g. max turns). If the model already
+      // produced text before that, use it; otherwise surface the failure.
+      if (!text.trim()) throw err;
+    }
+
+    return text.trim();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // ProviderDriver implementation
+  // ─────────────────────────────────────────────────────────────
+
+  return {
+    async createSession(request: WorkRunRequest): Promise<AcquiredSession> {
+      await ensureSDK();
+      if (!queryFn) throw new Error("Claude SDK not properly initialized");
+
+      const abortController = new AbortController();
+      const overridePermissionMode = request.configSnapshot?.permissionMode;
+      const sessionId = randomUUID();
+      const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
+      const options = await buildOptions({
+        model: getModel(request.model),
+        workspacePath: request.execution.cwd,
+        abortController,
+        runHooks: request.hooks,
+        runAgents: request.agents,
+        runId: request.runId,
+        workspaceId: request.execution.workspaceId,
+        newSessionId: sessionId,
+        permissionMode: isSDKPermissionMode(overridePermissionMode)
+          ? overridePermissionMode
+          : undefined,
+        permissionModeRef,
+        extraInstructions: request.extraInstructions,
+        outputStyle:
+          typeof request.configSnapshot?.outputStyle === "string"
+            ? request.configSnapshot.outputStyle
+            : config.outputStyle ?? undefined,
+        mode: request.mode,
+        toolPolicy: request.toolPolicy,
+        additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
+        configSnapshot: request.configSnapshot,
+      });
+
+      const session = newSession(request.runId, options, abortController, true, permissionModeRef,
+        typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
+      session.state.sessionId = sessionId;
+      sessionIdMemo.set(request.runId, sessionId);
+      return { session, prompt: buildStartPrompt(request), sessionId };
+    },
+
+    async resumeSession(request: WorkRunContinueRequest): Promise<AcquiredSession> {
+      await ensureSDK();
+      if (!queryFn) throw new Error("Claude SDK not properly initialized");
+
+      const sessionId = await lookupSessionId(request.runId);
+      if (!sessionId) {
+        throw new Error(
+          `Session not found for run ${request.runId}. The session may have expired or was never created.`,
+        );
+      }
+
+      const abortController = new AbortController();
+      const resumePermissionMode = request.configSnapshot?.permissionMode;
+      const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
+      const options = await buildOptions({
+        model: getModel(request.model ?? config.defaultModel),
+        workspacePath: request.execution.cwd,
+        abortController,
+        resumeSessionId: sessionId,
+        runHooks: request.hooks,
+        runAgents: request.agents,
+        runId: request.runId,
+        workspaceId: request.execution.workspaceId,
+        permissionMode: isSDKPermissionMode(resumePermissionMode)
+          ? resumePermissionMode
+          : undefined,
+        permissionModeRef,
+        extraInstructions: request.extraInstructions,
+        outputStyle:
+          typeof request.configSnapshot?.outputStyle === "string"
+            ? request.configSnapshot.outputStyle
+            : undefined,
+        mode: request.mode,
+        toolPolicy: request.toolPolicy,
+        additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
+        configSnapshot: request.configSnapshot,
+      });
+
+      const session = newSession(request.runId, options, abortController, false, permissionModeRef,
+        typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
+      try {
+        for (const anchor of await runsRepo.findClaudeTaskAnchorsByRun(request.runId)) {
+          if (typeof anchor.taskId !== "string" || !anchor.taskId || !anchor.toolUseId) continue;
+          const known = session.taskIndex.get(anchor.taskId);
+          if (known?.providerRunId && (!anchor.providerRunId || anchor.providerRunId < known.providerRunId)) continue;
+          session.taskIndex.set(anchor.taskId, {
+            toolUseId: anchor.toolUseId,
+            originalToolUseId: known?.originalToolUseId ?? anchor.toolUseId,
+            providerRunId: anchor.providerRunId ?? undefined,
+            parentTaskId: anchor.parentTaskId ?? undefined,
+            taskType: anchor.taskType ?? (anchor.subagentType ? "local_agent" : undefined),
+            subagentType: anchor.subagentType ?? undefined,
+            isBackgrounded: anchor.isBackgrounded === null ? undefined : !!anchor.isBackgrounded,
+            ambient: anchor.ambient === null ? undefined : !!anchor.ambient,
+            terminal: anchor.phase === "completed" || ["completed", "failed", "killed", "stopped"].includes(anchor.status ?? ""),
+            notified: anchor.phase === "completed",
+          });
+        }
+      } catch (error) {
+        logWarn("Could not restore Claude task identities:", error instanceof Error ? error.message : String(error));
+      }
+      // Prime sessionId so executePrompt's "first session_id" persistence is a no-op for resume;
+      // the SDK keeps the same id when resuming.
+      session.state.sessionId = sessionId;
+      if (request.clientUserMessageId) {
+        session.initialInput = { uuid: request.clientUserMessageId, onAccepted: request.onInputAccepted };
+      }
+      return { session, prompt: buildContinuePrompt(request) };
+    },
+
+    async steerRun(request) {
+      // Capture the parent query before prompt preparation. Never retarget a
+      // late request onto another query acquired for this conversation.
+      const cs = liveSessions.get(request.runId);
+      const input = cs?.input;
+      if (!cs?.query || !input || !cs.onEvent || cs.abortController.signal.aborted) {
+        throw new Error("There is no active Claude turn to steer. The message stays queued.");
+      }
+      const onEvent = cs.onEvent;
+      const receipt = await input.send({
+        type: "user", uuid: request.clientUserMessageId,
+        session_id: cs.state.sessionId!, parent_tool_use_id: null,
+        message: { role: "user", content: buildContinuePrompt(request) }, priority: "now",
+      }, async ({ turnId, delivery }) => {
+        if (delivery === "queue") {
+          cs.state.hasAssistantContent = false;
+          cs.state.lastAssistantMessage = undefined;
+          cs.state.terminalToolNonExecutionKind = undefined;
+        }
+        await emitUserPromptArtifact(onEvent, request.message, {
+          ...request, contextSkills: request.skills, providerTurnId: turnId,
+          delivery,
+        });
+      });
+      return { turnId: receipt.turnId };
+    },
+
+    async getInputStatus(runId, clientUserMessageId, sessionId) {
+      const live = await liveSessions.get(runId)?.input?.getAcceptedStatus(clientUserMessageId);
+      if (live?.accepted) return live;
+      await ensureSDK();
+      const id = sessionId ?? await lookupSessionId(runId);
+      if (!id || !getSessionMessagesFn) return { accepted: false };
+      const cwd = runCwdMemo.get(runId);
+      const messages = await getSessionMessagesFn(id, cwd ? { dir: cwd } : undefined);
+      return { accepted: messages.some((message) => message.type === "user" &&
+        message.uuid === clientUserMessageId && !message.parent_tool_use_id &&
+        !message.parent_agent_id && isClaudeUserInput(message.message)) };
+    },
+
+    async forkSession(request: WorkRunForkRequest): Promise<AcquiredSession> {
+      await ensureSDK();
+      if (!queryFn) throw new Error("Claude SDK not properly initialized");
+
+      const sourceSessionId = await lookupSessionId(request.sourceRunId);
+      if (!sourceSessionId) {
+        throw new Error(
+          `Session not found for source run ${request.sourceRunId}. Cannot fork.`,
+        );
+      }
+
+      const abortController = new AbortController();
+      // A fork gets a new id, and the CLI lets us name it — so the fork is
+      // identified before it produces anything, same as a fresh session.
+      const sessionId = randomUUID();
+      const forkPermissionMode = request.configSnapshot?.permissionMode;
+      const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
+      const options = await buildOptions({
+        model: getModel(request.model ?? config.defaultModel),
+        workspacePath: request.execution.cwd,
+        abortController,
+        resumeSessionId: sourceSessionId,
+        runHooks: request.hooks,
+        runAgents: request.agents,
+        runId: request.runId,
+        workspaceId: request.execution.workspaceId,
+        forkSession: true,
+        newSessionId: sessionId,
+        permissionMode: isSDKPermissionMode(forkPermissionMode)
+          ? forkPermissionMode
+          : undefined,
+        permissionModeRef,
+        extraInstructions: request.extraInstructions,
+        outputStyle:
+          typeof request.configSnapshot?.outputStyle === "string"
+            ? request.configSnapshot.outputStyle
+            : undefined,
+        mode: request.mode,
+        toolPolicy: request.toolPolicy,
+        additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
+        configSnapshot: request.configSnapshot,
+      });
+
+      const session = newSession(request.runId, options, abortController, true, permissionModeRef,
+        typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
+      session.state.sessionId = sessionId;
+      sessionIdMemo.set(request.runId, sessionId);
+      return { session, prompt: buildForkPrompt(request), sessionId };
+    },
+
+    async executePrompt(
+      sessionParam,
+      prompt,
+      onEvent,
+      signal,
+    ): Promise<DriverOutcome> {
+      const cs = sessionParam as ClaudeSession;
+      const timeout = config.timeout ?? 3_600_000;
+      if (!queryFn) throw new Error("Claude SDK not properly initialized");
+
+      cs.onEvent = onEvent;
+      cs.input = createClaudeTurnInput({
+        initial: {
+          type: "user", uuid: cs.initialInput?.uuid ?? randomUUID(),
+          session_id: cs.state.sessionId!, parent_tool_use_id: null,
+          message: { role: "user", content: prompt },
+        },
+        onInitialAccepted: cs.initialInput?.onAccepted,
+        cancel: async (uuid) => {
+          if (cs.query?.cancelAsyncMessage) return cs.query.cancelAsyncMessage(uuid);
+          if (!cs.query?.request) throw new Error("Claude input cancellation is unavailable");
+          const response = await cs.query.request({ subtype: "cancel_async_message", message_uuid: uuid });
+          const envelope = response as { response?: { cancelled?: boolean } };
+          return envelope?.response?.cancelled === true;
+        },
+      });
+
+      // Stop closes our input first, recalls queued native commands when the
+      // control channel is available, and aborts the process as a backstop.
+      const onAbort = () => {
+        cs.input?.stop();
+        if (cs.query?.request) {
+          void cs.query.request({ subtype: "interrupt", cancel_queued: true }).catch(() => {});
+        } else if (cs.query?.interrupt) {
+          void cs.query.interrupt().catch(() => {});
+        }
+        try {
+          cs.abortController.abort();
+        } catch (err) {
+          logError("Error aborting controller:", err);
+        }
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+
+      // Create the SDK query (this is when the prompt is bound to the session).
+      const query = queryFn({ prompt: cs.input.stream, options: {
+        ...cs.options, extraArgs: { ...cs.options.extraArgs, "replay-user-messages": null },
+      } });
+      cs.query = query;
+      liveSessions.set(cs.runId, cs);
+      if (signal.aborted) onAbort();
+      if (cs.options.cwd) runCwdMemo.set(cs.runId, cs.options.cwd);
+      // A resumed or forked session's results continue from the totals its
+      // transcript saved; read them as the query opens, before the first result.
+      const sessionTotalsBefore = cs.options.resume
+        ? readClaudeSessionTotals(query)
+        : Promise.resolve(null);
+
+      let timeoutId: NodeJS.Timeout | undefined;
+      let timedOut = false;
+      const timeoutPromise = new Promise<void>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          cs.input?.stop();
+          cs.abortController.abort();
+          reject(new Error(`Request timed out after ${timeout}ms`));
+        }, timeout);
+      });
+
+      try {
+        // Context meter, in preference order:
+        //   1. The `get_context_usage` control reply — the CLI's own `/context`
+        //      report, with the category breakdown and the autocompact
+        //      threshold. Requested while the stream is live; the reason the
+        //      driver used to avoid it is that requesting it around teardown
+        //      answers "Query closed before response".
+        //   2. `context_usage` on an assistant message, which per the CLI's
+        //      schema only ever rides the synthetic reply to `/context`.
+        //   3. A per-request snapshot from `message.usage`, sized against the
+        //      window in result.modelUsage — for a CLI too old for (1).
+        let sawContextUsage = false;
+        let lastReqContextTokens = 0;
+        let contextUsageInFlight = false;
+        let contextUsageAt = 0;
+        let primaryModel: string | undefined;
+        // The reply is a whole-context token count, so it is asked for at a
+        // human-readable cadence rather than once per assistant message.
+        const CONTEXT_USAGE_MIN_INTERVAL_MS = 2_000;
+
+        function refreshContextUsage(): void {
+          const now = Date.now();
+          if (contextUsageInFlight) return;
+          if (contextUsageAt && now - contextUsageAt < CONTEXT_USAGE_MIN_INTERVAL_MS) return;
+          if (typeof cs.query?.getContextUsage !== "function") return;
+          contextUsageInFlight = true;
+          contextUsageAt = now;
+          // Fire-and-forget: the meter is an indicator and must never hold up
+          // the transcript stream.
+          void cs.query
+            .getContextUsage()
+            .then((response) => {
+              const event = mapContextUsageResponse(response, Date.now());
+              if (!event) return;
+              sawContextUsage = true;
+              return onEvent(event);
+            })
+            .catch(() => {
+              // A CLI without the control handler, or a closed query — the
+              // modelUsage fallback covers the meter either way.
+            })
+            .finally(() => {
+              contextUsageInFlight = false;
+            });
+        }
+
+        const streamPromise = (async () => {
+          for await (const msg of query) {
+            if (signal.aborted || timedOut) break;
+            // Persist accepted inputs before projecting the reply they own.
+            // Result receipts close steering immediately, before any awaits.
+            await cs.input!.observe(msg as Parameters<ReturnType<typeof createClaudeTurnInput>["observe"]>[0]);
+            primaryModel = resolveClaudeTurnModel(
+              primaryModel,
+              msg as unknown as ClaudeTurnModelMessage,
+              cs.options.model,
+            );
+
+            if (msg.type === "system" && (msg as SDKSystemMessage).subtype === "init") {
+              const { capabilities } = msg as SDKSystemMessage;
+              cs.state.capabilities = capabilities;
+              // MCP Apps: learn which tools carry a UI before their calls are mapped.
+              if (supportsClaudeMcpApps(capabilities)) {
+                cs.mcpApps ??= { catalog: { known: new Set(), apps: new Map() } };
+                await refreshMcpCatalog(cs);
+              }
+            } else if (msg.type === "assistant" && cs.mcpApps) {
+              for (const block of (msg as SDKAssistantMessage).message?.content ?? []) {
+                if (block.type === "tool_use" && block.name) await mcpAppToolFor(cs, block.name);
+              }
+            }
+
+            // Track whether any assistant text content has been streamed (for result-message dedup).
+            if (msg.type === "assistant") {
+              const aMsg = msg as SDKAssistantMessage;
+              const isMainMessage = !aMsg.parent_tool_use_id && !aMsg.agent_id;
+              if (isMainMessage && aMsg.message?.content?.some((b: any) => b.type === "text" && b.text)) {
+                cs.state.hasAssistantContent = true;
+              }
+              // (1) Ask the CLI where the window stands. Driven off assistant
+              // messages so a long tool-using turn keeps the meter live rather
+              // than updating it once at the end.
+              if (isMainMessage) refreshContextUsage();
+
+              // (2) The `/context` reply, when a run happens to invoke it.
+              const ctxEvent = buildContextUsageEvent(aMsg, Date.now());
+              if (ctxEvent) {
+                sawContextUsage = true;
+                await onEvent(ctxEvent);
+              }
+
+              // (3) Fallback snapshot: one request's prompt+response size ≈ what
+              // occupies the window. result.modelUsage is *cumulative* across
+              // every round-trip in the turn, so cache-read tokens balloon with
+              // each tool call and pin the meter to 100% — hence per-request.
+              // Subagent (e.g. haiku) messages are skipped so they don't clobber
+              // the main conversation's snapshot. The Anthropic message carries a
+              // per-request `usage` at runtime even though our local type omits it.
+              const u = (aMsg.message as any)?.usage as
+                | { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+                | undefined;
+              if (u && isMainMessage) {
+                const snapshot =
+                  (u.input_tokens ?? 0) +
+                  (u.cache_read_input_tokens ?? 0) +
+                  (u.cache_creation_input_tokens ?? 0) +
+                  (u.output_tokens ?? 0);
+                if (snapshot > 0) lastReqContextTokens = snapshot;
+              }
+            }
+
+            // The id is assigned at acquisition and already persisted, so this
+            // is a tripwire rather than the happy path: if the CLI ever opens a
+            // different session than the one it was given, resuming this run
+            // would silently target a transcript that does not exist.
+            if (msg.session_id && msg.session_id !== cs.state.sessionId) {
+              logWarn(
+                `Session id mismatch for run ${cs.runId}: asked for ${cs.state.sessionId ?? "none"}, got ${msg.session_id}`,
+              );
+              cs.state.sessionId = msg.session_id;
+              sessionIdMemo.set(cs.runId, msg.session_id);
+              runsRepo
+                .updateRun(cs.runId, { sessionId: msg.session_id })
+                .catch((err) => logError("Failed to persist session ID:", err));
+            }
+
+            // Capture stop reason + usage from result messages.
+            if (msg.type === "result") {
+              const resultMsg = msg as SDKResultMessage;
+              if (resultMsg.stop_reason !== undefined) {
+                cs.state.lastStopReason = resultMsg.stop_reason;
+              }
+
+              // Turns are summed downstream, so the turn is booked at this
+              // query's share, not the session's running total.
+              const own = subtractClaudeSessionTotals(resultMsg, await sessionTotalsBefore);
+              let inputTokens = 0,
+                outputTokens = 0,
+                cacheRead = 0,
+                cacheWrite = 0;
+              for (const usage of Object.values(own.modelUsage)) {
+                inputTokens += usage.inputTokens;
+                outputTokens += usage.outputTokens;
+                cacheRead += usage.cacheReadInputTokens;
+                cacheWrite += usage.cacheCreationInputTokens;
+              }
+              // Fallback context meter: the entry with the largest window is the
+              // main conversation model (not haiku subagents).
+              let ctxModel: string | undefined;
+              let ctxWindow = 0;
+              for (const [modelName, usage] of Object.entries(resultMsg.modelUsage ?? {})) {
+                const window = usage.contextWindow ?? 0;
+                if (window > ctxWindow) {
+                  ctxWindow = window;
+                  ctxModel = modelName;
+                }
+              }
+
+              cs.state.lastUsage = {
+                totalCostUsd: own.costUsd,
+                durationMs: resultMsg.duration_ms,
+                numTurns: resultMsg.num_turns,
+                inputTokens: Object.keys(own.modelUsage).length ? inputTokens : undefined,
+                outputTokens: Object.keys(own.modelUsage).length ? outputTokens : undefined,
+                cacheReadTokens: Object.keys(own.modelUsage).length ? cacheRead : undefined,
+                cacheWriteTokens: Object.keys(own.modelUsage).length ? cacheWrite : undefined,
+                model: primaryModel,
+                modelUsage: resultMsg.modelUsage ? own.modelUsage : undefined,
+              };
+
+              // Fallback only — an authoritative snapshot already covered the turn.
+              if (!sawContextUsage && ctxWindow > 0 && lastReqContextTokens > 0) {
+                const total = Math.min(lastReqContextTokens, ctxWindow);
+                await onEvent({
+                  type: "context_usage",
+                  totalTokens: total,
+                  maxTokens: ctxWindow,
+                  percentage: (total / ctxWindow) * 100,
+                  model: ctxModel ?? primaryModel,
+                  ts: Date.now(),
+                });
+              }
+            }
+
+            const replayedInput = msg.type === "user" && !msg.parent_tool_use_id && !msg.agent_id &&
+              typeof msg.uuid === "string" && cs.input!.getStatus(msg.uuid).accepted &&
+              isClaudeUserInput(msg.message);
+            const events = replayedInput ? [] : mapSDKMessage(msg, cs);
+            for (const event of events) {
+              await onEvent(event);
+
+              if (
+                event.type === "tool_call" &&
+                event.metadata?.phase === "complete" &&
+                event.output
+              ) {
+                for (const artEvent of extractArtifactsFromToolOutput(event.toolName, event.output)) {
+                  await onEvent(artEvent);
+                }
+              }
+            }
+          }
+        })();
+
+        await Promise.race([streamPromise, timeoutPromise]);
+
+        // Replace the provisional goal-derived title with the CLI's
+        // auto-generated aiTitle, once, for the initial run only. Fire-and-forget:
+        // getSessionInfo reads the persisted transcript independently of the
+        // (now-finished) query, so this must not delay the run outcome.
+        if (cs.isInitial && cs.state.sessionId) {
+          const sessionId = cs.state.sessionId;
+          const dir = cs.options.cwd;
+          void readAutoTitle(sessionId, dir).then((title) => {
+            if (title) {
+              runsRepo
+                .updateRun(cs.runId, { title })
+                .catch((err) => logError("Failed to persist auto title:", err));
+            }
+          });
+        }
+
+        return classifyOutcome({
+          stopReason: cs.state.lastStopReason ?? null,
+          usage: cs.state.lastUsage,
+          terminalToolNonExecutionKind: cs.state.terminalToolNonExecutionKind,
+          aborted: signal.aborted,
+          timedOut: false,
+          errorMessage: undefined,
+          timeoutMs: timeout,
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        // Emit interrupted events for any pending tool calls
+        const ts = Date.now();
+        for (const [toolCallId, toolInfo] of cs.toolCallIndex) {
+          await onEvent({
+            type: "tool_call",
+            toolName: toolInfo.toolName,
+            input: toolInfo.input as Record<string, unknown> | undefined,
+            error: "Interrupted",
+            endedAt: ts,
+            metadata: { phase: "complete", toolCallId, interrupted: true },
+          });
+        }
+        cs.toolCallIndex.clear();
+
+        return classifyOutcome({
+          stopReason: cs.state.lastStopReason ?? null,
+          usage: cs.state.lastUsage,
+          terminalToolNonExecutionKind: cs.state.terminalToolNonExecutionKind,
+          aborted: signal.aborted || cs.abortController.signal.aborted,
+          timedOut,
+          errorMessage,
+          timeoutMs: timeout,
+        });
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+        cs.input?.finish();
+        signal.removeEventListener("abort", onAbort);
+        if (liveSessions.get(cs.runId) === cs) liveSessions.delete(cs.runId);
+      }
+    },
+
+    async cleanup(session): Promise<void> {
+      // Per-run state lives on the Session object Core is about to drop.
+      const cs = session as ClaudeSession;
+      cs.input?.finish();
+
+      // The query normally auto-completes when the stream ends, so this is a
+      // backstop: on an aborted or errored run the CLI subprocess can outlive
+      // the stream, and nothing else would reap it.
+      try {
+        cs.query?.close?.();
+      } catch (err) {
+        logWarn(
+          "Failed to close SDK query:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+
+      removeClaudeRuntimeSettings(cs.runtimeSettingsPath);
+      if (cs.state.sessionId) {
+        try {
+          await bridgeService.mirrorClaudeSession({ runId: cs.runId, sessionId: cs.state.sessionId, dir: cs.options.cwd ?? process.cwd() });
+        } catch {
+          // The next turn imports the full native session again. Mirror failure
+          // must not change a completed/aborted run's outcome or log raw entries.
+          logWarn("Could not mirror Claude session; will retry after its next turn");
+        }
+      }
+    },
+
+    async readMcpAppResource(request) {
+      const result = await withMcpQuery(request.runId, async (query) => {
+        if (typeof query.readMcpResource !== "function") {
+          throw new Error("This Claude Code version cannot read MCP App resources");
+        }
+        await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
+        return query.readMcpResource(request.server, request.uri);
+      });
+      return { contents: result.contents ?? [], originCallId: request.originCallId ?? null };
+    },
+
+    // `meta` has nowhere to go: mcp_call takes a tool and its arguments only.
+    async callMcpAppTool(request) {
+      const raw = await withMcpQuery(request.runId, async (query) => {
+        if (typeof query.request !== "function") {
+          throw new Error("This Claude Code version cannot call MCP App tools");
+        }
+        const statuses = await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
+        assertMcpToolCallableFromApp(statuses, request.server, request.tool);
+        return query.request(buildMcpAppCallRequest(request.server, request.tool, request.arguments));
+      });
+      // The control reply wraps the tool result in `response`.
+      const result = toMcpCallToolResult((raw as { response?: unknown } | null)?.response ?? raw);
+      if (!result) throw new Error("MCP App tool call returned no result");
+      return result;
+    },
+
+    async canResumeSession(runId: string): Promise<boolean> {
+      const sessionId = await lookupSessionId(runId);
+      if (!sessionId) return false;
+      try {
+        await ensureSDK();
+        return queryFn !== null;
+      } catch {
+        return false;
+      }
+    },
+
+    async deleteSession(runId: string): Promise<void> {
+      // Resolve before clearing the memo — lookupSessionId reads it.
+      const sessionId = await lookupSessionId(runId);
+
+      // Remove the persisted transcript too. Clearing our own column only makes
+      // the session unreachable from Mains; the CLI's `{sessionId}.jsonl` and
+      // its subagent-transcript directory would stay on disk forever.
+      if (sessionId) {
+        try {
+          await ensureSDK();
+          if (deleteSdkSessionFn) {
+            await deleteSdkSessionFn(sessionId);
+          } else {
+            logWarn("SDK has no deleteSession(); transcript left on disk");
+          }
+        } catch (err) {
+          // A missing session throws — that is the already-deleted case, and it
+          // must not block clearing our own reference to it.
+          logWarn(
+            `Failed to delete SDK session ${sessionId}:`,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
+
+      sessionIdMemo.delete(runId);
+      runCwdMemo.delete(runId);
+      runsRepo
+        .updateRun(runId, { sessionId: null })
+        .catch((err) => logError("Failed to clear session ID in DB:", err));
+    },
+
+    updateConfig(next) {
+      const binaryChanged = config.binary !== (next as ClaudeCodeAdapterConfig).binary;
+      adoptConfig(config, next as ClaudeCodeAdapterConfig);
+      if (binaryChanged) {
+        cachedModels = null;
+        cachedModelsTimestamp = 0;
+        invalidatePluginCaches();
+      }
+    },
+
+    invalidateCatalogs() {
+      cachedModels = null;
+      cachedModelsTimestamp = 0;
+      invalidatePluginCaches();
+    },
+
+    async shutdown(): Promise<void> {
+      sessionIdMemo.clear();
+      for (const cwd of [...mcpHosts.keys()]) closeMcpHost(cwd);
+      for (const cs of liveSessions.values()) {
+        cs.input?.finish();
+        try {
+          cs.abortController.abort();
+          cs.query?.close();
+        } catch (err) { logWarn("Failed to close Claude query:", err instanceof Error ? err.message : String(err)); }
+      }
+      liveSessions.clear();
+      runCwdMemo.clear();
+      sdkLoaded = false;
+      loadError = null;
+      queryFn = null;
+      getSessionInfoFn = null;
+      getSessionMessagesFn = null;
+      deleteSdkSessionFn = null;
+      cachedModels = null;
+      cachedModelsTimestamp = 0;
+      cachedPlugins = null;
+      cachedPluginsTimestamp = 0;
+      commandsCache.clear();
+      skillsCache.clear();
+      logInfo("Shutdown complete");
+    },
+
+    async listModels(): Promise<ModelInfo[]> {
+      const generation = catalogGeneration;
+      const now = Date.now();
+      if (cachedModels && now - cachedModelsTimestamp < MODELS_CACHE_TTL_MS) {
+        return cachedModels;
+      }
+
+      try {
+        const sdkModels = await withControlQuery((query) => query.supportedModels());
+        if (!sdkModels || sdkModels.length === 0) {
+          logWarn("SDK returned no models, using fallback");
+          return getDefaultModels(config.defaultModel);
+        }
+
+        // Drop the SDK's synthetic "default" entry ("Use the default model
+        // (currently …)"). It's redundant with the concrete model it resolves
+        // to (Opus 4.8) and just duplicates a row in the picker. Guard against
+        // an account whose only offering is "default" so the list never empties.
+        const selectableSdkModels =
+          sdkModels.length > 1
+            ? sdkModels.filter((m) => m.value !== "default")
+            : sdkModels;
+
+        const defaultModelId = resolveClaudeDefaultModelId(
+          sdkModels,
+          config.defaultModel,
+        );
+
+        const models: ModelInfo[] = selectableSdkModels.map((sdkModel) => {
+          // SDK's .d.ts declares supportsFastMode but the runtime payload doesn't include it.
+          // Fast mode is currently meaningful only on opus; this fallback lights it up
+          // automatically when the SDK starts surfacing the field.
+          const id = sdkModel.value;
+          const fallbackFastMode = id === "opus[1m]";
+          return {
+            id,
+            displayName: sdkModel.displayName,
+            description: sdkModel.description,
+            isDefault: sdkModel.value === defaultModelId,
+            capabilities: {
+              streaming: true,
+              vision: true,
+              functionCalling: true,
+              reasoning: sdkModel.value.includes("opus"),
+            },
+            contextWindow: sdkModel.value.includes("haiku") ? 128000 : 200000,
+            supportsFastMode: sdkModel.supportsFastMode ?? fallbackFastMode,
+            supportsEffort: sdkModel.supportsEffort,
+            supportedEffortLevels: sdkModel.supportedEffortLevels,
+          };
+        });
+
+        if (generation === catalogGeneration) {
+          cachedModels = models;
+          cachedModelsTimestamp = now;
+        }
+        return models;
+      } catch (error) {
+        logError("Failed to fetch models from SDK:", error);
+        return getDefaultModels(config.defaultModel);
+      }
+    },
+
+    async listCommands(workspacePath?: string): Promise<CommandInfo[]> {
+      const generation = catalogGeneration;
+      const now = Date.now();
+      const cacheKey = workspacePath ?? "__global__";
+      const cachedEntry = commandsCache.get(cacheKey);
+      if (cachedEntry && now - cachedEntry.timestamp < COMMANDS_CACHE_TTL_MS) {
+        return cachedEntry.commands;
+      }
+
+      try {
+        const initResult = await withControlQuery(
+          (query) => query.initializationResult(),
+          workspacePath,
+        );
+        if (!initResult?.commands || initResult.commands.length === 0) {
+          return [];
+        }
+
+        // initializationResult().commands mixes built-in /commands with disk-backed skills.
+        // Exclude only skills we discover the same way as the $ menu.
+        const diskSkills = await fetchDiskSkills(workspacePath);
+        const diskSkillNames = new Set(diskSkills.map((s) => s.name));
+
+        const commands: CommandInfo[] = initResult.commands
+          .filter((cmd) => !diskSkillNames.has(cmd.name))
+          .map((cmd) => ({
+            name: cmd.name,
+            description: cmd.description,
+            argumentHint: cmd.argumentHint,
+            userFacing: true,
+          }));
+
+        if (generation === catalogGeneration) commandsCache.set(cacheKey, { commands, timestamp: now });
+        return commands;
+      } catch (error) {
+        logError("Failed to fetch commands from SDK:", error);
+        return [];
+      }
+    },
+
+    async listSkills(workspacePath?: string): Promise<SkillInfo[]> {
+      return fetchDiskSkills(workspacePath);
+    },
+
+    async listPlugins(): Promise<PluginListResponse> {
+      const generation = catalogGeneration;
+      const now = Date.now();
+      if (cachedPlugins && now - cachedPluginsTimestamp < PLUGINS_CACHE_TTL_MS) {
+        return cachedPlugins;
+      }
+
+      const empty = (remoteSyncError: string | null): PluginListResponse => ({
+        marketplaces: [],
+        marketplaceLoadErrors: [],
+        remoteSyncError,
+        featuredPluginIds: [],
+      });
+
+      try {
+        if (!resolveClaudeRuntime(config.binary)) return empty("Claude CLI not found");
+
+        // `--available` includes the marketplace catalog (and may sync remotely);
+        // marketplace list supplies the install locations / ordering.
+        const [listRes, mpRes] = await Promise.all([
+          runClaudeCli(["plugin", "list", "--json", "--available"], 30000),
+          runClaudeCli(["plugin", "marketplace", "list", "--json"], 15000),
+        ]);
+
+        const parse = <T>(stdout: string, label: string): T | null => {
+          const trimmed = stdout.trim();
+          if (!trimmed) return null;
+          try {
+            return JSON.parse(trimmed) as T;
+          } catch (err) {
+            logWarn(`Failed to parse ${label} JSON:`, err instanceof Error ? err.message : String(err));
+            return null;
+          }
+        };
+
+        const listJson = parse<{ installed?: unknown[]; available?: unknown[] }>(
+          listRes.stdout,
+          "plugin list",
+        );
+        const mpJson = parse<unknown[]>(mpRes.stdout, "marketplace list");
+
+        if (!listJson && !mpJson) {
+          const msg = (listRes.stderr || mpRes.stderr || "").trim();
+          return empty(msg || null);
+        }
+
+        // Manifest fallback for plugins the catalog cache hasn't indexed yet.
+        const manifestsByMarketplace: Record<
+          string,
+          Record<string, Record<string, any>>
+        > = {};
+        for (const raw of mpJson ?? []) {
+          const mp = raw as Record<string, unknown>;
+          if (mp && typeof mp.name === "string" && typeof mp.installLocation === "string") {
+            manifestsByMarketplace[mp.name] = readMarketplaceManifestPlugins(
+              mp.installLocation,
+            );
+          }
+        }
+
+        const result = mapClaudePluginList(
+          listJson,
+          mpJson,
+          readPluginCatalogPlugins(),
+          readInstalledShaById(),
+          manifestsByMarketplace,
+        );
+        if (generation === catalogGeneration) {
+          cachedPlugins = result;
+          cachedPluginsTimestamp = now;
+        }
+        return result;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        logError("Failed to list plugins:", msg);
+        return empty(msg);
+      }
+    },
+
+    async readPlugin(pluginName: string, marketplacePath: string): Promise<PluginDetail> {
+      // Detail comes from the local catalog cache (written by `plugin list
+      // --available`), which carries components + cost for installed AND
+      // not-installed plugins — the `plugin details` CLI command has no JSON
+      // output, so disk is the robust source. installed/enabled is overlaid
+      // from the cached list when available, else from installed_plugins.json.
+      const catalogPlugins = readPluginCatalogPlugins();
+      const installedEnabled: Record<string, boolean> = {};
+      if (cachedPlugins) {
+        for (const mp of cachedPlugins.marketplaces) {
+          for (const p of mp.plugins) {
+            if (p.installed) installedEnabled[p.id] = p.enabled;
+          }
+        }
+      } else {
+        for (const id of readInstalledPluginIds()) installedEnabled[id] = true;
+      }
+      const manifestEntry =
+        readMarketplaceManifestPlugins(marketplacePath)[pluginName] ?? null;
+      return mapClaudePluginDetail(
+        catalogPlugins,
+        installedEnabled,
+        pluginName,
+        marketplacePath,
+        manifestEntry,
+      );
+    },
+
+    async installPlugin(pluginId: string, scope?: "user" | "project" | "local"): Promise<void> {
+      // pluginId is "name@marketplace"; the CLI accepts it directly. Default
+      // scope is "user" (global); install also enables by default.
+      const args = ["plugin", "install", pluginId];
+      if (scope) args.push("--scope", scope);
+      const { stdout, stderr, code } = await runClaudeCli(args, 120000);
+      if (code !== 0) {
+        throw new Error(`Plugin install failed: ${(stderr || stdout).trim() || `exit code ${code}`}`);
+      }
+      invalidatePluginCaches();
+    },
+
+    async uninstallPlugin(pluginId: string): Promise<void> {
+      // Match the scope the plugin was installed at (defaults to "user"); -y
+      // skips the prune confirmation prompt in the non-TTY subprocess. local/
+      // project scope resolves relative to cwd → run in the install dir.
+      const loc = getInstalledPluginLocation(pluginId);
+      const cwd = resolveScopeCwd(loc);
+      const args = ["plugin", "uninstall", pluginId, "-y"];
+      if (loc?.scope) args.push("--scope", loc.scope);
+      const { stdout, stderr, code } = await runClaudeCli(args, 120000, cwd);
+      if (code !== 0) {
+        throw new Error(`Plugin uninstall failed: ${(stderr || stdout).trim() || `exit code ${code}`}`);
+      }
+      invalidatePluginCaches();
+    },
+
+    async setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+      // `claude plugin enable|disable <id> [--scope]`. Match the installed scope
+      // and run local/project ops in the dir the plugin was installed from.
+      const loc = getInstalledPluginLocation(pluginId);
+      const cwd = resolveScopeCwd(loc);
+      const args = ["plugin", enabled ? "enable" : "disable", pluginId];
+      if (loc?.scope) args.push("--scope", loc.scope);
+      const { stdout, stderr, code } = await runClaudeCli(args, 60000, cwd);
+      if (code !== 0) {
+        throw new Error(
+          `Plugin ${enabled ? "enable" : "disable"} failed: ${(stderr || stdout).trim() || `exit code ${code}`}`,
+        );
+      }
+      invalidatePluginCaches();
+    },
+
+    async updatePlugin(pluginId: string): Promise<void> {
+      const { stdout, stderr, code } = await runClaudeCli(["plugin", "update", pluginId], 120000);
+      if (code !== 0) {
+        throw new Error(`Plugin update failed: ${(stderr || stdout).trim() || `exit code ${code}`}`);
+      }
+      invalidatePluginCaches();
+    },
+
+    async getRateLimits(): Promise<RateLimitInfo | null> {
+      try {
+        return await withControlQuery(async (query) => {
+          // Older external CLIs may not expose the experimental usage request.
+          if (typeof query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== "function") {
+            return null;
+          }
+          const usage = await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
+            skipBehaviors: true,
+          });
+          return mapClaudeRateLimits(usage);
+        });
+      } catch (error) {
+        logError("Failed to get usage:", error);
+        return null;
+      }
+    },
+
+    async getAccountInfo(): Promise<AccountInfo> {
+      const runtime = resolveClaudeRuntime(config.binary);
+      const cli: NonNullable<AccountInfo["cli"]> = {
+        version: await getClaudeVersion(),
+        channel: null,
+        outdated: false,
+        ...(runtime ? {
+          source: runtime.source,
+          updateMethod: runtime.source === "bundled" ? "app" : "cli",
+          authLoginCommand: claudeAuthLoginCommand(runtime),
+        } : {}),
+      };
+
+      // Fast path: read login state straight from the CLI — detects the
+      // signed-out case definitively and skips spawning an SDK query process.
+      const fromAuthStatus = await readAccountFromAuthStatus();
+      if (fromAuthStatus !== undefined) {
+        return { account: fromAuthStatus, requiresOpenaiAuth: false, cli };
+      }
+
+      // Legacy fallback (CLI without `auth status`): read the account via a
+      // lightweight control query (same pattern as listModels — prompt:""
+      // never sends a turn). Falls back to no account.
+      let account: AccountInfo["account"] = null;
+      try {
+        const info = await withControlQuery((query) => query.accountInfo());
+        if (info?.email) {
+          account = {
+            type: "claude",
+            email: info.email,
+            planType: info.subscriptionType ?? info.organization ?? "",
+          };
+        } else if (info?.apiKeySource || info?.tokenSource) {
+          account = { type: "apiKey" };
+        }
+      } catch (error) {
+        logWarn(
+          `getAccountInfo: account read failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
+      return { account, requiresOpenaiAuth: false, cli };
+    },
+
+    async updateCli(): Promise<CliUpdateResult> {
+      if (resolveClaudeRuntime(config.binary)?.source === "bundled") {
+        return { success: false, output: "Claude is included with Mains and updates with the app. Check for Mains updates in Settings." };
+      }
+      const { stdout, stderr, code } = await runClaudeCli(["update"], 120000);
+      return { success: code === 0, output: `${stdout}${stderr}`.trim() };
+    },
+
+    // The Claude Code CLI writes its own auto-title (aiTitle) into SDK
+    // transcripts too, but only for some sessions (a bare "hello" gets none),
+    // and only after the first turn. So the title is generated here with a
+    // cheap one-shot model call, mirroring the codex driver, and runs.service
+    // sets it at run start; when the CLI does write an aiTitle, readAutoTitle
+    // swaps it in once the initial run finishes (see executePrompt).
+    async generateTitle(goal: string, context?: WorkRunContextItem[]): Promise<string> {
+      try {
+        let contextSnippet = "";
+        if (context && context.length > 0) {
+          contextSnippet = context
+            .map((ctx) => {
+              const header = ctx.ref ? `[${ctx.kind}: ${ctx.ref}]` : `[${ctx.kind}]`;
+              return `${header} ${(ctx.content || "").substring(0, 200)}`;
+            })
+            .join("\n")
+            .substring(0, 500);
+        }
+
+        const titlePrompt = [
+          "Generate a concise title (2-5 words) that summarizes what the user wants.",
+          "Rules:",
+          "- Reply with ONLY the title text, nothing else",
+          '- Use title case: capitalize the first letter of each word, e.g. "Fix Login Redirect", "Add Dark Mode", "Hello Greeting"',
+          '- Do NOT use generic descriptions of the request type, e.g. NOT "Title Generation"',
+          "- No quotes, no punctuation at the end, no prefixes",
+          "",
+          `User message: ${goal}`,
+          contextSnippet ? `\nContext:\n${contextSnippet}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+
+        const raw = await generateOneShotText(titlePrompt, {
+          system:
+            "You write short, descriptive titles. Output only the title text, nothing else.",
+        });
+        return cleanGeneratedTitle(raw, goal);
+      } catch (err) {
+        logWarn("Title generation failed, using fallback:", err);
+        return goal.slice(0, 50);
+      }
+    },
+
+    async generateText(
+      prompt: string,
+      opts?: { system?: string; model?: string },
+    ): Promise<string> {
+      return generateOneShotText(prompt, opts);
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Module-level helpers (no closure dependencies)
+// ─────────────────────────────────────────────────────────────
+
+async function discoverSkillsFromDirectory(
+  skillsDir: string,
+  source: "user" | "project",
+): Promise<SkillInfo[]> {
+  const skills: SkillInfo[] = [];
+  try {
+    if (!fs.existsSync(skillsDir)) return skills;
+
+    const stat = fs.statSync(skillsDir);
+    if (!stat.isDirectory()) return skills;
+
+    const entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const skillDir = path.join(skillsDir, entry.name);
+      const skillMdPath = path.join(skillDir, "SKILL.md");
+      if (!fs.existsSync(skillMdPath)) continue;
+
+      try {
+        const skill = parseSkillFile(skillMdPath, entry.name, source);
+        if (skill) skills.push(skill);
+      } catch (err) {
+        console.warn(`[ClaudeDriver] Failed to parse skill ${entry.name}:`, err);
+      }
+    }
+  } catch (err) {
+    console.warn(`[ClaudeDriver] Failed to read skills directory ${skillsDir}:`, err);
+  }
+  return skills;
+}
+
+function parseSkillFile(
+  filePath: string,
+  dirName: string,
+  source: "user" | "project",
+): SkillInfo | null {
+  const content = fs.readFileSync(filePath, "utf-8");
+
+  const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!frontmatterMatch) {
+    const firstParagraph = content.trim().split("\n\n")[0]?.trim();
+    return {
+      name: dirName,
+      description: firstParagraph?.substring(0, 200),
+      source,
+      path: filePath,
+      userInvokable: true,
+      modelInvocable: true,
+    };
+  }
+
+  const frontmatter = frontmatterMatch[1];
+  const parsed = parseSimpleYaml(frontmatter);
+
+  const skill: SkillInfo = {
+    name: (parsed.name as string) || dirName,
+    description: parsed.description as string | undefined,
+    argumentHint: parsed["argument-hint"] as string | undefined,
+    userInvokable: parsed["user-invokable"] !== false,
+    modelInvocable: parsed["disable-model-invocation"] !== true,
+    source,
+    model: parsed.model as string | undefined,
+    forked: parsed.context === "fork",
+    agent: parsed.agent as string | undefined,
+    path: filePath,
+  };
+
+  if (!skill.description) {
+    const bodyContent = content.slice(frontmatterMatch[0].length).trim();
+    const firstParagraph = bodyContent.split("\n\n")[0]?.trim();
+    if (firstParagraph && !firstParagraph.startsWith("#")) {
+      skill.description = firstParagraph.substring(0, 200);
+    }
+  }
+
+  return skill;
+}
+
+export function parseSimpleYaml(yaml: string): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  const lines = yaml.split(/\r?\n/);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    // Skill frontmatter fields are top-level scalars. Indented lines belong to
+    // a block scalar (handled below) or to metadata we do not consume here.
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent > 0) continue;
+
+    const colonIndex = trimmed.indexOf(":");
+    if (colonIndex === -1) continue;
+
+    const key = trimmed.slice(0, colonIndex).trim();
+    let value: unknown = trimmed.slice(colonIndex + 1).trim();
+    const blockStyle = (value as string).match(/^([>|])[+-]?(?:\s+#.*)?$/);
+
+    if (blockStyle) {
+      const blockLines: string[] = [];
+      let nextIndex = index + 1;
+
+      while (nextIndex < lines.length) {
+        const nextLine = lines[nextIndex];
+        const nextTrimmed = nextLine.trim();
+        const nextIndent = nextLine.length - nextLine.trimStart().length;
+
+        if (nextTrimmed && nextIndent <= lineIndent) break;
+
+        blockLines.push(nextLine);
+        nextIndex += 1;
+      }
+
+      const contentIndent = blockLines.reduce((smallest, blockLine) => {
+        if (!blockLine.trim()) return smallest;
+        const indent = blockLine.length - blockLine.trimStart().length;
+        return Math.min(smallest, indent);
+      }, Number.POSITIVE_INFINITY);
+      const normalizedLines = blockLines.map((blockLine) =>
+        blockLine.trim() && Number.isFinite(contentIndent)
+          ? blockLine.slice(contentIndent)
+          : "",
+      );
+
+      value =
+        blockStyle[1] === "|"
+          ? normalizedLines.join("\n").trim()
+          : normalizedLines
+              .reduce((folded, blockLine) => {
+                if (!blockLine.trim()) return `${folded.trimEnd()}\n`;
+                if (!folded || folded.endsWith("\n")) return folded + blockLine.trim();
+                return `${folded} ${blockLine.trim()}`;
+              }, "")
+              .trim();
+      index = nextIndex - 1;
+    } else if (
+      ((value as string).startsWith('"') && (value as string).endsWith('"')) ||
+      ((value as string).startsWith("'") && (value as string).endsWith("'"))
+    ) {
+      value = (value as string).slice(1, -1);
+    } else if (value === "true") {
+      value = true;
+    } else if (value === "false") {
+      value = false;
+    } else if (value === "") {
+      value = undefined;
+    }
+
+    result[key] = value;
+  }
+
+  return result;
+}
+
+function readMcpServersFromSettings(
+  settingSources: Array<"user" | "project" | "local">,
+  workspacePath?: string,
+): Record<string, McpServerConfig> {
+  const mergedServers: Record<string, McpServerConfig> = {};
+
+  if (settingSources.includes("user")) {
+    const userSettingsPath = path.join(os.homedir(), ".claude", "settings.json");
+    const userServers = readMcpServersFromFile(userSettingsPath);
+    if (userServers) Object.assign(mergedServers, userServers);
+
+    const claudeJsonPath = path.join(os.homedir(), ".claude.json");
+    const claudeJsonServers = readMcpServersFromFile(claudeJsonPath);
+    if (claudeJsonServers) Object.assign(mergedServers, claudeJsonServers);
+  }
+
+  if (settingSources.includes("project") && workspacePath) {
+    const projectSettingsPath = path.join(workspacePath, ".claude", "settings.json");
+    const projectServers = readMcpServersFromFile(projectSettingsPath);
+    if (projectServers) Object.assign(mergedServers, projectServers);
+
+    const mcpJsonPath = path.join(workspacePath, ".mcp.json");
+    const mcpJsonServers = readMcpServersFromFile(mcpJsonPath);
+    if (mcpJsonServers) Object.assign(mergedServers, mcpJsonServers);
+  }
+
+  if (settingSources.includes("local") && workspacePath) {
+    const localSettingsPath = path.join(workspacePath, ".claude", "settings.local.json");
+    const localServers = readMcpServersFromFile(localSettingsPath);
+    if (localServers) Object.assign(mergedServers, localServers);
+  }
+
+  return mergedServers;
+}
+
+function readMcpServersFromFile(
+  filePath: string,
+): Record<string, McpServerConfig> | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+
+    const content = fs.readFileSync(filePath, "utf-8");
+    const settings = JSON.parse(content);
+    const servers = settings.mcpServers || settings;
+
+    if (!servers || typeof servers !== "object") return null;
+
+    const validServers: Record<string, McpServerConfig> = {};
+    for (const [name, cfg] of Object.entries(servers)) {
+      if (isValidMcpServerConfig(cfg)) {
+        validServers[name] = cfg as McpServerConfig;
+      }
+    }
+
+    return Object.keys(validServers).length > 0 ? validServers : null;
+  } catch (err) {
+    console.warn(`[ClaudeDriver] Failed to read MCP servers from ${filePath}:`, err);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Plugin disk readers (read the Claude CLI's local plugin metadata files)
+// ─────────────────────────────────────────────────────────────
+
+function readJsonFileSafe(filePath: string): any | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function pluginsDir(): string {
+  return path.join(os.homedir(), ".claude", "plugins");
+}
+
+/** `catalog.plugins` from plugin-catalog-cache.json ({} when unavailable). */
+function readPluginCatalogPlugins(): Record<string, unknown> {
+  const data = readJsonFileSafe(path.join(pluginsDir(), "plugin-catalog-cache.json"));
+  const plugins = data?.catalog?.plugins;
+  return plugins && typeof plugins === "object" ? plugins : {};
+}
+
+/**
+ * Plugin entries from a cloned marketplace's `.claude-plugin/marketplace.json`,
+ * keyed by plugin name. Fallback metadata source for plugins the catalog cache
+ * hasn't indexed yet — the cache lags the manifest, so newly added marketplace
+ * plugins (author/category/homepage) appear here first.
+ */
+function readMarketplaceManifestPlugins(
+  marketplacePath: string,
+): Record<string, Record<string, any>> {
+  if (!marketplacePath) return {};
+  const data = readJsonFileSafe(
+    path.join(marketplacePath, ".claude-plugin", "marketplace.json"),
+  );
+  const out: Record<string, Record<string, any>> = {};
+  for (const raw of Array.isArray(data?.plugins) ? data.plugins : []) {
+    if (raw && typeof raw === "object" && typeof raw.name === "string") {
+      out[raw.name] = raw as Record<string, any>;
+    }
+  }
+  return out;
+}
+
+/** Installed plugin ids (keys of installed_plugins.json). */
+function readInstalledPluginIds(): string[] {
+  const data = readJsonFileSafe(path.join(pluginsDir(), "installed_plugins.json"));
+  const plugins = data?.plugins;
+  return plugins && typeof plugins === "object" ? Object.keys(plugins) : [];
+}
+
+/** pluginId → installed git commit sha (first entry), for update detection. */
+function readInstalledShaById(): Record<string, string> {
+  const data = readJsonFileSafe(path.join(pluginsDir(), "installed_plugins.json"));
+  const plugins = data?.plugins;
+  const out: Record<string, string> = {};
+  if (plugins && typeof plugins === "object") {
+    for (const [id, entries] of Object.entries(plugins)) {
+      const sha = Array.isArray(entries) ? entries[0]?.gitCommitSha : undefined;
+      if (typeof sha === "string") out[id] = sha;
+    }
+  }
+  return out;
+}
+
+/** Scope + project dir the plugin was installed at (first entry), or null.
+ *  projectPath is set for project/local scope and is needed as the CLI cwd so
+ *  enable/disable/uninstall resolve the scope against the right directory. */
+function getInstalledPluginLocation(
+  pluginId: string,
+): { scope: string; projectPath?: string } | null {
+  const data = readJsonFileSafe(path.join(pluginsDir(), "installed_plugins.json"));
+  const entries = data?.plugins?.[pluginId];
+  const e = Array.isArray(entries) ? entries[0] : undefined;
+  if (e?.scope) {
+    return {
+      scope: String(e.scope),
+      projectPath: typeof e.projectPath === "string" ? e.projectPath : undefined,
+    };
+  }
+  return null;
+}
+
+/**
+ * cwd to run a scope-sensitive plugin op (enable/disable/uninstall) in.
+ * - user scope: undefined (global, cwd-independent).
+ * - project/local scope: the install dir, which must still exist — the CLI
+ *   resolves the scope against cwd and spawn() ENOENTs on a missing dir.
+ * Throws a clear error when the install dir is gone (orphaned plugin).
+ */
+function resolveScopeCwd(loc: { scope: string; projectPath?: string } | null): string | undefined {
+  if (!loc || loc.scope === "user") return undefined;
+  if (loc.projectPath && fs.existsSync(loc.projectPath)) return loc.projectPath;
+  throw new Error(
+    `This plugin was installed in "${loc.projectPath ?? "an unknown directory"}" (${loc.scope} scope), ` +
+      `which no longer exists. Re-create that directory to manage it, or remove the plugin manually.`,
+  );
+}
+
+function isValidMcpServerConfig(cfg: unknown): boolean {
+  if (!cfg || typeof cfg !== "object") return false;
+  const c = cfg as Record<string, unknown>;
+  if (c.type === undefined || c.type === "stdio") {
+    return typeof c.command === "string" && c.command.length > 0;
+  }
+  if (c.type === "http" || c.type === "sse") {
+    return typeof c.url === "string" && c.url.length > 0;
+  }
+  return false;
+}
+
+/**
+ * Offline fallback picker, used only when the SDK or the CLI binary is missing
+ * — the live `supportedModels()` list is the real catalogue.
+ *
+ * Display names are deliberately version-free: the CLI aliases below always
+ * resolve to the current generation, so spelling a version here only rots (this
+ * list read "Claude Opus 4.8" long after Opus 5 shipped). Effort levels are the
+ * conservative common set for the same reason.
+ */
+function getDefaultModels(defaultModel?: string): ModelInfo[] {
+  const models: Array<Omit<ModelInfo, "isDefault">> = [
+    {
+      id: "fable",
+      displayName: "Claude Fable",
+      capabilities: { streaming: true, vision: true, functionCalling: true, reasoning: true },
+      contextWindow: 200000,
+      supportsFastMode: false,
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+    },
+    {
+      id: "sonnet",
+      displayName: "Claude Sonnet",
+      capabilities: { streaming: true, vision: true, functionCalling: true },
+      contextWindow: 200000,
+      supportsFastMode: true,
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high"],
+    },
+    {
+      id: "opus[1m]",
+      displayName: "Claude Opus [1M]",
+      capabilities: { streaming: true, vision: true, functionCalling: true, reasoning: true },
+      contextWindow: 1000000,
+      supportsFastMode: true,
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+    },
+    {
+      id: "haiku",
+      displayName: "Claude Haiku",
+      capabilities: { streaming: true, vision: true, functionCalling: true },
+      contextWindow: 200000,
+      supportsFastMode: false,
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high"],
+    },
+  ];
+  const defaultId = resolveCatalogDefaultId(
+    models.map((m) => m.id),
+    defaultModel,
+    ["sonnet"],
+  );
+  return models.map((m) => ({ ...m, isDefault: m.id === defaultId }));
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pure helpers exported for testing
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Decide which SDK model the picker should mark as default.
+ *
+ * A configured `providers.defaultModel` wins only while the SDK still offers
+ * it — a pinned id that has aged out (the seed shipped `claude-opus-4-8`, which
+ * is an API id and never matched an SDK alias at all) must not leave the
+ * catalogue with no default. Otherwise fall back to the SDK's synthetic
+ * "default" entry, which names the concrete model the CLI resolves to
+ * ("Use the default model (currently …)"); we drop that entry from the picker,
+ * but its text is the only signal for the CLI's own choice. Longest display
+ * name wins so "Claude Opus [1M]" beats "Claude Opus" on the same hint.
+ * Failing both, the SDK lists models in preference order — take the first.
+ */
+export function resolveClaudeDefaultModelId(
+  sdkModels: Array<{ value: string; displayName?: string; description?: string }>,
+  configuredDefault?: string,
+): string | undefined {
+  const selectable = sdkModels.filter((m) => m.value !== "default");
+  const pool = selectable.length > 0 ? selectable : sdkModels;
+  if (configuredDefault && pool.some((m) => m.value === configuredDefault)) {
+    return configuredDefault;
+  }
+
+  const synthetic = sdkModels.find((m) => m.value === "default");
+  const hint = `${synthetic?.displayName ?? ""} ${synthetic?.description ?? ""}`
+    .trim()
+    .toLowerCase();
+  if (hint) {
+    let namedId: string | undefined;
+    let namedLength = 0;
+    for (const model of pool) {
+      const name = model.displayName?.trim().toLowerCase();
+      if (!name || !hint.includes(name)) continue;
+      if (name.length > namedLength) {
+        namedId = model.value;
+        namedLength = name.length;
+      }
+    }
+    if (namedId) return namedId;
+  }
+
+  return pool[0]?.value;
+}
+
+/**
+ * Map the `claude plugin list --json --available` payload plus
+ * `claude plugin marketplace list --json` into the app's marketplace-centric
+ * PluginListResponse. Pure: no SDK/CLI access, exposed for tests.
+ *
+ * The CLI shapes:
+ *   list:        { installed: [{ id, enabled, installPath, scope, ... }],
+ *                  available: [{ pluginId, name, description, marketplaceName,
+ *                               source: { source, url, path, ... } }] }
+ *   marketplaces: [{ name, source, repo, installLocation }]
+ */
+export function mapClaudePluginList(
+  list: { installed?: unknown[]; available?: unknown[] } | null,
+  marketplaces: unknown[] | null,
+  catalogPlugins: Record<string, unknown> = {},
+  installedShaById: Record<string, string> = {},
+  manifestsByMarketplace: Record<string, Record<string, Record<string, any>>> = {},
+): PluginListResponse {
+  // Index installed plugins by id for installed/enabled lookup.
+  const installedById = new Map<string, { enabled: boolean; installPath?: string }>();
+  for (const raw of list?.installed ?? []) {
+    const p = raw as Record<string, unknown>;
+    if (p && typeof p.id === "string") {
+      installedById.set(p.id, {
+        enabled: p.enabled === true,
+        installPath: typeof p.installPath === "string" ? p.installPath : undefined,
+      });
+    }
+  }
+
+  // Marketplace skeletons (preserve CLI order); lazily created for ids that
+  // reference a marketplace not in the configured list.
+  const marketplaceByName = new Map<string, MarketplaceInfo>();
+  for (const raw of marketplaces ?? []) {
+    const mp = raw as Record<string, unknown>;
+    if (!mp || typeof mp.name !== "string") continue;
+    marketplaceByName.set(mp.name, {
+      name: mp.name,
+      path: typeof mp.installLocation === "string" ? mp.installLocation : "",
+      interface: null,
+      plugins: [],
+    });
+  }
+  const ensureMarketplace = (name: string): MarketplaceInfo => {
+    let mp = marketplaceByName.get(name);
+    if (!mp) {
+      mp = { name, path: "", interface: null, plugins: [] };
+      marketplaceByName.set(name, mp);
+    }
+    return mp;
+  };
+
+  const covered = new Set<string>();
+
+  for (const raw of list?.available ?? []) {
+    const a = raw as Record<string, unknown>;
+    if (!a || typeof a.pluginId !== "string") continue;
+    const id = a.pluginId;
+    const marketplaceName =
+      (typeof a.marketplaceName === "string" && a.marketplaceName) || id.split("@")[1] || "unknown";
+    const inst = installedById.get(id);
+    const src = (a.source as Record<string, unknown>) ?? {};
+    const name = typeof a.name === "string" ? a.name : id.split("@")[0];
+    // Enrich category/developer/homepage from the catalog cache (the
+    // `--available` payload omits them) so the UI can group by category.
+    // The cloned marketplace.json is the fallback: the catalog cache lags the
+    // manifest, so newly added plugins only carry metadata there.
+    const catEntry = catalogPlugins[id] as Record<string, any> | undefined;
+    const me = (catEntry?.marketplace_entry as Record<string, any>) ?? {};
+    const mf = manifestsByMarketplace[marketplaceName]?.[name] ?? {};
+    const mfAuthor =
+      typeof mf.author === "string" ? mf.author : (mf.author?.name as string | undefined);
+    const desc =
+      (typeof a.description === "string" && a.description) ||
+      (typeof me.description === "string" ? me.description : undefined) ||
+      (typeof mf.description === "string" ? mf.description : undefined);
+    const category =
+      typeof me.category === "string"
+        ? me.category
+        : typeof mf.category === "string"
+          ? mf.category
+          : undefined;
+    const developerName =
+      typeof me.author?.name === "string" ? me.author.name : mfAuthor;
+    const websiteUrl =
+      typeof me.homepage === "string"
+        ? me.homepage
+        : typeof mf.homepage === "string"
+          ? mf.homepage
+          : undefined;
+    const displayName = typeof me.displayName === "string" ? me.displayName : undefined;
+    const installs =
+      typeof a.installCount === "number"
+        ? a.installCount
+        : typeof catEntry?.unique_installs === "number"
+          ? (catEntry.unique_installs as number)
+          : undefined;
+    // Only flag updates when the catalog reports a concrete latest sha that
+    // differs from what's installed — `source_sha` alone is unreliable.
+    const catSha = typeof catEntry?.sha === "string" ? (catEntry.sha as string) : undefined;
+    const installedSha = installedShaById[id];
+    const updateAvailable = !!inst && !!catSha && !!installedSha && catSha !== installedSha;
+    ensureMarketplace(marketplaceName).plugins.push({
+      id,
+      name,
+      source: {
+        type: (src.source as string) ?? "git",
+        path: (src.url as string) ?? (src.path as string) ?? "",
+      },
+      installed: !!inst,
+      enabled: inst?.enabled ?? false,
+      installPolicy: "AVAILABLE",
+      authPolicy: "ON_INSTALL",
+      installs,
+      updateAvailable,
+      // Most Claude plugins are slug-named with no displayName, so the UI
+      // humanizes the raw `name` ("agent-sdk-dev" → "Agent SDK Dev"); a real
+      // marketplace displayName (rare) is preferred when present. No icon/logo
+      // data exists in Claude's plugin metadata — the UI falls back to a letter
+      // avatar.
+      interface:
+        displayName || desc || category || developerName
+          ? {
+              displayName,
+              shortDescription: desc,
+              longDescription: desc,
+              category,
+              developerName,
+              websiteUrl,
+              capabilities: [],
+              screenshots: [],
+            }
+          : null,
+    });
+    covered.add(id);
+  }
+
+  // Installed plugins absent from the catalog (local-only, or marketplace
+  // removed) — surface under their id-derived marketplace so they're visible.
+  for (const [id, inst] of installedById) {
+    if (covered.has(id)) continue;
+    const marketplaceName = id.split("@")[1] || "local";
+    ensureMarketplace(marketplaceName).plugins.push({
+      id,
+      name: id.split("@")[0],
+      source: { type: "local", path: inst.installPath ?? "" },
+      installed: true,
+      enabled: inst.enabled,
+      installPolicy: "AVAILABLE",
+      authPolicy: "ON_INSTALL",
+      interface: null,
+    });
+  }
+
+  return {
+    marketplaces: Array.from(marketplaceByName.values()),
+    marketplaceLoadErrors: [],
+    remoteSyncError: null,
+    featuredPluginIds: [],
+  };
+}
+
+/**
+ * Build a PluginDetail from the local plugin catalog cache. Pure: takes the
+ * already-read `catalog.plugins` map and an installed→enabled overlay, resolves
+ * the plugin id from (name, marketplacePath), and maps components. Exposed for
+ * tests.
+ */
+export function mapClaudePluginDetail(
+  catalogPlugins: Record<string, unknown>,
+  installedEnabled: Record<string, boolean>,
+  pluginName: string,
+  marketplacePath: string,
+  manifestEntry: Record<string, any> | null = null,
+): PluginDetail {
+  const marketplaceName = marketplacePath ? path.basename(marketplacePath) : "";
+  let pluginId = marketplaceName ? `${pluginName}@${marketplaceName}` : "";
+  let entry = pluginId ? (catalogPlugins[pluginId] as Record<string, any> | undefined) : undefined;
+  if (!entry) {
+    // Fallback: match by plugin name across marketplaces.
+    const key = Object.keys(catalogPlugins).find((k) => k.split("@")[0] === pluginName);
+    if (key) {
+      pluginId = key;
+      entry = catalogPlugins[key] as Record<string, any>;
+    }
+  }
+  if (!pluginId) pluginId = `${pluginName}@${marketplaceName || "unknown"}`;
+
+  // The catalog cache entry wins; the marketplace.json manifest entry fills
+  // the gaps for plugins the cache hasn't indexed yet.
+  const me = (entry?.marketplace_entry as Record<string, any>) ?? {};
+  const mf = manifestEntry ?? {};
+  const comps = (entry?.components as Record<string, any>) ?? {};
+  const rawAuthor = me.author ?? mf.author;
+  const authorName =
+    typeof rawAuthor === "string" ? rawAuthor : (rawAuthor?.name as string | undefined);
+  const description =
+    (typeof me.description === "string" ? me.description : null) ??
+    (typeof mf.description === "string" ? mf.description : null);
+  const category =
+    typeof me.category === "string"
+      ? me.category
+      : typeof mf.category === "string"
+        ? mf.category
+        : undefined;
+  const homepage =
+    typeof me.homepage === "string"
+      ? me.homepage
+      : typeof mf.homepage === "string"
+        ? mf.homepage
+        : undefined;
+  const manifestSourceUrl =
+    typeof mf.source === "string" ? mf.source : (mf.source?.url as string | undefined);
+  const installed = pluginId in installedEnabled;
+  const enabled = installedEnabled[pluginId] ?? false;
+  const resolvedMarketplace = marketplaceName || pluginId.split("@")[1] || "";
+
+  const skills = (Array.isArray(comps.skills) ? comps.skills : [])
+    .map((s: any) => ({ name: (typeof s === "string" ? s : (s?.name as string)) ?? "", enabled: true }))
+    .filter((s: { name: string }) => s.name.length > 0);
+
+  const mcpServers = (Array.isArray(comps.mcpServers) ? comps.mcpServers : [])
+    .map((m: any) => (typeof m === "string" ? m : (m?.name as string)))
+    .filter(Boolean) as string[];
+
+  return {
+    marketplaceName: resolvedMarketplace,
+    marketplacePath,
+    summary: {
+      id: pluginId,
+      name: pluginName,
+      source: {
+        type: "git",
+        path: homepage ?? (me.source as string) ?? manifestSourceUrl ?? "",
+      },
+      installed,
+      enabled,
+      installPolicy: "AVAILABLE",
+      authPolicy: "ON_INSTALL",
+      interface: {
+        displayName: (me.name as string) ?? pluginName,
+        shortDescription: description ?? undefined,
+        longDescription: description ?? undefined,
+        developerName: authorName,
+        category,
+        capabilities: [],
+        websiteUrl: homepage,
+        screenshots: [],
+      },
+    },
+    description,
+    skills,
+    apps: [],
+    mcpServers,
+    uniqueInstalls:
+      typeof entry?.unique_installs === "number" ? (entry.unique_installs as number) : null,
+    lastUpdated:
+      typeof entry?.last_updated === "string" ? (entry.last_updated as string) : null,
+  };
+}
+
+/**
+ * Translate the streaming outcome (stop reason / abort flags / error / timeout)
+ * into a DriverOutcome. Pure: no SDK access, exposed for tests.
+ */
+/**
+ * Normalize a model-generated run title: keep the first line, strip a leading
+ * "title:" label, surrounding quotes/backticks, and trailing sentence
+ * punctuation, then cap at 50 chars. Falls back to the goal text when the model
+ * returns nothing usable. Mirrors the codex driver's title cleanup.
+ */
+export function cleanGeneratedTitle(raw: string, fallbackGoal: string): string {
+  const cleaned = (raw || "")
+    .split("\n")[0]
+    .trim()
+    .replace(/^title:\s*/i, "")
+    .replace(/^["'`]|["'`]$/g, "")
+    .replace(/[.!?]$/, "")
+    .trim();
+  return (cleaned || fallbackGoal.trim()).slice(0, 50);
+}
+
+export function classifyOutcome(args: {
+  stopReason: string | null;
+  usage?: WorkRunUsage;
+  terminalToolNonExecutionKind?: string;
+  aborted: boolean;
+  timedOut: boolean;
+  errorMessage?: string;
+  timeoutMs: number;
+}): DriverOutcome {
+  const {
+    stopReason: rawStopReason,
+    usage,
+    terminalToolNonExecutionKind,
+    aborted,
+    timedOut,
+    errorMessage,
+    timeoutMs,
+  } = args;
+  // DriverOutcome.stopReason is `string | undefined`; coerce null → undefined.
+  const stopReason = rawStopReason ?? undefined;
+
+  // Success path: no error, stopReason indicates normal completion (or undefined).
+  if (!errorMessage && !timedOut && !aborted) {
+    if (stopReason === "refusal") {
+      return {
+        status: "failed",
+        summary: "The model declined to fulfill this request.",
+        stopReason,
+        usage,
+      };
+    }
+    if (terminalToolNonExecutionKind === "cancelled") {
+      return {
+        status: "failed",
+        summary: "Tool execution was cancelled before the run could complete.",
+        stopReason,
+        usage,
+      };
+    }
+    return {
+      status: "succeeded",
+      summary: "Completed successfully",
+      stopReason,
+      usage,
+    };
+  }
+
+  // Aborted (signal fired) takes precedence over timeout — Core fired the signal.
+  if (aborted && !timedOut) {
+    return { status: "canceled", summary: "Run was aborted", stopReason, usage };
+  }
+
+  if (timedOut) {
+    return {
+      status: "failed",
+      summary: `Request timed out after ${timeoutMs / 1000} seconds.`,
+      stopReason,
+      usage,
+    };
+  }
+
+  // Generic error path
+  if (errorMessage) {
+    if (errorMessage.includes("timed out")) {
+      return {
+        status: "failed",
+        summary: `Request timed out after ${timeoutMs / 1000} seconds.`,
+        stopReason,
+        usage,
+      };
+    }
+    if (errorMessage.includes("aborted")) {
+      return { status: "canceled", summary: "Run was aborted", stopReason, usage };
+    }
+    return { status: "failed", summary: errorMessage, stopReason, usage };
+  }
+
+  // Fallthrough
+  return { status: "failed", summary: "Unknown error", stopReason, usage };
+}

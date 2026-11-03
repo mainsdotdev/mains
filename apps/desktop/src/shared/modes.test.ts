@@ -33,6 +33,7 @@ describe("PROVIDER_MODES", () => {
     expect(providerSupportsMode(PROVIDER_IDS.codex, "chat")).toBe(true);
     expect(providerSupportsMode(PROVIDER_IDS.copilot, "work")).toBe(false);
     expect(providerSupportsMode(PROVIDER_IDS.cursor, "chat")).toBe(false);
+    expect(providerSupportsMode(PROVIDER_IDS.opencode, "work")).toBe(false);
   });
 
   it("leaves an unknown provider id unrestricted", () => {

@@ -11,7 +11,7 @@ import Text from "../text";
 import DropdownWrapper from "../dropdown-wrapper";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { getModelIcon } from "@/lib/model-icons";
-import { formatModelDisplayName, selectableModelNames } from "@/lib/model-display";
+import { formatModelDisplayName, groupModelsByOpenCodeProvider, openCodeModelParts, selectableModelNames } from "@/lib/model-display";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import { formatEffortLevel } from "@/lib/format";
 import { ArrowUp, Brain, Check } from "../icons";
@@ -467,8 +467,21 @@ export function ModelSelectDropdown({
             pointerRef.current = { x: e.clientX, y: e.clientY };
           }}
         >
-          {modelList.map((m) => {
-            const displayName = formatModelDisplayName(m, variant);
+          {(variant === "opencode" ? groupModelsByOpenCodeProvider(modelList) : [{ provider: "", models: modelList }]).map((group, groupIndex) => (
+            <div key={group.provider || "models"}>
+              {group.provider && (
+                <Text
+                  as="div"
+                  size="xxs"
+                  tone="subtle"
+                  className={`px-3 pb-1 uppercase tracking-wide ${groupIndex === 0 ? "pt-1" : "pt-2.5"}`}
+                >
+                  {group.provider}
+                </Text>
+              )}
+          {group.models.map((m) => {
+            const parts = variant === "opencode" ? openCodeModelParts(m) : null;
+            const displayName = parts?.name ?? formatModelDisplayName(m, variant);
             const isSelected = model === m;
             const isEffortMenuAnchor =
               hoveredModel === m && hoveredModelHasEffortMenu;
@@ -511,6 +524,8 @@ export function ModelSelectDropdown({
               </Button>
             );
           })}
+            </div>
+          ))}
         </div>
       </DropdownWrapper>
 

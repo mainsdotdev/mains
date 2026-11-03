@@ -47,6 +47,7 @@ const page = vi.hoisted(() => ({
   mode: "developer" as "developer" | "work" | "chat",
   runQueryReady: true,
   realTabs: false,
+  isMobile: false,
   workspaceLoading: false,
 }));
 const browser = vi.hoisted(() => ({
@@ -83,6 +84,7 @@ vi.mock("@/hooks/use-active-space", () => ({
 
 vi.mock("@/features/workspace/hooks", () => ({
   useWorkspacePage: () => ({ runsLoaded: true,
+    tabRuns: page.state.runs ?? [], contextParts: { spaceId: "space-codex" }, useProjectChats: false,
     conversationSettings: { model: "", config: {} }, conversationSettingsReady: true,
     setConversationSettings: vi.fn(), handleSettingsConfigChange: vi.fn(), ...page.state }),
   useToolApproval: () => ({ pendingApprovals: [], respond: vi.fn() }),
@@ -120,7 +122,7 @@ vi.mock("@/lib/provider-variants", () => ({
   }),
 }));
 
-vi.mock("@/lib/platform", () => ({ useIsMobile: () => false }));
+vi.mock("@/lib/platform", () => ({ useIsMobile: () => page.isMobile }));
 
 vi.mock("@/lib/redux/api", () => ({
   useAbortRunMutation: () => [vi.fn()],
@@ -210,6 +212,7 @@ afterEach(() => {
   page.mode = "developer";
   page.runQueryReady = true;
   page.realTabs = false;
+  page.isMobile = false;
   page.workspaceLoading = false;
   vi.unstubAllGlobals();
 });
@@ -265,14 +268,17 @@ describe("WorkspaceProviderPage while changing spaces", () => {
       showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false, showInput: true, goal: "", uploadedFiles: [] };
     renderPage();
     const pending = screen.getByRole("button", { name: "Answer pending questions" });
+    const composer = screen.getByTestId("pinned-input");
     expect(screen.queryByRole("textbox", { name: "Custom answer" })).toBeNull();
+    expect(composer.closest("[hidden]")).toBeNull();
     expect(screen.getByTestId("events").compareDocumentPosition(pending) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(pending.compareDocumentPosition(screen.getByTestId("pinned-input")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pending.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(pending);
     const option = screen.getByRole("button", { name: "Staging" });
     expect(screen.getByRole("textbox", { name: "Custom answer" })).toBeTruthy();
     expect(screen.getByTestId("events").compareDocumentPosition(option) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(option.compareDocumentPosition(screen.getByTestId("pinned-input")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(option.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(composer.closest("[hidden]")).toBeTruthy();
   });
 
   it.each([true, false])("consumes floating annotations in the parent only after an accepted send (%s)", async (accepted) => {
@@ -510,6 +516,73 @@ describe("WorkspaceProviderPage while changing spaces", () => {
     page.state = { ...page.state, activeTab: nextRun.id, activeRunId: nextRun.id, activeRun: nextRun };
     view.rerender(content());
     expect(screen.getByText("Next run").closest('[role="button"]')).toBe(nextTab);
+  });
+
+  it.each([false, true])("uses one project-chat tab without New run or close controls (mobile=%s)", async (mobile) => {
+    page.realTabs = true;
+    page.isMobile = mobile;
+    const first = { id: "first-chat", title: "First chat", goal: "", status: "succeeded" };
+    page.state = {
+      useProjectChats: true, runs: [first], runsLoaded: true, activeTab: first.id,
+      activeRunId: first.id, activeRun: first, selectedFile: null,
+      openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false,
+      currentWorkspace: null, currentEvents: [], currentTurns: [], goal: "", uploadedFiles: [],
+    };
+    const content = () => createElement(MemoryRouter, null, createElement(MainHeaderProvider, null,
+      createElement(Header), createElement(WorkspaceProviderPage, { providerId: "codex", variant: "codex" })));
+    const view = render(content());
+    const tab = screen.getByRole("tab", { name: "First chat" });
+    expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
+    expect(tab.closest('[data-tab-strip]')).toBeTruthy();
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    const next = { ...first, id: "second-chat", title: "Second chat" };
+    page.state = { ...page.state, runs: [next], activeTab: next.id, activeRunId: next.id, activeRun: next };
+    view.rerender(content());
+    expect(screen.getByRole("tab", { name: "Second chat" })).toBe(tab);
+    expect(screen.queryByRole("button", { name: /Close/ })).toBeNull();
+    page.state = { ...page.state, activeTab: "new-run", activeRunId: null, activeRun: null, tabRuns: [], showNewRunTab: true };
+    view.rerender(content());
+    expect(screen.getByRole("tab", { name: "New chat" })).toBe(tab);
+    expect(screen.getByTestId("centered-input")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
+  });
+
+  it("keeps a New chat tab on a confirmed empty workspace without a plus button", () => {
+    page.realTabs = true;
+    page.state = {
+      useProjectChats: true, runs: [], runsLoaded: true, activeTab: "new-run", activeRunId: null,
+      activeRun: null, selectedFile: null, openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: true, isEmptyStatePending: false, showNewRunTab: true,
+      currentWorkspace: null, currentEvents: [], currentTurns: [], goal: "", uploadedFiles: [],
+    };
+    renderPage();
+    expect(screen.getByRole("tab", { name: "New chat" })).toBeTruthy();
+    expect(screen.getByTestId("centered-input")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
+  });
+
+  it("keeps editor tabs and returns to the selected project chat through its tab", () => {
+    page.realTabs = true;
+    const chat = { id: "selected-chat", title: "Selected chat", goal: "", status: "succeeded" };
+    const selectChat = vi.fn();
+    page.state = {
+      useProjectChats: true, runs: [chat], runsLoaded: true, activeTab: "editor", activeRunId: null,
+      activeRun: null, selectedFile: { name: "readme.md" }, openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false,
+      currentWorkspace: null, currentEvents: [], currentTurns: [], goal: "", uploadedFiles: [],
+      handleSelectRunTab: selectChat,
+    };
+    renderPage();
+    const editor = screen.getByRole("button", { name: /readme.md/ });
+    const conversation = screen.getByRole("tab", { name: "Selected chat" });
+    expect(editor.closest("[data-tab-viewport]")).toBe(conversation.closest("[data-tab-viewport]"));
+    expect(document.querySelectorAll("[data-tab-strip]")).toHaveLength(1);
+    expect(editor.compareDocumentPosition(conversation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(conversation.getAttribute("aria-selected")).toBe("false");
+    fireEvent.click(conversation);
+    expect(selectChat).toHaveBeenCalledExactlyOnceWith(chat.id);
+    expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
   });
 
   it.each(["work", "chat"] as const)("updates the %s chat tab in place on sidebar selection", async (mode) => {

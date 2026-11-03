@@ -112,7 +112,7 @@ export function AtlasSidebar() {
           );
         })}
       </nav>
-      <div className="min-h-0 flex-1 overflow-y-auto noscrollbar px-3 pt-7">
+      <div className="scroll-bounce min-h-0 flex-1 overflow-y-auto noscrollbar px-3 pt-7">
         <SidebarGroupSection
           groupKey="atlas-recents"
           label="Recents"

@@ -10,6 +10,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createTestDb } from "./setup-db";
 import type { DatabaseInstance } from "../src/db/types";
 import type Database from "better-sqlite3";
+import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 
 // ── DB mock — all services call getDb() internally ──────────
 let db: DatabaseInstance;
@@ -61,14 +62,12 @@ describe("smoke", () => {
       expect(account.locale).toBe("en-US");
     });
 
-    it("seeds two providers (copilot_cli, claude_code)", async () => {
+    it("seeds every registered provider", async () => {
       const providers = await providersService.getAll();
       const ids = providers.map((p) => p.id);
-      expect(ids).toContain("copilot_cli");
-      expect(ids).toContain("claude_code");
-      expect(providers.length).toBeGreaterThanOrEqual(2);
+      expect(ids.sort()).toEqual(Object.values(PROVIDER_IDS).sort());
 
-      // Both should be agent_runtime and enabled
+      // Every seeded provider should be agent_runtime and enabled.
       for (const p of providers) {
         expect(p.kind).toBe("agent_runtime");
         expect(p.isEnabled).toBe(true);
@@ -95,11 +94,10 @@ describe("smoke", () => {
     });
 
     it("runSeeds is idempotent (no-op on second call)", async () => {
-      // Should not throw or duplicate data
+      const before = await providersService.getAll();
       await runSeeds(db);
 
-      const providers = await providersService.getAll();
-      expect(providers.length).toBe(4);
+      expect(await providersService.getAll()).toEqual(before);
     });
 
     it("seeds connection states for all integrations", async () => {

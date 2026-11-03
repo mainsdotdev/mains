@@ -44,8 +44,8 @@ export function buildApprovalDiffPreviews(
   }
 
   if (kind === "edit") {
-    const oldText = stringValue(input.old_string ?? input.old_str);
-    const newText = stringValue(input.new_string ?? input.new_str);
+    const oldText = stringValue(input.old_string ?? input.old_str ?? input.oldString);
+    const newText = stringValue(input.new_string ?? input.new_str ?? input.newString);
     if (oldText !== undefined || newText !== undefined) {
       const lines = [
         ...splitTextLines(oldText ?? "").map((text) => `-${text}`),

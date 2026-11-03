@@ -18,6 +18,7 @@ import { SignalTabContent } from "./signal-tab-content";
 import { NoteTabContent } from "./note-tab-content";
 import { TurnRail } from "./turn-rail";
 import type { TranscriptHistory } from "../hooks/use-run-history";
+import type { ProviderVariant } from "@/lib/provider-variants";
 import { useTranscriptScroll } from "../hooks/use-transcript-scroll";
 import { RealtimeVoiceBar } from "./realtime-voice-bar";
 import { projectVoiceTranscriptEvents } from "../lib/voice-transcript-view";
@@ -433,7 +434,7 @@ interface WorkspaceEventsProps {
   issueTabs: IssueWithEntity[];
   signalTabs?: SignalWithEntity[];
   turns?: RunTurn[];
-  variant?: "copilot" | "claude" | "codex" | "cursor";
+  variant?: ProviderVariant;
   onForkRun?: (sourceRunId: string, message: string) => Promise<string | null>;
   onSuggestionSelect?: (suggestion: string) => void;
   onApplyPlan?: () => void;

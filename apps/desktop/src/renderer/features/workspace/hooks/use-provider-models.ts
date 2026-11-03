@@ -56,7 +56,7 @@ export function useProviderModels(
     );
 
   const { data: providerData } = useGetProviderByIdQuery(activeProviderId, {
-    skip: variant !== "claude" && variant !== "codex" && variant !== "copilot" && variant !== "cursor",
+    skip: !activeProviderId,
   });
   const config = (conversationConfig ?? providerData?.config ?? {}) as Record<string, any>;
 

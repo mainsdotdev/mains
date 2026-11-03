@@ -590,7 +590,7 @@ export class DemoBackend implements DemoHandler {
       }
     }
     if (patch.permissionMode !== undefined) {
-      const key = { claude_code: "permissionMode", copilot_cli: "permissionMode", codex: "sandboxMode", cursor: "mode" }[
+      const key = { claude_code: "permissionMode", copilot_cli: "permissionMode", codex: "sandboxMode", cursor: "mode", opencode: "agent" }[
         providerId
       ];
       if (key) config[key] = patch.permissionMode;

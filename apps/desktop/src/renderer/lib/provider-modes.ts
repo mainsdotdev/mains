@@ -83,6 +83,23 @@ export const CURSOR_MODES: readonly ModeOption<CursorMode>[] = [
   },
 ] as const;
 
+export type OpenCodeAgent = "build" | "plan";
+
+export const OPENCODE_AGENTS: readonly ModeOption<OpenCodeAgent>[] = [
+  {
+    value: "build",
+    label: "Build",
+    shortLabel: "Build",
+    description: "OpenCode's default coding agent",
+  },
+  {
+    value: "plan",
+    label: "Plan",
+    shortLabel: "Plan",
+    description: "Plan before changing files",
+  },
+] as const;
+
 // ── Codex sandbox mode ─────────────────────────────────────────────
 export type CodexSandboxMode =
   | "read-only"

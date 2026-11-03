@@ -7,7 +7,7 @@ import {
   type ProviderVariant,
 } from "./provider-variants";
 
-const VARIANTS: ProviderVariant[] = ["claude", "copilot", "codex", "cursor"];
+const VARIANTS: ProviderVariant[] = ["claude", "copilot", "codex", "cursor", "opencode"];
 
 describe("provider variant descriptor", () => {
   it("maps each variant to its canonical provider id", () => {
@@ -15,6 +15,7 @@ describe("provider variant descriptor", () => {
     expect(getProviderVariant("copilot").providerId).toBe(PROVIDER_IDS.copilot);
     expect(getProviderVariant("codex").providerId).toBe(PROVIDER_IDS.codex);
     expect(getProviderVariant("cursor").providerId).toBe(PROVIDER_IDS.cursor);
+    expect(getProviderVariant("opencode").providerId).toBe(PROVIDER_IDS.opencode);
   });
 
   it("pins the permission config-key contract (must match what the drivers read)", () => {
@@ -22,6 +23,7 @@ describe("provider variant descriptor", () => {
     expect(getProviderVariant("copilot").permissionKey).toBe("permissionMode");
     expect(getProviderVariant("codex").permissionKey).toBe("sandboxMode");
     expect(getProviderVariant("cursor").permissionKey).toBe("mode");
+    expect(getProviderVariant("opencode").permissionKey).toBe("agent");
   });
 
   it("pins the effort key and thinking/effort coupling", () => {

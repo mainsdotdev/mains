@@ -18,6 +18,7 @@ import {
   clearPendingGoal,
   clearPendingReviewTarget,
   openNewRunTab,
+  closeRunTab,
   setSelectedCollectionId,
 } from "@/lib/redux/slices/workspaceSlice";
 import { isRunTab, isNewRunTab, isReviewTab } from "@/features/workspace/lib/repo-utils";
@@ -60,6 +61,8 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
   const activeTab = useAppSelector(
     (state) => state.workspace.activeTab,
   );
+  const openRunIds = useAppSelector((state) => state.workspace.openRunIds);
+  const useProjectChats = useAppSelector((state) => state.appSettings.developerSidebarView === "chats");
   const selectedFile = useAppSelector(
     (state) => state.workspace.selectedFile,
   );
@@ -142,6 +145,23 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       : undefined
   );
 
+  const singleChatTab = useProjectChats && showTabs;
+  const contextualRunId = isReviewTab(activeTab) ? reviewRunId : previousNonEditorTab;
+  const chatTabRunId = isNewRunTab(activeTab) ? null
+    : isRunTab(activeTab) ? activeTab
+    : contextualRunId && isRunTab(contextualRunId) && openRunIds.includes(contextualRunId)
+      ? contextualRunId
+      : openRunIds.at(-1) ?? null;
+
+  // The project chat sidebar owns conversation switching. Keep one chat tab
+  // alongside the workspace's file/review tabs, without removing its history.
+  useLayoutEffect(() => {
+    if (!singleChatTab || mirrorOnly || activeViewKey !== viewKey) return;
+    for (const runId of openRunIds) {
+      if (runId !== chatTabRunId) dispatch(closeRunTab(runId));
+    }
+  }, [singleChatTab, mirrorOnly, activeViewKey, viewKey, openRunIds, chatTabRunId, dispatch]);
+
   const {
     runs,
     runsLoaded,
@@ -171,7 +191,13 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     mode,
     visibleRunId,
     switchableWorkspaceIds,
+    { retainedRunIds: [...(singleChatTab && chatTabRunId ? [chatTabRunId] : []), ...(pendingRunId ? [pendingRunId] : [])] },
   );
+
+  const tabRuns = useMemo(() => {
+    if (!singleChatTab) return runs;
+    return runs.filter((run) => run.id === chatTabRunId);
+  }, [singleChatTab, runs, chatTabRunId]);
 
   // The tab is authoritative. The run hook can still retain the previous
   // selection while a New Run tab is visible or a synced run is loading.
@@ -346,11 +372,22 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     if (workspaceViewNeedsDefaultRun && runs.length > 0 && !selectedFile && activeTab === "editor") {
       // A jump into another workspace names its run; landing on the newest
       // first would flash it before the jump is consumed.
-      const target = runs.find((r) => r.id === pendingRunId) ?? runs[0];
+      const requested = runs.find((r) => r.id === pendingRunId);
+      if (pendingRunId && !requested) return;
+      const target = requested ?? runs[0];
       dispatch(setActiveTab(target.id));
       selectTab(target.id);
     }
   }, [activeViewKey, viewKey, showTabs, runs, selectedFile, activeTab, composeTargetRunId, selectedRunId, pendingRunId, workspaceViewNeedsDefaultRun, dispatch, selectTab]);
+
+  // A saved/closed draft can leave the neutral editor placeholder without a
+  // file or chat. In the project view it is still a new conversation.
+  useLayoutEffect(() => {
+    if (mirrorOnly || !singleChatTab || activeViewKey !== viewKey || !runsLoaded || pendingRunId) return;
+    if (activeTab === "editor" && !selectedFile && !chatTabRunId &&
+        (!workspaceViewNeedsDefaultRun || runs.length === 0)) dispatch(openNewRunTab());
+  }, [mirrorOnly, singleChatTab, activeViewKey, viewKey, runsLoaded, pendingRunId, activeTab,
+    selectedFile, chatTabRunId, workspaceViewNeedsDefaultRun, runs.length, dispatch]);
 
   // Tab-less modes use "editor" as the neutral placeholder for a new chat.
   useEffect(() => {
@@ -374,7 +411,8 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
 
   const tabHandlers = useTabHandlers({
     activeTab,
-    runs,
+    runs: tabRuns,
+    closeOnly: singleChatTab,
     closeTab,
     selectTab,
     setActiveRunId,
@@ -713,6 +751,8 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     openNoteTabs,
     reviewTabOpen,
     runs,
+    tabRuns,
+    useProjectChats,
     runsLoaded,
     activeRun,
     activeRunId,

@@ -1,6 +1,6 @@
 import { desc, eq, and, like, or, inArray, sql } from "drizzle-orm";
 import { getDb } from "../../db/client";
-import { entities, tasks, issues, signals } from "../../db/schema";
+import { entities, tasks, issues, issueStatuses, signals } from "../../db/schema";
 import { serializeLabels, serializeMetadata } from "./entities.utils";
 import type {
   CreateEntityPayload,
@@ -229,11 +229,14 @@ export const entitiesRepo = {
   // ─────────────────────────────────────────────────────────────
   async findAllIssues(options: IssueQueryOptions = {}) {
     const db = getDb();
-    const { provider, state, repo, limit = 50 } = options;
+    const { provider, category, repo, limit = 50 } = options;
+    // A status id with no row (nothing writes one today) reads as open, so a
+    // stray id can never make an issue vanish from the inbox.
+    const statusCategory = sql`coalesce(${issueStatuses.category}, 'open')`;
 
     const conditions = [eq(entities.isDeleted, false)];
     if (provider) conditions.push(eq(issues.provider, provider));
-    if (state) conditions.push(eq(issues.state, state));
+    if (category) conditions.push(sql`${statusCategory} = ${category}`);
     if (repo) conditions.push(eq(issues.repo, repo));
 
     return db
@@ -243,12 +246,26 @@ export const entitiesRepo = {
       })
       .from(issues)
       .innerJoin(entities, eq(issues.entityId, entities.id))
+      .leftJoin(issueStatuses, eq(issues.statusId, issueStatuses.id))
       .where(and(...conditions))
       .orderBy(
-        sql`CASE WHEN ${issues.state} = 'open' THEN 0 ELSE 1 END`,
+        sql`CASE WHEN ${statusCategory} = 'open' THEN 0 ELSE 1 END`,
         desc(issues.number),
       )
       .limit(limit);
+  },
+
+  async findAllIssueStatuses() {
+    return getDb()
+      .select({
+        id: issueStatuses.id,
+        name: issueStatuses.name,
+        category: issueStatuses.category,
+        sortOrder: issueStatuses.sortOrder,
+      })
+      .from(issueStatuses)
+      .orderBy(issueStatuses.sortOrder)
+      .all();
   },
 
   async findIssueById(entityId: string) {

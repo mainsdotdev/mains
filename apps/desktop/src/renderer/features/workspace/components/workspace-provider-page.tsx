@@ -16,7 +16,7 @@ import {
   GoalSummaryBar,
   TodoSummaryBar,
 } from "@/features/workspace/components";
-import { AsyncQuestionDialogProvider, RunInputDialog } from "@/features/workspace/components/tools/async-question-dialog";
+import { AsyncQuestionDialogProvider, ComposerSlot } from "@/features/workspace/components/tools/async-question-dialog";
 import { parseStructuralPlanSnapshot } from "@/features/workspace/components/todo-summary-bar";
 import {
   useWorkspacePage,
@@ -405,6 +405,7 @@ function InteractiveWorkspaceProviderPage({
   const currentPlanApproval = isExitPlanApproval(currentApproval)
     ? currentApproval
     : undefined;
+  const blockingApproval = currentPlanApproval ? undefined : currentApproval;
   const currentStructuralPlan = useMemo(() => {
     const activeTurn = ws.currentTurns.find(
       (turn) => turn.status === "active",
@@ -482,11 +483,13 @@ function InteractiveWorkspaceProviderPage({
 
   const tabBar = useMemo(
     () =>
-      // Developer workspaces use their full strip; Work/Chat get one chat tab below.
-      !modeConfig.showTabs || ws.showEmptyState || ws.isEmptyStatePending ? null : (
+      // Project chat navigation keeps one conversation tab without a create action.
+      !modeConfig.showTabs || (!ws.useProjectChats && (ws.showEmptyState || ws.isEmptyStatePending)) ? null : (
         <WorkspaceTabs
           variant={variant}
-          runs={ws.runs}
+          runs={ws.tabRuns}
+          conversationPresentation={ws.useProjectChats ? "single" : "tabs"}
+          onArchiveRun={ws.useProjectChats ? ws.handleArchiveRun : undefined}
           activeTab={ws.activeTab}
           hasSelectedFile={!!ws.selectedFile}
           fileName={ws.selectedFile?.name}
@@ -518,7 +521,9 @@ function InteractiveWorkspaceProviderPage({
       modeConfig.showTabs,
       ws.showEmptyState,
       ws.isEmptyStatePending,
-      ws.runs,
+      ws.tabRuns,
+      ws.useProjectChats,
+      ws.handleArchiveRun,
       ws.activeTab,
       ws.selectedFile,
       ws.openIssueTabs,
@@ -552,7 +557,7 @@ function InteractiveWorkspaceProviderPage({
     openSignalTabs: ws.openSignalTabs,
     openNoteTabs: ws.openNoteTabs,
     reviewTabOpen: ws.reviewTabOpen,
-    runs: ws.runs,
+    runs: ws.tabRuns,
     showNewRunTab: ws.showNewRunTab,
   });
 
@@ -579,7 +584,9 @@ function InteractiveWorkspaceProviderPage({
   const floatingPanel = reviewVisible ? {
     isExpanded: true, chatVisible: reviewChatVisible, chatMode: reviewChatMode,
     chatHost: reviewChatHost, setChatMode: setReviewChatMode, nativeOverlay: false,
-  } : mcpPanel?.isExpanded && mcpPanel.ownerKey === ws.ownerKey ? { ...mcpPanel, nativeOverlay: false } : browserPanel;
+  } : mcpPanel?.isExpanded && mcpPanel.ownerKey === ws.ownerKey ? { ...mcpPanel, nativeOverlay: false   } : browserPanel;
+  const dockedComposer = !floatingPanel.isExpanded && onboardingCompleted && !ws.showEmptyState && !ws.showNewRunTab && !ws.isEmptyStatePending;
+  const dockedApproval = !floatingPanel.isExpanded && !!ws.activeRunId && !currentPlanApproval && !ws.showEmptyState && !ws.showNewRunTab;
   useVoiceChatPresence(!browserChatOnly && !floatingPanel.isExpanded && !useCenteredPromptLayout
     && !ws.showEmptyState && !ws.isEmptyStatePending
     ? ws.activeRun?.id ?? null : null);
@@ -768,7 +775,18 @@ function InteractiveWorkspaceProviderPage({
           onShowDetails={() => floatingPanel.setChatMode("details")}
           onMinimize={() => floatingPanel.setChatMode("icon")}
           onComposerHeightChange={browserChatOnly ? handleBrowserComposerHeight : undefined}
-          composer={browserComposer}
+          composer={
+            <ComposerSlot
+              request={blockingApproval}
+              onRespond={respondToolApproval}
+              variant={variant}
+              maxHeight="40dvh"
+              blocked={!!currentPlanApproval}
+              dialogClassName="px-3 pb-1"
+            >
+              {browserComposer}
+            </ComposerSlot>
+          }
         >
           {(browserSelectedRun || ws.isSubmitting) && (
             <>
@@ -793,16 +811,6 @@ function InteractiveWorkspaceProviderPage({
                   floatingChat
                 />
               </div>
-              {!currentPlanApproval && (
-                <div className="shrink-0 px-3">
-                  <RunInputDialog
-                    request={currentApproval}
-                    onRespond={respondToolApproval}
-                    variant={variant}
-                    maxHeight="40dvh"
-                  />
-                </div>
-              )}
               {ws.currentWorkspace && !ws.showEmptyState && !ws.showNewRunTab && (
                 <div className="shrink-0 px-3">
                   <GoalSummaryBar
@@ -842,7 +850,7 @@ function InteractiveWorkspaceProviderPage({
         browser panel is a native view layered above the renderer). */}
     <div
       data-workspace-route=""
-      className={`relative flex flex-col h-full ${routeTopRounding} overflow-hidden`}
+      className={`relative flex flex-col h-full ${routeTopRounding} overflow-hidden overscroll-none`}
     >
       {/* Separate painted panes leave the translucent shell visible between chat and terminal. */}
       <div
@@ -898,7 +906,7 @@ function InteractiveWorkspaceProviderPage({
           setChatHost={setReviewChatHost} onCommentAdded={showReviewChat} />
           : floatingPanel.isExpanded ? null : useCenteredPromptLayout ? (
           <div
-            className={`flex h-full min-h-0 flex-col items-center justify-center-safe gap-4 overflow-y-auto py-10 noscrollbar ${CONTENT_COLUMN_GUTTER}`}
+            className={`flex h-full min-h-0 flex-col items-center justify-center-safe gap-4 overflow-y-auto overscroll-none py-10 noscrollbar ${CONTENT_COLUMN_GUTTER}`}
           >
             <WorkspaceEmptyState />
             <div className="w-full flex flex-col items-center gap-2">
@@ -961,11 +969,9 @@ function InteractiveWorkspaceProviderPage({
         )}
       </div>
 
-      {/* Pinned just above the input rather than inline in the transcript:
-          the transcript fills all remaining height, so an inline dialog left a
-          large empty gap below it (short runs) or floated mid-scroll (long
-          runs). Anchoring it here keeps it directly above the input and always
-          reachable regardless of scroll position or conversation length. */}
+      {/* The card sits in the composer slot, under the same gutter as the
+          input. An inline transcript dialog left a gap on short runs and
+          scrolled away on long ones. */}
 
       {/* Two boxes, not one: `content-inset` sets `padding-right` and wins the
           cascade over a `px-*` on the same element, so sharing them zeroes the
@@ -973,18 +979,6 @@ function InteractiveWorkspaceProviderPage({
           then hangs off the right edge while the left keeps its padding. */}
       <div className="content-inset">
       <div className={CONTENT_COLUMN_GUTTER}>
-      {!floatingPanel.isExpanded && ws.activeRunId &&
-        !currentPlanApproval &&
-        !ws.showEmptyState &&
-        !ws.showNewRunTab && (
-        <div className="w-full max-w-210 mx-auto">
-          <RunInputDialog
-            request={currentApproval}
-            onRespond={respondToolApproval}
-            variant={variant}
-          />
-        </div>
-      )}
       {/* Renders as a fixed toast-style pill at the top of the viewport (it
           positions itself; mounting here only controls gating). Shown only
           while the active run is running, so it disappears on completion.
@@ -1009,34 +1003,43 @@ function InteractiveWorkspaceProviderPage({
         />
       )}
 
-      {!floatingPanel.isExpanded && onboardingCompleted && !ws.showEmptyState && !ws.showNewRunTab && !ws.isEmptyStatePending ? (
-        <WorkspaceInput
-          runQueue={ws.runQueue}
-          goal={ws.goal}
-          onGoalChange={ws.setGoal}
-          onSubmit={ws.handleExecute}
-          onCreateVoiceConversation={ws.handleCreateVoiceConversation}
-          isLoading={ws.isLoading}
-          activeRun={ws.composerRun}
-          canResume={ws.canResume ?? false}
-          providerId={providerId}
-          selectedModel={ws.selectedModel}
-          onModelChange={ws.handleModelChange}
-          settingsConfig={ws.conversationSettings.config}
-          settingsReady={ws.conversationSettingsReady}
-          onSettingsConfigChange={ws.handleSettingsConfigChange}
-          sendTarget={ws.sendTarget}
-          onSendTargetChange={ws.handleSendTargetChange}
-          workspacePath={ws.currentWorkspace?.rootPath}
-          projectId={ws.currentWorkspace?.projectId ?? undefined}
-          uploadedFiles={ws.uploadedFiles}
-          onUploadedFilesChange={ws.setUploadedFiles}
-          additionalDirectories={ws.additionalDirectories}
-          onAdditionalDirectoriesChange={ws.setAdditionalDirectories}
-          onStop={handleStop}
-          isNewRunTabActive={ws.showNewRunTab}
-        />
-      ) : null}
+      {(dockedComposer || dockedApproval) && (
+        <ComposerSlot
+          request={blockingApproval}
+          onRespond={respondToolApproval}
+          variant={variant}
+          blocked={!dockedApproval}
+        >
+          {dockedComposer ? (
+            <WorkspaceInput
+              runQueue={ws.runQueue}
+              goal={ws.goal}
+              onGoalChange={ws.setGoal}
+              onSubmit={ws.handleExecute}
+              onCreateVoiceConversation={ws.handleCreateVoiceConversation}
+              isLoading={ws.isLoading}
+              activeRun={ws.composerRun}
+              canResume={ws.canResume ?? false}
+              providerId={providerId}
+              selectedModel={ws.selectedModel}
+              onModelChange={ws.handleModelChange}
+              settingsConfig={ws.conversationSettings.config}
+              settingsReady={ws.conversationSettingsReady}
+              onSettingsConfigChange={ws.handleSettingsConfigChange}
+              sendTarget={ws.sendTarget}
+              onSendTargetChange={ws.handleSendTargetChange}
+              workspacePath={ws.currentWorkspace?.rootPath}
+              projectId={ws.currentWorkspace?.projectId ?? undefined}
+              uploadedFiles={ws.uploadedFiles}
+              onUploadedFilesChange={ws.setUploadedFiles}
+              additionalDirectories={ws.additionalDirectories}
+              onAdditionalDirectoriesChange={ws.setAdditionalDirectories}
+              onStop={handleStop}
+              isNewRunTabActive={ws.showNewRunTab}
+            />
+          ) : null}
+        </ComposerSlot>
+      )}
       </div>
       </div>
       </div>

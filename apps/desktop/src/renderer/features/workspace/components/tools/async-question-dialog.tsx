@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type ReactNode } from "react";
+import { animate } from "motion/react";
 import { asyncQuestionMessageId, readAsyncQuestionAnswer, readAsyncQuestionReply, readAsyncQuestions, readAsyncQuestionState,
   type AsyncQuestion, type AsyncQuestionAnswer, type AsyncQuestionState } from "@mains/contracts/async-questions";
 import { Button, Caption, Text } from "@/components/ui";
@@ -7,6 +8,7 @@ import type { RunTurn } from "@/lib/redux/api/runsApi";
 import type { Run, RunEvent } from "../../types";
 import type { ToolApprovalRequest } from "../../hooks/use-tool-approval";
 import { dismissAsyncQuestions, sendAsyncQuestionAnswers } from "../../lib/async-question-answers";
+import { useComposerDockCover } from "../floating-chat-overlay";
 import { ToolApprovalDialog } from "./tool-approval-dialog";
 
 interface QuestionSource {
@@ -187,7 +189,10 @@ export function AsyncQuestionDialogProvider({ ownerKey, runId, runStatus, turns,
   }}>{children}</Context.Provider>;
 }
 
-/** Real approvals take priority over the nonblocking async question dialog. */
+/**
+ * Real approvals take priority over the nonblocking async question dialog.
+ * A banner for questions the user closed stays above the composer.
+ */
 export function RunInputDialog({ request, onRespond, variant, maxHeight, blocked = false }: {
   request?: ToolApprovalRequest;
   onRespond: DialogProps["onRespond"];
@@ -214,4 +219,91 @@ export function RunInputDialog({ request, onRespond, variant, maxHeight, blocked
     </div>
     {pending.error && <Caption role="alert" tone="danger" className="mt-1 block">{pending.error}</Caption>}
   </div>;
+}
+
+/**
+ * Puts an open approval or question card in the composer slot. The composer
+ * stays mounted behind it, so a draft, queue edit, or upload survives the card.
+ * A closed-question banner does not take the slot.
+ */
+export function ComposerSlot({ request, onRespond, variant, maxHeight, blocked = false, dialogClassName, children }: {
+  request?: ToolApprovalRequest;
+  onRespond: DialogProps["onRespond"];
+  variant?: DialogProps["variant"];
+  maxHeight?: string;
+  blocked?: boolean;
+  /** Inset for surfaces whose composer has no column gutter. */
+  dialogClassName?: string;
+  children: ReactNode;
+}) {
+  const asyncQuestions = useAsyncQuestionDialog();
+  const occupied = !blocked && (!!request || !!asyncQuestions?.dialog);
+  useComposerDockCover(occupied);
+  const surfaceKey = request?.requestId ?? asyncQuestions?.dialog?.request.requestId ?? "";
+  const frameRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const heightRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!occupied) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && composerRef.current?.contains(active)) active.blur();
+  }, [occupied]);
+  // Resting height, so a later swap starts from the size currently on screen.
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    if (!frame || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (frame.style.height) return;
+      heightRef.current = frame.getBoundingClientRect().height;
+    });
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const next = frame.scrollHeight;
+    const from = frame.style.height ? frame.getBoundingClientRect().height : heightRef.current;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+    if (reduceMotion || from == null || Math.abs(from - next) < 1) {
+      frame.style.height = "";
+      frame.style.overflow = "";
+      heightRef.current = frame.getBoundingClientRect().height || next;
+      return;
+    }
+    // Pin the height that is already on screen, then spring to the new one.
+    // The slot sits at the bottom of the column, so it grows and shrinks upward.
+    frame.style.overflow = "hidden";
+    frame.style.height = `${from}px`;
+    let stopped = false;
+    const controls = animate(frame, { height: next }, {
+      type: "spring",
+      bounce: 0,
+      duration: 0.4,
+      onComplete: () => {
+        if (stopped) return;
+        frame.style.height = "";
+        frame.style.overflow = "";
+        heightRef.current = frame.getBoundingClientRect().height;
+      },
+    });
+    return () => {
+      stopped = true;
+      controls.stop();
+    };
+  }, [occupied, surfaceKey]);
+  const composer = isValidElement<{ suspended?: boolean }>(children) && typeof children.type !== "string"
+    ? cloneElement(children as ReactElement<{ suspended?: boolean }>, { suspended: occupied })
+    : children;
+  const dialog = blocked ? null : (
+    <RunInputDialog request={request} onRespond={onRespond} variant={variant} maxHeight={maxHeight} />
+  );
+  return (
+    <div ref={frameRef} className={`mx-auto flex w-full max-w-210 flex-col justify-end ${dialogClassName ?? ""}`}>
+      {dialog}
+      <div ref={composerRef} hidden={occupied || undefined} inert={occupied || undefined}>
+        {composer}
+      </div>
+    </div>
+  );
 }

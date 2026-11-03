@@ -3,6 +3,7 @@ import storage from "redux-persist/lib/storage";
 import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { ReviewFileState } from "./slices/workspaceSlice";
+import { isRunTab } from "@/features/workspace/lib/repo-utils";
 
 // Conversation preferences are canonical backend data; drafts and the last-used
 // new-run defaults also survive renderer restarts locally.
@@ -47,12 +48,18 @@ const workspaceMigrations = {
     delete next.reviewedFilesByWorkspace;
     return next;
   },
+  2: (state: PersistedState): PersistedState => {
+    if (!state) return state;
+    const next = { ...state } as NonNullable<PersistedState> & { activeTab?: string; openRunIds?: string[] };
+    next.openRunIds ??= next.activeTab && isRunTab(next.activeTab) ? [next.activeTab] : [];
+    return next;
+  },
 };
 
 export const workspacePersistConfig = {
   key: "workspace",
   storage,
-  version: 1,
+  version: 2,
   migrate: createMigrate(workspaceMigrations),
   transforms: [selectedFileTransform, conversationSettingsTransform],
   whitelist: [
@@ -69,6 +76,7 @@ export const workspacePersistConfig = {
     "explorerExpandedPaths",
     "sidebarTab",
     "activeTab",
+    "openRunIds",
     "previousNonEditorTab",
     "openIssueTabs",
     "openSignalTabs",

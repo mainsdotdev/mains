@@ -86,11 +86,11 @@ import { registerEventSink } from "../../ipc-kit/event-bus";
 import {
   createClaudePermissionModeRef,
   mapSDKMessage,
-} from "../providers/adapters/claude.driver";
+} from "../providers/adapters/claude/claude.driver";
 import {
   createCodexEventMapper,
   type CodexEventRunState,
-} from "../providers/adapters/codex-event-mapper";
+} from "../providers/adapters/codex/codex-event-mapper";
 
 describe("RunSession", () => {
   beforeEach(() => {

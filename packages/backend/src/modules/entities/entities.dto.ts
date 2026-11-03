@@ -1,3 +1,5 @@
+import type { IssueStatusCategory } from "@mains/contracts/issue-status";
+
 // ─────────────────────────────────────────────────────────────
 // Entity DTOs
 // ─────────────────────────────────────────────────────────────
@@ -245,7 +247,8 @@ export interface TaskQueryOptions {
 
 export interface IssueQueryOptions {
   provider?: string;
-  state?: string;
+  /** Open or closed by Mains' issue status — not the provider's state name. */
+  category?: IssueStatusCategory;
   repo?: string;
   limit?: number;
 }

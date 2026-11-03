@@ -16,6 +16,17 @@ describe("buildApprovalDiffPreviews", () => {
     expect(preview.patch).toContain("+export const ready = true;");
   });
 
+  it("builds an edit patch from OpenCode oldString/newString", () => {
+    const [preview] = buildApprovalDiffPreviews("edit", {
+      path: "src/hero-section.tsx",
+      oldString: "const tone = 'old';\n",
+      newString: "const tone = 'new';\n",
+    });
+    expect(preview.filePath).toBe("src/hero-section.tsx");
+    expect(preview.patch).toContain("-const tone = 'old';");
+    expect(preview.patch).toContain("+const tone = 'new';");
+  });
+
   it("builds an edit patch from Claude old/new strings", () => {
     const [preview] = buildApprovalDiffPreviews("edit", {
       file_path: "src/card.tsx",

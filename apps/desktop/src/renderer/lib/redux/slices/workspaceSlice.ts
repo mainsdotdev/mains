@@ -47,6 +47,7 @@ interface WorkspaceViewSnapshot {
   selectedFile: FileNode | null;
   explorerExpandedPaths: string[];
   activeTab: string;
+  openRunIds?: string[];
   previousNonEditorTab: string | null;
   openIssueTabs: IssueWithEntity[];
   openSignalTabs: SignalWithEntity[];
@@ -98,6 +99,8 @@ export interface WorkspaceState {
   explorerExpandedPaths: string[];
   sidebarTab: WorkspaceSidebarTab;
   activeTab: "editor" | string;
+  /** Explicitly opened chats, independent of the workspace's conversation history. */
+  openRunIds: string[];
   /** Tab that was active before "editor" was opened — used to restore on editor close. */
   previousNonEditorTab: string | null;
   /**
@@ -165,6 +168,7 @@ const initialState: WorkspaceState = {
   explorerExpandedPaths: [],
   sidebarTab: "files",
   activeTab: "editor",
+  openRunIds: [],
   previousNonEditorTab: null,
   contextItems: [],
   composerContextKey: "default",
@@ -190,6 +194,7 @@ function snapshotWorkspaceView(state: WorkspaceState): WorkspaceViewSnapshot {
     selectedFile: state.selectedFile?.extension === "diff" ? null : state.selectedFile,
     explorerExpandedPaths: state.explorerExpandedPaths,
     activeTab: state.activeTab,
+    openRunIds: state.openRunIds,
     previousNonEditorTab: state.previousNonEditorTab,
     openIssueTabs: state.openIssueTabs,
     openSignalTabs: state.openSignalTabs,
@@ -209,6 +214,7 @@ function restoreWorkspaceView(state: WorkspaceState, view?: WorkspaceViewSnapsho
   state.explorerExpandedPaths = view?.explorerExpandedPaths ?? [];
   state.sidebarTab = view?.sidebarTab ?? "files";
   state.activeTab = view?.activeTab ?? "editor";
+  state.openRunIds = view?.openRunIds ?? (view && isRunTab(view.activeTab) ? [view.activeTab] : []);
   state.previousNonEditorTab = view?.previousNonEditorTab ?? null;
   state.openIssueTabs = view?.openIssueTabs ?? [];
   state.openSignalTabs = view?.openSignalTabs ?? [];
@@ -235,11 +241,13 @@ function detachRunFromViews(state: WorkspaceState, backendId: string, runId: str
   }
   for (const [key, view] of Object.entries(state.workspaceViews)) {
     if (!viewKeyBelongsToBackend(key, backendId)) continue;
+    view.openRunIds = view.openRunIds?.filter((id) => id !== runId);
     if (view.activeTab === runId) view.activeTab = "editor";
     if (view.reviewRunId === runId) view.reviewRunId = null;
     if (view.previousNonEditorTab === runId) view.previousNonEditorTab = null;
   }
   if (state.workspaceViewKey && viewKeyBelongsToBackend(state.workspaceViewKey, backendId)) {
+    state.openRunIds = state.openRunIds.filter((id) => id !== runId);
     if (state.activeTab === runId) {
       state.activeTab = "editor";
       // A stale list may still contain this run until its query refreshes.
@@ -442,6 +450,13 @@ const workspaceSlice = createSlice({
         state.previousNonEditorTab = state.activeTab;
       }
       state.activeTab = action.payload;
+      if (isRunTab(action.payload) && !state.openRunIds.includes(action.payload)) {
+        state.openRunIds.push(action.payload);
+      }
+    },
+    closeRunTab: (state, action: PayloadAction<string>) => {
+      state.openRunIds = state.openRunIds.filter((id) => id !== action.payload);
+      if (state.previousNonEditorTab === action.payload) state.previousNonEditorTab = null;
     },
     openReviewTab: (state) => {
       if (!state.reviewTabOpen) {
@@ -693,6 +708,7 @@ export const {
   expandExplorerPaths,
   collapseAllExplorerPaths,
   setActiveTab,
+  closeRunTab,
   openReviewTab,
   closeReviewTab,
   setReviewRunId,

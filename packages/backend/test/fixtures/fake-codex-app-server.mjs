@@ -6,7 +6,7 @@ import process from "node:process";
 import { setTimeout } from "node:timers";
 
 const fixtureCliVersion =
-  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.163.0";
+  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.166.0";
 
 if (process.argv.includes("--version")) {
   process.stdout.write(`codex-cli ${fixtureCliVersion}\n`);
@@ -154,6 +154,15 @@ input.on("line", (line) => {
             },
       );
       break;
+
+    case "thread/turns/list": {
+      const pages = JSON.parse(process.env.MAINS_CODEX_FIXTURE_HISTORY_PAGES ?? '[{"cursor":null,"result":{"data":[],"nextCursor":null,"backwardsCursor":null}}]');
+      const page = pages.find((page) => page.cursor === (params.cursor ?? null));
+      if (!page) respondError(id, -32602, "Invalid fixture history cursor");
+      else if (page.error) respondError(id, page.error.code, page.error.message);
+      else respond(id, page.result);
+      break;
+    }
 
     case "thread/start": {
       const threadId = `thread-${nextThreadId++}`;
@@ -755,11 +764,14 @@ input.on("line", (line) => {
               type: "amazonBedrock",
               usesCodexManagedCredentials: true,
             }
-          : {
-              type: "chatgpt",
-              email: "codex@example.com",
-              planType: "pro",
-            },
+          : process.env.MAINS_CODEX_FIXTURE_ACCOUNT === "gcp"
+            ? { type: "gcp" }
+            : {
+                type: "chatgpt",
+                email: "codex@example.com",
+                planType: "pro",
+                workspaceName: process.env.MAINS_CODEX_FIXTURE_WORKSPACE_NAME ?? null,
+              },
         requiresOpenaiAuth: false,
       });
       break;
@@ -831,38 +843,48 @@ input.on("line", (line) => {
       });
       break;
 
-    case "model/list":
-      respond(id, {
-        data: process.env.MAINS_CODEX_FIXTURE_EMPTY_MODELS === "1" ? [] : [{
-          id: "gpt-fixture-codex",
-          model: "gpt-fixture-codex",
-          upgrade: null,
-          upgradeInfo: null,
-          availabilityNux: null,
-          displayName: "GPT Fixture Codex",
-          description: "Fixture model for capability integration tests.",
-          hidden: false,
-          supportedReasoningEfforts: JSON.parse(
-            process.env.MAINS_CODEX_FIXTURE_EFFORTS ?? '["medium"]',
-          ).map((reasoningEffort) => ({
-            reasoningEffort,
-            description: `Fixture ${reasoningEffort} reasoning.`,
-          })),
-          defaultReasoningEffort: "medium",
-          inputModalities: ["text", "image"],
-          supportsPersonality: true,
-          additionalSpeedTiers: [],
-          serviceTiers: process.env.MAINS_CODEX_FIXTURE_SERVICE_TIERS ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_SERVICE_TIERS) : [{
-            id: "fast",
-            name: "Fast",
-            description: "Priority fixture service.",
-          }],
-          defaultServiceTier: null,
-          isDefault: true,
+    case "model/list": {
+      const model = {
+        id: "gpt-fixture-codex",
+        model: "gpt-fixture-codex",
+        upgrade: null,
+        upgradeInfo: null,
+        availabilityNux: null,
+        displayName: "GPT Fixture Codex",
+        description: "Fixture model for capability integration tests.",
+        hidden: false,
+        supportedReasoningEfforts: JSON.parse(
+          process.env.MAINS_CODEX_FIXTURE_EFFORTS ?? '["medium"]',
+        ).map((reasoningEffort) => ({
+          reasoningEffort,
+          description: `Fixture ${reasoningEffort} reasoning.`,
+        })),
+        defaultReasoningEffort: "medium",
+        inputModalities: ["text", "image"],
+        supportsPersonality: true,
+        additionalSpeedTiers: [],
+        serviceTiers: process.env.MAINS_CODEX_FIXTURE_SERVICE_TIERS ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_SERVICE_TIERS) : [{
+          id: "fast",
+          name: "Fast",
+          description: "Priority fixture service.",
         }],
+        defaultServiceTier: null,
+        isDefault: true,
+      };
+      if (process.env.MAINS_CODEX_FIXTURE_MODEL_PAGES) {
+        const pages = JSON.parse(process.env.MAINS_CODEX_FIXTURE_MODEL_PAGES);
+        const page = pages.find((page) => page.cursor === (params.cursor ?? null));
+        if (!page) respondError(id, -32602, "Invalid fixture model cursor");
+        else if (page.error) respondError(id, page.error.code, page.error.message);
+        else respond(id, { ...page.result, data: page.result.data.map((overrides) => ({ ...model, ...overrides })) });
+        break;
+      }
+      respond(id, {
+        data: process.env.MAINS_CODEX_FIXTURE_EMPTY_MODELS === "1" ? [] : [model],
         nextCursor: null,
       });
       break;
+    }
 
     case "skills/list":
       respond(id, {

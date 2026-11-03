@@ -26,12 +26,13 @@ export function collectUiContextCandidates(
     const previewWorkspaceId = workspaceIdFromPreviewOwnerKey(key, backendId);
     if (previewWorkspaceId) workspaces.add(previewWorkspaceId);
   };
-  const addView = (key: string, activeTab?: string, previousTab?: string | null) => {
+  const addView = (key: string, activeTab?: string, previousTab?: string | null, openRunIds?: string[]) => {
     const workspaceId = workspaceIdFromViewKey(key, backendId);
     if (workspaceId) workspaces.add(workspaceId);
     if (!viewKeyBelongsToBackend(key, backendId)) return;
     if (activeTab && isRunTab(activeTab)) runs.add(activeTab);
     if (previousTab && isRunTab(previousTab)) runs.add(previousTab);
+    for (const id of openRunIds ?? []) if (isRunTab(id)) runs.add(id);
   };
 
   for (const key of Object.keys(state.workspace.draftTextByKey)) addOwner(key);
@@ -48,10 +49,10 @@ export function collectUiContextCandidates(
   for (const key of browserOwnerKeys) addOwner(key);
   for (const key of Object.keys(state.preview?.byOwner ?? {})) addOwner(key);
   for (const [key, view] of Object.entries(state.workspace.workspaceViews)) {
-    addView(key, view.activeTab, view.previousNonEditorTab);
+    addView(key, view.activeTab, view.previousNonEditorTab, view.openRunIds);
   }
   if (state.workspace.workspaceViewKey) {
-    addView(state.workspace.workspaceViewKey, state.workspace.activeTab, state.workspace.previousNonEditorTab);
+    addView(state.workspace.workspaceViewKey, state.workspace.activeTab, state.workspace.previousNonEditorTab, state.workspace.openRunIds);
   }
 
   return [

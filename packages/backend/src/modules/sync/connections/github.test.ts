@@ -34,23 +34,91 @@ const baseArgs = {
 };
 
 describe("githubIssuesFetcher", () => {
-  it("returns [] when no token in secrets", async () => {
-    const result = await githubIssuesFetcher.fetchForResource({
-      ...baseArgs,
-      secrets: {},
-      resource: validResource,
-    });
-    expect(result).toEqual([]);
+  it("is incremental", () => {
+    expect(githubIssuesFetcher.incremental).toBe(true);
+  });
+
+  it("throws without a token, so the runner keeps its cursor", async () => {
+    await expect(
+      githubIssuesFetcher.fetchForResource({ ...baseArgs, secrets: {}, resource: validResource }),
+    ).rejects.toThrow(/token/);
     expect(mockListForRepo).not.toHaveBeenCalled();
   });
 
-  it("returns [] when resource identifier lacks a slash", async () => {
+  it("throws when the resource identifier lacks a slash", async () => {
+    await expect(
+      githubIssuesFetcher.fetchForResource({
+        ...baseArgs,
+        resource: { ...validResource, externalId: "no-slash" },
+      }),
+    ).rejects.toThrow(/owner\/repo/);
+    expect(mockListForRepo).not.toHaveBeenCalled();
+  });
+
+  it("asks for open issues without a cursor", async () => {
+    mockListForRepo.mockResolvedValue({ data: [] });
+    await githubIssuesFetcher.fetchForResource({ ...baseArgs, resource: validResource, since: null });
+    expect(mockListForRepo).toHaveBeenCalledWith(
+      expect.objectContaining({ state: "open", page: 1 }),
+    );
+    expect(mockListForRepo.mock.calls[0][0]).not.toHaveProperty("since");
+  });
+
+  it("asks for every state updated since the cursor", async () => {
+    mockListForRepo.mockResolvedValue({
+      data: [
+        {
+          number: 3,
+          title: "Closed as not planned",
+          body: null,
+          html_url: "https://github.com/octocat/hello-world/issues/3",
+          state: "closed",
+          state_reason: "not_planned",
+          closed_at: "2025-03-02T00:00:00Z",
+          created_at: "2025-01-01T00:00:00Z",
+          labels: [],
+          assignee: null,
+        },
+      ],
+    });
+
+    const [issue] = await githubIssuesFetcher.fetchForResource({
+      ...baseArgs,
+      resource: validResource,
+      since: new Date("2025-03-01T00:00:00Z"),
+    });
+
+    expect(mockListForRepo).toHaveBeenCalledWith(
+      expect.objectContaining({ state: "all", since: "2025-03-01T00:00:00.000Z" }),
+    );
+    expect(issue.metadata).toMatchObject({ state: "closed", statusId: "canceled" });
+  });
+
+  it("pages until a short page", async () => {
+    const issue = (number: number) => ({
+      number,
+      title: `#${number}`,
+      body: null,
+      html_url: `https://github.com/octocat/hello-world/issues/${number}`,
+      state: "open",
+      created_at: "2025-01-01T00:00:00Z",
+      labels: [],
+      assignee: null,
+    });
+    mockListForRepo
+      .mockResolvedValueOnce({ data: Array.from({ length: 100 }, (_, i) => issue(i + 1)) })
+      .mockResolvedValueOnce({ data: [issue(101)] });
+
     const result = await githubIssuesFetcher.fetchForResource({
       ...baseArgs,
-      resource: { ...validResource, externalId: "no-slash" },
+      limit: 1000,
+      resource: validResource,
     });
-    expect(result).toEqual([]);
-    expect(mockListForRepo).not.toHaveBeenCalled();
+
+    expect(result).toHaveLength(101);
+    // Same page size on every page, or page 2 would overlap page 1.
+    expect(mockListForRepo.mock.calls[1][0]).toMatchObject({ page: 2, per_page: 100 });
+    expect(mockListForRepo).toHaveBeenCalledTimes(2);
   });
 
   it("normalizes issues, filtering out pull requests", async () => {
@@ -63,8 +131,9 @@ describe("githubIssuesFetcher", () => {
           html_url: "https://github.com/octocat/hello-world/issues/1",
           state: "open",
           created_at: "2025-01-01T00:00:00Z",
-          labels: [{ name: "bug" }, "feature"],
-          assignee: { login: "octocat" },
+          labels: [{ name: "bug", color: "d73a4a" }, "feature"],
+          assignee: { login: "octocat", avatar_url: "https://avatars.githubusercontent.com/u/1" },
+          milestone: { title: "v1.0" },
           pull_request: undefined,
         },
         {
@@ -99,7 +168,13 @@ describe("githubIssuesFetcher", () => {
         repo: "octocat/hello-world",
         labels: ["bug", "feature"],
         state: "open",
+        stateId: "open",
+        statusId: "todo",
         assignee: "octocat",
+        identifier: "#1",
+        labelColors: { bug: "#d73a4a" },
+        assigneeAvatarUrl: "https://avatars.githubusercontent.com/u/1",
+        group: { name: "v1.0", color: null },
       },
     });
   });

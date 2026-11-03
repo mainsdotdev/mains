@@ -1,172 +1,95 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useGetIssuesInboxQuery, type IssueWithEntity } from "@/lib/redux/api";
-import { IssueListItem } from "@/features/workspace/components/issue-list-item";
-import { ProviderIcon } from "@/features/workspace/components/provider-icon";
-import { Body, Button, DropdownWrapper, Input, SegmentedTabs, Text } from "@/components/ui";
-import { Close, Layers, Search, Trash } from "@/components/ui/icons";
-import { useClickOutside } from "@/hooks/use-click-outside";
-import { parseLabels } from "@/lib/label-colors";
-import { FilterSection, sortedEntries } from "./filter-section";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useGetIssuesInboxQuery,
+  useGetIssueStatusesQuery,
+  type IssueWithEntity,
+} from "@/lib/redux/api";
+import { Body, Button, Input, SegmentedTabs, Text } from "@/components/ui";
+import { Close, Search } from "@/components/ui/icons";
+import { useIsMobile } from "@/lib/platform";
+import type { IssueStatus } from "@mains/contracts/issue-status";
+import {
+  countIssueFilters,
+  EMPTY_ISSUE_FILTERS,
+  ISSUE_VIEWS,
+  matchesIssueFilters,
+  matchesIssueText,
+  matchesIssueView,
+  toggleIssueFilter,
+  type IssueFacet,
+  type IssueFilters,
+  type IssueView,
+} from "../lib/issue-filters";
+import { matchesIssueScope, type TasksScope } from "../lib/scope";
+import { buildIssueFacetGroups, IssueFilterButton, IssueFilterChips } from "./issue-filter-menu";
+import { IssueRow } from "./issue-row";
+import { OPEN_ISSUES_QUERY } from "./tasks-sidebar";
 
-type IssueStateFilter = "all" | "open" | "closed";
-
-const STATE_FILTERS: { value: IssueStateFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "open", label: "Open" },
-  { value: "closed", label: "Closed" },
-];
-
-type FilterGroup = "providers" | "repos" | "labels" | "assignees";
-
-interface IssueFilters {
-  providers: string[];
-  repos: string[];
-  labels: string[];
-  assignees: string[];
-}
-
-const EMPTY_FILTERS: IssueFilters = {
-  providers: [],
-  repos: [],
-  labels: [],
-  assignees: [],
-};
+const EMPTY_STATUSES: IssueStatus[] = [];
 
 interface IssuesPanelProps {
+  /** Connection / resource picked in the sidebar. */
+  scope: TasksScope;
   activeEntityId: string | null;
   /** `null` clears the drawer — the list has nothing left to point at. */
   onSelectIssue: (issue: IssueWithEntity | null) => void;
 }
 
-export function IssuesPanel({ activeEntityId, onSelectIssue }: IssuesPanelProps) {
-  const [stateFilter, setStateFilter] = useState<IssueStateFilter>("open");
+export function IssuesPanel({ scope, activeEntityId, onSelectIssue }: IssuesPanelProps) {
+  // The sidebar owns connection + project scoping on desktop; without it
+  // (mobile) the facet menu is the only way to narrow by either.
+  const showScopeFacets = useIsMobile();
   const [text, setText] = useState("");
-  const [filters, setFilters] = useState<IssueFilters>(EMPTY_FILTERS);
-  const [filterOpen, setFilterOpen] = useState(false);
-  // Left offset of the active tab inside the wrapper — anchors the facet
-  // menu under the tab that was clicked rather than the whole control.
-  const [menuLeft, setMenuLeft] = useState(0);
-  const filterDropdownRef = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState<IssueView>("all");
+  const [filters, setFilters] = useState<IssueFilters>(EMPTY_ISSUE_FILTERS);
 
-  useClickOutside(filterDropdownRef, () => {
-    if (filterOpen) setFilterOpen(false);
-  });
-
-  const filterButtonRef = useRef<HTMLButtonElement>(null);
-
-  const openFilterMenu = () => {
-    const wrapper = filterDropdownRef.current;
-    const button = filterButtonRef.current;
-    if (wrapper && button) {
-      setMenuLeft(
-        button.getBoundingClientRect().left -
-          wrapper.getBoundingClientRect().left,
-      );
-    }
-    setFilterOpen(true);
-  };
-
-  // currentData (not data): keeps a state-filter switch from showing the
-  // previous tab's rows while the new query is in flight.
+  // Open issues only — work still to do. Done / canceled ones stay synced
+  // (that is how they leave this list) but aren't listed. "Open" is Mains'
+  // status category: a provider's own state names are never literally "open".
   const {
     currentData: issues = [],
     isLoading,
     isFetching,
-  } = useGetIssuesInboxQuery({
-    ...(stateFilter === "all" ? {} : { state: stateFilter }),
-    limit: 200,
-  });
+  } = useGetIssuesInboxQuery(OPEN_ISSUES_QUERY);
 
-  // Facet options are derived from the loaded set, so the menu only ever
-  // offers values that exist (with counts), Linear-style.
-  const filterOptions = useMemo(() => {
-    const providers = new Map<string, number>();
-    const repos = new Map<string, number>();
-    const labels = new Map<string, number>();
-    const assignees = new Map<string, number>();
-    for (const row of issues) {
-      providers.set(
-        row.issue.provider,
-        (providers.get(row.issue.provider) ?? 0) + 1,
-      );
-      if (row.issue.repo) {
-        repos.set(row.issue.repo, (repos.get(row.issue.repo) ?? 0) + 1);
-      }
-      if (row.issue.assignee) {
-        assignees.set(
-          row.issue.assignee,
-          (assignees.get(row.issue.assignee) ?? 0) + 1,
-        );
-      }
-      for (const label of parseLabels(row.issue.labels)) {
-        labels.set(label, (labels.get(label) ?? 0) + 1);
-      }
-    }
-    return {
-      providers: sortedEntries(providers),
-      repos: sortedEntries(repos),
-      labels: sortedEntries(labels),
-      assignees: sortedEntries(assignees),
-    };
-  }, [issues]);
+  const { data: statuses = EMPTY_STATUSES } = useGetIssueStatusesQuery();
+  const statusById = useMemo(
+    () => new Map(statuses.map((status) => [status.id, status])),
+    [statuses],
+  );
 
-  const activeFilterCount =
-    filters.providers.length +
-    filters.repos.length +
-    filters.labels.length +
-    filters.assignees.length;
+  // What the sidebar scope, the view chip and the search leave. The filter
+  // menu counts from here, so its numbers follow what is shown.
+  const rowsInView = useMemo(
+    () =>
+      issues.filter(
+        (row) => matchesIssueScope(row, scope) && matchesIssueView(row, view) && matchesIssueText(row, text),
+      ),
+    [issues, scope, view, text],
+  );
+  const filteredIssues = useMemo(
+    () => rowsInView.filter((row) => matchesIssueFilters(row, filters)),
+    [rowsInView, filters],
+  );
+  const facetGroups = useMemo(
+    () => buildIssueFacetGroups({ rows: rowsInView, filters, statuses, showScopeFacets }),
+    [rowsInView, filters, statuses, showScopeFacets],
+  );
+  const activeFilterCount = countIssueFilters(filters);
+  const narrowed = Boolean(text.trim()) || activeFilterCount > 0 || view !== "all";
 
-  // Facets come from the loaded rows, so an empty tab offers nothing —
-  // the menu explains itself instead of opening as a blank shell.
-  const hasFilterOptions =
-    filterOptions.providers.length > 0 || filterOptions.repos.length > 0;
+  const toggleFilter = useCallback(
+    (facet: IssueFacet, value: string) => setFilters((prev) => toggleIssueFilter(prev, facet, value)),
+    [],
+  );
+  const clearFilters = useCallback(
+    (facet: IssueFacet | null) =>
+      setFilters((prev) => (facet ? { ...prev, [facet]: [] } : EMPTY_ISSUE_FILTERS)),
+    [],
+  );
 
-  const toggleFilter = (group: FilterGroup, value: string) =>
-    setFilters((prev) => ({
-      ...prev,
-      [group]: prev[group].includes(value)
-        ? prev[group].filter((v) => v !== value)
-        : [...prev[group], value],
-    }));
-
-  // Client-side text + facet filters — the synced issues are already local.
-  const filteredIssues = useMemo(() => {
-    const query = text.trim().toLowerCase();
-    return issues.filter((row) => {
-      if (
-        filters.providers.length > 0 &&
-        !filters.providers.includes(row.issue.provider)
-      ) {
-        return false;
-      }
-      if (
-        filters.repos.length > 0 &&
-        (!row.issue.repo || !filters.repos.includes(row.issue.repo))
-      ) {
-        return false;
-      }
-      if (
-        filters.assignees.length > 0 &&
-        (!row.issue.assignee || !filters.assignees.includes(row.issue.assignee))
-      ) {
-        return false;
-      }
-      if (filters.labels.length > 0) {
-        const rowLabels = parseLabels(row.issue.labels);
-        if (!filters.labels.some((label) => rowLabels.includes(label))) {
-          return false;
-        }
-      }
-      if (!query) return true;
-      const num = row.issue.number != null ? String(row.issue.number) : "";
-      return (
-        (row.entity.title ?? "").toLowerCase().includes(query) ||
-        (row.issue.repo ?? "").toLowerCase().includes(query) ||
-        (row.issue.labels ?? "").toLowerCase().includes(query) ||
-        num.includes(query)
-      );
-    });
-  }, [issues, text, filters]);
+  // A priority column only when something in view has one (GitHub never does).
+  const showPriority = filteredIssues.some((row) => row.issue.priority > 0);
 
   // The detail drawer is always open — keep it pointed at the top row
   // whenever nothing (or something no longer listed) is selected.
@@ -213,121 +136,28 @@ export function IssuesPanel({ activeEntityId, onSelectIssue }: IssuesPanelProps)
             </Button>
           )}
         </div>
-        <div className="flex items-center gap-2 ">
-          {/* The Layers button to the right of the tabs toggles the facet
-              filter menu; the menu opens anchored under the button. */}
-          <div className="relative flex items-center gap-1.5" ref={filterDropdownRef}>
-            <SegmentedTabs
-              variant="plain"
-              value={stateFilter}
-              onChange={(next) => {
-                if (next !== stateFilter) {
-                  setStateFilter(next);
-                  setFilterOpen(false);
-                }
-              }}
-              options={STATE_FILTERS}
-              semantics="radiogroup"
-              aria-label="Issue state"
-              className="w-fit"
-            />
-            <Button
-              variant="icon"
-              ref={filterButtonRef}
-              onClick={() => {
-                if (filterOpen) setFilterOpen(false);
-                else openFilterMenu();
-              }}
-              tooltip="Filter issues"
-              aria-label="Filter issues"
-              aria-haspopup="dialog"
-              aria-expanded={filterOpen}
-              className={
-                filterOpen || activeFilterCount > 0
-                  ? "bg-primary/80 dark:bg-primary/10 glass-outline text-primary-900 dark:text-primary-100"
-                  : undefined
-              }
-            >
-              <Layers className="w-3.5 h-3.5" />
-            </Button>
-            {/* Positioned anchor so the menu opens under the active tab. */}
-            <div className="absolute inset-y-0" style={{ left: menuLeft }}>
-              <DropdownWrapper
-                isOpen={filterOpen}
-                role="dialog"
-                aria-label="Issue filters"
-                minWidth="min-w-80"
-              >
-              <div className="max-h-80 overflow-y-auto noscrollbar pb-1.5">
-                {!hasFilterOptions && activeFilterCount === 0 && (
-                  <Text as="div" size="xs" tone="subtle" className="px-3 py-3 -mb-1.5">
-                    Nothing to filter — this list is empty.
-                  </Text>
-                )}
-                <FilterSection
-                  title="Connection"
-                  entries={filterOptions.providers}
-                  selected={filters.providers}
-                  onToggle={(value) => toggleFilter("providers", value)}
-                  renderIcon={(value) => (
-                    <ProviderIcon
-                      provider={value}
-                      className="size-4 shrink-0 text-primary-800 dark:text-primary-200"
-                      fallback="text"
-                    />
-                  )}
-                />
-                <FilterSection
-                  title="Projects"
-                  entries={filterOptions.repos}
-                  selected={filters.repos}
-                  onToggle={(value) => toggleFilter("repos", value)}
-                />
-                {/* <FilterSection
-                  title="Label"
-                  entries={filterOptions.labels}
-                  selected={filters.labels}
-                  onToggle={(value) => toggleFilter("labels", value)}
-                />
-                <FilterSection
-                  title="Assignee"
-                  entries={filterOptions.assignees}
-                  selected={filters.assignees}
-                  onToggle={(value) => toggleFilter("assignees", value)}
-                /> */}
-                {activeFilterCount > 0 && (
-                  <div className="px-3 pt-2">
-                    <Button
-                    variant="subtle"
-                      onClick={() => setFilters(EMPTY_FILTERS)}
-                      className="w-full text-center text-xs text-primary-600 dark:text-primary-400 hover:text-primary-800 dark:hover:text-primary-200 cursor-pointer py-1"
-                    >
-                      Clear filters
-                    </Button>
-                  </div>
-                )}
-              </div>
-              </DropdownWrapper>
-            </div>
-          </div>
-          {activeFilterCount > 0 && (
-
-            <Button
-              onClick={() => setFilters(EMPTY_FILTERS)}
-              className="flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-primary/60 dark:bg-primary/10 glass-outline text-primary-800 dark:text-primary-200 cursor-pointer"
-              tooltip="Clear filters"
-            >
-               <Trash className="size-3.5"/>
-              {activeFilterCount} filter{activeFilterCount === 1 ? "" : "s"}
-
-            </Button>
-
-          )}
+        {/* Same controls as the pull requests tab: views left, filter right. */}
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <SegmentedTabs
+            variant="plain"
+            value={view}
+            onChange={setView}
+            options={ISSUE_VIEWS}
+            semantics="radiogroup"
+            aria-label="Issue view"
+            className="w-fit"
+          />
+          <IssueFilterButton groups={facetGroups} filters={filters} onToggle={toggleFilter} />
         </div>
+        {activeFilterCount > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <IssueFilterChips groups={facetGroups} filters={filters} onClear={clearFilters} />
+          </div>
+        )}
       </div>
 
       {/* Scrolling list — rows fade out as they slide under the controls */}
-      <div className="flex-1 min-h-0 overflow-y-auto noscrollbar px-6 pt-3 pb-16 mask-[linear-gradient(to_bottom,transparent,black_1.75rem)]">
+      <div className="scroll-bounce flex-1 min-h-0 overflow-y-auto noscrollbar px-6 pt-3 pb-16 mask-[linear-gradient(to_bottom,transparent,black_1.75rem)]">
         {isLoading || (isFetching && issues.length === 0) ? (
           <div className="flex items-center justify-center py-10">
             <Text as="span" size="xs" tone="inherit" className="shine-text">
@@ -337,11 +167,9 @@ export function IssuesPanel({ activeEntityId, onSelectIssue }: IssuesPanelProps)
         ) : filteredIssues.length === 0 ? (
           <div className="flex flex-col items-center gap-1 py-12 text-center">
             <Body size="s" tone="secondary">
-              {text.trim() || activeFilterCount > 0
-                ? "No issues match these filters."
-                : `No ${stateFilter === "all" ? "" : stateFilter + " "}issues synced yet.`}
+              {narrowed ? "No issues match these filters." : "No open issues synced yet."}
             </Body>
-            {!text.trim() && activeFilterCount === 0 && (
+            {!narrowed && (
               <Body size="xs" tone="subtle">
                 Issues arrive from your connections (GitHub, Linear, Jira, ...)
                 via sync.
@@ -356,9 +184,12 @@ export function IssuesPanel({ activeEntityId, onSelectIssue }: IssuesPanelProps)
                 className="animate-slide-in"
                 style={{ animationDelay: `${Math.min(index, 20) * 0.02}s` }}
               >
-                <IssueListItem
-                  issue={row}
+                <IssueRow
+                  row={row}
+                  status={statusById.get(row.issue.statusId) ?? null}
                   isActive={activeEntityId === row.issue.entityId}
+                  showProvider={!scope.provider}
+                  showPriority={showPriority}
                   onClick={() => onSelectIssue(row)}
                 />
               </div>

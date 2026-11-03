@@ -44,9 +44,9 @@ export const MODE_COMPOSER_CONTROLS = {
  * Work and Chat ask an agent to behave as a knowledge-work collaborator, which
  * takes more than a prompt delta: a tone lever, a way to constrain commands,
  * and a UI that hides the developer ceremony. Claude and Codex have those.
- * Copilot CLI and Cursor are code-first agents whose harnesses don't yet, so
- * they stay on Developer — the mode picker doesn't offer the others and the
- * service refuses to store them.
+ * Copilot CLI, Cursor, and OpenCode are code-first agents whose harnesses
+ * don't yet, so they stay on Developer — the mode picker doesn't offer the
+ * others and the service refuses to store them.
  *
  * Reversing this is one line per provider: the harness table already carries
  * their work/chat entries, unused, waiting.
@@ -56,6 +56,7 @@ export const PROVIDER_MODES: Record<ProviderId, readonly ModeId[]> = {
   [PROVIDER_IDS.codex]: MODE_IDS,
   [PROVIDER_IDS.copilot]: ["developer"],
   [PROVIDER_IDS.cursor]: ["developer"],
+  [PROVIDER_IDS.opencode]: ["developer"],
 };
 
 /** Modes a provider offers. An id outside the union is left unrestricted. */

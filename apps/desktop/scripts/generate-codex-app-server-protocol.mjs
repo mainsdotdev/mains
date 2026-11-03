@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputRoot = path.join(
   desktopRoot,
-  "../../packages/backend/src/modules/providers/adapters/codex-app-server-protocol/generated",
+  "../../packages/backend/src/modules/providers/adapters/codex/codex-app-server-protocol/generated",
 );
 const codexBinary = process.env.CODEX_BINARY || "codex";
 const temporaryRoot = fs.mkdtempSync(
@@ -77,6 +77,8 @@ const roots = [
   "v2/ThreadGoalSetResponse.ts",
   "v2/ThreadReadParams.ts",
   "v2/ThreadReadResponse.ts",
+  "v2/ThreadTurnsListParams.ts",
+  "v2/ThreadTurnsListResponse.ts",
   "v2/ThreadRealtimeStartParams.ts",
   "v2/ThreadRealtimeStartResponse.ts",
   "v2/ThreadRealtimeStopParams.ts",

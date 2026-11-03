@@ -2,7 +2,6 @@ export { RunTab, getTabTitle } from "./run-tab";
 export { EditorTab } from "./editor-tab";
 export { IssueTab } from "./issue-tab";
 export { IssueTabContent } from "./issue-tab-content";
-export { IssueListItem } from "./issue-list-item";
 export { NoteTab } from "./note-tab";
 export { NoteTabContent } from "./note-tab-content";
 export { ActivitySection } from "./activity-section";

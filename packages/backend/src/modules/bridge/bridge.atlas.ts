@@ -3,13 +3,9 @@ import type { BridgeRecoveryContext } from "./bridge.store";
 import { aliasSet, canonicalPk, clockOf, compareClock, quote, type RowClock, type SqlRow } from "./bridge.sql";
 
 /** Runs inside the applier's delete transaction, before any CASCADE. No file IO:
- * immutable blob manifests survive under the new file identities. */
+ * immutable blob manifests survive under the new file identities. A revision tombstone is history
+ * cleanup, so it must not copy the Page. Only deleting the Page itself saves unsent edits. */
 export function recoverAtlasPage({ sqlite, table, row, captureAfterDelete }: BridgeRecoveryContext): void {
-  if (table === "atlas_page_revisions") {
-    const parent = sqlite.prepare("SELECT * FROM atlas_items WHERE id=?").get(row.item_id) as SqlRow | undefined;
-    if (parent) recoverAtlasPage({ sqlite, table: "atlas_items", pk: String(parent.id), row: parent, captureAfterDelete });
-    return;
-  }
   if (table !== "atlas_items" || row.kind !== "page") return;
   const pending = sqlite.prepare(`SELECT r.* FROM atlas_page_revisions r
     LEFT JOIN bridge_row_clock c ON c.table_name='atlas_page_revisions' AND c.pk=r.id AND c.register='row'

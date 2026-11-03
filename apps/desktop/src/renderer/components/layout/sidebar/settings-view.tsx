@@ -103,7 +103,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
         <Text size="base" weight="medium" align="left">Settings</Text>
       </div>
 
-      <div className="flex-1 px-3 mb-1 mt-2 overflow-y-auto noscrollbar">
+      <div className="scroll-bounce flex-1 px-3 mb-1 mt-2 overflow-y-auto noscrollbar">
         <nav className="space-y-0.5">
           {SETTINGS_MAIN_NAV_ITEMS.map(renderSectionButton)}
         </nav>

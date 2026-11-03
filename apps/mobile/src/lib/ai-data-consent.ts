@@ -51,6 +51,14 @@ const DISCLOSURES: Record<ProviderId, AiProviderDisclosure> = {
       "Anysphere processes the data through Cursor and may route it to the model provider selected by Cursor.",
     privacyPolicyUrl: "https://cursor.com/privacy",
   },
+  [PROVIDER_IDS.opencode]: {
+    providerId: PROVIDER_IDS.opencode,
+    serviceName: "OpenCode",
+    recipientName: "the model provider selected in OpenCode",
+    recipientDetail:
+      "OpenCode runs locally and sends prompts to the model provider you signed in with, such as Anthropic, OpenAI, or OpenCode Zen.",
+    privacyPolicyUrl: "https://opencode.ai/docs",
+  },
 };
 
 export const AI_PROVIDER_DISCLOSURES = SUPPORTED_PROVIDER_IDS.map(

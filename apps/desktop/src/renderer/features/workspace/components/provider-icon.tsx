@@ -32,10 +32,6 @@ export function ProviderIcon({
   className = "w-4 h-4 shrink-0",
   fallback = "icon",
 }: ProviderIconProps) {
-  if (provider === "asana") {
-    return <Asana className="h-5.5 w-6 scale-60 shrink-0" />;
-  }
-
   const Icon = PROVIDER_ICONS[provider];
 
   if (!Icon) {
