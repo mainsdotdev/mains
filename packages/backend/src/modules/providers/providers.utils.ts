@@ -743,6 +743,28 @@ export function findCursorBinaryPath(): string | null {
   return firstExecutable(candidates);
 }
 
+/**
+ * Locate the OpenCode CLI. OpenCode 2 installs `opencode` on PATH or under
+ * ~/.opencode/bin. Mains talks to `opencode acp` and refuses 1.x.
+ */
+export function findOpenCodeBinaryPath(): string | null {
+  const onPath = whichBinary("opencode");
+  if (onPath) return onPath;
+
+  const homedir = os.homedir();
+  const candidates = isWindowsPlatform ? [
+    path.join(homedir, ".opencode", "bin", "opencode.exe"),
+    path.join(homedir, ".opencode", "bin", "opencode.cmd"),
+    path.join(process.env.APPDATA ?? path.join(homedir, "AppData", "Roaming"), "npm", "opencode.cmd"),
+  ] : [
+    path.join(homedir, ".opencode", "bin", "opencode"),
+    "/usr/local/bin/opencode",
+    "/opt/homebrew/bin/opencode",
+  ];
+
+  return firstExecutable(candidates);
+}
+
 export type { DetectedClis } from "@mains/contracts/provider-cli";
 
 /**
@@ -759,7 +781,7 @@ function configuredBinaryExists(binary: string): boolean {
  * settings pages to tell a missing CLI apart from a signed-out one.
  */
 export function detectInstalledClis(
-  binaries: Partial<Record<"claude" | "copilot" | "codex" | "cursor", string>> = {},
+  binaries: Partial<Record<"claude" | "copilot" | "codex" | "cursor" | "opencode", string>> = {},
 ): DetectedClis {
   const claude = resolveClaudeRuntime(binaries.claude);
   const copilot = resolveCopilotRuntime(binaries.copilot);
@@ -770,5 +792,6 @@ export function detectInstalledClis(
     ...(copilot ? { copilotSource: copilot.source } : {}),
     codex: binaries.codex ? configuredBinaryExists(binaries.codex) : findCodexBinaryPath() !== null,
     cursor: binaries.cursor ? configuredBinaryExists(binaries.cursor) : findCursorBinaryPath() !== null,
+    opencode: binaries.opencode ? configuredBinaryExists(binaries.opencode) : findOpenCodeBinaryPath() !== null,
   };
 }

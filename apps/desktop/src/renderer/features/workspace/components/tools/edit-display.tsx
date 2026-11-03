@@ -16,6 +16,9 @@ export interface EditParams {
   path?: string;
   old_str?: string;
   new_str?: string;
+  // OpenCode params
+  oldString?: string;
+  newString?: string;
 }
 
 interface DiffLine {
@@ -147,9 +150,10 @@ function parsePatch(
     return parsePatchLines(unifiedLines);
   }
 
-  // Fallback: build diff from old_string/new_string (Claude) or old_str/new_str (Copilot)
-  const oldStr = params.old_string ?? params.old_str;
-  const newStr = params.new_string ?? params.new_str;
+  // Fallback: build diff from old_string/new_string (Claude), old_str/new_str
+  // (Copilot), or oldString/newString (OpenCode).
+  const oldStr = params.old_string ?? params.old_str ?? params.oldString;
+  const newStr = params.new_string ?? params.new_str ?? params.newString;
   if (oldStr || newStr) {
     const oldLines = (oldStr || "").split("\n");
     const newLines = (newStr || "").split("\n");

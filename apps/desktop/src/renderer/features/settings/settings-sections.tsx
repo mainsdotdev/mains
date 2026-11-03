@@ -7,6 +7,7 @@ import {
   Connect,
   CopilotStatic,
   Cursor,
+  OpenCode,
   FolderGit,
   Keyboard,
   Relay,
@@ -34,6 +35,7 @@ const CodexSettings = lazy(() => import("./components/codex"));
 // its default (codex) provider.
 const CodexPlugins = lazy(() => import("./components/provider-plugins"));
 const CursorSettings = lazy(() => import("./components/cursor"));
+const OpenCodeSettings = lazy(() => import("./components/opencode"));
 const LensSettings = lazy(() => import("./components/lens"));
 const KeyboardShortcutsSettings = lazy(
   () => import("./components/keyboard-shortcuts"),
@@ -68,6 +70,7 @@ export type SettingsRouteId =
   | "codex"
   | "codex-plugins"
   | "cursor"
+  | "opencode"
   | "backends"
   | "archive"
   | "dashboard";
@@ -118,6 +121,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   },
   { id: "copilot", label: "Copilot", icon: CopilotStatic, showInNav: true, navGroup: "providers", Component: CopilotSettings },
   { id: "cursor", label: "Cursor", icon: Cursor, showInNav: true, navGroup: "providers", Component: CursorSettings },
+  { id: "opencode", label: "OpenCode", icon: OpenCode, showInNav: true, navGroup: "providers", Component: OpenCodeSettings },
 
   { id: "personalization", label: "Personalization", Component: PersonalizationSettings },
   { id: "schedules", label: "Schedules", Component: SchedulesSettings },

@@ -112,10 +112,11 @@ const REVIEW_FLOW: ProviderId[] = [
   PROVIDER_IDS.claude,
   PROVIDER_IDS.copilot,
   PROVIDER_IDS.cursor,
+  PROVIDER_IDS.opencode,
 ];
 // CheckPackage: Claude/Copilot guard packages via a PreToolUse Bash hook, so
 // they need no explicit tool; Codex/Cursor cannot hook that path. Deliberate.
-const PACKAGE_GUARD: ProviderId[] = [PROVIDER_IDS.codex, PROVIDER_IDS.cursor];
+const PACKAGE_GUARD: ProviderId[] = [PROVIDER_IDS.codex, PROVIDER_IDS.cursor, PROVIDER_IDS.opencode];
 
 // Review and package tools belong to Developer; file delivery also belongs
 // to Work. Availability is declared per tool and checked against provider modes.
@@ -129,7 +130,7 @@ export const MAINS_TOOLS: MainsToolDef[] = [
   defineTool({
     name: "RegisterDeliverable", description: TOOL_DESCRIPTIONS.RegisterDeliverable,
     schema: RegisterDeliverableSchema, handler: handleRegisterDeliverable,
-    providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude, PROVIDER_IDS.copilot, PROVIDER_IDS.cursor],
+    providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude, PROVIDER_IDS.copilot, PROVIDER_IDS.cursor, PROVIDER_IDS.opencode],
     modes: ["developer", "work"],
   }),
   defineTool({

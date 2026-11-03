@@ -47,6 +47,57 @@ function formatCursorModelName(model: string): string {
   return `${brandDisplay} ${tokens.join(" ")}`;
 }
 
+const OPENCODE_PROVIDER_LABELS: Record<string, string> = {
+  "github-copilot": "GitHub Copilot",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  google: "Google",
+  opencode: "OpenCode",
+  openrouter: "OpenRouter",
+  groq: "Groq",
+  mistral: "Mistral",
+  xai: "xAI",
+  azure: "Azure",
+  "amazon-bedrock": "Amazon Bedrock",
+  bedrock: "Amazon Bedrock",
+  "claude-agent": "Claude",
+  copilot: "GitHub Copilot",
+};
+
+function openCodeProviderLabel(slug: string): string {
+  const known = OPENCODE_PROVIDER_LABELS[slug.toLowerCase()];
+  if (known) return known;
+  return slug.split("-").filter(Boolean).map((word) =>
+    word.length <= 2 ? word.toUpperCase() : word.charAt(0).toUpperCase() + word.slice(1),
+  ).join(" ");
+}
+
+/** OpenCode catalogues models as `provider/name`. */
+export function openCodeModelParts(model: string): { provider: string; name: string } | null {
+  const slash = model.indexOf("/");
+  if (slash <= 0 || slash === model.length - 1) return null;
+  const name = model.slice(slash + 1).trim();
+  if (!name) return null;
+  return { provider: openCodeProviderLabel(model.slice(0, slash).trim()), name };
+}
+
+export function groupModelsByOpenCodeProvider(
+  models: string[],
+): { provider: string; models: string[] }[] {
+  const order: string[] = [];
+  const groups = new Map<string, string[]>();
+  for (const model of models) {
+    const provider = openCodeModelParts(model)?.provider ?? "Other";
+    const existing = groups.get(provider);
+    if (existing) existing.push(model);
+    else {
+      order.push(provider);
+      groups.set(provider, [model]);
+    }
+  }
+  return order.map((provider) => ({ provider, models: groups.get(provider) ?? [] }));
+}
+
 function removeGptNameSeparators(model: string): string {
   if (!/^gpt-/i.test(model)) return model;
   return model.replace(/^gpt-/i, "GPT ").replace(/-/g, " ")
@@ -64,6 +115,10 @@ export function formatModelDisplayName(model: string, variant?: ProviderVariant)
       const family = canonical[1].toLowerCase();
       return `${family[0].toUpperCase()}${family.slice(1)} ${canonical[2].replace("-", ".")}${canonical[3] ? " [1M]" : ""}`;
     }
+  }
+  if (variant === "opencode") {
+    const parts = openCodeModelParts(model);
+    if (parts) return `${parts.provider} / ${parts.name}`;
   }
   const formatted =
     variant === "cursor" ? formatCursorModelName(model) : model;

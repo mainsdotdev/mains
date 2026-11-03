@@ -149,7 +149,7 @@ export function installBridgeCapture(sqlite: SQLiteInstance): void {
         UPDATE run_attachments SET name=name WHERE id=NEW.attachment_id;
       END;`);
     // No permanently deleted fixed ids: the service archives seeds, SQL must also protect them.
-    for (const [table, ids] of [["accounts", ["default"]], ["spaces", ["claude", "codex", "copilot", "cursor"].filter(isSeededSpaceId)]] as const) {
+    for (const [table, ids] of [["accounts", ["default"]], ["spaces", ["claude", "codex", "copilot", "cursor", "opencode"].filter(isSeededSpaceId)]] as const) {
       sqlite.exec(`DROP TRIGGER IF EXISTS ${quote(`bridge_${table}_fixed`)};
         CREATE TRIGGER ${quote(`bridge_${table}_fixed`)} BEFORE DELETE ON ${quote(table)}
         WHEN (SELECT max(enabled,tracking_enabled) FROM bridge_config WHERE id=1)=1 AND OLD.id IN (${ids.map(literal).join(",")})

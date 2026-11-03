@@ -10,7 +10,7 @@ import type { IssueWithEntity, SignalWithEntity } from "@/lib/redux/api";
 import type { ReviewTab as ReviewTabType } from "@/lib/redux/slices/workspaceSlice";
 import { Button, TabStrip } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { getProviderVariant } from "@/lib/provider-variants";
+import { getProviderVariant, type ProviderVariant } from "@/lib/provider-variants";
 import { useIsMobile } from "@/lib/platform";
 import { ProviderIcon } from "./provider-icon";
 import { MobileTabSwitcher, type MobileTab } from "./mobile-tab-switcher";
@@ -47,7 +47,7 @@ interface WorkspaceTabsProps {
   showNewRunTab?: boolean;
   onSelectNewRunTab?: () => void;
   onCloseNewRunTab?: (e: React.MouseEvent) => void;
-  variant?: "claude" | "copilot" | "codex" | "cursor";
+  variant?: ProviderVariant;
 }
 
 export function WorkspaceTabs({
@@ -286,7 +286,7 @@ function NewRunTab({
 }: {
   isActive: boolean;
   isFirst?: boolean;
-  variant: "copilot" | "claude" | "codex" | "cursor";
+  variant: ProviderVariant;
   onClick: () => void;
   onClose: (e: React.MouseEvent) => void;
 }) {

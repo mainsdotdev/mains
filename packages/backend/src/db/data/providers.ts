@@ -98,4 +98,23 @@ export const seedProviders: CreateProviderPayload[] = [
       notes: "Cursor adapter using ACP (Agent Client Protocol) over JSON-RPC",
     },
   },
+
+  {
+    id: PROVIDER_IDS.opencode,
+    kind: "agent_runtime",
+    displayName: "OpenCode",
+    isEnabled: true,
+    config: {
+      timeout: 600000,
+      agent: "build",
+    },
+    capabilities: {
+      mode: ["run"],
+      tools: true,
+      streaming: true,
+      workspaceAware: true,
+      artifacts: ["patch", "file", "log", "command_result"],
+      notes: "OpenCode 2 adapter using ACP over stdio (`opencode acp`)",
+    },
+  },
 ];

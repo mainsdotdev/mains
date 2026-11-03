@@ -1,4 +1,5 @@
 import {
+  Bot,
   CopilotStatic,
   Cursor,
   DeepSeek,
@@ -6,7 +7,6 @@ import {
   Gpt,
   Grok,
   Kimi,
-  Mains,
   Meta,
   Muse,
   Zai,
@@ -63,6 +63,5 @@ export function getModelIcon(modelName: string, variant?: ProviderVariant) {
   if (name.includes("glm")) {
     return <Zai className="size-3.5 dark:text-primary text-primary-950" />;
   }
-  // Default icon
-  return <Mains className="size-3.5 dark:text-primary text-primary-950" />;
+  return <Bot className="size-3.5 dark:text-primary text-primary-950" />;
 }

@@ -95,6 +95,7 @@ html:not(.app-ready) *::after {
   --color-copilot: #8534F3;
   --color-codex: #0169CC;
   --color-cursor: #727272;
+  --color-opencode: #5B6CFF;
 
   /* Z-index layers */
   --z-base: 10;

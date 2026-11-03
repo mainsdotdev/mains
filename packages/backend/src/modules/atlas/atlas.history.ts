@@ -29,7 +29,7 @@ function historySessions<T extends HistoryRow>(newestFirst: readonly T[], pinned
   let anchor: T | null = null;
   let newer: T | null = null;
   for (const row of newestFirst) {
-    const same = !!anchor && !!newer && sameHistorySession(anchor, newer, row, pinned);
+    const same: boolean = !!anchor && !!newer && sameHistorySession(anchor, newer, row, pinned);
     if (!same) sessions.push([row]);
     else sessions[sessions.length - 1].push(row);
     anchor = same ? anchor : row;

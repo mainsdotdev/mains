@@ -1,4 +1,5 @@
 import { AsciiSpinner, Text } from "@/components/ui";
+import type { ProviderVariant } from "@/lib/provider-variants";
 import type { RunEvent } from "../types";
 import { resolveTool } from "../lib/resolve-tool";
 import { coerceToolOutput, parseToolContent, previewParams } from "../lib/parse-tool-content";
@@ -76,7 +77,7 @@ export function AsciiLoader({
   activeTool,
 }: {
   className?: string;
-  variant?: "claude" | "copilot" | "codex" | "cursor";
+  variant?: ProviderVariant;
   thinkingText?: string;
   activeTool?: RunEvent;
 }) {

@@ -20,7 +20,7 @@ vi.mock("@/lib/redux/api", () => ({
 
 import { ProviderAccountSection, ProviderCliSection } from "./provider-settings-shared";
 
-const ALL_INSTALLED: DetectedClis = { claude: true, copilot: true, codex: true, cursor: true };
+const ALL_INSTALLED: DetectedClis = { claude: true, copilot: true, codex: true, cursor: true, opencode: true };
 
 beforeEach(() => {
   mocks.detected = undefined;

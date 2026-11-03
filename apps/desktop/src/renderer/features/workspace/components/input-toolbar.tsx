@@ -25,11 +25,12 @@ import { Microphone, Plus } from "@/components/ui/icons";
 import { VoiceMuteButton } from "./voice-mute-button";
 import type { ComposerPrimaryAction } from "../lib/composer-controls";
 import type { ModelServiceTier } from "@mains/contracts/run-settings";
+import type { ProviderVariant } from "@/lib/provider-variants";
 
 interface InputToolbarProps {
   primaryAction: ComposerPrimaryAction & { onClick: () => void };
   voiceMute?: { muted: boolean; disabled: boolean; onToggle: () => void };
-  variant: "claude" | "copilot" | "codex" | "cursor";
+  variant: ProviderVariant;
   isLoading: boolean;
   // Model
   selectedModelDisplayName: string;

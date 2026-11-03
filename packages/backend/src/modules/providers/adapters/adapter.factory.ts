@@ -12,6 +12,7 @@ import type {
   ClaudeCodeAdapterConfig,
   CodexAdapterConfig,
   CursorAdapterConfig,
+  OpenCodeAdapterConfig,
   ModelInfo,
   CommandInfo,
   SkillInfo,
@@ -28,6 +29,7 @@ import { createClaudeDriver } from "./claude/claude.driver";
 import { createCodexDriver } from "./codex/codex.driver";
 import { createCopilotDriver } from "./copilot/copilot.driver";
 import { createCursorDriver } from "./cursor/cursor.driver";
+import { createOpenCodeDriver } from "./opencode/opencode.driver";
 import { createWorkRunAdapter } from "./work-run-core";
 import {
   PROVIDER_IDS,
@@ -93,6 +95,12 @@ function buildAdapterConfig(provider: ProviderResponse): AdapterConfig {
         ...(provider.config as CursorAdapterConfig | null),
         defaultModel: provider.defaultModel ?? undefined,
       } satisfies CursorAdapterConfig;
+
+    case PROVIDER_IDS.opencode:
+      return {
+        ...(provider.config as OpenCodeAdapterConfig | null),
+        defaultModel: provider.defaultModel ?? undefined,
+      } satisfies OpenCodeAdapterConfig;
 
     default:
       throw new Error(
@@ -204,6 +212,12 @@ export function createWorkAdapter(provider: ProviderResponse): WorkRunAdapter {
     case PROVIDER_IDS.cursor:
       adapter = createWorkRunAdapter(
         createCursorDriver(config as CursorAdapterConfig),
+      );
+      break;
+
+    case PROVIDER_IDS.opencode:
+      adapter = createWorkRunAdapter(
+        createOpenCodeDriver(config as OpenCodeAdapterConfig),
       );
       break;
 

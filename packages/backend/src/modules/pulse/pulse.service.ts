@@ -37,6 +37,10 @@ function buildConfigSnapshot(
       snapshot.mode = "agent";
       if (pulse.effortLevel) snapshot.effortLevel = pulse.effortLevel;
       break;
+    case PROVIDER_IDS.opencode:
+      snapshot.agent = "build";
+      if (pulse.effortLevel) snapshot.effortLevel = pulse.effortLevel;
+      break;
   }
 
   return snapshot;

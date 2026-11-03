@@ -82,6 +82,7 @@ const providerAccents = {
   copilot_cli: "#8534F3",
   codex: "#0169CC",
   cursor: "#727272",
+  opencode: "#5B6CFF",
 } as const;
 
 /** A provider's brand color, falling back to the app's own accent. */

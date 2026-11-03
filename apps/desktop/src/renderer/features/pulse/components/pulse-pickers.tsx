@@ -53,6 +53,7 @@ const SUPPORTED_PROVIDER_IDS = [
   PROVIDER_IDS.copilot,
   PROVIDER_IDS.codex,
   PROVIDER_IDS.cursor,
+  PROVIDER_IDS.opencode,
 ] as const satisfies readonly ProviderId[];
 
 function providerLabel(id: string, fallback: string): string {

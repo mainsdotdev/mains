@@ -21,7 +21,7 @@ interface RunTabProps {
   onArchive?: () => void;
   onRename: (newTitle: string) => void;
   title: string;
-  variant?: "copilot" | "claude" | "codex" | "cursor";
+  variant?: ProviderVariant;
 }
 
 function VariantIcon({ variant }: { variant: string; isActive: boolean }) {
@@ -39,7 +39,7 @@ export function TabIcon({ run, variant, isActive, live }: { run: Pick<Run, "stat
   return (
     <span className="flex items-center justify-center size-4 shrink-0">
       {isRunning ? (
-        <AsciiSpinner variant={variant as "claude" | "copilot" | "codex" | "cursor"} />
+        <AsciiSpinner variant={variant as ProviderVariant} />
       ) : (
         <VariantIcon variant={variant} isActive={isActive} />
       )}

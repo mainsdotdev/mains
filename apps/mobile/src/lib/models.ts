@@ -76,6 +76,10 @@ const PERMISSION_MODES: Record<string, PermissionModeOption[]> = {
     { value: "agent", label: "Agent", shortLabel: "Agent", description: "Full autonomous agent mode" },
     { value: "plan", label: "Plan", shortLabel: "Plan", description: "Plan before executing" },
   ],
+  opencode: [
+    { value: "build", label: "Build", shortLabel: "Build", description: "OpenCode's default coding agent" },
+    { value: "plan", label: "Plan", shortLabel: "Plan", description: "Plan before changing files" },
+  ],
 };
 
 /** What a provider starts on when its config holds no mode (desktop `permissionDefault`). */
@@ -84,6 +88,7 @@ const PERMISSION_DEFAULTS: Record<string, string> = {
   copilot_cli: "default",
   codex: "workspace-write",
   cursor: "agent",
+  opencode: "build",
 };
 
 /** The config key a provider keeps its permission / sandbox mode under. */
@@ -92,6 +97,7 @@ const PERMISSION_KEYS: Record<string, string> = {
   copilot_cli: "permissionMode",
   codex: "sandboxMode",
   cursor: "mode",
+  opencode: "agent",
 };
 
 export function permissionModesFor(providerId: string): PermissionModeOption[] {

@@ -9,6 +9,7 @@ import {
 } from "./elicitation-form";
 import { parseElicitationSchema } from "@mains/backend/shared/mcp-elicitation";
 import type { ToolApprovalRequest } from "../../hooks";
+import type { ProviderVariant } from "@/lib/provider-variants";
 import { ToolInputPreview } from "./tool-input-preview";
 import { resolveTool } from "../../lib/resolve-tool";
 import { VENDORS } from "../../lib/tool-registry";
@@ -24,7 +25,7 @@ const VISIBLE_PARAMS_INITIAL = 4;
 interface ToolApprovalDialogProps {
   request: ToolApprovalRequest;
   onRespond: (requestId: string, approved: boolean, answer?: string) => void;
-  variant?: "copilot" | "claude" | "codex" | "cursor";
+  variant?: ProviderVariant;
   /** Forms keep their actions visible within this height while fields scroll. */
   maxHeight?: string;
   /** Controlled question input for callers that deliver answers themselves. */
