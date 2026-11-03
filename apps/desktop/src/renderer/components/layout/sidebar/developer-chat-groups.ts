@@ -35,6 +35,8 @@ export function groupDeveloperChats(
   for (const run of runs) {
     if (run.mode !== "developer" || run.isArchived || !(run.isReplica ? sources.bridge : sources.local)) continue;
     const workspace = run.workspaceId ? workspaceMap.get(run.workspaceId) : undefined;
+    // Recent runs outlive the active workspace list when a workspace is archived.
+    if (!workspace || workspace.isArchived) continue;
     const project = projectFor(workspace);
     const branch = workspace?.isReplica ? workspace.metadata?.lastBranch : gitStates.get(run.workspaceId ?? "")?.branch;
     if (query && ![run.title, run.goal, project?.name, workspace?.name, workspace?.rootPath, branch]

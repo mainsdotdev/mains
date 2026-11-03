@@ -41,12 +41,13 @@ function setup(searchQuery = "") {
   const store = configureStore({ reducer: { workspace: workspaceReducer, appSettings: appSettingsReducer,
     backends: () => ({ activeBackendId: null }) } });
   function Location() { return <output aria-label="Location">{useLocation().pathname}</output>; }
-  render(<Provider store={store}><MemoryRouter initialEntries={["/code/local"]}>
-    <DeveloperChatList workspaces={[local, worktree]} gitStateByWorkspaceId={gitStates} searchQuery={searchQuery}
+  const view = (workspaces: Workspace[]) => <Provider store={store}><MemoryRouter initialEntries={["/code/local"]}>
+    <DeveloperChatList workspaces={workspaces} gitStateByWorkspaceId={gitStates} searchQuery={searchQuery}
       pendingClones={[]} onCancelClone={vi.fn()} onRetryClone={vi.fn()} onDismissClone={vi.fn()} />
     <Location />
-  </MemoryRouter></Provider>);
-  return store;
+  </MemoryRouter></Provider>;
+  const { rerender } = render(view([local, worktree]));
+  return { store, updateWorkspaces: (workspaces: Workspace[]) => rerender(view(workspaces)) };
 }
 
 describe("developer project chat sidebar", () => {
@@ -79,8 +80,21 @@ describe("developer project chat sidebar", () => {
     expect(screen.getByRole("button", { name: /^Chat 5/ })).toBeTruthy();
   });
 
+  it("removes an archived workspace's chats instead of moving them to Recents, and restores them with the workspace", () => {
+    const { updateWorkspaces } = setup();
+    expect(screen.getByRole("button", { name: /^Fix login/ })).toBeTruthy();
+
+    updateWorkspaces([local]);
+    expect(screen.queryByRole("button", { name: /^Fix login/ })).toBeNull();
+    expect(screen.queryByText("Recents")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Review changes/ })).toBeTruthy();
+
+    updateWorkspaces([local, worktree]);
+    expect(screen.getByRole("button", { name: /^Fix login/ })).toBeTruthy();
+  });
+
   it("starts a new conversation in the project's existing checkout", () => {
-    const store = setup();
+    const { store } = setup();
     fireEvent.click(screen.getByRole("button", { name: "New chat in mains" }));
     expect(store.getState().workspace.activeWorkspaceId).toBe("local");
     expect(store.getState().workspace.activeTab).toBe("new-run");
@@ -88,7 +102,7 @@ describe("developer project chat sidebar", () => {
   });
 
   it("keeps the original workspace view accessible from the sidebar menu", () => {
-    const store = setup();
+    const { store } = setup();
     fireEvent.click(screen.getByRole("button", { name: "Sidebar view" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Chats by project" }));
     expect(store.getState().appSettings.developerSidebarView).toBe("chats");

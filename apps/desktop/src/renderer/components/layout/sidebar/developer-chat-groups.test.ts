@@ -23,12 +23,21 @@ describe("developer sidebar project chats", () => {
     expect(result.recents).toEqual([]);
   });
 
-  it("keeps legacy pinned chats in their project and chats whose workspace is unavailable in Recents", () => {
+  it("keeps legacy pinned chats in their project and hides chats without an available workspace", () => {
     const result = groupDeveloperChats([chat("pinned", "local", { pinnedAt: 1 }), chat("orphan", "missing"),
+      chat("detached", null),
       chat("work-mode", "local", { mode: "work" }), chat("archived", "local", { isArchived: true })],
       [project("mains")], [workspace("local", "mains")], new Map(), sources, "");
     expect(result.groups[0].chats.map((run) => run.id)).toEqual(["pinned"]);
-    expect(result.recents.map((run) => run.id)).toEqual(["orphan"]);
+    expect(result.recents).toEqual([]);
+  });
+
+  it.each([false, true])("hides chats of archived workspaces, including replicas (%s)", (isReplica) => {
+    const result = groupDeveloperChats([chat("active", "local"), chat("archived-workspace-chat", "archived", { isReplica })],
+      [project("mains")], [workspace("local", "mains"), workspace("archived", "mains", { isArchived: true, isReplica })],
+      new Map(), sources, "");
+    expect(result.groups[0].chats.map((run) => run.id)).toEqual(["active"]);
+    expect(result.recents).toEqual([]);
   });
 
   it("searches chat titles and live branches without losing workspace-to-project ownership", () => {
