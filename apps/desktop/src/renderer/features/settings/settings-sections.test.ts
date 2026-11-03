@@ -65,6 +65,7 @@ describe("Settings sections", () => {
       "codex",
       "copilot",
       "cursor",
+      "opencode",
     ]);
     expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).not.toContain(
       "claude",

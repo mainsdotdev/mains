@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Input } from "@/components/ui";
 import { asyncQuestionMessageId, type AsyncQuestionState } from "@mains/contracts/async-questions";
 import type { Run, RunEvent } from "../../types";
 import type { ToolApprovalRequest } from "../../hooks/use-tool-approval";
@@ -150,7 +151,7 @@ describe("Codex async questions in the existing approval dialog", () => {
     const view = render(<AsyncQuestionDialogProvider ownerKey="local/run" runId="run" runStatus="running"
       turns={[{ id: 1, status: "active" }]} events={[event]}>
       <ComposerSlot onRespond={mocks.nativeRespond} variant="codex">
-        <input aria-label="Composer draft" defaultValue="keep me" />
+        <Input aria-label="Composer draft" defaultValue="keep me" />
       </ComposerSlot>
     </AsyncQuestionDialogProvider>);
     const draft = screen.getByRole("textbox", { name: "Composer draft", hidden: true });
