@@ -1,6 +1,7 @@
 import { closeDatabase, initializeDatabase } from "./db/client";
 import { startWsHost, type WsHost } from "./ipc-kit/ws-server-host";
 import { generateToken } from "./ipc-kit/ws-auth";
+import { loadRelayHostConfig } from "./ipc-kit/relay-config";
 
 // Backend IPC registrations — the same handlers the Electron host registers (see
 // apps/desktop/src/main/index.ts), now reachable over WebSocket. Keep this list
@@ -228,6 +229,7 @@ export async function startBackendServer(
   let wsHost: WsHost;
   try {
     wsHost = await startWsHost({
+      relay: await loadRelayHostConfig(async () => (await backendService.describe()).backendId),
       port: options.port ?? DEFAULT_PORT,
       host,
       token,

@@ -162,6 +162,23 @@ _Avoid_: importing every generated file into Atlas tables; automatically duplica
 The `search` module is a read-only, cross-aggregate projection for the global command menu. It owns no canonical table: `search:query` runs bounded, account-scoped reads over workspace metadata, run title/goal metadata, generated `document` artifacts, and the `run_artifacts_fts` search projection, then returns the small `GlobalSearchResult` navigation contract from `@mains/contracts/search`. The FTS5 projection contains only visible conversation text (`user-prompt`, `report`, and `result`), is backfilled by its migration, and stays synchronized through `run_artifacts` insert/update/delete triggers; tool logs, files, and internal thinking never enter it. Its `unicode61` tokenizer and 2/3-character prefix indexes make partial multilingual queries fast without treating user input as FTS operators. Run/document hits carry provider, mode, space, workspace, and collection ids so the renderer can restore the run's experience before opening it. Local commands and Pulse/prompt suggestions never enter SQLite; `cmdk` supplies keyboard/list semantics and `fuzzysort` ranks that in-memory catalog.
 _Avoid_: routing global search through the canonical-content `entities:search` endpoint; returning whole workspace/run/artifact rows; scanning transcripts with `%LIKE%` on each keystroke; indexing tool output or thinking as chat content; putting command execution in the search service.
 
+### Private relay
+
+The optional Go gateway in `apps/relay` carries live paired-phone traffic to an
+online backend over outbound WebSockets. It is part of Mains Connect remote
+control, separate from Bridge's persisted-data replication. The private preview
+uses operator-configured routing secrets, not Mains account authorization.
+`@mains/contracts/relay` owns routing DTOs; `packages/relay` owns shared endpoint
+encryption and the phone socket adapter. Trusted direct pairing supplies a pinned
+backend key and a device routing ticket. Only the backend verifies the encrypted
+device credential and applies the existing channel/event allowlists and command
+receipts. Relay closure is an availability signal; only a refusal authenticated
+by the pinned backend may block device authorization. Existing direct endpoints
+remain the phone's fallback. No offline command queue or push is implemented.
+_Avoid_: equating a routing ticket with paired-device authorization, accepting
+relay plaintext as a backend message, or promising Cloud execution/Bridge sync
+through the live gateway.
+
 ### Bridge and Cloud
 
 Unreleased writer-authentication work is defined in

@@ -1,0 +1,10 @@
+# Allow only Go source into the build context. In particular, never send keys.
+*
+!Dockerfile
+!.dockerignore
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**

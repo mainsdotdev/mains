@@ -12,9 +12,15 @@ Host applications install one adapter at the runtime seam before booting:
 
 Run checks from this directory:
 
+First install the shared relay endpoint dependencies with `npm install` from
+`../relay`; each package owns its own dependencies.
+
 ```bash
 npm install
 npm test
 npm run typecheck
 npm run lint
 ```
+
+Optional private relay configuration and `npm run test:relay` acceptance checks
+are documented in [Mains Relay](../../apps/relay/README.md).

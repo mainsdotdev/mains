@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import { AppState } from "react-native";
 
 import { toWebSocketUrl } from "@mains/contracts/backend";
+import { pairedBackendEndpoints, pairedSocketFactory } from "./relay-connection";
 import { setHistoryFollowing } from "./run-history";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { ListRunOutputsPayload, ReadRunOutputPayload, ReadRunAttachmentPayload, RunAttachmentFile, RunOutputsPage, RunOutputChunk } from "@mains/contracts/run-outputs";
@@ -115,7 +116,7 @@ export interface SessionSnapshot {
 const IDLE: ConnectionState = { kind: "idle" };
 
 function isAuthRefusal(info: CloseInfo): boolean {
-  return /\b401\b|unauthorized/i.test(info.reason ?? "");
+  return info.code === 1008 || /\b401\b|unauthorized/i.test(info.reason ?? "");
 }
 
 function platformSignals(): SupervisorSignals {
@@ -225,13 +226,14 @@ class BackendSession {
     });
 
     const supervisor = new ConnectionSupervisor({
-      endpoints: backend.endpoints,
+      endpoints: pairedBackendEndpoints(backend),
       createTransport: (endpoint) => {
         // The demo Mac lives inside the app; its endpoint only picks the socket.
         const transport = isDemoEndpoint(endpoint)
           ? createDemoTransport()
           : new WsTransport(toWebSocketUrl(endpoint), {
               token: backend.deviceToken,
+              factory: pairedSocketFactory(backend, endpoint),
               isFatalClose: isAuthRefusal,
             });
         this.transport = transport;

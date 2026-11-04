@@ -14,6 +14,9 @@ Expo/React Native client for controlling a Mains backend from iOS and Android.
 
 Install dependencies and verify the project:
 
+First run `npm install` from `../../packages/relay` for the shared encrypted
+transport. Run the following commands from `apps/mobile`:
+
 ```bash
 npm install
 npm run doctor
@@ -28,6 +31,11 @@ The app uses a custom development client rather than Expo Go:
 npm run build:development
 npm start
 ```
+
+Optional private Go relay setup is documented in [Mains Relay](../relay/README.md).
+It is provisioned during direct pairing and uses the existing connection recovery
+and remote-control screens. Rebuild the native development client after adding
+`expo-crypto`.
 
 For local native builds:
 

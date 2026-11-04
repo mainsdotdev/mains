@@ -92,6 +92,7 @@ Onboarding shows where each agent stands and signs you in.
 - **iPhone** — pair with a QR code to follow runs, send the next prompt, and answer approvals
 - **Standalone server** — the same backend and web UI on macOS or Linux, without the desktop app
 - **Remote access** — over your local network, Tailscale, or SSH
+- **Private relay (preview)** — encrypted live phone control through an operator-hosted [Go gateway](apps/relay/README.md)
 
 ### Observability
 
@@ -152,6 +153,8 @@ agents use their normal host authentication.
 | `apps/desktop` | The Electron desktop app (React 19 renderer, SQLite + Drizzle ORM) |
 | `apps/server` | The standalone server: Node entrypoint, `mains` CLI, npm packaging |
 | `apps/mobile` | The iPhone app (Expo / React Native), the desktop's remote control |
+| `apps/relay` | Optional private Go gateway for encrypted remote phone control |
+| `packages/relay` | Endpoint encryption and socket adapter shared by backend and mobile |
 | `packages/backend` | The Electron-free backend shared by desktop and server: database, domains, agent runtimes, transport |
 | `packages/contracts` | The wire contract shared by every app: IPC channels, WebSocket protocol, provider ids, modes |
 | `packages/icons` | The desktop icon registry as data (SVG shapes + tint helpers), so the iPhone app draws space and project icons the same way |
@@ -166,7 +169,11 @@ so editing them needs no build step.
 
 ```bash
 git clone https://github.com/mainsdotdev/mains.git
-cd mains/apps/desktop
+cd mains/packages/relay
+npm install
+cd ../backend
+npm install
+cd ../../apps/desktop
 npm install
 npm start
 ```

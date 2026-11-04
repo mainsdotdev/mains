@@ -29,6 +29,10 @@ jobs:
           cache-dependency-path: |
             apps/desktop/package-lock.json
             packages/backend/package-lock.json
+            packages/relay/package-lock.json
+      - name: Install relay endpoint dependencies
+        working-directory: packages/relay
+        run: npm ci
       - name: Install shared backend dependencies
         working-directory: packages/backend
         run: npm ci

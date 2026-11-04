@@ -64,6 +64,7 @@ export async function pairWithBackend(
         pairedAt: new Date().toISOString(),
         appVersion: result.backend.appVersion,
         protocolVersion: result.backend.protocolVersion,
+        ...(result.relay ? { relay: result.relay } : {}),
       };
     } catch (error) {
       if (error instanceof PairingRejectedError) throw error;

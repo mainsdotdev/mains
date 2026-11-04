@@ -1,0 +1,16 @@
+{
+  "name": "@mains/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Shared encrypted transport for the private Mains Go relay",
+  "exports": { "./*": "./src/*.ts" },
+  "scripts": { "test": "node --import ./test/register.mjs --test test/*.test.mjs" },
+  "dependencies": {
+    "@mains/contracts": "file:../contracts",
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0"
+  }
+}

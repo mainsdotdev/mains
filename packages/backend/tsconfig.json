@@ -17,5 +17,5 @@
       "@mains/contracts/*": ["../contracts/src/*"]
     }
   },
-  "include": ["src/**/*.ts", "shared/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "shared/**/*.ts", "test/**/*.ts", "integration/**/*.ts"]
 }

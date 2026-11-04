@@ -16,6 +16,41 @@ defaults:
     working-directory: apps/desktop
 
 jobs:
+  relay:
+    name: Go relay and encrypted remote control
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/relay
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: apps/relay/go.sum
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.20.0
+          cache: npm
+          cache-dependency-path: |
+            packages/relay/package-lock.json
+            packages/backend/package-lock.json
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: go build -o bin/mains-relay ./cmd/mains-relay
+      - name: Check shared endpoint encryption
+        working-directory: packages/relay
+        run: |
+          npm ci
+          npm test
+      - name: Check real Go/Node/mobile transport integration
+        working-directory: packages/backend
+        run: |
+          npm ci
+          npm run test:relay
+      - name: Check container deployment through HTTPS and WebSockets
+        run: node scripts/smoke-deployment.mjs
+
   mobile:
     name: Mobile
     runs-on: ubuntu-latest
@@ -28,7 +63,12 @@ jobs:
         with:
           node-version: 24.20.0
           cache: npm
-          cache-dependency-path: apps/mobile/package-lock.json
+          cache-dependency-path: |
+            apps/mobile/package-lock.json
+            packages/relay/package-lock.json
+      - name: Install relay endpoint dependencies
+        working-directory: packages/relay
+        run: npm ci
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
@@ -50,7 +90,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: packages/backend/package-lock.json
+          cache-dependency-path: |
+            packages/backend/package-lock.json
+            packages/relay/package-lock.json
+      - name: Install relay endpoint dependencies
+        working-directory: packages/relay
+        run: npm ci
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
@@ -73,6 +118,10 @@ jobs:
           cache-dependency-path: |
             apps/bridge/package-lock.json
             packages/backend/package-lock.json
+            packages/relay/package-lock.json
+      - name: Install relay endpoint dependencies
+        working-directory: packages/relay
+        run: npm ci
       - name: Install shared backend dependencies
         working-directory: packages/backend
         run: npm ci
@@ -98,7 +147,11 @@ jobs:
           cache-dependency-path: |
             apps/desktop/package-lock.json
             packages/backend/package-lock.json
+            packages/relay/package-lock.json
       - run: npm ci
+      - name: Install relay endpoint dependencies
+        working-directory: packages/relay
+        run: npm ci
       - name: Install shared backend dependencies
         working-directory: packages/backend
         run: npm ci
@@ -116,7 +169,11 @@ jobs:
           cache-dependency-path: |
             apps/desktop/package-lock.json
             packages/backend/package-lock.json
+            packages/relay/package-lock.json
       - run: npm ci
+      - name: Install relay endpoint dependencies
+        working-directory: packages/relay
+        run: npm ci
       - name: Install shared backend dependencies
         working-directory: packages/backend
         run: npm ci
@@ -134,7 +191,11 @@ jobs:
           cache-dependency-path: |
             apps/desktop/package-lock.json
             packages/backend/package-lock.json
+            packages/relay/package-lock.json
       - run: npm ci
+      - name: Install relay endpoint dependencies
+        working-directory: packages/relay
+        run: npm ci
       - name: Install shared backend dependencies
         working-directory: packages/backend
         run: npm ci
@@ -158,8 +219,12 @@ jobs:
             apps/server/package-lock.json
             apps/bridge/package-lock.json
             packages/backend/package-lock.json
+            packages/relay/package-lock.json
       - name: Install desktop web dependencies
         working-directory: apps/desktop
+        run: npm ci
+      - name: Install relay endpoint dependencies
+        working-directory: packages/relay
         run: npm ci
       - name: Install shared backend dependencies
         working-directory: packages/backend
@@ -195,7 +260,11 @@ jobs:
           cache-dependency-path: |
             apps/desktop/package-lock.json
             packages/backend/package-lock.json
+            packages/relay/package-lock.json
       - run: npm ci
+      - name: Install relay endpoint dependencies
+        working-directory: packages/relay
+        run: npm ci
       - name: Install shared backend dependencies
         working-directory: packages/backend
         run: npm ci

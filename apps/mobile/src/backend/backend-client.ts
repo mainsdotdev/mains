@@ -5,6 +5,7 @@ import {
   encodeWsMessage,
 } from "@mains/contracts/ws-protocol";
 import type { PairedBackend } from "./paired-backend-store";
+import { pairedBackendEndpoints, pairedSocketFactory } from "./relay-connection";
 
 const PROBE_TIMEOUT_MS = 8000;
 const DESCRIBE_ID = 1;
@@ -25,9 +26,9 @@ export class BackendRefusedError extends Error {}
  * response but was '401 Unauthorized'"), so the close event is where the cause
  * lives.
  */
-function errorFromClose(event: CloseEvent): Error {
+function errorFromClose(event: { reason?: string; code?: number }): Error {
   const reason = event.reason ?? "";
-  if (/\b401\b|unauthorized/i.test(reason)) {
+  if (event.code === 1008 || /\b401\b|unauthorized/i.test(reason)) {
     return new BackendRefusedError(
       "Mains on your computer refused the connection — was this phone revoked?",
     );
@@ -41,13 +42,13 @@ function errorFromClose(event: CloseEvent): Error {
  * A one-shot probe — the connection supervisor that keeps a socket alive comes
  * later and will reuse the same handshake.
  */
-function probeEndpoint(endpoint: string, deviceToken: string): Promise<BackendProbe> {
+function probeEndpoint(endpoint: string, backend: PairedBackend): Promise<BackendProbe> {
   return new Promise((resolve, reject) => {
     const started = Date.now();
-    const socket = new WebSocket(
-      toWebSocketUrl(endpoint),
-      buildSubprotocols(deviceToken),
-    );
+    const factory = pairedSocketFactory(backend, endpoint);
+    const socket = factory
+      ? factory(toWebSocketUrl(endpoint))
+      : new WebSocket(toWebSocketUrl(endpoint), buildSubprotocols(backend.deviceToken));
     let settled = false;
     const finish = (outcome: () => void) => {
       if (settled) return;
@@ -75,7 +76,7 @@ function probeEndpoint(endpoint: string, deviceToken: string): Promise<BackendPr
         }),
       );
     };
-    socket.onmessage = (event) => {
+    socket.onmessage = (event: { data: unknown }) => {
       let message;
       try {
         message = decodeWsMessage(String(event.data));
@@ -100,8 +101,8 @@ function probeEndpoint(endpoint: string, deviceToken: string): Promise<BackendPr
       // Deliberately not settling here: the `close` that always follows is the
       // one carrying the reason (see errorFromClose).
     };
-    socket.onclose = (event) => {
-      finish(() => reject(errorFromClose(event)));
+    socket.onclose = (event?: { code?: number; reason?: string }) => {
+      finish(() => reject(errorFromClose(event ?? {})));
     };
   });
 }
@@ -112,9 +113,9 @@ function probeEndpoint(endpoint: string, deviceToken: string): Promise<BackendPr
  */
 export async function probeBackend(backend: PairedBackend): Promise<BackendProbe> {
   let lastError: Error | null = null;
-  for (const endpoint of backend.endpoints) {
+  for (const endpoint of pairedBackendEndpoints(backend)) {
     try {
-      return await probeEndpoint(endpoint, backend.deviceToken);
+      return await probeEndpoint(endpoint, backend);
     } catch (error) {
       if (error instanceof BackendRefusedError) throw error;
       lastError = error instanceof Error ? error : new Error(String(error));

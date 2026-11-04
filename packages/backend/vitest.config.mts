@@ -5,7 +5,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    include: ["src/**/*.test.ts", "shared/**/*.test.ts", "test/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "shared/**/*.test.ts", "test/**/*.test.ts", "integration/**/*.test.ts"],
     setupFiles: ["test/global-setup.ts"],
   },
   resolve: {

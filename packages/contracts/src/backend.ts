@@ -1,3 +1,5 @@
+import { isRelayAccess, type RelayAccess } from "./relay";
+
 /**
  * Backend identity and pairing contract — mirrors `packages/backend/src/modules/
  * backend/backend.dto.ts`. React Native
@@ -34,6 +36,8 @@ export interface PairDeviceResult {
   deviceId: string;
   deviceToken: string;
   backend: BackendDescriptor;
+  /** Optional private relay, pinned during trusted direct pairing. */
+  relay?: RelayAccess;
 }
 
 export function isPairDeviceResult(value: unknown): value is PairDeviceResult {
@@ -46,7 +50,8 @@ export function isPairDeviceResult(value: unknown): value is PairDeviceResult {
     !!backend &&
     typeof backend.backendId === "string" &&
     typeof backend.name === "string" &&
-    typeof backend.protocolVersion === "number"
+    typeof backend.protocolVersion === "number" &&
+    (v.relay === undefined || isRelayAccess(v.relay))
   );
 }
 

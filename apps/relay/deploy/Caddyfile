@@ -1,0 +1,18 @@
+{
+	skip_install_trust
+	log {
+		format filter {
+			wrap json
+			fields {
+				# Upstream errors can include requests even without access logs.
+				request>headers delete
+			}
+		}
+	}
+}
+
+{$RELAY_DOMAIN} {
+	# WebSocket upgrades and bidirectional streaming are handled by Caddy.
+	# Keep access logging off: routing credentials arrive in request headers.
+	reverse_proxy relay:8791
+}

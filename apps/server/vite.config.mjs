@@ -41,6 +41,9 @@ export default defineConfig({
         if (id === "@mains/backend" || id.startsWith("@mains/backend/")) {
           return false;
         }
+        if (id === "@mains/relay" || id.startsWith("@mains/relay/")) {
+          return false;
+        }
         return builtins.has(id) || (!id.startsWith(".") && !path.isAbsolute(id));
       },
     },

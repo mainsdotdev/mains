@@ -16,6 +16,9 @@ import {
 } from "@mains/contracts/ws-protocol";
 import { registerEventSink } from "./event-bus";
 import { tokensMatch } from "./ws-auth";
+import { startRelayHost } from "./relay-host";
+import type { RelayHostConfig } from "./relay-config";
+import { validateRelayUrl } from "@mains/contracts/relay";
 import {
   createWebSessionManager,
   type WebLoginLink,
@@ -60,6 +63,8 @@ export interface WsHost {
 }
 
 export interface WsHostOptions {
+  /** Optional private Go relay; direct connections retain the same policy. */
+  relay?: RelayHostConfig;
   port: number;
   host?: string;
   /**
@@ -560,6 +565,17 @@ function createStaticHandler(webRoot: string) {
  * See docs/design/remote-backend.md.
  */
 export function startWsHost(options: WsHostOptions): Promise<WsHost> {
+  let relay: ReturnType<typeof startRelayHost> | undefined;
+  let relayConfig: RelayHostConfig | undefined;
+  if (options.relay) {
+    try {
+      if (!options.verifyDeviceToken || !/^[A-Za-z0-9_-]{1,128}$/.test(options.relay.backendId) ||
+          options.relay.privateKey.length !== 32 || Buffer.byteLength(options.relay.routingSecret) < 32) {
+        throw new Error("Relay requires backend identity, secure keys and paired-device verification");
+      }
+      relayConfig = { ...options.relay, url: validateRelayUrl(options.relay.url) };
+    } catch (error) { return Promise.reject(error); }
+  }
   const token = options.token;
   // Checked at runtime too: an empty string type-checks and would open the host.
   if (!token) {
@@ -590,7 +606,10 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
       req.method === "POST" &&
       pathname === "/pair"
     ) {
-      void handlePairing(req, res, options.pairDevice);
+      void handlePairing(req, res, async (body) => {
+        const result = await options.pairDevice!(body);
+        return relay ? relay.addPairingAccess(result) : result;
+      });
     } else if (
       options.createPairingCode &&
       req.method === "POST" &&
@@ -750,6 +769,14 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   return new Promise<WsHost>((resolve, reject) => {
     httpServer.once("error", reject);
     httpServer.listen(options.port, options.host, () => {
+      if (relayConfig && options.verifyDeviceToken) {
+        relay = startRelayHost(relayConfig, {
+          sink,
+          verifyDeviceToken: options.verifyDeviceToken,
+          commandReceipts: options.commandReceipts,
+          onDeviceConnectionChange: options.onDeviceConnectionChange,
+        });
+      }
       const address = httpServer.address();
       const port =
         typeof address === "object" && address ? address.port : options.port;
@@ -759,7 +786,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         webUiAvailable: webRoot !== null,
         createWebLogin,
         disconnectDevice: (deviceId) => {
-          let dropped = 0;
+          let dropped = relay?.disconnectDevice(deviceId) ?? 0;
           for (const client of wss.clients) {
             if (socketDevices.get(client) !== deviceId) continue;
             // terminate, not close: a close handshake leaves the socket readable
@@ -770,7 +797,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
           return dropped;
         },
         connectedDeviceIds: () => {
-          const ids = new Set<string>();
+          const ids = relay?.connectedDeviceIds() ?? new Set<string>();
           for (const client of wss.clients) {
             const deviceId = socketDevices.get(client);
             if (deviceId && client.readyState === client.OPEN) ids.add(deviceId);
@@ -780,6 +807,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         close: () =>
           new Promise<void>((res) => {
             unregisterSink();
+            relay?.close();
             webSessions.clear();
             // Force live connections closed first. httpServer.close() waits for
             // active sockets to drain, and wss.close() does NOT terminate its

@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import { isRelayAccess, type RelayAccess } from "@mains/contracts/relay";
 
 /**
  * The one Mac this phone is paired with, kept in the platform keychain. The
@@ -16,6 +17,7 @@ export interface PairedBackend {
   pairedAt: string;
   appVersion: string;
   protocolVersion: number;
+  relay?: RelayAccess;
 }
 
 const KEY = "mains.pairedBackend";
@@ -29,7 +31,8 @@ function isPairedBackend(value: unknown): value is PairedBackend {
     Array.isArray(v.endpoints) &&
     v.endpoints.every((e) => typeof e === "string") &&
     typeof v.deviceId === "string" &&
-    typeof v.deviceToken === "string"
+    typeof v.deviceToken === "string" &&
+    (v.relay === undefined || isRelayAccess(v.relay))
   );
 }
 

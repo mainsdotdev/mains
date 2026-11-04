@@ -10,6 +10,8 @@ This is a monorepo:
 - `apps/mobile` — the Mains mobile app (Expo / React Native), the desktop's remote control. Its own `CLAUDE.md` / `AGENTS.md` live there.
 - `apps/server` — the standalone Node backend and browser UI package. It owns the headless composition root, CLI, packaging, and server release checks. Its own `CLAUDE.md` / `AGENTS.md` live there.
 - `apps/bridge` — the ciphertext-only Bridge hub (Cloudflare Worker and SQLite Durable Objects). Its own `CLAUDE.md` / `AGENTS.md` and local development instructions live there.
+- `apps/relay` — the private Go WebSocket relay gateway. Its own `CLAUDE.md` / `AGENTS.md` and setup instructions live there.
+- `packages/relay` — shared endpoint encryption and socket adapter for the Go relay. Run `npm install` there before installing its backend/mobile consumers.
 - `packages/backend` — the Electron-free backend implementation shared by the desktop and standalone server: database, domain modules, provider runtimes, transport-neutral IPC/WebSocket plumbing, and lifecycle orchestration. Its own `CLAUDE.md` / `AGENTS.md` live there.
 - `packages/contracts` — the wire contract shared by both apps: IPC channel names, the WebSocket protocol, provider ids, modes, and the device-facing DTO types.
 

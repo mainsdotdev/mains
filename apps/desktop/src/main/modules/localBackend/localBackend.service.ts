@@ -7,6 +7,7 @@ import {
   type WsHost,
 } from "@mains/backend/ipc-kit/ws-server-host";
 import { generateToken } from "@mains/backend/ipc-kit/ws-auth";
+import { loadRelayHostConfig } from "@mains/backend/ipc-kit/relay-config";
 import { CHANNELS } from "@mains/contracts/channels";
 import { resolveWebRoot } from "@mains/backend/web-root";
 import {
@@ -240,6 +241,7 @@ async function reconcileHost(): Promise<void> {
   if (!wsHost) {
     if (!sessionToken) sessionToken = generateToken();
     wsHost = await startWsHost({
+      relay: await loadRelayHostConfig(async () => (await backendService.describe()).backendId),
       port,
       host: desiredBind,
       token: sessionToken,
