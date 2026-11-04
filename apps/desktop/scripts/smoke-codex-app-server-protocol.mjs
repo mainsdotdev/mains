@@ -194,12 +194,18 @@ try {
   assertContains("ClientRequest.ts", [
     '"method": "initialize"',
     '"method": "thread/start"',
+    '"method": "thread/turns/list"',
     '"method": "turn/start"',
     '"method": "turn/steer"',
     '"method": "skills/list"',
     '"method": "account/rateLimits/read"',
     '"method": "plugin/list"',
   ]);
+  assertContains("v2/ThreadTurnsListParams.ts", [
+    "threadId: string", "cursor?: string | null", "itemsView?: TurnItemsView | null",
+  ]);
+  assertContains("v2/ThreadTurnsListResponse.ts", ["data: Array<Turn>", "nextCursor: string | null"]);
+  assertContains("v2/ModelListParams.ts", ["cursor?: string | null"]);
   assertContains("v2/SkillsListParams.ts", [
     "cwds?: Array<string>",
     "forceReload?: boolean",
@@ -249,6 +255,13 @@ try {
     assertContains("v2/Turn.ts", ["rootTurnId: string | null"]);
     assertContains("v2/TurnStartParams.ts", ["parentTurnId?: string | null", "rootTurnId?: string | null"]);
     assertContains("v2/ThreadItem.ts", ['"type": "subAgentActivity"', "model: string | null", "reasoningEffort: ReasoningEffort | null"]);
+  }
+  if (compareVersions(versionOutput, "0.166.0") >= 0) {
+    assertContains("ImageGenerationItem.ts", [
+      "fileId: string", "result: string", "generationId: string | null",
+      "inputImages?: Array<ImageGenerationInputImage>",
+    ]);
+    assertContains("v2/Account.ts", ['"type": "gcp"', "workspaceName: string | null"]);
   }
   assertContains("v2/McpResourceReadParams.ts", [
     "threadId?: string | null",

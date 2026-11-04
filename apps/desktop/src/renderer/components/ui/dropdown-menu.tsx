@@ -14,6 +14,7 @@ import { createPortal } from "react-dom";
 import { cn } from "../../lib/cn";
 import { ArrowUp, Selected } from "./icons";
 import { Button } from "./button";
+import { CheckboxMark } from "./checkbox";
 import { focusNextFrom } from "./focus-navigation";
 
 const MENU_ITEM_SELECTOR = [
@@ -644,7 +645,11 @@ export interface DropdownMenuItemProps {
   className?: string;
   disabled?: boolean;
   selected?: boolean;
-  indicator?: "check" | "none";
+  /**
+   * `checkbox` draws a bordered box in place of the check, for multi-select
+   * lists where an unchecked row's empty check column reads as a gap.
+   */
+  indicator?: "check" | "checkbox" | "none";
   /** Exclusive choices are radios. Independent choices, such as source filters, are checkboxes. */
   selection?: "single" | "multiple";
 }
@@ -701,6 +706,7 @@ export function DropdownMenuItem({
           className={cn("size-4", selected ? "opacity-100" : "opacity-0")}
         />
       )}
+      {selected !== undefined && indicator === "checkbox" && <CheckboxMark checked={selected} />}
       {children}
     </Button>
   );

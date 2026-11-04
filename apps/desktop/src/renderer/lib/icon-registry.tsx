@@ -1,14 +1,11 @@
 import { ComponentType, SVGProps } from "react";
 import * as Icons from "@/components/ui/icons/space";
-import { Codex, Cursor, DeviceDesktop, DeviceLaptop, Info, MainsStroke, Palm } from "@/components/ui/icons";
+import { Codex, Cursor, MainsStroke, OpenCode, Palm } from "@/components/ui/icons";
 
 export type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
 export const iconRegistry: Record<string, IconComponent> = {
 
-  info: Info,
-  "device-desktop": DeviceDesktop,
-  "device-laptop": DeviceLaptop,
   basketball: Icons.Basketball,
   bolt: Icons.Bolt,
   broadcast: Icons.Broadcast,
@@ -82,6 +79,7 @@ export const iconRegistry: Record<string, IconComponent> = {
   copilot: Icons.Copilot,
   codex: Codex,
   cursor: Cursor,
+  opencode: OpenCode,
 };
 
 /**
@@ -90,7 +88,7 @@ export const iconRegistry: Record<string, IconComponent> = {
  * offered as manual choices — a provider mark on a project or space would read
  * as a runtime badge rather than a user-picked icon.
  */
-const providerIconNames = new Set(["claude", "copilot", "codex", "cursor"]);
+const providerIconNames = new Set(["claude", "copilot", "codex", "cursor", "opencode"]);
 
 /** Icons offered in the icon picker grid. */
 export const availableIcons = Object.entries(iconRegistry)

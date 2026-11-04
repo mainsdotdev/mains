@@ -270,6 +270,7 @@ describe("captureDiffSnapshot", () => {
       additions: 2,
       deletions: 0,
       isNew: true,
+      status: "added",
     });
   });
 
@@ -286,6 +287,7 @@ describe("captureDiffSnapshot", () => {
       additions: 0,
       deletions: 0,
       isNew: true,
+      status: "added",
     });
   });
 
@@ -321,6 +323,7 @@ describe("captureDiffSnapshot", () => {
       additions: 0,
       deletions: 0,
       isNew: true,
+      status: "added",
     });
   });
 
@@ -340,6 +343,23 @@ describe("captureDiffSnapshot", () => {
     expect(snap.diffText).toContain("+merhaba");
     expect(snap.diffText).not.toContain("\\303\\266");
     expect(snap.diffText).not.toContain("could not read file");
+  });
+
+  it("includes a tracked file deleted from the working tree", async () => {
+    const repo = makeRepo();
+    const head = await gitService.getHeadSha(repo);
+    fs.rmSync(path.join(repo, "README.md"));
+
+    const snap = await gitService.captureDiffSnapshot(repo, head);
+
+    expect(snap.files).toEqual(["README.md"]);
+    expect(snap.diffText).toContain("deleted file");
+    expect(parsePerFileDiffStats(snap.diffText).get("README.md")).toMatchObject({
+      status: "deleted",
+      isNew: false,
+      additions: 0,
+      deletions: 1,
+    });
   });
 
   it("throws on an unknown baseRef instead of degrading to an empty diff (all-or-throw)", async () => {
@@ -1000,15 +1020,25 @@ describe("parsePerFileDiffStats", () => {
 
     const stats = parsePerFileDiffStats(diff);
 
-    expect(stats.get("a.ts")).toEqual({ additions: 2, deletions: 1, isNew: false });
-    expect(stats.get("b.ts")).toEqual({ additions: 0, deletions: 2, isNew: false });
+    expect(stats.get("a.ts")).toEqual({
+      additions: 2,
+      deletions: 1,
+      isNew: false,
+      status: "modified",
+    });
+    expect(stats.get("b.ts")).toEqual({
+      additions: 0,
+      deletions: 2,
+      isNew: false,
+      status: "modified",
+    });
   });
 
   // The `+++`/`---` file headers start with the same characters as content
   // lines; counting them would inflate every file by one each way.
   it("ignores the file headers", () => {
     expect(parsePerFileDiffStats(chunk("a.ts", "+x"))).toEqual(
-      new Map([["a.ts", { additions: 1, deletions: 0, isNew: false }]]),
+      new Map([["a.ts", { additions: 1, deletions: 0, isNew: false, status: "modified" }]]),
     );
   });
 
@@ -1021,6 +1051,8 @@ describe("parsePerFileDiffStats", () => {
       additions: 1,
       deletions: 0,
       isNew: false,
+      status: "renamed",
+      oldPath: "old.ts",
     });
     expect(stats.get("old.ts")).toEqual(stats.get("new.ts"));
   });
@@ -1034,6 +1066,7 @@ describe("parsePerFileDiffStats", () => {
       additions: 0,
       deletions: 0,
       isNew: true,
+      status: "added",
     });
   });
 

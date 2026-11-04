@@ -139,8 +139,9 @@ const api = {
   },
   // Issue operations (actionable domain)
   issues: {
-    getAll: (options?: { provider?: string; state?: string; repo?: string; limit?: number }) =>
+    getAll: (options?: { provider?: string; category?: "open" | "closed"; repo?: string; limit?: number }) =>
       ipcRenderer.invoke(CHANNELS.issues.getAll, options),
+    listStatuses: () => ipcRenderer.invoke(CHANNELS.issues.listStatuses),
     getById: (entityId: string) =>
       ipcRenderer.invoke(CHANNELS.issues.getById, entityId),
     getDetail: (entityId: string) =>
@@ -169,6 +170,10 @@ const api = {
   // Sync operations
   sync: {
     runEntitySync: (provider?: string) => ipcRenderer.invoke(CHANNELS.sync.runEntitySync, provider),
+    listIssueStates: (resourceId: string) =>
+      ipcRenderer.invoke(CHANNELS.sync.listIssueStates, resourceId),
+    setIssueStatusMapping: (input: { resourceId: string; stateId: string; statusId: string | null }) =>
+      ipcRenderer.invoke(CHANNELS.sync.setIssueStatusMapping, input),
   },
   // Connections aggregate (identity + tokens + states). See ADR-0002.
   connections: {

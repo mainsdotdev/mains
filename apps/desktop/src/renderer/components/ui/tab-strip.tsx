@@ -47,7 +47,7 @@ export function TabStrip({ children, activeKey, createAction, className, role, "
         className="relative flex min-w-0 items-end overflow-x-auto px-3 noscrollbar">
         {children}
       </div>
-      {createAction && <div data-tab-create="" className="mb-1.5 flex shrink-0 items-center">{createAction}</div>}
+      {createAction && <div data-tab-create="" className="-ml-1.5 mb-1.5 flex shrink-0 items-center">{createAction}</div>}
     </div>
   );
 }

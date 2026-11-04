@@ -63,6 +63,10 @@ export function ParticleLogoCanvas({ className, variant, text }: ParticleLogoCan
     svgPaths = CURSOR_PATHS;
     svgViewBox = CURSOR_VIEWBOX;
     renderMode = "fill";
+  } else if (variant === "opencode") {
+    svgPaths = ["M4 3h11l5 5v13H4z"];
+    svgViewBox = "0 0 24 24";
+    renderMode = "stroke";
   }
 
   useParticleLogo(canvasRef, {

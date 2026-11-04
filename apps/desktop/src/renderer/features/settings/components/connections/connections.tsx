@@ -8,14 +8,7 @@ import {
   toast,
 } from "@/components/ui";
 import { SettingsPageShell } from "../settings-layout";
-import AsanaModal from "./asana/asana-modal";
-import GitHubModal from "./github/github-modal";
-import GitLabModal from "./gitlab/gitlab-modal";
-import JiraModal from "./jira/jira-modal";
-import LinearModal from "./linear/linear-modal";
-import TrelloModal from "./trello/trello-modal";
-import SentryModal from "./sentry/sentry-modal";
-import SocketDevModal from "./socketdev/socketdev-modal";
+import { ConnectionModalHost } from "./connection-modals";
 import { useRunEntitySyncMutation } from "@/lib/redux/api/syncApi";
 import { useGetConnectionStatesQuery } from "@/lib/redux/api";
 import type { ConnectionState } from "@/lib/redux/api";
@@ -29,27 +22,6 @@ const FILTER_TABS: { id: CategoryFilter; label: string }[] = [
   { id: "issues", label: "Issues" },
   { id: "monitoring", label: "Monitoring" },
   { id: "security", label: "Security" },
-];
-
-type ConnectionModalProps = {
-  open: boolean;
-  onClose: () => void;
-  isConnected: boolean;
-  onSuccess: () => void;
-};
-
-const CONNECTION_MODALS: Array<{
-  id: string;
-  Component: React.ComponentType<ConnectionModalProps>;
-}> = [
-  { id: "github", Component: GitHubModal },
-  { id: "gitlab", Component: GitLabModal },
-  { id: "jira", Component: JiraModal },
-  { id: "asana", Component: AsanaModal },
-  { id: "linear", Component: LinearModal },
-  { id: "trello", Component: TrelloModal },
-  { id: "sentry", Component: SentryModal },
-  { id: "socketdev", Component: SocketDevModal },
 ];
 
 export default function ConnectionsSettings() {
@@ -166,32 +138,6 @@ export default function ConnectionsSettings() {
         onSuccess={handleConnectionSuccess}
       />
     </SettingsPageShell>
-  );
-}
-
-function ConnectionModalHost({
-  activeModal,
-  isConnected,
-  onClose,
-  onSuccess,
-}: {
-  activeModal: string | null;
-  isConnected: (appId: string) => boolean;
-  onClose: () => void;
-  onSuccess: () => void;
-}) {
-  return (
-    <>
-      {CONNECTION_MODALS.map(({ id, Component }) => (
-        <Component
-          key={id}
-          open={activeModal === id}
-          onClose={onClose}
-          isConnected={isConnected(id)}
-          onSuccess={onSuccess}
-        />
-      ))}
-    </>
   );
 }
 

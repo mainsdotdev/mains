@@ -8,6 +8,7 @@ import { Caption, Tiny } from "../text";
 import { useIsMobile } from "@/lib/platform";
 import {
   CURSOR_MODES as CURSOR_MODE_DEFS,
+  OPENCODE_AGENTS as OPENCODE_AGENT_DEFS,
   CODEX_SANDBOX_MODES as CODEX_SANDBOX_MODE_DEFS,
   CLAUDE_PERMISSION_MODES as CLAUDE_PERMISSION_MODE_DEFS,
   shortLabelMap,
@@ -68,6 +69,8 @@ const PERMISSION_MODE_LABELS: Record<string, string> = {
 
 const CURSOR_MODES = CURSOR_MODE_DEFS;
 const CURSOR_MODE_LABELS = shortLabelMap(CURSOR_MODE_DEFS);
+const OPENCODE_AGENTS = OPENCODE_AGENT_DEFS;
+const OPENCODE_AGENT_LABELS = shortLabelMap(OPENCODE_AGENT_DEFS);
 const CODEX_SANDBOX_MODES = CODEX_SANDBOX_MODE_DEFS;
 const CODEX_SANDBOX_LABELS = shortLabelMap(CODEX_SANDBOX_MODE_DEFS);
 
@@ -77,12 +80,14 @@ const MODES_BY_VARIANT: Record<
   readonly { value: string; label: string; description?: string }[]
 > = {
   cursor: CURSOR_MODES,
+  opencode: OPENCODE_AGENTS,
   codex: CODEX_SANDBOX_MODES,
   claude: CLAUDE_PERMISSION_MODES,
 };
 
 const LABELS_BY_VARIANT: Record<string, Record<string, string>> = {
   cursor: CURSOR_MODE_LABELS,
+  opencode: OPENCODE_AGENT_LABELS,
   codex: CODEX_SANDBOX_LABELS,
   claude: CLAUDE_PERMISSION_LABELS,
 };
@@ -106,6 +111,7 @@ function PermissionModeIcon({
     case "dontAsk":
       return <DontAsk className={className} />;
     case "agent":
+    case "build":
       return <Infinite className={className} />;
     case "read-only":
       return <Lock className={className} />;

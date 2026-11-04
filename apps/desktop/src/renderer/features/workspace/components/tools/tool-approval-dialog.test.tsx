@@ -157,6 +157,51 @@ describe("permission prompt restrictions", () => {
     await user.click(screen.getByRole("button", { name: "Submit" }));
     expect(onRespond).toHaveBeenCalledExactlyOnceWith("restricted-1", true, "work");
   });
+
+  it("sends a single choice immediately and closes a Codex question without an answer", async () => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    render(<ToolApprovalDialog request={toolRequest({ kind: "ask_user", question: "Which account?",
+      options: [{ label: "Work", description: "The team account" }, { label: "Personal" }] })}
+      onRespond={onRespond} variant="codex" />);
+
+    expect(screen.getByRole("button", { name: "Work The team account" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith("restricted-1", false);
+    onRespond.mockClear();
+    await user.click(screen.getByRole("button", { name: "Personal" }));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith("restricted-1", true, "Personal");
+  });
+
+  it("keeps a multi-select choice unsent until Submit", async () => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    render(<ToolApprovalDialog request={toolRequest({ kind: "ask_user", question: "Which accounts?", multiSelect: true,
+      options: [{ label: "Work" }, { label: "Personal" }] })} onRespond={onRespond} variant="codex" />);
+
+    await user.click(screen.getByRole("button", { name: "Work" }));
+    expect(onRespond).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Work" }).getAttribute("aria-pressed")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "Skip" }));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith("restricted-1", false);
+  });
+
+  it("skips a Cursor question without cancelling it", async () => {
+    const onRespond = vi.fn();
+    render(<ToolApprovalDialog request={toolRequest({ kind: "ask_user", question: "Which account?",
+      options: [{ label: "Work" }] })} onRespond={onRespond} variant="cursor" />);
+
+    expect(screen.queryByRole("textbox", { name: "Custom answer" })).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Skip" }));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith("restricted-1", true);
+  });
+
+  it("closes a permission the same way Cancel does", async () => {
+    const onRespond = vi.fn();
+    render(<ToolApprovalDialog request={toolRequest()} onRespond={onRespond} variant="claude" />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Close" }));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith("restricted-1", false);
+  });
 });
 
 describe("MCP form approval dialog", () => {

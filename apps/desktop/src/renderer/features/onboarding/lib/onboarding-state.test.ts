@@ -38,7 +38,7 @@ const providers = [
   { id: "codex", kind: "agent_runtime", isEnabled: true },
   { id: "cursor", kind: "agent_runtime", isEnabled: true },
 ] as Provider[];
-const detected = { claude: true, codex: true, cursor: true, copilot: false };
+const detected = { claude: true, codex: true, cursor: true, copilot: false, opencode: false };
 
 describe("onboarding choices", () => {
   it("offers only detected, enabled providers with a visible space and prefers the current one", () => {

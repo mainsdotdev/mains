@@ -580,4 +580,44 @@ describe("RichInputForm mention navigation", () => {
     fireEvent.keyDown(screen.getByRole("link", { name: "apple-design" }), { key: " " });
     expect(onSkillChipClick).toHaveBeenCalledWith("apple-design");
   });
+
+  it("removes a hovered mention from the icon control without opening it", () => {
+    const onQueryChange = vi.fn();
+    const onSkillChipClick = vi.fn();
+    const onFileChipClick = vi.fn();
+    const onSkillChipsChange = vi.fn();
+    const onFileChipsChange = vi.fn();
+    const onSubmit = vi.fn();
+    const path = "/repo/hero-announcement.tsx";
+    const query = `Use $presentations and @${path} please`;
+    render(createElement(RichInputForm, {
+      query,
+      onQueryChange,
+      onSubmit,
+      onSkillChipClick,
+      onFileChipClick,
+      onSkillChipsChange,
+      onFileChipsChange,
+      skillChipMap: new Map([["$presentations", {
+        name: "presentations",
+        displayName: "Presentations",
+        token: "$presentations",
+        clickable: true,
+      }]]),
+      fileChipMap: new Map([[path, { path, basename: "hero-announcement.tsx", clickable: true }]]),
+    }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Presentations" }));
+    expect(onQueryChange).toHaveBeenLastCalledWith(`Use and @${path} please`);
+    expect(onSkillChipsChange).toHaveBeenLastCalledWith([]);
+    expect(onSkillChipClick).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Remove Presentations" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove hero-announcement.tsx" }));
+    expect(onQueryChange).toHaveBeenLastCalledWith("Use and please");
+    expect(onFileChipsChange).toHaveBeenLastCalledWith([]);
+    expect(onFileChipClick).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox").textContent).toBe("Use and please");
+  });
 });

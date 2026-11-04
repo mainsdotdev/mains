@@ -61,6 +61,7 @@ function flushFrames() {
 function setup(
   overrides: Partial<RecentRun> = {},
   collections: Collection[] = [],
+  workspaceContext?: { branch: string | null; isWorktree: boolean },
 ) {
   const callbacks = {
     onSelect: vi.fn(),
@@ -78,6 +79,7 @@ function setup(
       isActive={false}
       isPinned={false}
       collections={collections}
+      workspaceContext={workspaceContext}
       {...callbacks}
     />,
   );
@@ -103,6 +105,15 @@ const project: Collection = {
 };
 
 describe("ChatItem hover card", () => {
+  it("marks actual worktree chats and exposes their branch in the row", () => {
+    setup({ mode: "developer" }, [], { branch: "codex/login", isWorktree: true });
+    expect(screen.getByRole("img", { name: "Worktree: codex/login" })).toBeTruthy();
+  });
+
+  it("does not mark a local checkout as a worktree just because its branch is a feature branch", () => {
+    setup({ mode: "developer" }, [], { branch: "feature/login", isWorktree: false });
+    expect(screen.queryByRole("img", { name: /Worktree/ })).toBeNull();
+  });
   it.each([
     ["work", "Work"],
     ["chat", "Chat"],
@@ -120,6 +131,26 @@ describe("ChatItem hover card", () => {
 });
 
 describe("ChatItem quick actions", () => {
+  it("omits pinning from developer rows, hover cards and menus", async () => {
+    const { row, user, onTogglePin } = setup({ mode: "developer" });
+    expect(screen.queryByRole("button", { name: /^(Unpin|Pin) chat$/ })).toBeNull();
+    const card = openCard(row);
+    expect(within(card).queryByRole("button", { name: /^(Unpin|Pin) chat$/ })).toBeNull();
+    expect(within(card).getByRole("button", { name: "Archive chat" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Chat options" }));
+    const menu = screen.getByRole("menu", { name: "Chat actions" });
+    expect(within(menu).queryByRole("menuitem", { name: /^(Unpin|Pin)$/ })).toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: "Rename" })).toBeTruthy();
+    expect(onTogglePin).not.toHaveBeenCalled();
+  });
+
+  it.each(["work", "chat"] as const)("keeps pinning available for %s conversations", async (mode) => {
+    const { user, onTogglePin } = setup({ mode });
+    await user.click(screen.getByRole("button", { name: "Chat options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Pin" }));
+    expect(onTogglePin).toHaveBeenCalledOnce();
+  });
+
   it("opens a replica without offering rename, pin, move, archive or delete", async () => {
     const { row, user, onSelect, onRename, onTogglePin, onArchive, onDelete } = setup({ isReplica: true, ownerBackendId: "source" });
     expect(screen.queryByRole("button", { name: "Chat options" })).toBeNull();

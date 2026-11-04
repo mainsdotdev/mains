@@ -12,6 +12,7 @@ import {
 import { ToolCallItem } from "./tool-call-item";
 import type { EventGroup } from "../../lib/group-events";
 import { Button } from "@/components/ui";
+import type { ProviderVariant } from "@/lib/provider-variants";
 import { useTranscriptValue } from "../../lib/transcript-view-state";
 
 const TOOL_GROUP_LABEL_TEXT =
@@ -20,7 +21,7 @@ const TOOL_GROUP_LABEL_TEXT =
 interface ToolCallGroupProps {
   group: EventGroup;
   defaultExpanded?: boolean;
-  variant?: "copilot" | "claude" | "codex" | "cursor";
+  variant?: ProviderVariant;
 }
 
 function ToolCallGroupImpl({

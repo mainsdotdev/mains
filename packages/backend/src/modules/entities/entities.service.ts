@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { entitiesRepo } from "./entities.repo";
 import { getConnectionWithSecrets } from "../connections";
 import { fetchLinearIssueDetail } from "./entities.linear";
+import type { IssueStatus } from "@mains/contracts/issue-status";
 import type {
   CreateEntityPayload,
   UpdateEntityPayload,
@@ -95,6 +96,10 @@ export const entitiesService = {
   // ─────────────────────────────────────────────────────────────
   async getAllIssues(options: IssueQueryOptions = {}): Promise<unknown[]> {
     return entitiesRepo.findAllIssues(options);
+  },
+
+  async listIssueStatuses(): Promise<IssueStatus[]> {
+    return entitiesRepo.findAllIssueStatuses();
   },
 
   async getIssueById(entityId: string): Promise<unknown> {

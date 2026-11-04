@@ -149,10 +149,11 @@ export const providersService = {
       }
       // App-server effort identifiers are opaque; preserve them on this path
       // just as the conversation settings and model catalog do.
-      const level = id === PROVIDER_IDS.codex
+      const opaqueEffort = id === PROVIDER_IDS.codex || id === PROVIDER_IDS.opencode;
+      const level = opaqueEffort
         ? patch.effortLevel
         : patch.effortLevel.trim().toLowerCase();
-      if (id !== PROVIDER_IDS.codex && level && !isEffortLevel(level)) {
+      if (!opaqueEffort && level && !isEffortLevel(level)) {
         throw new Error(`Unknown effort level "${patch.effortLevel}"`);
       }
       if (id === PROVIDER_IDS.codex || id === PROVIDER_IDS.copilot) {
@@ -372,11 +373,12 @@ export const providersService = {
   },
 
   async detectInstalled(): Promise<DetectedClisResponse> {
-    const [claude, copilot, codex, cursor] = await Promise.all([
+    const [claude, copilot, codex, cursor, opencode] = await Promise.all([
       providersRepo.findById(PROVIDER_IDS.claude),
       providersRepo.findById(PROVIDER_IDS.copilot),
       providersRepo.findById(PROVIDER_IDS.codex),
       providersRepo.findById(PROVIDER_IDS.cursor),
+      providersRepo.findById(PROVIDER_IDS.opencode),
     ]);
     const binary = (provider: typeof claude) =>
       typeof provider?.config?.binary === "string" && provider.config.binary
@@ -387,6 +389,7 @@ export const providersService = {
       copilot: binary(copilot),
       codex: binary(codex),
       cursor: binary(cursor),
+      opencode: binary(opencode),
     });
   },
 };

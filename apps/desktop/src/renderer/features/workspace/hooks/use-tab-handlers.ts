@@ -11,7 +11,9 @@ import {
   closeReviewTab,
   openNewRunTab,
   closeNewRunTab,
+  closeRunTab,
 } from "@/lib/redux/slices/workspaceSlice";
+import { store } from "@/lib/redux";
 import {
   isIssueTab,
   isNewRunTab,
@@ -27,7 +29,8 @@ import {
 interface UseTabHandlersParams {
   activeTab: string;
   runs: Array<{ id: string }>;
-  closeTab: (runId: string) => void;
+  closeTab: (runId: string) => Promise<boolean>;
+  closeOnly?: boolean;
   selectTab: (runId: string) => void;
   setActiveRunId: (id: string | null) => void;
   forkRun: (sourceRunId: string, message: string) => Promise<string | null>;
@@ -39,6 +42,7 @@ export function useTabHandlers({
   activeTab,
   runs,
   closeTab,
+  closeOnly = false,
   selectTab,
   setActiveRunId,
   forkRun,
@@ -47,7 +51,7 @@ export function useTabHandlers({
 }: UseTabHandlersParams) {
   const dispatch = useAppDispatch();
   const [updateRun] = useUpdateRunMutation();
-  const { openIssueTabs, openSignalTabs, openNoteTabs, reviewTabOpen, selectedFile, previousNonEditorTab } = useAppSelector(
+  const { openIssueTabs, openSignalTabs, openNoteTabs, reviewTabOpen, selectedFile, previousNonEditorTab, workspaceViewKey } = useAppSelector(
     (state) => state.workspace,
   );
 
@@ -71,19 +75,36 @@ export function useTabHandlers({
       }
       if (reviewTabOpen && closingTabId !== "review") return "review";
       if (selectedFile && closingTabId !== "editor") return "editor";
-      return "editor";
+      return closeOnly ? "new-run" : "editor";
     },
-    [runs, openIssueTabs, openSignalTabs, openNoteTabs, reviewTabOpen, selectedFile],
+    [runs, openIssueTabs, openSignalTabs, openNoteTabs, reviewTabOpen, selectedFile, closeOnly],
   );
+
+  const handleArchiveRun = useCallback(async (runId: string) => {
+    const next = getNextTab(runId);
+    const wasActive = activeTab === runId;
+    if (!await closeTab(runId)) return;
+    if (store.getState().workspace.workspaceViewKey === workspaceViewKey) {
+      dispatch(closeRunTab(runId));
+      const current = store.getState().workspace;
+      if (wasActive && (current.activeTab === runId || (current.activeTab === "editor" && !current.selectedFile))) {
+        dispatch(setActiveTab(next));
+      }
+    }
+  }, [activeTab, closeTab, dispatch, getNextTab, workspaceViewKey]);
 
   const handleCloseTab = useCallback(
     (runId: string) => {
+      if (!closeOnly) { void handleArchiveRun(runId); return; }
       if (runId === activeTab) {
-        dispatch(setActiveTab(getNextTab(runId)));
+        const next = getNextTab(runId);
+        dispatch(setActiveTab(next));
+        if (isRunTab(next)) selectTab(next);
+        else setActiveRunId(null);
       }
-      closeTab(runId);
+      dispatch(closeRunTab(runId));
     },
-    [closeTab, activeTab, dispatch, getNextTab],
+    [closeOnly, handleArchiveRun, activeTab, dispatch, getNextTab, selectTab, setActiveRunId],
   );
 
   const handleNewRun = useCallback(() => {
@@ -254,6 +275,7 @@ export function useTabHandlers({
 
   return {
     handleCloseTab,
+    handleArchiveRun,
     handleSelectReviewTab,
     handleCloseReviewTab,
     handleRenameRun,

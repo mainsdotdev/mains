@@ -3,7 +3,7 @@ import type { RootState } from "../index";
 import { providerAccountCacheKey, providerCatalogConfigKey } from "@mains/backend/shared/provider-catalog";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModelServiceTier } from "@mains/contracts/run-settings";
-import type { DetectedClis, ProviderCliInfo } from "@mains/contracts/provider-cli";
+import type { DetectedClis } from "@mains/contracts/provider-cli";
 import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
 import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 export type { GoalSetParams } from "@mains/contracts/provider-goals";
@@ -14,6 +14,7 @@ import type {
   PluginDisabledReason,
 } from "../../../../shared/plugin-install-availability";
 import type {
+  AccountInfo,
   ConsumeRateLimitResetCreditOutcome,
   ConsumeRateLimitResetCreditParams,
   CodexMemorySetting,
@@ -24,6 +25,7 @@ import type {
 } from "../../../../shared/adapter.types";
 
 export type {
+  AccountInfo,
   RateLimitInfo,
   RateLimitSnapshotInfo,
   RateLimitWindow,
@@ -242,32 +244,6 @@ export interface PluginDetailResponse {
   uniqueInstalls?: number | null;
   /** ISO timestamp of the plugin's last marketplace update, if known. */
   lastUpdated?: string | null;
-}
-
-export interface AccountInfo {
-  account: {
-    type: "apiKey";
-  } | {
-    type: "chatgpt";
-    email: string | null;
-    planType: string;
-  } | {
-    type: "amazonBedrock";
-    usesCodexManagedCredentials: boolean;
-  } | {
-    type: "cursor";
-    email: string;
-    planType: string;
-  } | {
-    type: "claude";
-    email: string;
-    planType: string;
-  } | {
-    type: "copilot";
-    login: string | null;
-  } | null;
-  requiresOpenaiAuth: boolean;
-  cli?: ProviderCliInfo;
 }
 
 export interface CliUpdateResult {

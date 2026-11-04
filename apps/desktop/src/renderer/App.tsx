@@ -23,6 +23,7 @@ import {
   isSettingsRoute,
   isWorkspaceRoute,
   isAtlasRoute,
+  isTasksRoute,
   NAV_RAIL_WIDTH,
 } from "./lib/layout";
 import { useBottomTerminal } from "./hooks/use-bottom-terminal";
@@ -125,6 +126,7 @@ function AppContent() {
   const settingsRoute = isSettingsRoute(location.pathname);
   const workspaceRoute = isWorkspaceRoute(location.pathname);
   const atlasRoute = isAtlasRoute(location.pathname);
+  const tasksRoute = isTasksRoute(location.pathname);
   useRealtimeVoiceLifecycle();
   const hideRightPanel = shouldHideRightPanel(location.pathname);
   const hideWorkspacePanels = shouldHideWorkspacePanels(location.pathname);
@@ -249,7 +251,7 @@ function AppContent() {
 
   useKeyboardShortcut("app.toggleSidebar", () => {
     dispatch(setSidebarCollapsed(!sidebarCollapsed));
-  }, { enabled: isMobile || workspaceRoute || atlasRoute, allowInEditable: true });
+  }, { enabled: isMobile || workspaceRoute || atlasRoute || tasksRoute, allowInEditable: true });
   useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
     enabled:
       showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
@@ -350,7 +352,7 @@ function AppContent() {
             aria-hidden
           />
         )}
-        {(isMobile || workspaceRoute || atlasRoute) && !(
+        {(isMobile || workspaceRoute || atlasRoute || tasksRoute) && !(
           isMobile &&
           (rightPanelVisible || browserPanel.isOpen || docViewer.isOpen || mcpAppPanel?.isOpen)
         ) && (

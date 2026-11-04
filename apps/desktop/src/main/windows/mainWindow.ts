@@ -113,10 +113,18 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
       // significant CPU and GPU when the user switches away. Streaming IPC
       // events still arrive via `webContents.send` regardless of throttling.
       backgroundThrottling: true,
+      // Electron ships this off. The same switch gates Chromium's elastic
+      // overscroll for nested scrollers, so sidebar, settings and lists
+      // hard-stop at the edge until it is on. Do not set overscroll-behavior
+      // to none or contain on these scrollers: Chromium then reports the
+      // gesture as having no local edge effect and the rubber band never runs.
+      ...(process.platform === "darwin" ? { scrollBounce: true } : {}),
     },
     ...(process.platform === "darwin" ? {
       titleBarStyle: "hiddenInset" as const,
-      trafficLightPosition: { x: 16, y: 16 },
+      // y is the top of the lights. 18 centers their 14px circles on the
+      // shell header (5px inset + 40px row), in line with the sidebar button.
+      trafficLightPosition: { x: 16, y: 18 },
       transparent: true,
       vibrancy: "fullscreen-ui" as const,
       visualEffectState: "active" as const,

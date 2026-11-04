@@ -50,16 +50,20 @@ export const statsService = {
     const tokenActivity = resolved.range.granularity === "day" ? tokenUsage
       : resolved.dailyDates.map((date) => ({ date, ...emptyUsage() }));
     const activityBuckets = new Map(tokenActivity.map((bucket) => [bucket.date, bucket]));
-    const dailyActivity: DailyActivity[] = resolved.dates.map((date) => ({ date, claude: 0, copilot: 0, codex: 0, cursor: 0, other: 0 }));
+    const dailyActivity: DailyActivity[] = resolved.dates.map((date) => ({ date, claude: 0, copilot: 0, codex: 0, cursor: 0, opencode: 0, other: 0 }));
     const statusDays: StatusBreakdownDay[] = resolved.dates.map((date) => ({ date, succeeded: 0, failed: 0, canceled: 0, other: 0 }));
     const bucketIndex = new Map(resolved.dates.map((date, index) => [date, index]));
     const hourDistribution = Array.from({ length: 24 }, (_, hour) => ({ hour, count: 0 }));
     const providers = new Map<string, ProviderUsage>();
     const models = new Map<string, ModelUsage>();
     const sessions = new Map<string, RecentSession>();
-    const providerKeys = new Map<string, "claude" | "copilot" | "codex" | "cursor">(
-      Object.entries(PROVIDER_IDS).map(([key, id]) => [id, key as "claude" | "copilot" | "codex" | "cursor"]),
-    );
+    const providerKeys = new Map<string, Exclude<keyof DailyActivity, "date">>([
+      [PROVIDER_IDS.claude, "claude"],
+      [PROVIDER_IDS.copilot, "copilot"],
+      [PROVIDER_IDS.codex, "codex"],
+      [PROVIDER_IDS.cursor, "cursor"],
+      [PROVIDER_IDS.opencode, "opencode"],
+    ]);
     const pause = createStatsWorkBudget();
 
     for (const row of activityRows) {

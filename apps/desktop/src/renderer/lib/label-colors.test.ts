@@ -1,5 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { parseLabels } from "./label-colors";
+import { labelColor, parseLabels } from "./label-colors";
+
+describe("labelColor", () => {
+  it("gives the same label the same color, across case and connections", () => {
+    expect(labelColor("Bug")).toBe(labelColor("bug"));
+    expect(labelColor(" Feature ")).toBe(labelColor("feature"));
+    expect(labelColor("Bug")).toMatch(/^#[\da-f]{6}$/);
+  });
+
+  it("spreads different labels over the palette", () => {
+    const names = ["Bug", "Feature", "Improvement", "Desktop", "Mobile", "Docs", "Design", "Infra"];
+    expect(new Set(names.map(labelColor)).size).toBeGreaterThan(3);
+  });
+});
 
 
 describe("parseLabels", () => {

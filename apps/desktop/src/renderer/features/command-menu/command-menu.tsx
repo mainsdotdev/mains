@@ -12,7 +12,7 @@ import { Command } from "cmdk";
 import fuzzysort from "fuzzysort";
 import type { GlobalSearchResult } from "@mains/contracts/search";
 import { isProviderId } from "@mains/contracts/provider-ids";
-import { providerModes, type ModeId } from "@mains/contracts/modes";
+import { providerModes } from "@mains/contracts/modes";
 import {
   Chat,
   Clock,
@@ -62,7 +62,7 @@ import {
   setCommandMenuOpen,
   subscribeCommandMenuOpen,
 } from "./command-menu-bridge";
-import { Bag, Code } from "@/components/ui/icons/space";
+import { MODE_ICONS } from "@/lib/mode-icons";
 import { useKeyboardShortcut } from "@/providers/keyboard-shortcuts-provider";
 
 type IconTone = "neutral" | "blue" | "purple" | "amber";
@@ -123,12 +123,6 @@ function fuzzyFilter(
 
 function fileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
-}
-
-function modeIcon(mode: ModeId): IconComponent {
-  if (mode === "developer") return Code;
-  if (mode === "work") return Bag;
-  return Chat;
 }
 
 function Keycap({ children }: { children: ReactNode }) {
@@ -366,7 +360,7 @@ export function CommandMenu() {
           title: `Switch to ${config.label}`,
           subtitle: config.description,
           keywords: `mode ${targetMode} ${config.label}`,
-          icon: modeIcon(targetMode),
+          icon: MODE_ICONS[targetMode],
           onSelect: runAndClose(() => switchMode(targetMode)),
         });
       }

@@ -36,9 +36,11 @@ describe("seed v2 — provider model/effort defaults", () => {
 
     await run(db);
 
-    for (const id of Object.values(PROVIDER_IDS)) {
+    // This fixture represents the four providers present before later seeds added OpenCode.
+    for (const id of [PROVIDER_IDS.claude, PROVIDER_IDS.codex, PROVIDER_IDS.copilot, PROVIDER_IDS.cursor]) {
       expect(readProvider(id)?.defaultModel).toBeNull();
     }
+    expect(readProvider(PROVIDER_IDS.opencode)).toBeUndefined();
   });
 
   it("leaves a model the user pinned themselves alone", async () => {

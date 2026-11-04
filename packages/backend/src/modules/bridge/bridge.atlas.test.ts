@@ -8,6 +8,7 @@ import { createBridgeEngine, type BridgeEngineOptions } from "./bridge.engine";
 const active = vi.hoisted(() => ({ fixture: null as ReturnType<typeof createTestDb> | null }));
 vi.mock("../../db/client", () => ({ getDb: () => active.fixture!.db, getSqlite: () => active.fixture!.sqlite }));
 vi.mock("../bridge", () => ({ bridgeService: { resolveFile: vi.fn() } }));
+import { HISTORY_CHECKPOINTS } from "../atlas/atlas.history";
 import { atlasService } from "../atlas/atlas.service";
 
 const cleanups: (() => void)[] = [];
@@ -41,6 +42,27 @@ async function settle(a: Node, b: Node) {
   for (let i = 0; i < 3; i++) { await drain(a); await b.engine.pull(); await drain(b); await a.engine.pull(); }
   expect(a.sqlite.pragma("foreign_key_check")).toEqual([]);
   expect(b.sqlite.pragma("foreign_key_check")).toEqual([]);
+}
+/** One revision per session, then one more save. That save drops the prefix older than the retained window. */
+async function agePrefix(n: Node, original: AtlasPage, extras = HISTORY_CHECKPOINTS) {
+  let current = await page(n, original);
+  const ids = [current.revision.id];
+  for (let index = 0; index < extras; index++) {
+    current = await save(n, current, `Session ${index}`);
+    ids.push(current.revision.id);
+  }
+  n.sqlite.prepare("UPDATE bridge_state SET applying=1 WHERE id=1").run();
+  try {
+    const step = 2 * 60 * 60;
+    ids.forEach((id, index) => {
+      n.sqlite.prepare("UPDATE atlas_page_revisions SET created_at=? WHERE id=?").run(
+        Math.floor(Date.now() / 1000) - (ids.length - index) * step, id);
+    });
+  } finally {
+    n.sqlite.prepare("UPDATE bridge_state SET applying=0 WHERE id=1").run();
+  }
+  const newest = await save(n, await page(n, original), "Newest");
+  return { newest, ids, dropped: ids.slice(0, ids.length + 1 - HISTORY_CHECKPOINTS) };
 }
 
 describe("Atlas editing between independent migrated backends", () => {
@@ -271,5 +293,52 @@ describe("Atlas editing between independent migrated backends", () => {
     const recovered = await on(b, (s) => s.getPage({ id: copies[0].id, accountId: "default" }));
     expect(recovered?.revision.markdown).not.toContain("atlas-file://image");
     await settle(b, a);
+  });
+
+  it("does not recover a page when a replicated revision prefix is deleted", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    const base = await create(a); await settle(a, b);
+    const offline = await save(b, await page(b, base), "Offline edit");
+    const aged = await agePrefix(a, base);
+    await drain(a);
+    for (let i = 0; i < 3; i++) await b.engine.pull();
+    const pages = await on(b, (s) => s.list({ accountId: "default", kind: "page" }));
+    expect(pages.map((item) => item.title)).toEqual(["Newest"]);
+    expect(pages[0].id).toBe(base.item.id);
+    expect(b.sqlite.prepare("SELECT markdown FROM atlas_page_revisions WHERE id=?").get(offline.revision.id)).toMatchObject({ markdown: expect.stringContaining("Offline edit") });
+    expect(b.sqlite.prepare("SELECT 1 FROM atlas_page_revisions WHERE id=?").get(aged.dropped[0])).toBeUndefined();
+    expect(b.engine.unverified()).toBe(0);
+  });
+
+  it("applies a replicated prefix delete without leaving a conflict", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    const base = await create(a); await settle(a, b);
+    const aged = await agePrefix(a, base);
+    await settle(a, b);
+    const oldestKept = aged.ids[aged.dropped.length];
+    for (const n of [a, b]) {
+      expect((await page(n, base)).conflicts).toEqual([]);
+      expect(n.sqlite.prepare("SELECT parent_revision_id AS parent FROM atlas_page_revisions WHERE id=?").get(oldestKept)).toEqual({ parent: null });
+      expect(n.sqlite.prepare("SELECT parent_revision_id AS parent FROM atlas_page_revisions WHERE id=?").get(aged.newest.revision.id)).toEqual({ parent: aged.ids[aged.ids.length - 1] });
+      for (const id of aged.dropped) expect(n.sqlite.prepare("SELECT 1 FROM atlas_page_revisions WHERE id=?").get(id)).toBeUndefined();
+      expect(n.engine.unverified()).toBe(0);
+    }
+  });
+
+  it("drops a revision that arrives after its replicated parent was deleted", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    const base = await create(a); await settle(a, b);
+    const aged = await agePrefix(a, base);
+    expect(aged.dropped).toContain(base.revision.id);
+    await drain(a);
+    const child = await save(b, await page(b, base), "Built on the deleted revision");
+    await drain(b); await a.engine.pull();
+    expect(a.sqlite.prepare("SELECT 1 FROM atlas_page_revisions WHERE id=?").get(child.revision.id)).toBeUndefined();
+    const pages = await on(a, (s) => s.list({ accountId: "default", kind: "page" }));
+    expect(pages.map((item) => item.id)).toEqual([base.item.id]);
+    const current = await page(a, base);
+    expect(current.revision.id).toBe(aged.newest.revision.id);
+    expect(current.revision.markdown).toContain("Newest");
+    expect(current.conflicts).toEqual([]);
   });
 });

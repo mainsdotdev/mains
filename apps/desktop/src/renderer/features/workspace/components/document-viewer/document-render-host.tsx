@@ -347,7 +347,7 @@ export function DocumentRenderHost({
     <div className="relative flex-1 min-h-0 min-w-0 flex flex-col bg-primary-100 dark:bg-primary-900">
       <div
         className={`relative flex-1 min-h-0 min-w-0 ${
-          isPresentation ? "overflow-hidden" : "overflow-auto p-3"
+          isPresentation ? "overflow-hidden overscroll-none" : "overflow-auto overscroll-none p-3"
         }`}
       >
         <div

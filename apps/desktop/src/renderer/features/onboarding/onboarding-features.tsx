@@ -104,15 +104,8 @@ export const CORE_FEATURES: CoreFeature[] = [
     accent: "default",
     previewPlacement: "center",
     preview: (
-      // The sidebar header's `SpaceModePicker`, open; shortcuts are the defaults.
-      <ModesPreview
-        prefixLabel="Mains"
-        items={[
-          { mode: "developer", shortcut: "⌘ 1" },
-          { mode: "work", shortcut: "⌘ 2" },
-          { mode: "chat", shortcut: "⌘ 3" },
-        ]}
-      />
+      // The sidebar header's `SpaceModePicker`.
+      <ModesPreview modes={["developer", "work", "chat"]} />
     ),
   },
   {

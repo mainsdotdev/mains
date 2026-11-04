@@ -62,6 +62,7 @@ export interface DailyActivity {
   copilot: number;
   codex: number;
   cursor: number;
+  opencode: number;
   other: number;
 }
 

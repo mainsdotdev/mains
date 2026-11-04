@@ -62,7 +62,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("rail app navigation", () => {
-  it.each(["copilot_cli", "cursor"])("disables Atlas for %s", (providerId) => {
+  it.each(["copilot_cli", "cursor", "opencode"])("disables Atlas for %s", (providerId) => {
     mocks.providerId = providerId;
     renderRail();
     const button = screen.getByRole("button", { name: "Atlas" }) as HTMLButtonElement;

@@ -155,6 +155,27 @@ export const BRIDGE_TABLES: Readonly<Record<string, BridgeTableDefinition>> = {
     localColumns: [], references: {},
     uniqueIndexes: {}, blobColumns: [],
   },
+  "issue_status_mappings": {
+    class: "local", primaryKey: ["resource_id", "state_id"], idKind: "composite", stream: "account",
+    ownerRoot: null, primaryRegister: null,
+    registers: {},
+    localColumns: [], references: {},
+    uniqueIndexes: {}, blobColumns: [],
+  },
+  "sync_cursors": {
+    class: "local", primaryKey: ["fetcher_id", "resource_id"], idKind: "composite", stream: "account",
+    ownerRoot: null, primaryRegister: null,
+    registers: {},
+    localColumns: [], references: {},
+    uniqueIndexes: {}, blobColumns: [],
+  },
+  "issue_statuses": {
+    class: "local", primaryKey: ["id"], idKind: "text", stream: "account",
+    ownerRoot: null, primaryRegister: null,
+    registers: {},
+    localColumns: [], references: {},
+    uniqueIndexes: {}, blobColumns: [],
+  },
   "paired_devices": {
     class: "local", primaryKey: ["id"], idKind: "text", stream: "account",
     ownerRoot: null, primaryRegister: null,

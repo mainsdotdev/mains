@@ -1,0 +1,1703 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type {
+  AccountInfo,
+  CodexMemorySetting,
+  CodexMemorySettings,
+  ConnectorInfo,
+  ConnectorOverview,
+  ConsumeRateLimitResetCreditOutcome,
+  ConsumeRateLimitResetCreditParams,
+  ModelInfo,
+  PluginDetail,
+  PluginInfo,
+  PluginListResponse,
+  PluginScope,
+  RateLimitInfo,
+  SkillInfo,
+} from "../../../../../shared/adapter.types";
+import {
+  filterCodexModelsForUsage,
+} from "../../../../../shared/codex-model-availability";
+import { getPluginInstallBlockReason } from "../../../../../shared/plugin-install-availability";
+import {
+  createLogger,
+  type AdapterLogger,
+} from "../adapter.shared";
+import type { CodexAppServer } from "./codex-app-server.client";
+import type { CodexAppServerResult } from "./codex-app-server-protocol/rpc";
+import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
+import type { McpServerStatus } from "./codex-app-server-protocol/generated/v2/McpServerStatus";
+import { discoverMcpAppEntrypoints, installedMcpAppEntrypoints, type McpAppPluginSource } from "./codex-mcp-apps";
+
+interface CodexCapabilitiesOptions {
+  /**
+   * Getter, not a value: the driver refreshes its config object in place when
+   * provider settings change, so a snapshot taken here would go stale.
+   */
+  getDefaultModel?: () => string | undefined;
+  ensureServer: (cwd?: string) => Promise<CodexAppServer>;
+  getRunningServer: () => CodexAppServer | null;
+  getCliHealth: () => Promise<NonNullable<AccountInfo["cli"]>>;
+  logger?: AdapterLogger;
+}
+
+interface AppDirectoryEntry {
+  name?: string;
+  description?: string;
+  logoUrl?: string;
+  installUrl?: string;
+  isAccessible?: boolean;
+  isEnabled?: boolean;
+}
+
+interface RemotePluginReference {
+  remotePluginId: string;
+  marketplaceName: string;
+}
+
+const PLUGIN_CATALOG_TTL_MS = 15 * 60 * 1000;
+const INSTALLED_PLUGINS_TTL_MS = 5 * 60 * 1000;
+// Cold discovery can wait for remote MCP servers to initialize.
+const MCP_DISCOVERY_TIMEOUT_MS = 60_000;
+
+function isUnsupportedRpc(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /method not found|unknown method|not supported|unsupported method|experimental api/i.test(message);
+}
+
+let appDirectoryMemo: {
+  mtimeMs: number;
+  map: Map<string, AppDirectoryEntry>;
+} | null = null;
+
+/** Map one Codex rate-limit snapshot into Mains' provider shape. */
+export function mapRateLimitSnapshot(
+  rateLimit: Record<string, unknown> | undefined,
+): RateLimitInfo | null {
+  if (!rateLimit) return null;
+  const primary = rateLimit.primary as Record<string, unknown> | undefined;
+  const secondary = rateLimit.secondary as
+    | Record<string, unknown>
+    | undefined;
+  const credits = rateLimit.credits as Record<string, unknown> | undefined;
+  const individualLimit = rateLimit.individualLimit as
+    | Record<string, unknown>
+    | undefined;
+
+  return {
+    ...(typeof rateLimit.limitId === "string"
+      ? { limitId: rateLimit.limitId }
+      : {}),
+    ...(typeof rateLimit.limitName === "string"
+      ? { limitName: rateLimit.limitName }
+      : {}),
+    ...(typeof rateLimit.normalModelSlug === "string"
+      ? { normalModelSlug: rateLimit.normalModelSlug }
+      : {}),
+    planType:
+      typeof rateLimit.planType === "string"
+        ? rateLimit.planType
+        : undefined,
+    primary: primary
+      ? {
+          usedPercent: primary.usedPercent as number,
+          windowDurationMins:
+            typeof primary.windowDurationMins === "number"
+              ? primary.windowDurationMins
+              : undefined,
+          resetsAt:
+            typeof primary.resetsAt === "number"
+              ? primary.resetsAt
+              : undefined,
+        }
+      : undefined,
+    secondary: secondary
+      ? {
+          usedPercent: secondary.usedPercent as number,
+          windowDurationMins:
+            typeof secondary.windowDurationMins === "number"
+              ? secondary.windowDurationMins
+              : undefined,
+          resetsAt:
+            typeof secondary.resetsAt === "number"
+              ? secondary.resetsAt
+              : undefined,
+        }
+      : undefined,
+    credits: credits
+      ? {
+          hasCredits: credits.hasCredits as boolean,
+          balance:
+            typeof credits.balance === "string"
+              ? credits.balance
+              : undefined,
+          unlimited: credits.unlimited as boolean,
+        }
+      : undefined,
+    ...(individualLimit
+      ? {
+          individualLimit: {
+            limit: individualLimit.limit as string,
+            used: individualLimit.used as string,
+            remainingPercent: individualLimit.remainingPercent as number,
+            resetsAt: individualLimit.resetsAt as number,
+          },
+        }
+      : {}),
+    ...(typeof rateLimit.spendControlReached === "boolean"
+      ? { spendControlReached: rateLimit.spendControlReached }
+      : {}),
+    ...(typeof rateLimit.rateLimitReachedType === "string"
+      ? { rateLimitReachedType: rateLimit.rateLimitReachedType }
+      : {}),
+  };
+}
+
+/** Map the complete account/rateLimits/read response, including new buckets. */
+export function mapRateLimitResponse(
+  response: Record<string, unknown> | undefined,
+): RateLimitInfo | null {
+  if (!response) return null;
+  const rateLimits = mapRateLimitSnapshot(
+    response.rateLimits as Record<string, unknown> | undefined,
+  );
+  if (!rateLimits) return null;
+
+  const rawBuckets = response.rateLimitsByLimitId as
+    | Record<string, unknown>
+    | null
+    | undefined;
+  const rateLimitsByLimitId: NonNullable<
+    RateLimitInfo["rateLimitsByLimitId"]
+  > = {};
+  for (const [limitId, rawSnapshot] of Object.entries(rawBuckets ?? {})) {
+    const snapshot = mapRateLimitSnapshot(
+      rawSnapshot as Record<string, unknown> | undefined,
+    );
+    if (snapshot) rateLimitsByLimitId[limitId] = snapshot;
+  }
+
+  const rawResetCredits = response.rateLimitResetCredits as
+    | Record<string, unknown>
+    | null
+    | undefined;
+  const rawCredits = rawResetCredits?.credits;
+  const resetCredits = Array.isArray(rawCredits)
+    ? rawCredits.map((rawCredit) => {
+        const credit = rawCredit as Record<string, unknown>;
+        return {
+          id: credit.id as string,
+          resetType: credit.resetType as string,
+          status: credit.status as string,
+          grantedAt: credit.grantedAt as number,
+          ...(typeof credit.expiresAt === "number"
+            ? { expiresAt: credit.expiresAt }
+            : {}),
+          ...(typeof credit.title === "string"
+            ? { title: credit.title }
+            : {}),
+          ...(typeof credit.description === "string"
+            ? { description: credit.description }
+            : {}),
+        };
+      })
+    : undefined;
+
+  return {
+    ...rateLimits,
+    ...(typeof response.ordinaryUsageAllowed === "boolean" ||
+    response.ordinaryUsageAllowed === null
+      ? {
+          ordinaryUsageAllowed: response.ordinaryUsageAllowed as
+            | boolean
+            | null,
+        }
+      : {}),
+    ...(Object.keys(rateLimitsByLimitId).length > 0
+      ? { rateLimitsByLimitId }
+      : {}),
+    ...(rawResetCredits
+      ? {
+          rateLimitResetCredits: {
+            availableCount: Number(rawResetCredits.availableCount ?? 0),
+            ...(resetCredits ? { credits: resetCredits } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function fileToDataUrl(
+  filePath: string | undefined | null,
+): string | undefined {
+  if (!filePath) return undefined;
+  try {
+    const data = fs.readFileSync(filePath);
+    const extension = path.extname(filePath).toLowerCase().slice(1);
+    const mime =
+      extension === "svg"
+        ? "image/svg+xml"
+        : extension === "png"
+          ? "image/png"
+          : extension === "jpg" || extension === "jpeg"
+            ? "image/jpeg"
+            : extension === "gif"
+              ? "image/gif"
+              : extension === "webp"
+                ? "image/webp"
+                : "application/octet-stream";
+    return `data:${mime};base64,${data.toString("base64")}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function loadAppDirectory(): Map<string, AppDirectoryEntry> {
+  try {
+    const directory = path.join(
+      os.homedir(),
+      ".codex",
+      "cache",
+      "codex_app_directory",
+    );
+    let newestPath: string | null = null;
+    let newestMtime = 0;
+    for (const fileName of fs.readdirSync(directory)) {
+      if (!fileName.endsWith(".json")) continue;
+      const filePath = path.join(directory, fileName);
+      const stat = fs.statSync(filePath);
+      if (stat.mtimeMs > newestMtime) {
+        newestMtime = stat.mtimeMs;
+        newestPath = filePath;
+      }
+    }
+    if (!newestPath) return new Map();
+    if (appDirectoryMemo?.mtimeMs === newestMtime) {
+      return appDirectoryMemo.map;
+    }
+
+    const data = JSON.parse(fs.readFileSync(newestPath, "utf8")) as {
+      connectors?: Array<Record<string, unknown>>;
+    };
+    const map = new Map<string, AppDirectoryEntry>();
+    for (const connector of data.connectors ?? []) {
+      const id = connector.id as string | undefined;
+      if (!id) continue;
+      map.set(id, {
+        name: (connector.name as string) ?? undefined,
+        description: (connector.description as string) ?? undefined,
+        logoUrl: (connector.logoUrl as string) ?? undefined,
+        installUrl: (connector.installUrl as string) ?? undefined,
+        isAccessible: (connector.isAccessible as boolean) ?? undefined,
+        isEnabled: (connector.isEnabled as boolean) ?? undefined,
+      });
+    }
+    appDirectoryMemo = { mtimeMs: newestMtime, map };
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+function pluginAssetUrl(
+  ...candidates: Array<string | undefined | null>
+): string | undefined {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (/^(https?:|data:)/i.test(candidate)) return candidate;
+    const dataUrl = fileToDataUrl(candidate);
+    if (dataUrl) return dataUrl;
+  }
+  return undefined;
+}
+
+function mapPluginAvailability(
+  value: unknown,
+): PluginInfo["availability"] {
+  if (value === "AVAILABLE" || value === "DISABLED_BY_ADMIN") {
+    return value;
+  }
+  // Older experimental plugin payloads wrapped availability in an object.
+  if (value && typeof value === "object") {
+    const legacyType = (value as { type?: unknown }).type;
+    if (legacyType === "available") return "AVAILABLE";
+    if (legacyType === "disabledByAdmin") return "DISABLED_BY_ADMIN";
+  }
+  return undefined;
+}
+
+function mapPluginDisabledReason(
+  value: unknown,
+): PluginInfo["disabledReason"] {
+  switch (value) {
+    case "disabled_by_admin":
+    case "plan_not_eligible":
+    case "required_app_unavailable":
+    case "unknown":
+      return value;
+    default:
+      return typeof value === "string" ? "unknown" : null;
+  }
+}
+
+function mapEligiblePlanTypes(value: unknown): string[] | null {
+  return Array.isArray(value)
+    ? value.filter((plan): plan is string => typeof plan === "string")
+    : null;
+}
+
+export function mapCodexPluginList(
+  result: Record<string, unknown> | null | undefined,
+): PluginListResponse {
+  const rawMarketplaces = Array.isArray(result?.marketplaces)
+    ? (result.marketplaces as Array<Record<string, unknown>>)
+    : [];
+
+  return {
+    marketplaces: rawMarketplaces.map((marketplace) => {
+      const rawPlugins = Array.isArray(marketplace.plugins)
+        ? (marketplace.plugins as Array<Record<string, unknown>>)
+        : [];
+
+      return {
+        name: (marketplace.name as string) ?? "",
+        path: (marketplace.path as string | null | undefined) ?? "",
+        interface:
+          (marketplace.interface as {
+            displayName?: string;
+          } | null | undefined) ?? null,
+        plugins: rawPlugins.map((plugin): PluginInfo => {
+          const pluginInterface = plugin.interface as
+            | Record<string, unknown>
+            | null
+            | undefined;
+          return {
+            id: (plugin.id as string) ?? "",
+            name: (plugin.name as string) ?? "",
+            source:
+              (plugin.source as {
+                type: string;
+                path: string;
+              } | undefined) ?? { type: "local", path: "" },
+            installed: (plugin.installed as boolean) ?? false,
+            enabled: (plugin.enabled as boolean) ?? false,
+            installPolicy:
+              (plugin.installPolicy as PluginInfo["installPolicy"]) ??
+              "AVAILABLE",
+            availability: mapPluginAvailability(plugin.availability),
+            disabledReason: mapPluginDisabledReason(plugin.disabledReason),
+            eligiblePlanTypes: mapEligiblePlanTypes(
+              plugin.eligiblePlanTypes,
+            ),
+            installedAt:
+              typeof plugin.installedAt === "number"
+                ? plugin.installedAt
+                : null,
+            authPolicy:
+              (plugin.authPolicy as PluginInfo["authPolicy"]) ?? "ON_INSTALL",
+            interface: pluginInterface
+              ? {
+                  displayName:
+                    (pluginInterface.displayName as string | undefined) ??
+                    undefined,
+                  shortDescription:
+                    (pluginInterface.shortDescription as string | undefined) ??
+                    undefined,
+                  longDescription:
+                    (pluginInterface.longDescription as string | undefined) ??
+                    undefined,
+                  developerName:
+                    (pluginInterface.developerName as string | undefined) ??
+                    undefined,
+                  category:
+                    (pluginInterface.category as string | undefined) ??
+                    undefined,
+                  capabilities:
+                    (pluginInterface.capabilities as string[] | undefined) ??
+                    [],
+                  websiteUrl:
+                    (pluginInterface.websiteUrl as string | undefined) ??
+                    undefined,
+                  defaultPrompt:
+                    (pluginInterface.defaultPrompt as string[] | undefined) ??
+                    undefined,
+                  brandColor:
+                    (pluginInterface.brandColor as string | undefined) ??
+                    undefined,
+                  composerIcon: pluginAssetUrl(
+                    pluginInterface.composerIcon as string | undefined,
+                    pluginInterface.composerIconUrl as string | undefined,
+                  ),
+                  logo: pluginAssetUrl(
+                    pluginInterface.logo as string | undefined,
+                    pluginInterface.logoUrl as string | undefined,
+                  ),
+                  logoDark: pluginAssetUrl(
+                    pluginInterface.logoDark as string | undefined,
+                    pluginInterface.logoUrlDark as string | undefined,
+                  ),
+                  screenshots: [
+                    ...((pluginInterface.screenshots as
+                      | string[]
+                      | undefined) ?? []),
+                    ...((pluginInterface.screenshotUrls as
+                      | string[]
+                      | undefined) ?? []),
+                  ]
+                    .map((screenshot) => pluginAssetUrl(screenshot))
+                    .filter(Boolean) as string[],
+                  privacyPolicyUrl:
+                    (pluginInterface.privacyPolicyUrl as string | undefined) ??
+                    undefined,
+                  termsOfServiceUrl:
+                    (pluginInterface.termsOfServiceUrl as string | undefined) ??
+                    undefined,
+                }
+              : null,
+          };
+        }),
+      };
+    }),
+    marketplaceLoadErrors:
+      (result?.marketplaceLoadErrors as
+        | PluginListResponse["marketplaceLoadErrors"]
+        | undefined) ?? [],
+    remoteSyncError:
+      (result?.remoteSyncError as string | null | undefined) ?? null,
+    featuredPluginIds:
+      (result?.featuredPluginIds as string[] | undefined) ?? [],
+  };
+}
+
+function mapPluginDetail(
+  rawPlugin: Record<string, unknown>,
+): PluginDetail {
+  const summary = rawPlugin.summary as Record<string, unknown>;
+  const pluginInterface = summary.interface as
+    | Record<string, unknown>
+    | undefined;
+  const skills =
+    (rawPlugin.skills as Array<Record<string, unknown>>) ?? [];
+  const apps = (rawPlugin.apps as Array<Record<string, unknown>>) ?? [];
+  const appDirectory = loadAppDirectory();
+
+  return {
+    marketplaceName: rawPlugin.marketplaceName as string,
+    marketplacePath: rawPlugin.marketplacePath as string,
+    summary: {
+      id: summary.id as string,
+      name: summary.name as string,
+      source:
+        (summary.source as { type: string; path: string }) ?? {
+          type: "local",
+          path: "",
+        },
+      installed: (summary.installed as boolean) ?? false,
+      enabled: (summary.enabled as boolean) ?? false,
+      installPolicy:
+        (summary.installPolicy as PluginInfo["installPolicy"]) ?? "AVAILABLE",
+      availability: mapPluginAvailability(summary.availability),
+      disabledReason: mapPluginDisabledReason(summary.disabledReason),
+      eligiblePlanTypes: mapEligiblePlanTypes(summary.eligiblePlanTypes),
+      installedAt:
+        typeof summary.installedAt === "number"
+          ? summary.installedAt
+          : null,
+      authPolicy:
+        (summary.authPolicy as PluginInfo["authPolicy"]) ?? "ON_INSTALL",
+      interface: pluginInterface
+        ? {
+            displayName:
+              pluginInterface.displayName as string | undefined,
+            shortDescription:
+              pluginInterface.shortDescription as string | undefined,
+            longDescription:
+              pluginInterface.longDescription as string | undefined,
+            developerName:
+              pluginInterface.developerName as string | undefined,
+            category: pluginInterface.category as string | undefined,
+            capabilities:
+              (pluginInterface.capabilities as string[]) ?? [],
+            websiteUrl:
+              pluginInterface.websiteUrl as string | undefined,
+            defaultPrompt:
+              pluginInterface.defaultPrompt as string[] | undefined,
+            brandColor:
+              pluginInterface.brandColor as string | undefined,
+            composerIcon: pluginAssetUrl(
+              pluginInterface.composerIcon as string | undefined,
+              pluginInterface.composerIconUrl as string | undefined,
+            ),
+            logo: pluginAssetUrl(
+              pluginInterface.logo as string | undefined,
+              pluginInterface.logoUrl as string | undefined,
+            ),
+            logoDark: pluginAssetUrl(
+              pluginInterface.logoDark as string | undefined,
+              pluginInterface.logoUrlDark as string | undefined,
+            ),
+            screenshots: [
+              ...((pluginInterface.screenshots as string[]) ?? []),
+              ...((pluginInterface.screenshotUrls as string[]) ?? []),
+            ]
+              .map((screenshot) => pluginAssetUrl(screenshot))
+              .filter(Boolean) as string[],
+            privacyPolicyUrl:
+              pluginInterface.privacyPolicyUrl as string | undefined,
+            termsOfServiceUrl:
+              pluginInterface.termsOfServiceUrl as string | undefined,
+          }
+        : null,
+    },
+    description: (rawPlugin.description as string) ?? null,
+    skills: skills.map((skill) => {
+      const skillInterface = skill.interface as
+        | Record<string, unknown>
+        | undefined;
+      return {
+        name: skill.name as string,
+        displayName:
+          (skillInterface?.displayName as string | undefined) ?? undefined,
+        path: skill.path as string | undefined,
+        description:
+          (skillInterface?.longDescription as string | undefined) ??
+          (skill.description as string | undefined),
+        shortDescription:
+          (skillInterface?.shortDescription as string | undefined) ??
+          (skill.shortDescription as string | undefined),
+        enabled: (skill.enabled as boolean) ?? false,
+      };
+    }),
+    apps: apps.map((app) => {
+      const directoryEntry = appDirectory.get(app.id as string);
+      return {
+        id: app.id as string,
+        name:
+          (app.name as string) ||
+          directoryEntry?.name ||
+          (app.id as string),
+        needsAuth: (app.needsAuth as boolean) ?? false,
+        description:
+          (app.description as string | undefined) ??
+          directoryEntry?.description,
+        installUrl:
+          (app.installUrl as string | undefined) ??
+          directoryEntry?.installUrl,
+        isAccessible:
+          (app.isAccessible as boolean | undefined) ??
+          directoryEntry?.isAccessible,
+        isEnabled:
+          (app.isEnabled as boolean | undefined) ??
+          directoryEntry?.isEnabled,
+        category: app.category as string | undefined,
+        iconUrl: directoryEntry?.logoUrl,
+      };
+    }),
+    mcpServers: (rawPlugin.mcpServers as string[]) ?? [],
+  };
+}
+
+export function createCodexCapabilities(
+  options: CodexCapabilitiesOptions,
+) {
+  const logger =
+    options.logger ?? createLogger("[CodexCapabilities]");
+  const marketplacePathCache = new Map<string, string>();
+  const remotePluginRefCache = new Map<
+    string,
+    RemotePluginReference
+  >();
+  let pluginCatalogCache: {
+    value: PluginListResponse;
+    fetchedAt: number;
+  } | null = null;
+  const installedPluginsCache = new Map<string, {
+    value: PluginListResponse;
+    fetchedAt: number;
+  }>();
+  let pluginCatalogInFlight: Promise<PluginListResponse> | null = null;
+  const installedPluginsInFlight = new Map<string, Promise<PluginListResponse>>();
+  let pluginCapabilityPromise: Promise<void> | null = null;
+  let pluginCacheGeneration = 0;
+  const mcpAppPluginSources = new Map<string, Promise<Pick<McpAppPluginSource, "connectorIds" | "mcpServers">>>();
+  let mcpInventoryInFlight: Promise<McpServerStatus[]> | null = null;
+
+  // ── Session install overlay ──────────────────────────────────
+  // `plugin/installed` is answered from an install registry the app-server
+  // snapshots when it boots: a plugin installed from a *remote* marketplace
+  // mid-session never appears in it, even though `plugin/list` flips the same
+  // plugin to installed=true and `skills/list` starts returning its skills
+  // straight away (verified against codex-cli 0.153.0). Since Mains keeps one
+  // long-lived app-server per adapter, without this overlay Settings › Plugins
+  // and the "@" menu's Plugins section only catch up when the app restarts.
+  // Entries are dropped as soon as the server reports the plugin itself.
+  const sessionInstalls = new Map<
+    string,
+    { marketplaceName: string; plugin: PluginInfo }
+  >();
+  const sessionUninstalls = new Set<string>();
+
+  function findCatalogPlugin(pluginId: string): PluginInfo | undefined {
+    for (const marketplace of pluginCatalogCache?.value.marketplaces ?? []) {
+      const plugin = marketplace.plugins.find(
+        (candidate) => candidate.id === pluginId,
+      );
+      if (plugin) return plugin;
+    }
+    return undefined;
+  }
+
+  function assertPluginCanInstall(pluginId: string): void {
+    const plugin = findCatalogPlugin(pluginId);
+    if (!plugin) return;
+    const blockReason = getPluginInstallBlockReason(plugin);
+    if (blockReason) throw new Error(blockReason);
+  }
+
+  /** Snapshot the catalog entry for a plugin before its caches are dropped. */
+  function captureCatalogEntry(pluginId: string): {
+    marketplaceName: string;
+    plugin: PluginInfo;
+  } {
+    for (const marketplace of pluginCatalogCache?.value.marketplaces ?? []) {
+      const plugin = marketplace.plugins.find(
+        (candidate) => candidate.id === pluginId,
+      );
+      if (plugin) {
+        return {
+          marketplaceName: marketplace.name,
+          // The catalog entry still carries the pre-install flags.
+          plugin: { ...plugin, installed: true, enabled: true },
+        };
+      }
+    }
+    // The catalog is normally warm (installs are initiated from the plugin
+    // browser), but fall back to an id-derived stub so the row still shows.
+    const separatorIndex = pluginId.lastIndexOf("@");
+    return {
+      marketplaceName:
+        separatorIndex !== -1 ? pluginId.slice(separatorIndex + 1) : "",
+      plugin: {
+        id: pluginId,
+        name:
+          separatorIndex !== -1 ? pluginId.slice(0, separatorIndex) : pluginId,
+        source: { type: "remote", path: "" },
+        installed: true,
+        enabled: true,
+        installPolicy: "AVAILABLE",
+        authPolicy: "ON_INSTALL",
+        interface: null,
+      },
+    };
+  }
+
+  /** Fold this session's installs/uninstalls into a `plugin/installed` reply. */
+  function applySessionOverlay(
+    list: PluginListResponse,
+  ): PluginListResponse {
+    if (sessionInstalls.size === 0 && sessionUninstalls.size === 0) {
+      return list;
+    }
+    const marketplaces = list.marketplaces.map((marketplace) => ({
+      ...marketplace,
+      plugins: marketplace.plugins.filter(
+        (plugin) => !sessionUninstalls.has(plugin.id),
+      ),
+    }));
+    for (const [pluginId, entry] of sessionInstalls) {
+      const alreadyReported = marketplaces.some((marketplace) =>
+        marketplace.plugins.some((plugin) => plugin.id === pluginId),
+      );
+      if (alreadyReported) continue;
+      const plugin: PluginInfo = { ...entry.plugin, installed: true };
+      const marketplace = marketplaces.find(
+        (candidate) => candidate.name === entry.marketplaceName,
+      );
+      if (marketplace) {
+        marketplace.plugins = [...marketplace.plugins, plugin];
+      } else {
+        marketplaces.push({
+          name: entry.marketplaceName,
+          path: "",
+          interface: null,
+          plugins: [plugin],
+        });
+      }
+    }
+    return { ...list, marketplaces };
+  }
+
+  function indexPluginReferences(
+    result: Record<string, unknown>,
+  ): void {
+    const marketplaces = Array.isArray(result.marketplaces)
+      ? (result.marketplaces as Array<Record<string, unknown>>)
+      : [];
+    for (const marketplace of marketplaces) {
+      const marketplaceName = marketplace.name as string;
+      const marketplacePath = marketplace.path as
+        | string
+        | null
+        | undefined;
+      if (marketplacePath) {
+        marketplacePathCache.set(marketplaceName, marketplacePath);
+      }
+
+      const plugins = Array.isArray(marketplace.plugins)
+        ? (marketplace.plugins as Array<Record<string, unknown>>)
+        : [];
+      for (const plugin of plugins) {
+        const remotePluginId = plugin.remotePluginId as
+          | string
+          | undefined;
+        if (!remotePluginId) continue;
+        const reference = {
+          remotePluginId,
+          marketplaceName,
+        };
+        remotePluginRefCache.set(plugin.id as string, reference);
+        remotePluginRefCache.set(plugin.name as string, reference);
+      }
+    }
+  }
+
+  async function assertPluginCapability(
+    server: CodexAppServer,
+  ): Promise<void> {
+    pluginCapabilityPromise ??= (async () => {
+      let cursor: string | null = null;
+      do {
+        const result: {
+          data: Array<{
+            name: string;
+            enabled: boolean;
+            stage: string;
+          }>;
+          nextCursor: string | null;
+        } = await server.sendRequest("experimentalFeature/list", {
+          cursor,
+          limit: 100,
+        });
+        const feature = result.data.find(
+          ({ name }) => name === "plugins",
+        );
+        if (feature) {
+          if (!feature.enabled || feature.stage === "removed") {
+            throw new Error(
+              "Codex plugins feature is disabled or unavailable.",
+            );
+          }
+          return;
+        }
+        cursor = result.nextCursor;
+      } while (cursor);
+
+      throw new Error(
+        "Codex plugins feature is disabled or unavailable.",
+      );
+    })();
+    return pluginCapabilityPromise;
+  }
+
+  async function fetchPluginList(
+    method: "plugin/list" | "plugin/installed",
+    workspacePath?: string,
+  ): Promise<PluginListResponse> {
+    const server = await options.ensureServer(workspacePath);
+    await assertPluginCapability(server);
+    const result = (await server.sendRequest(
+      method,
+      workspacePath ? { cwds: [workspacePath] } : {},
+      30000,
+    )) as unknown as Record<string, unknown>;
+    indexPluginReferences(result);
+    return mapCodexPluginList(result);
+  }
+
+  function pluginListFailure(
+    error: unknown,
+    method: "plugin/list" | "plugin/installed",
+    staleValue?: PluginListResponse,
+  ): PluginListResponse {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    logger.error(`Failed to call ${method}:`, message);
+    if (/method not found|unknown method|not supported/i.test(message)) {
+      logger.warn(`${method} not supported by this Codex version`);
+    }
+    if (staleValue) {
+      return { ...staleValue, remoteSyncError: message };
+    }
+    return {
+      marketplaces: [],
+      marketplaceLoadErrors: [],
+      remoteSyncError: message,
+      featuredPluginIds: [],
+    };
+  }
+
+  function invalidatePluginCaches(): void {
+    pluginCacheGeneration += 1;
+    pluginCatalogCache = null;
+    installedPluginsCache.clear();
+    pluginCatalogInFlight = null;
+    installedPluginsInFlight.clear();
+    mcpAppPluginSources.clear();
+    mcpInventoryInFlight = null;
+  }
+
+  async function listRealtimeVoices(): Promise<RealtimeVoiceCatalog> {
+    const server = await options.ensureServer();
+    const { voices } = await server.sendRequest("thread/realtime/listVoices", {});
+    // Codex 0.163 adds a dedicated v3 catalog; older servers use v1 for v3 calls.
+    const availableVoices = voices?.v3?.length ? voices.v3 : voices?.v1;
+    if (!Array.isArray(availableVoices) || availableVoices.length === 0
+      || !availableVoices.every((voice) => typeof voice === "string" && voice.length > 0)) {
+      throw new Error("Codex returned an invalid voice list.");
+    }
+    // There is no defaultV3 field. Preserve defaultV1 when this catalog has it.
+    const defaultVoice = availableVoices.includes(voices.defaultV1)
+      ? voices.defaultV1 : availableVoices[0];
+    return { voices: [...new Set(availableVoices)], defaultVoice };
+  }
+
+  async function listModels(): Promise<ModelInfo[]> {
+    try {
+      const server = await options.ensureServer();
+      const catalog: CodexAppServerResult<"model/list">["data"] = [];
+      const cursors = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        const page: CodexAppServerResult<"model/list"> = await server.sendRequest(
+          "model/list", cursor ? { cursor } : {},
+        );
+        if (!Array.isArray(page.data)) {
+          logger.warn("Invalid models response from app-server");
+          return [];
+        }
+        catalog.push(...page.data);
+        cursor = page.nextCursor;
+        if (cursor) {
+          if (cursors.has(cursor)) throw new Error("Codex model catalog returned a repeated pagination cursor");
+          cursors.add(cursor);
+        }
+      } while (cursor);
+
+      const models = catalog
+        .filter((model) => !model.hidden)
+        .map((model): ModelInfo => {
+          const effortLevels = model.supportedReasoningEfforts.map(
+            (effort) => effort.reasoningEffort,
+          );
+          const serviceTiers =
+            model.serviceTiers.length > 0
+              ? model.serviceTiers.map((tier) => ({
+                  id: tier.id,
+                  name: tier.name || tier.id,
+                  description: tier.description,
+                }))
+              : model.additionalSpeedTiers.length > 0
+                ? model.additionalSpeedTiers.map((id) => ({
+                    id,
+                    name: id,
+                  }))
+                : undefined;
+          const displayName = (model.displayName || model.id)
+            .replace(/^gpt-/i, "GPT-")
+            .replace(/-codex/i, " Codex")
+            .replace(/-mini$/i, " Mini")
+            .replace(/-max$/i, " Max")
+            .replace(/-spark$/i, " Spark");
+
+          return {
+            id: model.id,
+            displayName,
+            isDefault:
+              model.isDefault ||
+              model.id === options.getDefaultModel?.(),
+            description: model.description,
+            capabilities: {
+              vision: model.inputModalities.includes("image"),
+            },
+            supportsEffort: effortLevels.length > 0,
+            supportedEffortLevels: effortLevels,
+            supportsFastMode:
+              serviceTiers?.some(
+                (tier) =>
+                  tier.id === "fast" || tier.id === "priority" || tier.id === "ultrafast",
+              ) ?? false,
+            serviceTiers,
+          };
+        });
+      return filterCodexModelsForUsage(models, await getRateLimits());
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      if (/not authenticated/i.test(message)) throw error;
+      logger.error("Failed to list models:", error);
+      return [];
+    }
+  }
+
+  async function getAccountInfo(): Promise<AccountInfo> {
+    const cli = await options.getCliHealth();
+    try {
+      const server = await options.ensureServer();
+      const result = await server.sendRequest("account/read", {});
+      return {
+        account: result.account,
+        requiresOpenaiAuth: result.requiresOpenaiAuth,
+        cli,
+      };
+    } catch (error) {
+      logger.error("Failed to read account:", error);
+      return { account: null, requiresOpenaiAuth: true, cli };
+    }
+  }
+
+  async function getRateLimits(): Promise<RateLimitInfo | null> {
+    try {
+      const server = options.getRunningServer();
+      if (!server) return null;
+      const result = await server.sendRequest(
+        "account/rateLimits/read",
+        undefined,
+      );
+      return mapRateLimitResponse(
+        result as unknown as Record<string, unknown>,
+      );
+    } catch (error) {
+      logger.error("Failed to get rate limits:", error);
+      return null;
+    }
+  }
+
+  async function getCodexMemorySettings(): Promise<CodexMemorySettings> {
+    const server = await options.ensureServer();
+    try {
+      const { config } = await server.sendRequest("config/read", {
+        includeLayers: false,
+      });
+      const enabled = config.features?.memories;
+      const disabledOnExternalContext =
+        config.memories?.disable_on_external_context;
+      return {
+        supported: true,
+        memoriesEnabled: typeof enabled === "boolean" ? enabled : null,
+        allowToolAssistedChats:
+          typeof disabledOnExternalContext === "boolean"
+            ? !disabledOnExternalContext
+            : null,
+      };
+    } catch (error) {
+      if (isUnsupportedRpc(error)) {
+        return {
+          supported: false,
+          memoriesEnabled: null,
+          allowToolAssistedChats: null,
+        };
+      }
+      throw error;
+    }
+  }
+
+  async function setCodexMemorySetting(
+    setting: CodexMemorySetting,
+    enabled: boolean,
+  ): Promise<void> {
+    if (setting !== "memoriesEnabled" && setting !== "allowToolAssistedChats") {
+      throw new Error("Unknown Codex memory setting.");
+    }
+    if (typeof enabled !== "boolean") {
+      throw new Error("Codex memory setting must be a boolean.");
+    }
+    const server = await options.ensureServer();
+    const keyPath = setting === "memoriesEnabled"
+      ? "features.memories"
+      : "memories.disable_on_external_context";
+    try {
+      const result = await server.sendRequest("config/value/write", {
+        keyPath,
+        value: setting === "memoriesEnabled" ? enabled : !enabled,
+        mergeStrategy: "upsert",
+      });
+      if (result.status === "okOverridden") {
+        throw new Error("A managed Codex policy overrides this memory setting.");
+      }
+    } catch (error) {
+      if (isUnsupportedRpc(error)) {
+        throw new Error("This Codex version cannot update memory settings.");
+      }
+      throw error;
+    }
+  }
+
+  async function resetCodexMemories(): Promise<void> {
+    const server = await options.ensureServer();
+    try {
+      await server.sendRequest("memory/reset", undefined);
+    } catch (error) {
+      if (isUnsupportedRpc(error)) {
+        throw new Error("This Codex version cannot delete memories through App Server.");
+      }
+      throw error;
+    }
+  }
+
+  async function consumeRateLimitResetCredit(
+    params: ConsumeRateLimitResetCreditParams,
+  ): Promise<ConsumeRateLimitResetCreditOutcome> {
+    const server = await options.ensureServer();
+    const result = await server.sendRequest(
+      "account/rateLimitResetCredit/consume",
+      {
+        idempotencyKey: params.idempotencyKey,
+        ...(params.creditId ? { creditId: params.creditId } : {}),
+      },
+    );
+    return result.outcome;
+  }
+
+  async function listSkills(
+    workspacePath?: string,
+  ): Promise<SkillInfo[]> {
+    try {
+      const server = await options.ensureServer(workspacePath);
+      const result = await server.sendRequest("skills/list", {
+        ...(workspacePath ? { cwds: [workspacePath] } : {}),
+        forceReload: true,
+      });
+      const skills: SkillInfo[] = [];
+      for (const entry of result.data) {
+        for (const skill of entry.skills) {
+          if (!skill.enabled) continue;
+          const scope =
+            skill.scope === "user"
+              ? "user"
+              : skill.scope === "repo"
+                ? "project"
+                : undefined;
+          skills.push({
+            name: skill.name,
+            description:
+              skill.interface?.shortDescription ||
+              skill.shortDescription ||
+              skill.description ||
+              "",
+            source: scope,
+            path: skill.path,
+            userInvokable: true,
+            displayName: skill.interface?.displayName,
+            shortDescription:
+              skill.interface?.shortDescription ??
+              skill.shortDescription,
+            iconSmall: skill.interface?.iconSmall,
+            iconLarge: skill.interface?.iconLarge,
+            brandColor: skill.interface?.brandColor,
+            defaultPrompt: skill.interface?.defaultPrompt,
+            scope: skill.scope,
+            enabled: skill.enabled,
+          });
+        }
+      }
+      return skills;
+    } catch (error) {
+      logger.error("Failed to list skills:", error);
+      return [];
+    }
+  }
+
+  async function listPlugins(): Promise<PluginListResponse> {
+    if (
+      pluginCatalogCache &&
+      Date.now() - pluginCatalogCache.fetchedAt <
+        PLUGIN_CATALOG_TTL_MS
+    ) {
+      return pluginCatalogCache.value;
+    }
+    if (pluginCatalogInFlight) return pluginCatalogInFlight;
+
+    const staleValue = pluginCatalogCache?.value;
+    const generation = pluginCacheGeneration;
+    const request = fetchPluginList("plugin/list")
+      .then((value) => {
+        if (generation === pluginCacheGeneration) {
+          pluginCatalogCache = {
+            value,
+            fetchedAt: Date.now(),
+          };
+        }
+        return value;
+      })
+      .catch((error) =>
+        pluginListFailure(error, "plugin/list", staleValue),
+      )
+      .finally(() => {
+        if (pluginCatalogInFlight === request) {
+          pluginCatalogInFlight = null;
+        }
+      });
+    pluginCatalogInFlight = request;
+    return request;
+  }
+
+  async function listInstalledPlugins(forceRefresh = false, workspacePath?: string): Promise<PluginListResponse> {
+    const key = workspacePath ?? "";
+    const cached = installedPluginsCache.get(key);
+    if (
+      !forceRefresh &&
+      cached &&
+      Date.now() - cached.fetchedAt <
+        INSTALLED_PLUGINS_TTL_MS
+    ) {
+      return applySessionOverlay(cached.value);
+    }
+    const inFlight = installedPluginsInFlight.get(key);
+    if (inFlight) return inFlight;
+
+    const staleValue = cached?.value;
+    const generation = pluginCacheGeneration;
+    const request = fetchPluginList("plugin/installed", workspacePath)
+      .then((value) => {
+        if (generation === pluginCacheGeneration) {
+          installedPluginsCache.set(key, {
+            value,
+            fetchedAt: Date.now(),
+          });
+        }
+        return value;
+      })
+      .catch((error) =>
+        pluginListFailure(error, "plugin/installed", staleValue),
+      )
+      .then(applySessionOverlay)
+      .finally(() => {
+        if (installedPluginsInFlight.get(key) === request) {
+          installedPluginsInFlight.delete(key);
+        }
+      });
+    installedPluginsInFlight.set(key, request);
+    return request;
+  }
+
+  /**
+   * `plugin/read` describes bundled apps and MCP servers, while their live
+   * enabled/authentication state lives on the app and MCP runtime RPCs. Merge
+   * the two here so plugin detail is the single connection-management surface.
+   */
+  async function enrichPluginConnectorState(
+    server: CodexAppServer,
+    detail: PluginDetail,
+  ): Promise<PluginDetail> {
+    let apps = detail.apps;
+    if (apps.length > 0) {
+      try {
+        const result = await server.sendRequest("app/installed", {
+          // Hosted setup completes in ChatGPT, without a local MCP OAuth event.
+          // Connection management needs a fresh runtime snapshot, including
+          // when this process has not loaded a tool-using conversation yet.
+          forceRefresh: true,
+        });
+        const runtimeById = new Map(
+          result.apps.map((app) => [app.id, app] as const),
+        );
+        apps = apps.map((app) => {
+          const runtime = runtimeById.get(app.id);
+          return runtime
+            ? {
+                ...app,
+                installed: true,
+                runtimeEnabled: runtime.enabled,
+                callable: runtime.callable,
+              }
+            : {
+                ...app,
+                installed: false,
+                callable: false,
+              };
+        });
+      } catch (error) {
+        if (!isUnsupportedRpc(error)) {
+          logger.warn("Failed to read plugin app runtime state:", error);
+        }
+      }
+    }
+
+    let mcpServerStatuses: NonNullable<PluginDetail["mcpServerStatuses"]> =
+      detail.mcpServers.map((name) => ({
+        name,
+        runtimeStatus: null,
+        authStatus: "unknown",
+        toolCount: 0,
+      }));
+    if (detail.mcpServers.length > 0) {
+      const wantedNames = new Set(detail.mcpServers);
+      const runtimeByName = new Map<
+        string,
+        NonNullable<PluginDetail["mcpServerStatuses"]>[number]
+      >();
+      try {
+        for (const status of await readMcpInventory()) {
+          if (!wantedNames.has(status.name)) continue;
+          runtimeByName.set(status.name, {
+            name: status.name,
+            runtimeStatus: status.runtimeStatus,
+            authStatus: status.authStatus,
+            pluginId: status.pluginId,
+            title: status.serverInfo?.title ?? status.serverInfo?.name,
+            description: status.serverInfo?.description,
+            websiteUrl: status.serverInfo?.websiteUrl,
+            toolCount: Object.values(status.tools ?? {}).filter(Boolean)
+              .length,
+            toolsError: status.toolsError,
+          });
+        }
+
+        mcpServerStatuses = mcpServerStatuses.map(
+          (mcp) => runtimeByName.get(mcp.name) ?? mcp,
+        );
+      } catch (error) {
+        if (!isUnsupportedRpc(error)) {
+          logger.warn("Failed to read plugin MCP runtime state:", error);
+        }
+      }
+    }
+
+    return { ...detail, apps, mcpServerStatuses };
+  }
+
+  async function readPluginMetadata(
+    pluginName: string,
+    marketplacePath: string,
+  ): Promise<PluginDetail> {
+    const server = await options.ensureServer();
+    await assertPluginCapability(server);
+    const remoteReference = !marketplacePath
+      ? remotePluginRefCache.get(pluginName)
+      : undefined;
+    if (!marketplacePath && !remoteReference) {
+      throw new Error(
+        `Marketplace not found for plugin "${pluginName}". Try browsing plugins first.`,
+      );
+    }
+    const params = marketplacePath
+      ? { pluginName, marketplacePath }
+      : {
+          pluginName: remoteReference!.remotePluginId,
+          remoteMarketplaceName:
+            remoteReference!.marketplaceName,
+        };
+    const result = await server.sendRequest(
+      "plugin/read",
+      params,
+      30000,
+    );
+    return mapPluginDetail(
+      result.plugin as unknown as Record<string, unknown>,
+    );
+  }
+
+  async function readPlugin(pluginName: string, marketplacePath: string): Promise<PluginDetail> {
+    const server = await options.ensureServer();
+    return enrichPluginConnectorState(server, await readPluginMetadata(pluginName, marketplacePath));
+  }
+
+  async function installPlugin(
+    pluginId: string,
+    _scope?: PluginScope,
+  ): Promise<void> {
+    assertPluginCanInstall(pluginId);
+    const server = await options.ensureServer();
+    await assertPluginCapability(server);
+    const separatorIndex = pluginId.lastIndexOf("@");
+    const marketplaceName =
+      separatorIndex !== -1
+        ? pluginId.slice(separatorIndex + 1)
+        : "";
+    const pluginName =
+      separatorIndex !== -1
+        ? pluginId.slice(0, separatorIndex)
+        : pluginId;
+    const marketplacePath =
+      marketplacePathCache.get(marketplaceName);
+    const remoteReference = remotePluginRefCache.get(pluginId);
+
+    if (marketplacePath) {
+      await server.sendRequest(
+        "plugin/install",
+        { pluginName, marketplacePath },
+        120000,
+      );
+      try {
+        await server.sendRequest("config/value/write", {
+          keyPath: `plugins.${pluginId}.enabled`,
+          value: true,
+          mergeStrategy: "replace",
+        });
+      } catch (error) {
+        logger.warn(
+          "Failed to auto-enable plugin via config:",
+          error,
+        );
+      }
+    } else if (remoteReference) {
+      await server.sendRequest(
+        "plugin/install",
+        {
+          pluginName: remoteReference.remotePluginId,
+          remoteMarketplaceName:
+            remoteReference.marketplaceName,
+        },
+        120000,
+      );
+    } else {
+      throw new Error(
+        `Marketplace not found for "${pluginId}". Try browsing plugins first.`,
+      );
+    }
+
+    // Capture before invalidating — the catalog cache is the only place the
+    // plugin's display metadata lives until the app-server is restarted.
+    sessionUninstalls.delete(pluginId);
+    sessionInstalls.set(pluginId, captureCatalogEntry(pluginId));
+    invalidatePluginCaches();
+    logger.info(`Plugin installed and enabled: ${pluginId}`);
+  }
+
+  async function uninstallPlugin(pluginId: string): Promise<void> {
+    const server = await options.ensureServer();
+    await assertPluginCapability(server);
+    const separatorIndex = pluginId.lastIndexOf("@");
+    const marketplaceName =
+      separatorIndex !== -1
+        ? pluginId.slice(separatorIndex + 1)
+        : "";
+    const marketplacePath =
+      marketplacePathCache.get(marketplaceName);
+    const remoteReference = remotePluginRefCache.get(pluginId);
+
+    if (marketplacePath) {
+      await server.sendRequest("plugin/uninstall", { pluginId });
+    } else if (remoteReference) {
+      await server.sendRequest("plugin/uninstall", {
+        pluginId: remoteReference.remotePluginId,
+      });
+    } else {
+      throw new Error(
+        `Marketplace not found for "${pluginId}". Try browsing plugins first.`,
+      );
+    }
+    sessionInstalls.delete(pluginId);
+    sessionUninstalls.add(pluginId);
+    invalidatePluginCaches();
+    logger.info(`Plugin uninstalled: ${pluginId}`);
+  }
+
+  async function setPluginEnabled(
+    pluginId: string,
+    enabled: boolean,
+  ): Promise<void> {
+    const server = await options.ensureServer();
+    await assertPluginCapability(server);
+    const separatorIndex = pluginId.lastIndexOf("@");
+    const marketplaceName =
+      separatorIndex !== -1
+        ? pluginId.slice(separatorIndex + 1)
+        : "";
+    if (
+      !marketplacePathCache.get(marketplaceName) &&
+      remotePluginRefCache.has(pluginId)
+    ) {
+      throw new Error(
+        "Codex remote plugins can't be enabled/disabled — uninstall the plugin instead.",
+      );
+    }
+    await server.sendRequest("config/value/write", {
+      keyPath: `plugins.${pluginId}.enabled`,
+      value: enabled,
+      mergeStrategy: "replace",
+    });
+    invalidatePluginCaches();
+    logger.info(
+      `Plugin ${enabled ? "enabled" : "disabled"}: ${pluginId}`,
+    );
+  }
+
+  async function listConnectors(
+    forceRefresh = false,
+  ): Promise<ConnectorOverview> {
+    const server = await options.ensureServer();
+    const catalog: Array<Record<string, unknown>> = [];
+
+    try {
+      let cursor: string | null = null;
+      do {
+        const page: CodexAppServerResult<"app/list"> =
+          await server.sendRequest("app/list", {
+            cursor,
+            limit: 100,
+            forceRefetch: forceRefresh,
+          });
+        catalog.push(
+          ...(page.data as unknown as Array<Record<string, unknown>>),
+        );
+        cursor = page.nextCursor;
+      } while (cursor);
+    } catch (error) {
+      if (isUnsupportedRpc(error)) {
+        logger.warn(
+          "Native connector management is unavailable in this Codex version",
+        );
+        return { supported: false, apps: [], mcpServers: [] };
+      }
+      throw error;
+    }
+
+    const installedById = new Map<
+      string,
+      {
+        runtimeName: string | null;
+        enabled: boolean;
+        callable: boolean;
+      }
+    >();
+    try {
+      const result = await server.sendRequest("app/installed", {
+        forceRefresh,
+      });
+      for (const app of result.apps) installedById.set(app.id, app);
+    } catch (error) {
+      if (!isUnsupportedRpc(error)) {
+        logger.warn("Failed to read installed connectors:", error);
+      }
+    }
+
+    const detailsById = new Map<string, Record<string, unknown>>();
+    try {
+      for (let index = 0; index < catalog.length; index += 100) {
+        const appIds = catalog
+          .slice(index, index + 100)
+          .map((app) => app.id as string)
+          .filter(Boolean);
+        if (appIds.length === 0) continue;
+        const result = await server.sendRequest("app/read", {
+          appIds,
+          includeTools: true,
+        });
+        for (const app of result.apps) {
+          detailsById.set(
+            app.id,
+            app as unknown as Record<string, unknown>,
+          );
+        }
+      }
+    } catch (error) {
+      if (!isUnsupportedRpc(error)) {
+        logger.warn("Failed to read connector details:", error);
+      }
+    }
+
+    const apps = catalog
+      .map((app): ConnectorInfo => {
+        const id = app.id as string;
+        const detail = detailsById.get(id);
+        const installed = installedById.get(id);
+        const branding = app.branding as
+          | Record<string, unknown>
+          | null
+          | undefined;
+        const rawTools = detail?.toolSummaries;
+        return {
+          id,
+          name:
+            (detail?.name as string | undefined) ??
+            (app.name as string | undefined) ??
+            id,
+          description:
+            (detail?.description as string | null | undefined) ??
+            (app.description as string | null | undefined),
+          logoUrl:
+            (detail?.iconUrl as string | null | undefined) ??
+            (app.logoUrl as string | null | undefined),
+          logoUrlDark:
+            (detail?.iconUrlDark as string | null | undefined) ??
+            (app.logoUrlDark as string | null | undefined),
+          installUrl:
+            (detail?.installUrl as string | null | undefined) ??
+            (app.installUrl as string | null | undefined),
+          distributionChannel:
+            (detail?.distributionChannel as string | null | undefined) ??
+            (app.distributionChannel as string | null | undefined),
+          category: branding?.category as string | null | undefined,
+          developer: branding?.developer as string | null | undefined,
+          pluginDisplayNames:
+            (detail?.pluginDisplayNames as string[] | undefined) ??
+            (app.pluginDisplayNames as string[] | undefined) ??
+            [],
+          isAccessible: Boolean(app.isAccessible),
+          isEnabled: Boolean(app.isEnabled),
+          installed: Boolean(installed),
+          runtimeName: installed?.runtimeName,
+          runtimeEnabled: installed?.enabled,
+          callable: installed?.callable ?? false,
+          tools: Array.isArray(rawTools)
+            ? rawTools.map((rawTool) => {
+                const tool = rawTool as Record<string, unknown>;
+                return {
+                  name: tool.name as string,
+                  title: tool.title as string | null | undefined,
+                  description: (tool.description as string) ?? "",
+                  isEnabled: Boolean(tool.isEnabled),
+                  disabledReason: tool.disabledReason as
+                    | string
+                    | null
+                    | undefined,
+                  isReadOnly: Boolean(tool.isReadOnly),
+                };
+              })
+            : [],
+        };
+      })
+      .sort((left, right) => {
+        if (left.callable !== right.callable) return left.callable ? -1 : 1;
+        if (left.installed !== right.installed) return left.installed ? -1 : 1;
+        return left.name.localeCompare(right.name);
+      });
+
+    const mcpServers: ConnectorOverview["mcpServers"] = [];
+    try {
+      for (const status of await readMcpInventory()) {
+        mcpServers.push({
+          name: status.name,
+          runtimeStatus: status.runtimeStatus,
+          authStatus: status.authStatus,
+          pluginId: status.pluginId,
+          title: status.serverInfo?.title ?? status.serverInfo?.name,
+          description: status.serverInfo?.description,
+          websiteUrl: status.serverInfo?.websiteUrl,
+          toolCount: Object.values(status.tools).filter(Boolean).length,
+          toolsError: status.toolsError,
+        });
+      }
+    } catch (error) {
+      if (!isUnsupportedRpc(error)) {
+        logger.warn("Failed to read MCP server status:", error);
+      }
+    }
+
+    mcpServers.sort((left, right) => left.name.localeCompare(right.name));
+    return { supported: true, apps, mcpServers };
+  }
+
+  async function startConnectorOAuth(serverName: string) {
+    const server = await options.ensureServer();
+    return server.sendRequest("mcpServer/oauth/login", {
+      name: serverName,
+    });
+  }
+
+  function readMcpInventory(): Promise<McpServerStatus[]> {
+    if (mcpInventoryInFlight) return mcpInventoryInFlight;
+    const request = (async () => {
+      const server = await options.ensureServer();
+      const inventory: McpServerStatus[] = [];
+      let cursor: string | null = null;
+      do {
+        const page: CodexAppServerResult<"mcpServerStatus/list"> =
+          await server.sendRequest("mcpServerStatus/list", {
+            cursor, limit: 100, detail: "toolsAndAuthOnly",
+          }, MCP_DISCOVERY_TIMEOUT_MS);
+        inventory.push(...page.data);
+        cursor = page.nextCursor;
+      } while (cursor);
+      return inventory;
+    })();
+    mcpInventoryInFlight = request;
+    const clear = () => {
+      if (mcpInventoryInFlight === request) mcpInventoryInFlight = null;
+    };
+    void request.then(clear, clear);
+    return request;
+  }
+
+  async function listMcpAppEntrypoints(inventory?: McpServerStatus[]) {
+    const entries = discoverMcpAppEntrypoints(inventory ?? await readMcpInventory());
+    if (!entries.length) return [];
+    const installed = await listInstalledPlugins(true);
+    if (installed.remoteSyncError) throw new Error(installed.remoteSyncError);
+    const plugins = installed.marketplaces.flatMap((marketplace) => marketplace.plugins
+      .filter((plugin) => plugin.installed && plugin.enabled)
+      .map((plugin) => ({ plugin, marketplacePath: marketplace.path })));
+    const sources: McpAppPluginSource[] = plugins.map(({ plugin }) => ({ plugin, connectorIds: [], mcpServers: [] }));
+    const sourceById = new Map(sources.map((source) => [source.plugin.id, source]));
+    const readSources = async (candidates: typeof plugins) => {
+      const results = await Promise.allSettled(candidates.map(async ({ plugin, marketplacePath }) => {
+        let request = mcpAppPluginSources.get(plugin.id);
+        if (!request) {
+          request = readPluginMetadata(marketplacePath ? plugin.name : plugin.id, marketplacePath).then((detail) => ({
+            connectorIds: detail.apps.map((app) => app.id), mcpServers: detail.mcpServers,
+          }));
+          mcpAppPluginSources.set(plugin.id, request);
+          void request.catch(() => {
+            if (mcpAppPluginSources.get(plugin.id) === request) mcpAppPluginSources.delete(plugin.id);
+          });
+        }
+        Object.assign(sourceById.get(plugin.id)!, await request);
+      }));
+      for (const result of results) {
+        if (result.status === "rejected") logger.warn("Failed to discover plugin app ownership:", result.reason);
+      }
+    };
+    // Names only prioritize metadata reads. Returned entries require exact ownership.
+    const normalize = (value: string) => value.toLowerCase().replace(/[\s._-]+/g, "");
+    const unowned = entries.filter((entry) => !entry.pluginId);
+    const preferred = plugins.filter(({ plugin }) => unowned.some((entry) =>
+      normalize(entry.name) === normalize(plugin.interface?.displayName ?? plugin.name)));
+    await readSources(preferred);
+    const matched = new Set(installedMcpAppEntrypoints(entries, sources).map((entry) => entry.id));
+    if (unowned.some((entry) => !matched.has(entry.id))) {
+      const readIds = new Set(preferred.map(({ plugin }) => plugin.id));
+      await readSources(plugins.filter(({ plugin }) => !readIds.has(plugin.id)));
+    }
+    return installedMcpAppEntrypoints(entries, sources);
+  }
+
+  return {
+    listModels,
+    invalidateCatalogs: invalidatePluginCaches,
+    listRealtimeVoices,
+    getAccountInfo,
+    getRateLimits,
+    getCodexMemorySettings,
+    setCodexMemorySetting,
+    resetCodexMemories,
+    consumeRateLimitResetCredit,
+    listSkills,
+    listPlugins,
+    listInstalledPlugins,
+    readPlugin,
+    installPlugin,
+    uninstallPlugin,
+    setPluginEnabled,
+    listConnectors,
+    startConnectorOAuth,
+    readMcpInventory,
+    listMcpAppEntrypoints,
+    onServerClosed(): void {
+      pluginCapabilityPromise = null;
+      invalidatePluginCaches();
+    },
+    shutdown(): void {
+      pluginCapabilityPromise = null;
+      invalidatePluginCaches();
+      marketplacePathCache.clear();
+      remotePluginRefCache.clear();
+    },
+  };
+}
+
+export type CodexCapabilities = ReturnType<
+  typeof createCodexCapabilities
+>;

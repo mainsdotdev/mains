@@ -15,6 +15,7 @@ export {
   buildPerFileDiffHashes,
   parsePerFileDiffStats,
   type DiffSnapshot,
+  type DiffFileStatus,
   type FileDiffStat,
 } from "./git-snapshot";
 export type {

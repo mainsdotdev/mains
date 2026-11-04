@@ -32,6 +32,7 @@ import {
   PinFilled,
 } from "@/components/ui/icons";
 import { useGetInstalledAppsQuery } from "@/lib/redux/api";
+import { SIDEBAR_PROJECT_CHILD_ROW_CLASS } from "@/lib/sidebar-layout";
 import { useGetLatestWorkspaceDiffSummaryQuery } from "@/lib/redux/api/workspaceApi";
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import type { GroupingMode } from "./workspace-group-dropdown";
@@ -269,8 +270,8 @@ export default function WorkspaceItem({
             onClick?.();
           }
         }}
-        className={`block py-1.25
-           transition-all duration-200 ease-out ${sortHandle?.listeners ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${grouping !== "project" ? "rounded-2xl px-2.5" : "rounded-[10px] px-2.5"} ${
+        className={`block
+           transition-all duration-200 ease-out ${sortHandle?.listeners ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${grouping !== "project" ? "rounded-2xl px-2.5 py-1.25" : `rounded-[10px] ${SIDEBAR_PROJECT_CHILD_ROW_CLASS}`} ${
              isActive
                ? "bg-primary/50 glass-outline-soft glass-outline dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
                : "bg-transparent group-hover:bg-primary/50 dark:group-hover:bg-primary/5"
@@ -293,7 +294,7 @@ export default function WorkspaceItem({
             <div
               className={`flex items-center gap-1.5 ${grouping === "project" ? "pl-0" : "pl-0"}`}
             >
-              <span aria-hidden="true" className="size-3.5 shrink-0" />
+              {grouping !== "project" && <span aria-hidden="true" className="size-3.5 shrink-0" />}
               {!pathExists ? (
                 // Replaces the branch line rather than sitting next to it: with
                 // no folder there is no branch to show, and the reason the row

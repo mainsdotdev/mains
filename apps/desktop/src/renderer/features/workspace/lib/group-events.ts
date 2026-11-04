@@ -315,6 +315,8 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
       const isImportant =
         level === "warn" ||
         level === "error" ||
+        event.metadata?.source === "codex_auth_recovery" ||
+        event.metadata?.source === "codex_model_rerouted" ||
         content.includes("Session initialized") ||
         content.includes("Starting") ||
         content.includes("Resuming") ||

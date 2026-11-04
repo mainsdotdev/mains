@@ -23,9 +23,9 @@ export function validateConversationSettings(providerId: string, value: Conversa
   if (permission !== undefined && !permissionModeIdsFor(providerId).includes(String(permission))) {
     throw new Error(`Unknown permission mode "${permission}" for ${providerId}`);
   }
-  // Codex validates its model/effort pair in the app-server; its model catalog
-  // can advertise identifiers that this app does not know yet.
-  if (providerId !== PROVIDER_IDS.codex) {
+  // Codex and OpenCode advertise their own effort identifiers. The other
+  // providers stay on the fixed vocabulary.
+  if (providerId !== PROVIDER_IDS.codex && providerId !== PROVIDER_IDS.opencode) {
     for (const level of [value.config.effortLevel, value.config.modelReasoningEffort]) {
       if (level && !isEffortLevel(level)) {
         throw new Error(`Unknown effort level "${level}"`);

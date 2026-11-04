@@ -1349,6 +1349,27 @@ export interface CursorAdapterConfig {
 }
 
 /**
+ * Configuration for the OpenCode ACP adapter (`opencode acp`).
+ * OpenCode 2 only. The `agent` value is OpenCode's primary agent
+ * (`build` or `plan`), sent as the ACP `mode` config option.
+ */
+export interface OpenCodeAdapterConfig {
+  /** Path to the opencode binary. Empty uses PATH, then ~/.opencode/bin. */
+  binary?: string;
+  /** Default model slug (`provider/model`), pinned by the user. */
+  defaultModel?: string;
+  /** Timeout in milliseconds for one prompt. */
+  timeout?: number;
+  /** OpenCode primary agent. */
+  agent?: "build" | "plan";
+  /**
+   * Effort variant for the selected model, sent as the ACP `effort` config
+   * option. Only models that advertise variants honor it.
+   */
+  effortLevel?: string;
+}
+
+/**
  * Any provider's adapter config, as stored in `providers.config`.
  * The factory narrows it per provider id; drivers cast to their own shape.
  */
@@ -1356,7 +1377,8 @@ export type AdapterConfig =
   | CodexAdapterConfig
   | CopilotAdapterConfig
   | ClaudeCodeAdapterConfig
-  | CursorAdapterConfig;
+  | CursorAdapterConfig
+  | OpenCodeAdapterConfig;
 
 /**
  * A persisted JSON Schema entry for structured output
@@ -1949,9 +1971,13 @@ export interface AccountInfo {
     type: "chatgpt";
     email: string | null;
     planType: string;
+    /** Selected workspace; omitted by older Codex app-server versions. */
+    workspaceName?: string | null;
   } | {
     type: "amazonBedrock";
     usesCodexManagedCredentials: boolean;
+  } | {
+    type: "gcp";
   } | {
     type: "cursor";
     email: string;
@@ -1964,6 +1990,10 @@ export interface AccountInfo {
     type: "copilot";
     /** GitHub login name; null when the CLI doesn't report one. */
     login: string | null;
+  } | {
+    type: "opencode";
+    /** Integration names with a stored credential, such as "OpenAI". */
+    providers: string[];
   } | null;
   requiresOpenaiAuth: boolean;
   /**

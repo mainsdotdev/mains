@@ -62,7 +62,7 @@ function CoverChoice({
       aria-label={`Use ${item.title} as cover`}
       className="overflow-hidden rounded-xl border border-primary-200 dark:border-primary-800 focus-visible:ring-2"
     >
-      <div className="aspect-[2/1] bg-primary-100 dark:bg-primary-900">
+      <div className="aspect-2/1 bg-primary-100 dark:bg-primary-900">
         {url && (
           <img
             src={url}
@@ -98,7 +98,7 @@ function CoverPresetChoice({
       aria-label={`Use ${title} as cover`}
       className="overflow-hidden rounded-xl border border-primary-200 dark:border-primary-800 focus-visible:ring-2"
     >
-      <div className="aspect-[2/1] bg-primary-100 dark:bg-primary-900">
+      <div className="aspect-2/1 bg-primary-100 dark:bg-primary-900">
         {url && (
           <img
             src={url}

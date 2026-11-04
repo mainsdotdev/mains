@@ -10,18 +10,20 @@ import { createElement, type ComponentProps, type ReactNode } from "react";
 import workspaceReducer, {
   activateWorkspaceView,
   setActiveTab,
+  setSelectedFile,
   openNewRunTab,
   openReviewTab,
   addContextItem,
   setContextItemsForKey,
   replaceMcpAppContext,
   setPendingReviewTarget,
+  setPendingRunId,
 } from "@/lib/redux/slices/workspaceSlice";
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import type { ContextBrowserItem, ContextMcpAppItem, ContextReviewItem } from "../lib/composer-context";
 import type { UploadedFile } from "@/components/ui";
 import previewReducer from "@/lib/redux/slices/previewSlice";
-import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
+import appSettingsReducer, { setDeveloperSidebarView, type DeveloperSidebarView } from "@/lib/redux/slices/appSettingsSlice";
 import { DocumentViewerProvider, useDocumentViewer } from "@/hooks/use-document-viewer";
 
 const mocks = vi.hoisted(() => ({
@@ -33,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   getToolCalls: vi.fn(),
   getTurns: vi.fn(),
   getByWorkspace: vi.fn(),
+  archiveRun: vi.fn(),
   executeRun: vi.fn(),
   executeReview: vi.fn(),
   createVoiceConversation: vi.fn(),
@@ -78,7 +81,7 @@ vi.mock("@/lib/redux/api/providersApi", () => ({
 vi.mock("@/lib/redux/api", () => ({
   workspaceApi: { util: { invalidateTags: () => ({ type: "test/invalidateWorkspaces" }) } },
   runsApi: { util: { invalidateTags: () => ({ type: "test/invalidateRuns" }) } },
-  useArchiveRunMutation: () => [vi.fn()],
+  useArchiveRunMutation: () => [mocks.archiveRun],
   useUpdateRunMutation: () => [vi.fn()],
 }));
 vi.mock("@/components/ui", () => ({ toast: { error: vi.fn() } }));
@@ -175,6 +178,7 @@ beforeEach(() => {
   mocks.writeSettings.mockResolvedValue({ success: true });
   mocks.continueRun.mockResolvedValue(true);
   mocks.checkCanResume.mockResolvedValue(false);
+  mocks.archiveRun.mockReturnValue({ unwrap: async () => undefined });
   mocks.getById.mockResolvedValue({ success: true, data: run });
   mocks.getArtifacts.mockResolvedValue({
     success: true,
@@ -198,15 +202,17 @@ beforeEach(() => {
   }));
 });
 
-function workspacePage(providerId = "claude_code") {
+function workspacePage(providerId = "claude_code", sidebarView: DeveloperSidebarView = "workspaces") {
   const store = configureStore({
     reducer: {
       workspace: workspaceReducer,
       preview: previewReducer,
       runQueue: runQueueReducer,
-      appSettings: () => ({ onboardingCompleted: true }),
+      appSettings: appSettingsReducer,
       backends: () => ({ activeBackendId: null }),
     },
+    preloadedState: { appSettings: { ...appSettingsReducer(undefined, { type: "init" }),
+      onboardingCompleted: true, developerSidebarView: sidebarView } },
   });
   mocks.getState.mockImplementation(() => store.getState());
   const wrapper = ({ children }: { children: ReactNode }) => createElement(
@@ -219,6 +225,197 @@ function workspacePage(providerId = "claude_code") {
     pathname: useLocation().pathname,
   }), { wrapper }) };
 }
+
+describe("project chat sidebar", () => {
+  function conversations() {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    const chats = [
+      { ...run, id: "recent-chat", mode: "developer" as const, workspaceId: "ws-1" },
+      { ...run, id: "older-chat", mode: "developer" as const, workspaceId: "ws-1" },
+    ];
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: chats });
+    mocks.getById.mockImplementation(async (id: string) => ({ success: true, data: chats.find((chat) => chat.id === id) }));
+    return chats;
+  }
+
+  it("keeps all conversation tabs in the default view", async () => {
+    conversations();
+    const view = workspacePage();
+    await waitFor(() => expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual(["recent-chat", "older-chat"]));
+    expect(view.result.current.useProjectChats).toBe(false);
+    view.unmount();
+  });
+
+  it("shows all chats in the original view and only the selected chat in the project view", async () => {
+    conversations();
+    const view = workspacePage("claude_code", "chats");
+    await waitFor(() => expect(view.result.current.activeTab).toBe("recent-chat"));
+    expect(view.result.current.tabRuns).toHaveLength(1);
+    act(() => view.store.dispatch(setDeveloperSidebarView("workspaces")));
+    expect(view.result.current.tabRuns).toHaveLength(2);
+    act(() => view.store.dispatch(setDeveloperSidebarView("chats")));
+    expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual(["recent-chat"]);
+    view.unmount();
+  });
+
+  it("replaces the open chat and preserves history and drafts when switching or closing it", async () => {
+    conversations();
+    const view = workspacePage("claude_code", "chats");
+    await waitFor(() => expect(view.result.current.activeTab).toBe("recent-chat"));
+    expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual(["recent-chat"]);
+    act(() => view.result.current.handleSelectRunTab("older-chat"));
+    act(() => view.result.current.handleSelectRunTab("older-chat"));
+    expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual(["older-chat"]);
+    expect(view.store.getState().workspace.openRunIds).toEqual(["older-chat"]);
+    act(() => view.result.current.setGoal("Unsent follow-up"));
+    act(() => view.result.current.handleSelectRunTab("recent-chat"));
+    expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual(["recent-chat"]);
+    act(() => view.result.current.handleSelectRunTab("older-chat"));
+    expect(view.result.current.goal).toBe("Unsent follow-up");
+    act(() => view.result.current.handleCloseTab("older-chat"));
+    expect(view.result.current.activeTab).toBe("new-run");
+    expect(view.result.current.tabRuns).toEqual([]);
+    expect(view.store.getState().workspace.openRunIds).toEqual([]);
+    expect(view.result.current.runs.map((chat) => chat.id)).toEqual(["recent-chat", "older-chat"]);
+    expect(mocks.archiveRun).not.toHaveBeenCalled();
+    act(() => view.result.current.handleSelectRunTab("older-chat"));
+    expect(view.result.current.goal).toBe("Unsent follow-up");
+    view.unmount();
+  });
+
+  it.each(["editor", "review"])("keeps the current chat beside %s when switching from a view with multiple chats", async (tab) => {
+    conversations();
+    const view = workspacePage();
+    await waitFor(() => expect(view.result.current.activeTab).toBe("recent-chat"));
+    act(() => view.result.current.handleSelectRunTab("older-chat"));
+    act(() => view.result.current.handleSelectRunTab("recent-chat"));
+    act(() => {
+      view.store.dispatch(setSelectedFile({ name: "readme.md", fullPath: "/repo/readme.md", type: "file" }));
+      view.result.current.handleSelectEditorTab();
+    });
+    if (tab === "review") {
+      act(() => view.result.current.handleSelectRunTab("older-chat"));
+      act(() => view.result.current.handleSelectReviewTab());
+    }
+    const selectedChatId = tab === "review" ? "older-chat" : "recent-chat";
+    expect(view.result.current.tabRuns).toHaveLength(2);
+    act(() => view.store.dispatch(setDeveloperSidebarView("chats")));
+    expect(view.result.current.activeTab).toBe(tab);
+    expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual([selectedChatId]);
+    expect(view.result.current.selectedFile?.name).toBe("readme.md");
+    expect(view.store.getState().workspace.openRunIds).toEqual([selectedChatId]);
+    act(() => {
+      const event = { stopPropagation() {} } as React.MouseEvent;
+      if (tab === "review") view.result.current.handleCloseReviewTab(event);
+      else view.result.current.handleCloseEditorTab(event);
+    });
+    expect(view.result.current.activeTab).toBe(selectedChatId);
+    view.unmount();
+  });
+
+  it("replaces the existing chat with a new conversation", async () => {
+    conversations();
+    const view = workspacePage("claude_code", "chats");
+    await waitFor(() => expect(view.result.current.activeTab).toBe("recent-chat"));
+    act(() => view.result.current.handleNewRun());
+    expect(view.result.current.activeTab).toBe("new-run");
+    expect(view.result.current.showNewRunTab).toBe(true);
+    expect(view.result.current.tabRuns).toEqual([]);
+    expect(view.store.getState().workspace.openRunIds).toEqual([]);
+    expect(view.result.current.runs).toHaveLength(2);
+    expect(mocks.archiveRun).not.toHaveBeenCalled();
+    act(() => view.result.current.handleSelectRunTab("older-chat"));
+    expect(view.result.current.showNewRunTab).toBe(false);
+    expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual(["older-chat"]);
+    view.unmount();
+  });
+
+  it("restores the centered new-chat state when an old draft tab is closed", async () => {
+    conversations();
+    const view = workspacePage("claude_code", "chats");
+    await waitFor(() => expect(view.result.current.activeTab).toBe("recent-chat"));
+    act(() => view.result.current.handleNewRun());
+    act(() => view.result.current.setGoal("Unsent new conversation"));
+    act(() => view.result.current.handleCloseNewRunTab({ stopPropagation() {} } as React.MouseEvent));
+    expect(view.result.current.activeTab).toBe("new-run");
+    expect(view.result.current.showNewRunTab).toBe(true);
+    expect(view.result.current.showInput).toBe(true);
+    expect(view.result.current.goal).toBe("Unsent new conversation");
+    expect(view.result.current.tabRuns).toEqual([]);
+    expect(mocks.archiveRun).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("restores one selected chat when moving between a project's workspaces", async () => {
+    const chats = conversations();
+    const worktreeChat = { ...chats[0], id: "worktree-chat", workspaceId: "ws-2" };
+    mocks.getByWorkspace.mockImplementation(async (id: string) => ({ success: true, data: id === "ws-1" ? chats : [worktreeChat] }));
+    mocks.getById.mockImplementation(async (id: string) => ({ success: true,
+      data: [worktreeChat, ...chats].find((chat) => chat.id === id) }));
+    const view = workspacePage("claude_code", "chats");
+    await waitFor(() => expect(view.result.current.activeTab).toBe("recent-chat"));
+    act(() => view.result.current.handleSelectRunTab("older-chat"));
+    mocks.workspaceId = "ws-2";
+    view.rerender();
+    await waitFor(() => expect(view.result.current.activeTab).toBe("worktree-chat"));
+    expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual(["worktree-chat"]);
+    mocks.workspaceId = "ws-1";
+    view.rerender();
+    await waitFor(() => expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual(["older-chat"]));
+    expect(view.store.getState().workspace.openRunIds).toEqual(["older-chat"]);
+    view.unmount();
+  });
+
+  it("opens an older sidebar chat outside the workspace's recent page", async () => {
+    const chats = conversations();
+    const older = { ...chats[0], id: "outside-recent-page" };
+    mocks.getById.mockImplementation(async (id: string) => ({ success: true,
+      data: id === older.id ? older : chats.find((chat) => chat.id === id) }));
+    const view = workspacePage("claude_code", "chats");
+    await waitFor(() => expect(view.result.current.activeTab).toBe("recent-chat"));
+    act(() => view.store.dispatch(setPendingRunId(older.id)));
+    await waitFor(() => expect(view.result.current.activeTab).toBe(older.id));
+    expect(view.store.getState().workspace.pendingRunId).toBeNull();
+    expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual([older.id]);
+    view.unmount();
+  });
+
+  it("shows a new-chat composer after the final open tab is closed", async () => {
+    conversations();
+    const view = workspacePage("claude_code", "chats");
+    await waitFor(() => expect(view.result.current.activeTab).toBe("recent-chat"));
+    act(() => view.result.current.handleCloseTab("recent-chat"));
+    expect(view.result.current.tabRuns).toEqual([]);
+    expect(view.result.current.activeTab).toBe("new-run");
+    expect(view.result.current.showNewRunTab).toBe(true);
+    expect(view.result.current.runs).toHaveLength(2);
+    expect(mocks.archiveRun).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("archives only through the separate archive action", async () => {
+    conversations();
+    const view = workspacePage("claude_code", "chats");
+    await waitFor(() => expect(view.result.current.activeTab).toBe("recent-chat"));
+    await act(async () => { await view.result.current.handleArchiveRun("recent-chat"); });
+    expect(mocks.archiveRun).toHaveBeenCalledExactlyOnceWith("recent-chat");
+    expect(view.result.current.runs.map((chat) => chat.id)).toEqual(["older-chat"]);
+    expect(view.result.current.activeTab).toBe("new-run");
+    view.unmount();
+  });
+
+  it("keeps an open chat selected when archiving fails", async () => {
+    conversations();
+    mocks.archiveRun.mockReturnValue({ unwrap: async () => { throw new Error("Offline"); } });
+    const view = workspacePage("claude_code", "chats");
+    await waitFor(() => expect(view.result.current.activeTab).toBe("recent-chat"));
+    await act(async () => { await view.result.current.handleArchiveRun("recent-chat"); });
+    expect(view.result.current.activeTab).toBe("recent-chat");
+    expect(view.result.current.tabRuns.map((chat) => chat.id)).toEqual(["recent-chat"]);
+    view.unmount();
+  });
+});
 
 describe("document previews across routes", () => {
   it("parks the chat's PDF on leaving and restores it without replacing Atlas's own preview", () => {

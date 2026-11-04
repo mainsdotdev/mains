@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   LazyMotion,
   MotionConfig,
@@ -77,6 +77,18 @@ export function floatingChatSize(
   };
 }
 
+const ComposerDockCoverContext = createContext<((covered: boolean) => void) | null>(null);
+
+/** The approval card reports when it replaces the composer, so the dock can drop its divider. */
+export function useComposerDockCover(covered: boolean) {
+  const report = useContext(ComposerDockCoverContext);
+  useLayoutEffect(() => {
+    if (!report) return;
+    report(covered);
+    return () => report(false);
+  }, [covered, report]);
+}
+
 interface FloatingChatOverlayProps {
   /** The host owns chat/run selection; this surface only displays its title and activity. */
   title?: string;
@@ -109,6 +121,7 @@ export function FloatingChatOverlay({
   const surfaceRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const [composerHeight, setComposerHeight] = useState(CHAT_BAR_SIZE);
+  const [composerCovered, setComposerCovered] = useState(false);
   const [stageSize, setStageSize] = useState(() => ({
     width:
       typeof window === "undefined"
@@ -330,11 +343,13 @@ export function FloatingChatOverlay({
           >
             <m.div
               className="pointer-events-none absolute inset-x-0 top-0 h-px bg-primary-200/60 dark:bg-primary/5"
-              style={{ opacity: detailsOpacity }}
+              style={{ opacity: composerCovered ? 0 : detailsOpacity }}
             />
-            <m.div ref={composerRef} style={{ opacity: composerOpacity }}>
-              {composer}
-            </m.div>
+            <ComposerDockCoverContext.Provider value={setComposerCovered}>
+              <m.div ref={composerRef} style={{ opacity: composerOpacity }}>
+                {composer}
+              </m.div>
+            </ComposerDockCoverContext.Provider>
           </m.div>
           <m.div
             className="absolute bottom-0 right-0 z-30 size-12"

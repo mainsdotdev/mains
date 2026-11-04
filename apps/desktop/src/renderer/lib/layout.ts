@@ -13,9 +13,18 @@ export function isAtlasRoute(pathname: string): boolean {
   return pathname === "/atlas" || pathname.startsWith("/atlas/");
 }
 
-/** Conversations, settings and Atlas each own the shared sidebar panel. */
+export function isTasksRoute(pathname: string): boolean {
+  return pathname === "/tasks" || pathname.startsWith("/tasks/");
+}
+
+/** Conversations, settings, Atlas and Tasks each own the shared sidebar panel. */
 export function hasSidebarPanel(pathname: string): boolean {
-  return isWorkspaceRoute(pathname) || isSettingsRoute(pathname) || isAtlasRoute(pathname);
+  return (
+    isWorkspaceRoute(pathname) ||
+    isSettingsRoute(pathname) ||
+    isAtlasRoute(pathname) ||
+    isTasksRoute(pathname)
+  );
 }
 
 export function shouldHideRightPanel(pathname: string): boolean {

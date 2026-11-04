@@ -14,12 +14,12 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { ComponentType } from "react";
-import { CopilotStatic, Codex, Cursor } from "@/components/ui/icons";
+import { CopilotStatic, Codex, Cursor, OpenCode } from "@/components/ui/icons";
 import { Claude } from "@/components/ui/icons/space";
 import { DEFAULT_CLAUDE_PERMISSION_MODE } from "../../shared/claude-permission-modes";
 import { PROVIDER_IDS, type ProviderId } from "../../shared/provider-ids";
 
-export type ProviderVariant = "claude" | "copilot" | "codex" | "cursor";
+export type ProviderVariant = "claude" | "copilot" | "codex" | "cursor" | "opencode";
 
 /** Variant of the surface the user is on: a provider variant on `/code`, "default" elsewhere. */
 export type WorkspaceVariant = ProviderVariant | "default";
@@ -231,6 +231,34 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     planExit: { key: "mode", planValue: "plan", nextValue: "agent" },
     enableForkRun: true,
     enableSuggestions: true,
+  },
+  opencode: {
+    variant: "opencode",
+    label: "OpenCode",
+    providerId: PROVIDER_IDS.opencode,
+    icon: OpenCode,
+    permissionKey: "agent",
+    permissionDefault: "build",
+    effortKey: "effortLevel",
+    effortDefault: "medium",
+    thinkingCoupledToEffort: false,
+    fastMode: { kind: "boolean", key: "fastMode" },
+    authLoginCommand: "opencode auth login",
+    installCommand: "npm install -g @opencode/cli",
+    setupGuideUrl: "https://opencode.ai/docs",
+    supportsUltracode: false,
+    supportsPlanMode: false,
+    supportsGoalMode: false,
+    supportsSkills: false,
+    supportsAdditionalDirectories: false,
+    supportsPlugins: false,
+    supportsAtlas: false,
+    supportsMcpAppExtensions: false,
+    supportsTurnSteer: false,
+    supportsRealtime: false,
+    planExit: { key: "agent", planValue: "plan", nextValue: "build" },
+    enableForkRun: true,
+    enableSuggestions: false,
   },
 };
 

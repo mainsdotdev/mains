@@ -39,6 +39,12 @@ describe("formatModelDisplayName", () => {
     expect(formatModelDisplayName("codex-auto-review", "codex")).toBe("Codex Auto Review");
     expect(formatModelDisplayName("<synthetic>", "claude")).toBe("Synthetic");
     expect(formatModelDisplayName("vendor-mystery-1", "codex")).toBe("vendor-mystery-1");
+    expect(formatModelDisplayName("github-copilot/Claude Sonnet 5.5", "opencode")).toBe(
+      "GitHub Copilot / Claude Sonnet 5.5",
+    );
+    expect(formatModelDisplayName("openai/GPT-5.6 Luna", "opencode")).toBe(
+      "OpenAI / GPT-5.6 Luna",
+    );
   });
 });
 

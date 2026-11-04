@@ -15,7 +15,11 @@ import { extractErrorMessage } from "@/lib/extract-error-message";
 import { DIFF_ADDED_TEXT, DIFF_REMOVED_TEXT } from "@/features/workspace/lib/severity";
 import { useOpenFileInEditor } from "@/features/workspace/hooks/use-open-file-in-editor";
 import { useOpenDiffInEditor } from "@/features/workspace/hooks/use-open-diff-in-editor";
-import { parseFileDiffSegment } from "@/features/workspace/lib/parse-diff";
+import {
+  parseFileDiffSegment,
+  type FileChangeStatus,
+} from "@/features/workspace/lib/parse-diff";
+import { FileStatusLetter } from "@/features/workspace/components/file-status-letter";
 import { describeDiscard } from "@/features/workspace/lib/describe-discard";
 import { PanelItem, PanelCollapse } from "../panel-item";
 import type { GitActionsPanel } from "./use-git-actions-panel";
@@ -247,13 +251,23 @@ export function ChangesSection({ panel }: { panel: GitActionsPanel }) {
   );
 }
 
+function fileChangeStatus(status: string | undefined): FileChangeStatus {
+  switch (status) {
+    case "added":
+    case "untracked":
+    case "deleted":
+    case "renamed":
+    case "modified":
+      return status;
+    default:
+      return "modified";
+  }
+}
+
 /**
- * One changed file: name, its directory, and its own +/-.
- *
- * The name leads and the directory follows it muted — a panel this narrow
- * truncates a full path down to nothing, and the name is what identifies the
- * file. Zero counts are omitted rather than shown as "+0", so a pure deletion
- * reads as one number instead of two.
+ * One changed file: name, its own +/-, and the same status letter the Changes
+ * tab uses. A deleted file is struck through with a D — line counts alone
+ * can't tell that apart from a file that only lost lines.
  */
 function ChangedFileRow({
   file,
@@ -272,6 +286,8 @@ function ChangedFileRow({
   const name = file.path.split("/").pop() || file.path;
   const dot = name.lastIndexOf(".");
   const extension = dot > 0 ? name.slice(dot + 1) : undefined;
+  const status = fileChangeStatus(file.status);
+  const isDeleted = status === "deleted";
 
   return (
     <PanelItem
@@ -279,12 +295,20 @@ function ChangedFileRow({
         <FileIconComponent
           fileName={name}
           extension={extension}
-          className="size-4"
+          className={`size-4${isDeleted ? " opacity-50" : ""}`}
         />
       }
       label={
         <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate">{name}</span>
+          <span
+            className={`truncate${
+              isDeleted
+                ? " text-primary-600 line-through decoration-primary-800/50 dark:text-primary-400 dark:decoration-primary/50"
+                : ""
+            }`}
+          >
+            {name}
+          </span>
         </span>
       }
       trailing={
@@ -293,7 +317,7 @@ function ChangedFileRow({
           size="xxs"
           tone="inherit"
           weight="medium"
-          className="flex items-center gap-1"
+          className="flex items-center gap-1.5"
         >
           {file.additions > 0 && (
             <span className={DIFF_ADDED_TEXT}>+{file.additions}</span>
@@ -301,6 +325,14 @@ function ChangedFileRow({
           {file.deletions > 0 && (
             <span className={DIFF_REMOVED_TEXT}>-{file.deletions}</span>
           )}
+          <FileStatusLetter
+            status={status}
+            title={
+              status === "renamed" && file.oldPath
+                ? `Renamed from ${file.oldPath}`
+                : undefined
+            }
+          />
         </Text>
       }
       hoverAction={{

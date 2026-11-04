@@ -70,10 +70,10 @@ describe("mains tool registry — availability matrix", () => {
     const start = async () => { throw new Error("should not dispatch invalid input"); };
     await expect(dispatchMainsTool("StartVoiceTask", { taskKey: "../bad", title: "", prompt: "" }, { ...CTX, voiceTools: { start } as never })).rejects.toThrow();
   });
-  it("CheckPackage is exposed only to Codex and Cursor (Bash-hook guard elsewhere)", () => {
+  it("CheckPackage is exposed to Codex, Cursor, and OpenCode", () => {
     const checkPackage = MAINS_TOOLS.find((t) => t.name === "CheckPackage")!;
     expect([...checkPackage.providers].sort()).toEqual(
-      [PROVIDER_IDS.codex, PROVIDER_IDS.cursor].sort(),
+      [PROVIDER_IDS.codex, PROVIDER_IDS.cursor, PROVIDER_IDS.opencode].sort(),
     );
   });
 

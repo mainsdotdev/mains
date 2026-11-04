@@ -7,7 +7,7 @@ import { ArrowUp, Brain, BoltFill, Check } from "../icons";
 import { Bolt } from "../icons/space";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { getModelIcon } from "@/lib/model-icons";
-import { formatModelDisplayName, selectableModelNames } from "@/lib/model-display";
+import { formatModelDisplayName, groupModelsByOpenCodeProvider, openCodeModelParts, selectableModelNames } from "@/lib/model-display";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import { ULTRACODE_GRADIENT_TEXT } from "./ultracode-styles";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
@@ -130,9 +130,13 @@ export function CompactComposerControls({
         <div className="max-h-[60vh] overflow-auto noscrollbar py-1">
           {modelList.length > 0 && (
             <>
-              <Section>Model</Section>
-              {modelList.map((m) => {
-                const name = formatModelDisplayName(m, variant);
+              {variant !== "opencode" && <Section>Model</Section>}
+              {(variant === "opencode" ? groupModelsByOpenCodeProvider(modelList) : [{ provider: "", models: modelList }]).map((group) => (
+                <div key={group.provider || "models"}>
+                  {group.provider && <Section>{group.provider}</Section>}
+              {group.models.map((m) => {
+                const parts = variant === "opencode" ? openCodeModelParts(m) : null;
+                const name = parts?.name ?? formatModelDisplayName(m, variant);
                 const active = model === m;
                 return (
                   <Button
@@ -152,6 +156,8 @@ export function CompactComposerControls({
                   </Button>
                 );
               })}
+                </div>
+              ))}
             </>
           )}
 

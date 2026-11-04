@@ -21,6 +21,15 @@ vi.mock("./sync.connection-utils", () => ({
     mockGetSelectedResources(...args),
 }));
 
+const mockGetCursor = vi.fn();
+const mockOldestOpenIssueSeenAt = vi.fn();
+vi.mock("./sync.repo", () => ({
+  syncRepo: {
+    getCursor: (...args: unknown[]) => mockGetCursor(...args),
+    oldestOpenIssueSeenAt: (...args: unknown[]) => mockOldestOpenIssueSeenAt(...args),
+  },
+}));
+
 const fakeFetchers: ResourceFetcher[] = [];
 vi.mock("./connections", () => ({
   get RESOURCE_FETCHERS() {
@@ -28,7 +37,7 @@ vi.mock("./connections", () => ({
   },
 }));
 
-import { fetchAllEntities, fetchEntitiesByProvider } from "./sync.fetchers";
+import { fetchAllEntities, fetchEntitiesByProvider, listResourceStates } from "./sync.fetchers";
 
 function makeFetcher(
   id: string,
@@ -38,6 +47,7 @@ function makeFetcher(
     fetchAll?: ResourceFetcher["fetchAll"];
     resourceKind?: string;
     defaultLimit?: number;
+    incremental?: boolean;
   } = {},
 ): ResourceFetcher {
   return {
@@ -45,6 +55,7 @@ function makeFetcher(
     provider,
     resourceKind: options.resourceKind ?? `${provider}_resource`,
     defaultLimit: options.defaultLimit ?? 25,
+    incremental: options.incremental,
     fetchForResource: options.forResource ?? (async () => []),
     fetchAll: options.fetchAll,
   };
@@ -228,6 +239,117 @@ describe("runner — fetchEntitiesByProvider generator", () => {
       { provider: "a:x", count: 1 },
       { provider: "b:y", count: 1 },
     ]);
+  });
+});
+
+describe("runner — incremental cursors", () => {
+  const resource = { id: "res-1", externalId: "ENG", connectionId: "conn", name: "Eng", kind: "k", metadata: {} };
+
+  beforeEach(() => {
+    mockGetConnectionWithSecrets.mockResolvedValue({ id: "conn", secrets: {} });
+    mockGetSelectedResources.mockResolvedValue([resource]);
+    mockGetCursor.mockReturnValue(null);
+    mockOldestOpenIssueSeenAt.mockReturnValue(null);
+  });
+
+  async function runOnce() {
+    const batches = [];
+    for await (const batch of fetchEntitiesByProvider()) batches.push(batch);
+    return batches[0];
+  }
+
+  it("leaves non-incremental fetchers alone: no since, no cursor", async () => {
+    const forResource = vi.fn().mockResolvedValue([entity("a")]);
+    fakeFetchers.push(makeFetcher("a:x", "a", { forResource }));
+
+    const batch = await runOnce();
+
+    expect(forResource.mock.calls[0][0]).not.toHaveProperty("since");
+    expect(mockGetCursor).not.toHaveBeenCalled();
+    expect(batch.cursors).toEqual([]);
+  });
+
+  it("asks for changes since the cursor, minus an overlap, and returns a new cursor", async () => {
+    mockGetCursor.mockReturnValue(new Date("2025-03-01T00:10:00Z"));
+    const forResource = vi.fn().mockResolvedValue([entity("a")]);
+    fakeFetchers.push(makeFetcher("linear:issues", "linear", { forResource, incremental: true }));
+
+    const before = Date.now();
+    const batch = await runOnce();
+
+    expect(mockGetCursor).toHaveBeenCalledWith("linear:issues", "res-1");
+    expect(forResource).toHaveBeenCalledOnce();
+    expect(forResource.mock.calls[0][0].since).toEqual(new Date("2025-03-01T00:05:00Z"));
+    expect(batch.cursors).toHaveLength(1);
+    expect(batch.cursors[0].resourceId).toBe("res-1");
+    expect(batch.cursors[0].syncedAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("fetches only the open set on a first run with nothing stored", async () => {
+    const forResource = vi.fn().mockResolvedValue([entity("a")]);
+    fakeFetchers.push(makeFetcher("linear:issues", "linear", { forResource, incremental: true }));
+
+    const batch = await runOnce();
+
+    expect(forResource).toHaveBeenCalledOnce();
+    expect(forResource.mock.calls[0][0].since).toBeNull();
+    expect(batch.cursors).toHaveLength(1);
+  });
+
+  it("catches up on closures of rows stored before cursors existed", async () => {
+    mockOldestOpenIssueSeenAt.mockReturnValue(new Date("2025-01-01T00:05:00Z"));
+    const forResource = vi
+      .fn()
+      .mockResolvedValueOnce([entity("open-1"), entity("closed-later")])
+      .mockResolvedValueOnce([{ ...entity("closed-later"), title: "fresher" }, entity("closed-1")]);
+    fakeFetchers.push(makeFetcher("linear:issues", "linear", { forResource, incremental: true }));
+
+    const batch = await runOnce();
+
+    expect(forResource.mock.calls.map((call) => call[0].since)).toEqual([
+      null,
+      new Date("2025-01-01T00:00:00Z"),
+    ]);
+    // One row per issue; the change feed's copy wins.
+    expect(batch.entities.map((e: EntityInput) => e.title)).toEqual(["open-1", "fresher", "closed-1"]);
+  });
+
+  it("keeps the old cursor when a resource fails", async () => {
+    mockGetCursor.mockReturnValue(new Date("2025-03-01T00:00:00Z"));
+    const forResource = vi.fn().mockRejectedValue(new Error("rate limited"));
+    fakeFetchers.push(makeFetcher("linear:issues", "linear", { forResource, incremental: true }));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const batch = await runOnce();
+
+    expect(batch.entities).toEqual([]);
+    expect(batch.cursors).toEqual([]);
+  });
+});
+
+describe("listResourceStates", () => {
+  const resource = { id: "res-1", externalId: "ENG", connectionId: "conn", name: "Eng", kind: "linear_team", metadata: {} };
+
+  it("asks the fetcher that owns the resource kind, with the connection's secrets", async () => {
+    const listStates = vi.fn().mockResolvedValue([{ id: "s", name: "Todo", color: null, defaultStatusId: "todo" }]);
+    fakeFetchers.push({ ...makeFetcher("linear:issues", "linear", { resourceKind: "linear_team" }), listStates });
+    mockGetConnectionWithSecrets.mockResolvedValue({ id: "conn", secrets: { apiKey: "k" }, metadata: {} });
+
+    const states = await listResourceStates(resource);
+
+    expect(listStates).toHaveBeenCalledWith({ resource, secrets: { apiKey: "k" }, metadata: {} });
+    expect(states).toHaveLength(1);
+  });
+
+  it("returns null for a provider with no states to map", async () => {
+    fakeFetchers.push(makeFetcher("github:issues", "github", { resourceKind: "github_repo" }));
+    await expect(listResourceStates({ ...resource, kind: "github_repo" })).resolves.toBeNull();
+  });
+
+  it("throws when the resource's connection is gone", async () => {
+    fakeFetchers.push({ ...makeFetcher("linear:issues", "linear", { resourceKind: "linear_team" }), listStates: vi.fn() });
+    mockGetConnectionWithSecrets.mockResolvedValue({ id: "a-newer-connection", secrets: {} });
+    await expect(listResourceStates(resource)).rejects.toThrow(/no longer connected/);
   });
 });
 

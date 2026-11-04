@@ -12,6 +12,7 @@ export const PERMISSION_MODE_IDS: Record<ProviderId, readonly string[]> = {
   [PROVIDER_IDS.copilot]: ["default", "acceptEdits", "plan", "bypassPermissions"],
   [PROVIDER_IDS.codex]: ["read-only", "workspace-write", "danger-full-access"],
   [PROVIDER_IDS.cursor]: ["ask", "agent", "plan"],
+  [PROVIDER_IDS.opencode]: ["build", "plan"],
 };
 
 export const PERMISSION_CONFIG_KEY: Record<ProviderId, string> = {
@@ -19,6 +20,7 @@ export const PERMISSION_CONFIG_KEY: Record<ProviderId, string> = {
   [PROVIDER_IDS.copilot]: "permissionMode",
   [PROVIDER_IDS.codex]: "sandboxMode",
   [PROVIDER_IDS.cursor]: "mode",
+  [PROVIDER_IDS.opencode]: "agent",
 };
 
 export function permissionModeIdsFor(providerId: string): readonly string[] {
@@ -47,6 +49,7 @@ export const RUN_SETTING_CONFIG_KEYS = [
   "serviceTier",
   "goalMode",
   "planMode",
+  "agent",
 ] as const;
 
 export interface RunSettingConfig {
@@ -61,6 +64,8 @@ export interface RunSettingConfig {
   fastMode?: boolean;
   goalMode?: boolean;
   planMode?: boolean;
+  /** OpenCode primary agent (`build` or `plan`). */
+  agent?: string;
 }
 
 /** A speed option advertised by the provider's model catalog. */
@@ -93,6 +98,7 @@ export function snapshotRunSettingConfig(providerId: string, config: Record<stri
     [PROVIDER_IDS.copilot]: "default",
     [PROVIDER_IDS.codex]: "workspace-write",
     [PROVIDER_IDS.cursor]: "agent",
+    [PROVIDER_IDS.opencode]: "build",
   };
   const permissionKey = permissionConfigKeyFor(providerId);
   const coupledThinking = providerId === PROVIDER_IDS.codex || providerId === PROVIDER_IDS.copilot;

@@ -3,7 +3,7 @@ import { Button, Text } from "@/components/ui";
 import { AskUserQuestionDisplay } from "./ask-user-question-display";
 import { useAsyncQuestionDialog } from "./async-question-dialog";
 
-/** The transcript retains the question and reply; input lives above the composer. */
+/** The transcript retains the question and reply. The open card takes the composer slot. */
 export function CodexAsyncQuestionCard({ artifactId, questions, answer, state }: {
   runId: string;
   artifactId: number;

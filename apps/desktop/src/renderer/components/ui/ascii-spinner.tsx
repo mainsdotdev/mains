@@ -8,6 +8,7 @@ export type AsciiSpinnerVariant =
   | "copilot"
   | "codex"
   | "cursor"
+  | "opencode"
   | "null"
   /** No tint of its own — takes the surrounding text color via `currentColor`
    *  (e.g. a spinner inside a warning-tinted button). */
@@ -25,6 +26,7 @@ const VARIANT_COLOR: Record<AsciiSpinnerVariant, string> = {
   copilot: "text-copilot",
   codex: "text-codex",
   cursor: "text-cursor",
+  opencode: "text-opencode",
   null: "text-primary-900 dark:text-primary-100",
   inherit: "",
 };

@@ -3,22 +3,19 @@ import { useState } from "react";
 
 import { useSession } from "@/backend/backend-session";
 import { Card, Row, SheetHeader, SheetHint, SheetScrollView, ThemedText } from "@/components/ui";
-import {
-  effortOffAllowed,
-  formatEffortLevel,
-  modelPrettyName,
-} from "@/lib/models";
-import { useModelSelection } from "@/lib/use-model-selection";
+import { EffortControl } from "@/features/runs/components/composer/effort-control";
 import { modelSelectionPatch } from "@/lib/conversation-settings";
+import { modelPrettyName, previewModels } from "@/lib/models";
+import { useModelSelection } from "@/lib/use-model-selection";
 import { spacing } from "@/theme";
 
 /**
- * The model sheet, in the shape of the Claude app's: the provider's models
- * with a line each and the one in effect checked, and under them Effort,
- * which unfolds into the levels the chosen model offers. Model and effort
- * belong to this conversation. How the agent may act — permissions and
- * the fast / goal / plan switches — is the run options sheet's, next door,
- * so that its chip lands on those rows rather than under a list of models.
+ * The model sheet. The provider's models, with the one in effect checked,
+ * and under them that model's effort: a stepped slider, a Thinking switch
+ * when the model is only on or off, and nothing when there is no choice.
+ * Past five models the rest sit behind "Show more", and the selected model
+ * stays in the five so the checkmark never folds away. Model and effort
+ * belong to this conversation. How the agent may act is the run options sheet.
  */
 export default function ModelSheet() {
   const { providerId: param, runId: runParam } = useLocalSearchParams<{ providerId: string; runId?: string }>();
@@ -27,15 +24,18 @@ export default function ModelSheet() {
   const session = useSession();
   const backendId = session.backend?.backendId ?? "";
   const selection = useModelSelection(backendId, providerId, runId);
-  const { hint, apply } = selection;
-  const [effortOpen, setEffortOpen] = useState(false);
+  const { hint, apply, ready } = selection;
+  const [expandedFor, setExpandedFor] = useState(providerId);
+  const [expanded, setExpanded] = useState(false);
+  if (expandedFor !== providerId) {
+    setExpandedFor(providerId);
+    setExpanded(false);
+  }
 
   const chooseModel = (model: (typeof selection.models)[number]) => {
     void apply(modelSelectionPatch(providerId, selection.settings, model));
   };
-
-  const effortOptions = [...(effortOffAllowed(providerId) ? [""] : []), ...selection.supportedLevels];
-  const shownEffort = selection.effortLevel;
+  const catalogue = previewModels(selection.models, selection.selected?.id, expanded);
 
   return (
     <SheetScrollView>
@@ -49,43 +49,44 @@ export default function ModelSheet() {
               : "Connect to Mains on your computer to load its models."}
           </ThemedText>
         ) : (
-          selection.models.map((model, index) => (
+          catalogue.visible.map((model, index) => (
             <Row
               key={model.id}
               first={index === 0}
               title={modelPrettyName(model, providerId)}
-              subtitle={model.description ?? undefined}
+              subtitle={selection.selected?.id === model.id ? model.description ?? undefined : undefined}
               selected={selection.selected?.id === model.id}
-              disabled={!selection.ready}
+              disabled={!ready}
               onPress={() => chooseModel(model)}
             />
           ))
         )}
+        {catalogue.canFold && (
+          <Row
+            first={catalogue.visible.length === 0}
+            title={expanded ? "Show less" : `Show ${catalogue.hiddenCount} more`}
+            chevron={expanded ? "chevron.up" : "chevron.down"}
+            onPress={() => setExpanded((open) => !open)}
+          />
+        )}
       </Card>
 
-      <Card surface="sheet">
-        <Row
-          first
-          title="Effort"
-          value={selection.supportedLevels.length > 0 || shownEffort ? formatEffortLevel(shownEffort) : "—"}
-          chevron={effortOpen ? "chevron.down" : "chevron.right"}
-          disabled={!selection.ready || effortOptions.length === 0}
-          onPress={() => setEffortOpen((open) => !open)}
+      {selection.selected && (
+        <EffortControl
+          modelId={selection.selected.id}
+          providerId={providerId}
+          supportedLevels={selection.supportedLevels}
+          effortLevel={selection.effortLevel}
+          thinkingMode={selection.thinkingMode}
+          disabled={!ready}
+          onEffort={(level) => {
+            if (ready && level !== selection.effortLevel) void apply({ effortLevel: level });
+          }}
+          onThinking={(on) => {
+            if (ready && on !== selection.thinkingMode) void apply({ thinkingMode: on });
+          }}
         />
-        {effortOpen &&
-          effortOptions.map((level) => (
-            <Row
-              key={level || "off"}
-              first={false}
-              indented
-              title={formatEffortLevel(level)}
-              selected={shownEffort === level}
-              onPress={() => {
-                if (level !== shownEffort) void apply({ effortLevel: level });
-              }}
-            />
-          ))}
-      </Card>
+      )}
 
       <SheetHint text={hint} />
     </SheetScrollView>

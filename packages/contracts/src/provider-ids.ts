@@ -12,6 +12,7 @@ export const PROVIDER_IDS = {
   copilot: "copilot_cli",
   codex: "codex",
   cursor: "cursor",
+  opencode: "opencode",
 } as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[keyof typeof PROVIDER_IDS];
@@ -19,13 +20,14 @@ export type ProviderId = (typeof PROVIDER_IDS)[keyof typeof PROVIDER_IDS];
 /**
  * Ordered tuple of all known provider IDs.
  * Order matters for some legacy callers (adapter factory iteration, settings
- * default selection); preserve copilot → claude → codex → cursor.
+ * default selection); preserve copilot → claude → codex → cursor → opencode.
  */
 export const SUPPORTED_PROVIDER_IDS = [
   PROVIDER_IDS.copilot,
   PROVIDER_IDS.claude,
   PROVIDER_IDS.codex,
   PROVIDER_IDS.cursor,
+  PROVIDER_IDS.opencode,
 ] as const satisfies readonly ProviderId[];
 
 const PROVIDER_ID_SET: ReadonlySet<string> = new Set(SUPPORTED_PROVIDER_IDS);

@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createTestDb } from "../../../test/setup-db";
-import { createAccount, createConnection, createEntity } from "../../../test/factories";
+import {
+  createAccount,
+  createConnection,
+  createConnectionResource,
+  createEntity,
+  createIssue,
+} from "../../../test/factories";
 import type { DatabaseInstance } from "../../db/types";
 import type Database from "better-sqlite3";
 import { entities, issues } from "../../db/schema";
@@ -207,6 +213,70 @@ describe("syncRepo", () => {
       const row = db.select().from(issues).where(eq(issues.entityId, "ent-issue-5")).get();
       expect(row!.provider).toBe("unknown");
       expect(row!.state).toBe("open");
+      expect(row!.statusId).toBe("todo");
+      expect(row!.stateId).toBeNull();
+    });
+
+    it("stores the shared row fields every fetcher fills", async () => {
+      createEntity(db, { id: "ent-issue-row", kind: "issue" });
+      await syncRepo.upsertIssue("ent-issue-row", {
+        provider: "jira",
+        identifier: "PROJ-12",
+        priority: "High",
+        priorityLevel: 2,
+        assigneeAvatarUrl: "https://avatars.example/a.png",
+        labelColors: { Bug: "#ef4444" },
+        group: { name: "Checkout revamp", color: "#5e6ad2" },
+        dueAt: "2025-04-01",
+      });
+
+      const row = db.select().from(issues).where(eq(issues.entityId, "ent-issue-row")).get()!;
+      expect(row.identifier).toBe("PROJ-12");
+      // The normalized level wins over Jira's priority name.
+      expect(row.priority).toBe(2);
+      expect(row.assigneeAvatarUrl).toBe("https://avatars.example/a.png");
+      expect(JSON.parse(row.labelColors!)).toEqual({ Bug: "#ef4444" });
+      expect(row.groupName).toBe("Checkout revamp");
+      expect(row.groupColor).toBe("#5e6ad2");
+      expect(row.dueAt).toEqual(new Date("2025-04-01"));
+    });
+
+    it("leaves the row fields empty when a fetcher has none", async () => {
+      createEntity(db, { id: "ent-issue-bare", kind: "issue" });
+      await syncRepo.upsertIssue("ent-issue-bare", { provider: "asana", labelColors: {}, group: null });
+
+      const row = db.select().from(issues).where(eq(issues.entityId, "ent-issue-bare")).get()!;
+      expect(row.identifier).toBeNull();
+      expect(row.labelColors).toBeNull();
+      expect(row.groupName).toBeNull();
+      expect(row.dueAt).toBeNull();
+      expect(row.priority).toBe(0);
+    });
+
+    it("stores the fetcher's status and the provider's state id", async () => {
+      createEntity(db, { id: "ent-issue-6", kind: "issue" });
+      await syncRepo.upsertIssue("ent-issue-6", {
+        provider: "linear",
+        state: "Ready for QA",
+        stateId: "state-qa",
+        statusId: "in_review",
+      });
+
+      const row = db.select().from(issues).where(eq(issues.entityId, "ent-issue-6")).get();
+      expect(row!.state).toBe("Ready for QA");
+      expect(row!.stateId).toBe("state-qa");
+      expect(row!.statusId).toBe("in_review");
+    });
+
+    it("falls back on closedAt when the status id is missing or unknown", async () => {
+      createEntity(db, { id: "ent-issue-7", kind: "issue" });
+      await syncRepo.upsertIssue("ent-issue-7", {
+        statusId: "not-a-status",
+        closedAt: "2025-06-01T00:00:00Z",
+      });
+
+      const row = db.select().from(issues).where(eq(issues.entityId, "ent-issue-7")).get();
+      expect(row!.statusId).toBe("done");
     });
   });
 
@@ -287,6 +357,108 @@ describe("syncRepo", () => {
       syncRepo.upsertIssueSync("sync-issue-2", { state: "closed" });
       const row = db.select().from(issues).where(eq(issues.entityId, "sync-issue-2")).get();
       expect(row!.state).toBe("closed");
+    });
+  });
+
+  describe("sync cursors", () => {
+    beforeEach(() => {
+      createConnection(db, { id: "conn-sync" });
+      createConnectionResource(db, { id: "res-1", connectionId: "conn-sync", kind: "linear_team" });
+    });
+
+    it("has no cursor before a resource's first incremental run", () => {
+      expect(syncRepo.getCursor("linear:issues", "res-1")).toBeNull();
+    });
+
+    it("saves and then moves a cursor per fetcher and resource", () => {
+      syncRepo.saveCursors("linear:issues", [{ resourceId: "res-1", syncedAt: new Date("2025-03-01T00:00:00Z") }]);
+      syncRepo.saveCursors("linear:issues", [{ resourceId: "res-1", syncedAt: new Date("2025-03-02T00:00:00Z") }]);
+
+      expect(syncRepo.getCursor("linear:issues", "res-1")).toEqual(new Date("2025-03-02T00:00:00Z"));
+      expect(syncRepo.getCursor("other:fetcher", "res-1")).toBeNull();
+    });
+
+    it("finds when the stalest open issue of a resource was last seen", () => {
+      const seen = (id: string, at: string, statusId: string, resourceId = "res-1") => {
+        createIssue(db, {
+          entity: { id, resourceId, connectionId: "conn-sync", updatedAt: new Date(at) },
+          issue: { provider: "linear", state: "x", statusId },
+        });
+      };
+      seen("open-stale", "2025-01-01T00:00:00Z", "todo");
+      seen("open-fresh", "2025-03-01T00:00:00Z", "in_progress");
+      // Closed rows and other resources don't hold the window open.
+      seen("closed-older", "2024-06-01T00:00:00Z", "done");
+      createConnectionResource(db, { id: "res-2", connectionId: "conn-sync", kind: "linear_team" });
+      seen("elsewhere", "2024-01-01T00:00:00Z", "todo", "res-2");
+
+      expect(syncRepo.oldestOpenIssueSeenAt("res-1")).toEqual(new Date("2025-01-01T00:00:00Z"));
+    });
+
+    it("has nothing to catch up on for a resource without open issues", () => {
+      expect(syncRepo.oldestOpenIssueSeenAt("res-1")).toBeNull();
+    });
+  });
+
+  describe("status mappings", () => {
+    beforeEach(() => {
+      createConnection(db, { id: "conn-sync" });
+      createConnectionResource(db, { id: "res-1", connectionId: "conn-sync", kind: "linear_team" });
+    });
+
+    function linearIssue(url: string, stateId: string, statusId: string): EntityInput {
+      return makeEntityInput({
+        kind: "issue",
+        url,
+        connectionId: "conn-sync",
+        resourceId: "res-1",
+        metadata: { provider: "linear", state: "Ready for QA", stateId, statusId },
+      });
+    }
+
+    const statusOf = (url: string) =>
+      db
+        .select({ statusId: issues.statusId })
+        .from(issues)
+        .innerJoin(entities, eq(issues.entityId, entities.id))
+        .where(eq(entities.url, url))
+        .get()!.statusId;
+
+    it("applies a user mapping over the fetcher's status when issues are written", () => {
+      syncRepo.setStatusMapping("res-1", "state-qa", "in_review");
+      syncRepo.upsertEntities([linearIssue("https://linear.app/i/1", "state-qa", "in_progress")]);
+      expect(statusOf("https://linear.app/i/1")).toBe("in_review");
+    });
+
+    it("leaves other states and other resources on the automatic status", () => {
+      createConnectionResource(db, { id: "res-2", connectionId: "conn-sync", kind: "linear_team" });
+      syncRepo.setStatusMapping("res-2", "state-qa", "in_review");
+      syncRepo.upsertEntities([
+        linearIssue("https://linear.app/i/1", "state-qa", "in_progress"),
+        linearIssue("https://linear.app/i/2", "state-doing", "in_progress"),
+      ]);
+      expect(statusOf("https://linear.app/i/1")).toBe("in_progress");
+      expect(statusOf("https://linear.app/i/2")).toBe("in_progress");
+    });
+
+    it("re-applies a changed mapping to issues already stored, and drops it back to automatic", () => {
+      syncRepo.upsertEntities([
+        linearIssue("https://linear.app/i/1", "state-qa", "in_progress"),
+        linearIssue("https://linear.app/i/2", "state-qa", "in_progress"),
+      ]);
+
+      expect(syncRepo.setStatusMapping("res-1", "state-qa", "done")).toBe(2);
+      expect(statusOf("https://linear.app/i/1")).toBe("done");
+      expect(syncRepo.listStatusMappings("res-1")).toEqual(new Map([["state-qa", "done"]]));
+
+      expect(syncRepo.setStatusMapping("res-1", "state-qa", null)).toBe(2);
+      expect(statusOf("https://linear.app/i/1")).toBe("in_progress");
+      expect(syncRepo.listStatusMappings("res-1").size).toBe(0);
+    });
+
+    it("knows which statuses exist", () => {
+      expect(syncRepo.statusExists("in_review")).toBe(true);
+      expect(syncRepo.statusExists("nope")).toBe(false);
     });
   });
 });

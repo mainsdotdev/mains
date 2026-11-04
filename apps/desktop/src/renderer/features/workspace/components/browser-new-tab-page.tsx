@@ -51,7 +51,7 @@ export function BrowserNewTabPage({
   }
 
   return (
-    <div className="pointer-events-auto absolute inset-0 overflow-y-auto px-6 py-8">
+    <div className="pointer-events-auto absolute inset-0 overflow-y-auto overscroll-none px-6 py-8">
       <section aria-label="Recent tabs" className="mx-auto max-w-2xl">
         <Text as="h2" size="lg" weight="semibold" className="mb-5 px-2">
           Recent tabs

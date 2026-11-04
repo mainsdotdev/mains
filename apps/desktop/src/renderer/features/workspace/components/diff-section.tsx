@@ -19,11 +19,8 @@ import {
 import { Alert, Button, Caption, Text, toast } from "@/components/ui";
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import { DIFF_ADDED_TEXT, DIFF_REMOVED_TEXT, SEVERITY_TEXT } from "../lib/severity";
-import {
-  parseFileDiffSegment,
-  parsePerFileStats,
-  type FileChangeStatus,
-} from "../lib/parse-diff";
+import { parseFileDiffSegment, parsePerFileStats } from "../lib/parse-diff";
+import { FileStatusLetter } from "./file-status-letter";
 import { normalizePath, pathsMatch } from "../lib/path-utils";
 import { describeDiscard, type DiscardTarget } from "../lib/describe-discard";
 
@@ -50,64 +47,6 @@ function DiffStats({ stats }: { stats: WorkspaceDiff["stats"] }) {
         <span className={DIFF_REMOVED_TEXT}>-{deletions}</span>
       )}
     </Text>
-  );
-}
-
-/**
- * Single-letter git status per file row, in the slot the per-file +/- counts
- * used to occupy. Every row carries one, so it reads as a column rather than
- * an exception marker — the totals in the header cover the line arithmetic.
- */
-const STATUS_LETTER: Record<
-  FileChangeStatus,
-  { label: string; title: string; className: string }
-> = {
-  added: {
-    label: "A",
-    title: "Added",
-    className: "text-success",
-  },
-  untracked: {
-    label: "U",
-    title: "Untracked",
-    className: "text-success",
-  },
-  modified: {
-    label: "M",
-    title: "Modified",
-    className: "text-warning",
-  },
-  deleted: {
-    label: "D",
-    title: "Deleted",
-    className: "text-danger",
-  },
-  renamed: {
-    label: "R",
-    title: "Renamed",
-    className: "text-accent",
-  },
-};
-
-function FileStatusLetter({
-  status,
-  title,
-  className = "",
-}: {
-  status: FileChangeStatus;
-  title?: string;
-  /** Lets the row fade the letter out while its Undo takes the slot. */
-  className?: string;
-}) {
-  const letter = STATUS_LETTER[status];
-  return (
-    <span
-      title={title ?? letter.title}
-      // Fixed width so the letters line up into a column regardless of name length.
-      className={`shrink-0 w-3 text-center text-xxs font-medium tabular-nums ${letter.className} ${className}`}
-    >
-      {letter.label}
-    </span>
   );
 }
 
@@ -255,7 +194,7 @@ export function DiffSection({
       </div>
 
       {/* File list */}
-      <div className="flex-1 overflow-y-auto noscrollbar space-y-1">
+      <div className="flex-1 overflow-y-auto overscroll-none noscrollbar space-y-1">
         {diff.files.map((filePath, index) => {
           const fileName = filePath.split("/").pop() || filePath;
           const dirPath = filePath.includes("/")

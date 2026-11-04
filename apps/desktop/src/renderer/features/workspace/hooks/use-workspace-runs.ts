@@ -39,7 +39,7 @@ export function useWorkspaceRuns(
   /** Workspaces the user can switch to next; their run lists are fetched ahead. */
   prefetchWorkspaceIds: readonly string[] = NO_WORKSPACE_IDS,
   /** Embedded app conversations own their selection without changing workspace tabs. */
-  options: { selection?: "workspace" | "local" } = {},
+  options: { selection?: "workspace" | "local"; retainedRunIds?: readonly string[] } = {},
 ) {
   const publishSelection = options.selection !== "local";
   const [runs, setRuns] = useState<Run[]>([]);
@@ -89,6 +89,33 @@ export function useWorkspaceRuns(
     setLoadedKey(remembered ? viewKey : null);
   }
   const runsLoaded = viewKey === null || loadedKey === viewKey;
+  const missingRetainedIds = JSON.stringify(
+    runsLoaded && workspaceId && !routeRunId
+      ? (options.retainedRunIds ?? NO_WORKSPACE_IDS).filter((id) => !runs.some((run) => run.id === id))
+      : [],
+  );
+
+  // An explicitly opened chat may be older than the recent workspace list.
+  // Restore just its metadata; transcripts still load only when selected.
+  useEffect(() => {
+    const ids: string[] = JSON.parse(missingRetainedIds);
+    if (!ids.length) return;
+    let current = true;
+    void (async () => {
+      for (let start = 0; start < ids.length && current; start += 8) {
+        const results = await Promise.allSettled(ids.slice(start, start + 8).map((id) => appApi.runs.getById(id)));
+        if (!current) return;
+        const restored = results.flatMap((result) => {
+          if (result.status !== "fulfilled" || !result.value.success || !result.value.data) return [];
+          const run = result.value.data;
+          return !run.isArchived && run.workspaceId === workspaceId &&
+            (!providerId || run.providerId === providerId) && (!mode || run.mode === mode) ? [run] : [];
+        });
+        setRuns((previous) => [...previous, ...restored.filter((run) => !previous.some((item) => item.id === run.id))]);
+      }
+    })();
+    return () => { current = false; };
+  }, [missingRetainedIds, workspaceId, providerId, mode]);
 
   // A run selected through the floating window may need to join this list.
   // Its asynchronous fetch must not insert into a view navigated to later.
@@ -180,9 +207,9 @@ export function useWorkspaceRuns(
       // newest one. Read through a ref so the request can't re-trigger
       // the mount effect.
       const requestedId = pendingRunIdRef.current;
-      if (requestedId) dispatch(clearPendingRunId());
       const requested = filteredRuns.find((run: Run) => run.id === requestedId);
-      const target = requested ?? (wasShown ? undefined : filteredRuns[0]);
+      if (requested) dispatch(clearPendingRunId());
+      const target = requested ?? (wasShown || requestedId ? undefined : filteredRuns[0]);
       if (target) {
         setActiveRunId(target.id);
         loadRunDetails(target.id);
@@ -321,12 +348,12 @@ export function useWorkspaceRuns(
     const target = runs.find((run) => run.id === pendingRunId);
     if (!target) return;
     dispatch(clearPendingRunId());
+    dispatch(setActiveTab(target.id));
     // Same microtask hop as the pendingGoal sync — the consume must not set
     // state synchronously inside the effect body.
     queueMicrotask(() => {
       setActiveRunId(target.id);
       loadRunDetails(target.id);
-      dispatch(setActiveTab(target.id));
     });
   }, [pendingRunId, runs, dispatch, loadRunDetails]);
 
@@ -424,6 +451,7 @@ export function useWorkspaceRuns(
 
   const closeTab = useCallback(
     async (runId: string) => {
+      const revision = selectionRevisionRef.current;
       try {
         await archiveRun(runId).unwrap();
       } catch (error) {
@@ -431,10 +459,10 @@ export function useWorkspaceRuns(
         toast.error(
           error instanceof Error ? error.message : "Failed to archive run",
         );
-        return;
+        return false;
       }
 
-      setRuns((prev) => {
+      if (revision === selectionRevisionRef.current) setRuns((prev) => {
         const newRuns = prev.filter((r) => r.id !== runId);
         if (activeRunId === runId && newRuns.length > 0) {
           setActiveRunId(newRuns[0].id);
@@ -447,6 +475,7 @@ export function useWorkspaceRuns(
       // Drop from the LRU + incremental bookkeeping so reopening re-fetches fresh.
       cache.forget(runId);
       forgetHistory(runId);
+      return true;
     },
     [activeRunId, archiveRun, loadRunDetails, cache, forgetHistory],
   );

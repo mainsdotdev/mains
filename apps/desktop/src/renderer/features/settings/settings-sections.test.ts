@@ -65,9 +65,19 @@ describe("Settings sections", () => {
       "codex",
       "copilot",
       "cursor",
+      "opencode",
     ]);
     expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).not.toContain(
       "claude",
+    );
+  });
+
+  it("keeps Connections out of the Settings navigation", async () => {
+    vi.resetModules();
+    const { SETTINGS_MAIN_NAV_ITEMS } = await import("./settings-sections");
+
+    expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).not.toContain(
+      "connections",
     );
   });
 

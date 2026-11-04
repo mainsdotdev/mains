@@ -16,6 +16,13 @@ import {
   type SortableHandle,
 } from "@/components/ui";
 import WorkspaceItem from "./workspace-item";
+import {
+  SIDEBAR_LIST_CLASS,
+  SIDEBAR_LIST_HEADER_CLASS,
+  SIDEBAR_PROJECT_GROUPS_CLASS,
+  SIDEBAR_PROJECT_ITEMS_CLASS,
+  SIDEBAR_PROJECT_CHILD_ROW_CLASS,
+} from "@/lib/sidebar-layout";
 import PendingWorkspaceItem from "./pending-workspace-item";
 import type { PendingWorkspaceClone } from "@/hooks/use-sidebar-actions";
 import type {
@@ -561,9 +568,9 @@ export default function WorkspacesList({
         }
       >
         {localRows.length > 0 ? (
-          renderSortableWorkspaces(localRows, "flex flex-col space-y-0.5")
+          renderSortableWorkspaces(localRows, SIDEBAR_PROJECT_ITEMS_CLASS)
         ) : replicas.length === 0 ? (
-          <div className="pl-7 pr-2.5 py-1">
+          <div className={`flex items-center ${SIDEBAR_PROJECT_CHILD_ROW_CLASS}`}>
             <Text as="span" size="xxs" tone="muted">
               No workspaces
             </Text>
@@ -581,7 +588,7 @@ export default function WorkspacesList({
   };
 
   return (
-    <div className="pb-2 pt-2">
+    <div className={SIDEBAR_LIST_CLASS}>
       {pinnedWorkspaces.length > 0 && (
         <div className="mb-2">
           <SidebarGroupSection
@@ -603,7 +610,7 @@ export default function WorkspacesList({
         // tabIndex={0}
         // onClick={() => setIsExpanded(!isExpanded)}
         // onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIsExpanded(!isExpanded); } }}
-        className="w-full flex items-center justify-between transition-all duration-200 bg-transparent px-2 py-1 "
+        className={SIDEBAR_LIST_HEADER_CLASS}
       >
         <Text as="span" size="s" tone="muted" weight="medium">
           Workspaces
@@ -672,12 +679,12 @@ export default function WorkspacesList({
             )}
           </>
         ) : (
-          <div className="flex flex-col gap-1">
+          <div className={SIDEBAR_PROJECT_GROUPS_CLASS}>
             <SortableList
               ids={sortableProjectGroups.map((group) => group.project!.id)}
               onReorder={persistProjectOrder}
               disabled={!canReorderProjects}
-              className="flex flex-col gap-1"
+              className={SIDEBAR_PROJECT_GROUPS_CLASS}
             >
               {sortableProjectGroups.map((group) => (
                 <SortableItem key={group.project!.id} id={group.project!.id}>

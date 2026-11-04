@@ -101,6 +101,7 @@ function createHarness(
     copilot: options.copilot ?? false,
     copilotSource: options.copilot ? "bundled" : undefined,
     cursor: false,
+    opencode: false,
   };
   let signedOut = options.signedOut ?? false;
   let copilotSignedOut = options.copilotSignedOut ?? false;
@@ -219,7 +220,7 @@ describe("onboarding flow", () => {
     return onboardingProviders(
       [{ id: providerId, kind: "agent_runtime", isEnabled: true }] as AgentProvider[],
       [{ id: `${variant}-space`, providerId, mode: "developer", sortOrder: 0, isArchived: false }] as Space[],
-      { claude: false, codex: false, copilot: false, cursor: false, [variant]: true, [`${variant}Source`]: "bundled" },
+      { claude: false, codex: false, copilot: false, cursor: false, opencode: false, [variant]: true, [`${variant}Source`]: "bundled" },
       `${variant}-space`,
     );
   }
@@ -623,6 +624,7 @@ describe("onboarding flow", () => {
       codex: true,
       copilot: false,
       cursor: false,
+      opencode: false,
     });
     act(() => result.current.recheckProviders());
     await waitFor(() =>

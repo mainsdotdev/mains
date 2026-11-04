@@ -1,5 +1,4 @@
 import type { CSSProperties, MouseEvent } from "react";
-import { useSyncExternalStore } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui";
 import {
@@ -7,17 +6,11 @@ import {
   Home,
   Plugin,
   Question,
-  Search,
   Settings,
   Task,
 } from "@/components/ui/icons";
 import { Clock, Globe } from "@/components/ui/icons/space";
 import { RealtimeVoiceDock } from "@/features/workspace/components/realtime-voice-dock";
-import {
-  getCommandMenuOpen,
-  requestCommandMenu,
-  subscribeCommandMenuOpen,
-} from "@/features/command-menu/command-menu-bridge";
 import { useResolvedAppTheme } from "@/hooks/use-app-theme";
 import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
 import type { Space } from "@/lib/redux/api";
@@ -65,16 +58,9 @@ export function NavigationRail({
   const settingsShortcut = keyboardShortcutLabel(
     useKeyboardShortcutBinding("app.openSettings"),
   );
-  const commandMenuShortcut = keyboardShortcutLabel(
-    useKeyboardShortcutBinding("app.commandMenu"),
-  );
   const appPanel = useMcpAppPanel();
   const homeActive = isWorkspaceRoute(pathname) && !appPanel?.isOpen;
   const settingsActive = isSettingsRoute(pathname);
-  const commandMenuOpen = useSyncExternalStore(
-    subscribeCommandMenuOpen,
-    getCommandMenuOpen,
-  );
   const { entries: appExtensions } = useMcpAppExtensions();
   const destinations: Array<{
     label: string; path: string; Icon: typeof Plugin; disabled?: boolean;
@@ -99,7 +85,7 @@ export function NavigationRail({
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-(--z-panel) flex flex-col items-center mt-11 mb-1.25 mx-1.25 p-1.5 rounded-2xl ${translucent ? "bg-transparent" : "dark:bg-primary-950 bg-primary"}`}
+      className={`fixed inset-y-0 left-0 z-(--z-panel) flex flex-col items-center overflow-hidden overscroll-none mt-11 mb-1.25 mx-1.25 p-1.5 rounded-2xl ${translucent ? "bg-transparent" : "dark:bg-primary-950 bg-primary"}`}
       style={
         {
           width: "var(--nav-rail-width)",
@@ -108,7 +94,7 @@ export function NavigationRail({
       }
       aria-label="Primary navigation"
     >
-      <nav className="flex min-h-0 flex-col items-center gap-2 overflow-y-auto" aria-label="Pages">
+      <nav className="scroll-bounce flex min-h-0 flex-col items-center gap-2 overflow-y-auto" aria-label="Pages">
         <Button
           variant="bare"
           className={buttonClass(homeActive)}
@@ -122,19 +108,6 @@ export function NavigationRail({
           }}
         >
           <Home className="size-5" filled={homeActive} aria-hidden />
-        </Button>
-        <Button
-          variant="bare"
-          className={buttonClass(commandMenuOpen)}
-          tooltip="Search Mains"
-          tooltipShortcut={commandMenuShortcut}
-          tooltipPosition="right"
-          aria-label="Search Mains"
-          aria-haspopup="dialog"
-          aria-expanded={commandMenuOpen}
-          onClick={requestCommandMenu}
-        >
-          <Search className="size-5" filled={commandMenuOpen} aria-hidden />
         </Button>
         {destinations.map(({ label, path, Icon, disabled }) => {
           const active = pathname === path || pathname.startsWith(`${path}/`);

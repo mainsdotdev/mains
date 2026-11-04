@@ -7,6 +7,7 @@ import {
   Connect,
   CopilotStatic,
   Cursor,
+  OpenCode,
   FolderGit,
   Keyboard,
   Relay,
@@ -34,6 +35,7 @@ const CodexSettings = lazy(() => import("./components/codex"));
 // its default (codex) provider.
 const CodexPlugins = lazy(() => import("./components/provider-plugins"));
 const CursorSettings = lazy(() => import("./components/cursor"));
+const OpenCodeSettings = lazy(() => import("./components/opencode"));
 const LensSettings = lazy(() => import("./components/lens"));
 const KeyboardShortcutsSettings = lazy(
   () => import("./components/keyboard-shortcuts"),
@@ -68,6 +70,7 @@ export type SettingsRouteId =
   | "codex"
   | "codex-plugins"
   | "cursor"
+  | "opencode"
   | "backends"
   | "archive"
   | "dashboard";
@@ -99,7 +102,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "git", label: "Git", icon: FolderGit, showInNav: true, Component: GitSettings },
   { id: "lens", label: "Lens", icon: View, showInNav: capabilities.appshots, Component: LensSettings },
   { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard, showInNav: capabilities.windowChrome, Component: KeyboardShortcutsSettings },
-  { id: "connections", label: "Connections", icon: Connect, showInNav: true, Component: ConnectionsSettings },
+  // Hidden for now: connections are managed from the /tasks sidebar. The section
+  // stays registered (its modals are shared), but Settings.tsx redirects it away.
+  { id: "connections", label: "Connections", icon: Connect, showInNav: false, Component: ConnectionsSettings },
   { id: "backends", label: "Mains Connect", icon: Relay, showInNav: true, Component: BackendsSettings },
   { id: "dashboard", label: "Dashboard", icon: Chart, showInNav: true, Component: DashboardPage },
   { id: "archive", label: "Archive", icon: Archive, showInNav: true, Component: ArchiveSettings },
@@ -116,6 +121,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   },
   { id: "copilot", label: "Copilot", icon: CopilotStatic, showInNav: true, navGroup: "providers", Component: CopilotSettings },
   { id: "cursor", label: "Cursor", icon: Cursor, showInNav: true, navGroup: "providers", Component: CursorSettings },
+  { id: "opencode", label: "OpenCode", icon: OpenCode, showInNav: true, navGroup: "providers", Component: OpenCodeSettings },
 
   { id: "personalization", label: "Personalization", Component: PersonalizationSettings },
   { id: "schedules", label: "Schedules", Component: SchedulesSettings },

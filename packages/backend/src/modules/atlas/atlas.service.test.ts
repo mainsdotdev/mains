@@ -10,6 +10,7 @@ import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import type { DatabaseInstance } from "../../db/types";
 import { atlasItems, atlasPageRevisions, collections, runAttachmentRefs, runAttachments, runs } from "../../db/schema";
 import { ownershipOf } from "../bridge/bridge.ownership";
+import { HISTORY_CHECKPOINTS } from "./atlas.history";
 import { atlasRepo } from "./atlas.repo";
 import { sourceKey } from "./atlas.storage";
 
@@ -891,7 +892,7 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     expect(atlasService.getPage(identity)?.conflicts).toEqual([]);
     expect(atlasService.revisions(identity).map((row) => row.id)).toEqual([latest.revision.id, page.revision.id]);
   });
-  it("never rewrites or prunes a replicated revision", async () => {
+  it("does not rewrite a replicated revision while its sessions are still retained", async () => {
     const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });
     const identity = { accountId: "default", id: page.item.id };
     // A Bridge clock means another backend may already hold this revision.
@@ -902,21 +903,66 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     expect(atlasService.getRevision({ ...identity, revisionId: page.revision.id }).markdown).toContain("v1");
     await atlasService.savePage({ ...identity, expectedVersion: 2, title: "Notes", markdown: "agent 1" }, "agent");
     const last = await atlasService.savePage({ ...identity, expectedVersion: 3, title: "Notes", markdown: "agent 2" }, "agent");
-    // History groups each author's saves into one entry, but nothing is deleted from a replicated Page.
+    // History groups each author's saves into one entry. They still sit inside the retained sessions.
     expect(revisionRows(page.item.id)).toHaveLength(4);
     expect(atlasService.revisions(identity).map((row) => row.id)).toEqual([last.revision.id, next.revision.id]);
+  });
+  it("drops a replicated prefix older than the retained sessions without opening a conflict", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "base" });
+    const identity = { accountId: "default", id: page.item.id };
+    db.run(sql`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,portable)
+      VALUES('atlas_page_revisions',${page.revision.id},'row',1,0,'other','{}',1)`);
+    let latest = page;
+    const ids = [page.revision.id];
+    for (let index = 0; index < HISTORY_CHECKPOINTS + 2; index++) {
+      latest = await atlasService.savePage({ ...identity, expectedVersion: latest.item.version, title: "Notes", markdown: `s${index}` }, "agent");
+      ids.push(latest.revision.id);
+    }
+    const step = 2 * 60 * 60_000;
+    ids.forEach((id, index) => {
+      db.update(atlasPageRevisions).set({ createdAt: new Date(Date.now() - (ids.length - index) * step) })
+        .where(eq(atlasPageRevisions.id, id)).run();
+      db.run(sql`INSERT OR IGNORE INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,portable)
+        VALUES('atlas_page_revisions',${id},'row',1,0,'other','{}',1)`);
+    });
+    const mid = await atlasService.savePage({ ...identity, expectedVersion: latest.item.version, title: "Notes", markdown: "mid" }, "agent");
+    const head = await atlasService.savePage({ ...identity, expectedVersion: mid.item.version, title: "Notes", markdown: "head" }, "agent");
+    const rows = revisionRows(page.item.id);
+    // The last two saves share one session, so the prefix is one session longer than `ids`.
+    const dropped = ids.slice(0, ids.length + 1 - HISTORY_CHECKPOINTS);
+    expect(rows.map((row) => row.id)).toEqual(expect.not.arrayContaining(dropped));
+    expect(rows).toHaveLength(ids.length - dropped.length + 2);
+    expect(rows.find((row) => row.id === ids[dropped.length])?.parentRevisionId).toBeNull();
+    expect(rows.find((row) => row.id === head.revision.id)?.parentRevisionId).toBe(mid.revision.id);
+    expect(rows.find((row) => row.id === mid.revision.id)?.parentRevisionId).toBe(ids[ids.length - 1]);
+    expect(atlasService.getPage(identity)?.conflicts).toEqual([]);
   });
   it("protects embedded files needed by a previous revision", async () => {
     const page = await atlasService.createPage({ accountId: "default", title: "Visual notes" });
     const image = await atlasService.uploadFile({ accountId: "default", pageId: page.item.id,
       fileName: "photo.png", data: Buffer.from("image bytes").toString("base64") });
-    await atlasService.savePage({ accountId: "default", id: page.item.id, expectedVersion: 1, title: "Visual notes",
-      blocks: [{ type: "image", props: { url: `atlas-file://${image.id}`, name: "photo.png" } }] });
-    await atlasService.savePage({ accountId: "default", id: page.item.id, expectedVersion: 2, title: "Visual notes", markdown: "Without image" });
+    const identity = { accountId: "default", id: page.item.id };
+    const blocks = [{ type: "image", props: { url: `atlas-file://${image.id}`, name: "photo.png" } }];
+    // An agent save is its own revision, so dropping the image later must not free the file.
+    await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Visual notes", blocks }, "agent");
+    await atlasService.savePage({ ...identity, expectedVersion: 2, title: "Visual notes", markdown: "Without image" });
     await atlasService.update({ accountId: "default", id: image.id, trashed: true });
     await expect(atlasService.remove({ accountId: "default", id: image.id })).rejects.toThrow("revision history");
-    await atlasService.update({ accountId: "default", id: page.item.id, trashed: true });
-    await atlasService.remove({ accountId: "default", id: page.item.id });
+    await atlasService.update({ ...identity, trashed: true });
+    await atlasService.remove(identity);
+    await atlasService.remove({ accountId: "default", id: image.id });
+    expect(fs.existsSync(image.path!)).toBe(false);
+  });
+  it("releases an embedded file dropped during a folded session", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Visual notes" });
+    const image = await atlasService.uploadFile({ accountId: "default", pageId: page.item.id,
+      fileName: "photo.png", data: Buffer.from("image bytes").toString("base64") });
+    const identity = { accountId: "default", id: page.item.id };
+    const withImage = await atlasService.savePage({ ...identity, expectedVersion: 1, title: "Visual notes",
+      blocks: [{ type: "image", props: { url: `atlas-file://${image.id}`, name: "photo.png" } }] });
+    const without = await atlasService.savePage({ ...identity, expectedVersion: 2, title: "Visual notes", markdown: "Without image" });
+    expect(without.revision.id).toBe(withImage.revision.id);
+    await atlasService.update({ accountId: "default", id: image.id, trashed: true });
     await atlasService.remove({ accountId: "default", id: image.id });
     expect(fs.existsSync(image.path!)).toBe(false);
   });
