@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, ReactNode } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../../lib/cn";
 import Text from "./text";
@@ -14,6 +14,7 @@ export type TooltipPosition =
   | "bottom-right";
 
 export interface TooltipProps {
+  id?: string;
   content: ReactNode;
   children?: ReactNode;
   /** Existing DOM trigger, for controls rendered outside React (for example, in a shadow root). */
@@ -28,9 +29,14 @@ export interface TooltipProps {
   shortcut?: string;
   /** Hide tooltip when clicking on the trigger element */
   hideOnClick?: boolean;
+  /** Keep larger tooltip cards inside the window as their content loads. */
+  constrainToViewport?: boolean;
+  /** Allow reading or scrolling a larger card without dismissing it. */
+  interactive?: boolean;
 }
 
 export default function Tooltip({
+  id,
   content,
   children,
   target,
@@ -41,6 +47,8 @@ export default function Tooltip({
   disabled = false,
   shortcut,
   hideOnClick = false,
+  constrainToViewport = false,
+  interactive = false,
 }: TooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [shouldRender, setShouldRender] = useState(false);
@@ -50,10 +58,12 @@ export default function Tooltip({
   const autoHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const frameRef = useRef<number | null>(null);
   const triggerRef = useRef<HTMLSpanElement>(null);
+  const tooltipRef = useRef<HTMLElement>(null);
 
   const updatePosition = () => {
     // Wrapped children and externally created controls share the same positioning.
-    const element = target ?? (triggerRef.current?.firstElementChild as HTMLElement | null);
+    const element =
+      target ?? (triggerRef.current?.firstElementChild as HTMLElement | null);
     if (!element) return;
 
     const rect = element.getBoundingClientRect();
@@ -160,6 +170,45 @@ export default function Tooltip({
     showRef.current = showTooltip;
     hideRef.current = hideTooltip;
   });
+  useLayoutEffect(() => {
+    const tooltip = tooltipRef.current;
+    if (!shouldRender || !constrainToViewport || !tooltip) return;
+    const fit = () => {
+      const width = tooltip.offsetWidth;
+      const height = tooltip.offsetHeight;
+      const x =
+        position === "left" || position.endsWith("-left")
+          ? 1
+          : position === "top" || position === "bottom"
+            ? 0.5
+            : 0;
+      const y =
+        position === "top" || position.startsWith("top-")
+          ? 1
+          : position === "left" || position === "right"
+            ? 0.5
+            : 0;
+      tooltip.style.left = `${Math.max(8 + width * x, Math.min(coords.left, window.innerWidth - 8 - width * (1 - x)))}px`;
+      tooltip.style.top = `${Math.max(8 + height * y, Math.min(coords.top, window.innerHeight - 8 - height * (1 - y)))}px`;
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(tooltip);
+    window.addEventListener("resize", fit);
+    // A scroll can move the trigger inside the rail's overflow area.
+    const hide = (event: Event) => {
+      if (event.target instanceof Node && tooltip.contains(event.target))
+        return;
+      hideRef.current();
+    };
+    window.addEventListener("scroll", hide, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", fit);
+      window.removeEventListener("scroll", hide, true);
+    };
+  }, [shouldRender, constrainToViewport, position, coords]);
+
   useEffect(() => {
     if (!target || disabled) return;
     const show = () => showRef.current();
@@ -206,10 +255,21 @@ export default function Tooltip({
   const tooltipElement = shouldRender
     ? createPortal(
         <Text
+          id={id}
+          ref={tooltipRef}
           as="div"
           size="xs"
           tone="contrast"
           role="tooltip"
+          onMouseEnter={
+            interactive
+              ? () => {
+                  cancelPending();
+                  setIsVisible(true);
+                }
+              : undefined
+          }
+          onMouseLeave={interactive ? hideTooltip : undefined}
           style={{
             position: "fixed",
             top: coords.top,
@@ -222,11 +282,12 @@ export default function Tooltip({
             "shadow-lg shadow-primary-950/10 ",
             "transition-all duration-50 ease-out",
             "flex items-center gap-2",
+            interactive && "pointer-events-auto",
             isVisible ? "opacity-100 scale-100" : "opacity-0 scale-90",
             className,
           )}
         >
-          <span>{content}</span>
+          <div>{content}</div>
           {shortcut && (
             <Text as="span" size="inherit" tone="subtle" weight="normal">
               {shortcut}
@@ -237,7 +298,9 @@ export default function Tooltip({
       )
     : null;
 
-  return target ? tooltipElement : (
+  return target ? (
+    tooltipElement
+  ) : (
     <>
       <span
         ref={triggerRef}
@@ -248,6 +311,9 @@ export default function Tooltip({
         onFocus={showTooltip}
         onBlur={hideTooltip}
         onClick={hideOnClick ? hideTooltip : undefined}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") hideTooltip();
+        }}
       >
         {children}
       </span>
