@@ -5,6 +5,8 @@ import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Text } from "@/components/ui";
 import { appApi } from "@/lib/transport";
+import { fetchLocalDocument } from "@/lib/local-document-url";
+import { TEXT_PREVIEW_MAX_BYTES } from "@mains/contracts/output-files";
 import { markdownComponents } from "@/components/markdown-components";
 import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
 import { isAbsoluteFilePath, markdownFileUrlTransform, resolveDocumentImagePath } from "@/lib/file-path";
@@ -48,8 +50,9 @@ const documentSanitizeSchema = {
  * renders everywhere else, and going through the shadow boundary would strip
  * the theme and the shared components off it for nothing.
  *
- * Text comes through `fileExplorer.readFileText`, which keeps the regular-file,
- * size, and binary guards — the same seam the editor tab reads through.
+ * On-disk text comes through `fileExplorer.readFileText`, with the editor's
+ * regular-file, size and binary guards. Unsent attachments use their local
+ * blob URL with the same preview size limit and null-byte check.
  *
  * Keyed by path at the call site: a new document is a new component, so its
  * state starts empty and the panel never paints one file's body under
@@ -62,9 +65,27 @@ export function MarkdownDocument({ path, docType = "md" }: { path: string; docTy
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     void (async () => {
       try {
+        if (path.startsWith("blob:")) {
+          const response = await fetchLocalDocument(path, { signal: controller.signal });
+          const blob = await response.blob();
+          if (cancelled) return;
+          if (blob.size > TEXT_PREVIEW_MAX_BYTES) {
+            setError(`This text document exceeds the ${TEXT_PREVIEW_MAX_BYTES / (1024 * 1024)} MiB inline preview limit.`);
+            return;
+          }
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          if (cancelled) return;
+          if (bytes.subarray(0, 8192).includes(0)) {
+            setError("This file isn't text");
+            return;
+          }
+          setContent(new TextDecoder().decode(bytes));
+          return;
+        }
         const res = await appApi.fileExplorer.readFileText({ filePath: path });
         if (cancelled) return;
         if (!res.success) {
@@ -83,6 +104,7 @@ export function MarkdownDocument({ path, docType = "md" }: { path: string; docTy
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [path]);
 

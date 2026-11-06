@@ -37,7 +37,7 @@ export function AgentCard({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "group flex flex-col items-stretch overflow-hidden rounded-2xl  transition-all duration-200 cursor-pointer flex-1 min-w-0 glass-card",
+        "group flex flex-col items-stretch overflow-hidden rounded-2xl  transition-all duration-200 cursor-pointer flex-1 min-w-max glass-card",
         isSelected
           ? " text-primary-900 dark:text-primary"
           : " text-primary-600 dark:text-primary-400 opacity-80 hover:opacity-100",
@@ -52,7 +52,7 @@ export function AgentCard({
           size="xs"
           tone="inherit"
           weight="medium"
-          className="leading-tight truncate"
+          className="leading-tight whitespace-nowrap"
         >
           {label}
         </Text>

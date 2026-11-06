@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { PatchDiff, type DiffLineAnnotation } from "@pierre/diffs/react";
+import { processFile } from "@pierre/diffs";
 import {
   useGetPrDetailQuery,
   useGetPrDiffQuery,
@@ -14,13 +15,14 @@ import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
 import {
   Body,
   Button,
+  DiffFileHeader,
   SendButton,
   Text,
   Textarea,
   toast,
+  type DiffFileHeaderStatus,
 } from "@/components/ui";
 import { extractErrorMessage } from "@/lib/extract-error-message";
-import { ArrowUp } from "@/components/ui/icons";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { formatDate } from "@/lib/format-date";
 import { DIFF_TYPOGRAPHY_STYLE, patchDiffOptions } from "@/lib/diff-style";
@@ -31,6 +33,8 @@ interface FileDiff {
   additions: number;
   deletions: number;
   patch: string;
+  previousPath?: string;
+  status: DiffFileHeaderStatus;
 }
 
 type DiffSide = "left" | "right";
@@ -53,8 +57,13 @@ export function splitDiffByFile(diffText: string): FileDiff[] {
 
   for (const section of sections) {
     const headerMatch = section.match(/^diff --git a\/(.+?) b\/(.+)$/m);
-    if (!headerMatch) continue;
-    const path = headerMatch[2];
+    // Use the same header parser as workspace review for renames and quoted paths.
+    let header: ReturnType<typeof processFile>;
+    try { header = processFile(section.split(/^@@ /m, 1)[0], { throwOnError: true }); }
+    catch { /* A damaged hunk must not hide an otherwise readable file header. */ }
+    const path = header?.name ?? headerMatch?.[2];
+    if (!path) continue;
+    const status = header?.type === "new" ? "A" : header?.type === "deleted" ? "D" : header?.prevName ? "R" : "M";
 
     let additions = 0;
     let deletions = 0;
@@ -63,7 +72,7 @@ export function splitDiffByFile(diffText: string): FileDiff[] {
       else if (line.startsWith("-") && !line.startsWith("---")) deletions++;
     }
 
-    files.push({ path, additions, deletions, patch: section });
+    files.push({ path, previousPath: header?.prevName, status, additions, deletions, patch: section });
   }
   return files;
 }
@@ -354,39 +363,12 @@ function FileSection({
   );
 
   return (
-    <div className="rounded-xl overflow-hidden glass-outline">
-      <Button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 dark:bg-primary/5 bg-primary-50 cursor-pointer"
-      >
-        <Text
-          as="span"
-          size="xs"
-          weight="medium"
-          className="truncate"
-          tone="secondary"
-        >
-          {file.path}
-        </Text>
-        <Text
-          as="span"
-          size="xxs"
-          tone="inherit"
-          className="ml-auto tabular-nums whitespace-nowrap shrink-0"
-        >
-          <Text as="span" size="inherit" tone="success">
-            +{file.additions}
-          </Text>{" "}
-          <Text as="span" size="inherit" tone="danger">
-            -{file.deletions}
-          </Text>
-        </Text>
-        <ArrowUp
-          className={`w-3 h-3 text-primary-600 dark:text-primary-400 transition-transform ${
-            expanded ? "rotate-180" : "rotate-90"
-          }`}
-        />
-      </Button>
+    <section className="border-b border-primary-200/60 dark:border-primary-800/60" aria-label={`Changes in ${file.path}`}>
+      <div className="sticky top-0 z-10 flex items-center diff-file-surface">
+        <DiffFileHeader path={file.path} previousPath={file.previousPath} status={file.status}
+          additions={file.additions} deletions={file.deletions} expanded={expanded} onToggle={() => setExpanded(!expanded)}
+          commentCount={threads.reduce((count, thread) => count + thread.comments.length, 0)} />
+      </div>
       {/* grid-rows 1fr↔0fr — the codebase's smooth-collapse pattern
           (context-chips, activity-section). Content stays mounted so
           re-expanding animates instead of re-rendering the diff. */}
@@ -424,12 +406,16 @@ function FileSection({
           />
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 
 export function PrDiffView({ prRef }: { prRef: PrRefInput }) {
-  const { data, isLoading, isError, refetch } = useGetPrDiffQuery(prRef);
+  const { data, isLoading, isError, refetch } = useGetPrDiffQuery(prRef, {
+    refetchOnMountOrArgChange: true,
+    pollingInterval: 30_000,
+    skipPollingIfUnfocused: true,
+  });
   // Cache-shared with the Summary tab — review threads anchor the inline
   // comment cards. Resolved threads stay out of the diff (they live in
   // the Summary's review-threads section).
@@ -501,13 +487,13 @@ export function PrDiffView({ prRef }: { prRef: PrRefInput }) {
   }
 
   return (
-    <div className="space-y-3">
+    <div>
       {data?.truncated && (
         <Text
           as="div"
           size="xs"
           tone="warning"
-          className="px-3 py-3 rounded-xl bg-warning/10"
+          className="mx-4 my-3 px-3 py-3 rounded-xl bg-warning/10"
         >
           This diff is large — only the available files and patches are shown.
           Open the pull request on GitHub for the full diff.

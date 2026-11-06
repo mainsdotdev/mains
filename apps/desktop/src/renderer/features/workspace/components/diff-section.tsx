@@ -228,7 +228,7 @@ export function DiffSection({
                   setSelectedDiffFile(filePath);
                   onSelectDiffFile(filePath, segment || diff.diffText);
                 }}
-                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                className="flex min-w-0 flex-1 items-center gap-2 text-left text-primary-900 dark:text-primary-100"
               >
                 <FileIconComponent
                   fileName={fileName}

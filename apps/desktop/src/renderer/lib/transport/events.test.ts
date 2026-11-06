@@ -27,6 +27,7 @@ describe("appEvents", () => {
     const offs = [
       appEvents.runs.onStreamingEvent(cb),
       appEvents.runs.onContextUsage(cb),
+      appEvents.runs.onPullRequestCreated(cb),
       appEvents.runs.onToolApprovalRequest(cb),
       appEvents.runs.onToolApprovalResolved(cb),
       appEvents.providers.onModelsUpdated(cb),
@@ -38,6 +39,7 @@ describe("appEvents", () => {
     const subscribe = t.subscribe as ReturnType<typeof vi.fn>;
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.ephemeralEvent, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.contextUsage, cb);
+    expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.pullRequestCreated, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.toolApprovalRequest, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.toolApprovalResolved, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.providers.modelsUpdated, cb);

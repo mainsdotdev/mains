@@ -4,6 +4,7 @@ import { Provider } from "react-redux";
 import { MemoryRouter } from "react-router-dom";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Input } from "@/components/ui";
 vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ mode: "developer" }) }));
 vi.mock("@/hooks/use-shell-header-chrome", () => ({ useShellHeaderChrome: () => ({}) }));
 vi.mock("@/hooks/use-is-dark-mode", () => ({ useIsDarkMode: () => false }));
@@ -11,6 +12,9 @@ vi.mock("@/hooks/use-mcp-app-panel", () => ({ useMcpAppInstances: () => [] }));
 vi.mock("./browser-panel", () => ({ BrowserPanel: () => <div>Browser content host</div> }));
 vi.mock("./document-viewer-panel", () => ({ DocumentViewerPanel: () => null }));
 vi.mock("./mcp-app-panel", () => ({ McpAppPanel: () => null }));
+vi.mock("@/features/pull-requests/components/pull-request-view", () => ({
+  PullRequestView: ({ active }: { active: boolean }) => <div data-testid="pr-view" data-active={active}><Input aria-label="PR comment draft" /></div>,
+}));
 import settings, { setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import workspace, { activateWorkspaceView, setComposerContextKey } from "@/lib/redux/slices/workspaceSlice";
 import preview, { openPreviewTab, setPreviewOpen, setPreviewExpanded, type PreviewTab } from "@/lib/redux/slices/previewSlice";
@@ -32,6 +36,23 @@ function harness(tabs: PreviewTab[] = [file]) {
 beforeEach(() => { vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} }); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("shared preview shell", () => {
+  it("renders PR tabs alongside files and keeps their draft while switching or hiding", async () => {
+    const pr: PreviewTab = { kind: "pull-request", id: "pr", title: "PR #176",
+      prRef: { provider: "github", owner: "acme", repo: "widget", number: 176 }, url: "https://github.com/acme/widget/pull/176" };
+    const h = harness([file, pr]);
+    const input = await screen.findByRole("textbox", { name: "PR comment draft" });
+    fireEvent.change(input, { target: { value: "Looks good" } });
+    fireEvent.click(screen.getByRole("tab", { name: "Report.pdf" }));
+    expect(screen.getByTestId("pr-view").getAttribute("data-active")).toBe("false");
+    fireEvent.click(screen.getByRole("tab", { name: "PR #176" }));
+    expect((screen.getByRole("textbox", { name: "PR comment draft" }) as HTMLInputElement).value).toBe("Looks good");
+    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
+    expect(screen.getByTestId("pr-view").getAttribute("data-active")).toBe("false");
+    act(() => h.state.dispatch(setPreviewOpen({ ownerKey: key, open: true })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close PR #176" })));
+    expect(screen.queryByTestId("pr-view")).toBeNull();
+    expect(h.state.getState().preview.byOwner[key].activeTabId).toBe("pdf");
+  });
   it("preserves sidebar choices when expanding and switching between app, browser and document tabs", () => {
     const page: PreviewTab = { kind: "browser", id: "page", title: "Page", faviconUrl: null, isLoading: false, isCrashed: false };
     const h = harness([file, page, { kind: "app", id: "app", title: "Canvas" }]);

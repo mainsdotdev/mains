@@ -41,6 +41,9 @@ export const appEvents = {
     onEventPersisted: bind<typeof window.api.runs.onEventPersisted>(
       CHANNELS.runs.eventPersisted,
     ),
+    onPullRequestCreated: bind<typeof window.api.runs.onPullRequestCreated>(
+      CHANNELS.runs.pullRequestCreated,
+    ),
     onStatusChanged: bind<typeof window.api.runs.onStatusChanged>(
       CHANNELS.runs.statusChanged,
     ),

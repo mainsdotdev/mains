@@ -299,8 +299,10 @@ export function ComposerSlot({ request, onRespond, variant, maxHeight, blocked =
     <RunInputDialog request={request} onRespond={onRespond} variant={variant} maxHeight={maxHeight} />
   );
   return (
-    <div ref={frameRef} className={`mx-auto flex w-full max-w-210 flex-col justify-end ${dialogClassName ?? ""}`}>
-      {dialog}
+    <div ref={frameRef} className="mx-auto flex w-full max-w-210 flex-col justify-end">
+      {!blocked && (occupied || asyncQuestions?.pending) && (
+        <div className={dialogClassName}>{dialog}</div>
+      )}
       <div ref={composerRef} hidden={occupied || undefined} inert={occupied || undefined}>
         {composer}
       </div>

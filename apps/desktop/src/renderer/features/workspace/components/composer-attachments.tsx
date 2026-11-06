@@ -8,7 +8,7 @@ import {
   Web,
 } from "@/components/ui/icons";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
-import { classifyDocType, isTextDocType } from "@/lib/document-viewer";
+import { classifyDocType } from "@/lib/document-viewer";
 import { useComposerContext } from "@/features/workspace/hooks/use-composer-context";
 import type {
   ContextAppshotItem,
@@ -152,8 +152,7 @@ export function ComposerAttachments({
 
   const openDraftDocument = (file: File) => {
     const docType = classifyDocType(file.name);
-    // Text formats are read from disk by path, which a draft doesn't have.
-    if (!docType || isTextDocType(docType)) return;
+    if (!docType) return;
     let url = draftDocumentUrls.get(file);
     if (!url) {
       url = URL.createObjectURL(file);
@@ -277,13 +276,13 @@ export function ComposerAttachments({
               }
 
               const docType = classifyDocType(file.name);
-              const canOpen = !!docType && !isTextDocType(docType);
+              const canOpen = !!docType;
               const content = (
                 <>
                   <div className="flex flex-1 items-center justify-center">
                     <FileIcon className="size-6 text-primary-400 dark:text-primary-600" />
                   </div>
-                  <div className="flex items-center gap-1.5 px-2.5 pb-2">
+                  <div className="flex items-center gap-1.5 px-2.5 pb-2 text-primary-950 dark:text-primary">
                     <FileIconComponent
                       fileName={file.name}
                       extension={fileExtension(file.name)}

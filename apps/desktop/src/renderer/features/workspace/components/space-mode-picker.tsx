@@ -29,7 +29,7 @@ const BUTTON =
 
 /** Selected experience: icon and its name, in one pill. */
 const SELECTED =
-  "bg-primary-200/90 text-primary-900 dark:bg-primary-800/80 dark:text-primary-50";
+  "glass-outline text-primary-900 dark:text-primary-50";
 
 /** The other experiences stay icon-only until they are the current one. */
 const IDLE =

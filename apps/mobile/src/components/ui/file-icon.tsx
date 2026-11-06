@@ -9,7 +9,7 @@ export function FileIcon({ path, size = 20 }: { path: string; size?: number }) {
   const colors = useThemeColors();
   const xml = fileIconSvg(path);
   return xml ? (
-    <SvgXml xml={xml} width={size} height={size} style={{ flexShrink: 0 }} accessibilityElementsHidden />
+    <SvgXml xml={xml} width={size} height={size} color={colors.secondaryLabel} style={{ flexShrink: 0 }} accessibilityElementsHidden />
   ) : (
     <SFSymbol name="doc" size={size} tint={colors.secondaryLabel} />
   );

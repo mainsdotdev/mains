@@ -515,6 +515,15 @@ export interface RunEventPersistedEvent {
   ts: number;
 }
 
+/** A live, successful PR creation tool result; never replayed from history. */
+export interface RunPullRequestCreatedEvent {
+  runId: string;
+  workspaceId: string | null;
+  mode: ModeId;
+  toolCallId: number;
+  url: string;
+}
+
 /**
  * `runs:ephemeralEvent` push — an in-memory artifact snapshot used while an
  * agent message is still being written. It is never persisted or replayed;

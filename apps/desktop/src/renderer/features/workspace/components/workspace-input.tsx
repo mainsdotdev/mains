@@ -1079,56 +1079,61 @@ export function WorkspaceInput({
           files={uploadedFiles}
           onRemove={handleRemoveUploadedFile}
         />
-        <div className="relative">
-          <RichInputForm
-            ref={inputRef}
-            query={goal}
-            onQueryChange={handleGoalChange}
-            onSubmit={handleSubmit}
-            submitDisabled={sendDisabled}
-            disabled={disabled}
-            ariaLabel={inputLabel}
-            onSkillChipsChange={handleSkillChipsChange}
-            onFileChipsChange={handleFileChipsChange}
-            onCodeChipsChange={handleCodeChipsChange}
-            onFileChipClick={openFile}
-            onSkillChipClick={openSkillMention}
-            onCaretContextChange={handleCaretContext}
-            onPasteFiles={handlePasteFiles}
-            skillChipMap={skillChipMap}
-            fileChipMap={fileChipMap}
-            codeChipMap={codeChipMap}
-            placeholder={floatingRunStatus || inputPlaceholder}
-            placeholderIcon={floatingRunStatus
-              ? <AsciiSpinner
-                  variant={providerVariant}
-                  kind={activeRun?.status === "queued" ? "circle" : "square"}
-                />
-              : undefined}
-            focusShortcutLabel={layout === "floating" ? undefined : focusComposerShortcut}
-            compact={compactFloating}
-            dense={denseFloating}
-          />
-          <UnifiedContextDropdown
-            isOpen={unifiedMenu.visible}
-            trigger={unifiedMenu.trigger}
-            providerId={activeProviderId}
-            bucket={unifiedMenu.bucket}
-            filterText={unifiedMenu.filter}
-            workspacePath={workspacePath}
-            projectId={projectId}
-            commands={providerCommands}
-            skills={providerSkills}
-            isLoadingSkills={isLoadingSkills}
-            onSelectCommand={handleSlashCommandSelect}
-            onSelectSkill={handleUnifiedSkillSelect}
-            onSelectFile={handleUnifiedFileSelect}
-            onNavigateFile={handleUnifiedFileNavigate}
-            onSelectIssue={handleUnifiedIssueSelect}
-            onClose={() => updateUnifiedMenu({ visible: false, filter: "" })}
-            dropdownRef={unifiedContextDropdownRef}
-            triggerRef={pluginsButtonRef}
-          />
+        {/* The compact row reserves each control's actual width, including speed labels. */}
+        <div className={compactFloating
+          ? "relative grid grid-cols-[2rem_minmax(0,1fr)_auto] items-end gap-x-1 px-3 py-2"
+          : "relative"}>
+          <div className={compactFloating ? "relative col-start-2 row-start-1 min-w-0" : "contents"}>
+            <RichInputForm
+              ref={inputRef}
+              query={goal}
+              onQueryChange={handleGoalChange}
+              onSubmit={handleSubmit}
+              submitDisabled={sendDisabled}
+              disabled={disabled}
+              ariaLabel={inputLabel}
+              onSkillChipsChange={handleSkillChipsChange}
+              onFileChipsChange={handleFileChipsChange}
+              onCodeChipsChange={handleCodeChipsChange}
+              onFileChipClick={openFile}
+              onSkillChipClick={openSkillMention}
+              onCaretContextChange={handleCaretContext}
+              onPasteFiles={handlePasteFiles}
+              skillChipMap={skillChipMap}
+              fileChipMap={fileChipMap}
+              codeChipMap={codeChipMap}
+              placeholder={floatingRunStatus || inputPlaceholder}
+              placeholderIcon={floatingRunStatus
+                ? <AsciiSpinner
+                    variant={providerVariant}
+                    kind={activeRun?.status === "queued" ? "circle" : "square"}
+                  />
+                : undefined}
+              focusShortcutLabel={layout === "floating" ? undefined : focusComposerShortcut}
+              compact={compactFloating}
+              dense={denseFloating}
+            />
+            <UnifiedContextDropdown
+              isOpen={unifiedMenu.visible}
+              trigger={unifiedMenu.trigger}
+              providerId={activeProviderId}
+              bucket={unifiedMenu.bucket}
+              filterText={unifiedMenu.filter}
+              workspacePath={workspacePath}
+              projectId={projectId}
+              commands={providerCommands}
+              skills={providerSkills}
+              isLoadingSkills={isLoadingSkills}
+              onSelectCommand={handleSlashCommandSelect}
+              onSelectSkill={handleUnifiedSkillSelect}
+              onSelectFile={handleUnifiedFileSelect}
+              onNavigateFile={handleUnifiedFileNavigate}
+              onSelectIssue={handleUnifiedIssueSelect}
+              onClose={() => updateUnifiedMenu({ visible: false, filter: "" })}
+              dropdownRef={unifiedContextDropdownRef}
+              triggerRef={pluginsButtonRef}
+            />
+          </div>
           {compactFloating && toolbar}
         </div>
         {!compactFloating && toolbar}

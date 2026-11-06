@@ -1111,6 +1111,15 @@ html.mains-web.dark #root {
  * padding silently collapses to the inset (0px with nothing docked) while its
  * left padding stays. Wrap instead — `content-inset` outside, padding inside.
  */
+/* Keep sticky diff headers between the content and frame surface tones. */
+@utility diff-file-surface {
+  background-color: color-mix(in srgb, var(--color-primary) 50%, var(--color-primary-50));
+
+  .dark & {
+    background-color: color-mix(in srgb, var(--color-primary-950) 50%, var(--color-primary-900));
+  }
+}
+
 @utility content-inset {
   padding-right: var(--content-inset-right, 0px);
   transition: padding-right 150ms ease-out;

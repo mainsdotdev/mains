@@ -3,7 +3,7 @@ import { ShellHeader } from "@/components/layout/shell-header";
 import { ResizeHandle } from "@/components/layout/resize-handle";
 import { PreviewPanelControls } from "@/components/layout/preview-panel-controls";
 import { TabStrip, toast } from "@/components/ui";
-import { Refresh, Plugin } from "@/components/ui/icons";
+import { Refresh, Plugin, PullRequest } from "@/components/ui/icons";
 import { usePreviewPanel } from "@/hooks/use-preview-panel";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { usePreviewTabLifecycle } from "@/hooks/use-preview-tab-lifecycle";
@@ -26,6 +26,7 @@ import { McpAppPanel } from "./mcp-app-panel";
 import { McpAppTabIcon } from "./mcp-app-tab-icon";
 import { DocumentViewerPanel } from "./document-viewer-panel";
 import { PreviewNewTabButton } from "./preview-new-tab-button";
+import { PullRequestPreviewPanel } from "@/features/pull-requests/components/pull-request-preview-panel";
 
 export function PreviewPanel({ reserveLayoutControls = false }: { reserveLayoutControls?: boolean }) {
   const preview = usePreviewPanel();
@@ -33,6 +34,8 @@ export function PreviewPanel({ reserveLayoutControls = false }: { reserveLayoutC
   const width = useAppSelector((state) => state.appSettings.browserPanelWidth);
   const sidebarCollapsed = useAppSelector((state) => state.appSettings.sidebarCollapsed);
   const { headerInsetLeft } = useShellHeaderChrome(sidebarCollapsed);
+  const reserveHeaderInset = preview.isExpanded && !!headerInsetLeft;
+  const firstTabFlush = !reserveHeaderInset && preview.group.tabs[0]?.id === preview.group.activeTabId;
   const { isVisible, isAnimatedIn } = usePanelAnimation(preview.isOpen);
   const isMobile = useIsMobile();
   const { prepareClose } = usePreviewTabLifecycle();
@@ -85,7 +88,7 @@ export function PreviewPanel({ reserveLayoutControls = false }: { reserveLayoutC
       onDragEnd={() => { if (preview.activeTab?.kind === "browser") void window.api?.browser?.setVisible(true); }}
       ariaLabel="Resize preview panel" />}
     <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden">
-      <ShellHeader reserveWindowControls={reserveLayoutControls} paddingLeft={preview.isExpanded ? headerInsetLeft : undefined}
+      <ShellHeader reserveWindowControls={reserveLayoutControls} paddingLeft={reserveHeaderInset ? headerInsetLeft : undefined}
         onKeyDown={(event) => {
           if (!(event.target as Element).closest('[role="tab"]')) return;
           if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
@@ -102,12 +105,13 @@ export function PreviewPanel({ reserveLayoutControls = false }: { reserveLayoutC
             let icon;
             if (tab.kind === "browser") icon = <BrowserTabIcon {...tab} />;
             else if (tab.kind === "document") { const Icon = DOC_TYPE_ICONS[tab.doc.docType]; icon = <Icon className="size-3.5" />; }
+            else if (tab.kind === "pull-request") icon = <PullRequest className="size-3.5" />;
             else { const instance = instances.find((instance) => instance.document?.id === tab.id);
               icon = instance?.document && instance.scope
                 ? <McpAppTabIcon app={instance.document.app} providerId={instance.scope.providerId} />
                 : <Plugin className="size-3.5" />; }
             return <BaseTab key={tab.id} id={`preview-tab-${tab.id}`} ariaControls="preview-content" role="tab"
-              ariaLabel={label} label={label} tooltip={label} icon={icon} isFirst={index === 0} showLeadingCorner={index > 0 || (preview.isExpanded && !!headerInsetLeft)}
+              ariaLabel={label} label={label} tooltip={label} icon={icon} isFirst={index === 0} showLeadingCorner={index > 0 || reserveHeaderInset}
               isActive={tab.id === preview.group.activeTabId} tabIndex={tab.id === preview.group.activeTabId ? 0 : -1}
               onClick={() => preview.select(tab.id)} onClose={() => { void closeTab(tab); }} closeLabel={`Close ${label}`}
               closeIcon={closing.has(tab.id) ? <Refresh className="size-3 animate-spin" /> : undefined} />;
@@ -115,10 +119,11 @@ export function PreviewPanel({ reserveLayoutControls = false }: { reserveLayoutC
         </TabStrip>
       </ShellHeader>
       <div id="preview-content" role="tabpanel" aria-labelledby={preview.activeTab ? `preview-tab-${preview.activeTab.id}` : undefined}
-        className="relative min-h-0 flex-1 overflow-hidden overscroll-none rounded-2xl rounded-tl-none bg-primary dark:bg-primary-950">
+        className={`relative min-h-0 flex-1 overflow-hidden overscroll-none rounded-2xl ${firstTabFlush ? "rounded-tl-none" : ""} bg-primary dark:bg-primary-950`}>
         <BrowserPanel embedded />
         <DocumentViewerPanel />
         <McpAppPanel />
+        <PullRequestPreviewPanel />
       </div>
     </div>
   </div>;

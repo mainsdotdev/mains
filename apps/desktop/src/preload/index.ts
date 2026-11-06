@@ -10,6 +10,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { RunExperienceOptions, RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
 import type { AnswerAsyncQuestionsPayload, AnswerAsyncQuestionsResponse, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import type { CreateRealtimeConversationPayload, CreateRealtimeConversationResponse, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeEvent } from "@mains/contracts/realtime";
+import type { RunPullRequestCreatedEvent } from "@mains/contracts/runs";
 import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
 import type { ModeId } from "../shared/modes";
@@ -924,6 +925,11 @@ const api = {
       const listener = (_: any, data: any) => callback(data);
       ipcRenderer.on(CHANNELS.runs.eventPersisted, listener);
       return () => ipcRenderer.removeListener(CHANNELS.runs.eventPersisted, listener);
+    },
+    onPullRequestCreated: (callback: (data: RunPullRequestCreatedEvent) => void) => {
+      const listener = (_: unknown, data: RunPullRequestCreatedEvent) => callback(data);
+      ipcRenderer.on(CHANNELS.runs.pullRequestCreated, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.runs.pullRequestCreated, listener);
     },
     // Fired when a run's session starts ("running") and when it reaches a
     // terminal status (succeeded / failed / canceled).

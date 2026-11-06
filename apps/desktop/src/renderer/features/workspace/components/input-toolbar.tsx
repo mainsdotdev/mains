@@ -230,12 +230,12 @@ export function InputToolbar({
 
   if (layout === "floating") {
     return (
-      <div className="pointer-events-none absolute inset-x-2.5 bottom-1.5 flex items-center justify-between">
-        <div className="pointer-events-auto flex items-center">
+      <div className="contents">
+        <div className="col-start-1 row-start-1 flex h-8 items-center">
           {uploadButton}
           {uploadInput}
         </div>
-        <div className="pointer-events-auto flex items-center gap-0 *:shrink-0">
+        <div className="col-start-3 row-start-1 flex h-8 items-center gap-0 *:shrink-0">
           <ModelSelectDropdown
             model={selectedModelDisplayName}
             models={modelDisplayNames}
@@ -268,7 +268,7 @@ export function InputToolbar({
             iconOnly
           />}
           {/* Balance the visible gap beside the filled circle with the icon buttons' inset. */}
-          <div className="ml-3 flex items-center gap-1">
+          <div className="ml-1 flex items-center gap-1">
             {actionButtons}
           </div>
         </div>

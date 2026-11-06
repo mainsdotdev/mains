@@ -25,6 +25,7 @@ import { usePrAttachments } from "../../../hooks/use-pr-attachments";
 import { withPrAttachments } from "../../../lib/pr-attachment-upload";
 import { removePrMedia, stagePrMediaReferences, type PrEditorSelection } from "../../../lib/pr-media-markdown";
 import type { GitActionsPanel } from "./use-git-actions-panel";
+import { useOpenPullRequest } from "@/features/pull-requests/hooks/use-open-pull-request";
 
 const PR_VIEW_TRANSITION_NAME = "pr-editor";
 
@@ -46,6 +47,7 @@ export function PrSection({
   onEditorOpenChange: (open: boolean, transitioning: boolean) => void;
   onEditorTransitionEnd: () => void;
 }) {
+  const openPullRequest = useOpenPullRequest();
   const {
     workspaceId,
     status,
@@ -171,11 +173,11 @@ export function PrSection({
       if (result.warning) toast(`Pull request created. ${result.warning}`, { id: toastId, duration: 12_000 });
       else toast.success("Pull request created", { id: toastId });
       media.clear();
-      if (result.url) window.api.shell.openExternal(result.url);
       viewTransitionRef.current?.skipTransition();
       editorRestoredRef.current = true;
       setEditorOpen(false);
       onClose();
+      if (result.url && !openPullRequest(result.url)) void window.api.shell.openExternal(result.url);
     } catch (err) {
       toast.error(extractErrorMessage(err, "Failed to create PR"), {
         id: toastId,
@@ -198,6 +200,7 @@ export function PrSection({
     base,
     providerId,
     onClose,
+    openPullRequest,
   ]);
 
   const moveEditor = useCallback(

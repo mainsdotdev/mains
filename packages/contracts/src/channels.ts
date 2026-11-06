@@ -425,6 +425,7 @@ export const CHANNELS = {
     diffUpdated: "runs:diffUpdated",
     ephemeralEvent: "runs:ephemeralEvent",
     eventPersisted: "runs:eventPersisted",
+    pullRequestCreated: "runs:pullRequestCreated",
     execute: "runs:execute",
     executeReview: "runs:executeReview",
     fail: "runs:fail",

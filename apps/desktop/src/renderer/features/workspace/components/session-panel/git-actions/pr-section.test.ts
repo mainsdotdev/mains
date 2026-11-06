@@ -16,7 +16,9 @@ const revokeUrl = vi.fn();
 const mutations = vi.hoisted(() => ({
   createPr: vi.fn(),
   generatePr: vi.fn(),
+  openPullRequest: vi.fn(() => true),
 }));
+vi.mock("@/features/pull-requests/hooks/use-open-pull-request", () => ({ useOpenPullRequest: () => mutations.openPullRequest }));
 
 vi.mock("@/lib/redux/api", () => ({
   useCreatePrGitFlowMutation: () => [mutations.createPr],
@@ -26,6 +28,7 @@ vi.mock("@/lib/redux/api", () => ({
 }));
 
 beforeEach(() => {
+  mutations.openPullRequest.mockClear();
   const NativeURL = URL;
   vi.stubGlobal("URL", class extends NativeURL {
     static createObjectURL = vi.fn(() => "blob:preview");
@@ -68,6 +71,15 @@ describe("pull request editor", () => {
       providerId: "codex", onClose, onEditorOpenChange: () => undefined, onEditorTransitionEnd: () => undefined,
     });
   }
+
+  it("opens the newly created PR in the preview panel", async () => {
+    mutations.createPr.mockReturnValueOnce({ unwrap: () => Promise.resolve({ url: "https://github.com/acme/widget/pull/176" }) });
+    const onClose = vi.fn();
+    render(createElement(MediaHarness, { onClose }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Create pull request" })[1]);
+    await waitFor(() => expect(mutations.openPullRequest).toHaveBeenCalledWith("https://github.com/acme/widget/pull/176"));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
 
   it("inserts at a remembered table selection, previews in the cell, and stages one file for repeated references", async () => {
     const user = userEvent.setup();

@@ -83,6 +83,7 @@ import { createWorkAdapter, couldModifyFiles } from "../providers/adapters";
 import { gitService } from "../git/git.service";
 import { APP_WRITER, worktreeWrites } from "../git";
 import { registerEventSink } from "../../ipc-kit/event-bus";
+import { CHANNELS } from "@mains/contracts/channels";
 import {
   createClaudePermissionModeRef,
   mapSDKMessage,
@@ -151,6 +152,51 @@ describe("RunSession", () => {
   // ─────────────────────────────────────────────────────────────
   // Construction
   // ─────────────────────────────────────────────────────────────
+  it("announces a live PR creation once, after saving its tool result", async () => {
+    const created: unknown[] = [];
+    const off = registerEventSink({ kind: "test-pr", send(channel, payload) {
+      if (channel === CHANNELS.runs.pullRequestCreated) created.push(payload);
+    } });
+    try {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "Bash", input: { command: "gh pr create --body-file /tmp/pr.md" }, metadata: { phase: "start", toolCallId: "create-pr" } });
+      const result = { type: "tool_call" as const, toolName: "Bash", output: { stdout: "https://github.com/acme/widget/pull/176" }, metadata: { phase: "complete", toolCallId: "create-pr" } };
+      await session.project(result);
+      await session.project(result);
+      const calls = await runsRepo.findToolCallsByRun("r1");
+      expect(calls[0].status).toBe("done");
+      expect(created).toEqual([{ runId: "r1", workspaceId: "w1", mode: "developer", toolCallId: calls[0].id, url: "https://github.com/acme/widget/pull/176" }]);
+    } finally { off(); }
+  });
+
+  it("keeps the creating run's original Work ownership without a workspace", async () => {
+    createRun(db, { id: "work-run", workspaceId: null, mode: "work", accountId: "default", providerId: "copilot_cli", status: "running" });
+    const created: any[] = [];
+    const off = registerEventSink({ kind: "test-pr", send(channel, payload) { if (channel === CHANNELS.runs.pullRequestCreated) created.push(payload); } });
+    try {
+      const session = makeSession({ runId: "work-run", execution: { workspaceId: null, cwd: "/tmp/work" } });
+      await session.project({ type: "tool_call", toolName: "bash", input: { command: "gh pr create" }, metadata: { phase: "start", toolCallId: "work-pr" } });
+      await session.project({ type: "tool_call", toolName: "bash", output: "https://github.com/acme/widget/pull/176", metadata: { phase: "end", toolCallId: "work-pr", success: true } });
+      expect(created).toEqual([expect.objectContaining({ runId: "work-run", workspaceId: null, mode: "work" })]);
+    } finally { off(); }
+  });
+
+  it("does not announce a PR from prose, historical completions, failed creates or parallel reads", async () => {
+    const created: unknown[] = [];
+    const off = registerEventSink({ kind: "test-pr", send(channel, payload) { if (channel === CHANNELS.runs.pullRequestCreated) created.push(payload); } });
+    try {
+      const session = makeSession();
+      const url = "https://github.com/acme/widget/pull/176";
+      await session.project({ type: "artifact", kind: "report", content: "Existing PR: " + url });
+      await session.project({ type: "tool_call", toolName: "Bash", input: { command: "gh pr create" }, output: url, metadata: { phase: "complete", toolCallId: "historical" } });
+      await session.project({ type: "tool_call", toolName: "Bash", input: { command: "gh pr create" }, metadata: { phase: "start", toolCallId: "failed-pr" } });
+      await session.project({ type: "tool_call", toolName: "Bash", input: { command: "gh pr view 176" }, metadata: { phase: "start", toolCallId: "read-pr" } });
+      await session.project({ type: "tool_call", toolName: "Bash", output: url, metadata: { phase: "complete", toolCallId: "read-pr" } });
+      await session.project({ type: "tool_call", toolName: "Bash", output: url, error: "Already exists", metadata: { phase: "complete", toolCallId: "failed-pr", exitCode: 1 } });
+      expect(created).toEqual([]);
+    } finally { off(); }
+  });
+
   it("snapshots selected outputs once after the turn is committed, before finalization returns", async () => {
     const onTurnClosed = vi.fn(async (id: string) => {
       expect(id).toBe("r1");

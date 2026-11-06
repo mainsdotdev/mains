@@ -31,6 +31,9 @@ import { showRunFinishedNotification } from "./run-notification-sink";
 import { emit } from "../../ipc-kit";
 import type { TurnFileChange } from "./runs.dto";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
+import { CHANNELS } from "@mains/contracts/channels";
+import type { RunPullRequestCreatedEvent } from "@mains/contracts/runs";
+import { createdPullRequestUrl, pullRequestCreationCommand } from "./created-pull-request";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -183,6 +186,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // callKey → the files a running tool call named at start, claimed for the
   // turn only when it completes successfully (see noteToolWrites).
   const pendingToolWrites = new Map<string, string[]>();
+  const pendingPrCreations = new Set<string>();
+  const announcedPrUrls = new Set<string>();
   type ArtifactEvent = Extract<WorkRunEvent, { type: "artifact" }>;
   const reportStreams = new Map<string, ArtifactEvent>();
   const artifactProjections = new Set<Promise<boolean>>();
@@ -731,6 +736,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         : `${event.toolName}-${event.startedAt || Date.now()}`;
       pendingToolCalls.set(callKey, toolCallId);
       resolvedToolCalls.set(callKey, toolCallId);
+      if (pullRequestCreationCommand(event)) pendingPrCreations.add(callKey);
       const named = await noteToolWrites(event);
       if (named.length > 0) pendingToolWrites.set(callKey, named);
       return;
@@ -755,6 +761,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       if (callKey && pendingToolCalls.has(callKey)) {
         const toolCallId = pendingToolCalls.get(callKey)!;
         pendingToolCalls.delete(callKey);
+        const wasPrCreation = pendingPrCreations.delete(callKey);
         const latencyMs =
           event.startedAt && event.endedAt ? event.endedAt - event.startedAt : undefined;
         await runsRepo.updateToolCall(toolCallId, {
@@ -766,6 +773,19 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
           latencyMs,
           metadata: event.metadata,
         });
+        if (wasPrCreation) {
+          const url = createdPullRequestUrl(event);
+          if (url && !announcedPrUrls.has(url)) {
+            announcedPrUrls.add(url);
+            const run = await runsRepo.findRunById(runId);
+            if (run) {
+              const payload: RunPullRequestCreatedEvent = {
+                runId, toolCallId, url, mode: run.mode, workspaceId: run.workspaceId,
+              };
+              emit(CHANNELS.runs.pullRequestCreated, payload, { runId, workspaceId: run.workspaceId ?? undefined });
+            }
+          }
+        }
       }
       // Live diff: if this tool could have touched the filesystem, schedule a recomputation.
       if (!event.error && couldModifyFiles(event.toolName)) {
