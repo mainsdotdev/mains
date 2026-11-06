@@ -14,11 +14,15 @@ import {
   type ContextAppshotItem,
   type ContextBrowserItem,
   type ContextCodeItem,
+  type ContextDocumentItem,
+  type ContextPresentationItem,
   type ContextItem,
 } from "./composer-context";
 import { mcpAppContextPayload } from "./mcp-app-context";
 import type { BrowserSelectionElement } from "../../../../shared/browser-annotation";
 import { browserAnnotationAttachmentName } from "@mains/contracts/browser-annotations";
+import { presentationAnnotationAttachmentName } from "@mains/contracts/presentation-annotations";
+import { documentAnnotationAttachmentName, documentAnnotationPageLabel, readDocumentAnnotations } from "@mains/contracts/document-annotations";
 
 export type Attachments = Array<{
   name: string;
@@ -229,6 +233,40 @@ function browserSelectionsToPayload(selections: readonly ContextBrowserItem[]): 
   return { attachments, initialContext };
 }
 
+/** All rendered documents share one payload; old unsent presentation items retain their capture names. */
+function documentAnnotationsToPayload(items: readonly (ContextDocumentItem | ContextPresentationItem)[]): {
+  attachments: Attachments; initialContext: InitialContextItem[];
+} {
+  const attachments: Attachments = [];
+  const initialContext: InitialContextItem[] = [];
+  for (const item of items) {
+    const annotation = readDocumentAnnotations([item])[0];
+    if (!annotation) continue;
+    attachments.push({ name: item.kind === "presentation" ? presentationAnnotationAttachmentName(item) : documentAnnotationAttachmentName(item),
+      type: "image", data: item.screenshotData, mimeType: "image/png" });
+    initialContext.push({
+      kind: "selection" as const,
+      ref: `${annotation.filePath}#${annotation.documentType === "pptx" ? "slide" : "page"}=${annotation.pageNumber}`,
+      content: [
+        `Document annotation on ${annotation.filePath} (${annotation.documentType}), ${documentAnnotationPageLabel(annotation)}.`,
+        `User comment: ${annotation.comment}`,
+        "Selected items (bounds are fractions of the rendered page, independent of preview zoom):",
+        ...annotation.elements.map((element, index) => [
+          `${index + 1}. ${element.type}: ${element.name}`,
+          element.sourcePart ? `Source part: ${element.sourcePart}${element.shapeId ? `; shape id: ${element.shapeId}` : ""}` : null,
+          element.text ? `Text: ${element.text}` : null,
+          element.selector ? `Rendered block: ${element.selector}` : null,
+          element.textAnchor ? `Text anchor: ${JSON.stringify(element.textAnchor)}` : null,
+          `Bounds: ${JSON.stringify(element.rect)}`,
+        ].filter(Boolean).join("\n")),
+        "Use the original document to make changes. Page bounds describe the captured preview; text and nearby context identify the passage if pagination changes.",
+      ].join("\n"),
+      metadata: { source: "document", ...annotation },
+    });
+  }
+  return { attachments, initialContext };
+}
+
 /** Empty groups are sent as `undefined` rather than `[]` — the run payload
  *  treats every context field as optional, and omitting them keeps the wire
  *  payload (and the persisted run context) free of empty noise. */
@@ -254,15 +292,18 @@ export function buildRunContextPayload(
     appshots,
     codeSelections,
     reviewComments,
+    documentAnnotations,
     mcpApps,
   } = groupContextItems(items ?? []);
 
   const capturedWindows = appshotsToPayload(appshots);
   const browser = browserSelectionsToPayload(browserSelections);
+  const documents = documentAnnotationsToPayload(documentAnnotations);
   const apps = mcpAppContextPayload(mcpApps);
   const initialContext = [
     ...capturedWindows.initialContext,
     ...browser.initialContext,
+    ...documents.initialContext,
     ...codeSelectionsToContext(codeSelections),
     ...reviewComments.map(({ kind: _kind, ...comment }) => ({
       kind: "selection" as const,
@@ -282,6 +323,7 @@ export function buildRunContextPayload(
       ...(uploads ?? []),
       ...capturedWindows.attachments,
       ...browser.attachments,
+      ...documents.attachments,
       ...apps.attachments,
     ]),
     initialContext,

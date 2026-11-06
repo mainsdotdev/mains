@@ -10,6 +10,7 @@ export function hasComposerMessage(text: string, attachmentCount: number, items:
 export function composerAnnotationPrompt(items: readonly ContextItem[]): string {
   return [
     browserAnnotationPrompt(items),
+    ...items.flatMap((item) => item.kind === "presentation" || item.kind === "document" ? [item.comment.trim() || "Review the attached document annotation."] : []),
     items.some((item) => item.kind === "review") ? "Address the attached review comments." : "",
   ].filter(Boolean).join("\n\n");
 }

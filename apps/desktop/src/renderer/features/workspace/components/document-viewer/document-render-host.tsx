@@ -7,6 +7,8 @@ import { DocumentFallback } from "./document-fallback";
 import { SheetTabs } from "./sheet-tabs";
 import type { PptxRenderController } from "./renderers/render-pptx";
 import type { DocxRenderController } from "./renderers/render-docx";
+import { DocumentAnnotations } from "./document-annotations";
+import type { DocumentAnnotationSurface } from "../../lib/document-selection";
 
 type Status = "loading" | "ready" | "error";
 
@@ -182,9 +184,13 @@ const BASE_SHADOW_CSS = `
 export function DocumentRenderHost({
   doc,
   zoom,
+  annotating = false,
+  onExitAnnotation,
 }: {
   doc: DocumentViewerDoc & { docType: OfficeDocType };
   zoom: number;
+  annotating?: boolean;
+  onExitAnnotation?: () => void;
 }) {
   const revision = useSyncExternalStore(subscribeLocalDocumentUrls, localDocumentUrlRevision);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -195,6 +201,7 @@ export function DocumentRenderHost({
   const docxCtlRef = useRef<DocxRenderController | null>(null);
 
   const [status, setStatus] = useState<Status>("loading");
+  const [annotationSurface, setAnnotationSurface] = useState<DocumentAnnotationSurface | null>(null);
   const [failure, setFailure] = useState<string | undefined>();
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
@@ -222,6 +229,7 @@ export function DocumentRenderHost({
     let cancelled = false;
     const controller = new AbortController();
     setStatus("loading");
+    setAnnotationSurface(null);
     setFailure(undefined);
     setSheetNames([]);
     setActiveSheet(null);
@@ -277,6 +285,7 @@ export function DocumentRenderHost({
             return;
           }
           docxCtlRef.current = ctl;
+          setAnnotationSurface(ctl.annotationSurface);
           ctl.setZoom(zoomRef.current);
         } else if (key === "xlsx") {
           const { renderXlsx } = await import("./renderers/render-xlsx");
@@ -297,6 +306,7 @@ export function DocumentRenderHost({
             return;
           }
           pptxCtlRef.current = ctl;
+          setAnnotationSurface(ctl.annotationSurface);
         }
         if (cancelled) return;
         // Treat an empty render as a failure (pure-JS PPTX can silently produce
@@ -352,7 +362,7 @@ export function DocumentRenderHost({
       >
         <div
           ref={hostRef}
-          className={isPresentation ? "h-full min-h-0" : "min-h-full min-w-0"}
+          className={isPresentation ? "isolate h-full min-h-0" : "isolate min-h-full min-w-0"}
         />
         {status === "loading" && (
           <Text
@@ -370,6 +380,9 @@ export function DocumentRenderHost({
           </div>
         )}
       </div>
+      {status === "ready" && annotating && annotationSurface && onExitAnnotation && (
+        <DocumentAnnotations surface={annotationSurface} doc={doc} onExit={onExitAnnotation} />
+      )}
       {status === "ready" && doc.docType === "xlsx" && (
         <SheetTabs
           sheetNames={sheetNames}

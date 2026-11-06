@@ -255,7 +255,7 @@ function FileMutationCard({
   return (
     <div className="space-y-1.5">
       <div
-        className="flex min-w-0 items-center gap-1.5 px-0.5"
+        className="flex min-w-0 items-center gap-1.5 px-0.5 text-primary-700 dark:text-primary-300"
         title={normalizedPath || undefined}
       >
         <FileIconComponent

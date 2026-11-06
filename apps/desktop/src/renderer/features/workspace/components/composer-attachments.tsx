@@ -17,6 +17,7 @@ import type {
 import { ImagePreviewModal } from "./image-preview-modal";
 import { ComposerReviewComments } from "./review-comments-attachment";
 import { ComposerBrowserAnnotations } from "./composer-browser-annotations";
+import { ComposerDocumentAnnotations } from "./document-annotations-attachment";
 
 /**
  * A draft attachment has no file on disk yet, so the viewer reads it through a
@@ -123,7 +124,7 @@ export function ComposerAttachments({
   const [browserPreviewId, setBrowserPreviewId] = useState<string | null>(null);
   const [appshotPreviewId, setAppshotPreviewId] = useState<string | null>(null);
   const preview = previewIndex !== null ? files[previewIndex] : undefined;
-  const { appshots, browserSelections, reviewComments, remove: removeContext } =
+  const { appshots, browserSelections, reviewComments, documentAnnotations, remove: removeContext } =
     useComposerContext();
   const browserPreview = browserSelections.find(
     (selection) => selection.id === browserPreviewId,
@@ -139,7 +140,7 @@ export function ComposerAttachments({
     : undefined;
   const { open: openDocument } = useDocumentViewer();
   const hasAttachments =
-    files.length > 0 || browserSelections.length > 0 || appshots.length > 0 || reviewComments.length > 0;
+    files.length > 0 || browserSelections.length > 0 || appshots.length > 0 || reviewComments.length > 0 || documentAnnotations.length > 0;
 
   useEffect(() => {
     const present = new Set(files.map((f) => f.file));
@@ -326,6 +327,7 @@ export function ComposerAttachments({
               );
             })}
             <ComposerBrowserAnnotations />
+            <ComposerDocumentAnnotations />
             <ComposerReviewComments />
           </div>
         </div>

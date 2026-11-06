@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({ readFileText: vi.fn() }));
 vi.mock("@/lib/transport", () => ({ appApi: { fileExplorer: { readFileText: mocks.readFileText } } }));
 vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ mode: "developer" }) }));
 vi.mock("@/features/workspace/hooks/use-composer-context", () => ({
-  useComposerContext: () => ({ appshots: [], browserSelections: [], reviewComments: [], remove: vi.fn() }),
+  useComposerContext: () => ({ appshots: [], browserSelections: [], reviewComments: [], documentAnnotations: [], remove: vi.fn() }),
 }));
 vi.mock("@/hooks/use-open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/hooks/use-browser-panel", () => ({ useBrowserPanel: () => ({ openHtmlFile: vi.fn() }) }));

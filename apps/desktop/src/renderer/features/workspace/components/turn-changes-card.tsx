@@ -321,7 +321,7 @@ export function TurnChangesCard({
                 <Button
                   onClick={() => toggleFile(file.path)}
                   aria-expanded={open}
-                  className="sticky top-0 z-10 flex w-full items-center gap-2 bg-primary px-3 py-1.5 text-left hover:bg-primary-100/95 dark:bg-primary-950 dark:hover:bg-primary-900/95"
+                  className="sticky top-0 z-10 flex w-full items-center gap-2 bg-primary px-3 py-1.5 text-left text-primary-600 hover:bg-primary-100/95 dark:bg-primary-950 dark:text-primary-400 dark:hover:bg-primary-900/95"
                 >
                   <FileIconComponent
                     fileName={name}

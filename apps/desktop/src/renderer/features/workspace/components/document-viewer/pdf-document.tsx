@@ -4,6 +4,9 @@ import { Text } from "@/components/ui";
 import { fetchLocalDocument, localDocumentUrlRevision, subscribeLocalDocumentUrls } from "@/lib/local-document-url";
 import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 import { DocumentFallback } from "./document-fallback";
+import { DocumentAnnotations } from "./document-annotations";
+import type { DocumentAnnotationSurface } from "../../lib/document-selection";
+import "./pdf-text-layer.css";
 
 type Status = "loading" | "ready" | "error";
 type PdfJs = typeof import("pdfjs-dist");
@@ -44,7 +47,9 @@ function loadPdfjs(): Promise<PdfJs> {
  * zoom, and only pages near the viewport hold a canvas — a long PDF keeps a
  * sized placeholder for the rest.
  */
-export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: number }) {
+export function PdfDocument({ doc, zoom, annotating = false, onExitAnnotation }: {
+  doc: DocumentViewerDoc; zoom: number; annotating?: boolean; onExitAnnotation?: () => void;
+}) {
   const revision = useSyncExternalStore(subscribeLocalDocumentUrls, localDocumentUrlRevision);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>("loading");
@@ -58,10 +63,12 @@ export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: numbe
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [firstPageSize, setFirstPageSize] = useState<PageSize | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+  const [annotationSurface, setAnnotationSurface] = useState<DocumentAnnotationSurface | null>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    setAnnotationSurface({ root: el, viewport: el, pages: () => Array.from(el.querySelectorAll<HTMLElement>("[data-document-page]")), targets: new Map(), textSelection: true });
     const measure = () =>
       setContainerWidth(Math.max(0, el.clientWidth - CONTAINER_PADDING_PX));
     measure();
@@ -141,6 +148,9 @@ export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: numbe
           </div>
         )}
       </div>
+      {annotating && status === "ready" && annotationSurface && onExitAnnotation && (
+        <DocumentAnnotations surface={annotationSurface} doc={doc} onExit={onExitAnnotation} />
+      )}
     </div>
   );
 }
@@ -184,6 +194,7 @@ function PdfPage({
 
     let cancelled = false;
     let task: RenderTask | null = null;
+    let textTask: InstanceType<PdfJs["TextLayer"]> | null = null;
 
     void (async () => {
       try {
@@ -211,14 +222,26 @@ function PdfPage({
         canvas.style.width = "100%";
         canvas.style.height = "100%";
 
+        const pdfjs = await loadPdfjs();
+        if (cancelled) return;
         task = page.render({
           canvas,
           viewport,
           transform:
             outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined,
         });
-        await task.promise;
-        if (!cancelled) pageEl.replaceChildren(canvas);
+        const textLayer = document.createElement("div");
+        textLayer.className = "document-text-layer";
+        textLayer.style.setProperty("--total-scale-factor", String(viewport.scale * viewport.userUnit));
+        textTask = new pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: textLayer, viewport });
+        const textReady = textTask.render().catch((error: unknown) => {
+          if (!cancelled) console.warn(`[document-viewer] PDF text unavailable on page ${pageNumber}`, error);
+        });
+        await Promise.all([task.promise, textReady]);
+        if (!cancelled) {
+          textTask.textDivs.forEach((node, index) => node.setAttribute("data-document-text", `page-${pageNumber}-text-${index}`));
+          pageEl.replaceChildren(canvas, textLayer);
+        }
       } catch (err) {
         if (cancelled || (err as Error)?.name === "RenderingCancelledException") return;
         console.error(`[document-viewer] failed to render pdf page ${pageNumber}`, err);
@@ -228,6 +251,7 @@ function PdfPage({
     return () => {
       cancelled = true;
       task?.cancel();
+      textTask?.cancel();
     };
   }, [pdf, pageNumber, scale, isNearViewport]);
 
@@ -236,7 +260,8 @@ function PdfPage({
     <div
       ref={pageRef}
       aria-label={`Page ${pageNumber}`}
-      className="shrink-0 overflow-hidden rounded-sm bg-white shadow-sm"
+      data-document-page={pageNumber}
+      className="relative shrink-0 overflow-hidden rounded-sm bg-primary shadow-sm"
       style={{ width: width * scale, height: height * scale }}
     />
   );

@@ -24,6 +24,7 @@ export function DocumentViewerPanel() {
 function DocumentPreview({ currentDoc, active }: { currentDoc: DocumentViewerDoc; active: boolean }) {
   const [zoom, setZoom] = useState(1);
   const [isSaving, setIsSaving] = useState(false);
+  const [annotating, setAnnotating] = useState(false);
   // "Save a copy": the viewer shows a file that lives in a run directory or a
   // workspace, and the user's own copy belongs wherever they say. Main owns the
   // native dialog; cancelling comes back as a null path, which is not an error.
@@ -50,6 +51,9 @@ function DocumentPreview({ currentDoc, active }: { currentDoc: DocumentViewerDoc
   return <div data-document-viewer-panel="" hidden={!active} inert={!active}
     className="absolute inset-0 flex min-h-0 flex-col overflow-hidden" style={{ display: active ? undefined : "none" }}>
     <DocumentViewerToolbar doc={currentDoc} zoom={zoom} onZoomChange={setZoom}
+      annotating={annotating && active} onToggleAnnotating={["pptx", "pdf", "docx"].includes(currentDoc.docType) && !currentDoc.path.startsWith("blob:") &&
+        (currentDoc.byteSize === undefined || currentDoc.byteSize <= documentPreviewLimit(currentDoc.docType))
+        ? () => setAnnotating((value) => !value) : undefined}
       isSaving={isSaving} onSaveCopy={() => void saveCopy()} />
     {currentDoc.byteSize !== undefined && currentDoc.byteSize > documentPreviewLimit(currentDoc.docType) ? (
       <div className="relative flex-1">
@@ -58,9 +62,10 @@ function DocumentPreview({ currentDoc, active }: { currentDoc: DocumentViewerDoc
     ) : isTextDocType(currentDoc.docType) ? (
       <MarkdownDocument path={currentDoc.path} docType={currentDoc.docType} />
     ) : currentDoc.docType === "pdf" ? (
-      <PdfDocument doc={currentDoc} zoom={zoom} />
+      <PdfDocument doc={currentDoc} zoom={zoom} annotating={annotating && active} onExitAnnotation={() => setAnnotating(false)} />
     ) : (
-      <DocumentRenderHost doc={{ ...currentDoc, docType: currentDoc.docType }} zoom={zoom} />
+      <DocumentRenderHost doc={{ ...currentDoc, docType: currentDoc.docType }} zoom={zoom}
+        annotating={annotating && active} onExitAnnotation={() => setAnnotating(false)} />
     )}
   </div>;
 }

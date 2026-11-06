@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { FileAttachment as UploadAttachment, StoredAttachment } from "@mains/contracts/runs";
 import { browserAnnotationAttachmentName } from "@mains/contracts/browser-annotations";
+import { readDocumentAnnotations } from "@mains/contracts/document-annotations";
 import type { FileAttachment } from "../../../shared/adapter.types";
 import type { runAttachments } from "../../db/schema";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
@@ -160,12 +161,16 @@ export async function resolveRunAttachment(runId: string, attachmentId: string):
   return { attachment, path: await originalPath(attachment) };
 }
 
-/** This run's attachment records, with browser-annotation captures marked, without opening files. */
+/** This run's attachment records, with annotation captures marked, without opening files. */
 export function listRunAttachmentRecords(runId: string): Array<{ attachment: AttachmentRow; isBrowserAnnotation: boolean }> {
   const attachments = runsRepo.listAttachments(runId);
   if (!attachments.length) return [];
   const annotationIds = new Set<string>();
   for (const metadata of runsRepo.listAttachmentPromptMetadata(runId)) {
+    // The existing flag also excludes presentation feedback captures from the output library.
+    for (const annotation of [...readDocumentAnnotations(metadata?.documentAnnotations), ...readDocumentAnnotations(metadata?.presentationAnnotations)]) {
+      if (annotation.screenshotAttachmentId) annotationIds.add(annotation.screenshotAttachmentId);
+    }
     if (!Array.isArray(metadata?.browserAnnotations)) continue;
     for (const annotation of metadata.browserAnnotations) {
       if (!annotation || !Array.isArray(annotation.elements) || !annotation.elements.length) continue;

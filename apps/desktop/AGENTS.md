@@ -337,6 +337,7 @@ Core tables:
 - Pairs with `src/renderer/lib/proxied-image-src.ts` + `local-image-url.ts` and the `useLocalImageUrl` hook — use these instead of `<img src={remoteUrl}>`
 - Backs the in-app **document viewer** too (`documents:sign`): Office formats (`.docx/.xlsx/.pptx`) render from bytes behind a shadow root, PDFs render page by page onto canvases via lazily loaded `pdfjs-dist` (`document-viewer/pdf-document.tsx`), markdown renders as React through the shared markdown components. `classifyDocType` (`renderer/lib/document-viewer.ts`) is the one table saying what the viewer can show
 - Also backs the `api.documents` namespace (`documents:sign`) for serving local document files
+- PPTX, PDF and DOCX share document annotation mode. `document-selection.ts` owns object/text-range/area selection and normalized page geometry; `document-annotations.tsx` owns themed selection chrome. PDF pages retain a virtualized PDF.js text layer alongside each visible canvas; DOCX exposes paragraphs, tables and images, while `presentation-selection.ts` conservatively matches PPTX shape identities. New drafts use `kind: "document"`, and shared validated `documentAnnotations` metadata retains sent context. Legacy presentation drafts/history remain readable. Page captures travel as ordinary image attachments and stay out of the output library; compact thumbnails and theme-aware edit actions are shared across formats.
 
 **Stats Module** (`../../packages/backend/src/modules/stats/`) — Dashboard statistics and analytics (joins `workspace_diffs` via its own repo)
 

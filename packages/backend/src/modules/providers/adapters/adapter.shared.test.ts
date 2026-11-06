@@ -362,6 +362,36 @@ describe("appendPromptSections", () => {
 });
 
 describe("emitUserPromptArtifact", () => {
+  it.each(["pptx", "pdf", "docx"])("retains common %s annotations with text anchors and a durable screenshot", async (documentType) => {
+    const onEvent = vi.fn().mockResolvedValue(undefined);
+    await emitUserPromptArtifact(onEvent, "rewrite it", {
+      context: [{ kind: "selection", metadata: { source: "document", id: "annotation-1", filePath: `/work/file.${documentType}`,
+        fileName: `file.${documentType}`, documentType, pageNumber: 2, comment: "Make it clearer", elements: [{ id: "text-1", type: "text", name: "Selected text", text: "A passage",
+          rect: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 }, textAnchor: { startOffset: 7, endOffset: 16, before: "Before ", after: " after" } }] } }],
+      attachments: [{ attachmentId: "durable-document-capture", name: "document-page-2-annotation-annotation-1.png", type: "image", mimeType: "image/png", byteSize: 10, sourcePath: "/durable/page.png" }],
+    });
+    const metadata = onEvent.mock.calls[0][0].metadata;
+    expect(metadata.documentAnnotations).toEqual([expect.objectContaining({ documentType, pageNumber: 2, screenshotAttachmentId: "durable-document-capture",
+      elements: [expect.objectContaining({ textAnchor: { startOffset: 7, endOffset: 16, before: "Before ", after: " after" } })] })]);
+    expect(JSON.stringify(metadata)).not.toContain("/durable/");
+    expect(metadata).not.toHaveProperty("presentationAnnotations");
+  });
+  it("retains presentation object identity and links its durable screenshot without copying image bytes", async () => {
+    const onEvent = vi.fn().mockResolvedValue(undefined);
+    await emitUserPromptArtifact(onEvent, "change it", {
+      context: [{ kind: "selection", metadata: { source: "presentation", id: "selection-1", filePath: "/work/deck.pptx",
+        fileName: "deck.pptx", slideNumber: 5, comment: "Make it clearer",
+        elements: [{ id: "shape-42", type: "text", name: "Procedure", text: "First item", shapeId: "42",
+          sourcePart: "ppt/slides/slide9.xml", rect: { x: 0.1, y: 0.2, width: 0.4, height: 0.5 } }] } }],
+      attachments: [{ attachmentId: "durable-slide", name: "presentation-slide-5-annotation-selection-1.png", type: "image",
+        mimeType: "image/png", byteSize: 10, sourcePath: "/durable/slide.png" }],
+    });
+    const metadata = onEvent.mock.calls[0][0].metadata;
+    expect(metadata.presentationAnnotations).toEqual([expect.objectContaining({ slideNumber: 5, filePath: "/work/deck.pptx",
+      screenshotAttachmentId: "durable-slide", elements: [expect.objectContaining({ shapeId: "42", sourcePart: "ppt/slides/slide9.xml" })] })]);
+    expect(JSON.stringify(metadata)).not.toContain("/durable/");
+    expect(metadata).not.toHaveProperty("browserAnnotations");
+  });
   it("links browser annotations to their durable screenshot attachment", async () => {
     const onEvent = vi.fn().mockResolvedValue(undefined);
     await emitUserPromptArtifact(onEvent, "change it", {

@@ -1,4 +1,6 @@
 import { nearestSlideIndex } from "@/lib/document-viewer";
+import { indexPresentationElements } from "../../../lib/presentation-selection";
+import type { DocumentAnnotationSurface } from "../../../lib/document-selection";
 
 // `pptx-preview` renders every slide into ordinary DOM. We keep that single
 // render as the source of truth, then clone scaled, inert snapshots into the
@@ -9,6 +11,7 @@ const THUMBNAIL_MAX_HEIGHT = 68;
 
 export interface PptxRenderController {
   slideCount: number;
+  annotationSurface: DocumentAnnotationSurface;
   setZoom: (zoom: number) => void;
   destroy: () => void;
 }
@@ -82,6 +85,7 @@ function thumbnailClone(
   isolateCloneIds(clone, `pptx-thumb-${index}`);
   clone.className = "pptx-thumbnail-slide";
   clone.setAttribute("aria-hidden", "true");
+  clone.inert = true;
   clone.style.width = `${sourceWidth}px`;
   clone.style.height = `${sourceHeight}px`;
   clone.style.margin = "0";
@@ -90,7 +94,7 @@ function thumbnailClone(
   clone.style.pointerEvents = "none";
 
   for (const interactive of Array.from(
-    clone.querySelectorAll<HTMLElement>("a, button, input, select, textarea"),
+    clone.querySelectorAll<HTMLElement>("a, button, input, select, textarea, [tabindex]"),
   )) {
     interactive.tabIndex = -1;
   }
@@ -163,6 +167,7 @@ export async function renderPptx(
     throw new Error("PPTX renderer produced no preview wrapper");
   }
   previewWrapper.style.setProperty("zoom", String(size.zoom));
+  const annotationTargets = await indexPresentationElements(buf, renderRoot);
 
   let destroyed = false;
   let activeIndex = -1;
@@ -356,6 +361,10 @@ export async function renderPptx(
 
   return {
     slideCount: previewer.slideCount,
+    annotationSurface: { root: renderRoot, viewport: scroller, pages: () => presentationSlides(renderRoot), textSelection: false,
+      targets: new Map(Array.from(annotationTargets, ([node, target]) => [node, {
+        node, page: target.slide, pageNumber: target.slideNumber, element: target.element,
+      }])) },
     setZoom(nextZoom) {
       previewWrapper.style.setProperty("zoom", String(nextZoom));
       const indexToKeep = Math.max(0, activeIndex);

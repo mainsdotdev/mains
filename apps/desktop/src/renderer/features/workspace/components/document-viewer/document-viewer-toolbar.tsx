@@ -1,5 +1,5 @@
 import { Button, Text } from "@/components/ui";
-import { Download } from "@/components/ui/icons";
+import { Crop, Download } from "@/components/ui/icons";
 import { DOC_VIEWER_LABELS, isTextDocType } from "@/lib/document-viewer";
 import { clamp } from "@/lib/layout";
 import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
@@ -14,11 +14,14 @@ interface DocumentViewerToolbarProps {
   onZoomChange: (zoom: number) => void;
   isSaving: boolean;
   onSaveCopy: () => void;
+  annotating?: boolean;
+  onToggleAnnotating?: () => void;
 }
 
 /** Document actions sit below the title tab, inside the content surface. */
-export function DocumentViewerToolbar({ doc, zoom, onZoomChange, isSaving, onSaveCopy }: DocumentViewerToolbarProps) {
+export function DocumentViewerToolbar({ doc, zoom, onZoomChange, isSaving, onSaveCopy, annotating, onToggleAnnotating }: DocumentViewerToolbarProps) {
   const changeZoom = (step: number) => onZoomChange(clamp(+(zoom + step).toFixed(2), ZOOM_MIN, ZOOM_MAX));
+  const annotationLabel = doc?.docType === "pptx" ? "Annotate presentation" : "Annotate document";
 
   return (
     <div role="toolbar" aria-label="Document tools"
@@ -27,6 +30,12 @@ export function DocumentViewerToolbar({ doc, zoom, onZoomChange, isSaving, onSav
         {doc ? DOC_VIEWER_LABELS[doc.docType] : "Document"}
       </Text>
       <div className="flex shrink-0 items-center gap-1">
+        {onToggleAnnotating && <Button variant="icon" iconSize="sm" onClick={onToggleAnnotating}
+          tooltip={annotating ? "Exit annotation mode" : annotationLabel} tooltipPosition="bottom"
+          aria-label={annotating ? "Exit annotation mode" : annotationLabel} aria-pressed={!!annotating}
+          className={annotating ? "bg-accent/10 text-accent" : undefined}>
+          <Crop className="size-4" />
+        </Button>}
         {/* Text uses the app's type scale; rendered pages have their own zoom. */}
         {doc && !isTextDocType(doc.docType) && (
           <Text as="div" size="inherit" tone="muted" className="flex items-center gap-0.5">

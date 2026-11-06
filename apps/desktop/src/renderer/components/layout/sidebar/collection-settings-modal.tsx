@@ -302,7 +302,7 @@ export function CollectionSettingsModal({
             {sources.map((source) => (
               <div
                 key={source.id}
-                className="group/source flex items-center gap-3 rounded-xl border border-primary-200/70 bg-primary-50/60 px-3 py-3 dark:border-primary-800/70 dark:bg-primary-900/50"
+                className="group/source flex items-center gap-3 rounded-xl border border-primary-200/70 bg-primary-50/60 px-3 py-3 text-primary-950 dark:border-primary-800/70 dark:bg-primary-900/50 dark:text-primary"
               >
                 <SourceTypeIcon name={source.name} />
                 <div className="min-w-0 flex-1">
