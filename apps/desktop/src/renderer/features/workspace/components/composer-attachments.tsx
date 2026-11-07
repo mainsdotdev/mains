@@ -312,7 +312,7 @@ export function ComposerAttachments({
                       type="button"
                       onClick={() => openDraftDocument(file)}
                       aria-label={`Open ${file.name}`}
-                      className="flex size-full cursor-pointer flex-col text-left outline-none transition-colors hover:bg-primary-200/50 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-primary-900"
+                      className="flex size-full cursor-pointer flex-col text-left outline-none transition-colors hover:bg-primary-200/50 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-[color-mix(in_srgb,var(--color-primary-950)_60%,var(--color-primary-900))]"
                     >
                       {content}
                     </Button>

@@ -1,6 +1,7 @@
 import { Button, Text } from "@/components/ui";
-import { Crop, Download } from "@/components/ui/icons";
-import { DOC_VIEWER_LABELS, isTextDocType } from "@/lib/document-viewer";
+import { Download, RequestEdits } from "@/components/ui/icons";
+import { PreviewToolbar } from "@/components/layout/preview-toolbar";
+import { isTextDocType } from "@/lib/document-viewer";
 import { clamp } from "@/lib/layout";
 import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 
@@ -21,24 +22,22 @@ interface DocumentViewerToolbarProps {
 /** Document actions sit below the title tab, inside the content surface. */
 export function DocumentViewerToolbar({ doc, zoom, onZoomChange, isSaving, onSaveCopy, annotating, onToggleAnnotating }: DocumentViewerToolbarProps) {
   const changeZoom = (step: number) => onZoomChange(clamp(+(zoom + step).toFixed(2), ZOOM_MIN, ZOOM_MAX));
-  const annotationLabel = doc?.docType === "pptx" ? "Annotate presentation" : "Annotate document";
 
   return (
-    <div role="toolbar" aria-label="Document tools"
-      className="flex min-h-9 shrink-0 items-center gap-2 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
-      <Text as="span" size="t" tone="subtle" className="min-w-0 flex-1 truncate">
-        {doc ? DOC_VIEWER_LABELS[doc.docType] : "Document"}
-      </Text>
-      <div className="flex shrink-0 items-center gap-1">
-        {onToggleAnnotating && <Button variant="icon" iconSize="sm" onClick={onToggleAnnotating}
-          tooltip={annotating ? "Exit annotation mode" : annotationLabel} tooltipPosition="bottom"
-          aria-label={annotating ? "Exit annotation mode" : annotationLabel} aria-pressed={!!annotating}
-          className={annotating ? "bg-accent/10 text-accent" : undefined}>
-          <Crop className="size-4" />
-        </Button>}
+    <PreviewToolbar aria-label="Document tools">
+      {onToggleAnnotating && <Button onClick={onToggleAnnotating}
+        tooltip={annotating ? "Exit edit request mode" : "Request edits"} tooltipPosition="bottom"
+        aria-pressed={!!annotating}
+        className={`glass-card inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-xs font-medium focus-visible:ring-2 focus-visible:ring-accent/40 ${annotating
+          ? "text-accent"
+          : "text-primary-900 dark:text-primary-100"}`}>
+        <RequestEdits className="size-4 shrink-0" aria-hidden="true" />
+        Request edits
+      </Button>}
+      <div className="ml-auto flex shrink-0 items-center gap-1">
         {/* Text uses the app's type scale; rendered pages have their own zoom. */}
         {doc && !isTextDocType(doc.docType) && (
-          <Text as="div" size="inherit" tone="muted" className="flex items-center gap-0.5">
+          <Text as="div" size="inherit" tone="muted" className="glass-card flex h-8 items-center gap-0.5 rounded-full px-0.5">
             <Button variant="icon" iconSize="sm" tooltip="Zoom out" tooltipPosition="bottom"
               onClick={() => changeZoom(-ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out">
               <Text as="span" size="sm" tone="inherit" className="leading-none">−</Text>
@@ -57,11 +56,12 @@ export function DocumentViewerToolbar({ doc, zoom, onZoomChange, isSaving, onSav
         {/* Composer drafts have a blob URL rather than a file to copy. */}
         {!doc?.path.startsWith("blob:") && (
           <Button variant="icon" tooltip="Save a copy…" tooltipPosition="bottom-left"
-            onClick={onSaveCopy} disabled={!doc || isSaving} aria-label="Save a copy of this document">
+            onClick={onSaveCopy} disabled={!doc || isSaving} aria-label="Save a copy of this document"
+            className="glass-card rounded-full size-8">
             <Download className="size-4" />
           </Button>
         )}
       </div>
-    </div>
+    </PreviewToolbar>
   );
 }

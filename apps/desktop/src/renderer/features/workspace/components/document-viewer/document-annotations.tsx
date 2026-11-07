@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Textarea, toast } from "@/components/ui";
+import { Button, SegmentedTabs, Textarea, toast } from "@/components/ui";
 import { Close } from "@/components/ui/icons";
 import type { AnnotatableDocumentType } from "@mains/contracts/document-annotations";
 import { documentAnnotationPageLabel } from "@mains/contracts/document-annotations";
@@ -119,12 +119,16 @@ function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Pro
     finally { setBusy(false); }
   };
   return <div ref={layer} data-document-annotations="" className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
-    <div role="group" aria-label="Annotation selection" className="pointer-events-auto absolute right-3 top-3 flex gap-0.5 rounded-xl border border-primary-200 bg-primary-50 p-1 shadow-lg dark:border-primary-700 dark:bg-primary-900">
-      {(["content", "region"] as const).map((value) => <Button key={value} type="button" disabled={busy} aria-pressed={mode === value}
-        onClick={() => { setMode(value); setHovered(null); }}
-        className={`rounded-lg px-2 py-1 text-xs ${mode === value ? "bg-accent/10 text-accent" : "text-primary-600 dark:text-primary-400"}`}>
-        {value === "region" ? "Select area" : surface.textSelection ? "Select text / items" : "Select items"}
-      </Button>)}
+    <div className="pointer-events-auto absolute right-3 top-3 rounded-full bg-primary-50 shadow-lg dark:bg-primary-900">
+      <SegmentedTabs<DocumentSelectionMode>
+        aria-label="Annotation selection" semantics="radiogroup"
+        value={mode} onChange={(value) => { setMode(value); setHovered(null); }}
+        options={[
+          { value: "content", label: surface.textSelection ? "Select text / items" : "Select items" },
+          { value: "region", label: "Select area" },
+        ]}
+        disabled={busy}
+      />
     </div>
     {outlines.map((outline, index) => <div key={index} aria-hidden="true"
       className={`absolute border-2 border-accent ${outline.selected ? "bg-accent/10" : "border-dashed"}`}

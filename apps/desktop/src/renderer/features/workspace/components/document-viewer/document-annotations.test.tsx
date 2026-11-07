@@ -29,6 +29,19 @@ beforeEach(() => {
 afterEach(() => { cleanup(); document.body.replaceChildren(); vi.unstubAllGlobals(); });
 
 describe("presentation annotation interaction", () => {
+  it("switches selection modes with the shared selector and keyboard navigation", () => {
+    render(<DocumentAnnotations surface={surface} doc={doc} onExit={vi.fn()} />);
+    const items = screen.getByRole("radio", { name: "Select items" });
+    const area = screen.getByRole("radio", { name: "Select area" });
+    expect(items.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(area);
+    expect(area.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText(/Drag to select an area/)).toBeTruthy();
+    fireEvent.keyDown(area, { key: "ArrowLeft" });
+    expect(items.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText(/Click a text box, image or shape/)).toBeTruthy();
+  });
+
   it("selects whole objects, groups a comment, and adds a captured selection to its composer", async () => {
     render(<DocumentAnnotations surface={surface} doc={doc} onExit={vi.fn()} />);
     fireEvent.click(nodes[0]); fireEvent.click(nodes[1]);
@@ -59,6 +72,7 @@ describe("presentation annotation interaction", () => {
     mocks.capture.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     const view = render(<DocumentAnnotations surface={surface} doc={doc} onExit={vi.fn()} />);
     fireEvent.click(nodes[0]); fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+    expect(screen.getByRole("radio", { name: "Select area" }).hasAttribute("disabled")).toBe(true);
     mocks.key = "chat-b";
     view.rerender(<DocumentAnnotations surface={surface} doc={doc} onExit={vi.fn()} />);
     expect(screen.queryByRole("textbox")).toBeNull();

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, toast } from "@/components/ui";
 import { Refresh } from "@/components/ui/icons";
+import { PreviewToolbar } from "@/components/layout/preview-toolbar";
 import { useMcpAppPanel, useMcpAppInstances, McpAppInstanceProvider } from "@/hooks/use-mcp-app-panel";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { usePreviewTabLifecycle } from "@/hooks/use-preview-tab-lifecycle";
@@ -79,15 +80,15 @@ function AppContent() {
       if (interfaceUnsupported || !panel.isExpanded || panel.chatMode !== "details") return;
       if (!(event.target as Element).closest("[data-floating-chat-surface]")) panel.setChatMode("input");
     }}>
-    <div className="flex shrink-0 items-center justify-end gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
-      {panel.ownerKey !== composerKey && <Button variant="ghost" className="text-xs" onClick={() => {
+    <PreviewToolbar aria-label="App controls" className="justify-end">
+      {panel.ownerKey !== composerKey && <Button variant="ghost" className="glass-card text-xs" onClick={() => {
         if (panel.runId) dispatch(setPendingRunId(panel.runId));
         if (panel.scope) navigate(mcpAppConversationPath(panel.scope, panel.runId));
       }}>Open app conversation</Button>}
-      <Button variant="icon" onClick={reload} tooltip="Reload app" aria-label="Reload app">
+      <Button variant="icon" className="glass-card" onClick={reload} tooltip="Reload app" aria-label="Reload app">
         <Refresh className="size-4" />
       </Button>
-    </div>
+    </PreviewToolbar>
     <div className="relative min-h-0 flex-1 isolate">
       {startedDocumentId === documentId && <McpAppWorkspace key={reloadKey} registerBeforeSuspend={registerBeforeSuspend} />}
       {!interfaceUnsupported && <div ref={setChatHost} className="pointer-events-none absolute inset-0 z-10" />}

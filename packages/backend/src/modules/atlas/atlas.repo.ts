@@ -210,7 +210,8 @@ export const atlasRepo = {
     });
   },
   generatedRuns(accountId: string, offset: number, limit: number, collectionId?: string) {
-    const conditions = [eq(runs.accountId, accountId)];
+    // Only Work conversations feed Atlas automatically. Explicit saves resolve their run directly.
+    const conditions = [eq(runs.accountId, accountId), eq(runs.mode, "work")];
     if (collectionId) conditions.push(eq(runs.collectionId, collectionId));
     return getDb().select({ id: runs.id, title: runs.title, collectionId: runs.collectionId, mode: runs.mode })
       .from(runs).where(and(...conditions)).orderBy(desc(runs.createdAt), desc(runs.id))
