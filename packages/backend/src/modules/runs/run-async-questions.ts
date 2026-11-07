@@ -7,6 +7,7 @@ import {
 import type { RunInputStatusPayload, RunSteerPayload } from "@mains/contracts/runs";
 import { CHANNELS } from "@mains/contracts/channels";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
+import { isRunInputDeliveryUncertain } from "@mains/contracts/run-input";
 import { emit } from "../../ipc-kit";
 import { runsRepo } from "./runs.repo";
 import type { ContinueRunPayload } from "./runs.dto";
@@ -133,7 +134,7 @@ export async function answerAsyncQuestions(
       return await record(submission.reply);
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
-      if (accepted || invoked && /timeout|timed out|disconnect|offline|exited|stopping|socket|connection|transport|delivery is unknown|already being sent/i.test(text)) {
+      if (accepted || invoked && isRunInputDeliveryUncertain(text)) {
         submission.uncertain = true;
         throw new Error(`Delivery is unknown. Check delivery before sending again. ${text}`);
       }

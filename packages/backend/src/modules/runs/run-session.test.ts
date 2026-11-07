@@ -2265,6 +2265,40 @@ describe("RunSession", () => {
       expect(runSessionRegistry.get("r1")).toBeUndefined();
     });
 
+    it("drains an accepted tool event before publishing completion and releasing its session", async () => {
+      const session = makeSession();
+      await flushBackground();
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      const original = runsRepo.insertToolCall.bind(runsRepo);
+      const insert = vi.spyOn(runsRepo, "insertToolCall").mockImplementation(async (payload) => {
+        entered();
+        await gate;
+        return original(payload);
+      });
+      const writing = session.project({ type: "tool_call", toolName: "Bash",
+        metadata: { phase: "start", toolCallId: "pending-write" } });
+      await started;
+      const closing = session.finalize({ status: "succeeded" });
+      try {
+        await flushBackground();
+        expect((await runsRepo.findRunById("r1"))?.status).toBe("running");
+        expect(runSessionRegistry.get("r1")).toBe(session);
+        release();
+        await Promise.all([writing, closing]);
+        expect(await runsRepo.findToolCallsByRun("r1")).toEqual([
+          expect.objectContaining({ status: "done" }),
+        ]);
+        expect(runSessionRegistry.get("r1")).toBeUndefined();
+      } finally {
+        release();
+        await Promise.all([writing, closing]);
+        insert.mockRestore();
+      }
+    });
+
     it("closes orphaned tool calls as done on succeeded finalize", async () => {
       const session = makeSession();
       await flushBackground();
@@ -2522,6 +2556,42 @@ describe("RunSession", () => {
   // abort
   // ─────────────────────────────────────────────────────────────
   describe("abort", () => {
+    it("keeps Stop authoritative when a provider emits late events and reports success", async () => {
+      vi.mocked(createWorkAdapter).mockReturnValue({ abortRun: vi.fn().mockResolvedValue(undefined) } as any);
+      const session = makeSession();
+      await flushBackground();
+
+      await session.abort();
+      await session.project({ type: "artifact", kind: "report", content: "Late provider response" });
+      await session.finalize({ status: "succeeded" });
+
+      expect((await runsRepo.findRunById("r1"))?.status).toBe("canceled");
+      expect(await runsRepo.findArtifactsByRun("r1")).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ content: "Late provider response" })]),
+      );
+      expect(runSessionRegistry.get("r1")).toBeUndefined();
+    });
+
+    it("retains a native acceptance receipt arriving during Stop without accepting more output", async () => {
+      vi.mocked(createWorkAdapter).mockReturnValue({ abortRun: vi.fn().mockResolvedValue(undefined) } as any);
+      const session = makeSession();
+      await flushBackground();
+      await session.abort();
+      const receipt = { type: "artifact" as const, kind: "user-prompt", content: "Already accepted guidance",
+        metadata: { clientUserMessageId: "accepted-before-stop", providerTurnId: "native-turn", delivery: "steer" } };
+
+      await session.project(receipt);
+      await session.project(receipt);
+      await session.project({ type: "artifact", kind: "report", content: "Late response" });
+      await session.finalize({ status: "succeeded" });
+
+      expect(await runsRepo.findArtifactsByRun("r1")).toEqual([
+        expect.objectContaining({ content: receipt.content, metadata: expect.objectContaining(receipt.metadata) }),
+      ]);
+      expect(await runsRepo.findTurnsByRun("r1")).toHaveLength(1);
+      expect((await runsRepo.findRunById("r1"))?.status).toBe("canceled");
+    });
+
     it("calls adapter.abortRun", async () => {
       const abortRun = vi.fn().mockResolvedValue(undefined);
       vi.mocked(createWorkAdapter).mockReturnValue({ abortRun } as any);

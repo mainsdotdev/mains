@@ -6,7 +6,7 @@ import {
   toolWrites,
   type WorkRunEvent,
 } from "../providers/adapters";
-import type { WorkRunUsage, StopReason } from "../../../shared/adapter.types";
+import type { WorkRunUsage } from "../../../shared/adapter.types";
 import type { RunExecutionContext } from "../../../shared/adapter.types";
 import { runsRepo } from "./runs.repo";
 import { providersService } from "../providers";
@@ -27,6 +27,7 @@ import {
 } from "../workspace";
 import { createWorkAdapter } from "../providers/adapters";
 import { runSessionRegistry } from "./run-session-registry";
+import { createRunSessionLifecycle, type RunSessionPhase, type RunSessionResult } from "./run-lifecycle";
 import { showRunFinishedNotification } from "./run-notification-sink";
 import { emit } from "../../ipc-kit";
 import type { TurnFileChange } from "./runs.dto";
@@ -34,6 +35,8 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { RunPullRequestCreatedEvent } from "@mains/contracts/runs";
 import { createdPullRequestUrl, pullRequestCreationCommand } from "./created-pull-request";
+
+export type { RunSessionResult } from "./run-lifecycle";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -99,19 +102,15 @@ interface TurnBaseline {
   writes: TurnWrites;
 }
 
-export interface RunSessionResult {
-  status: "succeeded" | "failed" | "canceled";
-  summary?: string;
-  stopReason?: StopReason | null;
-  usage?: WorkRunUsage;
-}
-
 export interface RunSession {
   readonly runId: string;
+  /** Live ownership, independent of the persisted execution outcome. */
+  readonly phase: RunSessionPhase;
 
   /**
    * Project an adapter event onto run state.
-   * No-op after finalize. Tolerates out-of-order events by logging + dropping.
+   * No-op after finalize; abort accepts only identified native input receipts.
+   * Tolerates out-of-order events by logging + dropping.
    */
   project(event: WorkRunEvent): Promise<void>;
 
@@ -136,7 +135,7 @@ export interface RunSession {
   updateBaseRef(sha: string): void;
 
   /**
-   * Single cleanup path for all terminal states. Idempotent.
+   * Single cleanup path for all terminal states. Every caller awaits its completion.
    */
   finalize(result: RunSessionResult): Promise<void>;
 }
@@ -149,9 +148,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   const { runId, accountId, providerId, execution } = ctx;
   const workspaceId = execution.workspaceId;
 
-  // ─── Lifecycle flags ───
-  let finalized = false;
-  let aborting = false;
+  const lifecycle = createRunSessionLifecycle();
+  let finalization: Promise<void> | null = null;
   let forceFinalizeTimer: NodeJS.Timeout | null = null;
 
   // ─── Per-run state (was 8 module-scope Maps in runs.service.ts) ───
@@ -191,6 +189,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   type ArtifactEvent = Extract<WorkRunEvent, { type: "artifact" }>;
   const reportStreams = new Map<string, ArtifactEvent>();
   const artifactProjections = new Set<Promise<boolean>>();
+  const eventProjections = new Set<Promise<void>>();
   const streamScope = randomUUID();
   let reportSequence = 0;
 
@@ -598,9 +597,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
 
   // ─── Live diff scheduler ───
   async function recomputeLiveDiff(): Promise<void> {
-    if (!workspaceId) return;
+    if (!workspaceId || !lifecycle.acceptsEvents) return;
     const snapshot = await snapshotCurrentDiff();
-    if (!snapshot) return;
+    if (!snapshot || !lifecycle.acceptsEvents) return;
     if (snapshot.files.length === 0) {
       try {
         await clearStaleWorkspaceDiff();
@@ -610,6 +609,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       return;
     }
     const existing = await workspaceService.getDiffByRun(runId);
+    if (!lifecycle.acceptsEvents) return;
     if (existing && hashContent(existing.diffText) === hashContent(snapshot.diffText)) {
       return;
     }
@@ -622,6 +622,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   }
 
   async function runLiveDiff(): Promise<void> {
+    if (!lifecycle.acceptsEvents) return;
     if (liveDiffInFlight) {
       liveDiffPending = true;
       return;
@@ -639,11 +640,11 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   }
 
   function scheduleLiveDiff(): void {
-    if (!workspaceId) return;
+    if (!workspaceId || !lifecycle.acceptsEvents) return;
     if (liveDiffTimer) clearTimeout(liveDiffTimer);
     liveDiffTimer = setTimeout(() => {
       liveDiffTimer = null;
-      void runLiveDiff();
+      void trackProjection(runLiveDiff());
     }, LIVE_DIFF_DEBOUNCE_MS);
   }
 
@@ -1026,8 +1027,18 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   }
 
   // ─── Public methods ───
-  async function project(event: WorkRunEvent): Promise<void> {
-    if (finalized) return;
+  function trackProjection(work: Promise<void>): Promise<void> {
+    const projection = work.finally(() => { eventProjections.delete(projection); });
+    eventProjections.add(projection);
+    return projection;
+  }
+
+  function project(event: WorkRunEvent): Promise<void> {
+    if (!lifecycle.accepts(event)) return Promise.resolve();
+    return trackProjection(projectEvent(event));
+  }
+
+  async function projectEvent(event: WorkRunEvent): Promise<void> {
     let didPersist = false;
     switch (event.type) {
       case "log":
@@ -1080,13 +1091,21 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   }
 
   function updateBaseRef(sha: string): void {
-    if (finalized) return;
+    if (!lifecycle.acceptsEvents) return;
     baseRef = sha;
   }
 
   async function abort(): Promise<void> {
-    if (finalized || aborting) return;
-    aborting = true;
+    if (!lifecycle.abort()) return;
+    clearLiveDiffSchedule();
+    // Arm before awaiting the provider: even a stuck interrupt must time out.
+    forceFinalizeTimer = setTimeout(() => {
+      void finalize({
+        status: "canceled",
+        summary: "Forced abort: adapter did not wind down within timeout",
+      });
+    }, FORCE_FINALIZE_TIMEOUT_MS);
+    forceFinalizeTimer.unref();
     try {
       const provider = await providersService.getById(providerId);
       if (provider) {
@@ -1096,20 +1115,17 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     } catch (err) {
       console.error(`[RunSession ${runId}] adapter.abortRun failed:`, err);
     }
-    // Belt-and-suspenders: if adapter doesn't wind down, force-finalize.
-    forceFinalizeTimer = setTimeout(() => {
-      if (!finalized) {
-        void finalize({
-          status: "canceled",
-          summary: "Forced abort: adapter did not wind down within timeout",
-        });
-      }
-    }, FORCE_FINALIZE_TIMEOUT_MS);
   }
 
-  async function finalize(result: RunSessionResult): Promise<void> {
-    if (finalized) return;
-    finalized = true;
+  function finalize(result: RunSessionResult): Promise<void> {
+    if (finalization) return finalization;
+    const settled = lifecycle.finalize(result);
+    if (!settled) return Promise.resolve();
+    finalization = finish(settled);
+    return finalization;
+  }
+
+  async function finish(result: RunSessionResult): Promise<void> {
     if (forceFinalizeTimer) {
       clearTimeout(forceFinalizeTimer);
       forceFinalizeTimer = null;
@@ -1119,9 +1135,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     const toolCallStatus = result.status === "succeeded" ? "done" : "error";
 
     try {
-      // Finish any final-message insert already in flight before recovering
-      // the remaining previews, so a Stop cannot save the same message twice.
-      await Promise.allSettled([...artifactProjections]);
+      // Accepted events own their writes until settlement, including tools and
+      // logs. Cleanup must see them before closing orphan calls or the run row.
+      await Promise.allSettled([...eventProjections]);
       for (const report of [...reportStreams.values()]) {
         if (!report.content?.trim()) continue;
         try {
@@ -1171,12 +1187,13 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       broadcastStatusChanged(result.status);
       broadcastEventPersisted();
       void sendNotification(result.status);
-      runSessionRegistry.unregister(runId);
+      lifecycle.close();
+      runSessionRegistry.unregister(runId, session);
     }
   }
 
   // ─── Initialize ───
-  const session: RunSession = { runId, project, abort, finalize, updateBaseRef };
+  const session: RunSession = { runId, get phase() { return lifecycle.phase; }, project, abort, finalize, updateBaseRef };
   runSessionRegistry.register(runId, session);
   // Announce the live session, not just its terminal status. Clients that did
   // not start this run (another window, a remote client, the background-runs

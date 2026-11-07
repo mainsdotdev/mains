@@ -1,6 +1,7 @@
 import { assertOwnedRecord, bridgeService } from "../bridge";
 import type { ResolveArtifactPathPayload } from "@mains/contracts/runs";
 import { CHANNELS } from "@mains/contracts/channels";
+import { RUN_INPUT_ERRORS } from "@mains/contracts/run-input";
 import { conversationSettingsFrom, type ConversationSettings } from "@mains/contracts/run-settings";
 import type {
   CreateRealtimeConversationPayload,
@@ -11,6 +12,7 @@ import type {
   VoiceTaskLink,
 } from "@mains/contracts/realtime";
 import { insertRunInputArtifact } from "./run-input-artifact";
+import { assertRunCanContinue, canSteerRun, claimRunResponse, isRunResponseStarting } from "./run-lifecycle";
 import { answerAsyncQuestions, assertAsyncQuestionCanReply, dismissAsyncQuestions } from "./run-async-questions";
 import type { AnswerAsyncQuestionsPayload, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import { providerTurnLineageMetadata } from "../../../shared/provider-turn-lineage";
@@ -670,8 +672,6 @@ async function syncCodexRunSession(
 // Single-item reads return null for absence; mutations on a missing
 // target throw (see CONTEXT.md "absence rule").
 // ─────────────────────────────────────────────────────────────
-// Claims cover async continuation preparation, before a live session exists.
-const continuingRuns = new Set<string>();
 const realtimeConnections = new Map<
   string,
   {
@@ -772,7 +772,7 @@ export const runsService = {
       );
     if (run.providerId !== PROVIDER_IDS.codex)
       throw new Error("Voice chat is currently available for Codex.");
-    if (continuingRuns.has(run.id))
+    if (isRunResponseStarting(run.id))
       throw new Error(
         "Wait for this response to start before opening voice chat.",
       );
@@ -2398,28 +2398,14 @@ export const runsService = {
   async continueRun(payload: ContinueRunPayload): Promise<ContinueRunResponse> {
     assertOwnedRecord("runs", payload.runId);
     const { runId, accountId, message, additionalContext } = payload;
-    if (continuingRuns.has(runId))
-      throw new Error("This conversation is already starting a response.");
-    continuingRuns.add(runId);
+    const releaseResponse = claimRunResponse(runId);
     try {
       // Preconditions must not mark someone else's live turn failed.
       const existing = await runsRepo.findRunById(runId);
       if (!existing) throw new Error("Run not found");
       if (existing.accountId !== accountId)
         throw new Error("Run does not belong to this account");
-      if (realtimeConnections.has(runId))
-        throw new Error("End voice chat before starting a new text response.");
-      if (existing.isArchived)
-        throw new Error(
-          "Unarchive this conversation before sending a message.",
-        );
-      if (
-        runSessionRegistry.get(runId) ||
-        existing.status === "running" ||
-        existing.status === "queued"
-      ) {
-        throw new Error("This conversation already has an active response.");
-      }
+      assertRunCanContinue(existing, runSessionRegistry.get(runId)?.phase, realtimeConnections.has(runId));
       if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
       const uploads = sanitizeRunAttachments(
         payload.attachments,
@@ -2649,7 +2635,7 @@ export const runsService = {
         throw error;
       }
     } finally {
-      continuingRuns.delete(runId);
+      releaseResponse();
     }
   },
 
@@ -2660,14 +2646,12 @@ export const runsService = {
     if (run.accountId !== payload.accountId)
       throw new Error("Run does not belong to this account");
     if (run.isArchived)
-      throw new Error("Unarchive this conversation before sending a message.");
+      throw new Error(RUN_INPUT_ERRORS.archived);
     if (run.providerId !== PROVIDER_IDS.codex && run.providerId !== PROVIDER_IDS.claude)
       throw new Error("This provider does not support steering.");
     const activeSession = runSessionRegistry.get(run.id);
-    if (!activeSession || run.status !== "running") {
-      throw new Error(
-        "There is no active turn to steer. The message stays queued.",
-      );
+    if (!canSteerRun(run.status, activeSession?.phase)) {
+      throw new Error(RUN_INPUT_ERRORS.noActiveTurn);
     }
     if (!payload.clientUserMessageId || typeof payload.message !== "string")
       throw new Error("Invalid message.");
@@ -2685,10 +2669,10 @@ export const runsService = {
       uploads,
       payload.clientUserMessageId,
     );
-    if (runSessionRegistry.get(run.id) !== activeSession) {
-      throw new Error("The active turn changed before sending. The message stays queued.");
-    }
     if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(run.id, payload.asyncQuestionReply);
+    if (runSessionRegistry.get(run.id) !== activeSession || !canSteerRun(run.status, activeSession?.phase)) {
+      throw new Error(RUN_INPUT_ERRORS.turnChanged);
+    }
     const { turnId } = await adapter.steerRun({
       runId: run.id,
       message: payload.message,
