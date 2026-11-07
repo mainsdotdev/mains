@@ -22,6 +22,7 @@ vi.mock("@/lib/redux/api/atlasApi", () => ({
   useUpdateAtlasItemMutation: () => [mocks.update, {}],
   useRemoveAtlasItemMutation: () => [mocks.remove, {}],
 }));
+vi.mock("@/hooks/use-space-provider-variant", () => ({ useSpaceProviderVariant: () => ({ supportsAtlas: true }) }));
 vi.mock("@/lib/transport", () => ({ getTransport: () => "backend" }));
 vi.mock("@/hooks/use-document-viewer", () => ({ useDocumentViewer: () => ({ open: mocks.openDocument }) }));
 vi.mock("@/hooks/use-local-image-url", () => ({ useLocalImageUrl: (path: string) => path ? "mains-localimg://preview" : undefined }));

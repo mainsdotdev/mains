@@ -49,6 +49,8 @@ vi.mock("@/lib/redux/api/atlasApi", () => ({
       ...mocks.items.map(savedEntry), ...mocks.generated.map((file) => generatedEntry(file)),
     ]), isFetching: mocks.fetching || options.page === mocks.pendingPage, refetch: vi.fn() };
   },
+  useListAtlasTagsQuery: () => ({ data: [] }),
+  useEnrichAtlasBookmarkMutation: () => [vi.fn(), {}],
   useCreateAtlasPageMutation: () => [mocks.create, { isLoading: false }],
   useUpdateAtlasItemMutation: () => [vi.fn(), {}],
   useRemoveAtlasItemMutation: () => [vi.fn(), {}],
@@ -110,6 +112,7 @@ function setup(initialEntry = "/atlas?project=project") {
       <Route path="/atlas" element={<AtlasLibrary accountId="account" />} />
       <Route path="/atlas/images/new" element={<div>Image creator</div>} />
       <Route path="/atlas/:itemId" element={<PageDraft />} />
+      <Route path="/settings" element={<div>Settings page</div>} />
     </Routes>
   </MemoryRouter></Provider>);
   return store;
@@ -136,6 +139,15 @@ beforeEach(() => {
   mocks.openWith.mockResolvedValue({ success: true });
   vi.stubGlobal("api", { shell: { openFileWithBundle: mocks.openWith } });
   mocks.create.mockImplementation(() => ({ unwrap: async () => ({ item: { id: "new-page" } }) }));
+});
+
+describe("Atlas settings navigation", () => {
+  it("opens the dedicated Atlas settings section from the library toolbar", () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Atlas settings" }));
+    expect(screen.getByTestId("url").textContent).toBe("/settings?section=atlas");
+    expect(screen.getByText("Settings page")).toBeTruthy();
+  });
 });
 
 describe("Atlas library pagination", () => {

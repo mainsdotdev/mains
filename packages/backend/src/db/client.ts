@@ -1,7 +1,7 @@
 import { getLocalBackendId } from "./backend-identity";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { migrateDatabase } from "./migrate";
 import crypto from "node:crypto";
 import path from "path";
 import fs from "fs";
@@ -243,7 +243,7 @@ class DatabaseClient {
 
       try {
         console.log("Running migrations...");
-        migrate(this.db, { migrationsFolder });
+        migrateDatabase(this.db, this.sqlite!, migrationsFolder);
         console.log("Migrations completed");
 
         // Remove backup after success

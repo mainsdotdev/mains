@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedFile, AtlasIdentity,
+import type { AtlasAutoTagging, AtlasItemTag, AtlasSaveBookmark, AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedFile, AtlasIdentity,
   AtlasItem, AtlasLibraryEntry, AtlasLibraryOptions, AtlasLibraryPage, AtlasListItem, AtlasListOptions, AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem,
   AtlasUploadFile, AtlasResolveConflict, AtlasMetadataPatch } from "@mains/contracts/atlas";
 import { CHANNELS } from "@mains/contracts/channels";
@@ -18,6 +18,7 @@ import { metadataPatch, readMetadata } from "./atlas.metadata";
 import { ATLAS_COVER_SOURCE_PREFIX, coverPreset, isCoverId } from "@mains/contracts/atlas-covers";
 import { readCoverPreset } from "./atlas.covers";
 import { atlasRoot, fileHash, imageContentHash, inspectSource, readSource, removeFiles, restoreFile, safeName, sourceKey, storagePath, writeFile } from "./atlas.storage";
+import { atlasBookmarks, readBookmarkJob, validateTagInputs } from "./atlas.bookmarks";
 
 interface PagePresentation {
   metadata?: AtlasMetadataPatch | null;
@@ -56,11 +57,15 @@ function owned(input: AtlasIdentity) {
   if (!item) throw new Error("Atlas item not found");
   return item;
 }
-function format(row: AtlasRecord): AtlasItem {
-  const { storageKey, contentHash: _hash, ...item } = row;
+function format(row: AtlasRecord, tags?: AtlasItemTag[]): AtlasItem {
+  const { storageKey, contentHash: _hash, bookmarkJob, normalizedUrl: _normalized, ...item } = row;
   const metadata = readMetadata(row.metadata);
   if (metadata?.coverFileId) metadata.coverFileId = atlasRepo.find(metadata.coverFileId, row.accountId)?.id ?? metadata.coverFileId;
-  return { ...item, metadata, path: storageKey ? storagePath(storageKey) : null,
+  const job = readBookmarkJob(bookmarkJob);
+  return { ...item, metadata, tags: tags ?? atlasRepo.itemTags([row.id], row.accountId).get(row.id) ?? [],
+    ...(row.kind === "bookmark" ? { bookmarkImagePath: storageKey ? storagePath(storageKey) : null,
+      bookmarkState: job ? { status: job.status, error: job.error, analyzedBy: job.analyzedBy } : undefined } : {}),
+    path: row.kind !== "bookmark" && storageKey ? storagePath(storageKey) : null,
     trashedAt: row.trashedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
 }
@@ -120,7 +125,7 @@ async function requirePageFiles(ids: string[], accountId: string) {
   const canonical: string[] = [];
   for (const id of ids) {
     const file = owned({ id, accountId });
-    if (!file.storageKey || file.kind === "page") throw new Error("Embedded Atlas file not found");
+    if (!file.storageKey || (file.kind !== "image" && file.kind !== "file")) throw new Error("Embedded Atlas file not found");
     try {
       const stats = await fs.lstat(storagePath(file.storageKey));
       if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("Embedded Atlas file is missing");
@@ -272,7 +277,8 @@ function savedEntry(item: AtlasListItem): AtlasLibraryEntry {
 function matchesLibrary(entry: AtlasLibraryEntry, options: AtlasLibraryOptions, query: string) {
   return (!options.type || options.type === "all" || entry.kind === options.type)
     && (!options.collectionId || entry.collectionId === options.collectionId)
-    && `${entry.title} ${entry.generated?.runTitle ?? ""}`.toLocaleLowerCase().includes(query);
+    && (!options.tagId || !!entry.saved?.tags?.some((tag) => tag.id === options.tagId))
+    && `${entry.title} ${entry.generated?.runTitle ?? ""} ${entry.saved?.url ?? ""} ${entry.saved?.description ?? ""} ${entry.saved?.note ?? ""} ${(entry.saved?.tags ?? []).map((tag) => tag.name).join(" ")}`.toLocaleLowerCase().includes(query);
 }
 
 async function* savedLibraryEntries(options: AtlasLibraryOptions, query: string) {
@@ -292,7 +298,7 @@ async function* savedLibraryEntries(options: AtlasLibraryOptions, query: string)
 }
 
 async function* generatedLibraryEntries(options: AtlasLibraryOptions, query: string) {
-  if (options.type === "page" || options.scope === "saved" || options.scope === "favorites") return;
+  if (options.type === "page" || options.type === "bookmark" || options.tagId || options.scope === "saved" || options.scope === "favorites") return;
   const preferredImages = options.scope === "all"
     ? new Set(atlasRepo.imageIdentities(options.accountId, options.collectionId)
       .filter((item) => item.title.toLocaleLowerCase().includes(query)).map((item) => item.contentHash).filter(Boolean))
@@ -347,20 +353,39 @@ async function* libraryEntries(options: AtlasLibraryOptions, query: string) {
 }
 
 export const atlasService = {
+  async saveBookmark(input: AtlasSaveBookmark) { return format(await atlasBookmarks.save(input)); },
+  async enrichBookmark(input: AtlasIdentity) { return format(await atlasBookmarks.enrich(identity(input))); },
+  listTags(input: { accountId: string }) { return atlasRepo.listTags(required(input?.accountId, "Account")); },
+  renameTag(input: AtlasIdentity & { name: string }) {
+    const { id, accountId } = identity(input);
+    const [name] = validateTagInputs([input.name]);
+    atlasRepo.renameTag(id, accountId, name); emit(CHANNELS.atlas.changed, {});
+  },
+  removeTag(input: AtlasIdentity) { const { id, accountId } = identity(input); atlasRepo.removeTag(id, accountId); emit(CHANNELS.atlas.changed, {}); },
+  setTags(input: AtlasIdentity & { tags: string[] }) {
+    const item = owned(input);
+    atlasRepo.setTags(item.id, item.accountId, validateTagInputs(input.tags), "user"); emit(CHANNELS.atlas.changed, {});
+    return format(owned(input));
+  },
+  getAutoTagging(input: { accountId: string }) { return atlasBookmarks.preferences(required(input?.accountId, "Account")); },
+  setAutoTagging(input: { accountId: string; config: AtlasAutoTagging }) {
+    return atlasBookmarks.setPreferences(required(input?.accountId, "Account"), input.config);
+  },
   list(options: AtlasListOptions): AtlasListItem[] {
     const accountId = required(options?.accountId, "Account");
     if ((options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1000))
       || (options.offset !== undefined && (!Number.isSafeInteger(options.offset) || options.offset < 0))
       || (options.ids !== undefined && (!Array.isArray(options.ids) || options.ids.length > 1000 || options.ids.some((id) => typeof id !== "string")))
-      || (options.kind !== undefined && !["page", "file", "image"].includes(options.kind))
+      || (options.kind !== undefined && !["page", "file", "image", "bookmark"].includes(options.kind))
       || (options.trashed !== undefined && typeof options.trashed !== "boolean")
       || (options.isFavorite !== undefined && typeof options.isFavorite !== "boolean")
       || (options.collectionId !== undefined && typeof options.collectionId !== "string"))
       throw new Error("Invalid Atlas pagination or filters");
     if (options.ids?.length === 0) return [];
     const includePreview = options?.includePagePreview === true;
-    return atlasRepo.list({ ...options, accountId, includePagePreview: includePreview })
-      .map(({ item, preview }) => ({ ...format(item),
+    const rows = atlasRepo.list({ ...options, accountId, includePagePreview: includePreview });
+    const tags = atlasRepo.itemTags(rows.map(({ item }) => item.id), accountId);
+    return rows.map(({ item, preview }) => ({ ...format(item, tags.get(item.id) ?? []),
         ...(item.kind === "image" && item.contentHash ? { contentHash: item.contentHash } : {}),
         ...(includePreview && item.kind === "page" ? { preview: preview ?? "" } : {}) }));
   },
@@ -368,9 +393,10 @@ export const atlasService = {
     const accountId = required(input?.accountId, "Account");
     const requestedPage = input.page ?? 1;
     if (!Number.isSafeInteger(requestedPage) || requestedPage < 1 || requestedPage > 100000
-      || (input.type !== undefined && !["all", "page", "file", "image"].includes(input.type))
+      || (input.type !== undefined && !["all", "page", "file", "image", "bookmark"].includes(input.type))
       || (input.scope !== undefined && !["all", "saved", "favorites", "generated", "uploads"].includes(input.scope))
-      || (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 4096)))
+      || (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 4096))
+      || (input.tagId !== undefined && (typeof input.tagId !== "string" || input.tagId.length > 128)))
       throw new Error("Invalid Atlas pagination");
     if (input.collectionId) await collection(input.collectionId, accountId);
     const options = { ...input, accountId, scope: input.scope ?? "all" };

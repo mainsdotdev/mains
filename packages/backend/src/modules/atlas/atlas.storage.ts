@@ -108,6 +108,21 @@ export async function writeFile(id: string, name: string, bytes: Buffer) {
     return `${id}/${name}`;
   } finally { await fs.rm(temporary, { recursive: true, force: true }); }
 }
+/** Bookmark previews are replaceable derivatives, unlike saved Atlas originals.
+ * Content-addressed names keep an in-flight reader on its original bytes. */
+export async function writeBookmarkPreview(id: string, name: string, bytes: Buffer) {
+  const directory = itemDirectory(id);
+  if (!directory || !/^preview-[a-f0-9]+\.(png|jpg|webp|gif|avif)$/.test(name) || bytes.length > 5 * 1024 * 1024)
+    throw new Error("Invalid bookmark preview");
+  await fs.mkdir(directory, { recursive: true });
+  if ((await fs.lstat(directory)).isSymbolicLink()) throw new Error("Invalid bookmark preview directory");
+  const temporary = path.join(directory, `.preview-${randomUUID()}`);
+  try {
+    await fs.writeFile(temporary, bytes, { flag: "wx", mode: 0o444 });
+    await fs.rename(temporary, path.join(directory, name));
+  } finally { await fs.rm(temporary, { force: true }); }
+  return `${id}/${name}`;
+}
 /** Restore an immutable synced file from matching bundled bytes, without overwriting local files. */
 export async function restoreFile(key: string, bytes: Buffer, expectedHash: string | null) {
   const target = storagePath(key);

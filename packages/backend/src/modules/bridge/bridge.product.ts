@@ -97,16 +97,21 @@ export function removeBridgeReplicas(sqlite: SQLiteInstance, backendId: string, 
       const pending = (table: string, id: string) => `(NOT (${synced(table, id)}) OR EXISTS(SELECT 1 FROM bridge_row_clock c WHERE c.table_name='${table}' AND c.pk=${id} AND c.dirty=1))`;
       sqlite.exec(`CREATE TEMP TABLE IF NOT EXISTS bridge_keep(table_name TEXT,pk TEXT,PRIMARY KEY(table_name,pk)); DELETE FROM bridge_keep;
         INSERT OR IGNORE INTO bridge_keep SELECT 'atlas_items',a.id FROM atlas_items a WHERE ${pending("atlas_items", "a.id")}
-          OR EXISTS(SELECT 1 FROM atlas_page_revisions v WHERE v.item_id=a.id AND ${pending("atlas_page_revisions", "v.id")});
+          OR EXISTS(SELECT 1 FROM atlas_page_revisions v WHERE v.item_id=a.id AND ${pending("atlas_page_revisions", "v.id")})
+          OR EXISTS(SELECT 1 FROM atlas_item_tags it WHERE it.item_id=a.id AND ${pending("atlas_item_tags", "json_array(it.item_id,it.tag_id)")});
         INSERT OR IGNORE INTO bridge_keep SELECT 'atlas_items',f.file_id FROM atlas_page_file_refs f JOIN atlas_page_revisions v ON v.id=f.revision_id
           JOIN bridge_keep k ON k.table_name='atlas_items' AND k.pk=v.item_id;
+        INSERT OR IGNORE INTO bridge_keep SELECT 'atlas_tags',t.id FROM atlas_tags t WHERE ${pending("atlas_tags", "t.id")}
+          OR EXISTS(SELECT 1 FROM atlas_item_tags it JOIN bridge_keep k ON k.table_name='atlas_items' AND k.pk=it.item_id WHERE it.tag_id=t.id);
+        INSERT OR IGNORE INTO bridge_cleanup SELECT 'atlas_item_tags',json_array(it.item_id,it.tag_id) FROM atlas_item_tags it
+          WHERE NOT EXISTS(SELECT 1 FROM bridge_keep k WHERE k.table_name='atlas_items' AND k.pk=it.item_id);
         INSERT OR IGNORE INTO bridge_keep SELECT 'collections',c.id FROM collections c WHERE ${pending("collections", "c.id")}
           OR EXISTS(SELECT 1 FROM collection_sources s WHERE s.collection_id=c.id AND ${pending("collection_sources", "s.id")})
           OR EXISTS(SELECT 1 FROM atlas_items a JOIN bridge_keep k ON k.table_name='atlas_items' AND k.pk=a.id WHERE a.collection_id=c.id);
         INSERT OR IGNORE INTO bridge_keep SELECT 'spaces',s.id FROM spaces s WHERE ${pending("spaces", "s.id")};
         INSERT OR IGNORE INTO bridge_cleanup SELECT 'atlas_page_revisions',v.id FROM atlas_page_revisions v WHERE NOT EXISTS(SELECT 1 FROM bridge_keep k WHERE k.table_name='atlas_items' AND k.pk=v.item_id);
         INSERT OR IGNORE INTO bridge_cleanup SELECT 'collection_sources',s.id FROM collection_sources s WHERE NOT EXISTS(SELECT 1 FROM bridge_keep k WHERE k.table_name='collections' AND k.pk=s.collection_id);`);
-      for (const table of ["atlas_items", "collections", "spaces"]) {
+      for (const table of ["atlas_items", "atlas_tags", "collections", "spaces"]) {
         const seeds = table === "spaces" ? `AND id NOT IN (${SEEDED_SPACE_IDS.map((id) => `'${id}'`).join(",")})` : "";
         sqlite.exec(`INSERT OR IGNORE INTO bridge_cleanup SELECT '${table}',id FROM ${table} WHERE NOT EXISTS(SELECT 1 FROM bridge_keep k WHERE k.table_name='${table}' AND k.pk=${table}.id) ${seeds};
           ${table === "atlas_items" ? "DELETE FROM atlas_items WHERE kind='page' AND id IN(SELECT pk FROM bridge_cleanup WHERE table_name='atlas_items');" : ""}

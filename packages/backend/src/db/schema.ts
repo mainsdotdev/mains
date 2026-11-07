@@ -48,9 +48,15 @@ export const accounts = sqliteTable(
 export const atlasItems = sqliteTable("atlas_items", {
   id: text("id").primaryKey().notNull(),
   accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
-  kind: text("kind", { enum: ["page", "file", "image"] }).notNull(),
+  kind: text("kind", { enum: ["page", "file", "image", "bookmark"] }).notNull(),
   title: text("title").notNull(),
   metadata: text("metadata"),
+  url: text("url"),
+  normalizedUrl: text("normalized_url"),
+  description: text("description"),
+  note: text("note"),
+  // Durable device-local enrichment work; never replayed on another backend.
+  bookmarkJob: text("bookmark_job"),
   collectionId: text("collection_id").references(() => collections.id, { onDelete: "set null" }),
   sourceRunId: text("source_run_id").references(() => runs.id, { onDelete: "set null" }),
   // Stable origin identity survives deletion of the source conversation.
@@ -70,9 +76,27 @@ export const atlasItems = sqliteTable("atlas_items", {
   index("idx_atlas_items_account_updated").on(t.accountId, t.updatedAt),
   index("idx_atlas_items_collection").on(t.collectionId),
   uniqueIndex("uniq_atlas_items_source").on(t.accountId, t.sourceKey),
-  check("check_atlas_items_kind", sql`${t.kind} IN ('page', 'file', 'image')`),
+  check("check_atlas_items_kind", sql`${t.kind} IN ('page', 'file', 'image', 'bookmark')`),
   check("check_atlas_items_metadata_json", sql`json_valid(${t.metadata}) OR ${t.metadata} IS NULL`),
+  check("check_atlas_items_bookmark_job_json", sql`json_valid(${t.bookmarkJob}) OR ${t.bookmarkJob} IS NULL`),
 ]);
+
+export const atlasTags = sqliteTable("atlas_tags", {
+  id: text("id").primaryKey().notNull(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  normalizedName: text("normalized_name").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, (t) => [uniqueIndex("uniq_atlas_tags_name").on(t.accountId, t.normalizedName)]);
+
+export const atlasItemTags = sqliteTable("atlas_item_tags", {
+  itemId: text("item_id").notNull().references(() => atlasItems.id, { onDelete: "cascade" }),
+  tagId: text("tag_id").notNull().references(() => atlasTags.id, { onDelete: "cascade" }),
+  source: text("source", { enum: ["user", "ai"] }).notNull().default("user"),
+  // A user removal survives another AI analysis, without a separate ledger.
+  isExcluded: integer("is_excluded", { mode: "boolean" }).notNull().default(false),
+}, (t) => [primaryKey({ columns: [t.itemId, t.tagId] }), index("idx_atlas_item_tags_tag").on(t.tagId),
+  check("check_atlas_item_tags_source", sql`${t.source} IN ('user', 'ai')`)]);
 
 export const atlasPageRevisions = sqliteTable("atlas_page_revisions", {
   id: text("id").primaryKey().notNull(),
@@ -185,6 +209,7 @@ export const appSettings = sqliteTable("app_settings", {
 
   commitInstructions: text("commit_instructions").notNull().default(""),
   prInstructions: text("pr_instructions").notNull().default(""),
+  atlasAutoTagging: text("atlas_auto_tagging"),
 
   seedVersion: integer("seed_version").notNull().default(0),
 

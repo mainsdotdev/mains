@@ -171,6 +171,12 @@ function mergeIds(store: BridgeStore, table: string, ids: string[]) {
 }
 
 function naturalProjection(store: BridgeStore, table: string, pk: string, body: BridgeUpsertBody): string {
+  if (table === "atlas_tags") {
+    const same = (store.sqlite.prepare("SELECT pk,values_json FROM bridge_row_clock WHERE table_name='atlas_tags' AND register='row'").all() as { pk: string; values_json: string }[])
+      .filter((entry) => { const value = JSON.parse(entry.values_json); return value.account_id === body.values.account_id
+        && value.normalized_name === body.values.normalized_name && !deleted(store.sqlite, table, entry.pk); }).map((entry) => entry.pk);
+    return same.length > 1 ? mergeIds(store, table, same) : canonicalPk(store.sqlite, table, pk);
+  }
   if (table !== "collection_sources" && table !== "atlas_items") return canonicalPk(store.sqlite, table, pk);
   const v = body.values;
   if (table === "atlas_items" && !v.source_key) return canonicalPk(store.sqlite, table, pk);
@@ -179,7 +185,8 @@ function naturalProjection(store: BridgeStore, table: string, pk: string, body: 
   const candidates = (store.sqlite.prepare("SELECT * FROM bridge_row_clock WHERE table_name=? AND register=?").all(table, register) as RowClock[])
     .map((clock) => ({ id: clock.pk, v: portableValues(store, table, clock).values }))
     .filter((entry) => inScope(store, table, entry.id) && !deleted(store.sqlite, table, entry.id) && (table === "collection_sources" ? entry.v.collection_id === v.collection_id && entry.v.content_hash === v.content_hash : entry.v.account_id === v.account_id && entry.v.source_key === v.source_key));
-  const same = candidates.filter((entry) => table === "collection_sources" || !!v.content_hash && entry.v.content_hash === v.content_hash).map((entry) => entry.id);
+  const same = candidates.filter((entry) => table === "collection_sources" || v.kind === "bookmark" && entry.v.kind === "bookmark"
+    || !!v.content_hash && entry.v.content_hash === v.content_hash).map((entry) => entry.id);
   const canonical = same.length > 1 ? mergeIds(store, table, same) : canonicalPk(store.sqlite, table, pk);
   if (table === "atlas_items") {
     const sourceOwner = candidates.map((entry) => canonicalPk(store.sqlite, table, entry.id)).sort()[0] ?? canonical;
@@ -207,6 +214,11 @@ function materialize(store: BridgeStore, table: string, pk: string, owner: strin
     if (contenders[0] !== pk) values.source_key = null;
   }
   const existing = readRow(store, table, pk, owner);
+  if (table === "atlas_item_tags") {
+    const item = store.sqlite.prepare("SELECT account_id FROM atlas_items WHERE id=?").get(values.item_id) as SqlRow | undefined;
+    const tag = store.sqlite.prepare("SELECT account_id FROM atlas_tags WHERE id=?").get(values.tag_id) as SqlRow | undefined;
+    if (item?.account_id !== tag?.account_id) throw new BridgeRecordRejected("Atlas tag belongs to a different account");
+  }
   if (def.ownerRoot) {
     if (def.ownerRoot === table) {
       if (values.owner_backend_id !== owner || existing?.owner_backend_id && existing.owner_backend_id !== owner) throw new BridgeRecordRejected("Bridge root ownership collision");

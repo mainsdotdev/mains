@@ -1,4 +1,4 @@
-export { imageProxyService, SsrfBlockedError } from "./imageProxy.service";
+export { imageProxyService, SsrfBlockedError, assertPublicHttpUrl } from "./imageProxy.service";
 export { registerImageProxyIpc, unregisterImageProxyIpc } from "./imageProxy.ipc";
 export {
   MAX_IMAGE_SIZE,

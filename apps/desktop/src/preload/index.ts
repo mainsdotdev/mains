@@ -1,5 +1,5 @@
 import type { BridgeSignInInput, BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
+import type { AtlasAutoTagging, AtlasSaveBookmark, AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
@@ -360,6 +360,14 @@ const api = {
   },
   // Non-developer Projects: organizational Collections for Work/Chat runs.
   atlas: {
+    saveBookmark: (input: AtlasSaveBookmark) => ipcRenderer.invoke(CHANNELS.atlas.saveBookmark, input),
+    enrichBookmark: (input: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.enrichBookmark, input),
+    listTags: (input: { accountId: string }) => ipcRenderer.invoke(CHANNELS.atlas.listTags, input),
+    renameTag: (input: AtlasIdentity & { name: string }) => ipcRenderer.invoke(CHANNELS.atlas.renameTag, input),
+    removeTag: (input: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.removeTag, input),
+    setTags: (input: AtlasIdentity & { tags: string[] }) => ipcRenderer.invoke(CHANNELS.atlas.setTags, input),
+    getAutoTagging: (input: { accountId: string }) => ipcRenderer.invoke(CHANNELS.atlas.getAutoTagging, input),
+    setAutoTagging: (input: { accountId: string; config: AtlasAutoTagging }) => ipcRenderer.invoke(CHANNELS.atlas.setAutoTagging, input),
     list: (options: AtlasListOptions) => ipcRenderer.invoke(CHANNELS.atlas.list, options),
     library: (options: AtlasLibraryOptions) => ipcRenderer.invoke(CHANNELS.atlas.library, options),
     generated: (options: AtlasGeneratedOptions) => ipcRenderer.invoke(CHANNELS.atlas.generated, options),

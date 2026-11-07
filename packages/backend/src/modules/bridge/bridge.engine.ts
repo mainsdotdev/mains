@@ -57,7 +57,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   const existing = sqlite.prepare("SELECT backend_id,atlas_enabled FROM bridge_config WHERE id=1").get() as { backend_id: string; atlas_enabled: number } | undefined;
   if (existing && existing.backend_id !== backendId) throw new Error("Bridge database belongs to another backend");
   const store: BridgeStore = { sqlite, backendId, recordKey: Uint8Array.from(options.recordKey), codec: options.codec ?? bridgePassThroughCodec,
-    schemaVersion: options.schemaVersion ?? 4, wireSchemaVersion: options.schemaVersion ?? 3, atlasEnabled: options.experimentalAtlas ?? true,
+    schemaVersion: options.schemaVersion ?? 5, wireSchemaVersion: options.schemaVersion ?? 3, atlasEnabled: options.experimentalAtlas ?? true,
     recover(context) { recoverAtlasPage(context); options.recover?.(context); }, filesEnabled: !!options.blobs };
   sqlite.transaction(() => {
     sqlite.prepare(`INSERT INTO bridge_config(id,backend_id,enabled,tracking_enabled,atlas_enabled) VALUES(1,?,1,1,?)

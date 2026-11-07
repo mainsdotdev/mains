@@ -1,5 +1,32 @@
 /** Atlas stores Pages and explicitly saved files; generated files are projections. */
-export type AtlasKind = "page" | "file" | "image";
+export type AtlasKind = "page" | "file" | "image" | "bookmark";
+export interface AtlasTag { id: string; name: string; count: number }
+export interface AtlasItemTag { id: string; name: string; source: "user" | "ai" }
+export interface AtlasAutoTagging { enabled: boolean; providerId: string; model: string }
+export interface AtlasBookmarkMetadata {
+  siteName?: string;
+  imageUrl?: string;
+  faviconUrl?: string;
+  contentType?: string;
+  customTitle?: boolean;
+  customDescription?: boolean;
+}
+export interface AtlasBookmarkState {
+  status: "pending" | "running" | "ready" | "failed";
+  error?: string;
+  analyzedBy?: string;
+}
+export interface AtlasSaveBookmark {
+  accountId: string;
+  id?: string;
+  url: string;
+  title?: string;
+  description?: string;
+  note?: string;
+  collectionId?: string | null;
+  /** Existing tag ids and/or names to create, replacing visible tags on edit. */
+  tags?: string[];
+}
 export interface AtlasIdentity { accountId: string; id: string }
 /** Portable Page reference, resolved inside the current Mains app and backend. */
 export function atlasPageHref(id: string): string {
@@ -11,6 +38,7 @@ export interface AtlasMetadata {
   icon?: string;
   /** A permanently stored Atlas image, shared without copying its bytes. */
   coverFileId?: string;
+  bookmark?: AtlasBookmarkMetadata;
 }
 export interface AtlasMetadataPatch {
   icon?: string | null;
@@ -35,6 +63,12 @@ export interface AtlasItem {
   currentRevisionId?: string | null;
   createdAt: string;
   updatedAt: string;
+  url?: string | null;
+  description?: string | null;
+  note?: string | null;
+  tags?: AtlasItemTag[];
+  bookmarkState?: AtlasBookmarkState;
+  bookmarkImagePath?: string | null;
 }
 export interface AtlasListOptions {
   accountId: string;
@@ -91,6 +125,7 @@ export interface AtlasLibraryOptions {
   scope?: AtlasLibraryScope;
   collectionId?: string;
   query?: string;
+  tagId?: string;
   page?: number;
   includePagePreview?: boolean;
 }
