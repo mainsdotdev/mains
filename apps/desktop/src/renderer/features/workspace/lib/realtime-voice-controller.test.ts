@@ -39,15 +39,16 @@ function setup() {
     setInput: vi.fn(), setOutput: vi.fn(), setMuted: vi.fn(),
     read: vi.fn(() => ({ input: 0.4, output: 0.6 })), dispose: vi.fn(),
   };
+  const createId = vi.fn(() => "connection-a");
   const controller = createRealtimeVoiceController({
     api: () => api, getUserMedia, createPeer,
-    createAudio: () => audio as unknown as HTMLAudioElement, createId: () => "connection-a", timeoutMs: 100,
+    createAudio: () => audio as unknown as HTMLAudioElement, createId, timeoutMs: 100,
     createAudioMeter: () => audioMeter,
   });
   const input = { runId: "run", accountId: "account", label: "My chat" };
   const emit = (event: RunRealtimeUpdate) => listener({ runId: "run", connectionId: "connection-a", ...event });
   const connected = () => { peer.connectionState = "connected"; peer.onconnectionstatechange?.(); };
-  return { controller, input, api, off, track, stream, peer, channel, audio, audioMeter, getUserMedia, createPeer, emit, connected,
+  return { controller, input, api, off, track, stream, peer, channel, audio, audioMeter, getUserMedia, createPeer, createId, emit, connected,
     event: (event: RunRealtimeEvent) => listener(event) };
 }
 
@@ -188,6 +189,9 @@ describe("native voice media ownership", () => {
     h.controller.toggleMute();
     expect(h.track.enabled).toBe(false);
     expect(h.controller.getSnapshot().muted).toBe(true);
+    h.emit({ type: "started", sessionId: "native" });
+    h.connected();
+    expect(h.controller.getSnapshot().muted).toBe(true);
     h.controller.toggleMute();
     expect(h.track.enabled).toBe(true);
     await h.controller.stop();
@@ -233,6 +237,20 @@ describe("native voice media ownership", () => {
     expect(h.controller.getSnapshot().phase).toBe("idle");
   });
 
+  it.each(["analysis", "subscription"])("still shuts down the microphone and native call when %s cleanup throws", async (resource) => {
+    const h = setup();
+    await h.controller.start(h.input);
+    const cleanup = resource === "analysis" ? h.audioMeter.dispose : h.off;
+    cleanup.mockImplementationOnce(() => { throw new Error("Resource already detached"); });
+    await h.controller.stop();
+    expect(h.track.stop).toHaveBeenCalledOnce();
+    expect(h.peer.close).toHaveBeenCalledOnce();
+    expect(h.channel.close).toHaveBeenCalledOnce();
+    expect(h.audio.pause).toHaveBeenCalledOnce();
+    expect(h.api.stop).toHaveBeenCalledOnce();
+    expect(h.controller.getSnapshot().phase).toBe("idle");
+  });
+
   it.each(["response", "transport"])("keeps closure unconfirmed after a %s failure and retries without reopening the mic", async (failure) => {
     const h = setup();
     await h.controller.start(h.input);
@@ -272,6 +290,44 @@ describe("native voice media ownership", () => {
     ack.resolve(ok(undefined));
     await stopping;
     expect(h.controller.getSnapshot().phase).toBe("idle");
+  });
+
+  it("accepts a matching native close after a failed stop without another RPC", async () => {
+    const h = setup();
+    await h.controller.start(h.input);
+    h.api.stop.mockResolvedValueOnce(fail("Stop was rejected"));
+    await h.controller.stop();
+    expect(h.controller.getSnapshot().phase).toBe("stop_failed");
+    h.event({ type: "closed", reason: "ended", runId: "other", connectionId: "connection-a" });
+    h.event({ type: "closed", reason: "ended", runId: "run", connectionId: "stale" });
+    expect(h.controller.getSnapshot().phase).toBe("stop_failed");
+    h.emit({ type: "closed", reason: "ended" });
+    expect(h.controller.getSnapshot().phase).toBe("idle");
+    expect(h.off).toHaveBeenCalledOnce();
+    expect(h.track.stop).toHaveBeenCalledOnce();
+    expect(h.api.stop).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])("ignores an old stop response (success=%s) after native closure and a replacement call", async (success) => {
+    const h = setup();
+    await h.controller.start(h.input);
+    const oldListener = h.api.subscribe.mock.calls[0][0];
+    const ack = deferred<ReturnType<typeof ok<void>>>();
+    h.api.stop.mockReturnValueOnce(ack.promise);
+    let confirmed = false;
+    const stopping = h.controller.stop().then(() => { confirmed = true; });
+    h.emit({ type: "closed", reason: "ended" });
+    expect(h.controller.getSnapshot().phase).toBe("idle");
+    await vi.waitFor(() => expect(confirmed).toBe(true));
+    h.createId.mockReturnValue("connection-b");
+    await h.controller.start({ ...h.input, label: "Next call" });
+    oldListener({ runId: "run", connectionId: "connection-a", type: "closed", reason: "late" });
+    ack.resolve(success ? ok(undefined) : fail("Old transport timed out"));
+    await stopping;
+    expect(h.controller.getSnapshot()).toMatchObject({ phase: "connecting", connectionId: "connection-b", label: "Next call", error: null });
+    expect(h.track.stop).toHaveBeenCalledOnce();
+    expect(h.off).toHaveBeenCalledOnce();
+    await h.controller.stop();
   });
 
   it("ignores stale events and closes a start acknowledged after cancellation", async () => {

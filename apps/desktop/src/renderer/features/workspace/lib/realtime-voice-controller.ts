@@ -2,6 +2,7 @@ import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { RunRealtimeEvent, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeUpdate } from "@mains/contracts/realtime";
 import type { ServiceResponse } from "@mains/contracts/service-response";
 import { SILENT_VOICE_LEVELS, type RealtimeVoiceAudioMeter } from "./realtime-voice-audio";
+import { createRealtimeVoiceLifecycle, type RealtimeVoicePhase } from "./realtime-voice-lifecycle";
 
 export interface VoiceTranscript {
   itemId: string;
@@ -11,7 +12,7 @@ export interface VoiceTranscript {
 }
 
 export interface RealtimeVoiceState {
-  phase: "idle" | "connecting" | "connected" | "ending" | "stop_failed" | "error";
+  phase: RealtimeVoicePhase;
   runId: string | null;
   connectionId: string | null;
   startedAt: number | null;
@@ -30,6 +31,8 @@ export interface VoiceConnectionApi {
 interface VoiceAttempt {
   key: RunRealtimeStopPayload;
   api: VoiceConnectionApi;
+  label: string;
+  startedAt: number;
   stream?: MediaStream;
   peer?: RTCPeerConnection;
   audio?: HTMLAudioElement;
@@ -42,12 +45,6 @@ interface VoiceAttempt {
   signalQueue: Promise<void>;
   contextQueue: Array<Extract<RunRealtimeUpdate, { type: "context" }>>;
   contextIds: Set<string>;
-}
-
-interface VoiceClosure {
-  attempt: VoiceAttempt;
-  error?: string;
-  request?: Promise<void>;
 }
 
 // Codex 0.160's v3 (Frameless Bidi) wire format uses context.append,
@@ -74,6 +71,11 @@ const initialState: RealtimeVoiceState = {
   label: "", muted: false, error: null, transcripts: [],
 };
 
+function releaseResource(dispose: () => void) {
+  try { dispose(); }
+  catch (error) { console.warn("[Voice] Resource cleanup failed:", error); }
+}
+
 /** App-scoped media owner. Components subscribe; they never own a second mic. */
 export function createRealtimeVoiceController(options: {
   api: () => VoiceConnectionApi;
@@ -85,73 +87,66 @@ export function createRealtimeVoiceController(options: {
   timeoutMs?: number;
 }) {
   let state = initialState;
-  let active: VoiceAttempt | undefined;
-  let closing: VoiceClosure | undefined;
   const listeners = new Set<() => void>();
   function update(patch: Partial<RealtimeVoiceState>) {
     state = { ...state, ...patch };
     for (const listener of listeners) listener();
   }
-  function current(attempt: VoiceAttempt) { return active === attempt; }
-  function closureFor(attempt: VoiceAttempt) { return closing?.attempt === attempt ? closing : undefined; }
+  const lifecycle = createRealtimeVoiceLifecycle<VoiceAttempt>({
+    releaseMedia: release,
+    unsubscribe(attempt) {
+      const off = attempt.off;
+      attempt.off = undefined;
+      if (off) releaseResource(off);
+    },
+    stopNative: remoteStop,
+    transition(phase, attempt, error) {
+      if (phase === "idle") update({ ...initialState });
+      else if (phase === "connected") update({ phase });
+      else if (phase === "connecting" && attempt) {
+        update({ ...initialState, phase, runId: attempt.key.runId, label: attempt.label,
+          connectionId: attempt.key.connectionId, startedAt: attempt.startedAt });
+      } else update({ phase, muted: false, error: error ?? null });
+    },
+  });
+  const current = lifecycle.current;
   function mediaReady(attempt: VoiceAttempt) {
     if (!current(attempt) || !attempt.serverReady || attempt.peer?.connectionState !== "connected") return;
     clearTimeout(attempt.timer);
-    update({ phase: "connected" });
+    lifecycle.connected(attempt);
   }
   function release(attempt: VoiceAttempt) {
-    // Retire ownership before close/stop can synchronously fire callbacks.
-    if (current(attempt)) active = undefined;
     clearTimeout(attempt.timer);
-    attempt.off?.();
-    attempt.audioMeter?.dispose();
+    // One failed media cleanup must not keep another resource (especially the
+    // microphone) alive or prevent the id-scoped native stop from being sent.
+    releaseResource(() => attempt.audioMeter?.dispose());
     attempt.audioMeter = undefined;
     if (attempt.channel) {
       attempt.channel.onopen = null;
       attempt.channel.onclose = null;
       attempt.channel.onerror = null;
-      attempt.channel.close();
+      releaseResource(() => attempt.channel!.close());
     }
     attempt.contextQueue.length = 0;
     attempt.contextIds.clear();
     if (attempt.peer) {
       attempt.peer.onconnectionstatechange = null;
       attempt.peer.ontrack = null;
-      attempt.peer.close();
+      releaseResource(() => attempt.peer!.close());
     }
     for (const track of attempt.stream?.getTracks() ?? []) {
       track.onended = null;
-      track.stop();
+      releaseResource(() => { track.enabled = false; track.stop(); });
     }
-    if (attempt.audio) { attempt.audio.pause(); attempt.audio.srcObject = null; }
+    if (attempt.audio) {
+      attempt.audio.srcObject = null;
+      releaseResource(() => attempt.audio!.pause());
+    }
   }
   async function remoteStop(attempt: VoiceAttempt) {
     if (!attempt.issued) return;
     const result = await attempt.api.stop(attempt.key);
     if (!result.success) throw new Error(result.error);
-  }
-  function confirmClosure(closure: VoiceClosure): Promise<void> {
-    return closure.request ??= (async () => {
-      try {
-        await remoteStop(closure.attempt);
-        if (closing !== closure) return;
-        closing = undefined;
-        if (closure.error) update({ phase: "error", muted: false, error: closure.error });
-        else update({ ...initialState });
-      } catch (error) {
-        if (closing !== closure) return;
-        const detail = error instanceof Error ? error.message : String(error);
-        update({ phase: "stop_failed", muted: false,
-          error: `The microphone is off, but voice chat closure could not be confirmed. Retry ending voice chat. ${detail}` });
-      } finally { closure.request = undefined; }
-    })();
-  }
-  function endAttempt(attempt: VoiceAttempt, error?: string) {
-    release(attempt);
-    const closure = { attempt, error };
-    closing = closure;
-    update({ phase: "ending", muted: false, error: error ?? null });
-    return confirmClosure(closure);
   }
   function fail(attempt: VoiceAttempt, error: unknown) {
     if (!current(attempt)) return;
@@ -160,10 +155,15 @@ export function createRealtimeVoiceController(options: {
       ? "Allow microphone access in macOS settings to start voice chat."
       : name === "NotFoundError" ? "No microphone was found."
       : error instanceof Error ? error.message : String(error);
-    void endAttempt(attempt, message);
+    void lifecycle.end(attempt, message);
   }
   function handleEvent(attempt: VoiceAttempt, event: RunRealtimeEvent) {
-    if (!current(attempt) || event.runId !== attempt.key.runId || event.connectionId !== attempt.key.connectionId) return;
+    if (event.runId !== attempt.key.runId || event.connectionId !== attempt.key.connectionId) return;
+    if (event.type === "closed") {
+      lifecycle.closed(attempt);
+      return;
+    }
+    if (!current(attempt)) return;
     switch (event.type) {
       case "started":
         attempt.serverReady = true;
@@ -192,12 +192,8 @@ export function createRealtimeVoiceController(options: {
         if (attempt.contextQueue.length > 32) attempt.contextQueue.shift();
         flushContext(attempt);
         break;
-      case "ending": void endAttempt(attempt); break;
+      case "ending": void lifecycle.end(attempt); break;
       case "error": fail(attempt, new Error(event.message)); break;
-      case "closed":
-        release(attempt);
-        update({ ...initialState });
-        break;
     }
   }
 
@@ -221,15 +217,14 @@ export function createRealtimeVoiceController(options: {
   async function start(input: {
     runId: string; accountId: string; label: string; conversationSettings?: ConversationSettings;
   }) {
-    if (active || closing) return;
+    if (lifecycle.owned) return;
     const attempt: VoiceAttempt = {
       key: { runId: input.runId, accountId: input.accountId, connectionId: options.createId() },
-      api: options.api(), issued: false, serverReady: false, signalQueue: Promise.resolve(),
+      api: options.api(), label: input.label, startedAt: Date.now(),
+      issued: false, serverReady: false, signalQueue: Promise.resolve(),
       contextQueue: [], contextIds: new Set(),
     };
-    active = attempt;
-    update({ ...initialState, phase: "connecting", runId: input.runId, label: input.label,
-      connectionId: attempt.key.connectionId, startedAt: Date.now() });
+    if (!lifecycle.start(attempt)) return;
     try {
       // Create/resume Web Audio within the start gesture, before mic permission.
       attempt.audioMeter = options.createAudioMeter?.();
@@ -276,35 +271,21 @@ export function createRealtimeVoiceController(options: {
       const result = await attempt.api.start({ ...attempt.key, sdp: offer.sdp, conversationSettings: input.conversationSettings });
       // The user may cancel while the IPC request is still preparing a thread.
       if (!current(attempt)) {
-        const closure = closureFor(attempt);
-        if (closure) await confirmClosure(closure);
-        else await remoteStop(attempt).catch(() => {});
+        await lifecycle.settleStart(attempt);
         return;
       }
       if (!result.success) throw new Error(result.error);
     } catch (error) { fail(attempt, error); }
   }
 
-  async function stop() {
-    const attempt = active;
-    if (attempt) { await endAttempt(attempt); return; }
-    if (closing) {
-      const closure = closing;
-      closure.error = undefined;
-      update({ phase: "ending", error: null });
-      await confirmClosure(closure);
-    } else {
-      update({ ...initialState });
-    }
-  }
-
   return {
-    start, stop,
+    start, stop: lifecycle.stop,
     getSnapshot: () => state,
     getAudioLevels: (timeMs: number) => state.phase === "connected"
-      ? active?.audioMeter?.read(timeMs) ?? SILENT_VOICE_LEVELS : SILENT_VOICE_LEVELS,
+      ? lifecycle.active?.audioMeter?.read(timeMs) ?? SILENT_VOICE_LEVELS : SILENT_VOICE_LEVELS,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     toggleMute() {
+      const active = lifecycle.active;
       if (!active?.stream || state.phase !== "connected") return;
       const muted = !state.muted;
       for (const track of active.stream.getAudioTracks()) track.enabled = !muted;
