@@ -878,6 +878,23 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
       .map((row) => row.version).sort((left, right) => right - left);
     expect(versions).toEqual([3, 2, 1]);
   });
+  it("preserves Page content and history through Trash and rejects writes or permanent deletion in the wrong state", async () => {
+    const first = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "Original" });
+    const identity = { accountId: "default", id: first.item.id };
+    const latest = await atlasService.savePage({ ...identity, title: "Latest notes", expectedVersion: 1, markdown: "Keep this" }, "agent");
+    await expect(atlasService.remove(identity)).rejects.toThrow("Trash");
+    await atlasService.update({ ...identity, trashed: true });
+    await expect(atlasService.savePage({ ...identity, title: "Late write", expectedVersion: 2, markdown: "Wrong" })).rejects.toThrow("Trash");
+    await expect(atlasService.restore({ ...identity, revisionId: first.revision.id, expectedVersion: 2 })).rejects.toThrow("Trash");
+    expect(atlasService.getPage(identity)?.revision).toEqual(latest.revision);
+    expect(atlasService.revisions(identity).map((row) => row.id)).toEqual([latest.revision.id, first.revision.id]);
+    await atlasService.update({ ...identity, trashed: false });
+    expect(atlasService.getPage(identity)?.item).toMatchObject({ title: "Latest notes", version: 2, trashedAt: null });
+    await expect(atlasService.remove(identity)).rejects.toThrow("Trash");
+    await atlasService.update({ ...identity, trashed: true });
+    await atlasService.remove(identity);
+    expect(atlasService.getPage(identity)).toBeNull();
+  });
   it("folds a user's autosaves into one revision while the Page version still advances", async () => {
     const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });
     const identity = { accountId: "default", id: page.item.id };

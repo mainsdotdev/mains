@@ -264,6 +264,38 @@ describe("Atlas page tabs", () => {
     await waitFor(() => expect(screen.getByTestId("editor").textContent).toBe("one"));
   });
 
+  it.each(["select", "close", "create"])("drops a pending %s when the backend changes during saving", async (action) => {
+    const store = setup();
+    await screen.findByRole("tab", { name: "Page One" });
+    act(() => store.dispatch(openAtlasPageTab({ ownerKey: '["local","account-1"]', id: "two" })));
+    let finish!: (saved: boolean) => void;
+    mocks.flush.mockReturnValueOnce(new Promise<boolean>((resolve) => { finish = resolve; }));
+    fireEvent.click(action === "select" ? screen.getByRole("tab", { name: "Page Two" })
+      : screen.getByRole("button", { name: action === "close" ? "Close Page One" : "New Atlas page tab" }));
+    await waitFor(() => expect(mocks.flush).toHaveBeenCalledOnce());
+    mocks.transport = "backend-b";
+    await act(async () => finish(true));
+    expect(screen.getByTestId("route").textContent).toBe("/atlas/one");
+    expect(store.getState().atlas.byOwner['["local","account-1"]'].tabs.map((tab) => tab.id)).toEqual(["one", "two"]);
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it.each(["backend", "route"])("ignores a late Page creation after its %s owner changes", async (change) => {
+    setup();
+    await screen.findByRole("tab", { name: "Page One" });
+    let finish!: (page: { item: { id: string } }) => void;
+    const creation = new Promise((resolve) => { finish = resolve; });
+    mocks.create.mockImplementationOnce(() => ({ unwrap: () => creation }));
+    const create = screen.getByRole("button", { name: "New Atlas page tab" });
+    fireEvent.click(create); fireEvent.click(create);
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledOnce());
+    if (change === "backend") mocks.transport = "backend-b";
+    else fireEvent.click(screen.getByRole("button", { name: "Home" }));
+    await act(async () => finish({ item: { id: "new-page" } }));
+    expect(screen.getByTestId("route").textContent).toBe(change === "backend" ? "/atlas/one" : "/");
+    expect(mocks.create).toHaveBeenCalledOnce();
+  });
+
   it("updates the active tab title and supports arrow-key navigation", async () => {
     setup();
     await screen.findByRole("tab", { name: "Page One" });

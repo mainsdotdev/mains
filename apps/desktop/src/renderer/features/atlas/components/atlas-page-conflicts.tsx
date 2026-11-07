@@ -1,25 +1,21 @@
 import { useState } from "react";
 import type { AtlasPage } from "@mains/contracts/atlas";
 import { Button, Modal, Muted, Text, toast } from "@/components/ui";
-import { useAtlasRevisionQuery, useResolveAtlasConflictMutation } from "@/lib/redux/api/atlasApi";
+import { useAtlasRevisionQuery } from "@/lib/redux/api/atlasApi";
 import { atlasError } from "../hooks/use-save-to-atlas";
 
-export function AtlasPageConflicts({ page, beforeResolve, onResolved }: {
+export function AtlasPageConflicts({ page, onResolve, resolving }: {
   page: AtlasPage;
-  beforeResolve: () => Promise<number | null>;
-  onResolved: () => Promise<void>;
+  onResolve: (choice: "current" | "other", revisionId: string) => Promise<boolean>;
+  resolving: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const otherId = page.conflicts?.find((row) => row.id === selected)?.id ?? page.conflicts?.[0]?.id ?? "";
   const other = useAtlasRevisionQuery({ accountId: page.item.accountId, id: page.item.id, revisionId: otherId }, { skip: !open || !otherId });
-  const [resolve, resolving] = useResolveAtlasConflictMutation();
   const choose = async (choice: "current" | "other") => {
     try {
-      const version = await beforeResolve();
-      if (version === null) return;
-      await resolve({ accountId: page.item.accountId, id: page.item.id, revisionId: otherId, expectedVersion: version, choice }).unwrap();
-      await onResolved(); setOpen(false);
+      if (await onResolve(choice, otherId)) setOpen(false);
     } catch (error) { toast.error(atlasError(error)); }
   };
   return <>
@@ -40,8 +36,8 @@ export function AtlasPageConflicts({ page, beforeResolve, onResolved }: {
           <pre className="mt-3 whitespace-pre-wrap break-words font-sans text-sm">{other.data.markdown}</pre>
         </div>}
         <div className="flex flex-wrap gap-2">
-          <Button variant="primary" disabled={resolving.isLoading || !otherId} onClick={() => void choose("current")}>Keep current version</Button>
-          <Button variant="ghost" disabled={resolving.isLoading || other.data?.id !== otherId || other.isFetching} onClick={() => void choose("other")}>Use the other version</Button>
+          <Button variant="primary" disabled={resolving || !otherId} onClick={() => void choose("current")}>Keep current version</Button>
+          <Button variant="ghost" disabled={resolving || other.data?.id !== otherId || other.isFetching} onClick={() => void choose("other")}>Use the other version</Button>
         </div>
       </div>
     </Modal>

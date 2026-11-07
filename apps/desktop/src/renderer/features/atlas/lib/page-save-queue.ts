@@ -38,7 +38,9 @@ export function createPageSaveQueue(options: {
           try {
             const saved = await options.save(snapshot, version);
             version = saved.item.version;
-            dirty = JSON.stringify(draft) !== key;
+            // A conflict discovered during this write still owns the local
+            // draft. Only an explicit reset may discard that recovery copy.
+            dirty = locked || JSON.stringify(draft) !== key;
             options.persist(dirty ? draft : null, version);
           } catch (failure) { error = failure; }
         }

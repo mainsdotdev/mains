@@ -1,16 +1,17 @@
 // @vitest-environment jsdom
-import { createRef, type ReactNode } from "react";
+import { createRef, StrictMode, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AtlasPage } from "@mains/contracts/atlas";
+import type { AtlasPage, AtlasRevisionSummary } from "@mains/contracts/atlas";
 import type { AtlasPendingPageAction } from "../lib/page-actions";
 import { AUTOSAVE_INTERVAL_MS } from "../lib/page-save-queue";
 import AtlasPageEditor, { type AtlasPageEditorHandle } from "./atlas-page-editor";
 
 const mocks = vi.hoisted(() => ({
-  page: null as AtlasPage | null, save: vi.fn(), update: vi.fn(), download: vi.fn(), copy: vi.fn(),
+  page: null as AtlasPage | null, save: vi.fn(), update: vi.fn(), download: vi.fn(), copy: vi.fn(), resolve: vi.fn(), create: vi.fn(), reload: vi.fn(),
   error: vi.fn(), transport: "backend", acknowledged: vi.fn(),
+  restore: vi.fn(), revisions: [] as AtlasRevisionSummary[],
   beforeSend: null as (() => Promise<boolean>) | null,
   onEditorChange: null as (() => void) | null,
   editor: {
@@ -25,13 +26,15 @@ vi.mock("@blocknote/shadcn", () => ({ BlockNoteView: ({ onChange }: { onChange: 
 } }));
 vi.mock("@/lib/redux/api", () => ({ useListCollectionsQuery: () => ({ data: [{ id: "project", name: "Launch" }] }) }));
 vi.mock("@/lib/redux/api/atlasApi", () => ({
-  useAtlasPageQuery: () => ({ data: mocks.page, refetch: async () => ({ data: mocks.page }) }),
-  useAtlasRevisionsQuery: () => ({ data: [] }),
+  useAtlasPageQuery: () => ({ data: mocks.page, refetch: mocks.reload }),
+  useAtlasRevisionsQuery: () => ({ data: mocks.revisions }),
   useSaveAtlasPageMutation: () => [(input: unknown) => ({ unwrap: () => mocks.save(input) })],
   useUpdateAtlasItemMutation: () => [(input: unknown) => ({ unwrap: () => mocks.update(input) })],
   useUploadAtlasFileMutation: () => [vi.fn()],
-  useCreateAtlasPageMutation: () => [vi.fn()],
-  useRestoreAtlasPageMutation: () => [vi.fn(), {}],
+  useCreateAtlasPageMutation: () => [(input: unknown) => ({ unwrap: () => mocks.create(input) })],
+  useRestoreAtlasPageMutation: () => [(input: unknown) => ({ unwrap: () => mocks.restore(input) }), {}],
+  useResolveAtlasConflictMutation: () => [(input: unknown) => ({ unwrap: () => mocks.resolve(input) }), {}],
+  useAtlasRevisionQuery: () => ({ data: { id: "other", title: "Other version", markdown: "Other content" } }),
 }));
 vi.mock("@/lib/transport", () => ({ getTransport: () => mocks.transport, appApi: {} }));
 vi.mock("@/hooks/use-copy-to-clipboard", () => ({ useCopyToClipboard: () => ({ copy: mocks.copy }) }));
@@ -46,12 +49,15 @@ vi.mock("@/components/ui", async (original) => ({
 }));
 
 function Location() { const location = useLocation(); return <output data-testid="route">{location.pathname}{location.search}</output>; }
-function setup(requestedAction?: AtlasPendingPageAction) {
+function setup(requestedAction?: AtlasPendingPageAction, strict = false) {
   const ref = createRef<AtlasPageEditorHandle>();
   const props = { accountId: "account", id: "page", handleRef: ref, onTitleChange: vi.fn(), onActionHandled: mocks.acknowledged };
-  const ui = (request = requestedAction) => <MemoryRouter initialEntries={["/atlas/page"]}>
+  const ui = (request = requestedAction) => {
+    const editor = <>
     <AtlasPageEditor {...props} requestedAction={request} /><Location />
-  </MemoryRouter>;
+    </>;
+    return <MemoryRouter initialEntries={["/atlas/page"]}>{strict ? <StrictMode>{editor}</StrictMode> : editor}</MemoryRouter>;
+  };
   const view = render(ui());
   return { ref, rerender: () => view.rerender(ui()), unmount: view.unmount };
 }
@@ -71,6 +77,11 @@ beforeEach(() => {
   mocks.save.mockImplementation(async (input) => ({ ...mocks.page, item: { ...mocks.page!.item, title: input.title, version: 2 } }));
   mocks.update.mockResolvedValue({});
   mocks.copy.mockResolvedValue(true);
+  mocks.resolve.mockResolvedValue({});
+  mocks.create.mockResolvedValue({ item: { id: "new-page" } });
+  mocks.reload.mockImplementation(async () => ({ data: mocks.page }));
+  mocks.revisions = [];
+  mocks.restore.mockResolvedValue({});
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -131,6 +142,12 @@ describe("Atlas Page menu actions", () => {
     expect(mocks.acknowledged).toHaveBeenCalledOnce();
   });
 
+  it("consumes a requested Trash once when Strict Mode replays effects", async () => {
+    setup({ ownerKey: '["backend","account"]', id: "page", token: "trash-request", action: { type: "trash" } }, true);
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "page", trashed: true }));
+    expect(mocks.acknowledged).toHaveBeenCalledExactlyOnceWith("trash-request");
+  });
+
   it("saves the latest draft before moving the Page to Trash", async () => {
     const { ref } = setup();
     let finish!: (page: AtlasPage) => void;
@@ -162,6 +179,135 @@ describe("Atlas Page menu actions", () => {
     expect(mocks.update).not.toHaveBeenCalled();
     expect(screen.getByTestId("route").textContent).toBe("/atlas/page");
     expect(localStorage.getItem("mains:atlas:draft:account:page")).toContain("Unsaved title");
+  });
+
+  it.each(["backend", "unmount"])("drops a pending Trash after %s changes its owner", async (change) => {
+    const { ref, unmount } = setup();
+    let finish!: (page: AtlasPage) => void;
+    mocks.save.mockImplementationOnce(() => new Promise<AtlasPage>((resolve) => { finish = resolve; }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "My draft" } });
+    let operation!: Promise<void>;
+    act(() => { operation = ref.current!.performAction({ type: "trash" }); });
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledOnce());
+    if (change === "backend") mocks.transport = "other-backend";
+    else unmount();
+    await act(async () => {
+      finish({ ...mocks.page!, item: { ...mocks.page!.item, version: 2 } });
+      await operation;
+    });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("waits for the Trash result (success=%s) before allowing navigation and ignores repeated Trash", async (success) => {
+    const { ref } = setup();
+    let finish!: () => void, fail!: (error: Error) => void;
+    mocks.update.mockImplementationOnce(() => new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; }));
+    let trash!: Promise<void>;
+    act(() => { trash = ref.current!.performAction({ type: "trash" }); });
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledOnce());
+    let ready = false;
+    const navigation = ref.current!.flush().then((saved) => { ready = true; return saved; });
+    await act(async () => { await ref.current!.performAction({ type: "trash" }); });
+    expect(ready).toBe(false);
+    expect(await mocks.beforeSend!()).toBe(false);
+    await act(async () => {
+      if (success) { finish(); await trash; }
+      else { fail(new Error("Trash failed")); await expect(trash).rejects.toThrow("Trash failed"); }
+      expect(await navigation).toBe(success);
+    });
+    expect(mocks.update).toHaveBeenCalledOnce();
+    expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("disabled", success);
+  });
+
+  it("serializes conflict choices through saving and rejects a resolution after the backend changes", async () => {
+    mocks.page!.conflicts = [{ ...mocks.page!.revision, id: "other", title: "Other version" }];
+    setup();
+    let finish!: (page: AtlasPage) => void;
+    mocks.save.mockImplementationOnce(() => new Promise<AtlasPage>((resolve) => { finish = resolve; }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "My draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "View the other version" }));
+    const choose = screen.getByRole("button", { name: "Keep current version" });
+    fireEvent.click(choose);
+    fireEvent.click(choose);
+    await waitFor(() => expect(mocks.save).toHaveBeenCalledOnce());
+    expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("disabled", true);
+    mocks.transport = "other-backend";
+    await act(async () => { finish({ ...mocks.page!, item: { ...mocks.page!.item, version: 2 } }); });
+    expect(mocks.resolve).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Choose a version" })).toBeTruthy();
+  });
+
+  it("does not replace the saved draft with cached data when reloading a resolved conflict fails", async () => {
+    mocks.page!.conflicts = [{ ...mocks.page!.revision, id: "other", title: "Other version" }];
+    setup();
+    mocks.reload.mockResolvedValue({ data: mocks.page, error: { data: "Disconnected" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "My saved draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "View the other version" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep current version" }));
+    await waitFor(() => expect(mocks.reload).toHaveBeenCalledOnce());
+    expect(mocks.resolve).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "page", choice: "current", revisionId: "other", expectedVersion: 2 });
+    expect(mocks.editor.replaceBlocks).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("value", "My saved draft");
+    expect(screen.getByRole("dialog", { name: "Choose a version" })).toBeTruthy();
+    expect(mocks.error).toHaveBeenCalled();
+  });
+
+  it.each(["current", "other"] as const)("resolves the %s branch once at the saved version and applies the confirmed revision", async (choice) => {
+    mocks.page!.conflicts = [{ ...mocks.page!.revision, id: "other", title: "Other version" }];
+    setup();
+    const blocks = [{ type: "paragraph", content: "Resolved content" }];
+    mocks.resolve.mockImplementationOnce(async () => {
+      mocks.page = { ...mocks.page!, item: { ...mocks.page!.item, title: "Resolved", version: 3 },
+        revision: { ...mocks.page!.revision, id: "resolved", version: 3, blocks }, conflicts: [] };
+      return mocks.page;
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "Draft before resolution" } });
+    fireEvent.click(screen.getByRole("button", { name: "View the other version" }));
+    const choose = screen.getByRole("button", { name: choice === "current" ? "Keep current version" : "Use the other version" });
+    fireEvent.click(choose); fireEvent.click(choose);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("value", "Resolved"));
+    expect(mocks.resolve).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "page", choice, revisionId: "other", expectedVersion: 2 });
+    expect(mocks.editor.replaceBlocks).toHaveBeenCalledExactlyOnceWith(mocks.editor.document, blocks);
+    expect(localStorage.getItem("mains:atlas:draft:account:page")).toBeNull();
+  });
+
+  it("restores once at the saved version and ignores its result after the backend changes", async () => {
+    mocks.revisions = [{ ...mocks.page!.revision, id: "older", title: "Older page" }];
+    const { ref } = setup();
+    let finishSave!: (page: AtlasPage) => void, finishRestore!: () => void;
+    mocks.save.mockImplementationOnce(() => new Promise<AtlasPage>((resolve) => { finishSave = resolve; }));
+    mocks.restore.mockImplementationOnce(() => new Promise<void>((resolve) => { finishRestore = resolve; }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "Draft before restore" } });
+    await act(async () => ref.current!.performAction({ type: "history" }));
+    const restore = screen.getByRole("button", { name: "Restore" });
+    fireEvent.click(restore); fireEvent.click(restore);
+    expect(mocks.restore).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("disabled", true);
+    await act(async () => finishSave({ ...mocks.page!, item: { ...mocks.page!.item, version: 2 } }));
+    expect(mocks.restore).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "page", revisionId: "older", expectedVersion: 2 });
+    mocks.transport = "other-backend";
+    await act(async () => finishRestore());
+    expect(mocks.reload).not.toHaveBeenCalled();
+    expect(mocks.editor.replaceBlocks).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("value", "Draft before restore");
+  });
+
+  it("creates one recovery copy and keeps its draft when the backend changes before creation returns", async () => {
+    const { ref } = setup();
+    mocks.save.mockRejectedValueOnce(new Error("Disconnected"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "Keep this draft" } });
+    await act(async () => { expect(await ref.current!.flush()).toBe(false); });
+    let finish!: (page: { item: { id: string } }) => void;
+    mocks.create.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const duplicate = screen.getByRole("button", { name: "Save draft as new page" });
+    fireEvent.click(duplicate);
+    fireEvent.click(duplicate);
+    expect(mocks.create).toHaveBeenCalledOnce();
+    expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("disabled", true);
+    mocks.transport = "other-backend";
+    await act(async () => finish({ item: { id: "new-page" } }));
+    expect(screen.getByTestId("route").textContent).toBe("/atlas/page");
+    expect(localStorage.getItem("mains:atlas:draft:account:page")).toContain("Keep this draft");
   });
 
   it("does not autosave late editor events when a trashed Page closes", async () => {
