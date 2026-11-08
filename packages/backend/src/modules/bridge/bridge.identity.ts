@@ -1,3 +1,4 @@
+import { BridgeAuthCancelledError, createBridgeAuthLifecycle } from "./bridge.auth-lifecycle";
 import { hostname } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import { bridgeApprovalCode, bridgeBase64, bridgeBytes, normalizeBridgeVerificationCode, type BridgeApprovalRequest, type BridgeAuthStatus, type BridgeJoinCode,
@@ -33,35 +34,42 @@ export interface BridgeIdentityOptions {
 export function createBridgeIdentity(options: BridgeIdentityOptions) {
   const vault = createBridgeIdentityStorage(options.dataDir, options.storage);
   const membershipFiles = createBridgeMembershipStorage(options.dataDir);
-  let saved: BridgeSavedIdentity | null = null, state: BridgeAuthStatus["state"] = "signed-out", error: string | null = null;
+  const lifecycle = createBridgeAuthLifecycle();
+  let saved: BridgeSavedIdentity | null = null, error: string | null = null;
   let hub: string | null = null, label = hostname(), code: string | null = null, recoveryCode: string | null = null;
   /** Verified from a pinned head; never trusted from the hub alone. */
   let membership: BridgeVerifiedMembership | null = null;
   /** The view of the replica started last, which every newer pinned history reaches as well. */
   let replica: BridgeMembershipView | null = null;
   let joinCodes: BridgeJoinCode[] = [];
-  let login: BridgeAuthStatus["login"] = null, timer: ReturnType<typeof setTimeout> | undefined, closed = false, running: Promise<void> | undefined;
-  let stopLogin: (() => void) | undefined, deviceCode: string | null = null, interval = 5000, epoch = 0, activated = false;
+  let login: BridgeAuthStatus["login"] = null, timer: ReturnType<typeof setTimeout> | undefined, running: Promise<void> | undefined;
+  let stopLogin: (() => void) | undefined, deviceCode: string | null = null, interval = 5000;
   let requests: BridgeApprovalRequest[] = [], backends: BridgeRegisteredBackend[] = [];
-  let operations: Promise<unknown> = Promise.resolve(), cancelling = false;
-  function exclusive<T>(action: () => Promise<T>): Promise<T> {
-    const next = operations.then(action); operations = next.catch(() => {}); return next;
-  }
+  const exclusive = lifecycle.run;
   const notified = new Set<string>();
-  const notify = () => { if (!closed) options.changed(); };
-  const schedule = (ms = state === "ready" || state === "needs-verification" ? 300_000 : state === "signing-in" ? interval : 5000) => {
+  function cancelLogin() {
     if (timer) clearTimeout(timer); timer = undefined;
-    if (closed || cancelling || state === "revoked" || !saved && !deviceCode) return;
+    stopLogin?.(); stopLogin = undefined; deviceCode = null; login = null; pendingInput = null;
+  }
+  const notify = () => { if (!lifecycle.closed) options.changed(); };
+  const schedule = (ms = lifecycle.state === "ready" || lifecycle.state === "needs-verification" ? 300_000 : lifecycle.state === "signing-in" ? interval : 5000) => {
+    if (timer) clearTimeout(timer); timer = undefined;
+    if (lifecycle.closed || lifecycle.leaving || lifecycle.state === "revoked" || !saved && !deviceCode) return;
     timer = setTimeout(() => { timer = undefined; void refresh(); }, ms); timer.unref();
   };
+  const persist = (value: BridgeSavedIdentity) => lifecycle.checked(() => vault.write(value));
   async function request<T>(path: string, body?: unknown, method?: string): Promise<T> {
+    lifecycle.assert();
     if (!saved) throw new Error("Sign in to Bridge first");
-    return bridgeHttp<T>(saved.hubUrl, path, saved.token, body, method);
+    const identity = saved;
+    return lifecycle.checked(() => bridgeHttp<T>(identity.hubUrl, path, identity.token, body, method));
   }
   const self = (): BridgeMember => ({ backendId: options.backendId, publicKey: saved!.publicKey, signingPublicKey: saved!.signingPublicKey });
   async function fetchMembership(after: number) {
+    lifecycle.assert();
     if (!saved) throw new Error("Sign in to Bridge first");
-    return (await fetchBridgeMembership(saved.hubUrl, saved.token, after)).entries;
+    const identity = saved;
+    return (await lifecycle.checked(() => fetchBridgeMembership(identity.hubUrl, identity.token, after))).entries;
   }
   /** The account's whole log from the hub, verified from genesis; `anchor` must be part of it. */
   async function verifiedRemote(anchor?: BridgeMembershipHead) {
@@ -86,8 +94,8 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
    * already verified past, such as before a removal it made or saw. */
   async function pinMembership(next: BridgeMembershipState, entries: BridgeMembershipEntry[]) {
     membership = { state: next, entries };
-    await membershipFiles.write(saved!.accountId, entries);
-    if (saved!.membership?.seq !== next.seq || saved!.membership.hash !== next.head) { saved!.membership = { seq: next.seq, hash: next.head }; await vault.write(saved!); }
+    await lifecycle.checked(() => membershipFiles.write(saved!.accountId, entries));
+    if (saved!.membership?.seq !== next.seq || saved!.membership.hash !== next.head) { saved!.membership = { seq: next.seq, hash: next.head }; await persist(saved!); }
     replica?.adopt(membership);
     computeJoinCodes();
   }
@@ -96,7 +104,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
   async function syncMembership(offline = false): Promise<BridgeMembershipState> {
     if (!saved?.membership) throw new Error("Bridge account membership is not pinned on this backend");
     if (!membership) {
-      const local = await membershipFiles.read(saved.accountId);
+      const local = await lifecycle.checked(() => membershipFiles.read(saved!.accountId));
       if (local) try { membership = { state: await verifyBridgeMembershipLog(local, verifyBridgeSignature, saved.membership), entries: local as BridgeMembershipEntry[] }; } catch { membership = null; }
       if (!membership && offline) throw new Error("Bridge account membership is unavailable offline");
       if (!membership) {
@@ -104,7 +112,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         const entries = await fetchMembership(-1);
         try { membership = { state: await verifyBridgeMembershipLog(entries, verifyBridgeSignature, saved.membership), entries }; }
         catch (failure) { throw bridgeMembershipConflict(failure); }
-        await membershipFiles.write(saved.accountId, membership.entries);
+        await lifecycle.checked(() => membershipFiles.write(saved!.accountId, membership!.entries));
       }
       computeJoinCodes();
     }
@@ -134,8 +142,10 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     if (refreshAfter) await syncMembership();
   }
   function accountFence(backendId: string) {
-    if (options.accountFence) return options.accountFence(backendId);
-    return pullBridgeAccountFence(new URL("/v1/log", saved!.hubUrl).toString().replace(/^http/, "ws"), saved!.token, backendId);
+    lifecycle.assert();
+    const readFence = options.accountFence;
+    if (readFence) return lifecycle.checked(() => readFence(backendId));
+    return lifecycle.checked(() => pullBridgeAccountFence(new URL("/v1/log", saved!.hubUrl).toString().replace(/^http/, "ws"), saved!.token, backendId));
   }
   /** Removes a member with the fence of its account records, read again on every attempt: the hub derives
    * the list from what it stores and refuses a removal whose fence no longer matches it. Keys its
@@ -188,7 +198,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       const proposed = { ...saved, pendingToken: `b7_${randomBytes(32).toString("hex")}` };
       // Persist before contacting the hub, including before a request whose
       // reply is lost. Retry/restart always proposes the same random token.
-      await vault.write(proposed); saved = proposed;
+      await persist(proposed); saved = proposed;
     }
     const token = saved.pendingToken!, body = { nextTokenHash: createHash("sha256").update(token).digest("hex") };
     let reply: { nextTokenHash: string; expiresAt: number };
@@ -197,27 +207,27 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       if (!(failure instanceof BridgeHttpError && failure.status === 401)) throw failure;
       // Both credentials are already durable. The proposal may have been
       // accepted before an outage outlasted the predecessor's natural expiry.
-      reply = await bridgeHttp(saved.hubUrl, "/v1/backends/refresh", token, body);
+      reply = await lifecycle.checked(() => bridgeHttp<{ nextTokenHash: string; expiresAt: number }>(saved!.hubUrl, "/v1/backends/refresh", token, body));
     }
     if (!reply || reply.nextTokenHash !== body.nextTokenHash || !Number.isSafeInteger(reply.expiresAt) || reply.expiresAt <= Date.now()) throw new Error("Invalid Bridge token renewal response");
     const renewed = { ...saved, token, expiresAt: reply.expiresAt, pendingToken: null };
     // Replication only sees the successor after this write succeeds. A failed
     // write retains the saved proposal and retries the acknowledgement.
-    await vault.write(renewed); saved = renewed;
+    await persist(renewed); saved = renewed;
   }
   /** Requires verified membership from a pinned head; the key must match its genesis commitment. */
   async function activate(key: Uint8Array) {
-    if (!saved || closed || cancelling) throw new Error("Sign-in was cancelled");
+    lifecycle.assert();
+    if (!saved) throw new Error("Sign-in was cancelled");
     if (!membership || bridgeAccountKeyCommitment(key) !== membership.state.accountKeyCommitment) throw new Error("The approved account key does not match this account");
     saved.accountKey = bridgeBase64(key); saved.pendingAccountKey = null; saved.pendingMembership = null; saved.accountInitialized = true;
-    await vault.write(saved); computeJoinCodes();
-    if (closed || cancelling) return;
-    if (!activated) {
+    await persist(saved); computeJoinCodes();
+    if (!lifecycle.activated) {
       const value = config();
-      try { await options.ready(value, saved.includeExisting, saved.activationPending, saved.accountId); activated = true; saved.includeExisting = true; saved.activationPending = false; await vault.write(saved); }
+      try { await lifecycle.checked(() => options.ready(value, saved!.includeExisting, saved!.activationPending, saved!.accountId)); lifecycle.activate(); saved.includeExisting = true; saved.activationPending = false; await persist(saved); }
       finally { value.accountKey.fill(0); value.signingPrivateKey.fill(0); }
     }
-    state = "ready"; error = null; login = null; deviceCode = null; stopLogin = undefined; schedule(); notify();
+    lifecycle.transition("ready"); error = null; login = null; deviceCode = null; stopLogin = undefined; schedule(); notify();
   }
   /** Initializes the account from a proposal saved before it is first sent. A lost reply is then resent
    * unchanged, or found accepted (`accepted`: the hub approved this backend), and never strands the account's
@@ -229,15 +239,15 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         const recovery = await sealBridgeRecovery(key, code);
         const entry = signBridgeMembershipEntry({ accountId: saved!.accountId, seq: -1, head: null }, { kind: "genesis", body: { member: self(),
           recoverySigningPublicKey: recovery.signingPublicKey, accountKeyCommitment: bridgeAccountKeyCommitment(key) } }, deviceSigner(self()), secret);
-        if (closed || cancelling) return;
+        if (lifecycle.closed || lifecycle.leaving) return;
         const proposed = { ...saved!, pendingBootstrap: { accountKey: bridgeBase64(key), recoveryCode: code,
           wrap: sealBridgeAccountKey(key, bridgeBytes(saved!.publicKey, 32)), recovery: recovery.wrap, entry } };
         // Persist before contacting the hub, including before a request whose reply is lost.
-        await vault.write(proposed); saved = proposed;
+        await persist(proposed); saved = proposed;
       } finally { key.fill(0); secret.fill(0); }
     }
     const proposal = saved!.pendingBootstrap!;
-    if (closed || cancelling) return;
+    if (lifecycle.closed || lifecycle.leaving) return;
     // The log must start with exactly the proposed genesis, which only this backend could sign.
     const genesis = await applyBridgeMembershipEntry(null, proposal.entry, verifyBridgeSignature);
     if (!accepted) {
@@ -248,7 +258,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         // backend's genesis rules this proposal out; with its own, it activates once the hub approves it.
         const [first] = await fetchMembership(-1);
         if (first && await bridgeMembershipEntryHash(first as BridgeMembershipEntry) !== genesis.head) {
-          const declined = { ...saved!, pendingBootstrap: null }; await vault.write(declined); saved = declined;
+          const declined = { ...saved!, pendingBootstrap: null }; await persist(declined); saved = declined;
           return;
         }
         if ((await request<Mine>("/v1/keys/mine")).backend.status !== "approved") throw failure;
@@ -264,22 +274,22 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     if (saved?.accountKey) await update().catch(() => {});
   }
   async function update() {
-    if (!saved || closed || cancelling) return;
+    if (!saved || lifecycle.closed || lifecycle.leaving) return;
     if (saved.pendingToken) await renewToken();
     const mine = await request<Mine>("/v1/keys/mine");
     if (mine.accountId !== saved.accountId || mine.backend.backendId !== options.backendId || mine.backend.publicKey !== saved.publicKey || mine.backend.signingPublicKey !== saved.signingPublicKey)
       throw new Error("Backend identity changed; sign in again");
     if (typeof mine.initialized !== "boolean") throw new Error("Invalid Bridge account initialization state");
-    if (mine.initialized && !saved.accountInitialized) { saved.accountInitialized = true; await vault.write(saved); }
+    if (mine.initialized && !saved.accountInitialized) { saved.accountInitialized = true; await persist(saved); }
     if (saved.accountKey) {
       // A locally trusted key is never replaced by a hub-provided wrap/verifier.
       if (mine.backend.status !== "approved") throw new Error("Backend approval changed; sign in again");
       const members = await syncMembership();
       if (!sameMember(bridgeMember(members, options.backendId), self())) throw new Error("This backend was removed from the account; sign out and sign in again");
-      if (!activated) {
+      if (!lifecycle.activated) {
         const key = bridgeBytes(saved.accountKey, 32);
         try { await activate(key); } finally { key.fill(0); }
-      } else { state = "ready"; error = null; }
+      } else { lifecycle.transition("ready"); error = null; }
       if (saved.expiresAt - Date.now() < 7 * 24 * 60 * 60 * 1000) {
         // Do not let an older hub issue a different, server-generated token
         // which this client cannot safely acknowledge as its own proposal.
@@ -312,34 +322,37 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
           const encoded = bridgeBase64(key), head = { seq: admitted!.from, hash: remote.state.hashes[admitted!.from] };
           if (saved.pendingAccountKey && (saved.pendingAccountKey !== encoded || saved.pendingMembership?.hash !== head.hash))
             throw new Error("Account key or membership changed during verification; disconnect and try again");
-          if (!saved.pendingAccountKey) { saved.pendingAccountKey = encoded; saved.pendingMembership = head; await vault.write(saved); }
-          state = "needs-verification"; error = null; login = null; notify();
+          if (!saved.pendingAccountKey) { saved.pendingAccountKey = encoded; saved.pendingMembership = head; await persist(saved); }
+          lifecycle.transition("needs-verification"); error = null; login = null; notify();
         } finally { key.fill(0); }
       } finally { secret.fill(0); }
       return;
     }
     // An untrusted status/initialized flag cannot reset an in-progress comparison.
-    if (saved.pendingAccountKey) { state = "needs-verification"; return; }
+    if (saved.pendingAccountKey) { lifecycle.transition("needs-verification"); return; }
     login = null;
     if (!mine.initialized) {
       if (saved.accountInitialized) throw new Error("Account keys disappeared; use recovery or disconnect instead of creating a new key");
       await bootstrap(false);
       return;
     }
-    state = "needs-approval";
+    lifecycle.transition("needs-approval");
     if (!mine.approval) await request("/v1/approvals", {});
     else if (mine.approval.status === "rejected") error = "This backend's approval request was declined";
     else if (mine.approval.expires_at <= Date.now()) error = "Approval expired; request access again";
     notify();
   }
   async function complete(token: string, input: BridgeSignInInput, generation: number) {
-    if (generation !== epoch || closed) return;
+    if (!lifecycle.current(generation)) {
+      await bridgeHttp(hub!, "/api/auth/sign-out", token, {}).catch(() => {});
+      return;
+    }
     const pair = generateBridgeDeviceKeyPair(), signing = generateBridgeSigningKeyPair();
     const publicKey = bridgeBase64(pair.publicKey), signingPublicKey = bridgeBase64(signing.publicKey);
     try {
       const registered = await bridgeHttp<{ accountId: string; email: string; token: string; expiresAt: number; backend: BridgeRegisteredBackend }>(hub!, "/v1/backends", token,
         { backendId: options.backendId, publicKey, signingPublicKey, label, platform: process.platform });
-      if (generation !== epoch || closed) {
+      if (generation !== lifecycle.generation || lifecycle.closed) {
         await bridgeHttp(hub!, `/v1/backends/${encodeURIComponent(options.backendId)}`, registered.token, undefined, "DELETE").catch(() => {});
         return;
       }
@@ -349,14 +362,14 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         const candidate: BridgeSavedIdentity = { v: 3, backendId: options.backendId, hubUrl: hub!, label, accountId: registered.accountId, email: registered.email,
           publicKey, privateKey: bridgeBase64(pair.secretKey), signingPublicKey, signingPrivateKey: bridgeBase64(signing.secretKey), token: registered.token, expiresAt: registered.expiresAt,
           accountKey: null, includeExisting: input.includeExisting, activationPending: true };
-        await vault.write(candidate); saved = candidate;
+        await persist(candidate); saved = candidate;
       } catch (failure) {
         // Use the issued device credential and the requested id, never a
         // substituted response id or the browser session, to revoke this attempt.
         await bridgeHttp(hub!, `/v1/backends/${encodeURIComponent(options.backendId)}`, registered.token, undefined, "DELETE").catch(() => {});
         throw failure;
       }
-      code = await bridgeApprovalCode(saved); state = "signing-in"; login = null; deviceCode = null;
+      code = await bridgeApprovalCode(saved); lifecycle.transition("signing-in"); login = null; deviceCode = null;
       await update(); schedule();
     } finally {
       pair.secretKey.fill(0); signing.secretKey.fill(0);
@@ -387,11 +400,11 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       ? { contested: "The Bridge hub refused this backend although the account log still lists it; sync waits until it is admitted again" } : "removed";
   }
   async function refresh(afterCurrent = false): Promise<void> {
-    if (closed) return;
+    if (lifecycle.closed || lifecycle.leaving) return;
     // A notification received during a stale HTTP snapshot must run once more
     // afterwards, rather than disappear until the five-minute fallback.
     if (running) return afterCurrent ? running.catch(() => {}).then(() => refresh()) : running;
-    const generation = epoch;
+    const generation = lifecycle.generation;
     running = exclusive(async () => {
       try {
         if (saved) await update();
@@ -401,7 +414,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
           await complete(token.access_token, pendingInput!, generation);
         }
       } catch (failure) {
-        if (generation !== epoch || closed) return;
+        if (generation !== lifecycle.generation || lifecycle.closed) return;
         if (failure instanceof BridgeHttpError && /authorization_pending|slow_down/i.test(failure.code ?? failure.message)) { if (/slow_down/i.test(failure.code ?? failure.message)) interval += 5000; }
         else if (failure instanceof BridgeHttpError && failure.status === 401 && saved) {
           // A refusal the log contradicts is reported like any other failure: nothing is forgotten, the hub
@@ -411,20 +424,22 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
           else {
             // Either way this credential is finished; only a verified removal also forgets the account key.
             // A kept key is judged again when the app restarts.
-            if (verdict === "removed") { saved.accountKey = null; saved.pendingAccountKey = null; saved.pendingMembership = null; saved.pendingToken = null; await vault.write(saved); }
-            state = "revoked"; joinCodes = []; await options.revoked(); activated = false;
+            if (verdict === "removed") { saved.accountKey = null; saved.pendingAccountKey = null; saved.pendingMembership = null; saved.pendingToken = null; await persist(saved); }
+            lifecycle.revoke(); joinCodes = []; await lifecycle.checked(() => options.revoked());
             error = verdict === "removed" ? "Backend access expired or was revoked; sign out and sign in again"
               : "The Bridge hub refused this backend and its account log; the account key is kept. Sign out and sign in again";
           }
-        } else { error = failure instanceof Error ? failure.message : "Bridge sign-in failed"; if (!saved) state = "error"; }
-      } finally { if (generation === epoch && !closed) { notify(); schedule(); } }
+        } else { error = failure instanceof Error ? failure.message : "Bridge sign-in failed"; if (!saved) lifecycle.transition("error"); }
+      } finally { if (generation === lifecycle.generation && !lifecycle.closed) { notify(); schedule(); } }
     });
-    try { await running; } finally { running = undefined; }
+    try { await running; }
+    catch (failure) { if (!(failure instanceof BridgeAuthCancelledError)) throw failure; }
+    finally { running = undefined; }
   }
   let pendingInput: BridgeSignInInput | null = null;
   const api = {
-    async start() {
-      saved = await vault.read();
+    async start() { return exclusive(async () => {
+      saved = await lifecycle.checked(() => vault.read());
       // The hub was reset with the membership log, so an identity from before it can only be replaced.
       if (!saved) { if (vault.superseded) { error = "Bridge was reset in this version of Mains. Sign in again to sync this backend."; notify(); } return; }
       if (saved.backendId !== options.backendId) throw new Error("Bridge identity does not match this backend");
@@ -434,32 +449,51 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       if (saved.accountKey) {
         try { await syncMembership(true); } catch { membership = null; }
         if (membership) { const key = bridgeBytes(saved.accountKey, 32); try { await activate(key); } finally { key.fill(0); } }
-        else state = "signing-in"; // The first update verifies the pinned history from the hub, then activates.
+        else lifecycle.transition("signing-in"); // The first update verifies the pinned history from the hub, then activates.
       }
-      else if (saved.pendingAccountKey) state = "needs-verification";
-      else state = "needs-approval";
+      else if (saved.pendingAccountKey) lifecycle.transition("needs-verification");
+      else lifecycle.transition("needs-approval");
       schedule(0); notify();
-    },
+    }); },
     async signIn(input: BridgeSignInInput) { return exclusive(async () => {
-      if (saved || state === "signing-in") throw new Error("Bridge sign-in is already active");
+      if (saved) throw new Error("Bridge sign-in is already active");
       if (typeof input.includeExisting !== "boolean") throw new Error("Choose whether to sync existing history");
       if (!options.storage.isEncryptionAvailable()) throw new Error("Secure key storage is unavailable");
-      stopLogin?.(); stopLogin = undefined; if (timer) clearTimeout(timer); deviceCode = null; login = null;
-      epoch++; hub = bridgeHubUrl(input.hubUrl); label = input.label?.trim() || hostname();
-      if (label.length > 128 || [...label].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) throw new Error("Backend name is too long or invalid");
-      pendingInput = input; error = null; state = "signing-in"; const generation = epoch;
+      const nextHub = bridgeHubUrl(input.hubUrl), nextLabel = input.label?.trim() || hostname();
+      if (nextLabel.length > 128 || [...nextLabel].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) throw new Error("Backend name is too long or invalid");
+      lifecycle.beginLogin(); cancelLogin(); hub = nextHub; label = nextLabel;
+      pendingInput = input; error = null; const generation = lifecycle.generation;
       try {
       if (input.flow === "loopback" && options.kind === "electron") {
-        const listener = await startBridgeLoopback(hub, (token) => exclusive(() => complete(token, input, generation)), (failure) => { if (generation !== epoch || closed) return; error = failure instanceof Error ? failure.message : "Sign-in failed"; state = "error"; notify(); });
+        const loginHub = hub;
+        const listener = await startBridgeLoopback(hub, async (token) => {
+          try { await exclusive(() => complete(token, input, generation)); }
+          catch (failure) {
+            if (failure instanceof BridgeAuthCancelledError) await bridgeHttp(loginHub, "/api/auth/sign-out", token, {}).catch(() => {});
+            throw failure;
+          }
+        }, (failure) => {
+          if (!lifecycle.current(generation)) return;
+          void exclusive(async () => {
+            if (!lifecycle.current(generation)) return;
+            error = failure instanceof Error ? failure.message : "Sign-in failed"; lifecycle.transition("error"); notify();
+          }).catch(() => {});
+        });
+        if (!lifecycle.current(generation)) { listener.close(); throw new BridgeAuthCancelledError(); }
         stopLogin = listener.close; login = { url: listener.url, code: null, expiresAt: listener.expiresAt };
-        await options.openExternal(listener.url);
+        await lifecycle.checked(() => options.openExternal(listener.url));
       } else {
-        const auth = await startBridgeDeviceLogin(hub); deviceCode = auth.device_code; interval = Math.max(5000, auth.interval * 1000);
+        const auth = await lifecycle.checked(() => startBridgeDeviceLogin(nextHub));
+        if (generation !== lifecycle.generation || lifecycle.closed || lifecycle.leaving) throw new Error("Sign-in was cancelled");
+        deviceCode = auth.device_code; interval = Math.max(5000, auth.interval * 1000);
         login = { url: auth.verification_uri_complete, code: auth.user_code, expiresAt: new Date(Date.now() + auth.expires_in * 1000).toISOString() };
         schedule(interval);
       }
       notify(); return api.status();
-      } catch (failure) { stopLogin?.(); stopLogin = undefined; state = "error"; error = failure instanceof Error ? failure.message : "Sign-in failed"; notify(); throw failure; }
+      } catch (failure) {
+        if (generation !== lifecycle.generation || lifecycle.closed || lifecycle.leaving) throw failure;
+        stopLogin?.(); stopLogin = undefined; lifecycle.transition("error"); error = failure instanceof Error ? failure.message : "Sign-in failed"; notify(); throw failure;
+      }
     }); },
     status(): Omit<BridgeAuthStatus, "existing"> {
       // A signed removal takes effect before the hub's registration snapshot
@@ -468,19 +502,20 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         backend.status === "approved" && !sameMember(bridgeMember(membership!.state, backend.backendId), backend)
           ? { ...backend, status: "revoked" as const }
           : backend) : backends;
-      return { state, hubUrl: hub, accountId: saved?.accountId ?? null, email: saved?.email ?? null, backendId: options.backendId,
-        label, verificationCode: state === "needs-approval" ? code : null,
-        joinCodes: state === "ready" ? joinCodes : [], login, approvals: requests, backends: devices, recoveryCodeAvailable: recoveryCode !== null, error };
+      return { state: lifecycle.state, hubUrl: hub, accountId: saved?.accountId ?? null, email: saved?.email ?? null, backendId: options.backendId,
+        label, verificationCode: lifecycle.state === "needs-approval" ? code : null,
+        joinCodes: lifecycle.canUseCredentials(!!saved?.accountKey) && lifecycle.state === "ready" ? joinCodes : [], login, approvals: requests, backends: devices,
+        recoveryCodeAvailable: lifecycle.canUseCredentials(!!saved?.accountKey) && recoveryCode !== null, error };
     },
-    token(): string { if (!saved?.accountKey || state === "revoked") throw new Error("Bridge backend approval is required"); return saved.token; },
+    token(): string { if (!lifecycle.canUseCredentials(!!saved?.accountKey)) throw new Error("Bridge backend approval is required"); return saved!.token; },
     refresh,
     async requestApproval() { return exclusive(async () => {
-      if (state !== "needs-approval") throw new Error("This device is not waiting for approval");
+      lifecycle.require("requestApproval");
       await request("/v1/approvals", {}); error = null; await update(); notify();
     }); },
     async approve(input: Pick<BridgeApprovalRequest, "requestId" | "backendId" | "publicKey" | "signingPublicKey" | "code">) { return exclusive(async () => {
-      if (closed || cancelling) throw new Error("Sign-in was cancelled");
-      if (!saved?.accountKey || state !== "ready") throw new Error("Backend approval is required");
+      lifecycle.require("approve");
+      if (!saved?.accountKey) throw new Error("Backend approval is required");
       const supplied = normalizeBridgeVerificationCode(input.code), expected = await bridgeApprovalCode({ ...input, accountId: saved.accountId });
       if (supplied !== expected) throw new Error("The approval codes do not match");
       const pending = requests.find((entry) => entry.requestId === input.requestId);
@@ -502,8 +537,8 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     /** Confirms the join code shown by the approving device, which binds the offered key to the exact
      * membership entry that admitted this backend. */
     async confirmAccountKey(joinCode: string) { return exclusive(async () => {
-      if (closed || cancelling) throw new Error("Sign-in was cancelled");
-      if (!saved?.pendingAccountKey || !saved.pendingMembership || saved.accountKey || state !== "needs-verification") throw new Error("No account key is waiting for verification");
+      lifecycle.require("verify");
+      if (!saved?.pendingAccountKey || !saved.pendingMembership || saved.accountKey) throw new Error("No account key is waiting for verification");
       const supplied = normalizeBridgeVerificationCode(joinCode), key = bridgeBytes(saved.pendingAccountKey, 32);
       try {
         if (supplied !== bridgeJoinCode(key, saved.accountId, options.backendId, saved.pendingMembership.hash)) throw new Error("Join codes do not match; do not enable sync");
@@ -531,19 +566,20 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       }
       else if (leaving) await removeSelf();
       else await request(path, undefined, "DELETE");
-      if (leaving && saved) { saved.accountKey = null; saved.pendingAccountKey = null; saved.pendingMembership = null; saved.pendingToken = null; joinCodes = []; await vault.write(saved); state = "revoked"; activated = false; await options.revoked(); }
+      if (leaving && saved) { saved.accountKey = null; saved.pendingAccountKey = null; saved.pendingMembership = null; saved.pendingToken = null; joinCodes = []; await persist(saved); lifecycle.revoke(); await lifecycle.checked(() => options.revoked()); }
       else await update(); notify();
     }); },
     async enterRecoveryCode(value: string) { return exclusive(async () => {
-      if (!saved || state !== "needs-approval" && state !== "needs-verification") throw new Error("Sign in on the new backend first");
+      lifecycle.require("recover");
+      if (!saved) throw new Error("Sign in on the new backend first");
       const keys = await request<BridgeAccountKeys>("/v1/keys/recovery"), opened = await openBridgeRecovery(keys.recovery, value);
       try {
         // With no member to compare against, recovery trusts the newest history the hub presents.
         let remote = await verifiedRemote();
         if (bridgeAccountKeyCommitment(opened.accountKey) !== remote.state.accountKeyCommitment) throw new Error("Recovery key does not match the account");
         if (opened.signingPublicKey !== remote.state.recoverySigningPublicKey) throw new Error("This recovery code was replaced; use the account's current recovery code");
-        if (state === "needs-verification" && saved.pendingAccountKey !== bridgeBase64(opened.accountKey)) throw new Error("Recovery key does not match the key offered to this backend");
-        if (state === "needs-approval") {
+        if (lifecycle.state === "needs-verification" && saved.pendingAccountKey !== bridgeBase64(opened.accountKey)) throw new Error("Recovery key does not match the key offered to this backend");
+        if (lifecycle.state === "needs-approval") {
           const authority: BridgeMembershipSigner = { kind: "recovery", signingPublicKey: opened.signingPublicKey };
           for (let attempt = 0; ; attempt++) {
             // A retry after a lost response finds this backend already admitted and only uploads its wrap.
@@ -560,9 +596,10 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         await activate(opened.accountKey); await update(); notify();
       } finally { opened.accountKey.fill(0); opened.signingSecret.fill(0); }
     }); },
-    takeRecoveryCode() { if (closed || cancelling || state !== "ready") return null; const result = recoveryCode; recoveryCode = null; notify(); return result; },
+    takeRecoveryCode() { if (!lifecycle.canUseCredentials(!!saved?.accountKey) || lifecycle.state !== "ready") return null; const result = recoveryCode; recoveryCode = null; notify(); return result; },
     /** Replaces the code together with the recovery authority derived from it. */
     async regenerateRecoveryCode() { return exclusive(async () => {
+      lifecycle.require("approve");
       if (!saved?.accountKey) throw new Error("Backend approval is required");
       const generated = generateBridgeRecoveryCode(), key = bridgeBytes(saved.accountKey, 32);
       try {
@@ -572,25 +609,31 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         recoveryCode = null; notify(); return generated;
       } finally { key.fill(0); }
     }); },
+    /** Fence auth before the service pauses replication/preserves local files. */
+    prepareSignOut() { lifecycle.fence(); cancelLogin(); },
     async signOut(logout: { skipRevoke?: boolean } = {}) {
-      epoch++; cancelling = true; if (timer) clearTimeout(timer); stopLogin?.(); stopLogin = undefined; deviceCode = null; login = null;
-      return exclusive(async () => {
+      api.prepareSignOut();
+      const leaving = lifecycle.leave(async () => {
         try {
-          epoch++;
-          if (!logout.skipRevoke && saved && state !== "revoked" && saved.expiresAt > Date.now()) {
-            // A member leaves the account through its own signed, fenced removal. A hub that refuses this
-            // backend, or serves another history, cannot take that removal, so leaving stays local.
+          if (!logout.skipRevoke && saved && lifecycle.state !== "revoked" && saved.expiresAt > Date.now()) {
             try { await removeSelf(); }
             catch (failure) { if (!(failure instanceof BridgeHttpError && failure.status === 401 || failure instanceof BridgeMembershipConflictError)) throw failure; }
           }
           await options.revoked(); await vault.remove(); await membershipFiles.remove();
-          saved = null; membership = null; joinCodes = []; recoveryCode = null; activated = false;
-          if (timer) clearTimeout(timer);
-          requests = []; backends = []; error = null; state = "signed-out"; notify();
-        } finally { cancelling = false; if (saved) schedule(); }
+          saved = null; membership = null; joinCodes = []; recoveryCode = null;
+          requests = []; backends = []; error = null;
+        } catch (failure) {
+          error = failure instanceof Error ? failure.message : "Sign-out cleanup failed; retry signing out";
+          throw failure;
+        } finally { notify(); }
       });
+      await leaving; notify();
     },
-    async stop() { closed = true; epoch++; if (timer) clearTimeout(timer); stopLogin?.(); await operations; saved = null; membership = null; joinCodes = []; recoveryCode = null; },
+    async stop() {
+      const stopped = lifecycle.stop();
+      cancelLogin();
+      await stopped; saved = null; membership = null; joinCodes = []; recoveryCode = null;
+    },
   };
   return api;
 }

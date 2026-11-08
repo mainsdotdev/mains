@@ -47,6 +47,7 @@ function logoutState() {
 }
 async function finishLogout() {
   const state = logoutState(); if (!state?.logout_pending) return;
+  identity!.prepareSignOut();
   await replicator?.pause();
   await replicator?.preserveAccountFiles();
   await identity!.signOut({ skipRevoke: !!state.logout_revoked });

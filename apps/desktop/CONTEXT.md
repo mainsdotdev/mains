@@ -250,6 +250,20 @@ decrypted key directly, independently of later hub wraps, and signs with the
 recovery key derived from the code, so a removed backend holding only the account
 key cannot re-admit itself. See the untrusted-hub tests in
 `bridge.identity.test.ts` and the ceremony in `docs/design/bridge.md`.
+`bridge.auth-lifecycle.ts` owns auth action eligibility, serial operation ownership,
+activation, and the separate `active` → `leaving` → `active`/`stopped` lifetime.
+Sign-out fences active and queued work before replication pauses or shared files
+are preserved. HTTP, protected-storage and ready callbacks check their captured
+operation before starting I/O and after it settles; retired continuations cannot
+admit devices, publish renewed credentials or activate another session. Repeated
+sign-outs share cleanup. Failed cleanup retains the protected identity but keeps
+credentials, polling, approval and recovery actions fenced until an explicit
+retry succeeds. Stop retires the owner permanently and drains accepted work.
+Browser listeners close on cancellation, and late device/browser login sessions
+are signed out without registering a backend. Credential renewal still persists
+the same random successor before proposing it and publishes only a validated,
+durable acknowledgement. Approval and recovery-authority changes require ready
+trust; neither a lost socket nor an unverified hub snapshot proves key removal.
 `bridge.identity-storage` encrypts the credential and private keys using the
 host secret-storage adapter, never plaintext fallback. Only public identity
 state reaches the renderer; recovery values use imperative calls outside Redux
