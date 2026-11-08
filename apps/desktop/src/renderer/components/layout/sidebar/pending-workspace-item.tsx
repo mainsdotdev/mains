@@ -15,6 +15,7 @@ export default function PendingWorkspaceItem({
 }) {
   const failed = clone.status === "failed";
   const canceling = clone.status === "canceling";
+  const completing = clone.status === "completing";
 
   return (
     <div className="rounded-xl px-2 py-1">
@@ -31,7 +32,7 @@ export default function PendingWorkspaceItem({
             {clone.name}
           </Text>
           <Text as="span" size="xxs" tone={failed ? "danger" : "faint"} className="shrink-0">
-            {failed ? "Clone failed" : canceling ? "Canceling…" : "Cloning…"}
+            {failed ? "Clone failed" : canceling ? "Canceling…" : completing ? "Finishing…" : "Cloning…"}
           </Text>
         </div>
         {failed ? (
@@ -44,7 +45,7 @@ export default function PendingWorkspaceItem({
             </Button>
           </div>
         ) : (
-          <Button variant="icon" iconSize="xs" tooltip="Cancel" aria-label={`Cancel cloning ${clone.name}`} disabled={canceling} onClick={onCancel}>
+          <Button variant="icon" iconSize="xs" tooltip="Cancel" aria-label={`Cancel cloning ${clone.name}`} disabled={canceling || completing} onClick={onCancel}>
             <Close className="size-3.5" />
           </Button>
         )}

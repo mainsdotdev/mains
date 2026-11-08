@@ -6,7 +6,7 @@ import path from "path";
 import { CHANNELS } from "@mains/contracts/channels";
 import { emit } from "../../ipc-kit";
 import { workspaceRepo } from "./workspace.repo";
-import { cloneWorkspaceRepository, cancelWorkspaceClone } from "./workspace-clone";
+import { withWorkspaceIntake, cancelWorkspaceClone } from "./workspace-intake-lifecycle";
 import { projectsRepo } from "../projects/projects.repo";
 import { normalizeRemoteOrigin } from "../projects/projects.utils";
 import { gitService, type DiffSnapshot } from "../git";
@@ -243,6 +243,7 @@ function deriveWorkspacesPath(worktreePath: string): string {
  * rootPath when origin-less). Mirrors `projectsService.findOrCreate`, kept
  * here against `projectsRepo` to avoid a workspace ↔ projects service cycle.
  */
+const projectIntakes = new Map<string, Promise<ProjectResponse>>();
 async function findOrCreateProject(
   payload: CreateProjectPayload,
 ): Promise<ProjectResponse> {
@@ -250,19 +251,28 @@ async function findOrCreateProject(
     ? normalizeRemoteOrigin(payload.remoteOrigin)
     : null;
 
-  const existing = normalized
-    ? await projectsRepo.findByRemoteOrigin(payload.accountId, normalized)
-    : await projectsRepo.findByAccountAndRootPath(
-        payload.accountId,
-        payload.rootPath,
-      );
-  if (existing) return existing;
+  const key = JSON.stringify([payload.accountId, normalized ? ["origin", normalized] : ["path", payload.rootPath]]);
+  const pending = projectIntakes.get(key);
+  if (pending) return pending;
+  const creating = (async () => {
+    const existing = normalized
+      ? await projectsRepo.findByRemoteOrigin(payload.accountId, normalized)
+      : await projectsRepo.findByAccountAndRootPath(
+          payload.accountId,
+          payload.rootPath,
+        );
+    if (existing) return existing;
 
-  const id = randomUUID();
-  await projectsRepo.insert({ ...payload, id, remoteOrigin: normalized });
-  const project = await projectsRepo.findById(id);
-  if (!project) throw new Error("Failed to retrieve created project");
-  return project;
+    const id = randomUUID();
+    await projectsRepo.insert({ ...payload, id, remoteOrigin: normalized });
+    const project = await projectsRepo.findById(id);
+    if (!project) throw new Error("Failed to retrieve created project");
+    return project;
+  })();
+  projectIntakes.set(key, creating);
+  const release = () => { if (projectIntakes.get(key) === creating) projectIntakes.delete(key); };
+  void creating.then(release, release);
+  return creating;
 }
 
 interface MetadataParts {
@@ -673,188 +683,200 @@ export const workspaceService = {
   async createFromSource(
     payload: WorkspaceIntakePayload,
   ): Promise<WorkspaceResponse> {
-    const { accountId, source } = payload;
+    return withWorkspaceIntake(payload, async ({ accountId, source, acquireClone, prepareRegistration, workspaceId, resumingRegistration }) => {
 
-    // Every branch below ends here: write the row, then record the repo's
-    // starting diff before the workspace reaches the renderer, so its first
-    // Changes read already has one. `captureInitialDiff` swallows its own
-    // failures — intake is done once `create` returns.
-    const completeIntake = async (input: CreateWorkspacePayload) => {
-      const workspace = await this.create(input);
-      await captureInitialDiff(workspace);
-      return workspace;
-    };
+      // Every branch below ends here: write the row, then record the repo's
+      // starting diff before the workspace reaches the renderer, so its first
+      // Changes read already has one. `captureInitialDiff` swallows its own
+      // failures — intake is done once `create` returns.
+      const completeIntake = async (input: CreateWorkspacePayload) => {
+        const existing = resumingRegistration ? await workspaceRepo.findById(workspaceId) : null;
+        if (existing) {
+          assertOwnedRecord("workspaces", existing.id);
+          if (existing.accountId !== accountId || existing.projectId !== input.projectId || existing.rootPath !== input.rootPath || existing.isArchived) {
+            throw new Error("The acquired workspace changed; restore it before retrying intake");
+          }
+        }
+        const workspace = existing ?? await this.create({ ...input, id: workspaceId });
+        await captureInitialDiff(workspace);
+        return workspace;
+      };
 
-    // ── init: brand-new empty repo. Always direct, no remote. ──
-    if (source.kind === "init") {
-      const init = await gitService.initRepo(source.name, source.parentPath);
-      const project = await findOrCreateProject({
-        accountId,
-        name: source.name,
-        rootPath: init.rootPath,
-        defaultBranch: "main",
-        branches: ["main"],
-      });
-      return completeIntake({
-        accountId,
-        name: source.name,
-        rootPath: init.rootPath,
-        baseBranch: "main",
-        metadata: buildMetadata({
-          tracking: null,
-          ahead: 0,
-          behind: 0,
-          originUrl: null,
-          worktree: null,
-        }),
-        projectId: project.id,
-      });
-    }
+      const input = await prepareRegistration(async () => {
+        // ── init: brand-new empty repo. Always direct, no remote. ──
+        if (source.kind === "init") {
+          const init = await gitService.initRepo(source.name, source.parentPath);
+          const project = await findOrCreateProject({
+            accountId,
+            name: source.name,
+            rootPath: init.rootPath,
+            defaultBranch: "main",
+            branches: ["main"],
+          });
+          return {
+            accountId,
+            name: source.name,
+            rootPath: init.rootPath,
+            baseBranch: "main",
+            metadata: buildMetadata({
+              tracking: null,
+              ahead: 0,
+              behind: 0,
+              originUrl: null,
+              worktree: null,
+            }),
+          projectId: project.id,
+        };
+        }
 
-    // ── worktree: an additional worktree workspace for an existing project.
-    // The project already exists, so find-or-create is a lookup. ──
-    if (source.kind === "worktree") {
-      assertOwnedRecord("projects", source.projectId);
-      const project = await projectsRepo.findById(source.projectId);
-      if (!project) throw new Error("Project not found");
-      const baseBranch =
-        project.defaultBranch ??
-        (await gitService.getDefaultBranch(project.rootPath));
-      if (!project.defaultBranch) {
-        await projectsRepo.update(project.id, { defaultBranch: baseBranch });
-      }
+        // ── worktree: an additional worktree workspace for an existing project.
+        // The project already exists, so find-or-create is a lookup. ──
+        if (source.kind === "worktree") {
+          assertOwnedRecord("projects", source.projectId);
+          const project = await projectsRepo.findById(source.projectId);
+          if (!project) throw new Error("Project not found");
+          if (project.accountId !== accountId) throw new Error("Project does not belong to this account");
+          const baseBranch =
+            project.defaultBranch ??
+            (await gitService.getDefaultBranch(project.rootPath));
+          if (!project.defaultBranch) {
+            await projectsRepo.update(project.id, { defaultBranch: baseBranch });
+          }
 
-      const imported = await gitService.importLocalRepo(
-        project.rootPath,
-        {
-          projectName: project.name,
-          baseBranch,
-        },
-      );
-      if (!project.workspacesPath) {
-        await projectsRepo.update(project.id, {
-          workspacesPath: deriveWorkspacesPath(imported.worktreePath),
-        });
-      }
-      return completeIntake({
-        accountId,
-        name: project.name,
-        rootPath: imported.worktreePath,
-        repoUrl: imported.originUrl ?? project.remoteOrigin ?? undefined,
-        baseBranch,
-        metadata: buildMetadata({
-          tracking: imported.tracking,
-          ahead: imported.ahead,
-          behind: imported.behind,
-          originUrl: imported.originUrl ?? project.remoteOrigin ?? null,
-          worktree: {
-            name: imported.worktreeName,
-            path: imported.worktreePath,
-            sourcePath: project.rootPath,
-          },
-        }),
-        projectId: project.id,
-      });
-    }
+          const imported = await gitService.importLocalRepo(
+            project.rootPath,
+            {
+              projectName: project.name,
+              baseBranch,
+            },
+          );
+          if (!project.workspacesPath) {
+            await projectsRepo.update(project.id, {
+              workspacesPath: deriveWorkspacesPath(imported.worktreePath),
+            });
+          }
+          return {
+            accountId,
+            name: project.name,
+            rootPath: imported.worktreePath,
+            repoUrl: imported.originUrl ?? project.remoteOrigin ?? undefined,
+            baseBranch,
+            metadata: buildMetadata({
+              tracking: imported.tracking,
+              ahead: imported.ahead,
+              behind: imported.behind,
+              originUrl: imported.originUrl ?? project.remoteOrigin ?? null,
+              worktree: {
+                name: imported.worktreeName,
+                path: imported.worktreePath,
+                sourcePath: project.rootPath,
+              },
+            }),
+          projectId: project.id,
+        };
+        }
 
-    // ── folder / clone: obtain a local repo path, then import it. ──
-    const sourcePath =
-      source.kind === "clone"
-        ? (await cloneWorkspaceRepository(accountId, source))
-            .clonedPath
-        : source.path;
-    // Seed name for a *new* project only. The workspace is named after the
-    // project that find-or-create resolves to, so a second checkout of an
-    // already-imported repo (a worktree folder, a sibling clone) shows the
-    // project's name, not its folder's.
-    const name = basename(sourcePath);
+        // ── folder / clone: obtain a local repo path, then import it. ──
+        const sourcePath =
+          source.kind === "clone"
+            ? (await acquireClone())
+                .clonedPath
+            : source.path;
+        // Seed name for a *new* project only. The workspace is named after the
+        // project that find-or-create resolves to, so a second checkout of an
+        // already-imported repo (a worktree folder, a sibling clone) shows the
+        // project's name, not its folder's.
+        const name = basename(sourcePath);
 
-    // A picked folder can be anything — reject non-repos before any DB
-    // write, or the worktree path below would leave an orphan project row
-    // (it creates the project before the import can fail).
-    if (source.kind === "folder" && !(await gitService.isGitRepo(sourcePath))) {
-      throw new Error("Not a git repository");
-    }
+        // A picked folder can be anything — reject non-repos before any DB
+        // write, or the worktree path below would leave an orphan project row
+        // (it creates the project before the import can fail).
+        if (source.kind === "folder" && !(await gitService.isGitRepo(sourcePath))) {
+          throw new Error("Not a git repository");
+        }
 
-    if (await preferWorktrees()) {
-      // Worktree lands under worktrees/{projectName}, so the project must
-      // exist before the import — source origin/baseBranch up front.
-      const originUrl = await readOriginUrl(sourcePath);
-      const detectedDefaultBranch =
-        await gitService.getDefaultBranch(sourcePath);
-      const project = await findOrCreateProject({
-        accountId,
-        name,
-        rootPath: sourcePath,
-        remoteOrigin: originUrl ?? undefined,
-        defaultBranch: detectedDefaultBranch,
-      });
-      const baseBranch = project.defaultBranch ?? detectedDefaultBranch;
-      if (!project.defaultBranch) {
-        await projectsRepo.update(project.id, { defaultBranch: baseBranch });
-      }
-      const imported = await gitService.importLocalRepo(
-        sourcePath,
-        {
-          projectName: project.name,
-          baseBranch,
-        },
-      );
-      if (!project.workspacesPath) {
-        await projectsRepo.update(project.id, {
-          workspacesPath: deriveWorkspacesPath(imported.worktreePath),
-        });
-      }
-      return completeIntake({
-        accountId,
-        name: project.name,
-        rootPath: imported.worktreePath,
-        repoUrl: originUrl ?? undefined,
-        baseBranch,
-        metadata: buildMetadata({
-          tracking: imported.tracking,
-          ahead: imported.ahead,
-          behind: imported.behind,
-          originUrl,
-          worktree: {
-            name: imported.worktreeName,
-            path: imported.worktreePath,
+        if (await preferWorktrees()) {
+          // Worktree lands under worktrees/{projectName}, so the project must
+          // exist before the import — source origin/baseBranch up front.
+          const originUrl = await readOriginUrl(sourcePath);
+          const detectedDefaultBranch =
+            await gitService.getDefaultBranch(sourcePath);
+          const project = await findOrCreateProject({
+            accountId,
+            name,
+            rootPath: sourcePath,
+            remoteOrigin: originUrl ?? undefined,
+            defaultBranch: detectedDefaultBranch,
+          });
+          const baseBranch = project.defaultBranch ?? detectedDefaultBranch;
+          if (!project.defaultBranch) {
+            await projectsRepo.update(project.id, { defaultBranch: baseBranch });
+          }
+          const imported = await gitService.importLocalRepo(
             sourcePath,
-          },
-        }),
-        projectId: project.id,
-      });
-    }
+            {
+              projectName: project.name,
+              baseBranch,
+            },
+          );
+          if (!project.workspacesPath) {
+            await projectsRepo.update(project.id, {
+              workspacesPath: deriveWorkspacesPath(imported.worktreePath),
+            });
+          }
+          return {
+            accountId,
+            name: project.name,
+            rootPath: imported.worktreePath,
+            repoUrl: originUrl ?? undefined,
+            baseBranch,
+            metadata: buildMetadata({
+              tracking: imported.tracking,
+              ahead: imported.ahead,
+              behind: imported.behind,
+              originUrl,
+              worktree: {
+                name: imported.worktreeName,
+                path: imported.worktreePath,
+                sourcePath,
+              },
+            }),
+          projectId: project.id,
+        };
+        }
 
-    // Direct: import in place, then create the project from the result.
-    const imported = await gitService.importLocalRepoDirect(sourcePath);
-    const project = await findOrCreateProject({
-      accountId,
-      name,
-      rootPath: sourcePath,
-      remoteOrigin: imported.originUrl ?? undefined,
-      branches: [imported.branchName],
-      defaultBranch: imported.baseBranch,
-    });
-    const baseBranch = project.defaultBranch ?? imported.baseBranch;
-    if (!project.defaultBranch) {
-      await projectsRepo.update(project.id, { defaultBranch: baseBranch });
-    }
-    return completeIntake({
-      accountId,
-      name: project.name,
-      rootPath: sourcePath,
-      repoUrl: imported.originUrl ?? undefined,
-      baseBranch,
-      metadata: buildMetadata({
-        tracking: imported.tracking,
-        ahead: imported.ahead,
-        behind: imported.behind,
-        originUrl: imported.originUrl,
-        worktree: null,
-      }),
-        projectId: project.id,
+        // Direct: import in place, then create the project from the result.
+        const imported = await gitService.importLocalRepoDirect(sourcePath);
+        const project = await findOrCreateProject({
+          accountId,
+          name,
+          rootPath: sourcePath,
+          remoteOrigin: imported.originUrl ?? undefined,
+          branches: [imported.branchName],
+          defaultBranch: imported.baseBranch,
+        });
+        const baseBranch = project.defaultBranch ?? imported.baseBranch;
+        if (!project.defaultBranch) {
+          await projectsRepo.update(project.id, { defaultBranch: baseBranch });
+        }
+        return {
+          accountId,
+          name: project.name,
+          rootPath: sourcePath,
+          repoUrl: imported.originUrl ?? undefined,
+          baseBranch,
+          metadata: buildMetadata({
+            tracking: imported.tracking,
+            ahead: imported.ahead,
+            behind: imported.behind,
+            originUrl: imported.originUrl,
+            worktree: null,
+          }),
+          projectId: project.id,
+        };
       });
+      return completeIntake(input);
+    });
   },
 
   async update(

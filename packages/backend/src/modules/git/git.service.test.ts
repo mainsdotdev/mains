@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:http";
 import { WORKSPACE_CLONE_CANCELED } from "@mains/contracts/workspace-intake";
+import { cloneRepositoryName } from "@mains/contracts/workspace-intake";
+import { ResourceCleanupError } from "../../runtime/resource-lifecycle";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import { augmentPathForPackagedApp } from "../providers/providers.utils";
 
@@ -501,6 +503,46 @@ describe("initRepo", () => {
 });
 
 describe("cloneRepo", () => {
+  it.each(["clone", "init"])("preserves user files added to the %s reservation before publication", async (kind) => {
+    const url = await serveGitRemote(makeRepo());
+    const destination = path.join(sandbox, kind === "clone" ? cloneRepositoryName(url) : "init-with-user-files");
+    const rmdir = fs.promises.rmdir.bind(fs.promises);
+    let added = false;
+    const publication = vi.spyOn(fs.promises, "rmdir").mockImplementation(async (location, ...args) => {
+      if (String(location) === destination && !added) { added = true; await fs.promises.writeFile(path.join(destination, "keep.txt"), "User data"); }
+      return rmdir(location, ...args);
+    });
+    let failure: unknown;
+    try { failure = await (kind === "clone" ? gitService.cloneRepo(url, sandbox) : gitService.initRepo("init-with-user-files", sandbox)).catch((error: unknown) => error); }
+    finally { publication.mockRestore(); }
+    expect(["ENOTEMPTY", "EEXIST"]).toContain((failure as NodeJS.ErrnoException).code);
+    expect(fs.readFileSync(path.join(destination, "keep.txt"), "utf8")).toBe("User data");
+    expect(fs.existsSync(path.join(destination, ".git"))).toBe(false);
+  });
+
+  it("attempts every cleanup and exposes a retry when temporary cleanup fails", async () => {
+    const url = await serveGitRemote(makeRepo());
+    const destination = path.join(sandbox, cloneRepositoryName(url));
+    const initial = fs.readdirSync(sandbox);
+    const remove = fs.promises.rm.bind(fs.promises), rmdir = fs.promises.rmdir.bind(fs.promises);
+    let failPublish = true, failCleanup = true;
+    const publish = vi.spyOn(fs.promises, "rmdir").mockImplementation(async (location, ...args) => {
+      if (String(location) === destination && failPublish) { failPublish = false; throw new Error("Publish failed"); }
+      return rmdir(location, ...args);
+    });
+    const cleanup = vi.spyOn(fs.promises, "rm").mockImplementation(async (location, ...args) => {
+      if (path.dirname(String(location)) === sandbox && String(location) !== destination && failCleanup) { failCleanup = false; throw new Error("Cleanup failed"); }
+      return remove(location, ...args);
+    });
+    let failure: unknown;
+    try { failure = await gitService.cloneRepo(url, sandbox).catch((error: unknown) => error); }
+    finally { publish.mockRestore(); cleanup.mockRestore(); }
+    expect(failure).toBeInstanceOf(ResourceCleanupError);
+    expect(fs.existsSync(destination)).toBe(false);
+    await (failure as ResourceCleanupError).close();
+    expect(fs.readdirSync(sandbox).filter((name) => !initial.includes(name))).toEqual([]);
+  });
+
   it("clones a loopback HTTP remote with Git's default security guards", async () => {
     const url = await serveGitRemote(makeRepo());
     const parent = path.join(sandbox, "http-clone");
@@ -543,6 +585,30 @@ describe("cloneRepo", () => {
     controller.abort();
     await expect(gitService.cloneRepo("https://mains-test.invalid/owned.git", sandbox, controller.signal)).rejects.toThrow(WORKSPACE_CLONE_CANCELED);
     expect(fs.readFileSync(path.join(destination, "keep.txt"), "utf8")).toBe("existing files");
+  });
+
+  it("preserves a replacement directory when an in-flight clone is canceled", async () => {
+    let requestStarted!: () => void;
+    const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+    const server = createServer(() => requestStarted());
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing test server port");
+    const controller = new AbortController();
+    const pending = gitService.cloneRepo(`http://127.0.0.1:${address.port}/replaced.git`, sandbox, controller.signal);
+    onTestFinished(async () => {
+      controller.abort(); server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await pending.catch(() => {});
+    });
+    const rejected = expect(pending).rejects.toThrow(WORKSPACE_CLONE_CANCELED);
+    await started;
+    const destination = path.join(sandbox, "replaced");
+    fs.renameSync(destination, path.join(sandbox, "moved-partial-clone"));
+    fs.mkdirSync(destination);
+    fs.writeFileSync(path.join(destination, "keep.txt"), "User replacement");
+    controller.abort(); await rejected;
+    expect(fs.readFileSync(path.join(destination, "keep.txt"), "utf8")).toBe("User replacement");
   });
 
   it.runIf(process.platform === "win32")("clones with the stale PATH inherited from Windows Explorer", async () => {

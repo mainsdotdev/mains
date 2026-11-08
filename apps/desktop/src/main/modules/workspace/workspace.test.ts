@@ -3047,6 +3047,7 @@ describe("workspaceService — createFromSource (workspace intake)", () => {
     expect(gitMock.cloneRepo).toHaveBeenCalledWith(
       "https://github.com/foo/qux.git",
       "/clones",
+      expect.any(AbortSignal),
     );
     expect(gitMock.importLocalRepoDirect).toHaveBeenCalledWith("/clones/qux");
     expect(result.name).toBe("qux");

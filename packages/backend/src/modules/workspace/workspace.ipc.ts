@@ -1,6 +1,7 @@
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { workspaceService } from "./workspace.service";
+import { openWorkspaceIntakes } from "./workspace-intake-lifecycle";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { CancelWorkspaceClonePayload } from "@mains/contracts/workspace-intake";
 import type {
@@ -20,6 +21,7 @@ import type {
 // applied by handle().
 // ─────────────────────────────────────────────────────────────
 export function registerWorkspaceIpc(): void {
+  openWorkspaceIntakes();
   // ── lifecycle ──
   ipcMain.handle(
     CHANNELS.workspace.list,

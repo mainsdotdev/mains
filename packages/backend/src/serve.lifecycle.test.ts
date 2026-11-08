@@ -8,6 +8,7 @@ import { configureIpcMainAdapter } from "./ipc-kit/ipc-main";
 import { registeredChannels } from "./ipc-kit/handler-registry";
 import { installTestBackendRuntime } from "../test/backend-runtime";
 import { startBackendServer, type BackendServer, type ServeOptions } from "./serve";
+import { withWorkspaceIntake } from "./modules/workspace/workspace-intake-lifecycle";
 
 let directory: string, restoreRuntime: () => void, restoreIpc: () => void;
 let server: BackendServer | undefined, retry: (() => Promise<void>) | undefined;
@@ -29,6 +30,20 @@ afterEach(async () => {
 });
 
 describe("backend host acquisition and shutdown", () => {
+  it("keeps the database lease until accepted workspace registration drains", async () => {
+    server = await start();
+    const gate = deferred();
+    const accepted = withWorkspaceIntake({ accountId: "default", source: { kind: "folder", path: directory } }, async () => { await gate.promise; return "registered"; });
+    const closing = server.close(); let closed = false; void closing.then(() => { closed = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      expect(DatabaseClient.getInstance().isReady()).toBe(true);
+      expect(fs.existsSync(databaseOwnershipPath(path.join(directory, "mains.db")))).toBe(true);
+    } finally { gate.resolve(); await accepted; await closing; }
+    expect(DatabaseClient.getInstance().isReady()).toBe(false);
+  });
+
   it("retires a pending host start and cleans a late database initialization before another start", async () => {
     const ready = deferred(), entered = deferred(), cancellation = new AbortController();
     const restoreReady = installTestBackendRuntime({ getPath: () => directory, whenReady: () => { entered.resolve(); return ready.promise; } });

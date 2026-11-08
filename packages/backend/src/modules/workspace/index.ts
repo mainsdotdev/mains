@@ -1,4 +1,5 @@
 export { registerWorkspaceIpc, unregisterWorkspaceIpc } from "./workspace.ipc";
+export { shutdownWorkspaceIntakes } from "./workspace-intake-lifecycle";
 export {
   workspaceService,
   workspacePathExists,

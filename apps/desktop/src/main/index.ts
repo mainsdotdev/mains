@@ -63,6 +63,7 @@ import { registerToolsIpc, unregisterToolsIpc } from "@mains/backend/modules/too
 import {
   registerWorkspaceIpc,
   unregisterWorkspaceIpc,
+  shutdownWorkspaceIntakes,
 } from "@mains/backend/modules/workspace";
 import {
   registerWorkspaceDialogIpc,
@@ -1253,6 +1254,7 @@ async function cleanupAppResources() {
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
     stopBridgeNotifications?.();
+    await shutdownWorkspaceIntakes();
     await bridgeService.stop();
     await localBackendService.shutdown();
     // Stop `tailscale serve` if this process started it (no-op otherwise)
