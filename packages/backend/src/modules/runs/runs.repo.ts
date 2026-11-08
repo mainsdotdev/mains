@@ -449,11 +449,11 @@ export const runsRepo = {
     return this.findRunById(id);
   },
 
-  async unarchiveRun(id: string): Promise<RunResponse | null> {
+  async unarchiveRun(id: string, options: { detachCollection?: boolean } = {}): Promise<RunResponse | null> {
     const db = getDb();
     await db
       .update(runs)
-      .set({ isArchived: false, updatedAt: sql`(unixepoch())` })
+      .set({ isArchived: false, ...(options.detachCollection ? { collectionId: null } : {}), updatedAt: sql`(unixepoch())` })
       .where(eq(runs.id, id));
     return this.findRunById(id);
   },

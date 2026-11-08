@@ -9,6 +9,7 @@ import { registeredChannels } from "./ipc-kit/handler-registry";
 import { installTestBackendRuntime } from "../test/backend-runtime";
 import { startBackendServer, type BackendServer, type ServeOptions } from "./serve";
 import { withWorkspaceIntake } from "./modules/workspace/workspace-intake-lifecycle";
+import { recordKey, transitionRecord } from "./runtime/record-lifecycle";
 
 let directory: string, restoreRuntime: () => void, restoreIpc: () => void;
 let server: BackendServer | undefined, retry: (() => Promise<void>) | undefined;
@@ -30,6 +31,20 @@ afterEach(async () => {
 });
 
 describe("backend host acquisition and shutdown", () => {
+  it("drains accepted record side effects and their child cleanup before releasing SQLite", async () => {
+    server = await start(); const gate = deferred(); let childFinished = false;
+    await transitionRecord(recordKey("workspace", "retiring"), "archive", async ({ hold }) => {
+      hold(gate.promise.then(() => transitionRecord(recordKey("run", "child"), "delete", async () => { childFinished = true; })));
+    });
+    const closing = server.close(); let closed = false; void closing.then(() => { closed = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false); expect(DatabaseClient.getInstance().isReady()).toBe(true);
+      await expect(transitionRecord(recordKey("run", "new"), "delete", async () => {})).rejects.toThrow("shutting down");
+    } finally { gate.resolve(); await closing; }
+    expect(childFinished).toBe(true); expect(DatabaseClient.getInstance().isReady()).toBe(false);
+  });
+
   it("keeps the database lease until accepted workspace registration drains", async () => {
     server = await start();
     const gate = deferred();

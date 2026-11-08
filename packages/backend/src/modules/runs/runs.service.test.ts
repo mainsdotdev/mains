@@ -180,6 +180,16 @@ describe("runsService", () => {
       return { run, payload, startRealtime, stopRealtime, voice, work: () => work };
     }
 
+    it("requires confirmed voice closure before archiving or deleting the conversation", async () => {
+      const h = voiceFixture();
+      await runsService.startRealtime(h.payload);
+      try {
+        await expect(runsService.archiveRun(h.run.id)).rejects.toThrow("Stop");
+        await expect(runsService.deleteRun(h.run.id)).rejects.toThrow("Stop");
+      } finally { await runsService.stopRealtime(h.payload); }
+      expect(await runsService.getRunById(h.run.id)).not.toBeNull();
+    });
+
     it("links a separate worker with inherited settings, attributes its prompt and recovers it on the next call", async () => {
       const space = createSpace(db, { providerId: "codex", mode: "chat" });
       const h = voiceFixture(false, space.id);

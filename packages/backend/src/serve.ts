@@ -1,3 +1,4 @@
+import { shutdownRecordLifecycles } from "./runtime/record-lifecycle";
 import { createResourceLifecycle } from "./runtime/resource-lifecycle";
 import DatabaseClient, { closeDatabase, initializeDatabase } from "./db/client";
 import { startWsHost, type WsHost } from "./ipc-kit/ws-server-host";
@@ -196,7 +197,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
     scope.defer(closeDatabase);
     await initializeDatabase({ verbose: false, enableWAL: true, busyTimeout: 5000 });
     scope.assertActive();
-    scope.defer(() => shutdownWorkspaceIntakes());
+    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles()]); });
     scope.defer(async () => {
       runSessionRegistry.shutdownAll("Standalone server stopped during run");
       destroyAllTerminals();
@@ -235,7 +236,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
       commandReceipts: backendService.commandReceipts,
     });
     scope.defer(() => wsHost.close());
-    scope.defer(() => shutdownWorkspaceIntakes());
+    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles()]); });
     scope.assertActive();
     scope.defer(async () => { await Promise.all([automationsService.stop(), pulseService.stop()]); });
     automationsService.start();

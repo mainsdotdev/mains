@@ -1,4 +1,5 @@
 import { createResourceLifecycle, type ResourceScope } from "@mains/backend/runtime/resource-lifecycle";
+import { shutdownRecordLifecycles } from "@mains/backend/runtime/record-lifecycle";
 if (process.platform === "win32") {
   if (require("electron-squirrel-startup")) process.exit(0);
 }
@@ -1254,7 +1255,7 @@ async function cleanupAppResources() {
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
     stopBridgeNotifications?.();
-    await shutdownWorkspaceIntakes();
+    await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles()]);
     await bridgeService.stop();
     await localBackendService.shutdown();
     // Stop `tailscale serve` if this process started it (no-op otherwise)

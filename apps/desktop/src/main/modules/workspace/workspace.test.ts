@@ -845,6 +845,7 @@ describe("workspaceService — workspace lifecycle", () => {
     });
 
     it("delete returns error on failure", async () => {
+      createWorkspace(db, { id: "ws1" });
       vi.spyOn(workspaceRepo, "delete").mockRejectedValueOnce(new Error("db"));
       await expect(workspaceService.delete("ws1")).rejects.toThrow("db");
     });

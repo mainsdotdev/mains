@@ -35,7 +35,7 @@ import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload } from "@mains
 import { providersService } from "../providers";
 import { collectionsService } from "../collections";
 import { projectsService } from "../projects";
-import { workspaceService, assertWorkspacePathExists } from "../workspace";
+import { workspaceService, assertWorkspaceCanExecute } from "../workspace";
 import { gitService } from "../git";
 import { spaceService } from "../space";
 import { appSettingsService } from "../appSettings";
@@ -78,8 +78,7 @@ import {
 } from "./run-session";
 import {
   managedRunDir,
-  removeManagedRunDir,
-  removeManagedRunImages,
+  managedRunImageDir,
   resolveRunExecution,
 } from "./run-execution";
 import {
@@ -103,6 +102,8 @@ import {
 import { resolveAtlasPageContext } from "./run-atlas-page";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
+import { assertRecordAvailable, finishRecordDeletion, isRecordTransitioning, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
+import { restoreRecordStorage, stageRecordStorage } from "../../runtime/record-storage";
 import { withImageContentHashes } from "./run-image-content-hashes";
 import { deliverableReplies, projectRunDeliverables } from "./run-deliverables";
 import { resolveOutputFilePath } from "./run-output-references";
@@ -682,6 +683,12 @@ const realtimeConnections = new Map<
   }
 >();
 
+function assertRunCanRetire(runId: string): void {
+  if (isRunResponseStarting(runId) || runSessionRegistry.get(runId) || realtimeConnections.has(runId)) {
+    throw new Error("Stop active responses and voice chat before archiving or deleting this run.");
+  }
+}
+
 export const runsService = {
   async createRealtimeConversation(
     payload: CreateRealtimeConversationPayload,
@@ -705,7 +712,7 @@ export const runsService = {
       if (!workspace) throw new Error("Workspace not found");
       if (workspace.accountId !== payload.accountId)
         throw new Error("Workspace does not belong to this account");
-      assertWorkspacePathExists(workspace.rootPath, workspace.name);
+      assertWorkspaceCanExecute(workspace);
     } else if (payload.workspaceId) {
       throw new Error("Work and Chat runs do not use a workspace");
     }
@@ -753,6 +760,7 @@ export const runsService = {
 
   async startRealtime(payload: RunRealtimeStartPayload): Promise<void> {
     assertOwnedRecord("runs", payload.runId);
+    assertRecordAvailable(recordKey("run", payload.runId));
     if (
       typeof payload?.connectionId !== "string" ||
       !/^[\w-]{1,80}$/.test(payload.connectionId) ||
@@ -778,6 +786,7 @@ export const runsService = {
       );
     if (realtimeConnections.has(run.id))
       throw new Error("Voice chat is already active for this conversation.");
+    assertRecordAvailable(recordKey("run", run.id));
     let prepared!: () => void;
     const connection: NonNullable<ReturnType<typeof realtimeConnections.get>> =
       {
@@ -801,7 +810,7 @@ export const runsService = {
       if (run.workspaceId && !workspace)
         throw new Error("Run workspace no longer exists");
       if (workspace)
-        assertWorkspacePathExists(workspace.rootPath, workspace.name);
+        assertWorkspaceCanExecute(workspace);
       const execution = resolveRunExecution({
         runId: run.id,
         mode: run.mode,
@@ -1663,63 +1672,95 @@ export const runsService = {
   },
 
   async deleteRun(id: string): Promise<void> {
-    assertOwnedRecord("runs", id);
-    const run = await runsRepo.findRunById(id);
-    if (!run) throw new Error("Run not found");
-    await syncCodexRunSession(run, "delete");
-    removeManagedRunDir(run.id, run.mode);
-    await runsRepo.deleteRun(id);
-    removeManagedRunImages(id);
-    await pruneUnreferencedAttachments();
+    return transitionRecord(recordKey("run", id), "delete", async () => {
+      assertOwnedRecord("runs", id);
+      const run = await runsRepo.findRunById(id);
+      if (!run) throw new Error("Run not found");
+      assertRunCanRetire(id);
+      await syncCodexRunSession(run, "delete");
+      const staged: ReturnType<typeof stageRecordStorage>[] = [];
+      try {
+        if (run.mode !== "developer") staged.push(stageRecordStorage(path.dirname(managedRunDir(id, run.mode))));
+        staged.push(stageRecordStorage(managedRunImageDir(id)));
+        await runsRepo.deleteRun(id);
+      } catch (error) {
+        if (await runsRepo.findRunById(id)) {
+          await restoreRecordStorage(staged, error);
+          throw error;
+        }
+      }
+      await finishRecordDeletion(recordKey("run", id), async () => {
+        for (const storage of staged) storage.commit();
+        await pruneUnreferencedAttachments();
+      });
+    });
   },
 
   /** Delete every run of a workspace (project removal cleanup). */
   async deleteRunsByWorkspace(workspaceId: string): Promise<void> {
     const runIds = await runsRepo.findRunIdsByWorkspaceId(workspaceId);
-    await runsRepo.deleteRunsByWorkspaceId(workspaceId);
-    for (const runId of runIds) removeManagedRunImages(runId);
-    await pruneUnreferencedAttachments();
+    for (const runId of runIds) assertRunCanRetire(runId);
+    for (const runId of runIds) await this.deleteRun(runId);
+  },
+
+  async assertWorkspaceCanRetire(workspaceId: string): Promise<void> {
+    const runIds = await runsRepo.findRunIdsByWorkspaceId(workspaceId);
+    for (const runId of runIds) {
+      assertRunCanRetire(runId);
+      if (isRecordTransitioning(recordKey("run", runId))) throw new Error("Wait for this workspace's run archive, restore or deletion to finish.");
+    }
   },
 
   async archiveRun(id: string): Promise<RunResponse> {
-    assertOwnedRecord("runs", id);
-    const run = await runsRepo.findRunById(id);
-    if (!run) throw new Error("Run not found");
-    await syncCodexRunSession(run, "archive");
-    const archived = await runsRepo.archiveRun(id);
-    if (!archived) throw new Error("Run not found");
-    return archived;
+    return transitionRecord(recordKey("run", id), "archive", async () => {
+      assertOwnedRecord("runs", id);
+      const run = await runsRepo.findRunById(id);
+      if (!run) throw new Error("Run not found");
+      assertRunCanRetire(id);
+      if (run.isArchived) return run;
+      await syncCodexRunSession(run, "archive");
+      const archived = await runsRepo.archiveRun(id);
+      if (!archived) throw new Error("Run not found");
+      return archived;
+    });
   },
 
   async unarchiveRun(id: string): Promise<RunResponse> {
-    assertOwnedRecord("runs", id);
-    const run = await runsRepo.findRunById(id);
-    if (!run) throw new Error("Run not found");
-    if (run.workspaceId) {
-      const workspace = await workspaceService.get(run.workspaceId);
-      if (workspace) assertOwnedRecord("workspaces", workspace.id);
-      if (!workspace) {
-        throw new Error("Cannot restore a run whose workspace was deleted");
+    return transitionRecord(recordKey("run", id), "restore", async () => {
+      assertOwnedRecord("runs", id);
+      const run = await runsRepo.findRunById(id);
+      if (!run) throw new Error("Run not found");
+      if (run.workspaceId) {
+        assertRecordAvailable(recordKey("workspace", run.workspaceId));
+        const workspace = await workspaceService.get(run.workspaceId);
+        if (workspace) assertOwnedRecord("workspaces", workspace.id);
+        if (!workspace) {
+          throw new Error("Cannot restore a run whose workspace was deleted");
+        }
+        if (workspace.isArchived) {
+          throw new Error("Unarchive the workspace before restoring this run");
+        }
+        assertRecordAvailable(recordKey("project", workspace.projectId));
+      } else if (run.mode === "developer") {
+        throw new Error("Cannot restore a developer run without a workspace");
       }
-      if (workspace.isArchived) {
-        throw new Error("Unarchive the workspace before restoring this run");
+      let detachCollection = false;
+      if (run.collectionId) {
+        const collection = await collectionsService.get({
+          id: run.collectionId,
+          accountId: run.accountId,
+        });
+        if (!collection || collection.isArchived) {
+          detachCollection = true;
+        }
       }
-    } else if (run.mode === "developer") {
-      throw new Error("Cannot restore a developer run without a workspace");
-    }
-    if (run.collectionId) {
-      const collection = await collectionsService.get({
-        id: run.collectionId,
-        accountId: run.accountId,
-      });
-      if (!collection || collection.isArchived) {
-        await runsRepo.moveToCollection(run.id, null);
-      }
-    }
-    await syncCodexRunSession(run, "unarchive");
-    const unarchived = await runsRepo.unarchiveRun(id);
-    if (!unarchived) throw new Error("Run not found");
-    return unarchived;
+      assertRunCanRetire(id);
+      if (!run.isArchived) return run;
+      await syncCodexRunSession(run, "unarchive");
+      const unarchived = await runsRepo.unarchiveRun(id, { detachCollection });
+      if (!unarchived) throw new Error("Run not found");
+      return unarchived;
+    });
   },
 
   // ─── Run Context Operations ───
@@ -2038,6 +2079,7 @@ export const runsService = {
       await browserCaptureDir(),
     );
     const runId = generateRunId();
+    const releaseResponse = claimRunResponse(runId);
     try {
       const provider = await providersService.getById(payload.providerId);
       if (!provider) {
@@ -2092,7 +2134,7 @@ export const runsService = {
         if (workspace.accountId !== payload.accountId) {
           throw new Error("Workspace does not belong to this account");
         }
-        assertWorkspacePathExists(workspace.rootPath, workspace.name);
+        assertWorkspaceCanExecute(workspace);
       } else if (payload.workspaceId) {
         throw new Error("Work and Chat runs do not use a workspace");
       }
@@ -2182,6 +2224,11 @@ export const runsService = {
         }
       }
 
+      if (workspace) {
+        const fresh = await workspaceService.get(workspace.id);
+        if (!fresh) throw new Error("Run workspace no longer exists");
+        assertWorkspaceCanExecute(fresh);
+      }
       const session = createRunSession({
         onTurnClosed: runsService.snapshotBridgeOutputs,
         runId,
@@ -2242,7 +2289,7 @@ export const runsService = {
     } catch (error) {
       await handlePreSessionFailure(runId, error);
       throw error;
-    }
+    } finally { releaseResponse(); }
   },
 
   /**
@@ -2251,6 +2298,7 @@ export const runsService = {
    */
   async executeReview(payload: ReviewRunPayload): Promise<StartRunResponse> {
     const runId = generateRunId();
+    const releaseResponse = claimRunResponse(runId);
     try {
       const provider = await providersService.getById(payload.providerId);
       if (!provider) {
@@ -2282,7 +2330,7 @@ export const runsService = {
       if (!workspace) {
         throw new Error(`Workspace "${payload.workspaceId}" not found`);
       }
-      assertWorkspacePathExists(workspace.rootPath, workspace.name);
+      assertWorkspaceCanExecute(workspace);
 
       await workspaceService.update(payload.workspaceId, {
         status: "in_review",
@@ -2331,6 +2379,11 @@ export const runsService = {
       });
       await runsRepo.updateRun(runId, { startedAt: new Date() });
 
+      if (workspace) {
+        const fresh = await workspaceService.get(workspace.id);
+        if (!fresh) throw new Error("Run workspace no longer exists");
+        assertWorkspaceCanExecute(fresh);
+      }
       const session = createRunSession({
         onTurnClosed: runsService.snapshotBridgeOutputs,
         runId,
@@ -2387,7 +2440,7 @@ export const runsService = {
     } catch (error) {
       await handlePreSessionFailure(runId, error);
       throw error;
-    }
+    } finally { releaseResponse(); }
   },
 
   /**
@@ -2397,6 +2450,7 @@ export const runsService = {
    */
   async continueRun(payload: ContinueRunPayload): Promise<ContinueRunResponse> {
     assertOwnedRecord("runs", payload.runId);
+    assertRecordAvailable(recordKey("run", payload.runId));
     const { runId, accountId, message, additionalContext } = payload;
     const releaseResponse = claimRunResponse(runId);
     try {
@@ -2405,6 +2459,7 @@ export const runsService = {
       if (!existing) throw new Error("Run not found");
       if (existing.accountId !== accountId)
         throw new Error("Run does not belong to this account");
+      if (existing.workspaceId) assertRecordAvailable(recordKey("workspace", existing.workspaceId));
       assertRunCanContinue(existing, runSessionRegistry.get(runId)?.phase, realtimeConnections.has(runId));
       if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
       const uploads = sanitizeRunAttachments(
@@ -2440,7 +2495,7 @@ export const runsService = {
           throw new Error("Run workspace no longer exists");
         }
         if (workspace) {
-          assertWorkspacePathExists(workspace.rootPath, workspace.name);
+          assertWorkspaceCanExecute(workspace);
         }
         const execution = resolveRunExecution({
           runId,
@@ -2543,6 +2598,11 @@ export const runsService = {
           }
         }
 
+        if (workspace) {
+          const fresh = await workspaceService.get(workspace.id);
+          if (!fresh) throw new Error("Run workspace no longer exists");
+          assertWorkspaceCanExecute(fresh);
+        }
         const session = createRunSession({
           onTurnClosed: runsService.snapshotBridgeOutputs,
           runId,
@@ -2775,6 +2835,7 @@ export const runsService = {
       await browserCaptureDir(),
     );
     const newRunId = generateRunId();
+    const releaseResponse = claimRunResponse(newRunId);
     try {
       const sourceRun = await runsRepo.findRunById(sourceRunId);
       if (!sourceRun) throw new Error("Source run not found");
@@ -2803,7 +2864,7 @@ export const runsService = {
         throw new Error("Source run workspace no longer exists");
       }
       if (workspace) {
-        assertWorkspacePathExists(workspace.rootPath, workspace.name);
+        assertWorkspaceCanExecute(workspace);
       }
 
       const adapter = createWorkAdapter(provider);
@@ -2890,6 +2951,11 @@ export const runsService = {
         }
       }
 
+      if (workspace) {
+        const fresh = await workspaceService.get(workspace.id);
+        if (!fresh) throw new Error("Run workspace no longer exists");
+        assertWorkspaceCanExecute(fresh);
+      }
       const session = createRunSession({
         onTurnClosed: runsService.snapshotBridgeOutputs,
         runId: newRunId,
@@ -2950,7 +3016,7 @@ export const runsService = {
     } catch (error) {
       await handlePreSessionFailure(newRunId, error);
       throw error;
-    }
+    } finally { releaseResponse(); }
   },
 
   /**

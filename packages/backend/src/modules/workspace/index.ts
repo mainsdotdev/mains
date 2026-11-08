@@ -4,6 +4,7 @@ export {
   workspaceService,
   workspacePathExists,
   assertWorkspacePathExists,
+  assertWorkspaceCanExecute,
   logWorkspaceActivity,
   emitFindingsChanged,
   recordWorkspaceDiff,

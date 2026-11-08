@@ -1,7 +1,8 @@
+import { assertRecordAvailable, finishRecordDeletion, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
 import { assertOwnedRecord } from "../bridge";
 import { randomUUID } from "crypto";
 import { execFile } from "child_process";
-import { existsSync, watch, type FSWatcher } from "fs";
+import { existsSync, lstatSync, watch, type FSWatcher } from "fs";
 import path from "path";
 import { CHANNELS } from "@mains/contracts/channels";
 import { emit } from "../../ipc-kit";
@@ -70,6 +71,15 @@ export function assertWorkspacePathExists(
     `${label} points at a folder that no longer exists: ${rootPath}. ` +
       "Move it back, or delete the workspace.",
   );
+}
+
+/** Execution must not acquire a workspace being retired, even if its directory
+ * and a previously read row still exist. */
+export function assertWorkspaceCanExecute(workspace: WorkspaceResponse): void {
+  assertRecordAvailable(recordKey("workspace", workspace.id));
+  assertRecordAvailable(recordKey("project", workspace.projectId));
+  if (workspace.isArchived) throw new Error("Unarchive this workspace before starting a response.");
+  assertWorkspacePathExists(workspace.rootPath, workspace.name);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -592,13 +602,6 @@ export const workspaceService = {
     }
   },
 
-  async deleteByProject(projectId: string): Promise<void> {
-    assertOwnedRecord("projects", projectId);
-    const workspaces = await workspaceRepo.findByProjectId(projectId);
-    for (const workspace of workspaces) removeGitStateWatcher(workspace.id);
-    await workspaceRepo.deleteByProjectId(projectId);
-  },
-
   async deleteReviewsByWorkspace(workspaceId: string): Promise<void> {
     assertOwnedRecord("workspaces", workspaceId);
     await workspaceRepo.deleteReviewsByWorkspace(workspaceId);
@@ -611,6 +614,7 @@ export const workspaceService = {
       throw new Error("Workspace requires a Developer Project");
     }
     assertOwnedRecord("projects", payload.projectId);
+    assertRecordAvailable(recordKey("project", payload.projectId));
     const project = await projectsRepo.findById(payload.projectId);
     if (!project) throw new Error("Project not found");
     if (project.accountId !== payload.accountId) {
@@ -629,6 +633,7 @@ export const workspaceService = {
       id: payload.id || randomUUID(),
     };
 
+    assertRecordAvailable(recordKey("project", payload.projectId));
     const id = await workspaceRepo.insert(workspacePayload);
     const workspace = await workspaceRepo.findById(id);
     if (!workspace) throw new Error("Failed to retrieve created workspace");
@@ -909,30 +914,40 @@ export const workspaceService = {
    * the user's own checkout, so `removeWorktree` is ignored there rather than
    * honoured against a directory we never made.
    *
-   * The row goes regardless of what git does. A worktree whose directory was
-   * already deleted by hand (or by a project's archiveScript) makes `git
-   * worktree remove` fail, and refusing to delete the row over that would
-   * leave the user with an entry they cannot get rid of by any route.
+   * Commit the row deletion before touching Git. Missing/pruned worktrees are
+   * already clean; other native failures retain an identity-checked cleanup
+   * for retry even after the row is gone.
    */
   async delete(id: string, options?: DeleteWorkspaceOptions): Promise<void> {
-    assertOwnedRecord("workspaces", id);
-    if (options?.removeWorktree) {
+    return transitionRecord(recordKey("workspace", id), options?.removeWorktree ? "delete-worktree" : "delete", async () => {
+      assertOwnedRecord("workspaces", id);
       const workspace = await workspaceRepo.findById(id);
-      const worktree = workspace?.metadata?.worktree;
-      if (worktree?.enabled) {
-        try {
-          await gitService.removeWorktree(worktree.sourcePath, worktree.path);
-        } catch (err) {
-          console.error(
-            `[WorkspaceService] Failed to remove worktree at ${worktree.path}:`,
-            err,
-          );
+      if (!workspace) throw new Error("Workspace not found");
+      const { runsService } = await import("../runs");
+      await runsService.assertWorkspaceCanRetire(id);
+      const worktree = options?.removeWorktree && workspace.metadata?.worktree?.enabled ? workspace.metadata.worktree : null;
+      const identify = () => {
+        if (!worktree) return null;
+        try { return lstatSync(worktree.path, { bigint: true }); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+      };
+      const identity = identify();
+      try { await workspaceRepo.delete(id); }
+      catch (error) { if (await workspaceRepo.findById(id)) throw error; }
+      removeGitStateWatcher(id);
+      if (worktree) await finishRecordDeletion(recordKey("workspace", id), async () => {
+        const current = identify();
+        if (current && (!identity || current.dev !== identity.dev || current.ino !== identity.ino)) {
+          throw new Error("Worktree directory changed; refusing to remove its replacement");
         }
-      }
-    }
-
-    removeGitStateWatcher(id);
-    await workspaceRepo.delete(id);
+        try { await gitService.removeWorktree(worktree.sourcePath, worktree.path); }
+        catch (error) {
+          if (identify()) throw error;
+          // A missing/pruned worktree has no remaining directory to remove.
+          console.warn(`[WorkspaceService] Worktree was already absent at ${worktree.path}:`, error);
+        }
+      });
+    });
   },
 
   async updateStatus(
@@ -943,53 +958,30 @@ export const workspaceService = {
   },
 
   async archive(id: string): Promise<WorkspaceResponse> {
-    assertOwnedRecord("workspaces", id);
-    const workspace = await workspaceRepo.findById(id);
-    if (!workspace) throw new Error("Workspace not found");
-
-    const archived = await workspaceRepo.archive(id);
-    if (!archived) throw new Error("Failed to archive workspace");
-    removeGitStateWatcher(id);
-
-    // Fire-and-forget: run project archiveScript in background
-    if (workspace.projectId) {
-    const wsId = id;
-    const rootPath = workspace.rootPath;
-    projectsRepo
-      .findById(workspace.projectId)
-      .then((project) => {
+    return transitionRecord(recordKey("workspace", id), "archive", async ({ hold }) => {
+      assertOwnedRecord("workspaces", id);
+      const workspace = await workspaceRepo.findById(id);
+      if (!workspace) throw new Error("Workspace not found");
+      if (workspace.isArchived) return workspace;
+      const { runsService } = await import("../runs");
+      await runsService.assertWorkspaceCanRetire(id);
+      const archived = await workspaceRepo.archive(id);
+      if (!archived) throw new Error("Failed to archive workspace");
+      removeGitStateWatcher(id);
+      // Visibility returns promptly; restore/delete still wait for this script.
+      hold((async () => {
+        const project = await projectsRepo.findById(workspace.projectId);
         if (!project?.archiveScript) return;
-        console.log(
-          `[WorkspaceService] Running archive script for workspace ${wsId} in ${rootPath}`,
-        );
-        executeScript(project.archiveScript, rootPath)
-          .then(() => {
-            console.log(
-              `[WorkspaceService] Archive script completed for workspace ${wsId}`,
-            );
-            emitScriptComplete({
-              workspaceId: wsId,
-              script: "archive",
-              success: true,
-            });
-          })
-          .catch((err) => {
-            console.error(
-              `[WorkspaceService] Archive script failed for workspace ${wsId}:`,
-              err,
-            );
-            emitScriptComplete({
-              workspaceId: wsId,
-              script: "archive",
-              success: false,
-              error: err?.message,
-            });
-          });
-      })
-      .catch(() => {});
-    }
-
-    return archived;
+        try {
+          await executeScript(project.archiveScript, workspace.rootPath);
+          emitScriptComplete({ workspaceId: id, script: "archive", success: true });
+        } catch (error) {
+          console.error(`[WorkspaceService] Archive script failed for workspace ${id}:`, error);
+          emitScriptComplete({ workspaceId: id, script: "archive", success: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      })().catch((error) => { console.error(`[WorkspaceService] Archive script lookup failed for workspace ${id}:`, error); }));
+      return archived;
+    });
   },
 
   /**
@@ -1003,16 +995,19 @@ export const workspaceService = {
    * re-established by the next `listGitStates` sync.
    */
   async unarchive(id: string): Promise<WorkspaceResponse> {
-    assertOwnedRecord("workspaces", id);
-    const workspace = await workspaceRepo.findById(id);
-    if (!workspace) throw new Error("Workspace not found");
-    if (!(await projectsRepo.findById(workspace.projectId))) {
-      throw new Error("Workspace project not found");
-    }
+    return transitionRecord(recordKey("workspace", id), "restore", async () => {
+      assertOwnedRecord("workspaces", id);
+      const workspace = await workspaceRepo.findById(id);
+      if (!workspace) throw new Error("Workspace not found");
+      if (!(await projectsRepo.findById(workspace.projectId))) {
+        throw new Error("Workspace project not found");
+      }
+      if (!workspace.isArchived) return workspace;
 
-    const unarchived = await workspaceRepo.unarchive(id);
-    if (!unarchived) throw new Error("Failed to unarchive workspace");
-    return unarchived;
+      const unarchived = await workspaceRepo.unarchive(id);
+      if (!unarchived) throw new Error("Failed to unarchive workspace");
+      return unarchived;
+    });
   },
 
   // ─────────────────────────────────────────────────────────────

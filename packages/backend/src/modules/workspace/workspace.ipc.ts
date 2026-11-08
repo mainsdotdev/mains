@@ -2,6 +2,7 @@ import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { workspaceService } from "./workspace.service";
 import { openWorkspaceIntakes } from "./workspace-intake-lifecycle";
+import { openRecordLifecycles } from "../../runtime/record-lifecycle";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { CancelWorkspaceClonePayload } from "@mains/contracts/workspace-intake";
 import type {
@@ -21,6 +22,7 @@ import type {
 // applied by handle().
 // ─────────────────────────────────────────────────────────────
 export function registerWorkspaceIpc(): void {
+  openRecordLifecycles();
   openWorkspaceIntakes();
   // ── lifecycle ──
   ipcMain.handle(

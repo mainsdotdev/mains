@@ -1,6 +1,6 @@
 import { assertOwnedRecord } from "../bridge";
 import { randomUUID } from "crypto";
-import * as fs from "fs";
+import { assertRecordAvailable, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
 import { projectsRepo } from "./projects.repo";
 import { LINKABLE_KINDS, normalizeRemoteOrigin } from "./projects.utils";
 import { workspaceService } from "../workspace";
@@ -142,50 +142,23 @@ export const projectsService = {
   },
 
   async remove(id: string): Promise<void> {
-    assertOwnedRecord("projects", id);
-    const project = await projectsRepo.findById(id);
-    if (!project) {
-      throw new Error("Project not found");
-    }
-
-    const projectWorkspaces = await workspaceService.listByProject(id);
-
-    for (const ws of projectWorkspaces) {
-      if (
-        project.workspacesPath &&
-        ws.rootPath.startsWith(project.workspacesPath)
-      ) {
-        try {
-          await gitService.removeWorktree(project.rootPath, ws.rootPath);
-        } catch {
-          if (fs.existsSync(ws.rootPath)) {
-            fs.rmSync(ws.rootPath, { recursive: true, force: true });
-          }
-        }
+    return transitionRecord(recordKey("project", id), "delete", async () => {
+      assertOwnedRecord("projects", id);
+      const project = await projectsRepo.findById(id);
+      if (!project) throw new Error("Project not found");
+      const workspaces = await workspaceService.listByProject(id);
+      const { runsService } = await import("../runs");
+      // Preflight the whole aggregate before changing any child or filesystem.
+      for (const workspace of workspaces) {
+        assertRecordAvailable(recordKey("workspace", workspace.id));
+        await runsService.assertWorkspaceCanRetire(workspace.id);
       }
-    }
-
-    if (project.workspacesPath && fs.existsSync(project.workspacesPath)) {
-      try {
-        const remaining = fs.readdirSync(project.workspacesPath);
-        if (remaining.length === 0) {
-          fs.rmSync(project.workspacesPath, { recursive: true, force: true });
-        }
-      } catch {
-        // Ignore cleanup errors
+      for (const workspace of workspaces) {
+        await runsService.deleteRunsByWorkspace(workspace.id);
+        await workspaceService.delete(workspace.id, { removeWorktree: true });
       }
-    }
-
-    // Lazy: breaks the projects → runs → providers/adapters → gitFlow →
-    // projects require cycle.
-    const { runsService } = await import("../runs/runs.service");
-    for (const ws of projectWorkspaces) {
-      await runsService.deleteRunsByWorkspace(ws.id);
-      await workspaceService.deleteReviewsByWorkspace(ws.id);
-    }
-
-    await workspaceService.deleteByProject(id);
-    await projectsRepo.delete(id);
+      await projectsRepo.delete(id);
+    });
   },
 
   async delete(id: string): Promise<void> {
