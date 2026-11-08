@@ -29,7 +29,8 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
-import { spawnProvider as spawn } from "../provider-process";
+import { spawnProvider as spawn, killProviderProcess } from "../provider-process";
+import { createCatalogRead } from "../catalog-read";
 import type {
   AcquiredSession,
   AgentsConfig,
@@ -2924,6 +2925,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // uninstalling one must invalidate those caches too, not just the plugin list.
   function invalidatePluginCaches(): void {
     catalogGeneration++;
+    pluginCatalogRead.invalidate();
     cachedPlugins = null;
     cachedPluginsTimestamp = 0;
     commandsCache.clear();
@@ -3699,7 +3701,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     args: string[],
     timeoutMs: number,
     cwd?: string,
+    signal?: AbortSignal,
   ): Promise<{ stdout: string; stderr: string; code: number | null }> {
+    signal?.throwIfAborted();
     const runtime = resolveClaudeRuntime(config.binary);
     if (!runtime) {
       return Promise.resolve({ stdout: "", stderr: "Claude CLI not found", code: null });
@@ -3713,6 +3717,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         // the directory the plugin was installed from.
         ...(cwd ? { cwd } : {}),
       });
+      const abort = () => killProviderProcess(child);
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+      child.once("close", () => signal?.removeEventListener("abort", abort));
+      child.once("error", () => signal?.removeEventListener("abort", abort));
       let stdout = "";
       let stderr = "";
       child.stdout?.on("data", (d: Buffer) => (stdout += d.toString()));
@@ -3723,6 +3732,87 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       );
     });
   }
+
+  const pluginCatalogRead = createCatalogRead(async (signal): Promise<PluginListResponse> => {
+    const generation = catalogGeneration;
+    const now = Date.now();
+    if (cachedPlugins && now - cachedPluginsTimestamp < PLUGINS_CACHE_TTL_MS) {
+      return cachedPlugins;
+    }
+
+    const empty = (remoteSyncError: string | null): PluginListResponse => ({
+      marketplaces: [],
+      marketplaceLoadErrors: [],
+      remoteSyncError,
+      featuredPluginIds: [],
+    });
+
+    try {
+      if (!resolveClaudeRuntime(config.binary)) return empty("Claude CLI not found");
+
+      // `--available` includes the marketplace catalog (and may sync remotely);
+      // marketplace list supplies the install locations / ordering.
+      const [listRes, mpRes] = await Promise.all([
+        runClaudeCli(["plugin", "list", "--json", "--available"], 30000, undefined, signal),
+        runClaudeCli(["plugin", "marketplace", "list", "--json"], 15000, undefined, signal),
+      ]);
+      signal.throwIfAborted();
+
+      const parse = <T>(stdout: string, label: string): T | null => {
+        const trimmed = stdout.trim();
+        if (!trimmed) return null;
+        try {
+          return JSON.parse(trimmed) as T;
+        } catch (err) {
+          logWarn(`Failed to parse ${label} JSON:`, err instanceof Error ? err.message : String(err));
+          return null;
+        }
+      };
+
+      const listJson = parse<{ installed?: unknown[]; available?: unknown[] }>(
+        listRes.stdout,
+        "plugin list",
+      );
+      const mpJson = parse<unknown[]>(mpRes.stdout, "marketplace list");
+
+      if (!listJson && !mpJson) {
+        const msg = (listRes.stderr || mpRes.stderr || "").trim();
+        return empty(msg || null);
+      }
+
+      // Manifest fallback for plugins the catalog cache hasn't indexed yet.
+      const manifestsByMarketplace: Record<
+        string,
+        Record<string, Record<string, any>>
+      > = {};
+      for (const raw of mpJson ?? []) {
+        const mp = raw as Record<string, unknown>;
+        if (mp && typeof mp.name === "string" && typeof mp.installLocation === "string") {
+          manifestsByMarketplace[mp.name] = readMarketplaceManifestPlugins(
+            mp.installLocation,
+          );
+        }
+      }
+
+      const result = mapClaudePluginList(
+        listJson,
+        mpJson,
+        readPluginCatalogPlugins(),
+        readInstalledShaById(),
+        manifestsByMarketplace,
+      );
+      if (generation === catalogGeneration) {
+        cachedPlugins = result;
+        cachedPluginsTimestamp = now;
+      }
+      return result;
+    } catch (error) {
+      signal.throwIfAborted();
+      const msg = error instanceof Error ? error.message : String(error);
+      logError("Failed to list plugins:", msg);
+      return empty(msg);
+    }
+  });
 
   /** Read the installed Claude Code version (e.g. "2.1.159" from "2.1.159 (Claude Code)"). */
   async function getClaudeVersion(): Promise<string | null> {
@@ -4592,83 +4682,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       return fetchDiskSkills(workspacePath);
     },
 
-    async listPlugins(): Promise<PluginListResponse> {
-      const generation = catalogGeneration;
-      const now = Date.now();
-      if (cachedPlugins && now - cachedPluginsTimestamp < PLUGINS_CACHE_TTL_MS) {
-        return cachedPlugins;
-      }
-
-      const empty = (remoteSyncError: string | null): PluginListResponse => ({
-        marketplaces: [],
-        marketplaceLoadErrors: [],
-        remoteSyncError,
-        featuredPluginIds: [],
-      });
-
-      try {
-        if (!resolveClaudeRuntime(config.binary)) return empty("Claude CLI not found");
-
-        // `--available` includes the marketplace catalog (and may sync remotely);
-        // marketplace list supplies the install locations / ordering.
-        const [listRes, mpRes] = await Promise.all([
-          runClaudeCli(["plugin", "list", "--json", "--available"], 30000),
-          runClaudeCli(["plugin", "marketplace", "list", "--json"], 15000),
-        ]);
-
-        const parse = <T>(stdout: string, label: string): T | null => {
-          const trimmed = stdout.trim();
-          if (!trimmed) return null;
-          try {
-            return JSON.parse(trimmed) as T;
-          } catch (err) {
-            logWarn(`Failed to parse ${label} JSON:`, err instanceof Error ? err.message : String(err));
-            return null;
-          }
-        };
-
-        const listJson = parse<{ installed?: unknown[]; available?: unknown[] }>(
-          listRes.stdout,
-          "plugin list",
-        );
-        const mpJson = parse<unknown[]>(mpRes.stdout, "marketplace list");
-
-        if (!listJson && !mpJson) {
-          const msg = (listRes.stderr || mpRes.stderr || "").trim();
-          return empty(msg || null);
-        }
-
-        // Manifest fallback for plugins the catalog cache hasn't indexed yet.
-        const manifestsByMarketplace: Record<
-          string,
-          Record<string, Record<string, any>>
-        > = {};
-        for (const raw of mpJson ?? []) {
-          const mp = raw as Record<string, unknown>;
-          if (mp && typeof mp.name === "string" && typeof mp.installLocation === "string") {
-            manifestsByMarketplace[mp.name] = readMarketplaceManifestPlugins(
-              mp.installLocation,
-            );
-          }
-        }
-
-        const result = mapClaudePluginList(
-          listJson,
-          mpJson,
-          readPluginCatalogPlugins(),
-          readInstalledShaById(),
-          manifestsByMarketplace,
-        );
-        if (generation === catalogGeneration) {
-          cachedPlugins = result;
-          cachedPluginsTimestamp = now;
-        }
-        return result;
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        logError("Failed to list plugins:", msg);
-        return empty(msg);
-      }
+    async listPlugins(signal?: AbortSignal): Promise<PluginListResponse> {
+      signal?.throwIfAborted();
+      if (cachedPlugins && Date.now() - cachedPluginsTimestamp < PLUGINS_CACHE_TTL_MS) return cachedPlugins;
+      return pluginCatalogRead.read(signal);
     },
 
     async readPlugin(pluginName: string, marketplacePath: string): Promise<PluginDetail> {

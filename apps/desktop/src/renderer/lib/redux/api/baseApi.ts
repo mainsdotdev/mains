@@ -15,15 +15,24 @@ const ipcBaseQuery = (): BaseQueryFn<
   {
     handler: string;
     args?: any[];
+    cancel?: { handler: string; args: unknown[] };
   },
   unknown,
   unknown
-> => async ({ handler, args = [] }) => {
+> => async ({ handler, args = [], cancel }, { signal }) => {
+  const transport = getTransport();
+  const abort = () => {
+    if (cancel) void transport.invoke(cancel.handler, cancel.args).catch(() => {});
+  };
+  if (cancel && signal.aborted) return { error: 'Request cancelled' };
+  if (cancel) signal.addEventListener('abort', abort, { once: true });
   try {
-    const result: ServiceResponse<unknown> = await getTransport().invoke(
+    const result: ServiceResponse<unknown> = await transport.invoke(
       handler,
       args,
     );
+
+    if (cancel && (signal.aborted || getTransport() !== transport)) return { error: 'Request cancelled' };
 
     if (!result.success) {
       return { error: result.error };
@@ -37,6 +46,8 @@ const ipcBaseQuery = (): BaseQueryFn<
         error: error.message || 'An error occurred',
       },
     };
+  } finally {
+    if (cancel) signal.removeEventListener('abort', abort);
   }
 };
 

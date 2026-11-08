@@ -39,6 +39,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("settles both callers of the same approval request without replacing the original waiter", async () => {
+  const request = { requestId: "duplicate", runId: "run-1", toolName: "Bash", kind: "tool_approval" as const, timestamp: Date.now() };
+  const settled: string[] = [];
+  const first = requestToolApproval(request).then(() => { settled.push("first"); });
+  const second = requestToolApproval({ ...request }).then(() => { settled.push("second"); });
+  handleToolApprovalResponse({ requestId: request.requestId, approved: true });
+  await Promise.resolve(); await Promise.resolve();
+  expect(settled).toEqual(["first", "second"]);
+  await Promise.all([first, second]);
+});
+
 describe("resolution broadcast", () => {
   const request = (requestId: string, runId = "run-1") =>
     requestToolApproval({

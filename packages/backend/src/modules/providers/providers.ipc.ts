@@ -16,6 +16,11 @@ import type {
 } from "../../../shared/adapter.types";
 import { CHANNELS } from "@mains/contracts/channels";
 
+const catalogRequests = new Map<string, AbortController>();
+function catalogRequestKey(ctx: IpcInvokeContext & { sender?: { id: number } }, id: string, requestId: string): string {
+  return JSON.stringify([ctx.clientId ?? ctx.sender?.id ?? "local", id, requestId]);
+}
+
 // ─────────────────────────────────────────────────────────────
 // IPC Channel Names
 // ─────────────────────────────────────────────────────────────
@@ -163,7 +168,31 @@ export function registerProvidersIpc(): void {
 
   ipcMain.handle(
     CHANNELS.providers.getPlugins,
-    handle((id: string) => providersService.getPlugins(id)),
+    async (ctx: IpcInvokeContext, id: string, requestId?: string) => {
+      if (!requestId) return handle(() => providersService.getPlugins(id))(ctx);
+      if (typeof requestId !== "string" || requestId.length > 128) return fail("Invalid catalog request id");
+      const key = catalogRequestKey(ctx, id, requestId);
+      if (catalogRequests.has(key)) return fail("Catalog request already in progress");
+      const controller = new AbortController();
+      catalogRequests.set(key, controller);
+      try {
+        const result = await handle(async () => {
+          try { return await providersService.getPlugins(id, controller.signal); }
+          catch (error) { if (controller.signal.aborted) return null; throw error; }
+        })(ctx);
+        return controller.signal.aborted ? fail("Plugin catalog request cancelled") : result;
+      } finally {
+        if (catalogRequests.get(key) === controller) catalogRequests.delete(key);
+      }
+    },
+  );
+
+  ipcMain.handle(
+    CHANNELS.providers.cancelPluginCatalog,
+    (ctx: IpcInvokeContext, id: string, requestId: string) => {
+      catalogRequests.get(catalogRequestKey(ctx, id, requestId))?.abort();
+      return ok(undefined);
+    },
   );
 
   ipcMain.handle(
@@ -217,6 +246,8 @@ export function registerProvidersIpc(): void {
 }
 
 export function unregisterProvidersIpc(): void {
+  for (const controller of catalogRequests.values()) controller.abort();
+  catalogRequests.clear();
   [
     CHANNELS.providers.getAll,
     CHANNELS.providers.getById,
@@ -243,6 +274,7 @@ export function unregisterProvidersIpc(): void {
     CHANNELS.providers.getAccountInfo,
     CHANNELS.providers.updateCli,
     CHANNELS.providers.getPlugins,
+    CHANNELS.providers.cancelPluginCatalog,
     CHANNELS.providers.getInstalledPlugins,
     CHANNELS.providers.getConnectors,
     CHANNELS.providers.startConnectorOAuth,

@@ -386,12 +386,13 @@ export async function updateCliForProvider(
   return result;
 }
 
-export async function listPluginsForProvider(provider: ProviderResponse): Promise<PluginListResponse> {
+export async function listPluginsForProvider(provider: ProviderResponse, signal?: AbortSignal): Promise<PluginListResponse> {
+  signal?.throwIfAborted();
   const adapter = createWorkAdapter(provider);
   if (!adapter.listPlugins) {
     return { marketplaces: [], marketplaceLoadErrors: [], remoteSyncError: null, featuredPluginIds: [] };
   }
-  return adapter.listPlugins();
+  return adapter.listPlugins(signal);
 }
 
 export async function listInstalledPluginsForProvider(

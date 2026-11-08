@@ -15,7 +15,6 @@ import {
   HorizontalFadeScroller,
 } from "@/components/ui";
 import {
-  useGetProviderPluginsQuery,
   useReadProviderPluginQuery,
 } from "@/lib/redux/api";
 import type {
@@ -30,6 +29,7 @@ import { extractErrorMessage } from "@/lib/extract-error-message";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { appEvents } from "@/lib/transport/events";
 import { usePluginMutations } from "../hooks/use-plugin-mutations";
+import { usePluginCatalog } from "../hooks/use-plugin-catalog";
 import { useConnectorOAuth } from "../hooks/use-connector-oauth";
 import {
   Search,
@@ -1036,21 +1036,23 @@ function ProviderPluginCatalog({
     data: pluginData,
     isLoading,
     error,
-  } = useGetProviderPluginsQuery(providerId, {
-    refetchOnFocus: false,
-    refetchOnReconnect: false,
-  });
+  } = usePluginCatalog(providerId);
   const mutations = usePluginMutations(providerId);
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [installScope, setInstallScope] = useState<PluginScope>("user");
 
-  // Flatten all plugins from all marketplaces (only OpenAI plugins for now)
+  // Native catalogs can repeat an identity across marketplace entries. Keep
+  // the same first entry used by detail lookup, with one shelf item/card per id.
   const allPlugins = useMemo(() => {
-    if (!pluginData) return [];
-    return pluginData.marketplaces.flatMap((mp) => mp.plugins);
-    //.filter((p) => p.interface?.developerName === "OpenAI" || p.interface?.developerName === "Vercel Labs" );
+    const plugins = new Map<string, PluginInfo>();
+    for (const marketplace of pluginData?.marketplaces ?? []) {
+      for (const plugin of marketplace.plugins) {
+        if (!plugins.has(plugin.id)) plugins.set(plugin.id, plugin);
+      }
+    }
+    return Array.from(plugins.values());
   }, [pluginData]);
 
   // `plugin/installed` can retain legacy marketplace entries after they have

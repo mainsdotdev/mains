@@ -55,6 +55,17 @@ describe("createWorkAdapter", () => {
     vi.clearAllMocks();
   });
 
+  it("passes catalog cancellation through the shared adapter to its driver", async () => {
+    const driver = { ...fakeDriver(), listPlugins: vi.fn().mockResolvedValue({ marketplaces: [] }) };
+    createCodexDriver.mockReturnValue(driver);
+    const controller = new AbortController();
+    await listPluginsForProvider(codexProvider({}), controller.signal);
+    expect(driver.listPlugins).toHaveBeenCalledWith(controller.signal);
+    controller.abort();
+    await expect(listPluginsForProvider(codexProvider({}), controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(driver.listPlugins).toHaveBeenCalledOnce();
+  });
+
   it("keeps a plugin claimed across clients until its native installation settles", async () => {
     let release!: () => void;
     const driver = { ...fakeDriver(),

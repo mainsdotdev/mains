@@ -467,10 +467,14 @@ export const providersApi = baseApi.injectEndpoints({
     }),
 
     getProviderPlugins: builder.query<PluginListResponse, string>({
-      query: (id) => ({
-        handler: CHANNELS.providers.getPlugins,
-        args: [id],
-      }),
+      query: (id) => {
+        const requestId = crypto.randomUUID();
+        return {
+          handler: CHANNELS.providers.getPlugins,
+          args: [id, requestId],
+          cancel: { handler: CHANNELS.providers.cancelPluginCatalog, args: [id, requestId] },
+        };
+      },
       providesTags: (_result, _error, id) => [{ type: "ProviderPlugins", id }],
       keepUnusedDataFor: 900,
     }),
@@ -648,6 +652,7 @@ export const {
   useGetProviderAccountInfoQuery,
   useUpdateProviderCliMutation,
   useGetProviderPluginsQuery,
+  useLazyGetProviderPluginsQuery,
   useGetProviderInstalledPluginsQuery,
   useStartProviderConnectorOAuthMutation,
   useReadProviderPluginQuery,

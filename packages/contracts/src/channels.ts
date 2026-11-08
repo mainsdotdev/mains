@@ -332,6 +332,7 @@ export const CHANNELS = {
     /** Push: emitted when async model-capability discovery enriches the model list. */
     modelsUpdated: "providers:modelsUpdated",
     getPlugins: "providers:getPlugins",
+    cancelPluginCatalog: "providers:cancelPluginCatalog",
     getInstalledPlugins: "providers:getInstalledPlugins",
     getConnectors: "providers:getConnectors",
     startConnectorOAuth: "providers:startConnectorOAuth",

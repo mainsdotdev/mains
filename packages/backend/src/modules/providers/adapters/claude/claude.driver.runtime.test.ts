@@ -145,6 +145,40 @@ esac
     expect(cliCalls()).toContain("auth status --json");
   });
 
+  it("shares plugin discovery and kills both CLI processes when its last reader leaves", async () => {
+    fs.writeFileSync(bundled, `#!${process.execPath}
+const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(callsFile)}, process.pid + "\\n");
+setInterval(() => {}, 1000);
+`);
+    const driver = createClaudeDriver({ settingSources: [] });
+    const first = new AbortController();
+    const second = new AbortController();
+    const a = driver.listPlugins!(first.signal);
+    const b = driver.listPlugins!(second.signal);
+    const rejectedA = expect(a).rejects.toMatchObject({ name: "AbortError" });
+    const rejectedB = expect(b).rejects.toMatchObject({ name: "AbortError" });
+    const pids = () => cliCalls().trim().split("\n").filter(Boolean).map(Number);
+    const running = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    try {
+      await vi.waitFor(() => expect(pids()).toHaveLength(2));
+      first.abort();
+      await rejectedA;
+      expect(pids().every(running)).toBe(true);
+      second.abort();
+      await rejectedB;
+      await vi.waitFor(() => expect(pids().some(running)).toBe(false));
+      fs.writeFileSync(bundled, `#!${process.execPath}
+console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"available":[]}');
+`);
+      await expect(driver.listPlugins!()).resolves.toMatchObject({ marketplaces: [], remoteSyncError: null });
+    } finally {
+      first.abort(); second.abort();
+      for (const pid of pids()) if (running(pid)) process.kill(pid, "SIGKILL");
+      await driver.shutdown?.();
+    }
+  });
+
   it("reads plan usage through a control query using the selected runtime and releases it", async () => {
     sdk.usage.mockResolvedValueOnce({
       rate_limits_available: true,

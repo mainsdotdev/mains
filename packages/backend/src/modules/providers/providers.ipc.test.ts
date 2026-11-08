@@ -6,6 +6,7 @@ import { createAccount, createProvider } from "../../../test/factories";
 import type { DatabaseInstance } from "../../db/types";
 import type { ProviderResponse } from "./providers.dto";
 import { registerProvidersIpc, unregisterProvidersIpc } from "./providers.ipc";
+import { providersService } from "./providers.service";
 
 let db: DatabaseInstance;
 let cleanup: () => void;
@@ -31,7 +32,36 @@ describe("providers IPC for paired devices", () => {
 
   afterEach(() => {
     unregisterProvidersIpc();
+    vi.restoreAllMocks();
     cleanup();
+  });
+
+  it("cancels a catalog only for its requesting client, provider and request id", async () => {
+    let signal!: AbortSignal;
+    vi.spyOn(providersService, "getPlugins").mockImplementation((_id, captured) => {
+      signal = captured!;
+      return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    });
+    const pending = invokeHandler(CHANNELS.providers.getPlugins, ["codex", "request"], { clientId: "first" });
+    await invokeHandler(CHANNELS.providers.cancelPluginCatalog, ["codex", "request"], { clientId: "second" });
+    await invokeHandler(CHANNELS.providers.cancelPluginCatalog, ["claude_code", "request"], { clientId: "first" });
+    await invokeHandler(CHANNELS.providers.cancelPluginCatalog, ["codex", "other"], { clientId: "first" });
+    expect(signal.aborted).toBe(false);
+    await invokeHandler(CHANNELS.providers.cancelPluginCatalog, ["codex", "request"], { clientId: "first" });
+    expect(signal.aborted).toBe(true);
+    await expect(pending).resolves.toEqual({ success: false, error: "Plugin catalog request cancelled" });
+  });
+
+  it("retires outstanding catalog reads when the provider handlers shut down", async () => {
+    let signal!: AbortSignal;
+    vi.spyOn(providersService, "getPlugins").mockImplementation((_id, captured) => {
+      signal = captured!;
+      return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    });
+    const pending = invokeHandler(CHANNELS.providers.getPlugins, ["codex", "request"]);
+    unregisterProvidersIpc();
+    expect(signal.aborted).toBe(true);
+    await expect(pending).resolves.toEqual({ success: false, error: "Plugin catalog request cancelled" });
   });
 
   it("projects the update response like getEnabled, even for an empty patch", async () => {

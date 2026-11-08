@@ -20,6 +20,7 @@ vi.mock("@/lib/redux/api", () => ({
   useUpdateProviderPluginMutation: () => [mocks.update, {}],
   useStartProviderConnectorOAuthMutation: () => [mocks.startOAuth, {}],
 }));
+vi.mock("../hooks/use-plugin-catalog", () => ({ usePluginCatalog: mocks.getPlugins }));
 vi.mock("@/components/ui", () => ({
   Button: (props: ComponentProps<"button">) => <button {...props} />,
   Heading2: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
@@ -72,6 +73,22 @@ beforeEach(() => {
 afterEach(() => { cleanup(); resetTransport(); mocks.listeners.clear(); });
 
 describe("plugin detail navigation", () => {
+  it("renders one shelf entry and card per plugin identity when marketplaces repeat entries", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.getPlugins.mockReturnValue({ data: { ...pluginData, marketplaces: [
+      pluginData.marketplaces[0],
+      { ...pluginData.marketplaces[0], name: "duplicate-marketplace", plugins: [{ ...plugin }] },
+    ] }, isLoading: false });
+    try {
+      const view = render(<MemoryRouter><ProviderPlugins providerId="codex" /></MemoryRouter>);
+      expect(screen.getAllByRole("button", { name: "Open Gmail" })).toHaveLength(1);
+      expect(screen.getAllByText("Gmail")).toHaveLength(1);
+      view.rerender(<MemoryRouter><ProviderPlugins providerId="codex" /></MemoryRouter>);
+      expect(screen.getAllByRole("button", { name: "Open Gmail" })).toHaveLength(1);
+      expect(errors.mock.calls.some(([message]) => String(message).includes("same key"))).toBe(false);
+    } finally { errors.mockRestore(); }
+  });
+
   it("preserves a pending plugin's controls while another plugin finishes and navigation returns", async () => {
     let finish!: () => void;
     mocks.update.mockReturnValueOnce({ unwrap: () => new Promise<void>((resolve) => { finish = resolve; }) });

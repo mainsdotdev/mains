@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -28,6 +29,7 @@ import {
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { CodexAppServerResult } from "./codex-app-server-protocol/rpc";
 import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
+import { awaitCatalogResult, createCatalogRead } from "../catalog-read";
 import type { McpServerStatus } from "./codex-app-server-protocol/generated/v2/McpServerStatus";
 import { discoverMcpAppEntrypoints, installedMcpAppEntrypoints, type McpAppPluginSource } from "./codex-mcp-apps";
 
@@ -311,6 +313,55 @@ function pluginAssetUrl(
     if (dataUrl) return dataUrl;
   }
   return undefined;
+}
+
+/** Resolve catalog artwork asynchronously, at most eight plugins at a time. */
+async function mapPluginCatalog(result: Record<string, unknown>, signal?: AbortSignal): Promise<PluginListResponse> {
+  const assets = new Map<string, Promise<string | undefined>>();
+  async function asset(...candidates: Array<string | null | undefined>): Promise<string | undefined> {
+    for (const candidate of candidates) {
+      signal?.throwIfAborted();
+      if (!candidate) continue;
+      if (/^(https?:|data:)/i.test(candidate)) return candidate;
+      let read = assets.get(candidate);
+      if (!read) {
+        read = fs.promises.readFile(candidate, { signal }).then((data) => {
+          const extension = path.extname(candidate).toLowerCase();
+          const mime = ({ ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" } as Record<string, string>)[extension]
+            ?? "application/octet-stream";
+          return `data:${mime};base64,${data.toString("base64")}`;
+        }).catch(() => { signal?.throwIfAborted(); return undefined; });
+        assets.set(candidate, read);
+      }
+      const value = await read;
+      if (value) return value;
+    }
+    return undefined;
+  }
+  const marketplaces: Array<Record<string, unknown>> = [];
+  for (const marketplace of (Array.isArray(result.marketplaces) ? result.marketplaces : []) as Array<Record<string, unknown>>) {
+    const plugins: Array<Record<string, unknown>> = [];
+    const raw = (Array.isArray(marketplace.plugins) ? marketplace.plugins : []) as Array<Record<string, any>>;
+    for (let index = 0; index < raw.length; index += 8) {
+      await yieldToEventLoop(undefined, { signal });
+      plugins.push(...await Promise.all(raw.slice(index, index + 8).map(async (plugin) => {
+        const info = plugin.interface;
+        if (!info) return plugin;
+        const [composerIcon, logo, logoDark, screenshots] = await Promise.all([
+          asset(info.composerIcon, info.composerIconUrl), asset(info.logo, info.logoUrl), asset(info.logoDark, info.logoUrlDark),
+          Promise.all([...(info.screenshots ?? []), ...(info.screenshotUrls ?? [])].map((value) => asset(value))),
+        ]);
+        return { ...plugin, interface: { ...info, composerIcon, logo, logoDark,
+          composerIconUrl: undefined, logoUrl: undefined, logoUrlDark: undefined,
+          screenshots: screenshots.filter(Boolean), screenshotUrls: [],
+        } };
+      })));
+    }
+    marketplaces.push({ ...marketplace, plugins });
+  }
+  signal?.throwIfAborted();
+  return mapCodexPluginList({ ...result, marketplaces });
 }
 
 function mapPluginAvailability(
@@ -617,7 +668,36 @@ export function createCodexCapabilities(
     value: PluginListResponse;
     fetchedAt: number;
   }>();
-  let pluginCatalogInFlight: Promise<PluginListResponse> | null = null;
+  let rawCatalogInFlight: Promise<Record<string, unknown>> | null = null;
+  const catalogRead = createCatalogRead(async (signal) => {
+    const staleValue = pluginCatalogCache?.value;
+    const generation = pluginCacheGeneration;
+    try {
+      // plugin/list has no native cancellation RPC. Keep this request shared
+      // across navigation, but never map its response without a consumer.
+      if (!rawCatalogInFlight) {
+        const server = await awaitCatalogResult(options.ensureServer(), signal);
+        await awaitCatalogResult(assertPluginCapability(server), signal);
+        signal.throwIfAborted();
+        const request = server.sendRequest("plugin/list", {}, 30000) as unknown as Promise<Record<string, unknown>>;
+        rawCatalogInFlight = request;
+        void request.then(() => {}, () => {}).then(() => {
+          if (rawCatalogInFlight === request) rawCatalogInFlight = null;
+        });
+      }
+      const result = await awaitCatalogResult(rawCatalogInFlight, signal);
+      signal.throwIfAborted();
+      const value = await mapPluginCatalog(result, signal);
+      if (generation === pluginCacheGeneration) {
+        indexPluginReferences(result);
+        pluginCatalogCache = { value, fetchedAt: Date.now() };
+      }
+      return value;
+    } catch (error) {
+      signal.throwIfAborted();
+      return pluginListFailure(error, "plugin/list", staleValue);
+    }
+  });
   const installedPluginsInFlight = new Map<string, Promise<PluginListResponse>>();
   let pluginCapabilityPromise: Promise<void> | null = null;
   let pluginCacheGeneration = 0;
@@ -813,7 +893,7 @@ export function createCodexCapabilities(
       30000,
     )) as unknown as Record<string, unknown>;
     indexPluginReferences(result);
-    return mapCodexPluginList(result);
+    return mapPluginCatalog(result);
   }
 
   function pluginListFailure(
@@ -842,7 +922,8 @@ export function createCodexCapabilities(
     pluginCacheGeneration += 1;
     pluginCatalogCache = null;
     installedPluginsCache.clear();
-    pluginCatalogInFlight = null;
+    catalogRead.invalidate();
+    rawCatalogInFlight = null;
     installedPluginsInFlight.clear();
     mcpAppPluginSources.clear();
     mcpInventoryInFlight = null;
@@ -1109,7 +1190,8 @@ export function createCodexCapabilities(
     }
   }
 
-  async function listPlugins(): Promise<PluginListResponse> {
+  async function listPlugins(signal?: AbortSignal): Promise<PluginListResponse> {
+    signal?.throwIfAborted();
     if (
       pluginCatalogCache &&
       Date.now() - pluginCatalogCache.fetchedAt <
@@ -1117,30 +1199,7 @@ export function createCodexCapabilities(
     ) {
       return pluginCatalogCache.value;
     }
-    if (pluginCatalogInFlight) return pluginCatalogInFlight;
-
-    const staleValue = pluginCatalogCache?.value;
-    const generation = pluginCacheGeneration;
-    const request = fetchPluginList("plugin/list")
-      .then((value) => {
-        if (generation === pluginCacheGeneration) {
-          pluginCatalogCache = {
-            value,
-            fetchedAt: Date.now(),
-          };
-        }
-        return value;
-      })
-      .catch((error) =>
-        pluginListFailure(error, "plugin/list", staleValue),
-      )
-      .finally(() => {
-        if (pluginCatalogInFlight === request) {
-          pluginCatalogInFlight = null;
-        }
-      });
-    pluginCatalogInFlight = request;
-    return request;
+    return catalogRead.read(signal);
   }
 
   async function listInstalledPlugins(forceRefresh = false, workspacePath?: string): Promise<PluginListResponse> {

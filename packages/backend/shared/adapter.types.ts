@@ -780,9 +780,11 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
 
   /**
    * List available plugins from the provider's marketplace.
+   * Cancellation releases this reader; shared native discovery is stopped
+   * when its last reader leaves, where the provider supports cancellation.
    * @returns Promise resolving to plugin marketplace data
    */
-  listPlugins?(): Promise<PluginListResponse>;
+  listPlugins?(signal?: AbortSignal): Promise<PluginListResponse>;
 
   /**
    * List installed plugins without loading the full remote marketplace.
@@ -991,7 +993,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   resetCodexMemories?(): Promise<void>;
   getAccountInfo?(): Promise<AccountInfo>;
   updateCli?(): Promise<CliUpdateResult>;
-  listPlugins?(): Promise<PluginListResponse>;
+  listPlugins?(signal?: AbortSignal): Promise<PluginListResponse>;
   listInstalledPlugins?(workspacePath?: string): Promise<PluginListResponse>;
   readPlugin?(pluginName: string, marketplacePath: string): Promise<PluginDetail>;
   installPlugin?(pluginId: string, scope?: PluginScope): Promise<void>;

@@ -290,9 +290,9 @@ export const providersService = {
     return updateCliForProvider(provider);
   },
 
-  async getPlugins(id: string): Promise<PluginListResponse> {
+  async getPlugins(id: string, signal?: AbortSignal): Promise<PluginListResponse> {
     const provider = await requireEnabledProvider(id);
-    return listPluginsForProvider(provider);
+    return listPluginsForProvider(provider, signal);
   },
 
   async getInstalledPlugins(id: string): Promise<PluginListResponse> {
