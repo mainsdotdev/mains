@@ -1,3 +1,4 @@
+import { createResourceLifecycle, type ResourceScope } from "@mains/backend/runtime/resource-lifecycle";
 if (process.platform === "win32") {
   if (require("electron-squirrel-startup")) process.exit(0);
 }
@@ -806,7 +807,16 @@ const SERVE = parseServeOptions();
 /**
  * Initialize the application
  */
-async function initializeApp() {
+const appLifecycle = createResourceLifecycle<void>("Desktop backend");
+function initializeApp(): Promise<void> {
+  if (isShuttingDown) return Promise.resolve();
+  return appLifecycle.start((scope) => initializeAppResources(scope));
+}
+async function initializeAppResources(scope: ResourceScope) {
+  const step = async <T>(work: T | PromiseLike<T>): Promise<T> => {
+    const value = await work; scope.assertActive(); return value;
+  };
+  if (!SERVE.serve) scope.defer(cleanupAppResources);
   try {
     console.log("Initializing application...");
     watchChildProcesses();
@@ -820,6 +830,7 @@ async function initializeApp() {
     // host (which registers the WebSocket event sink). See docs/design/remote-backend.md.
     if (SERVE.serve) {
       const server = await startBackendServer({
+        signal: scope.signal,
         port: SERVE.port,
         host: SERVE.host,
         token: SERVE.token,
@@ -827,6 +838,8 @@ async function initializeApp() {
         tailscaleServe: SERVE.tailscaleServe,
         tailscaleServePort: SERVE.tailscaleServePort,
       });
+      scope.defer(() => server.close());
+      scope.assertActive();
       if (
         server.webUiAvailable &&
         process.stdout.isTTY &&
@@ -860,15 +873,15 @@ async function initializeApp() {
 
     // Running from the DMG or Downloads breaks auto-update: offer the move
     // before anything boots. On a move the app quits and relaunches itself.
-    if (await offerMoveToApplications()) return;
+    if (await step(offerMoveToApplications())) return;
 
     // Initialize database
-    await initializeDatabase({
+    await step(initializeDatabase({
       verbose: !app.isPackaged,
       enableWAL: true,
       busyTimeout: 5000,
-    });
-    await keyboardShortcutsService.start();
+    }));
+    await step(keyboardShortcutsService.start());
 
     // Wire the outbound event bus to the local renderer before any module can
     // emit. A headless `mains serve` would register a WebSocket sink instead.
@@ -917,7 +930,7 @@ async function initializeApp() {
     stopBridgeNotifications = startBridgeNotifications();
     registerLocalBackendIpc();
     registerSearchIpc();
-    await bridgeService.start();
+    await step(bridgeService.start());
     // Re-apply any persisted "This machine" exposure (survives app restarts).
     void localBackendService.restore();
     automationsService.start();
@@ -1155,9 +1168,10 @@ async function initializeApp() {
 
     // Create menu bar (tray) icon — respects user preference
     try {
-      const settings = await appSettingsService.ensureSettings();
+      const settings = await step(appSettingsService.ensureSettings());
       if (settings.showMenuBarIcon) showTray();
     } catch (err) {
+      scope.assertActive();
       console.warn("Failed to read menu bar icon preference, defaulting to shown:", err);
       showTray();
     }
@@ -1201,7 +1215,7 @@ async function initializeApp() {
       },
     });
 
-    await appshotsService.start();
+    await step(appshotsService.start());
 
     console.log("Application initialized successfully");
   } catch (error) {
@@ -1214,14 +1228,15 @@ async function initializeApp() {
     if (error instanceof DatabaseOwnershipError) {
       dialog.showErrorBox("Mains data is already in use", error.message);
     }
-    app.quit();
+    throw error;
   }
 }
 
 /**
  * Cleanup before app quits
  */
-async function cleanupApp() {
+function cleanupApp(): Promise<void> { return appLifecycle.close(); }
+async function cleanupAppResources() {
   try {
     console.log("Cleaning up application...");
     await Promise.all([automationsService.stop(), pulseService.stop()]);
@@ -1316,6 +1331,7 @@ async function cleanupApp() {
     console.log("Application cleanup completed");
   } catch (error) {
     console.error("Error during cleanup:", error);
+    throw error;
   }
 }
 
@@ -1357,10 +1373,10 @@ app.setAboutPanelOptions({
 registerImageProxyScheme();
 
 // App lifecycle events
-app.whenReady().then(initializeApp);
+app.whenReady().then(initializeApp).catch((error) => { console.error("Application startup failed:", error); app.quit(); });
 
 app.on("activate", () => {
-  if (SERVE.serve) return; // headless backend has no window to re-create
+  if (SERVE.serve || isShuttingDown || !appLifecycle.ready) return; // no window creation during teardown
   // On macOS it's common to re-create a window when dock icon is clicked
   const allWindows = BrowserWindow.getAllWindows();
   if (allWindows.length === 0) {
@@ -1383,7 +1399,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", async (event) => {
   if (isShuttingDown) {
-    return;
+    event.preventDefault(); return;
   }
 
   // Show confirmation if there are unsaved changes
@@ -1418,8 +1434,8 @@ app.on("before-quit", async (event) => {
 
   event.preventDefault();
   isShuttingDown = true;
-  await cleanupApp();
-  app.exit(0);
+  try { await cleanupApp(); app.exit(0); }
+  catch (error) { isShuttingDown = false; console.error("Application close failed; cleanup can be retried:", error); }
 });
 
 // Handle graceful shutdown signals

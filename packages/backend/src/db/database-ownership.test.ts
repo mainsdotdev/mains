@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireDatabaseOwnership,
@@ -50,6 +52,64 @@ function emulateWindowsDirectoryCollision(): void {
 }
 
 describe("database ownership", () => {
+  it("rejects an actual live Desktop process and recovers its lock after a crash", async () => {
+    const databasePath = temporaryDatabasePath(), lockPath = databaseOwnershipPath(databasePath);
+    const child = spawn(process.execPath, ["-e", `
+      const fs = require('node:fs'), path = require('node:path'), lock = process.argv[1];
+      fs.mkdirSync(lock);
+      fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ version: 1, token: 'child-owner',
+        pid: process.pid, owner: 'Mains Desktop', acquiredAt: new Date().toISOString() }));
+      process.send('ready'); setInterval(() => {}, 1000);
+    `, lockPath], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    try {
+      await once(child, "message");
+      expect(() => acquireDatabaseOwnership(databasePath, "Mains CLI")).toThrow(/already in use by Mains Desktop/);
+    } finally { const exited = once(child, "exit"); child.kill("SIGKILL"); await exited; }
+    const replacement = acquireDatabaseOwnership(databasePath, "Mains CLI"); replacement.release();
+  });
+
+  it.runIf(process.platform !== "win32")("shares ownership through a symlinked database file", () => {
+    const databasePath = temporaryDatabasePath(), alias = path.join(path.dirname(databasePath), "alias.db");
+    fs.writeFileSync(databasePath, ""); fs.symlinkSync(databasePath, alias);
+    const owner = acquireDatabaseOwnership(databasePath, "Mains Desktop");
+    let replacement: ReturnType<typeof acquireDatabaseOwnership> | undefined;
+    try {
+      expect(() => { replacement = acquireDatabaseOwnership(alias, "Mains CLI"); }).toThrow(/already in use/);
+    } finally { replacement?.release(); owner.release(); }
+  });
+
+  it("shares ownership through a symlinked data directory", () => {
+    const databasePath = temporaryDatabasePath(), directory = path.dirname(databasePath), alias = path.join(directory, "alias");
+    fs.symlinkSync(directory, alias, process.platform === "win32" ? "junction" : "dir");
+    const owner = acquireDatabaseOwnership(databasePath, "Mains Desktop");
+    try {
+      expect(() => acquireDatabaseOwnership(path.join(alias, "mains.db"), "Mains CLI")).toThrow(/already in use/);
+    } finally { owner.release(); }
+  });
+
+  it("can retry releasing the same owner after a filesystem failure", () => {
+    const databasePath = temporaryDatabasePath(), owner = acquireDatabaseOwnership(databasePath, "Mains Desktop");
+    vi.spyOn(fs, "rmSync").mockImplementationOnce(() => { throw Object.assign(new Error("Lock is busy"), { code: "EBUSY" }); });
+    expect(() => owner.release()).toThrow("Lock is busy");
+    expect(() => acquireDatabaseOwnership(databasePath, "Mains CLI")).toThrow(/already in use/);
+    owner.release();
+    expect(fs.existsSync(databaseOwnershipPath(databasePath))).toBe(false);
+  });
+
+  it("does not expire a recovery claim belonging to a live process", () => {
+    const identity = acquireDatabaseOwnership(temporaryDatabasePath(), "Live recovery");
+    const recovery = JSON.parse(fs.readFileSync(path.join(identity.lockPath!, "owner.json"), "utf8"));
+    identity.release(); recovery.acquiredAt = new Date(Date.now() - 60_000).toISOString();
+    const databasePath = temporaryDatabasePath(), lockPath = databaseOwnershipPath(databasePath);
+    fs.mkdirSync(lockPath);
+    writeRecord(path.join(lockPath, "owner.json"), { version: 1, token: "dead", pid: 2_147_483_647,
+      owner: "Crashed backend", acquiredAt: "2026-01-01T00:00:00.000Z" });
+    const recoveryPath = path.join(lockPath, "recovery.json");
+    fs.writeFileSync(recoveryPath, JSON.stringify(recovery));
+    expect(() => acquireDatabaseOwnership(databasePath, "New backend")).toThrow(/another process is recovering/);
+    expect(JSON.parse(fs.readFileSync(recoveryPath, "utf8"))).toEqual(recovery);
+  });
+
   it("reports the live owner when Windows returns EPERM for a directory collision", () => {
     const databasePath = temporaryDatabasePath();
     const desktop = acquireDatabaseOwnership(databasePath, "Mains Desktop");

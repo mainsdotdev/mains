@@ -31,6 +31,8 @@ export interface WsConnection extends WsClientConnection {
 
 export interface ServeConnectionOptions {
   commandReceipts?: CommandReceiptStore;
+  accepting?: () => boolean;
+  track?: (work: Promise<void>) => void;
 }
 
 /**
@@ -53,7 +55,10 @@ export function serveConnection(
   sink.addClient(conn);
   conn.onClose(() => { open = false; sink.removeClient(conn.id); });
   conn.onMessage((data) => {
-    if (open) void routeMessage(conn, data, options, () => open);
+    if (open && (options.accepting?.() ?? true)) {
+      const work = routeMessage(conn, data, options, () => open);
+      options.track?.(work);
+    }
   });
 }
 

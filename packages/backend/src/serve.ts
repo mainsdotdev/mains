@@ -1,4 +1,5 @@
-import { closeDatabase, initializeDatabase } from "./db/client";
+import { createResourceLifecycle } from "./runtime/resource-lifecycle";
+import DatabaseClient, { closeDatabase, initializeDatabase } from "./db/client";
 import { startWsHost, type WsHost } from "./ipc-kit/ws-server-host";
 import { generateToken } from "./ipc-kit/ws-auth";
 
@@ -87,6 +88,8 @@ import type { PairingCode } from "./modules/backend";
 import { bridgeService, registerBridgeIpc, unregisterBridgeIpc } from "./modules/bridge";
 
 export interface ServeOptions {
+  /** Cancel initialization or close this host when its owner is canceled. */
+  signal?: AbortSignal;
   /** Port to listen on. Default 8787. */
   port?: number;
   /** Interface to bind. Default loopback (127.0.0.1) — pair via SSH tunnel. */
@@ -165,17 +168,7 @@ const BACKEND_REGISTRATIONS: readonly BackendRegistration[] = [
   { register: registerImageProxyIpc, unregister: unregisterImageProxyIpc },
 ];
 
-function unregisterBackendRegistrations(
-  registrations: readonly BackendRegistration[],
-): void {
-  for (const registration of [...registrations].reverse()) {
-    try {
-      registration.unregister();
-    } catch (error) {
-      console.warn("[serve] failed to unregister a backend module", error);
-    }
-  }
-}
+let activeBackend: object | undefined;
 
 /**
  * Boot the mains backend headlessly and serve it over WebSocket.
@@ -191,42 +184,35 @@ function unregisterBackendRegistrations(
  *
  * See docs/design/remote-backend.md.
  */
-export async function startBackendServer(
-  options: ServeOptions = {},
-): Promise<BackendServer> {
-  await initializeDatabase({
-    verbose: false,
-    enableWAL: true,
-    busyTimeout: 5000,
-  });
-
-  const registered: BackendRegistration[] = [];
-  try {
+export function startBackendServer(options: ServeOptions = {}): Promise<BackendServer> {
+  if (activeBackend || DatabaseClient.getInstance().isReady())
+    return Promise.reject(new Error("A backend already owns this process; close it before starting another"));
+  const lifecycle = createResourceLifecycle<BackendServer>("Backend server");
+  activeBackend = lifecycle;
+  return lifecycle.start(async (scope) => {
+    scope.defer(() => { if (activeBackend === lifecycle) activeBackend = undefined; });
+    scope.observe(options.signal);
+    scope.defer(closeDatabase);
+    await initializeDatabase({ verbose: false, enableWAL: true, busyTimeout: 5000 });
+    scope.assertActive();
+    scope.defer(async () => {
+      runSessionRegistry.shutdownAll("Standalone server stopped during run");
+      destroyAllTerminals();
+      await shutdownAllWorkAdapters();
+    });
     for (const registration of BACKEND_REGISTRATIONS) {
+      // A registration may fail after installing some of its handlers.
+      scope.defer(() => registration.unregister());
       registration.register();
-      registered.push(registration);
+      scope.assertActive();
     }
+    scope.defer(() => bridgeService.stop());
     await bridgeService.start();
-    automationsService.start();
-    pulseService.start();
-  } catch (error) {
-    await Promise.all([automationsService.stop(), pulseService.stop()]);
-    await bridgeService.stop();
-    unregisterBackendRegistrations(registered);
-    await closeDatabase();
-    throw error;
-  }
-
-  const host = options.host ?? DEFAULT_HOST;
-  // Always token-gated, loopback included: a browser lets any web page open a
-  // WebSocket to 127.0.0.1, so "loopback only" does not mean "only this user".
-  const token = options.token || process.env.MAINS_SERVE_TOKEN || generateToken();
-
-  const webRoot = resolveWebRoot(options.webRoot);
-
-  let wsHost: WsHost;
-  try {
-    wsHost = await startWsHost({
+    scope.assertActive();
+    const host = options.host ?? DEFAULT_HOST;
+    const token = options.token || process.env.MAINS_SERVE_TOKEN || generateToken();
+    const webRoot = resolveWebRoot(options.webRoot);
+    const wsHost: WsHost = await startWsHost({
       port: options.port ?? DEFAULT_PORT,
       host,
       token,
@@ -246,84 +232,48 @@ export async function startBackendServer(
       },
       commandReceipts: backendService.commandReceipts,
     });
-  } catch (error) {
-    await Promise.all([automationsService.stop(), pulseService.stop()]);
-    await bridgeService.stop();
-    unregisterBackendRegistrations(registered);
-    await closeDatabase();
-    throw error;
-  }
-  console.log(`[serve] mains backend listening on ws://${host}:${wsHost.port}`);
-  if (webRoot) {
-    console.log(
-      `[serve] web UI ready at http://${host}:${wsHost.port}/ (serving ${webRoot})`,
-    );
-  } else {
-    console.log(
-      "[serve] web UI disabled — no renderer build found. Run `npm run build:web` first.",
-    );
-  }
-
-  let tailscaleUrl: string | null = null;
-  if (options.tailscaleServe) {
-    const httpsPort = options.tailscaleServePort ?? 443;
-    try {
-      await tailscaleService.startServe(wsHost.port, httpsPort);
-      const status = await tailscaleService.readStatus();
-      if (status.magicDnsName) {
-        const httpsUrl = tailscaleService.resolveHttpsUrl(
-          status.magicDnsName,
-          httpsPort,
-        );
-        tailscaleUrl = httpsUrl;
-        console.log(`[serve] Tailscale HTTPS web UI: ${httpsUrl}/`);
-        console.log(
-          `[serve] Tailscale connect (WS): ${httpsUrl.replace(/^https:/, "wss:")}`,
-        );
-      } else {
-        console.log(
-          "[serve] Tailscale serve started, but no MagicDNS name found (is Tailscale up / HTTPS enabled?).",
-        );
+    scope.defer(() => wsHost.close());
+    scope.assertActive();
+    scope.defer(async () => { await Promise.all([automationsService.stop(), pulseService.stop()]); });
+    automationsService.start();
+    pulseService.start();
+    console.log(`[serve] mains backend listening on ws://${host}:${wsHost.port}`);
+    if (webRoot) console.log(`[serve] web UI ready at http://${host}:${wsHost.port}/ (serving ${webRoot})`);
+    else console.log("[serve] web UI disabled — no renderer build found. Run `npm run build:web` first.");
+    let tailscaleUrl: string | null = null;
+    if (options.tailscaleServe) {
+      const httpsPort = options.tailscaleServePort ?? 443;
+      scope.defer(() => tailscaleService.stopServeIfActive());
+      try {
+        await tailscaleService.startServe(wsHost.port, httpsPort);
+        scope.assertActive();
+        const status = await tailscaleService.readStatus();
+        scope.assertActive();
+        if (status.magicDnsName) {
+          tailscaleUrl = tailscaleService.resolveHttpsUrl(status.magicDnsName, httpsPort);
+          console.log(`[serve] Tailscale HTTPS web UI: ${tailscaleUrl}/`);
+          console.log(`[serve] Tailscale connect (WS): ${tailscaleUrl.replace(/^https:/, "wss:")}`);
+        } else console.log("[serve] Tailscale serve started, but no MagicDNS name found (is Tailscale up / HTTPS enabled?).");
+      } catch (error) {
+        scope.assertActive();
+        console.error(`[serve] Tailscale serve failed: ${error instanceof Error ? error.message : error}`);
       }
-    } catch (error) {
-      console.error(
-        `[serve] Tailscale serve failed: ${
-          error instanceof Error ? error.message : error
-        }. Is the \`tailscale\` CLI installed, logged in, and HTTPS enabled for the tailnet?`,
-      );
     }
-  }
-
-  let stopPromise: Promise<void> | null = null;
-  const close = (): Promise<void> => {
-    if (stopPromise) return stopPromise;
-    stopPromise = (async () => {
-      await Promise.all([automationsService.stop(), pulseService.stop()]);
-      await wsHost.close();
-      await bridgeService.stop();
-      await tailscaleService.stopServeIfActive();
-      runSessionRegistry.shutdownAll("Standalone server stopped during run");
-      destroyAllTerminals();
-      await shutdownAllWorkAdapters();
-      await stopAttachmentMaintenance();
-      unregisterBackendRegistrations(registered);
-      await closeDatabase();
-    })();
-    return stopPromise;
-  };
-
-  startAttachmentMaintenance();
-  return {
-    sink: wsHost.sink,
-    port: wsHost.port,
-    webUiAvailable: wsHost.webUiAvailable,
-    token,
-    tailscaleUrl,
-    createWebLogin: (baseUrl) => wsHost.createWebLogin(baseUrl),
-    createPairingCode: (endpoints) =>
-      backendService.createPairingCode(endpoints),
-    disconnectDevice: (deviceId) => wsHost.disconnectDevice(deviceId),
-    connectedDeviceIds: () => wsHost.connectedDeviceIds(),
-    close,
-  };
+    scope.assertActive();
+    scope.defer(() => stopAttachmentMaintenance());
+    startAttachmentMaintenance();
+    return {
+      sink: wsHost.sink,
+      port: wsHost.port,
+      webUiAvailable: wsHost.webUiAvailable,
+      token,
+      tailscaleUrl,
+      createWebLogin: (baseUrl) => wsHost.createWebLogin(baseUrl),
+      createPairingCode: (endpoints) =>
+        backendService.createPairingCode(endpoints),
+      disconnectDevice: (deviceId) => wsHost.disconnectDevice(deviceId),
+      connectedDeviceIds: () => wsHost.connectedDeviceIds(),
+      close: () => lifecycle.close(),
+    };
+  });
 }

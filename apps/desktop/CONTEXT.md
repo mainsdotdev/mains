@@ -413,6 +413,27 @@ timer range into bounded waits and checks the actual due time before dispatch.
 Pulse calendar math still uses device-local time; automation intervals remain
 completion-based unless the user edited their next schedule during execution.
 
+**host lifecycle**:
+`packages/backend/src/runtime/resource-lifecycle.ts` owns opening/ready/closing
+admission, generation retirement and a reverse-order cleanup journal shared by
+SQLite, the backend host, the standalone composition root and Desktop startup.
+Close joins a pending opener and repeated closes share one promise. Late startup
+results cannot activate the next phase; owned resources are still journaled and
+released. Successful cleanup steps are removed, while a failed release retains
+its prerequisites and blocks reopening until close is retried. Failed startup
+rollback exposes `ResourceCleanupError.close()`; parent owners retain the child's
+cleanup before restoring runtime/IPC/notification adapters. Each process admits
+only one backend host, and initialized SQLite cannot silently switch paths.
+SQLite is published only when ready. WAL checkpoint failure still attempts native
+close, but a busy connection keeps its filesystem lease until native close and
+lease release succeed. Lock identity resolves filesystem aliases; live recovery
+owners never expire by age alone. Only an unidentified partial recovery record
+uses the grace interval. Network close rejects new admission and drains accepted
+HTTP, authentication, WebSocket handlers and command receipts before releasing
+SQLite. CLI startup observes SIGINT/SIGTERM before awaiting the host and does not
+commit a rotated token on cancellation. Desktop startup checks its generation
+after async boundaries; quit joins teardown and permits retry after failure.
+
 **standalone server**:
 The plain-Node backend composed by `apps/server/src/standalone-server.ts` and
 `apps/server/src/server-cli.ts`. The application owns one SQLite database,

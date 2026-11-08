@@ -10,6 +10,7 @@ import {
 import { configureBackendRuntime } from "@mains/backend/runtime/backend-runtime";
 import { createNodeBackendRuntime } from "@mains/backend/runtime/node-backend-runtime";
 import { serverImagePreview } from "./image-preview";
+import { createResourceLifecycle } from "@mains/backend/runtime/resource-lifecycle";
 
 export interface StandaloneServerOptions extends ServeOptions {
   dataDir: string;
@@ -22,6 +23,8 @@ export interface StandaloneServer extends BackendServer {
   readonly dataDir: string;
 }
 
+let activeHost: object | undefined;
+
 /**
  * Start Mains in a genuine Node process. The caller owns the returned server and
  * must close it so schedulers, agents, terminals, sockets and SQLite are drained.
@@ -29,51 +32,48 @@ export interface StandaloneServer extends BackendServer {
 export async function startStandaloneServer(
   options: StandaloneServerOptions,
 ): Promise<StandaloneServer> {
-  const dataDir = path.resolve(options.dataDir);
-  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  if (activeHost) throw new Error("A standalone backend already owns this process; close it before starting another");
+  const lifecycle = createResourceLifecycle<StandaloneServer>("Standalone server");
+  activeHost = lifecycle;
+  return lifecycle.start(async (scope) => {
+    scope.defer(() => { if (activeHost === lifecycle) activeHost = undefined; });
+    scope.observe(options.signal);
+    const dataDir = path.resolve(options.dataDir);
+    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
-  const restoreRuntime = configureBackendRuntime(
-    createNodeBackendRuntime({
+    const restoreRuntime = configureBackendRuntime(
+      createNodeBackendRuntime({
+        dataDir,
+        appVersion: options.appVersion,
+        appRoot: options.appRoot,
+        resourcesPath: options.resourcesPath,
+        imagePreview: serverImagePreview,
+      }),
+    );
+    scope.defer(restoreRuntime);
+    const restoreIpc = configureIpcMainAdapter(null);
+    scope.defer(restoreIpc);
+    const restoreNotifications = configureRunNotificationSink(null);
+    scope.defer(restoreNotifications);
+
+    const server = await startBackendServer(options);
+    scope.defer(() => server.close());
+    scope.assertActive();
+
+    return {
+      sink: server.sink,
+      port: server.port,
+      webUiAvailable: server.webUiAvailable,
+      token: server.token,
+      tailscaleUrl: server.tailscaleUrl,
+      createWebLogin: (baseUrl) => server.createWebLogin(baseUrl),
       dataDir,
-      appVersion: options.appVersion,
-      appRoot: options.appRoot,
-      resourcesPath: options.resourcesPath,
-      imagePreview: serverImagePreview,
-    }),
-  );
-  const restoreIpc = configureIpcMainAdapter(null);
-  const restoreNotifications = configureRunNotificationSink(null);
-
-  let server: BackendServer;
-  try {
-    server = await startBackendServer(options);
-  } catch (error) {
-    restoreNotifications();
-    restoreIpc();
-    restoreRuntime();
-    throw error;
-  }
-
-  let closePromise: Promise<void> | null = null;
-  return {
-    sink: server.sink,
-    port: server.port,
-    webUiAvailable: server.webUiAvailable,
-    token: server.token,
-    tailscaleUrl: server.tailscaleUrl,
-    createWebLogin: (baseUrl) => server.createWebLogin(baseUrl),
-    dataDir,
-    createPairingCode: (endpoints) => server.createPairingCode(endpoints),
-    disconnectDevice: (deviceId) => server.disconnectDevice(deviceId),
-    connectedDeviceIds: () => server.connectedDeviceIds(),
-    close() {
-      if (closePromise) return closePromise;
-      closePromise = server.close().finally(() => {
-        restoreNotifications();
-        restoreIpc();
-        restoreRuntime();
-      });
-      return closePromise;
-    },
-  };
+      createPairingCode: (endpoints) => server.createPairingCode(endpoints),
+      disconnectDevice: (deviceId) => server.disconnectDevice(deviceId),
+      connectedDeviceIds: () => server.connectedDeviceIds(),
+      close() {
+        return lifecycle.close();
+      },
+    };
+  });
 }

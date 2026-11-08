@@ -56,6 +56,24 @@ describe("startWsHost (integration)", () => {
     clearHandlers();
   });
 
+  it("waits for an accepted HTTP pairing operation even after its socket is closed", async () => {
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let completed = false;
+    host = await startWsHost({ port: 0, host: "127.0.0.1", token: TOKEN,
+      pairDevice: async () => { enter(); await gate; completed = true; return { deviceId: "device", deviceToken: "secret" }; } });
+    const request = fetch(`http://127.0.0.1:${host.port}/pair`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: "pairing-code", deviceName: "Phone", platform: "ios", appVersion: "test" }) }).catch(() => null);
+    await entered;
+    let closed = false; const closing = host.close().then(() => { closed = true; });
+    try {
+      await request; await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+    } finally { release(); await closing; }
+    expect(completed).toBe(true);
+  });
+
   it("serves invokes and pushes bus events end-to-end", async () => {
     host = await startWsHost({ port: 0, host: "127.0.0.1", token: TOKEN });
     registerHandler("ping:ping", async (_ctx, name) => ({

@@ -4,6 +4,12 @@ import path from "node:path";
 import { buildSubprotocols } from "@mains/contracts/ws-protocol";
 import { parsePairingLink } from "@mains/contracts/backend";
 import WebSocket from "ws";
+import { createServer, type AddressInfo } from "node:net";
+import { once } from "node:events";
+import { getSqlite } from "@mains/backend/db/client";
+import { databaseOwnershipPath } from "@mains/backend/db/database-ownership";
+import { getBackendRuntime } from "@mains/backend/runtime/backend-runtime";
+import { registerHandler, unregisterHandler } from "@mains/backend/ipc-kit/handler-registry";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   startStandaloneServer,
@@ -11,6 +17,11 @@ import {
 } from "./standalone-server";
 
 const TOKEN = "standalone-integration-token";
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 let server: StandaloneServer | null = null;
 let dataDir: string | null = null;
 
@@ -43,10 +54,11 @@ function invoke(socket: WebSocket, id: number, channel: string): Promise<any> {
   });
 }
 
-async function start(): Promise<StandaloneServer> {
+async function start(port = 0, signal?: AbortSignal): Promise<StandaloneServer> {
   return startStandaloneServer({
     host: "127.0.0.1",
-    port: 0,
+    port,
+    signal,
     token: TOKEN,
     dataDir: dataDir!,
     appVersion: "test-version",
@@ -64,6 +76,83 @@ afterEach(async () => {
 });
 
 describe("standalone Mains server", () => {
+  it("does not acquire resources for a canceled start and allows a later start", async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-server-test-"));
+    const cancellation = new AbortController(); cancellation.abort();
+    let unexpected: StandaloneServer | undefined;
+    try {
+      await expect(start(0, cancellation.signal).then((value) => { unexpected = value; })).rejects.toThrow(/cancel|abort|clos/i);
+    } finally { await unexpected?.close(); }
+    expect(fs.existsSync(databaseOwnershipPath(path.join(dataDir, "mains.db")))).toBe(false);
+    server = await start();
+  });
+
+  it("drains an accepted WebSocket write before closing SQLite and releasing its lock", async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-server-test-")); server = await start();
+    const entered = deferred(), gate = deferred(), finished = deferred(); let writeError: unknown;
+    registerHandler("test:drain-write", async () => {
+      entered.resolve(); await gate.promise;
+      try { getSqlite().prepare("UPDATE accounts SET bio='drained before close' WHERE id='default'").run(); }
+      catch (error) { writeError = error; }
+      finally { finished.resolve(); }
+      return { success: true, data: null };
+    });
+    const socket = await connect(server.port);
+    socket.send(JSON.stringify({ kind: "invoke", id: 44, channel: "test:drain-write", args: [] }));
+    await entered.promise;
+    const disconnected = once(socket, "close"); let closed = false;
+    const closing = server.close().then(() => { closed = true; });
+    try {
+      await disconnected; await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+    } finally { gate.resolve(); await finished.promise; await closing; unregisterHandler("test:drain-write"); }
+    expect(writeError).toBeUndefined();
+    server = await start();
+    const reconnected = await connect(server.port);
+    expect(await invoke(reconnected, 45, "account:get")).toMatchObject({ success: true, data: { bio: "drained before close" } }); reconnected.close();
+  });
+
+  it("rolls back a failed network bind and can start against the same database afterwards", async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-server-test-"));
+    const occupied = createServer(); occupied.listen(0, "127.0.0.1"); await once(occupied, "listening");
+    try {
+      await expect(start((occupied.address() as AddressInfo).port)).rejects.toThrow(/EADDRINUSE|address already in use/);
+      expect(fs.existsSync(databaseOwnershipPath(path.join(dataDir, "mains.db")))).toBe(false);
+      server = await start();
+      const socket = await connect(server.port);
+      expect(await invoke(socket, 43, "backend:describe")).toMatchObject({ success: true }); socket.close();
+    } finally { await new Promise<void>((resolve) => occupied.close(() => resolve())); }
+  });
+
+  it("retains runtime and database ownership after failed close and can finish the same close on retry", async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-server-test-"));
+    server = await start();
+    const reader = getSqlite().prepare("SELECT * FROM accounts").iterate(); reader.next();
+    try {
+      await expect(server.close()).rejects.toThrow();
+      expect(getBackendRuntime().getPath("userData")).toBe(dataDir);
+      expect(fs.existsSync(databaseOwnershipPath(path.join(dataDir, "mains.db")))).toBe(true);
+      await expect(start()).rejects.toThrow(/already|own/);
+    } finally { reader.return?.(); }
+    await server.close();
+    expect(fs.existsSync(databaseOwnershipPath(path.join(dataDir, "mains.db")))).toBe(false);
+    server = await start();
+    const socket = await connect(server.port);
+    expect(await invoke(socket, 42, "backend:describe")).toMatchObject({ success: true }); socket.close();
+  });
+
+  it("rejects a second in-process host without disturbing the running server", async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-server-test-"));
+    server = await start();
+    let duplicate: StandaloneServer | undefined;
+    try {
+      await expect(start().then((value) => { duplicate = value; })).rejects.toThrow(/already|active|own/i);
+      const socket = await connect(server.port);
+      expect(await invoke(socket, 41, "backend:describe")).toMatchObject({ success: true, data: { appVersion: "test-version" } });
+      socket.close();
+    } finally { await duplicate?.close(); }
+  });
+
   it("serves real handlers and restarts against its persisted database", async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-server-test-"));
     server = await start();

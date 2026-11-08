@@ -561,6 +561,12 @@ function createStaticHandler(webRoot: string) {
  */
 export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   const token = options.token;
+  let closing = false, closePromise: Promise<void> | undefined;
+  const pending = new Set<Promise<void>>();
+  const track = (work: Promise<void>) => {
+    pending.add(work);
+    void work.then(() => pending.delete(work), () => pending.delete(work));
+  };
   // Checked at runtime too: an empty string type-checks and would open the host.
   if (!token) {
     return Promise.reject(
@@ -583,6 +589,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   };
 
   const httpServer: Server = createServer((req, res) => {
+    if (closing) { res.writeHead(503); res.end("Backend is closing"); return; }
     const url = req.url ?? "";
     const pathname = url.split("?")[0];
     if (
@@ -590,34 +597,34 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
       req.method === "POST" &&
       pathname === "/pair"
     ) {
-      void handlePairing(req, res, options.pairDevice);
+      track(handlePairing(req, res, options.pairDevice));
     } else if (
       options.createPairingCode &&
       req.method === "POST" &&
       pathname === "/__mains/admin/pairing-code"
     ) {
-      void handleCreatePairingCode(
+      track(handleCreatePairingCode(
         req,
         res,
         token,
         options.createPairingCode,
-      );
+      ));
     } else if (
       req.method === "POST" &&
       pathname === "/__mains/admin/web-login"
     ) {
-      void handleCreateWebLogin(req, res, token, createWebLogin);
+      track(handleCreateWebLogin(req, res, token, createWebLogin));
     } else if (
       options.listPairedDevices &&
       req.method === "GET" &&
       pathname === "/__mains/admin/devices"
     ) {
-      void handleListPairedDevices(
+      track(handleListPairedDevices(
         req,
         res,
         token,
         options.listPairedDevices,
-      );
+      ));
     } else if (
       options.revokePairedDevice &&
       req.method === "DELETE" &&
@@ -635,13 +642,13 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         writeJson(res, 400, { error: "Invalid device id" });
         return;
       }
-      void handleRevokePairedDevice(
+      track(handleRevokePairedDevice(
         req,
         res,
         token,
         deviceId,
         options.revokePairedDevice,
-      );
+      ));
     } else if (
       req.method === "POST" &&
       pathname === WEB_SESSION_PATH
@@ -652,13 +659,13 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
       req.method === "GET" &&
       pathname === IMAGE_COOKIE_PATH
     ) {
-      void handleImageProxy(req, res, options.fetchProxiedImage, webSessions);
+      track(handleImageProxy(req, res, options.fetchProxiedImage, webSessions));
     } else if (options.serveLocalImage && url.startsWith("/__localimg")) {
-      void handleLocalFile(req, res, options.serveLocalImage);
+      track(handleLocalFile(req, res, options.serveLocalImage));
     } else if (options.serveLocalDocument && url.startsWith("/__localdoc")) {
-      void handleLocalFile(req, res, options.serveLocalDocument);
+      track(handleLocalFile(req, res, options.serveLocalDocument));
     } else if (staticHandler) {
-      void staticHandler(req, res);
+      track(staticHandler(req, res));
     } else {
       res.writeHead(426);
       res.end("Upgrade Required");
@@ -711,18 +718,20 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
     verifyClient: (info, cb) => {
       // Fail closed: a throw while authenticating must reject this handshake,
       // never surface as an unhandled rejection that takes the process down.
-      void authorize(info.req)
+      if (closing) { cb(false, 503, "Backend is closing"); return; }
+      track(authorize(info.req)
         .catch(() => false)
         .then((allowed) => {
-          if (allowed) cb(true);
+          if (!closing && allowed) cb(true);
           else cb(false, 401, "Unauthorized");
-        });
+        }));
     },
   });
 
   // Which paired device each open socket belongs to, for disconnectDevice.
   const socketDevices = new WeakMap<WebSocket, string>();
   wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
+    if (closing) { socket.terminate(); return; }
     const device = authenticatedDevices.get(req);
     if (device) {
       socketDevices.set(socket, device.deviceId);
@@ -744,12 +753,29 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
     }
     serveConnection(adaptSocket(socket, device), sink, {
       commandReceipts: options.commandReceipts,
+      accepting: () => !closing,
+      track,
     });
   });
 
   return new Promise<WsHost>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(options.port, options.host, () => {
+    let listening = false, failed = false;
+    const failStart = (error: Error) => {
+      if (listening || failed) return;
+      failed = true; closing = true;
+      unregisterSink(); webSessions.clear();
+      for (const client of wss.clients) client.terminate();
+      wss.close(() => {}); httpServer.close(() => {});
+      reject(error);
+    };
+    // ws forwards HTTP listen errors through its own EventEmitter too.
+    wss.on("error", (error) => {
+      if (!listening) failStart(error);
+      else console.error("Backend WebSocket server failed", error);
+    });
+    httpServer.once("error", failStart);
+    try { httpServer.listen(options.port, options.host, () => {
+      listening = true;
       const address = httpServer.address();
       const port =
         typeof address === "object" && address ? address.port : options.port;
@@ -777,8 +803,10 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
           }
           return ids;
         },
-        close: () =>
-          new Promise<void>((res) => {
+        close: () => {
+          if (closePromise) return closePromise;
+          closing = true;
+          closePromise = Promise.resolve().then(async () => {
             unregisterSink();
             webSessions.clear();
             // Force live connections closed first. httpServer.close() waits for
@@ -786,13 +814,18 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
             // clients — so a single connected WS client (the normal case for an
             // exposed backend) would otherwise hang every rebind/teardown/shutdown.
             for (const client of wss.clients) client.terminate();
-            wss.close(() => {
-              httpServer.close(() => res());
-              httpServer.closeAllConnections?.();
+            await new Promise<void>((res) => {
+              wss.close(() => {
+                httpServer.close(() => res());
+                httpServer.closeAllConnections?.();
+              });
             });
-          }),
+            await Promise.allSettled([...pending]);
+          });
+          return closePromise;
+        },
       });
-    });
+    }); } catch (error) { failStart(error as Error); }
   });
 }
 
