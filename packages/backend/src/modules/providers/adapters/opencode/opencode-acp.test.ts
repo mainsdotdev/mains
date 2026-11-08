@@ -3,6 +3,22 @@ import { describe, expect, it } from "vitest";
 import { OpenCodeAcpServer } from "./opencode-acp";
 
 describe("OpenCode ACP client", () => {
+  it("correlates a response delivered synchronously during the request write", async () => {
+    const fromAgent = new PassThrough(), toAgent = new PassThrough();
+    const server = new OpenCodeAcpServer();
+    server.attach(fromAgent, toAgent);
+    toAgent.on("data", (chunk: Buffer) => {
+      const request = JSON.parse(chunk.toString());
+      fromAgent.write(JSON.stringify({ id: request.id, result: "immediate" }) + "\n");
+    });
+    let received: unknown;
+    const pending = server.sendRequest("initialize").then((value) => { received = value; }, () => {});
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(received).toBe("immediate");
+    } finally { await server.stop(); await pending; }
+  });
+
   it("writes a request and resolves the matching response", async () => {
     const fromAgent = new PassThrough();
     const toAgent = new PassThrough();
