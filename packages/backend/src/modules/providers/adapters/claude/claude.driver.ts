@@ -1,3 +1,4 @@
+import { createClaudeQueryLifecycle, createClaudeQueryPool, type ClaudeQueryScope } from "./claude-query-lifecycle";
 import { pickRunSettingConfig } from "@mains/contracts/run-settings";
 import { bridgeService } from "../../../bridge";
 // ─────────────────────────────────────────────────────────────
@@ -883,6 +884,7 @@ function setClaudePermissionMode(
 }
 
 interface ClaudeSession {
+  owner: ClaudeQueryScope;
   runId: string;
   options: SDKOptions;
   abortController: AbortController;
@@ -2870,9 +2872,9 @@ export function mapSDKMessage(
 // ─────────────────────────────────────────────────────────────
 
 export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDriver {
+  const queryLifecycle = createClaudeQueryLifecycle<typeof import("@anthropic-ai/claude-agent-sdk")>();
   // SDK loader state
   let sdkLoaded = false;
-  let loadError: Error | null = null;
   let queryFn:
     | ((options: { prompt: string | AsyncIterable<unknown>; options?: SDKOptions }) => SDKQuery)
     | null = null;
@@ -2936,26 +2938,37 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   const liveSessions = new Map<string, ClaudeSession>();
   /** runId → the cwd its session ran in, for an MCP host that serves it later. */
   const runCwdMemo = new Map<string, string>();
-  /**
-   * cwd → an idle CLI process that only answers control requests — no prompt
-   * ever reaches it, so no model turn runs. Keyed by cwd because that is what
-   * decides which MCP servers a session configures.
-   */
-  const mcpHosts = new Map<string, { query: SDKQuery; release: () => void; idleTimer?: NodeJS.Timeout }>();
-  // Each host is a whole CLI process (~250 MB), so they are few and short-lived.
-  const MCP_HOST_IDLE_MS = 2 * 60 * 1000;
-  const MAX_MCP_HOSTS = 3;
+  const mcpHosts = createClaudeQueryPool<SDKQuery>({
+    open: (hooks) => queryLifecycle.open(hooks),
+    capacity: 3, idleMs: 2 * 60 * 1000,
+    acquire: async (cwd, owner) => {
+      await owner.run(ensureSDK);
+      const idle = new Promise<void>((resolve) => {
+        if (owner.signal.aborted) resolve();
+        else owner.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      const noPrompt: AsyncIterable<never> = {
+        [Symbol.asyncIterator]: () => ({ next: () => idle.then(() => ({ done: true as const, value: undefined })) }),
+      };
+      const options = buildProcessOptions();
+      options.cwd = cwd;
+      const mcpServers = readMcpServersFromSettings(options.settingSources!, cwd);
+      if (Object.keys(mcpServers).length > 0) options.mcpServers = mcpServers;
+      return owner.acquire(() => queryFn!({ prompt: noPrompt, options }));
+    },
+  });
 
   // ─────────────────────────────────────────────────────────────
   // SDK loader
   // ─────────────────────────────────────────────────────────────
 
   async function ensureSDK(): Promise<void> {
-    if (loadError) throw loadError;
+    const assert = queryLifecycle.checkpoint();
     if (sdkLoaded) return;
 
     try {
-      const ClaudeSDK = await import("@anthropic-ai/claude-agent-sdk").catch(() => null);
+      const ClaudeSDK = await queryLifecycle.load(() => import("@anthropic-ai/claude-agent-sdk"));
+      assert();
 
       if (!ClaudeSDK) {
         throw new Error(
@@ -2981,7 +2994,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       sdkLoaded = true;
       logInfo("SDK loaded successfully");
     } catch (error) {
-      loadError = error instanceof Error ? error : new Error(String(error));
+      const loadError = error instanceof Error ? error : new Error(String(error));
       logError("Failed to load SDK:", loadError.message);
       throw loadError;
     }
@@ -3189,15 +3202,17 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     read: (query: SDKQuery) => Promise<T>,
     cwd?: string,
   ): Promise<T> {
-    await ensureSDK();
-    if (!queryFn) throw new Error("Claude SDK not properly initialized");
-    const options = buildProcessOptions();
-    if (cwd) options.cwd = cwd;
-    const query = queryFn({ prompt: "", options });
+    const controller = new AbortController();
+    const owner = queryLifecycle.open({ cancel: () => controller.abort() });
     try {
-      return await read(query);
+      await owner.run(ensureSDK);
+      const options = buildProcessOptions();
+      options.abortController = controller;
+      if (cwd) options.cwd = cwd;
+      const query = owner.acquire(() => queryFn!({ prompt: "", options }));
+      return await owner.run(() => read(query));
     } finally {
-      query.close();
+      await owner.close();
     }
   }
 
@@ -3231,6 +3246,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     additionalDirectories?: string[];
     configSnapshot?: Record<string, unknown> | null;
   }): Promise<SDKOptions> {
+    const assert = queryLifecycle.checkpoint();
     const {
       model,
       workspacePath,
@@ -3390,6 +3406,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     {
       const guardHook = await guardsService.buildClaudeGuardHook();
+      assert();
       if (guardHook) {
         if (!options.hooks) options.hooks = {};
         if (!options.hooks.PreToolUse) options.hooks.PreToolUse = [];
@@ -3519,6 +3536,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // ─────────────────────────────────────────────────────────────
 
   function newSession(
+    assertCurrent: () => void,
     runId: string,
     options: SDKOptions,
     abortController: AbortController,
@@ -3526,8 +3544,27 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     permissionMode: ClaudePermissionModeRef,
     fastModeRequested = !!config.fastMode,
   ): ClaudeSession {
-    return {
-      runId,
+    try { assertCurrent(); }
+    catch (error) {
+      removeClaudeRuntimeSettings(typeof options.settings === "string" ? options.settings : undefined);
+      throw error;
+    }
+    const owner = queryLifecycle.open({
+      cancel: () => {
+        session.input?.stop();
+        try {
+          if (session.query?.request) void session.query.request({ subtype: "interrupt", cancel_queued: true }).catch(() => {});
+          else if (session.query?.interrupt) void session.query.interrupt().catch(() => {});
+        } finally { abortController.abort(); }
+      },
+      retire: () => session.input?.finish(),
+      release: async () => {
+        await session.input?.drainAccepted();
+        removeClaudeRuntimeSettings(session.runtimeSettingsPath);
+      },
+    });
+    const session: ClaudeSession = {
+      owner, runId,
       options,
       abortController,
       permissionMode,
@@ -3541,6 +3578,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       partialTextBuffers: new Map(),
       partialThinkingBuffers: new Map(),
     };
+    return session;
   }
 
   /**
@@ -3570,10 +3608,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   }
 
   async function lookupSessionId(runId: string): Promise<string | undefined> {
+    const assert = queryLifecycle.checkpoint();
     const memo = sessionIdMemo.get(runId);
     if (memo) return memo;
     try {
       const run = await runsRepo.findRunById(runId);
+      assert();
       if (run?.sessionId) {
         sessionIdMemo.set(runId, run.sessionId);
         return run.sessionId;
@@ -3621,84 +3661,33 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
   /** The directory a run's session ran in, which decides its MCP servers. */
   async function resolveRunCwd(runId: string): Promise<string> {
+    const assert = queryLifecycle.checkpoint();
     const cwd = liveSessions.get(runId)?.options.cwd ?? runCwdMemo.get(runId);
     if (cwd) return cwd;
     // After a restart the transcript is the record: it keeps the session's cwd.
     const sessionId = await lookupSessionId(runId);
     const info = sessionId && getSessionInfoFn ? await getSessionInfoFn(sessionId) : undefined;
+    assert();
     if (!info?.cwd) throw new Error("Cannot find where this run's session ran");
     runCwdMemo.set(runId, info.cwd);
     return info.cwd;
   }
 
-  function closeMcpHost(cwd: string): void {
-    const host = mcpHosts.get(cwd);
-    if (!host) return;
-    mcpHosts.delete(cwd);
-    if (host.idleTimer) clearTimeout(host.idleTimer);
-    host.release();
-    try {
-      host.query.close();
-    } catch (err) {
-      logWarn("Failed to close MCP host:", err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  /** The MCP host for a cwd, started on first use and closed after it idles. */
-  async function mcpHostFor(cwd: string): Promise<SDKQuery> {
-    let host = mcpHosts.get(cwd);
-    if (host) {
-      mcpHosts.delete(cwd); // re-insert: Map order is the eviction order
-    } else {
-      await ensureSDK();
-      if (!queryFn) throw new Error("Claude SDK not properly initialized");
-      while (mcpHosts.size >= MAX_MCP_HOSTS) {
-        closeMcpHost(mcpHosts.keys().next().value as string);
-      }
-      let release!: () => void;
-      const idle = new Promise<void>((resolve) => (release = resolve));
-      // A prompt that never yields keeps stdin open and the process idle.
-      const noPrompt: AsyncIterable<never> = {
-        [Symbol.asyncIterator]: () => ({
-          next: () => idle.then(() => ({ done: true as const, value: undefined })),
-        }),
-      };
-      const options = buildProcessOptions();
-      options.cwd = cwd;
-      const mcpServers = readMcpServersFromSettings(options.settingSources!, cwd);
-      if (Object.keys(mcpServers).length > 0) options.mcpServers = mcpServers;
-      const query = queryFn({ prompt: noPrompt, options });
-      host = { query, release };
-    }
-    mcpHosts.set(cwd, host);
-    if (host.idleTimer) clearTimeout(host.idleTimer);
-    host.idleTimer = setTimeout(() => closeMcpHost(cwd), MCP_HOST_IDLE_MS);
-    host.idleTimer.unref?.();
-    return host.query;
-  }
-
-  /**
-   * Run an MCP control request for a run: through its live turn when there is
-   * one, otherwise through the MCP host for its cwd. A turn that closed under
-   * the request falls through to the host; any other failure is the answer.
-   */
-  async function withMcpQuery<T>(runId: string, fn: (query: SDKQuery) => Promise<T>): Promise<T> {
-    const live = liveSessions.get(runId)?.query;
-    if (live) {
+  /** A closed live turn can fall back to its cwd host; shutdown cannot. */
+  async function withMcpQuery<T>(runId: string, fn: (query: SDKQuery, owner: ClaudeQueryScope) => Promise<T>): Promise<T> {
+    const assert = queryLifecycle.checkpoint();
+    const live = liveSessions.get(runId);
+    if (live?.query && live.owner.active) {
       try {
-        return await fn(live);
-      } catch (err) {
-        if (!/closed/i.test(err instanceof Error ? err.message : String(err))) throw err;
+        return await live.owner.run(() => fn(live.query!, live.owner));
+      } catch (error) {
+        assert();
+        if (!/closed/i.test(error instanceof Error ? error.message : String(error))) throw error;
       }
     }
     const cwd = await resolveRunCwd(runId);
-    try {
-      return await fn(await mcpHostFor(cwd));
-    } catch (err) {
-      // A host that died answers every request with the same error; drop it.
-      if (/closed/i.test(err instanceof Error ? err.message : String(err))) closeMcpHost(cwd);
-      throw err;
-    }
+    assert();
+    return mcpHosts.use(cwd, fn);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -3785,45 +3774,40 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     prompt: string,
     opts?: { system?: string; model?: string },
   ): Promise<string> {
-    await ensureSDK();
-    if (!queryFn) throw new Error("Claude SDK not properly initialized");
-
-    const options = await buildOptions({
-      model: opts?.model ?? "claude-haiku-4-5-20251001",
-    });
-    // Strip the MCP servers buildOptions injects so the model is never tempted
-    // to call a tool — with no tools available it just answers. maxTurns gets a
-    // little slack (not 1) so a stray first-message hiccup can't trip
-    // "error_max_turns" before the final text lands; without tools it still
-    // finishes in a single turn normally.
-    options.maxTurns = 6;
-    options.allowedTools = [];
-    options.disallowedTools = ["*"];
-    options.mcpServers = {};
-    options.systemPrompt =
-      opts?.system ??
-      "You are a helpful assistant. Follow the user's instructions exactly and output only what is requested.";
-
+    const controller = new AbortController();
+    const owner = queryLifecycle.open({ cancel: () => controller.abort() });
     let text = "";
     try {
-      const query = queryFn({ prompt, options });
-      for await (const msg of query) {
-        if (msg.type === "assistant") {
-          const assistantMsg = msg as {
-            message?: { content?: Array<{ type: string; text?: string }> };
-          };
-          for (const block of assistantMsg.message?.content ?? []) {
-            if (block.type === "text" && block.text) text += block.text;
+      await owner.run(ensureSDK);
+      const options = await owner.run(() => buildOptions({
+        model: opts?.model ?? "claude-haiku-4-5-20251001", abortController: controller,
+      }));
+      options.maxTurns = 6;
+      options.allowedTools = [];
+      options.disallowedTools = ["*"];
+      options.mcpServers = {};
+      options.systemPrompt = opts?.system ??
+        "You are a helpful assistant. Follow the user's instructions exactly and output only what is requested.";
+      const query = owner.acquire(() => queryFn!({ prompt, options }));
+      try {
+        await owner.run(async () => {
+          for await (const msg of query) {
+            owner.assertActive();
+            if (msg.type !== "assistant") continue;
+            const assistantMsg = msg as { message?: { content?: Array<{ type: string; text?: string }> } };
+            for (const block of assistantMsg.message?.content ?? []) {
+              if (block.type === "text" && block.text) text += block.text;
+            }
           }
-        }
+        });
+      } catch (error) {
+        // Retain text from SDK error results; cancellation cannot become success.
+        if (!owner.active || !text.trim()) throw error;
       }
-    } catch (err) {
-      // The SDK throws on error results (e.g. max turns). If the model already
-      // produced text before that, use it; otherwise surface the failure.
-      if (!text.trim()) throw err;
+      return text.trim();
+    } finally {
+      await owner.close();
     }
-
-    return text.trim();
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -3832,7 +3816,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
   return {
     async createSession(request: WorkRunRequest): Promise<AcquiredSession> {
+      const assert = queryLifecycle.checkpoint();
       await ensureSDK();
+      assert();
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
       const abortController = new AbortController();
@@ -3863,7 +3849,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, true, permissionModeRef,
+      const session = newSession(assert, request.runId, options, abortController, true, permissionModeRef,
         typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       session.state.sessionId = sessionId;
       sessionIdMemo.set(request.runId, sessionId);
@@ -3871,7 +3857,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async resumeSession(request: WorkRunContinueRequest): Promise<AcquiredSession> {
+      const assert = queryLifecycle.checkpoint();
       await ensureSDK();
+      assert();
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
       const sessionId = await lookupSessionId(request.runId);
@@ -3908,10 +3896,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, false, permissionModeRef,
+      const session = newSession(assert, request.runId, options, abortController, false, permissionModeRef,
         typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       try {
-        for (const anchor of await runsRepo.findClaudeTaskAnchorsByRun(request.runId)) {
+        const anchors = await runsRepo.findClaudeTaskAnchorsByRun(request.runId);
+        session.owner.assertActive();
+        for (const anchor of anchors) {
           if (typeof anchor.taskId !== "string" || !anchor.taskId || !anchor.toolUseId) continue;
           const known = session.taskIndex.get(anchor.taskId);
           if (known?.providerRunId && (!anchor.providerRunId || anchor.providerRunId < known.providerRunId)) continue;
@@ -3931,6 +3921,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       } catch (error) {
         logWarn("Could not restore Claude task identities:", error instanceof Error ? error.message : String(error));
       }
+      session.owner.assertActive();
       // Prime sessionId so executePrompt's "first session_id" persistence is a no-op for resume;
       // the SDK keeps the same id when resuming.
       session.state.sessionId = sessionId;
@@ -3981,7 +3972,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async forkSession(request: WorkRunForkRequest): Promise<AcquiredSession> {
+      const assert = queryLifecycle.checkpoint();
       await ensureSDK();
+      assert();
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
       const sourceSessionId = await lookupSessionId(request.sourceRunId);
@@ -4023,7 +4016,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, true, permissionModeRef,
+      const session = newSession(assert, request.runId, options, abortController, true, permissionModeRef,
         typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       session.state.sessionId = sessionId;
       sessionIdMemo.set(request.runId, sessionId);
@@ -4038,68 +4031,61 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     ): Promise<DriverOutcome> {
       const cs = sessionParam as ClaudeSession;
       const timeout = config.timeout ?? 3_600_000;
+      if (signal.aborted || cs.abortController.signal.aborted || !cs.owner.active) {
+        return classifyOutcome({ stopReason: null, aborted: true, timedOut: false, timeoutMs: timeout });
+      }
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
-      cs.onEvent = onEvent;
-      cs.input = createClaudeTurnInput({
-        initial: {
-          type: "user", uuid: cs.initialInput?.uuid ?? randomUUID(),
-          session_id: cs.state.sessionId!, parent_tool_use_id: null,
-          message: { role: "user", content: prompt },
-        },
-        onInitialAccepted: cs.initialInput?.onAccepted,
-        cancel: async (uuid) => {
-          if (cs.query?.cancelAsyncMessage) return cs.query.cancelAsyncMessage(uuid);
-          if (!cs.query?.request) throw new Error("Claude input cancellation is unavailable");
-          const response = await cs.query.request({ subtype: "cancel_async_message", message_uuid: uuid });
-          const envelope = response as { response?: { cancelled?: boolean } };
-          return envelope?.response?.cancelled === true;
-        },
-      });
-
-      // Stop closes our input first, recalls queued native commands when the
-      // control channel is available, and aborts the process as a backstop.
-      const onAbort = () => {
-        cs.input?.stop();
-        if (cs.query?.request) {
-          void cs.query.request({ subtype: "interrupt", cancel_queued: true }).catch(() => {});
-        } else if (cs.query?.interrupt) {
-          void cs.query.interrupt().catch(() => {});
-        }
-        try {
-          cs.abortController.abort();
-        } catch (err) {
-          logError("Error aborting controller:", err);
-        }
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-
-      // Create the SDK query (this is when the prompt is bound to the session).
-      const query = queryFn({ prompt: cs.input.stream, options: {
-        ...cs.options, extraArgs: { ...cs.options.extraArgs, "replay-user-messages": null },
-      } });
-      cs.query = query;
-      liveSessions.set(cs.runId, cs);
-      if (signal.aborted) onAbort();
-      if (cs.options.cwd) runCwdMemo.set(cs.runId, cs.options.cwd);
-      // A resumed or forked session's results continue from the totals its
-      // transcript saved; read them as the query opens, before the first result.
-      const sessionTotalsBefore = cs.options.resume
-        ? readClaudeSessionTotals(query)
-        : Promise.resolve(null);
-
+      if (cs.query || liveSessions.has(cs.runId)) throw new Error("Claude query is already running for this run");
+      const publish = onEvent;
+      onEvent = (event) => cs.owner.active ? publish(event) : undefined;
+      const assertDriver = queryLifecycle.checkpoint();
+      const onAbort = () => { void cs.owner.cancel().catch((error) => logWarn("Failed to close canceled Claude query:", String(error))); };
       let timeoutId: NodeJS.Timeout | undefined;
       let timedOut = false;
-      const timeoutPromise = new Promise<void>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          timedOut = true;
-          cs.input?.stop();
-          cs.abortController.abort();
-          reject(new Error(`Request timed out after ${timeout}ms`));
-        }, timeout);
-      });
-
       try {
+        cs.onEvent = onEvent;
+        cs.input = createClaudeTurnInput({
+          initial: {
+            type: "user", uuid: cs.initialInput?.uuid ?? randomUUID(),
+            session_id: cs.state.sessionId!, parent_tool_use_id: null,
+            message: { role: "user", content: prompt },
+          },
+          onInitialAccepted: cs.initialInput?.onAccepted,
+          cancel: async (uuid) => {
+            if (cs.query?.cancelAsyncMessage) return cs.query.cancelAsyncMessage(uuid);
+            if (!cs.query?.request) throw new Error("Claude input cancellation is unavailable");
+            const response = await cs.query.request({ subtype: "cancel_async_message", message_uuid: uuid });
+            const envelope = response as { response?: { cancelled?: boolean } };
+            return envelope?.response?.cancelled === true;
+          },
+        });
+
+        signal.addEventListener("abort", onAbort, { once: true });
+
+        // Create the SDK query (this is when the prompt is bound to the session).
+        const query = cs.owner.acquire(() => queryFn!({ prompt: cs.input!.stream, options: {
+          ...cs.options, extraArgs: { ...cs.options.extraArgs, "replay-user-messages": null },
+        } }));
+        cs.query = query;
+        liveSessions.set(cs.runId, cs);
+        if (signal.aborted) onAbort();
+        if (cs.options.cwd) runCwdMemo.set(cs.runId, cs.options.cwd);
+        // A resumed or forked session's results continue from the totals its
+        // transcript saved; read them as the query opens, before the first result.
+        const sessionTotalsBefore = cs.options.resume
+          ? readClaudeSessionTotals(query)
+          : Promise.resolve(null);
+
+        const timeoutPromise = new Promise<void>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            timedOut = true;
+            const error = new Error(`Request timed out after ${timeout}ms`);
+            void cs.owner.cancel(error).catch((cause) => logWarn("Failed to close timed-out Claude query:", String(cause)));
+            reject(error);
+          }, timeout);
+        });
+
         // Context meter, in preference order:
         //   1. The `get_context_usage` control reply — the CLI's own `/context`
         //      report, with the category breakdown and the autocompact
@@ -4147,10 +4133,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
         const streamPromise = (async () => {
           for await (const msg of query) {
-            if (signal.aborted || timedOut) break;
+            if (!cs.owner.active || signal.aborted || timedOut) break;
             // Persist accepted inputs before projecting the reply they own.
             // Result receipts close steering immediately, before any awaits.
             await cs.input!.observe(msg as Parameters<ReturnType<typeof createClaudeTurnInput>["observe"]>[0]);
+            cs.owner.assertActive();
             primaryModel = resolveClaudeTurnModel(
               primaryModel,
               msg as unknown as ClaudeTurnModelMessage,
@@ -4171,6 +4158,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
               }
             }
 
+            cs.owner.assertActive();
             // Track whether any assistant text content has been streamed (for result-message dedup).
             if (msg.type === "assistant") {
               const aMsg = msg as SDKAssistantMessage;
@@ -4303,7 +4291,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           }
         })();
 
-        await Promise.race([streamPromise, timeoutPromise]);
+        // A canceled query may finish its iterator after the owner has retired.
+        void streamPromise.catch(() => {});
+        await cs.owner.run(() => Promise.race([streamPromise, timeoutPromise]));
 
         // Replace the provisional goal-derived title with the CLI's
         // auto-generated aiTitle, once, for the initial run only. Fire-and-forget:
@@ -4313,6 +4303,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           const sessionId = cs.state.sessionId;
           const dir = cs.options.cwd;
           void readAutoTitle(sessionId, dir).then((title) => {
+            try { assertDriver(); } catch { return; }
             if (title) {
               runsRepo
                 .updateRun(cs.runId, { title })
@@ -4325,7 +4316,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           stopReason: cs.state.lastStopReason ?? null,
           usage: cs.state.lastUsage,
           terminalToolNonExecutionKind: cs.state.terminalToolNonExecutionKind,
-          aborted: signal.aborted,
+          aborted: signal.aborted || cs.abortController.signal.aborted,
           timedOut: false,
           errorMessage: undefined,
           timeoutMs: timeout,
@@ -4361,6 +4352,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         cs.input?.finish();
         signal.removeEventListener("abort", onAbort);
         if (liveSessions.get(cs.runId) === cs) liveSessions.delete(cs.runId);
+        await cs.owner.close();
       }
     },
 
@@ -4369,19 +4361,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const cs = session as ClaudeSession;
       cs.input?.finish();
 
-      // The query normally auto-completes when the stream ends, so this is a
-      // backstop: on an aborted or errored run the CLI subprocess can outlive
-      // the stream, and nothing else would reap it.
-      try {
-        cs.query?.close?.();
-      } catch (err) {
-        logWarn(
-          "Failed to close SDK query:",
-          err instanceof Error ? err.message : String(err),
-        );
-      }
+      await cs.owner.close();
 
-      removeClaudeRuntimeSettings(cs.runtimeSettingsPath);
       if (cs.state.sessionId) {
         try {
           await bridgeService.mirrorClaudeSession({ runId: cs.runId, sessionId: cs.state.sessionId, dir: cs.options.cwd ?? process.cwd() });
@@ -4394,11 +4375,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async readMcpAppResource(request) {
-      const result = await withMcpQuery(request.runId, async (query) => {
+      const result = await withMcpQuery(request.runId, async (query, owner) => {
         if (typeof query.readMcpResource !== "function") {
           throw new Error("This Claude Code version cannot read MCP App resources");
         }
-        await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
+        await waitForClaudeMcpServer(() => { owner.assertActive(); return query.mcpServerStatus(); }, request.server);
+        owner.assertActive();
         return query.readMcpResource(request.server, request.uri);
       });
       return { contents: result.contents ?? [], originCallId: request.originCallId ?? null };
@@ -4406,11 +4388,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     // `meta` has nowhere to go: mcp_call takes a tool and its arguments only.
     async callMcpAppTool(request) {
-      const raw = await withMcpQuery(request.runId, async (query) => {
+      const raw = await withMcpQuery(request.runId, async (query, owner) => {
         if (typeof query.request !== "function") {
           throw new Error("This Claude Code version cannot call MCP App tools");
         }
-        const statuses = await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
+        const statuses = await waitForClaudeMcpServer(() => { owner.assertActive(); return query.mcpServerStatus(); }, request.server);
+        owner.assertActive();
         assertMcpToolCallableFromApp(statuses, request.server, request.tool);
         return query.request(buildMcpAppCallRequest(request.server, request.tool, request.arguments));
       });
@@ -4480,19 +4463,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async shutdown(): Promise<void> {
+      const closing = queryLifecycle.shutdown();
+      catalogGeneration++;
       sessionIdMemo.clear();
-      for (const cwd of [...mcpHosts.keys()]) closeMcpHost(cwd);
-      for (const cs of liveSessions.values()) {
-        cs.input?.finish();
-        try {
-          cs.abortController.abort();
-          cs.query?.close();
-        } catch (err) { logWarn("Failed to close Claude query:", err instanceof Error ? err.message : String(err)); }
-      }
       liveSessions.clear();
       runCwdMemo.clear();
       sdkLoaded = false;
-      loadError = null;
       queryFn = null;
       getSessionInfoFn = null;
       getSessionMessagesFn = null;
@@ -4503,6 +4479,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       cachedPluginsTimestamp = 0;
       commandsCache.clear();
       skillsCache.clear();
+      createSdkMcpServerFn = null;
+      toolFn = null;
+      await closing;
       logInfo("Shutdown complete");
     },
 

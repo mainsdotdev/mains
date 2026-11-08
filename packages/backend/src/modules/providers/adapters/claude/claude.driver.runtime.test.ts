@@ -12,6 +12,7 @@ import {
 import { createClaudeDriver, mapSDKMessage } from "./claude.driver";
 import { runsRepo } from "../../../runs/runs.repo";
 import { bridgeService } from "../../../bridge";
+import { guardsService } from "../../../guards/guards.service";
 import type { WorkRunEvent } from "../../../../../shared/adapter.types";
 
 const sdk = vi.hoisted(() => ({
@@ -140,7 +141,7 @@ esac
       expect(options.env).not.toHaveProperty("ANTHROPIC_API_KEY");
       expect(options.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
     }
-    expect(sdk.close).toHaveBeenCalledTimes(2);
+    expect(sdk.close).toHaveBeenCalledTimes(3);
     expect(cliCalls()).toContain("auth status --json");
   });
 
@@ -198,6 +199,219 @@ esac
     expect(await createClaudeDriver({}).getRateLimits!()).toBeNull();
     expect(sdk.usage).not.toHaveBeenCalled();
     expect(sdk.close).toHaveBeenCalledOnce();
+  });
+
+  it("does not create a query for an already canceled run", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "already-canceled", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const abort = new AbortController(); abort.abort();
+    const onEvent = vi.fn();
+    await expect(driver.executePrompt(acquired.session, acquired.prompt, onEvent, abort.signal))
+      .resolves.toMatchObject({ status: "canceled" });
+    expect(sdk.query.mock.calls.length).toBe(0);
+    expect(onEvent).not.toHaveBeenCalled();
+    await driver.cleanup?.(acquired.session);
+  });
+
+  it("closes one-shot queries on successful and failed streams", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    await expect(driver.generateText!("hello")).resolves.toBe("ok");
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() { throw new Error("query crashed"); yield; },
+    }));
+    await expect(driver.generateText!("fail")).rejects.toThrow("query crashed");
+    expect(sdk.close).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes pending control queries on shutdown and ignores their late catalog response", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    let finish!: (models: Array<{ value: string; displayName: string }>) => void;
+    sdk.supportedModels.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const pending = driver.listModels!();
+    await vi.waitFor(() => expect(sdk.supportedModels.mock.calls.length).toBe(1));
+    await driver.shutdown?.();
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+    finish([{ value: "retired-model", displayName: "Retired" }]);
+    expect((await pending).some((model) => model.id === "retired-model")).toBe(false);
+    sdk.supportedModels.mockResolvedValueOnce([{ value: "new-model", displayName: "New" }]);
+    expect(await driver.listModels!()).toEqual([expect.objectContaining({ id: "new-model" })]);
+    expect(sdk.close).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels a one-shot stream on shutdown even when the SDK never finishes reading", async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() { await waiting; yield { type: "assistant", message: { content: [{ type: "text", text: "late text" }] } }; },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const pending = driver.generateText!("hello");
+    const settled = Promise.allSettled([pending]);
+    await vi.waitFor(() => expect(sdk.query.mock.calls.length).toBe(1));
+    await driver.shutdown?.();
+    release();
+    expect((await settled)[0].status).toBe("rejected");
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a live run on shutdown and ignores output from its retired query", async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() { await waiting; yield { type: "assistant", message: { content: [{ type: "text", text: "late output" }] } }; },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "shutdown-run", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const events: WorkRunEvent[] = [];
+    const pending = driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    await vi.waitFor(() => expect(sdk.query.mock.calls.length).toBe(1));
+    await driver.shutdown?.();
+    release();
+    await expect(pending).resolves.toMatchObject({ status: "canceled" });
+    expect(events).toEqual([]);
+    await Promise.all([driver.cleanup?.(acquired.session), driver.cleanup?.(acquired.session)]);
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not acquire a prepared session after shutdown retires its pending options", async () => {
+    let release!: () => void;
+    vi.mocked(guardsService.buildClaudeGuardHook).mockReturnValueOnce(new Promise((resolve) => { release = () => resolve(null); }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const pending = driver.createSession({ runId: "pending-options", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const rejected = expect(pending).rejects.toThrow(/shutdown/);
+    await vi.waitFor(() => expect(guardsService.buildClaudeGuardHook).toHaveBeenCalled());
+    await driver.shutdown?.();
+    release(); await rejected;
+    expect(sdk.query.mock.calls.length).toBe(0);
+  });
+
+  it("retires an acquired session on shutdown before its first query and removes its settings", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "prepared-session", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const settings = (acquired.session as { runtimeSettingsPath: string }).runtimeSettingsPath;
+    expect(fs.existsSync(settings)).toBe(true);
+    await driver.shutdown?.();
+    expect(fs.existsSync(settings)).toBe(false);
+    await expect(driver.executePrompt(acquired.session, acquired.prompt, vi.fn(), new AbortController().signal)).resolves.toMatchObject({ status: "canceled" });
+    expect(sdk.query.mock.calls.length).toBe(0);
+  });
+
+  it("shares the idle MCP control query between concurrent requests for one directory", async () => {
+    const resource = vi.fn().mockResolvedValue({ contents: [] });
+    sdk.query.mockImplementation(() => ({ close: sdk.close,
+      mcpServerStatus: vi.fn().mockResolvedValue([]), readMcpResource: resource,
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await driver.createSession({ runId: "mcp-host", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    // The first turn leaves a cwd memo for the widget after it completes.
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close, async *[Symbol.asyncIterator]() {} }));
+    await driver.executePrompt(prepared.session, prepared.prompt, () => {}, new AbortController().signal);
+    sdk.query.mockClear(); sdk.close.mockClear();
+    const input = { runId: "mcp-host", server: "fixture", uri: "ui://fixture/app" };
+    try {
+      await Promise.all([driver.readMcpAppResource!(input), driver.readMcpAppResource!(input)]);
+      expect(sdk.query.mock.calls.length).toBe(1);
+      expect(resource).toHaveBeenCalledTimes(2);
+    } finally { await driver.shutdown?.(); }
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["abort", "timeout"] as const)("settles an unresponsive run on %s without waiting for the SDK iterator", async (ending) => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const request = vi.fn().mockResolvedValue({});
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close, request,
+      async *[Symbol.asyncIterator]() { await waiting; yield { type: "assistant", message: { content: [{ type: "text", text: "retired" }] } }; },
+    }));
+    const driver = createClaudeDriver({ settingSources: [], timeout: ending === "timeout" ? 30 : 10000 });
+    const acquired = await driver.createSession({ runId: ending, accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const abort = new AbortController(), events: WorkRunEvent[] = [];
+    let result: string | undefined;
+    const pending = driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, abort.signal);
+    void pending.then((outcome) => { result = outcome.status; });
+    try {
+      if (ending === "abort") abort.abort();
+      await vi.waitFor(() => expect(result).toBe(ending === "abort" ? "canceled" : "failed"));
+      expect(request).toHaveBeenCalledExactlyOnceWith({ subtype: "interrupt", cancel_queued: true });
+      expect(sdk.close).toHaveBeenCalledTimes(1);
+    } finally {
+      release(); await pending;
+      await driver.cleanup?.(acquired.session);
+    }
+    expect(events).toEqual([]);
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans up a synchronous query factory failure and can run a new session", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const input = { runId: "factory-failure", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } };
+    const acquired = await driver.createSession(input);
+    const abort = new AbortController();
+    const remove = vi.spyOn(abort.signal, "removeEventListener");
+    sdk.query.mockImplementationOnce(() => { throw new Error("query construction failed"); });
+    await expect(driver.executePrompt(acquired.session, acquired.prompt, () => {}, abort.signal)).resolves.toMatchObject({ status: "failed", summary: "query construction failed" });
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(sdk.close).toHaveBeenCalledTimes(0);
+    const next = await driver.createSession(input);
+    await expect(driver.executePrompt(next.session, next.prompt, () => {}, new AbortController().signal)).resolves.toMatchObject({ status: "succeeded" });
+    await driver.shutdown?.();
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a context-control reply that arrives after its query finished", async () => {
+    let finish!: (response: unknown) => void;
+    const usage = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close, getContextUsage: usage,
+      async *[Symbol.asyncIterator]() { yield { type: "assistant", parent_tool_use_id: null, message: { content: [] } }; },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "late-context", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const events: WorkRunEvent[] = [];
+    await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    expect(usage).toHaveBeenCalledTimes(1);
+    finish({ totalTokens: 100, maxTokens: 1000, percentage: 10, categories: [] });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(events.filter((event) => event.type === "context_usage")).toEqual([]);
+    await driver.shutdown?.();
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains an accepted input receipt before Stop releases the query owner", async () => {
+    let ready!: () => void, writing!: () => void, finish!: () => void;
+    const initialized = new Promise<void>((resolve) => { ready = resolve; });
+    const entered = new Promise<void>((resolve) => { writing = resolve; });
+    const write = new Promise<void>((resolve) => { finish = resolve; });
+    sdk.query.mockImplementationOnce(({ prompt, options }) => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() {
+        const input = prompt[Symbol.asyncIterator](); const initial = (await input.next()).value;
+        const base = { session_id: options.sessionId, parent_tool_use_id: null };
+        yield { ...base, type: "command_lifecycle", command_uuid: initial.uuid, state: "started" };
+        yield { ...base, type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] };
+        ready();
+        const steer = (await input.next()).value;
+        yield { ...base, type: "command_lifecycle", command_uuid: steer.uuid, state: "started" };
+      },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "accepted-before-stop", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const abort = new AbortController(); let ended = false;
+    const pending = driver.executePrompt(acquired.session, acquired.prompt, async (event) => {
+      if (event.type === "artifact" && event.kind === "user-prompt") { writing(); await write; }
+    }, abort.signal);
+    void pending.then(() => { ended = true; });
+    await initialized;
+    const accepted = driver.steerRun!({ runId: "accepted-before-stop", clientUserMessageId: "accepted-id", message: "Keep this input" });
+    await entered;
+    abort.abort();
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(ended).toBe(false);
+    } finally {
+      finish(); await accepted; await pending;
+      await driver.shutdown?.();
+    }
+    expect(sdk.close).toHaveBeenCalledTimes(1);
   });
 
   it("steers the open parent query with native acceptance, preserving context and a single prompt artifact", async () => {

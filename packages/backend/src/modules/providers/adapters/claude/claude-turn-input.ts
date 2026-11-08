@@ -196,6 +196,9 @@ export function createClaudeTurnInput(options: {
 
   return {
     stream, send, observe, stop, finish,
+    async drainAccepted() {
+      await Promise.allSettled([...inputs.values()].flatMap((input) => input.projection ? [input.projection] : []));
+    },
     getStatus(uuid: string) {
       const input = inputs.get(uuid);
       return { accepted: input?.accepted ?? false, ...input?.acceptance };
