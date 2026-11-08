@@ -342,6 +342,48 @@ describe("Bridge transfer between independent SQLite databases", () => {
     expect(row(b, "spaces", "s")?.name).toBe("second");
   });
 
+  it("rejects new engine work immediately while stop drains a pending ACK", async () => {
+    const hub = await createBridgeTestHub(), gate = deferred<void>(), entered = deferred<void>(), raw = hub.connect("A");
+    let hold = false;
+    const transport: BridgeTransport = { ...raw, async push(stream, records) {
+      const result = await raw.push(stream, records); if (hold) { entered.resolve(); await gate.promise; } return result;
+    } };
+    const a = await node(hub, "A", { transport }); await drain(a);
+    collection(a, "pending"); hold = true;
+    const pushing = a.engine.push(); await entered.promise;
+    const stopping = a.engine.stop();
+    let refusal: Error | undefined;
+    const afterStop = a.engine.push().catch((error: Error) => { refusal = error; });
+    try {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      expect(refusal?.message).toMatch(/stopped/);
+    } finally { gate.resolve(); await Promise.allSettled([pushing, stopping, afterStop]); }
+    expect(a.engine.pending()).toEqual([]);
+    expect(row(a, "collections", "pending")?.name).toBe("pending");
+  });
+
+  it.each(["publication", "sequence", "count"])("keeps the whole batch queued after a malformed %s ACK and retries the same publications", async (fault) => {
+    const hub = await createBridgeTestHub(), raw = hub.connect("A");
+    let malformed = false;
+    const sent: string[] = [];
+    const transport: BridgeTransport = { ...raw, async push(stream, records) {
+      const results = await raw.push(stream, records);
+      if (!malformed) return results;
+      sent.push(JSON.stringify(records));
+      if (fault === "count") return results.slice(0, -1);
+      return results.map((result, index) => index === results.length - 1 && "seq" in result
+        ? { ...result, ...(fault === "publication" ? { publicationId: "another-publication" } : { seq: 0 }) } : result);
+    } };
+    const a = await node(hub, "A", { transport }); await drain(a);
+    collection(a, "one"); collection(a, "two"); malformed = true;
+    await expect(a.engine.push()).rejects.toThrow(/ACK/);
+    expect(a.engine.pending().map((entry) => entry.pk).sort()).toEqual(["one", "two"]);
+    await expect(a.engine.push()).rejects.toThrow(/ACK/);
+    expect(sent).toHaveLength(2); expect(sent[1]).toBe(sent[0]);
+    malformed = false; await a.engine.push();
+    expect(a.engine.pending()).toEqual([]);
+  });
+
   it("uses capture-time clocks: an older edit pushed late loses, a newer remote edit drops the stale outbox", async () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
     space(a, "s"); await settle(a, b);
@@ -469,6 +511,158 @@ describe("Bridge transfer between independent SQLite databases", () => {
 });
 
 describe("Bridge parking, deterministic merges and durable recovery", () => {
+  it("retains a set-aside publication when its recovery response cannot advance", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    await settle(a, b); collection(a, "recoverable"); await drain(a);
+    const record = (await hub.inspect("account")).find((entry) => bodyOf(entry.envelope).table === "collections")!;
+    const damaged = structuredClone(record.envelope); damaged.body.payload = "damaged";
+    b.sqlite.prepare("INSERT INTO bridge_parked(stream,seq,envelope,reason) VALUES('account',?,?,'unverified')").run(record.seq, JSON.stringify(damaged));
+    b.sqlite.prepare("UPDATE bridge_cursors SET seq=? WHERE stream='account'").run(record.seq);
+    await b.engine.stop();
+    const raw = hub.connect("B"), pull = vi.fn(raw.pull).mockImplementationOnce(async (_stream, after) => ({ records: [], next: after, hasMore: true }));
+    b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: { ...raw, pull } });
+    await expect(b.engine.pull()).rejects.toThrow("Invalid Bridge pull page");
+    expect(b.engine.unverified()).toBe(1); expect(row(b, "collections", "recoverable")).toBeUndefined();
+    await b.engine.pull();
+    expect(row(b, "collections", "recoverable")?.name).toBe("recoverable"); expect(b.engine.unverified()).toBe(0);
+  });
+
+  it("recovers every now-supported set-aside record instead of stranding records beyond the first hundred", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    await settle(a, b);
+    for (let i = 0; i < 101; i++) collection(a, `supported-${i}`);
+    await drain(a);
+    const records = (await hub.inspect("account")).filter((record) => bodyOf(record.envelope).table === "collections");
+    // A previous client version could not open these publications, but retained them durably.
+    for (const record of records) b.sqlite.prepare("INSERT INTO bridge_parked(stream,seq,envelope,reason) VALUES('account',?,?,'unverified')").run(record.seq, JSON.stringify(record.envelope));
+    b.sqlite.prepare("UPDATE bridge_cursors SET seq=? WHERE stream='account'").run(records.at(-1)!.seq);
+    await b.engine.stop();
+    b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: hub.connect("B") });
+    await b.engine.pull(); await b.engine.pull();
+    expect(rows(b, "collections")).toHaveLength(101);
+    expect(b.engine.unverified()).toBe(0); expect(b.engine.pending()).toEqual([]);
+  });
+
+  it("stops between set-aside recovery requests and recovers the remaining records after restart", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    await settle(a, b); space(a, "recover-one"); space(a, "recover-two"); await drain(a);
+    const records = (await hub.inspect("account")).filter((record) => bodyOf(record.envelope).table === "spaces");
+    for (const record of records) {
+      const damaged = structuredClone(record.envelope); damaged.body.payload = "damaged";
+      b.sqlite.prepare("INSERT INTO bridge_parked(stream,seq,envelope,reason) VALUES('account',?,?,'unverified')").run(record.seq, JSON.stringify(damaged));
+    }
+    b.sqlite.prepare("UPDATE bridge_cursors SET seq=? WHERE stream='account'").run(records.at(-1)!.seq);
+    await b.engine.stop();
+    const gate = deferred<void>(), entered = deferred<void>(), raw = hub.connect("B");
+    const pull = vi.fn(raw.pull).mockImplementationOnce(async (...args) => { const page = await raw.pull(...args); entered.resolve(); await gate.promise; return page; });
+    const make = () => createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: { ...raw, pull } });
+    b.engine = make(); const pulling = b.engine.pull(); await entered.promise;
+    const stopping = b.engine.stop(); gate.resolve(); await Promise.allSettled([pulling, stopping]);
+    expect(pull).toHaveBeenCalledOnce();
+    b.engine = make(); await b.engine.pull();
+    expect([row(b, "spaces", "recover-one")?.name, row(b, "spaces", "recover-two")?.name]).toEqual(["recover-one", "recover-two"]);
+    expect(b.engine.unverified()).toBe(0); expect(b.engine.pending()).toEqual([]);
+  });
+
+  it("keeps enrollment staging pending when stop interrupts its local scan", async () => {
+    const hub = await createBridgeTestHub(), fixture = createTestDb(); cleanups.push(fixture.cleanup);
+    const sqlite = fixture.sqlite, raw = hub.connect("B"), pull = vi.fn(raw.pull);
+    sqlite.exec("INSERT INTO accounts(id) VALUES('default'); INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default','B'); INSERT INTO collections(id,account_id,name) VALUES('local','default','Existing draft')");
+    const make = () => createBridgeEngine({ sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: { ...raw, pull }, stageLocalBeforePull: true });
+    const first = make(); sqlite.exec("UPDATE bridge_config SET enrollment_staging=1 WHERE id=1");
+    const starting = first.bootstrap(); await new Promise<void>((resolve) => setImmediate(resolve));
+    const captured = first.pending();
+    const stopping = first.stop(); await Promise.allSettled([starting, stopping]);
+    expect(first.pending()).toEqual(captured);
+    expect(sqlite.prepare("SELECT enrollment_staging FROM bridge_config WHERE id=1").get()).toEqual({ enrollment_staging: 1 });
+    expect(pull).not.toHaveBeenCalled();
+    const resumed = make(); await resumed.bootstrap();
+    expect(resumed.pending().some((entry) => entry.table_name === "collections" && entry.pk === "local")).toBe(true);
+    expect(sqlite.prepare("SELECT enrollment_staging FROM bridge_config WHERE id=1").get()).toEqual({ enrollment_staging: 0 });
+    await resumed.stop();
+  });
+
+  it("stops bootstrap between durable backfill batches and resumes without recapturing earlier generations", async () => {
+    const hub = await createBridgeTestHub(), fixture = createTestDb(); cleanups.push(fixture.cleanup);
+    const sqlite = fixture.sqlite, ready = deferred<void>(), raw = hub.connect("B");
+    sqlite.exec("INSERT INTO accounts(id) VALUES('default'); INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default','B')");
+    for (let i = 0; i < 201; i++) sqlite.prepare("INSERT INTO collections(id,account_id,name) VALUES(?,'default',?)").run(`local-${i}`, `Draft ${i}`);
+    const transport: BridgeTransport = { ...raw, async pull(...args) { const page = await raw.pull(...args); ready.resolve(); return page; } };
+    const make = () => createBridgeEngine({ sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport });
+    const first = make(), bootstrapping = first.bootstrap();
+    await ready.promise; await new Promise<void>((resolve) => setImmediate(resolve));
+    const captured = first.pending();
+    expect(captured.length).toBeGreaterThan(0); expect(captured.length).toBeLessThan(202);
+    const stopping = first.stop(); await Promise.allSettled([bootstrapping, stopping]);
+    expect(first.pending()).toEqual(captured);
+    const resumed = make(); await resumed.bootstrap();
+    expect(resumed.pending()).toHaveLength(202);
+    for (const entry of captured) expect(resumed.pending().find((next) => next.table_name === entry.table_name && next.pk === entry.pk)).toEqual(entry);
+    while (resumed.pending().length) await resumed.push();
+    const a = await node(hub, "A"); expect(rows(a, "collections")).toHaveLength(201);
+    await resumed.stop();
+  });
+
+  it("reports a parked tombstone as deletion exactly once when Atlas is enabled again", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    item(a, "deleted-later"); await settle(a, b); await b.engine.stop();
+    b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: hub.connect("B"), experimentalAtlas: false });
+    a.sqlite.exec("DELETE FROM atlas_items WHERE id='deleted-later'"); await drain(a); await b.engine.pull();
+    expect(row(b, "atlas_items", "deleted-later")).toBeTruthy(); await b.engine.stop();
+    const applied = vi.fn();
+    b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: hub.connect("B"), onApplied: applied });
+    await b.engine.retryParked(); await b.engine.retryParked();
+    expect(row(b, "atlas_items", "deleted-later")).toBeUndefined();
+    expect(applied.mock.calls.flatMap(([changes]) => changes)).toEqual([{ table: "atlas_items", pk: "deleted-later", op: "delete" }]);
+    expect(b.engine.pending()).toEqual([]);
+  });
+
+  it("commits the admitted pull page on stop without requesting the next page", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    await settle(a, b); collection(a, "first"); collection(a, "second"); await drain(a);
+    const gate = deferred<void>(), entered = deferred<void>(), rawPull = b.transport.pull.bind(b.transport);
+    const pull = vi.spyOn(b.transport, "pull").mockImplementationOnce(async (...args) => {
+      const page = await rawPull(...args); entered.resolve(); await gate.promise; return page;
+    });
+    const pulling = b.engine.pull("account", 1); await entered.promise;
+    const stopping = b.engine.stop(); gate.resolve();
+    const [result] = await Promise.allSettled([pulling, stopping]);
+    expect(pull).toHaveBeenCalledOnce();
+    expect(rows(b, "collections").map((entry) => entry.id)).toEqual(["first"]);
+    expect(result).toMatchObject({ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("stopped") }) });
+    pull.mockRestore();
+    b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: hub.connect("B") });
+    await b.engine.pull("account", 1);
+    expect(rows(b, "collections").map((entry) => entry.id)).toEqual(["first", "second"]);
+  });
+
+  it("resumes interrupted bootstrap at its committed cursor before backfilling local rows", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A");
+    space(a, "claude", "Remote configuration"); collection(a, "remote"); await drain(a);
+    const fixture = createTestDb(); cleanups.push(fixture.cleanup); const sqlite = fixture.sqlite;
+    sqlite.exec("INSERT INTO accounts(id) VALUES('default'); INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default','B'); INSERT INTO spaces(id,account_id,name,slug) VALUES('claude','default','Installation default','claude'); INSERT INTO collections(id,account_id,name) VALUES('local','default','Local draft')");
+    const raw = hub.connect("B"), offsets: number[] = []; let interrupted = true;
+    const transport: BridgeTransport = { ...raw, async pull(stream, after, limit) {
+      offsets.push(after);
+      if (interrupted && offsets.length === 2) throw new Error("Injected bootstrap disconnect");
+      return raw.pull(stream, after, limit);
+    } };
+    const make = () => createBridgeEngine({ sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport });
+    const first = make();
+    await expect(first.bootstrap(1)).rejects.toThrow("Injected bootstrap disconnect");
+    expect(first.pending()).toEqual([]);
+    const checkpoint = (sqlite.prepare("SELECT seq FROM bridge_cursors WHERE stream='account'").get() as { seq: number }).seq;
+    expect(checkpoint).toBeGreaterThan(0); await first.stop();
+    interrupted = false; offsets.length = 0;
+    const resumed = make();
+    await resumed.bootstrap(1);
+    expect(offsets[0]).toBe(checkpoint);
+    expect(sqlite.prepare("SELECT name FROM spaces WHERE id='claude'").get()).toEqual({ name: "Remote configuration" });
+    expect(sqlite.prepare("SELECT name FROM collections WHERE id='remote'").get()).toEqual({ name: "remote" });
+    expect(resumed.pending().map((entry) => [entry.table_name, entry.pk])).toEqual([["collections", "local"]]);
+    await resumed.stop();
+  });
+
   it("does not decrypt parked records again on unchanged empty pulls, but explicit retry and restart still check them", async () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A", { schemaVersion: 6 });
     const open = vi.fn((envelope: BridgeEnvelope) => bridgeTestCodec.open(envelope));

@@ -532,7 +532,7 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
           store.sqlite.prepare("DELETE FROM bridge_parked WHERE stream=? AND seq=?").run(entry.stream, entry.seq);
           if (verified.delete(entry.envelope)) cachedChars -= entry.envelope.length;
           progress = true;
-          if (outcome === "applied") changes.push({ table: body.table, pk: body.pk, op: "upsert", ...(envelope.header.runId ? { runId: envelope.header.runId } : {}) });
+          if (header.op === "upsert" && outcome === "applied") changes.push({ table: body.table, pk: body.pk, op: "upsert", ...(envelope.header.runId ? { runId: envelope.header.runId } : {}) });
         }
       }
     }

@@ -221,6 +221,39 @@ B1 establishes ownership, the explicit schema registry and the pass-through deve
 
 Bridge scheduling reacts immediately to local write events and hub change hints. Local writes push without pulling; hints pull account roots and only the affected watched stream, and skip the publishing socket. A five-minute safety pull covers lost hints and is never postponed by publishing; opening a conversation or reconnecting also pulls. Renewing a UI watch lease sends no RPC. A one-second local-only outbox check finds direct SQL writes without waking the hub. A write cycle that sends nothing while changes stay queued backs off from 2 to 60 seconds until a new local write changes the outbox. Protocol ping/pong checks idle connections every 25 seconds with a 10-second deadline, without waking the account DO. Ready identities and devices waiting for local join code confirmation poll every five minutes; unchanged pending keys are not rewritten. Sign-in and pending approval retain their short polling. Approval hints and 1008 closures trigger an HTTP identity recheck even when a previous snapshot is in flight; only confirmed HTTP rejection erases keys. The account DO caches credential-bound WebSocket approval for 30 seconds, invalidates it on revocation and revalidates after hibernation. D1 migration 0006 stages a successor hash without retiring the current credential. The client creates a random successor, saves it encrypted as pending before proposing only its SHA-256 hash, and retries the same proposal after restart. The hub echoes the hash and expiry, never the raw token; a competing proposal is a visible 409 conflict. No server secret derives the successor. Only a validated, durably stored acknowledgement exposes it to replication; first authenticated use commits the handover and invalidates only the predecessor's cache/sockets, with best-effort DO notification. A saved successor can complete after the predecessor expires. New clients require the client-hash-v1 capability before proposing a renewal, and both deploy scripts reject pending or unverified remote D1 migrations. Lost/truncated responses or local storage failure leave the current token and account key intact; token expiry still applies. Presence timestamps are persisted only on connect/disconnect; idle pulls and pings do not write them. Online state comes from live sockets. Initialized quota reads reuse their durable prefix without a no-op UPDATE, and an already armed maintenance alarm is left unchanged.
 
+`bridge.sync-lifecycle.ts` owns replication-loop admission, generation retirement,
+its single timer, connection retry deadlines, stalled-write pacing and upload-rate
+cooldown. The loop claims its promise before status/subscription callbacks run.
+Wake/change hints cannot shorten a failed connection's retry deadline; explicit
+sync can retry immediately. Pause retires the old generation while draining its
+accepted work, and Resume schedules a fresh cycle instead of reviving the old
+batch drain. Stop rejects new work, shares teardown, and ignores retired
+presence/approval callbacks. Captured change hints survive an interrupted cycle.
+The same module validates the whole ACK batch before any success is committed,
+clears only the matching journaled envelope, marks only the matching capture
+clock synced, and releases only the sent outbox generation. Synthetic attachment
+metadata has no independent outbox ACK. Deleted ACKs still recover unsent Page
+content before accepted child revisions are marked synced. Engine stop closes
+admission immediately while an already-running ACK can finish its durable
+commit before codec disposal. Read-only policy retains ordinary writes while
+reads and tombstones progress; reconnect retries preserve publication identity.
+
+`bridge.receive-lifecycle.ts` owns incoming page validation, value restoration,
+durable parking retries, enrollment staging and dependency-ordered backfill.
+Bootstrap resumes the committed account cursor and finishes the remote prefix
+before capturing untouched installation seeds. Each page commits applied rows,
+parked dependencies, deletion recovery and its cursor together through the
+applier; local failures leave that page retryable, and notifications follow the
+commit. Stop lets an admitted page finish but forbids its successor, another
+quarantine fetch or the next staging/backfill batch. Interrupted staging keeps
+its durable enrollment marker; backfill resumes its table/key checkpoint without
+replacing earlier capture generations. A new engine rechecks the whole bounded
+unverified queue, including records beyond the first hundred; an offline fetch
+leaves that check retryable. Recovery responses obey the same page ordering and
+progress checks as normal pulls before any quarantined publication is discarded.
+Replayed tombstones announce deletion only, never an upsert of a row they just
+removed. Explicit full pulls still replay from zero.
+
 B5 adds immutable R2 blob chunks, Worker-signed upload/download capabilities and a verified lazy cache under `userData/bridge/blobs`. File ids are account-private HMACs of plaintext hashes; XChaCha20-Poly1305 authenticates each 4 MiB chunk's identity, position and total size. The 50 MiB file limit leaves larger outputs available at their source. Register clocks retain encrypted file manifests through alias merges, rebuilds and retries; metadata edits that do not change file bytes retain their manifest. Turn-end selected outputs are frozen into `bridge/uploads`, referenced from the existing reply anchor and released after ACK. Replica images, attachments, selected document links and collection files resolve on the receiving backend. File Explorer may read exact, verified cache files but cannot write them. The browser still stores no SQLite database of its own. Atlas files use the same lazy cache once B6 enables the Atlas graph.
 B6 enables Atlas replication for explicitly configured Bridge backends and backfills pre-existing Atlas items on upgrade. Record schema version 2 lets earlier receivers park new records until they upgrade. Pages point at immutable revision UUIDs; `parent_revision_id` and `merged_revision_id` form the revision graph. Revision `version` is a database-local ordinal allocated from the maximum for that Page, and the item's ordinal follows its current pointer. Content and metadata retain independent registers, so a stale favourite cannot move the pointer. Non-current graph leaves are conflicts; choosing either version creates a new revision consuming both leaves. History/restore use UUIDs and display time/device; browser editor drafts stay scoped to the connected backend. Before a pulled tombstone or verified deleted ACK cascades, unsent Page revisions become a new “(recovered)” Page with fresh revision/file ids and preserved blob manifests. Recovery receipts avoid duplicate copies when child ACKs precede the Page's tombstone; deleted ACKs are processed before successful child ACKs in the same push. File aliases remain readable from embeds and covers, and canonical file references protect restorable history. Generated-file discovery only walks this backend's execution folders; replicas expose selected outputs through their conversation cache.
 

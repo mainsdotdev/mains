@@ -1,3 +1,4 @@
+import { createBridgeSyncLifecycle } from "./bridge.sync-lifecycle";
 import { createHash } from "node:crypto";
 import type { BridgeStatus, BridgeBackendInfo, BridgeRunState, BridgeQuota } from "@mains/contracts/bridge";
 import type { BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
@@ -39,7 +40,6 @@ export interface BridgeReplicatorOptions {
 const watcherLeaseMs = 90_000;
 const quotaRefreshIntervalMs = 60_000;
 const fallbackPollIntervalMs = 300_000;
-const stalledRetryMaxMs = 60_000;
 
 /** One serialized background loop per database; a hub outage never blocks local execution. */
 export function createBridgeReplicator(options: BridgeReplicatorOptions) {
@@ -49,13 +49,10 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   const binding = sqlite.prepare("SELECT account_fingerprint,enrollment_staging FROM bridge_config WHERE id=1").get() as { account_fingerprint: string | null; enrollment_staging: number } | undefined;
   if (binding?.account_fingerprint && binding.account_fingerprint !== fingerprint) throw new Error("This database is already bound to another Bridge account key");
 
-  let stopped = false, paused = false, initialized = false, state: BridgeStatus["state"] = "connecting";
+  const lifecycle = createBridgeSyncLifecycle(options);
+  let initialized = false, state: BridgeStatus["state"] = "connecting";
   let lastSyncedAt: string | null = null, error: string | null = null;
-  let timer: ReturnType<typeof setTimeout> | undefined, inFlight: Promise<void> | undefined;
-  let requested = false, failures = 0, subscribed = "";
-  // Consecutive write cycles that sent nothing while changes stayed queued, and the outbox they saw.
-  let stalls = 0, stalledOutbox = "";
-  let writeRetryAt = 0;
+  let subscribed = "";
   // Membership is re-read at start, after a reconnect or failure (hints may have been missed), on a hint
   // and with the safety read; a page that binds a newer head also refreshes it first.
   let pullAllRequested = true, nextSafetyPullAt = 0, membershipStale = true;
@@ -85,7 +82,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   const runStates = new Map<string, BridgeRunState>();
   const online = new Map<string, boolean>();
   const notify = () => {
-    if (!stopped) { try { options.onStatus?.(); } catch { /* UI listeners cannot interrupt durable replication. */ } }
+    if (!lifecycle.stopped) { try { options.onStatus?.(); } catch { /* UI listeners cannot interrupt durable replication. */ } }
   };
   const pending = () => (sqlite.prepare("SELECT count(*) AS n FROM bridge_outbox").get() as { n: number }).n;
   /** Every local capture raises the outbox generation, so a new write ends a stall. */
@@ -95,6 +92,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   };
 
   function presence(value: Extract<BridgeServerMessage, { type: "presence" }>) {
+    if (lifecycle.stopped) return;
     const peerJoined = value.online && value.backendId !== backendId && online.get(value.backendId) !== true;
     const previous = sqlite.prepare("SELECT label,platform FROM bridge_peers WHERE backend_id=?").get(value.backendId) as { label: string; platform: string | null } | undefined;
     sqlite.prepare(`INSERT INTO bridge_peers(backend_id,label,platform,last_seen_ms) VALUES(?,?,?,?)
@@ -109,15 +107,15 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     url: config.url, token: options.token ?? config.token, metadata: { label: config.label, platform: process.platform },
     requestTimeoutMs: options.requestTimeoutMs,
     onPresence: presence,
-    onApproval: options.onApproval,
-    onAccessChanged: options.onAccessChanged,
-    onChanged: (stream) => { changedStreams.add(stream); quotaDirty = true; requested = true; schedule(0); },
-    onMembership: (seq) => { if (seq > (membership.current()?.seq ?? -1)) { membershipStale = true; requested = true; schedule(0); } },
+    onApproval: (request) => { if (!lifecycle.stopped) options.onApproval?.(request); },
+    onAccessChanged: () => { if (!lifecycle.stopped) options.onAccessChanged?.(); },
+    onChanged: (stream) => { changedStreams.add(stream); quotaDirty = true; lifecycle.request(); schedule(0); },
+    onMembership: (seq) => { if (seq > (membership.current()?.seq ?? -1)) { membershipStale = true; lifecycle.request(); schedule(0); } },
     onStatusChange(next) {
-      if (stopped) return;
+      if (lifecycle.stopped) return;
       if (next === "offline") {
         online.clear(); subscribed = ""; pullAllRequested = true; membershipStale = true; state = "offline";
-        if (!inFlight && !failures) { requested = true; schedule(1000); }
+        if (!lifecycle.inFlight && !lifecycle.failures) { lifecycle.request(); schedule(1000); }
       }
       else if (next === "connecting") state = "connecting";
       else if (next === "connected") quotaDirty = true;
@@ -140,13 +138,14 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   /** Keeps the replay horizon moving while membership is quiet (MEMBERSHIP.md §8). The hub's time only
    * triggers it; a device tries at most once a day whatever the hub reports. Best effort: another member
    * may get there first, and replication never waits on it. */
-  async function heartbeat() {
+  async function heartbeat(current: () => boolean) {
     const state = membership.current(), newest = membership.headAppendedAt(), self = state && bridgeMember(state, backendId);
     if (!self || newest === null || Date.now() < nextHeartbeatAt || Date.now() - newest < BRIDGE_MEMBERSHIP_HEARTBEAT_MS) return;
     nextHeartbeatAt = Date.now() + 86_400_000;
     try {
       const entry = signBridgeMembershipEntry(state, { kind: "checkpoint", body: { horizon: true } }, deviceSigner(self), membershipSecret);
       await bridgeHttp(config.url.replace(/^ws/, "http"), "/v1/membership", options.token ? await options.token() : config.token, { entry });
+      if (!current()) return;
       await refreshMembership();
     } catch { /* A concurrent change or an unreachable hub leaves this to the next day or another member. */ }
   }
@@ -178,25 +177,18 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     return runs;
   }
   function schedule(delay: number) {
-    if (stopped || paused || options.autoStart === false) return;
-    if (timer) clearTimeout(timer);
-    const due = Date.now() + delay;
-    timer = setTimeout(() => {
-      timer = undefined;
-      // Discover durable local writes without sending a remote pull. This also
-      // covers SQL writers that do not emit a renderer/domain event.
+    lifecycle.schedule(delay, (due) => {
       const streams = ["account", ...watchedRuns().map((id) => `run:${id}`)].join(",");
-      const work = !failures && (!readOnly() && Date.now() >= writeRetryAt && pending() > 0 && (!stalls || outboxSignature() !== stalledOutbox) || streams !== subscribed ||
+      const work = !lifecycle.failures && (!readOnly() && Date.now() >= lifecycle.writeRetryAt && pending() > 0 && !lifecycle.stalled(outboxSignature()) || streams !== subscribed ||
         readOnly() && pending() > 0 && Date.now() >= nextQuotaRefreshAt);
-      if (Date.now() < due && (failures > 0 || !requested && !work)) { schedule(due - Date.now()); return; }
+      if (Date.now() < due && (lifecycle.failures > 0 || !lifecycle.requested && !work)) { schedule(due - Date.now()); return; }
       void runCycle().catch(() => {});
-    }, Math.min(delay, options.activeIntervalMs ?? 1000));
-    timer.unref();
+    });
   }
-  async function drain(stream: BridgeStream, deletesOnly = false) {
+  async function drain(stream: BridgeStream, deletesOnly: boolean, current: () => boolean) {
     let total = 0;
     // Bound a busy publisher's work so account pulls and open transcripts keep progressing.
-    for (let batch = 0; batch < 10 && !stopped && !paused; batch++) {
+    for (let batch = 0; batch < 10 && current(); batch++) {
       const pushed = await engine.push(stream, 100, deletesOnly);
       total += pushed;
       if (pushed) quotaDirty = true;
@@ -204,8 +196,8 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     }
     return total;
   }
-  async function cycle(refreshUsage = false) {
-    requested = false;
+  async function cycle(refreshUsage: boolean, current: () => boolean) {
+    lifecycle.beginCycle();
     const incoming = new Set(changedStreams); changedStreams.clear();
     const safetyDue = Date.now() >= nextSafetyPullAt;
     let pullAll = pullAllRequested || !initialized || safetyDue;
@@ -213,50 +205,51 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     try {
       const streams: BridgeStream[] = ["account", ...watchedRuns().map((id): BridgeStream => `run:${id}`)];
       const signature = streams.join(",");
-      if (subscribed !== signature) { await transport.subscribe(streams); subscribed = signature; pullAll = true; }
-      if (membershipStale || safetyDue) { membershipStale = false; await refreshMembership(); await heartbeat(); }
+      if (subscribed !== signature) { await transport.subscribe(streams); if (!current()) return; subscribed = signature; pullAll = true; }
+      if (membershipStale || safetyDue) { membershipStale = false; await refreshMembership(); if (!current()) return; await heartbeat(current); }
+      if (!current()) return;
       if (!initialized) {
         state = "syncing"; notify();
         await engine.bootstrap(); initialized = true;
       } else if (pullAll || incoming.size) await engine.pull("account");
-      if (stopped || paused) return;
+      if (!current()) return;
       const wasReadOnly = readOnly();
       // An inactive publisher checks for renewal once a minute, without retrying
       // its whole outbox. Explicit UI sync may refresh the cached usage sooner.
       if (wasReadOnly) { if (pending() || refreshUsage) quotaDirty = true; await refreshQuota(refreshUsage); }
+      if (!current()) return;
       const deletesOnly = readOnly();
       refreshClaudeSessionMirrors(sqlite, backendId);
       while (!(sqlite.prepare("SELECT backfill_done FROM bridge_config WHERE id=1").get() as { backfill_done: number }).backfill_done) {
         await engine.backfill(100); await new Promise<void>((resolve) => setImmediate(resolve));
-        if (stopped || paused) return;
+        if (!current()) return;
       }
       let writeError: unknown;
       let sent = 0;
       const publish = async (stream: BridgeStream, onlyDeletes: boolean) => {
-        try { sent += await drain(stream, onlyDeletes); }
+        try { sent += await drain(stream, onlyDeletes, current); }
         catch (cause) {
           // A write failure never skips the remaining streams or watched reads.
           writeError ??= cause;
-          if (/write rate limit/i.test(String(cause))) writeRetryAt = Date.now() + 60_000;
-          if (!onlyDeletes) await drain(stream, true).catch(() => {});
+          if (/write rate limit/i.test(String(cause))) lifecycle.rateLimited();
+          if (!onlyDeletes && current()) await drain(stream, true, current).catch(() => {});
         }
       };
-      await publish("account", deletesOnly || Date.now() < writeRetryAt);
+      await publish("account", deletesOnly || Date.now() < lifecycle.writeRetryAt);
+      if (!current()) return;
       const outgoing = sqlite.prepare("SELECT DISTINCT stream FROM bridge_outbox WHERE stream<>'account' ORDER BY stream").all() as { stream: BridgeStream }[];
       for (const { stream } of outgoing) {
-        if (stopped || paused) return;
+        if (!current()) return;
         // Only this run's acknowledged roots unlock its children; unrelated blocked account rows
         // do not hold it back. Tombstones can still close a never-published run.
-        await publish(stream, deletesOnly || Date.now() < writeRetryAt || !engine.canPushRun(stream.slice(4)));
+        await publish(stream, deletesOnly || Date.now() < lifecycle.writeRetryAt || !engine.canPushRun(stream.slice(4)));
       }
-      if (!deletesOnly) {
-        if (sent || !pending()) { stalls = 0; stalledOutbox = ""; }
-        else { stalls++; stalledOutbox = outboxSignature(); }
-      }
+      if (!deletesOnly) lifecycle.progress(sent, pending(), outboxSignature());
       for (const runId of watchedRuns()) {
-        if (stopped || paused) return;
+        if (!current()) return;
         if (!pullAll && !incoming.has(`run:${runId}`)) continue;
         await engine.pull(`run:${runId}`);
+        if (!current()) return;
         runStates.set(runId, { runId, ready: true, error: null });
       }
       // Local publishing and incremental hints cannot postpone the safety read.
@@ -265,18 +258,20 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       // Entering/leaving a quota refusal needs a fresh plan/usage sample. The
       // ordinary live-update path and repeated refusals remain rate limited.
       await refreshQuota(refreshUsage && !wasReadOnly || !!error && /quota|rate limit/i.test(error));
-      state = readOnly() ? "read-only" : pending() > 0 ? "syncing" : "connected"; error = null; failures = 0; lastSyncedAt = new Date().toISOString(); notify();
+      if (!current()) return;
+      state = readOnly() ? "read-only" : pending() > 0 ? "syncing" : "connected"; error = null; lifecycle.succeeded(); lastSyncedAt = new Date().toISOString(); notify();
     } catch (cause) {
-      if (stopped) return;
+      if (!current()) return;
       if (/quota|rate limit|subscription required/i.test(String(cause))) { quotaDirty = true; await refreshQuota(!error || !/quota|rate limit|subscription required/i.test(error)); }
+      if (!current()) return;
       if (/subscription required/i.test(String(cause)) && readOnly()) {
         // Bootstrap can discover inactive access before completing its first
         // read. Retry with the renewal sample, not a zero-delay timer loop.
         pullAllRequested = true;
         nextSafetyPullAt = Date.now() + Math.min(quotaRefreshIntervalMs, options.idleIntervalMs ?? fallbackPollIntervalMs);
-        state = "read-only"; error = null; failures = 0; lastSyncedAt = new Date().toISOString(); notify(); return;
+        state = "read-only"; error = null; lifecycle.succeeded(); lastSyncedAt = new Date().toISOString(); notify(); return;
       }
-      failures++;
+      lifecycle.failed();
       error = cause instanceof Error ? cause.message : "Bridge replication failed";
       state = /connection|timed out/i.test(error) ? "offline" : "error";
       online.clear(); subscribed = ""; pullAllRequested = true; membershipStale = true;
@@ -287,35 +282,30 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       }
       notify(); throw cause;
     } finally {
-      if (!stopped) {
-        const active = pending() > 0 && !readOnly();
-        const safety = Math.max(0, nextSafetyPullAt - Date.now());
-        const activeInterval = options.activeIntervalMs ?? 1000;
-        const retry = Date.now() < writeRetryAt ? writeRetryAt - Date.now() :
-          stalls ? Math.min(stalledRetryMaxMs, activeInterval * 2 ** Math.min(stalls, 6)) : activeInterval;
-        const interval = active ? Math.min(retry, safety) :
-          readOnly() && pending() > 0 ? Math.min(safety, Math.max(0, nextQuotaRefreshAt - Date.now())) : safety;
-        const delay = failures ? Math.min(30_000, 1000 * 2 ** Math.min(failures - 1, 5)) : requested ? 0 : interval;
-        schedule(delay);
+      if (!current() && !lifecycle.stopped) {
+        for (const stream of incoming) changedStreams.add(stream);
+        pullAllRequested ||= pullAll;
+        membershipStale = true;
       }
+      schedule(lifecycle.delay({ active: pending() > 0 && !readOnly(), safety: Math.max(0, nextSafetyPullAt - Date.now()),
+        readOnly: readOnly(), pending: pending(), quotaAt: nextQuotaRefreshAt }));
     }
   }
-  function runCycle(refreshUsage = false): Promise<void> {
-    if (stopped) return Promise.reject(new Error("Bridge replicator is stopped"));
-    if (paused) return Promise.reject(new Error("Bridge replication is paused"));
-    if (inFlight) return inFlight;
-    inFlight = cycle(refreshUsage).finally(() => { inFlight = undefined; });
-    return inFlight;
+  function runCycle(refreshUsage = false, retryBlocked = false): Promise<void> {
+    return lifecycle.run((current) => {
+      if (retryBlocked) engine.retryBlocked();
+      return cycle(refreshUsage, current);
+    });
   }
   function syncNow(refreshUsage = false): Promise<void> {
     pullAllRequested = true;
-    const run = () => { engine.retryBlocked(); return runCycle(refreshUsage); };
-    return inFlight ? inFlight.catch(() => {}).then(run) : run();
+    const run = () => runCycle(refreshUsage, true);
+    return lifecycle.inFlight ? lifecycle.inFlight.catch(() => {}).then(run) : run();
   }
   const api = {
     syncNow,
-    async pause() { paused = true; if (timer) clearTimeout(timer); timer = undefined; await inFlight?.catch(() => {}); },
-    resume() { if (stopped) return; paused = false; pullAllRequested = true; api.wake(); },
+    pause: lifecycle.pause,
+    resume() { if (lifecycle.stopped) return; lifecycle.resume(); pullAllRequested = true; api.wake(); },
     async preserveAccountFiles() { await files?.preserveAccountFiles(); },
     isCachedFile(realPath: string): Promise<boolean> { return blobs?.isCachedFile(realPath) ?? Promise.resolve(false); },
     captureOutput(file: string, roots: string[], mime: string | null) { return files?.captureOutput(file, roots, mime); },
@@ -323,9 +313,9 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       if (!files) throw new Error("Bridge file transfer is not configured");
       return files.resolve(table, id, column, sourcePath);
     },
-    wake() { requested = true; schedule(0); },
+    wake() { lifecycle.request(); schedule(0); },
     watchRun(runId: string, watcherId: string) {
-      if (stopped) throw new Error("Bridge replicator is stopped");
+      if (lifecycle.stopped) throw new Error("Bridge replicator is stopped");
       const run = sqlite.prepare("SELECT owner_backend_id FROM runs WHERE id=?").get(runId) as { owner_backend_id: string } | undefined;
       if (!run) throw new Error("Run not found");
       if (run.owner_backend_id === backendId) return;
@@ -356,14 +346,13 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       const blocked = engine.blocked();
       return { enabled: true, state: (state === "connected" || state === "syncing") && readOnly() ? "read-only" : state, backendId, label: config.label, lastSyncedAt, error,
         pendingRecords: pending(), rejectedRecords: engine.unverified(), blockedRecordCount: blocked.total, blockedRecords: blocked.records,
-        writeRetryAt: Date.now() < writeRetryAt ? new Date(writeRetryAt).toISOString() : null,
+        writeRetryAt: Date.now() < lifecycle.writeRetryAt ? new Date(lifecycle.writeRetryAt).toISOString() : null,
         backends: [...backends.values()], runs: [...runStates.values()], quota: displayQuota };
     },
-    async stop() {
-      stopped = true; if (timer) clearTimeout(timer); timer = undefined;
-      transport.close(); await blobs?.stop(); await inFlight?.catch(() => {}); await engine.stop(); membershipSecret.fill(0);
+    stop() { return lifecycle.stop(async (pending) => {
+      transport.close(); await blobs?.stop(); await pending?.catch(() => {}); await engine.stop(); membershipSecret.fill(0);
       watchers.clear(); online.clear();
-    },
+    }); },
   };
   schedule(0);
   return api;
