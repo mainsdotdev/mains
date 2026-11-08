@@ -4,9 +4,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
+import { setTransport, resetTransport } from "@/lib/transport/registry";
 
 const mocks = vi.hoisted(() => ({
-  getPlugins: vi.fn(), readPlugin: vi.fn(), refetch: vi.fn(), open: vi.fn(),
+  getPlugins: vi.fn(), readPlugin: vi.fn(), refetch: vi.fn(), open: vi.fn(), startOAuth: vi.fn(),
   listeners: new Set<(event: ProviderConnectorsUpdatedEvent) => void>(),
 }));
 vi.mock("@/lib/redux/api", () => ({
@@ -16,13 +17,7 @@ vi.mock("@/lib/redux/api", () => ({
   useUninstallProviderPluginMutation: () => [vi.fn(), {}],
   useSetProviderPluginEnabledMutation: () => [vi.fn(), {}],
   useUpdateProviderPluginMutation: () => [vi.fn(), {}],
-  useStartProviderConnectorOAuthMutation: () => [vi.fn(), {}],
-}));
-vi.mock("@/lib/transport/events", () => ({
-  appEvents: { providers: { onConnectorsUpdated: (listener: (event: ProviderConnectorsUpdatedEvent) => void) => {
-    mocks.listeners.add(listener);
-    return () => { mocks.listeners.delete(listener); };
-  } } },
+  useStartProviderConnectorOAuthMutation: () => [mocks.startOAuth, {}],
 }));
 vi.mock("@/components/ui", () => ({
   Button: (props: ComponentProps<"button">) => <button {...props} />,
@@ -59,11 +54,18 @@ function RouteControls() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  setTransport({
+    kind: "fixture", invoke: vi.fn(), status: () => "connected", onStatusChange: () => () => {},
+    subscribe(_channel, listener) {
+      mocks.listeners.add(listener);
+      return () => { mocks.listeners.delete(listener); };
+    },
+  });
   mocks.refetch.mockReset();
   mocks.getPlugins.mockReturnValue({ data: pluginData, isLoading: false });
   mocks.readPlugin.mockReturnValue({ refetch: mocks.refetch });
 });
-afterEach(() => { cleanup(); mocks.listeners.clear(); });
+afterEach(() => { cleanup(); resetTransport(); mocks.listeners.clear(); });
 
 describe("plugin detail navigation", () => {
   it("refreshes the connection on returning from hosted setup and replaces Connect with Connected", async () => {
