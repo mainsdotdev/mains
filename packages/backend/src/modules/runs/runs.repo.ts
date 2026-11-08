@@ -671,6 +671,22 @@ export const runsRepo = {
     return rows.map(mapToolCallRowToResponse);
   },
 
+  /** Lifecycle admission never needs historical tool input/output bodies. */
+  async findToolCallMetadata(id: number): Promise<Record<string, unknown> | null> {
+    const row = getDb().select({ metadata: toolCalls.metadata }).from(toolCalls).where(eq(toolCalls.id, id)).get();
+    return row?.metadata ? safeJsonParse<Record<string, unknown>>(row.metadata) : null;
+  },
+
+  /** Native correlation needs identities and lifecycle versions, never bodies. */
+  async findToolProjectionAnchors(runId: string) {
+    return getDb().select({
+      id: toolCalls.id, toolId: toolCalls.toolCallId, toolName: toolCalls.toolName, status: toolCalls.status,
+      taskRunId: sql<string | null>`json_extract(${toolCalls.metadata}, '$.task.providerRunId')`,
+      subagentRunId: sql<string | null>`json_extract(${toolCalls.metadata}, '$.subagent.providerRunId')`,
+      subagentPhase: sql<string | null>`json_extract(${toolCalls.metadata}, '$.subagent.phase')`,
+    }).from(toolCalls).where(eq(toolCalls.runId, runId)).orderBy(asc(toolCalls.id));
+  },
+
   /** Claude resume correlation, without reading historical tool inputs/outputs. */
   async findClaudeTaskAnchorsByRun(runId: string) {
     const taskId = sql<string | null>`COALESCE(json_extract(${toolCalls.metadata}, '$.task.taskId'), json_extract(${toolCalls.metadata}, '$.subagent.agentId'))`;
@@ -703,6 +719,7 @@ export const runsRepo = {
         status: payload.status ?? "queued",
         input: payload.input ? JSON.stringify(payload.input) : null,
         startedAt: payload.startedAt,
+        metadata: payload.metadata ? JSON.stringify(payload.metadata) : null,
         updatedAt: sql`(unixepoch())`,
       })
       .returning({ id: toolCalls.id });

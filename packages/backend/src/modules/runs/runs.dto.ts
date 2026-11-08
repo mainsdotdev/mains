@@ -203,6 +203,7 @@ export interface CreateToolCallPayload {
   status?: ToolCallStatus;
   input?: Record<string, unknown>;
   startedAt?: Date;
+  metadata?: Record<string, unknown>;
 }
 
 export interface UpdateToolCallPayload {

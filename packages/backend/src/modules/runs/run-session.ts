@@ -1,6 +1,6 @@
 import { insertRunInputArtifact } from "./run-input-artifact";
-import { randomUUID } from "node:crypto";
-import { isAssistantReportStream } from "../../../shared/report-stream";
+import { createToolCallProjection } from "./tool-call-projection";
+import { createReportProjection } from "./report-projection";
 import {
   couldModifyFiles,
   toolWrites,
@@ -46,19 +46,6 @@ export type { RunSessionResult } from "./run-lifecycle";
 
 const LIVE_DIFF_DEBOUNCE_MS = 300;
 const FORCE_FINALIZE_TIMEOUT_MS = 30_000;
-
-/**
- * `metadata.task` statuses the provider has already resolved — the run-end
- * sweep leaves these alone. Mirrors `SubagentTaskMeta["status"]` in the
- * renderer's subagent-identity, minus the live ones (`pending`, `running`,
- * `paused` — a paused task cannot resume once the run's process is gone).
- */
-const TERMINAL_TASK_STATUSES = new Set([
-  "completed",
-  "failed",
-  "killed",
-  "stopped",
-]);
 
 // ─────────────────────────────────────────────────────────────
 // File-level utilities (pure)
@@ -173,43 +160,16 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   let resolvedToolCallsReady: Promise<void> | null = null;
   let turnCounter: number = ctx.seedTurnIndex ?? -1;
   const liveDiff = workspaceId ? createWorkspaceDiffScheduler(workspaceId, recomputeLiveDiff, LIVE_DIFF_DEBOUNCE_MS, execution.cwd) : null;
-  const pendingToolCalls = new Map<string, number>();
-  // callKey → DB tool call id, retained for the whole run. pendingToolCalls is
-  // emptied on completion, but subagent and background-task events arrive AFTER
-  // their tool call has settled (a backgrounded command reports its real result
-  // once the foreground call already returned "running in background"), so they
-  // need an anchor that outlives it.
-  const resolvedToolCalls = new Map<string, number>();
-  const taskRunIds = new Map<string, string>();
+  const toolProjection = createToolCallProjection({ runId, accountId, providerId });
   // callKey → the files a running tool call named at start, claimed for the
   // turn only when it completes successfully (see noteToolWrites).
   const pendingToolWrites = new Map<string, string[]>();
   const pendingPrCreations = new Set<string>();
   const announcedPrUrls = new Set<string>();
-  type ArtifactEvent = Extract<WorkRunEvent, { type: "artifact" }>;
-  const reportStreams = new Map<string, ArtifactEvent>();
+  const reports = createReportProjection();
   const artifactProjections = new Set<Promise<boolean>>();
   const eventProjections = new Set<Promise<void>>();
-  const streamScope = randomUUID();
-  let reportSequence = 0;
-
-  async function hydrateResolvedToolCalls(): Promise<void> {
-    try {
-      const calls = await runsRepo.findToolCallsByRun(runId);
-      for (const call of calls) {
-        if (call.toolId) {
-          resolvedToolCalls.set(call.toolId, call.id);
-          const task = call.metadata?.task as { providerRunId?: string } | undefined;
-          if (task?.providerRunId) taskRunIds.set(call.toolId, task.providerRunId);
-        }
-      }
-    } catch (err) {
-      console.error(
-        `[RunSession ${runId}] Failed to hydrate tool-call anchors:`,
-        err,
-      );
-    }
-  }
+  let projectionTail = Promise.resolve();
 
   // ─── Broadcast helpers (channel names + payload shapes preserved exactly) ───
   function broadcastEventPersisted(): void {
@@ -470,91 +430,6 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     catch (error) { console.error(`[RunSession ${runId}] Could not snapshot Bridge outputs:`, error); }
   }
 
-  // ─── Tool call cleanup ───
-  async function closePendingToolCalls(status: "done" | "error"): Promise<void> {
-    if (pendingToolCalls.size === 0) return;
-    const now = new Date();
-    for (const [callKey, toolCallId] of pendingToolCalls) {
-      try {
-        await runsRepo.updateToolCall(toolCallId, { status, endedAt: now });
-      } catch (err) {
-        console.error(`[RunSession ${runId}] Failed to close orphaned tool call ${callKey}:`, err);
-      }
-    }
-    pendingToolCalls.clear();
-  }
-
-  /**
-   * Settle rows whose terminal lifecycle event never arrived.
-   *
-   * An aborted run tears the provider sink down before the settle
-   * notifications are processed, and a spawn-style call (Codex) is already
-   * "done" the moment the agent starts — so without this sweep the session
-   * panel shows those agents running forever. The run's outcome stands in for
-   * theirs: succeeded → completed, anything else → stopped.
-   *
-   * BOTH lifecycle keys are swept, because they are separate sources of
-   * "still working" and a row can carry either one. `metadata.subagent` is a
-   * spawn's own lifecycle; `metadata.task` is the CLI's task lifecycle, and it
-   * is the ONLY liveness a SendMessage continuation or a backgrounded command
-   * has — settling just the first left a resumed agent (whose live state moved
-   * onto its continuation row) spinning forever after the run that resumed it
-   * was stopped.
-   */
-  async function settleUnfinishedSubagents(
-    runStatus: "succeeded" | "failed" | "canceled",
-  ): Promise<void> {
-    const settledState = runStatus === "succeeded" ? "completed" : "stopped";
-    try {
-      const calls = await runsRepo.findToolCallsByRun(runId);
-      for (const call of calls) {
-        const metadata = call.metadata as Record<string, unknown> | null;
-        const subagent = metadata?.subagent as { phase?: string } | undefined;
-        const task = metadata?.task as
-          | { phase?: string; status?: string; error?: string }
-          | undefined;
-        const patch: Record<string, unknown> = {};
-
-        if (subagent?.phase === "invoked" || subagent?.phase === "running") {
-          patch.subagent = { phase: settledState, updatedAt: Date.now() };
-        }
-        // A task the provider already resolved — by status, by a completed
-        // phase, or by failing — keeps its own outcome.
-        if (
-          task &&
-          !task.error &&
-          task.phase !== "completed" &&
-          !TERMINAL_TASK_STATUSES.has(task.status ?? "")
-        ) {
-          patch.task = { status: settledState, updatedAt: Date.now() };
-        }
-
-        if (Object.keys(patch).length === 0) continue;
-        await runsRepo.updateToolCall(call.id, { metadata: patch });
-      }
-    } catch (err) {
-      console.error(`[RunSession ${runId}] Failed to settle subagents:`, err);
-    }
-  }
-
-  /** Belt-and-suspenders: mark any DB-side tool calls still in "running" as ended. */
-  async function closeRunningToolCallsInDb(status: "done" | "error"): Promise<void> {
-    try {
-      const calls = await runsRepo.findToolCallsByRun(runId);
-      const now = new Date();
-      for (const tc of calls) {
-        if (tc.status !== "running") continue;
-        try {
-          await runsRepo.updateToolCall(tc.id, { status, endedAt: now });
-        } catch (err) {
-          console.error(`[RunSession ${runId}] Failed to close running tool call ${tc.id}:`, err);
-        }
-      }
-    } catch (err) {
-      console.error(`[RunSession ${runId}] Failed to load tool calls for cleanup:`, err);
-    }
-  }
-
   // ─── Diff snapshotting ───
   /**
    * Anchored to the CURRENT HEAD, not the run-start `baseRef`. The stored diff
@@ -689,101 +564,40 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
 
   async function projectToolCall(
     event: Extract<WorkRunEvent, { type: "tool_call" }>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (initialTurnReady) await initialTurnReady;
-    const metadata = event.metadata;
-    const phase = metadata?.phase;
-    if (phase === "start") {
-      const metadataToolCallId = metadata?.toolCallId;
-      const parentToolUseId = metadata?.parentToolUseId;
-      const toolCallId = await runsRepo.insertToolCall({
-        accountId,
-        runId,
-        providerId,
-        toolId: metadataToolCallId ? String(metadataToolCallId) : undefined,
-        // Links a subagent's own tool calls back to the call that spawned the
-        // subagent — the session panel's flow view filters on this column.
-        parentToolCallId: parentToolUseId ? String(parentToolUseId) : undefined,
-        toolName: event.toolName,
-        status: "running",
-        input: event.input,
-        startedAt: event.startedAt ? new Date(event.startedAt) : new Date(),
-      });
-      // Capture ownership at start. A late completion must not move a call
-      // into the follow-up turn; metadata patches retain this turn ID.
-      await runsRepo.updateToolCall(toolCallId, { metadata: { ...metadata, turnId: activeTurnId } });
-      const callKey = metadataToolCallId
-        ? String(metadataToolCallId)
-        : `${event.toolName}-${event.startedAt || Date.now()}`;
-      pendingToolCalls.set(callKey, toolCallId);
-      resolvedToolCalls.set(callKey, toolCallId);
-      if (pullRequestCreationCommand(event)) pendingPrCreations.add(callKey);
+    const result = await toolProjection.project(event, activeTurnId);
+    const callKey = result.key;
+    if (result.transition === "unchanged") return false;
+    if (result.transition === "started") {
+      if (pullRequestCreationCommand(event)) pendingPrCreations.add(callKey!);
       const named = await noteToolWrites(event);
-      if (named.length > 0) pendingToolWrites.set(callKey, named);
-      return;
+      if (named.length > 0) pendingToolWrites.set(callKey!, named);
+      return true;
     }
-    if (phase === "end" || phase === "complete") {
-      const metadataToolCallId = (event.metadata as Record<string, unknown> | undefined)?.toolCallId;
-      let callKey: string | undefined;
-      if (metadataToolCallId) {
-        // Stable id present → match ONLY by exact id. The name-prefix fallback
-        // below closes the wrong call when many same-named tools run in parallel
-        // (e.g. a subagent reading 10 files), and a completion for an
-        // already-resolved id (duplicate from hook + tool_result block) must be
-        // a no-op rather than closing an unrelated pending call.
-        callKey = String(metadataToolCallId);
-      } else {
-        // No id (legacy/partial providers): best-effort match the oldest pending
-        // call with the same tool name.
-        callKey = Array.from(pendingToolCalls.keys()).find((k) =>
-          k.startsWith(`${event.toolName}-`),
-        );
-      }
-      if (callKey && pendingToolCalls.has(callKey)) {
-        const toolCallId = pendingToolCalls.get(callKey)!;
-        pendingToolCalls.delete(callKey);
-        const wasPrCreation = pendingPrCreations.delete(callKey);
-        const latencyMs =
-          event.startedAt && event.endedAt ? event.endedAt - event.startedAt : undefined;
-        await runsRepo.updateToolCall(toolCallId, {
-          status: event.terminalStatus ?? (event.error ? "error" : "done"),
-          input: event.input as Record<string, unknown> | undefined,
-          output: event.output,
-          error: event.error,
-          endedAt: event.endedAt ? new Date(event.endedAt) : new Date(),
-          latencyMs,
-          metadata: event.metadata,
-        });
-        if (wasPrCreation) {
-          const url = createdPullRequestUrl(event);
-          if (url && !announcedPrUrls.has(url)) {
-            announcedPrUrls.add(url);
-            const run = await runsRepo.findRunById(runId);
-            if (run) {
-              const payload: RunPullRequestCreatedEvent = {
-                runId, toolCallId, url, mode: run.mode, workspaceId: run.workspaceId,
-              };
-              emit(CHANNELS.runs.pullRequestCreated, payload, { runId, workspaceId: run.workspaceId ?? undefined });
-            }
-          }
-        }
-      }
-      // Live diff: if this tool could have touched the filesystem, schedule a recomputation.
-      if (!event.error && couldModifyFiles(event.toolName)) {
-        scheduleLiveDiff();
-      }
-      const namedAtStart = (callKey && pendingToolWrites.get(callKey)) || [];
-      if (callKey) pendingToolWrites.delete(callKey);
-      const named = await noteToolWrites(event);
-      // A denied or failed edit wrote nothing. Claiming its file anyway would
-      // put a peer's edit to that same file on this turn's card.
-      const wrote = !event.error && (event.terminalStatus ?? "done") === "done";
-      if (wrote && turnBaseline) {
-        for (const repoPath of [...namedAtStart, ...named]) {
-          turnBaseline.writes.paths.add(repoPath);
+    const wasPrCreation = callKey && pendingPrCreations.delete(callKey);
+    if (wasPrCreation) {
+      const url = createdPullRequestUrl(event);
+      if (url && !announcedPrUrls.has(url)) {
+        announcedPrUrls.add(url);
+        const run = await runsRepo.findRunById(runId);
+        if (run) {
+          const payload: RunPullRequestCreatedEvent = {
+            runId, toolCallId: result.id!, url, mode: run.mode, workspaceId: run.workspaceId,
+          };
+          emit(CHANNELS.runs.pullRequestCreated, payload, { runId, workspaceId: run.workspaceId ?? undefined });
         }
       }
     }
+    if (!event.error && couldModifyFiles(event.toolName)) scheduleLiveDiff();
+    const namedAtStart = (callKey && pendingToolWrites.get(callKey)) || [];
+    if (callKey) pendingToolWrites.delete(callKey);
+    const named = await noteToolWrites(event);
+    const wrote = !event.error && (event.terminalStatus ?? "done") === "done";
+    if (wrote && turnBaseline) {
+      for (const repoPath of [...namedAtStart, ...named]) turnBaseline.writes.paths.add(repoPath);
+    }
+    return true;
   }
 
   async function projectArtifact(
@@ -791,17 +605,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   ): Promise<boolean> {
     // Streaming chunks: push to renderer only, skip DB and the persisted-event broadcast.
     if (event.ephemeral) {
-      if (event.streamId && isAssistantReportStream(event)) {
-        const nativeId = event.streamId;
-        const previous = reportStreams.get(nativeId);
-        // Some providers reuse a block id within a turn or on resume. Give
-        // each live message its own identity so an older DB row cannot hide it.
-        const streamId = previous?.streamId ?? (event.content
-          ? `${nativeId}-${streamScope}-${++reportSequence}` : nativeId);
-        event = { ...event, streamId, metadata: { ...event.metadata, streamId } };
-        if (event.content) reportStreams.set(nativeId, event);
-        else reportStreams.delete(nativeId);
-      }
+      // A queued prompt boundary may still be preparing. Let ordered final
+      // projection assign a new stream's turn instead of freezing the old one.
+      event = reports.stream(event, eventProjections.size ? null : activeTurnId);
       broadcastEphemeralEvent({
         type: event.type,
         kind: event.kind,
@@ -813,22 +619,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     }
 
     if (initialTurnReady) await initialTurnReady;
-    event = { ...event, metadata: { ...event.metadata, turnId: activeTurnId } };
-    let reportKey: string | undefined;
-    if (event.kind === "report" && event.metadata?.isFromSubagent !== true) {
-      const streamId = event.streamId ?? event.metadata?.streamId;
-      if (typeof streamId === "string") {
-        reportKey = reportStreams.has(streamId) ? streamId
-          : [...reportStreams].find(([, report]) => report.streamId === streamId)?.[0];
-      } else if (event.content?.trim()) {
-        // Claude's completed text blocks have no native stream id. Match the
-        // final block to its live prefix before retiring that preview.
-        reportKey = [...reportStreams].find(([, report]) =>
-          report.content?.trim() && event.content!.trim().startsWith(report.content.trim()))?.[0];
-      }
-      const report = reportKey === undefined ? undefined : reportStreams.get(reportKey);
-      if (report) event = { ...event, metadata: { ...event.metadata, streamId: report.streamId } };
-    }
+    event = reports.prepare(event);
+    if (reports.completed(event)) return false;
+    event = { ...event, metadata: { ...event.metadata, turnId: event.metadata?.turnId ?? activeTurnId } };
     // A Claude send that missed the previous native turn can already have
     // started a new one. Deduplicate it before opening its boundary, and stamp
     // the accepted prompt with the new turn rather than the one it just closed.
@@ -838,7 +631,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       event = { ...event, metadata: { ...event.metadata, turnId: activeTurnId } };
       return event;
     } : undefined)) return false;
-    if (reportKey !== undefined) reportStreams.delete(reportKey);
+    reports.commit(event);
 
     // Turn boundary side-effects
     const artifactKind = (event.metadata as Record<string, unknown> | undefined)?.kind;
@@ -869,106 +662,6 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       }
     }
     return true;
-  }
-
-  /**
-   * Attach provider detail to an existing tool call's metadata under `key`.
-   *
-   * updateToolCall merges metadata with json_patch, so repeated patches from
-   * different owners accumulate instead of overwriting each other. Returns
-   * false when the tool call is unknown — an Agent/task event whose spawning
-   * call was never projected has nothing to attach to.
-   */
-  async function patchToolCallMetadata(
-    toolUseId: string | undefined,
-    key: "subagent" | "task",
-    detail: Record<string, unknown>,
-    parentToolCallId?: string | null,
-    extraMetadata?: Record<string, unknown>,
-  ): Promise<boolean> {
-    if (!toolUseId) return false;
-    let toolCallId = resolvedToolCalls.get(toolUseId);
-    if (toolCallId === undefined && resolvedToolCallsReady) {
-      await resolvedToolCallsReady;
-      toolCallId = resolvedToolCalls.get(toolUseId);
-    }
-    if (toolCallId === undefined) return false;
-    // Drop undefined fields so a later partial patch cannot blank an earlier one.
-    const clean = Object.fromEntries(
-      Object.entries(detail).filter(([, v]) => v !== undefined),
-    );
-    await runsRepo.updateToolCall(toolCallId, {
-      parentToolCallId,
-      metadata: {
-        ...extraMetadata,
-        [key]: clean,
-        ...(parentToolCallId !== undefined ? { parentToolUseId: parentToolCallId, isFromSubagent: !!parentToolCallId } : {}),
-      },
-    });
-    return true;
-  }
-
-  async function projectSubagent(
-    event: Extract<WorkRunEvent, { type: "subagent" }>,
-  ): Promise<boolean> {
-    if (resolvedToolCallsReady) await resolvedToolCallsReady;
-    const taskRunId = event.parentToolUseId ? taskRunIds.get(event.parentToolUseId) : undefined;
-    if (event.providerRunId && taskRunId && event.providerRunId < taskRunId) return false;
-    return patchToolCallMetadata(event.parentToolUseId, "subagent", {
-      phase: event.phase,
-      agentType: event.agentType,
-      agentId: event.agentId,
-      providerRunId: event.providerRunId,
-      model: event.model,
-      reasoningEffort: event.reasoningEffort,
-      role: event.role,
-      agentPath: event.agentPath,
-      prompt: event.prompt,
-      result: event.result,
-      error: event.error,
-      // Terminal patches overwrite updatedAt, so the spawn moment gets its own
-      // key — the panel derives "worked for Xs" from invokedAt → updatedAt.
-      ...(event.phase === "invoked" ? { invokedAt: event.ts ?? Date.now() } : {}),
-      updatedAt: event.ts ?? Date.now(),
-    });
-  }
-
-  async function projectTask(
-    event: Extract<WorkRunEvent, { type: "task" }>,
-  ): Promise<boolean> {
-    if (resolvedToolCallsReady) await resolvedToolCallsReady;
-    const previousRunId = event.toolCallId ? taskRunIds.get(event.toolCallId) : undefined;
-    if (event.providerRunId && previousRunId && event.providerRunId < previousRunId) return false;
-    const newExecution = !!(event.providerRunId && event.providerRunId !== previousRunId);
-    const didPersist = await patchToolCallMetadata(event.toolCallId, "task", {
-      // json_patch merges partial updates. Explicitly remove the previous
-      // execution's outcome so a resumed task cannot inherit its failure.
-      phase: event.phase,
-      taskId: event.taskId,
-      providerRunId: event.providerRunId,
-      parentTaskId: event.parentTaskId,
-      parentToolCallId: event.parentToolCallId,
-      status: event.status ?? (newExecution ? null : undefined),
-      description: event.description,
-      subagentType: event.subagentType,
-      taskType: event.taskType,
-      summary: event.summary ?? (newExecution ? null : undefined),
-      // Where a backgrounded command's real output landed. The run itself never
-      // carries that output, so this path is the only handle on it.
-      outputFile: event.outputFile ?? (newExecution ? null : undefined),
-      lastToolName: event.lastToolName ?? (newExecution ? null : undefined),
-      usage: event.usage ?? (newExecution ? null : undefined),
-      error: event.error ?? (newExecution ? null : undefined),
-      skipTranscript: event.skipTranscript ?? (newExecution ? null : undefined),
-      isBackgrounded: event.isBackgrounded ?? (newExecution ? null : undefined),
-      backgroundActive: event.backgroundActive ?? (newExecution ? null : undefined),
-      ambient: event.ambient ?? (newExecution ? null : undefined),
-      updatedAt: event.ts ?? Date.now(),
-    }, event.parentToolCallId, newExecution && (event.taskType === "local_agent" || event.subagentType) ? {
-      subagent: { phase: "running", agentId: event.taskId, providerRunId: event.providerRunId, result: null, error: null },
-    } : undefined);
-    if (didPersist && event.toolCallId && event.providerRunId) taskRunIds.set(event.toolCallId, event.providerRunId);
-    return didPersist;
   }
 
   async function projectPromptSuggestion(
@@ -1015,7 +708,15 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
 
   function project(event: WorkRunEvent): Promise<void> {
     if (!lifecycle.accepts(event)) return Promise.resolve();
-    return trackProjection(projectEvent(event));
+    if (event.type === "context_usage" || event.type === "artifact" && event.ephemeral) {
+      return trackProjection(projectEvent(event));
+    }
+    if (event.type === "artifact") event = reports.prepare(event);
+    // Preserve admitted event order even when SDK listeners do not await us.
+    // A failed write rejects its caller without poisoning subsequent events.
+    const projection = projectionTail.then(() => projectEvent(event));
+    projectionTail = projection.catch(() => {});
+    return trackProjection(projection);
   }
 
   async function projectEvent(event: WorkRunEvent): Promise<void> {
@@ -1026,8 +727,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         didPersist = true;
         break;
       case "tool_call":
-        await projectToolCall(event);
-        didPersist = true;
+        didPersist = await projectToolCall(event);
         break;
       case "artifact":
         {
@@ -1061,10 +761,10 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         broadcastContextUsage(event);
         break;
       case "subagent":
-        didPersist = await projectSubagent(event);
+        didPersist = await toolProjection.projectLifecycle(event);
         break;
       case "task":
-        didPersist = await projectTask(event);
+        didPersist = await toolProjection.projectLifecycle(event);
         break;
     }
     if (didPersist) broadcastEventPersisted();
@@ -1112,13 +812,11 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     }
     clearLiveDiffSchedule();
 
-    const toolCallStatus = result.status === "succeeded" ? "done" : "error";
-
     try {
       // Accepted events own their writes until settlement, including tools and
       // logs. Cleanup must see them before closing orphan calls or the run row.
       await Promise.allSettled([...eventProjections]);
-      for (const report of [...reportStreams.values()]) {
+      for (const report of reports.pending()) {
         if (!report.content?.trim()) continue;
         try {
           await projectArtifact({
@@ -1151,9 +849,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
 
       if (initialTurnReady) await initialTurnReady;
       await closeActiveTurn(result.usage, undefined, result.status);
-      await closePendingToolCalls(toolCallStatus);
-      await closeRunningToolCallsInDb(toolCallStatus);
-      await settleUnfinishedSubagents(result.status);
+      await toolProjection.settle(result.status);
     } catch (cleanupErr) {
       console.error(`[RunSession ${runId}] Cleanup failed:`, cleanupErr);
     } finally {
@@ -1193,10 +889,11 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // Keep the baseRef-capture promise so finalize can await it (see persistFinalDiff).
   baseRefCaptured = captureBaseRef();
   void acquireSleepBlocker();
-  resolvedToolCallsReady = hydrateResolvedToolCalls();
+  resolvedToolCallsReady = toolProjection.ready;
   initialTurnReady = resolvedToolCallsReady.then(() =>
     startNextTurn(ctx.initialPromptContent),
   );
+  void initialTurnReady.catch((error) => console.error(`[RunSession ${runId}] Initial projection failed:`, error));
   if (ctx.initialTurnMetadata) {
     // The renderer can show delegated work before the first message or tool.
     // The running notification above precedes this turn's asynchronous insert.

@@ -47,7 +47,7 @@ export type TranscriptItem = (
       images: PromptImage[];
       documents?: PromptDocument[];
     }
-  | { key: string; kind: "response"; text: string; at: number; fullContent?: FullContent }
+  | { key: string; kind: "response"; text: string; at: number; streamId?: string; fullContent?: FullContent }
   | { key: string; kind: "tools"; calls: ToolCallRow[]; at: number }
   | {
       key: string;
@@ -75,6 +75,7 @@ type FlatItem =
   | { key: string; kind: "image"; image: TranscriptImage; at: number; turnId?: number };
 
 interface ArtifactMetadata {
+  streamId?: unknown;
   /** Set by the backend on a file its deliverable rules selected for this turn. */
   outputSelected?: unknown;
   title?: unknown;
@@ -176,7 +177,7 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
     }
     default: {
       const text = artifact.content ?? artifact.path ?? "";
-      return text ? { key, kind: "response", text, at, ...(fullContent ? { fullContent } : {}) } : null;
+      return text ? { key, kind: "response", text, at, ...(typeof meta.streamId === "string" ? { streamId: meta.streamId } : {}), ...(fullContent ? { fullContent } : {}) } : null;
     }
   }
 }

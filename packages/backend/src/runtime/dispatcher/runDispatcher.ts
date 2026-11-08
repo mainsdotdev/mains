@@ -150,6 +150,7 @@ export async function dispatchRun(request: DispatchRunRequest): Promise<Dispatch
           ? "canceled"
           : "failed";
 
+    await writeback.finish(finalStatus);
     await runsService.updateRun(runId, {
       status: finalStatus,
       endedAt: new Date(),
@@ -167,6 +168,9 @@ export async function dispatchRun(request: DispatchRunRequest): Promise<Dispatch
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`[RunDispatcher] Run ${runId} failed with error:`, errorMessage);
 
+    await writeback.finish("failed").catch((cleanupError) => {
+      console.error(`[RunDispatcher] Could not finish writeback for ${runId}:`, cleanupError);
+    });
     await runsService.updateRun(runId, {
       status: "failed",
       endedAt: new Date(),
@@ -296,6 +300,7 @@ async function dispatchRunInternal(
           ? "canceled"
           : "failed";
 
+    await writeback.finish(finalStatus);
     await runsService.updateRun(runId, {
       status: finalStatus,
       endedAt: new Date(),
@@ -304,6 +309,9 @@ async function dispatchRunInternal(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
+    await writeback.finish("failed").catch((cleanupError) => {
+      console.error(`[RunDispatcher] Could not finish writeback for ${runId}:`, cleanupError);
+    });
     await runsService.updateRun(runId, {
       status: "failed",
       endedAt: new Date(),

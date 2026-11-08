@@ -36,6 +36,9 @@ background status events synchronize conversation metadata rather than history.
 _Avoid_: Downloading all history, treating a prompt-count limit as a data-size
 limit, accumulating full tool output while reading chunks.
 
+**Live transcript acknowledgement**:
+The streaming store uses `@mains/contracts/transcript-stream`, shared with desktop. Terminal status settles parent prose until the matching durable stream id arrives; late deltas cannot replace settled or acknowledged text. Durable response items retain `metadata.streamId`, so identical text from an older identified answer cannot hide a new live message. Older servers without stream ids use a timestamp-constrained text fallback. Backend replacement clears stream state and fences old transport callbacks. See [Run projection lifecycle](../desktop/docs/design/run-projection-lifecycle.md) for inventory 5, 6, 16.
+
 **Transcript scroll**:
 Touching the transcript pauses native chasing without freezing its history window. Only an upward departure beyond 80pt from the inset-aware end leaves following mode; returning near the actual end restores it when no newer page is missing. A single floating arrow is offered beyond 220pt or when a historical window has newer messages. Streaming growth and programmatic jumps do not flash the arrow. Drag/momentum intent gates automatic paging by direction, while anchor corrections reset motion tracking. Pages that fit the viewport use the explicit earlier/newer load controls, so rubber-band bounces cannot replace them. `features/runs/lib/transcript-scroll.ts` owns these decisions independently of native rendering.
 _Avoid_: Freezing history at touch-down, inserting a Jump to latest row into the transcript, treating programmatic offsets as user gestures, chasing the end during deceleration.

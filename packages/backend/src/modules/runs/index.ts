@@ -52,3 +52,6 @@ export type {
 } from "./runs.dto";
 
 export { shutdownUserDecisions } from "./user-decision-runtime";
+
+export { createToolCallProjection } from "./tool-call-projection";
+export { createReportProjection } from "./report-projection";

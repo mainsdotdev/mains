@@ -255,7 +255,7 @@ class BackendSession {
         });
         const detachStreaming = transport.subscribe(CHANNELS.runs.ephemeralEvent, (payload) => {
           const event = payload as RunEphemeralEvent;
-          if (event.runId === this.viewingRunId) receiveStreamingMessage(event);
+          if (this.transport === transport && this.snapshot.backend?.backendId === backend.backendId && event.runId === this.viewingRunId) receiveStreamingMessage(event);
         });
         const detachTargets = attachTargetEvents(transport, backend.backendId);
         this.detachEvents = () => {
