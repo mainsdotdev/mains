@@ -68,7 +68,8 @@ vi.mock("../git/git.service", () => ({
   },
 }));
 
-vi.mock("../workspace", () => ({
+vi.mock("../workspace", async () => ({
+  ...await vi.importActual("../workspace/workspace-diff-lifecycle"),
   workspaceService: {
     getDiffByRun: vi.fn().mockResolvedValue(null),
   },

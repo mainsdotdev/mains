@@ -932,6 +932,9 @@ The browser targets at most three live views, including its active tab, hibernat
 The framework-free bookkeeping state machine in `features/workspace/lib/run-cache.ts` (`createRunCache()`). It owns the four-run LRU, loaded flags, finalized set, and coalesced live-refresh bookkeeping. `useRunHistory` prunes event, turn and navigation maps to the same whitelist. Evicted runs reopen on a fresh latest page. `tryAcquireLoad` / `clearPending` / `hasPending` / `releaseLoad` coalesce repeated sync triggers; the history hook serializes these with navigation requests. `pruneRunMap` preserves the map reference when no eviction is needed.
 _Avoid_: retaining window metadata after its events are evicted; fetching the complete transcript on a cache miss.
 
+**workspace edit lifecycle**:
+Turn Undo, workspace diff refresh and editor auto-save use the run/checkout, projection and file/view owners described in [Workspace editing lifecycle](docs/design/workspace-edit-lifecycle.md). The diff queue is shared by run live/final snapshots, manual refresh, intake and native mutations; failed reads preserve its last valid row. File saves use a shared version contract and canonical file queue, while renderer recovery drafts stay scoped to backend/account/workspace/file.
+
 ## Pull request inbox
 
 **PR view model**:

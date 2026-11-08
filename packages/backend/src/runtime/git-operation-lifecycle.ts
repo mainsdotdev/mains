@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -11,6 +12,24 @@ export interface GitOperationScope {
 const jobs = new Map<string, Job>();
 const workspaces = new Map<string, Job>();
 const roots = new Map<string, Job>();
+const revisions = new Map<string, number>();
+const advance = (root: string) => revisions.set(root, (revisions.get(root) ?? 0) + 1);
+
+/** Synchronous native-execution admission also covers aliased workspaces. */
+export function assertCheckoutAvailable(location: string): void {
+  let resolved: string;
+  try { resolved = realpathSync(location); } catch { resolved = path.resolve(location); }
+  const root = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  if (roots.has(root)) throw new Error("Another Git action is already in progress for this checkout");
+}
+
+/** A read started before a checkout mutation cannot publish after it. */
+export async function captureCheckoutRevision(location: string): Promise<() => boolean> {
+  const resolved = await realpath(location).catch(() => path.resolve(location));
+  const root = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  const accepted = revisions.get(root) ?? 0;
+  return () => (revisions.get(root) ?? 0) === accepted;
+}
 let admission: "open" | "closing" | "closed" = "open";
 let stopping: Promise<void> | undefined;
 
@@ -29,7 +48,7 @@ export function shutdownGitOperations(): Promise<void> {
   admission = "closing";
   stopping = (async () => {
     await Promise.allSettled([...workspaces.values()].flatMap((job) => job.pending ? [job.pending] : []));
-    jobs.clear(); roots.clear(); workspaces.clear(); admission = "closed";
+    jobs.clear(); roots.clear(); workspaces.clear(); revisions.clear(); admission = "closed";
   })();
   return stopping;
 }
@@ -59,7 +78,7 @@ export function runGitOperation<T, P extends { workspaceId: string; operationId?
         job.checkout = identity;
         if (job.root && job.root !== root) throw new Error("Repository changed since this Git action started");
         if (roots.has(root) && roots.get(root) !== job) throw new Error("Another Git action is already in progress for this checkout");
-        job.root = root; roots.set(root, job);
+        job.root = root; roots.set(root, job); advance(root);
       }, async step(name, execute, recover) {
         if (job.completed.has(name)) return job.completed.get(name) as Awaited<ReturnType<typeof execute>>;
         if (job.started.has(name) && recover) {
@@ -71,7 +90,7 @@ export function runGitOperation<T, P extends { workspaceId: string; operationId?
       } });
   }).finally(() => {
       if (workspaces.get(input.workspaceId) === job) workspaces.delete(input.workspaceId);
-      if (job.root && roots.get(job.root) === job) roots.delete(job.root);
+      if (job.root && roots.get(job.root) === job) { roots.delete(job.root); advance(job.root); }
       job.pending = undefined;
       if (!operationId) jobs.delete(id);
   });

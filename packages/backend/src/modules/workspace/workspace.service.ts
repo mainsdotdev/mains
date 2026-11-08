@@ -1,4 +1,5 @@
-import { runGitOperation } from "../../runtime/git-operation-lifecycle";
+import { acceptWorkspaceDiffRead, captureWorkspaceDiff } from "./workspace-diff-lifecycle";
+import { assertCheckoutAvailable, runGitOperation } from "../../runtime/git-operation-lifecycle";
 import { assertRecordAvailable, finishRecordDeletion, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
 import { assertOwnedRecord } from "../bridge";
 import { randomUUID } from "crypto";
@@ -77,6 +78,7 @@ export function assertWorkspacePathExists(
 /** Execution must not acquire a workspace being retired, even if its directory
  * and a previously read row still exist. */
 export function assertWorkspaceCanExecute(workspace: WorkspaceResponse): void {
+  assertCheckoutAvailable(workspace.rootPath);
   assertRecordAvailable(recordKey("workspace", workspace.id));
   assertRecordAvailable(recordKey("project", workspace.projectId));
   if (workspace.isArchived) throw new Error("Unarchive this workspace before starting a response.");
@@ -163,6 +165,7 @@ export async function recordWorkspaceDiff(
   workspaceId: string,
   runId: string | null,
   snapshot: DiffSnapshot,
+  current: () => boolean = () => true,
 ): Promise<void> {
   assertOwnedRecord("workspaces", workspaceId);
   const filesJson = JSON.stringify(snapshot.files);
@@ -177,6 +180,7 @@ export async function recordWorkspaceDiff(
   const existing = runId
     ? await workspaceRepo.findDiffByRun(runId)
     : await workspaceRepo.findLatestDiffByWorkspace(workspaceId);
+  if (!current()) return;
   if (existing) {
     await workspaceRepo.updateDiff(existing.id, {
       diffText: snapshot.diffText,
@@ -187,6 +191,7 @@ export async function recordWorkspaceDiff(
     });
   } else {
     await workspaceRepo.deleteLatestDiffByWorkspace(workspaceId);
+    if (!current()) return;
     await workspaceRepo.insertDiff({
       id: randomUUID(),
       workspaceId,
@@ -201,10 +206,10 @@ export async function recordWorkspaceDiff(
 }
 
 /** Drop the workspace's latest diff row. Returns true when a row existed. */
-export async function clearWorkspaceDiff(workspaceId: string): Promise<boolean> {
+export async function clearWorkspaceDiff(workspaceId: string, current: () => boolean = () => true): Promise<boolean> {
   assertOwnedRecord("workspaces", workspaceId);
   const latest = await workspaceRepo.findLatestDiffByWorkspace(workspaceId);
-  if (!latest) return false;
+  if (!latest || !current()) return false;
   await workspaceRepo.deleteLatestDiffByWorkspace(workspaceId);
   return true;
 }
@@ -309,15 +314,7 @@ interface MetadataParts {
  */
 async function captureInitialDiff(workspace: WorkspaceResponse): Promise<void> {
   try {
-    const head = await gitService.getHeadSha(workspace.rootPath);
-    const snapshot = await gitService.captureDiffSnapshot(
-      workspace.rootPath,
-      head,
-    );
-    // A clean tree gets no row at all — same as resyncDiff, so "no changes"
-    // stays one state instead of an empty diff row plus a missing one.
-    if (snapshot.files.length === 0) return;
-    await recordWorkspaceDiff(workspace.id, null, snapshot);
+    await workspaceService.resyncDiff(workspace.id);
   } catch (err) {
     console.warn(
       `[WorkspaceService] Initial diff capture failed for workspace ${workspace.id}:`,
@@ -1046,7 +1043,7 @@ export const workspaceService = {
         .getCurrentBranch(workspace.rootPath)
         .catch(() => branch);
       emitGitStateChanged({ workspaceId, branch: current ?? branch, pathExists: true });
-      await this.resyncDiff(workspaceId);
+      await this.resyncDiff(workspaceId).catch((error) => console.error("[Workspace] Branch switch accepted; diff refresh failed:", error));
     });
   },
 
@@ -1158,7 +1155,7 @@ export const workspaceService = {
       await scope.bind(workspace.rootPath);
       if (paths.length === 0) return;
       await gitService.discardPaths(workspace.rootPath, paths);
-      await this.resyncDiff(workspaceId);
+      await this.resyncDiff(workspaceId).catch((error) => console.error("[Workspace] Discard accepted; diff refresh failed:", error));
     });
   },
 
@@ -1299,47 +1296,26 @@ export const workspaceService = {
    *
    * Returns the resulting diff summary (or null when the tree is clean).
    */
-  async resyncDiff(
-    workspaceId: string,
-  ): Promise<WorkspaceDiffSummaryResponse | null> {
-    assertOwnedRecord("workspaces", workspaceId);
-    const workspace = await workspaceRepo.findById(workspaceId);
-    if (!workspace) throw new Error("Workspace not found");
-
-    const existing = await workspaceRepo.findLatestDiffByWorkspace(workspaceId);
-
-    // Re-anchor to the current HEAD rather than the stored baseRef (captured
-    // at run start). Otherwise work committed externally — e.g. via the CLI —
-    // stays in the `baseRef..workingTree` range and keeps showing up even
-    // though the tree is clean. This mirrors the in-process commit tool, which
-    // advances baseRef to the post-commit HEAD (see mains-tools.core.ts).
-    const head = await gitService
-      .getHeadSha(workspace.rootPath)
-      .catch(() => null);
-    const baseRef = head ?? existing?.baseRef ?? null;
-
-    // No baseRef means it's not a git repo (or git failed). Drop any stale
-    // row defensively, then bail.
-    if (!baseRef) {
-      if (existing) {
-        await workspaceRepo.deleteLatestDiffByWorkspace(workspaceId);
-      }
-      return null;
-    }
-
-    const snapshot = await gitService.captureDiffSnapshot(
-      workspace.rootPath,
-      baseRef,
-    );
-
-    if (snapshot.files.length === 0) {
-      await clearWorkspaceDiff(workspaceId);
-      return null;
-    }
-
-    await recordWorkspaceDiff(workspaceId, null, snapshot);
-
-    return workspaceRepo.findLatestDiffSummaryByWorkspace(workspaceId);
+  async resyncDiff(workspaceId: string): Promise<WorkspaceDiffSummaryResponse | null> {
+    return acceptWorkspaceDiffRead(async () => {
+      assertOwnedRecord("workspaces", workspaceId);
+      const workspace = await workspaceRepo.findById(workspaceId);
+      if (!workspace) throw new Error("Workspace not found");
+      await captureWorkspaceDiff(workspaceId, async (current) => {
+        // A failed read is not evidence of a clean checkout. Keep the last row.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const head = await gitService.getHeadSha(workspace.rootPath);
+          const snapshot = await gitService.captureDiffSnapshot(workspace.rootPath, head);
+          if (!current()) return;
+          if (await gitService.getHeadSha(workspace.rootPath) !== head) continue;
+          if (snapshot.files.length === 0) await clearWorkspaceDiff(workspaceId, current);
+          else await recordWorkspaceDiff(workspaceId, null, snapshot, current);
+          return;
+        }
+        throw new Error("The repository kept changing during diff capture. Try refreshing again.");
+      }, workspace.rootPath);
+      return workspaceRepo.findLatestDiffSummaryByWorkspace(workspaceId);
+    });
   },
 
   // ─────────────────────────────────────────────────────────────

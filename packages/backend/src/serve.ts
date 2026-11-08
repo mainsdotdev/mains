@@ -39,6 +39,7 @@ import {
   registerWorkspaceIpc,
   unregisterWorkspaceIpc,
   shutdownWorkspaceIntakes,
+  shutdownWorkspaceDiffs,
 } from "./modules/workspace";
 import { registerProjectsIpc, unregisterProjectsIpc } from "./modules/projects";
 import {
@@ -50,6 +51,7 @@ import { registerRunsIpc, unregisterRunsIpc, startAttachmentMaintenance, stopAtt
 import { runSessionRegistry } from "./modules/runs/run-session-registry";
 import {
   registerFileExplorerIpc,
+  shutdownFileWrites,
   unregisterFileExplorerIpc,
 } from "./modules/fileExplorer";
 import { registerGitFlowIpc, unregisterGitFlowIpc, shutdownGitFlow } from "./modules/gitFlow";
@@ -197,7 +199,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
     scope.defer(closeDatabase);
     await initializeDatabase({ verbose: false, enableWAL: true, busyTimeout: 5000 });
     scope.assertActive();
-    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow()]); });
+    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs()]); });
     scope.defer(async () => {
       runSessionRegistry.shutdownAll("Standalone server stopped during run");
       destroyAllTerminals();
@@ -236,7 +238,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
       commandReceipts: backendService.commandReceipts,
     });
     scope.defer(() => wsHost.close());
-    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow()]); });
+    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs()]); });
     scope.assertActive();
     scope.defer(async () => { await Promise.all([automationsService.stop(), pulseService.stop()]); });
     automationsService.start();

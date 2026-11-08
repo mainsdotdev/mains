@@ -1,3 +1,4 @@
+import type { WriteFileTextOptions } from "@mains/contracts/file-text";
 import type { BridgeSignInInput, BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
 import type { AtlasAutoTagging, AtlasSaveBookmark, AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
@@ -1054,11 +1055,7 @@ const api = {
      * regular-file safeguards as readFileText; does not create new files.
      * Pass expectedMtimeMs to reject the write if the file changed on disk.
      */
-    writeFileText: (options: {
-      filePath: string;
-      content: string;
-      expectedMtimeMs?: number;
-    }) => ipcRenderer.invoke(CHANNELS.fileExplorer.writeFileText, options),
+    writeFileText: (options: WriteFileTextOptions) => ipcRenderer.invoke(CHANNELS.fileExplorer.writeFileText, options),
   },
   // NOTE: there is deliberately no `git` namespace — the git module is
   // main-process-internal. Renderer-triggered git effects are workspace/gitFlow

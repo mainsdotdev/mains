@@ -159,6 +159,7 @@ export function EditorContent({ className = "" }: EditorContentProps) {
             filename={selectedFile.name}
             filePath={selectedFile.fullPath}
             mtimeMs={selectedFileContent.mtimeMs}
+            version={selectedFileContent.version}
             workspaceId={activeWorkspaceId ?? undefined}
             className="h-full"
           />

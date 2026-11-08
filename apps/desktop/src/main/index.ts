@@ -65,6 +65,7 @@ import {
   registerWorkspaceIpc,
   unregisterWorkspaceIpc,
   shutdownWorkspaceIntakes,
+  shutdownWorkspaceDiffs,
 } from "@mains/backend/modules/workspace";
 import {
   registerWorkspaceDialogIpc,
@@ -81,6 +82,7 @@ import {
 } from "@mains/backend/modules/collections";
 import {
   registerFileExplorerIpc,
+  shutdownFileWrites,
   unregisterFileExplorerIpc,
 } from "@mains/backend/modules/fileExplorer";
 import {
@@ -1255,7 +1257,7 @@ async function cleanupAppResources() {
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
     stopBridgeNotifications?.();
-    await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow()]);
+    await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs()]);
     await bridgeService.stop();
     await localBackendService.shutdown();
     // Stop `tailscale serve` if this process started it (no-op otherwise)

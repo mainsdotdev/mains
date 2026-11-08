@@ -1,3 +1,9 @@
+import { assertOwnedRecord } from "../bridge";
+import { assertRecordAvailable, recordKey } from "../../runtime/record-lifecycle";
+import { runGitOperation, type GitOperationScope } from "../../runtime/git-operation-lifecycle";
+import { workspaceService } from "../workspace";
+import { createHash } from "node:crypto";
+import { acceptFileWrite, runFileWrite } from "../../runtime/file-write-lifecycle";
 import { promises as fs } from "fs";
 import * as path from "path";
 import type {
@@ -185,6 +191,10 @@ async function readDirectoryRecursive(
     console.warn(`[FileExplorer] Cannot read directory ${dirPath}:`, error);
     return [];
   }
+}
+
+function fileVersion(stats: import("node:fs").Stats, bytes: Buffer): string {
+  return createHash("sha256").update(JSON.stringify([stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs])).update(bytes).digest("hex");
 }
 
 export const fileExplorerService = {
@@ -440,6 +450,7 @@ export const fileExplorerService = {
 
       // Read file content
       const buffer = await fs.readFile(realPath);
+      const version = fileVersion(stats, buffer);
 
       // Check for binary content (look for null bytes in first 8KB)
       const sampleSize = Math.min(buffer.length, 8192);
@@ -458,6 +469,7 @@ export const fileExplorerService = {
           isBinary: true,
           encoding: "binary",
           mtimeMs: stats.mtimeMs,
+          version,
         };
       }
 
@@ -476,6 +488,7 @@ export const fileExplorerService = {
             isBinary: true,
             encoding: "binary",
             mtimeMs: stats.mtimeMs,
+          version,
           };
         }
       }
@@ -486,6 +499,7 @@ export const fileExplorerService = {
         isBinary: false,
         encoding: "utf-8",
         mtimeMs: stats.mtimeMs,
+          version,
       };
     } catch (error) {
       // Domain messages pass through; raw fs errors get mapped.
@@ -540,61 +554,82 @@ export const fileExplorerService = {
   async writeFileText(
     options: WriteFileTextOptions
   ): Promise<WriteFileTextResponse> {
-    const { filePath, content, expectedMtimeMs } = options;
+    const writeOwned = async (scope?: GitOperationScope): Promise<WriteFileTextResponse> => {
+      const { filePath, content, expectedMtimeMs, expectedVersion } = options;
 
-    const byteLength = Buffer.byteLength(content, "utf-8");
-    if (byteLength > MAX_FILE_SIZE_BYTES) {
-      const sizeMB = (byteLength / (1024 * 1024)).toFixed(2);
-      const limitMB = (MAX_FILE_SIZE_BYTES / (1024 * 1024)).toFixed(0);
-      throw new Error(
-        `Content too large (${sizeMB}MB). Maximum size is ${limitMB}MB`,
-      );
-    }
+      const byteLength = Buffer.byteLength(content, "utf-8");
+      if (byteLength > MAX_FILE_SIZE_BYTES) {
+        const sizeMB = (byteLength / (1024 * 1024)).toFixed(2);
+        const limitMB = (MAX_FILE_SIZE_BYTES / (1024 * 1024)).toFixed(0);
+        throw new Error(
+          `Content too large (${sizeMB}MB). Maximum size is ${limitMB}MB`,
+        );
+      }
 
-    const normalizedPath = path.resolve(filePath);
+      const normalizedPath = path.resolve(filePath);
 
-    let realPath: string;
-    try {
-      realPath = await fs.realpath(normalizedPath);
-    } catch (error) {
-      throwFsError(error, "File does not exist", "Failed to write file");
-    }
+      let realPath: string;
+      try {
+        realPath = await fs.realpath(normalizedPath);
+      } catch (error) {
+        throwFsError(error, "File does not exist", "Failed to write file");
+      }
 
-    await assertWithinContentRoots(realPath);
+      await assertWithinContentRoots(realPath);
 
-    try {
-      const stats = await fs.lstat(realPath);
-      if (!stats.isFile()) {
-        if (stats.isDirectory()) {
-          throw new Error("Cannot write to a directory");
+      const write = () => runFileWrite(realPath, async () => {
+        try {
+          const stats = await fs.lstat(realPath);
+          if (!stats.isFile()) {
+            if (stats.isDirectory()) {
+              throw new Error("Cannot write to a directory");
+            }
+            throw new Error("Cannot write to non-regular file");
+          }
+
+          // Optimistic-concurrency guard: agents write to workspace files too, so
+          // a stale editor buffer must not silently clobber a newer file.
+          if (expectedMtimeMs !== undefined && stats.mtimeMs !== expectedMtimeMs) {
+            throw new Error("File changed on disk");
+          }
+
+          if (expectedVersion !== undefined && fileVersion(stats, await fs.readFile(realPath)) !== expectedVersion) throw new Error("File changed on disk");
+          await fs.writeFile(realPath, content, "utf-8");
+          const after = await fs.stat(realPath);
+          // A save while a run is live must not land on its turn changes.
+          const dir = path.dirname(realPath);
+          await noteAppWrites(dir, (location) => [toWorktreePath(location, dir, realPath)]);
+          return { size: byteLength, mtimeMs: after.mtimeMs, version: fileVersion(after, Buffer.from(content, "utf8")) };
+        } catch (error) {
+          // Domain messages pass through; raw fs errors get mapped.
+          if (
+            error instanceof Error &&
+            !(error as NodeJS.ErrnoException).code &&
+            error.message
+          ) {
+            throw error;
+          }
+          console.error("[FileExplorer] Failed to write file text:", error);
+          throwFsError(error, "File does not exist", "Failed to write file");
         }
-        throw new Error("Cannot write to non-regular file");
-      }
-
-      // Optimistic-concurrency guard: agents write to workspace files too, so
-      // a stale editor buffer must not silently clobber a newer file.
-      if (expectedMtimeMs !== undefined && stats.mtimeMs !== expectedMtimeMs) {
-        throw new Error("File changed on disk");
-      }
-
-      await fs.writeFile(realPath, content, "utf-8");
-      const after = await fs.stat(realPath);
-      // A save while a run is live must not land on its turn changes.
-      const dir = path.dirname(realPath);
-      await noteAppWrites(dir, (location) => [toWorktreePath(location, dir, realPath)]);
-      return { size: byteLength, mtimeMs: after.mtimeMs };
-    } catch (error) {
-      // Domain messages pass through; raw fs errors get mapped.
-      if (
-        error instanceof Error &&
-        !(error as NodeJS.ErrnoException).code &&
-        error.message
-      ) {
-        throw error;
-      }
-      console.error("[FileExplorer] Failed to write file text:", error);
-      throwFsError(error, "File does not exist", "Failed to write file");
-    }
+      });
+      if (!options.workspaceId) return write();
+      const workspace = await workspaceService.get(options.workspaceId);
+      if (!workspace) throw new Error("Workspace not found");
+      assertOwnedRecord("workspaces", workspace.id);
+      assertRecordAvailable(recordKey("project", workspace.projectId));
+      if (workspace.isArchived) throw new Error("Restore the workspace before saving files.");
+      const root = await fs.realpath(workspace.rootPath);
+      const relative = path.relative(root, realPath);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("File is outside this workspace");
+      await scope!.bind(root);
+      const result = await write();
+      await workspaceService.resyncDiff(workspace.id).catch((error) => console.error("[Editor] Saved file diff refresh failed:", error));
+      return result;
+    };
+    return acceptFileWrite(() => options.workspaceId
+      ? runGitOperation({ workspaceId: options.workspaceId, filePath: options.filePath }, "save-file", writeOwned)
+      : writeOwned());
   },
 
   /**

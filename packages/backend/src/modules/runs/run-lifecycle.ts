@@ -13,6 +13,8 @@ export interface RunSessionResult {
 
 const startingResponses = new Set<string>();
 
+export function startingRunResponseIds(): IterableIterator<string> { return startingResponses.values(); }
+
 export function isRunResponseStarting(runId: string): boolean {
   return startingResponses.has(runId);
 }

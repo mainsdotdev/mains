@@ -1,3 +1,5 @@
+import { runGitOperation } from "../../runtime/git-operation-lifecycle";
+import { runTurnUndo } from "./run-turn-changes-lifecycle";
 import { assertOwnedRecord, bridgeService } from "../bridge";
 import type { ResolveArtifactPathPayload } from "@mains/contracts/runs";
 import { CHANNELS } from "@mains/contracts/channels";
@@ -12,7 +14,7 @@ import type {
   VoiceTaskLink,
 } from "@mains/contracts/realtime";
 import { insertRunInputArtifact } from "./run-input-artifact";
-import { assertRunCanContinue, canSteerRun, claimRunResponse, isRunResponseStarting } from "./run-lifecycle";
+import { assertRunCanContinue, canSteerRun, claimRunResponse, isRunResponseStarting, startingRunResponseIds } from "./run-lifecycle";
 import { answerAsyncQuestions, assertAsyncQuestionCanReply, dismissAsyncQuestions } from "./run-async-questions";
 import type { AnswerAsyncQuestionsPayload, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import { providerTurnLineageMetadata } from "../../../shared/provider-turn-lineage";
@@ -3096,64 +3098,70 @@ export const runsService = {
     turnId: number,
   ): Promise<RunTurnChangesSummary> {
     assertOwnedRecord("runs", runId);
-    const run = await runsRepo.findRunById(runId);
-    if (!run) throw new Error("Run not found");
-    if (runSessionRegistry.get(runId)) {
-      throw new Error("Wait for the run to finish before undoing its changes.");
-    }
-    const changes = await runsRepo.findTurnChanges(runId, turnId);
-    if (!changes) throw new Error("This turn has no recorded changes.");
-    if (changes.undoneAt) throw new Error("These changes were already undone.");
-    if (changes.truncated) {
-      throw new Error(
-        "This turn's changes were too large to store in full, so they can't be undone.",
-      );
-    }
-    // Reverse-applying would take the parallel run's edits to these files too.
-    if (changes.files.some((f) => f.shared)) {
-      throw new Error(
-        "A parallel run changed some of these files too, so this turn can't be undone automatically.",
-      );
-    }
-    const workspace = run.workspaceId
-      ? await workspaceService.get(run.workspaceId)
-      : null;
-    if (!workspace) throw new Error("Workspace not found");
+    return runTurnUndo(runId, turnId, async () => {
+      const run = await runsRepo.findRunById(runId);
+      if (!run) throw new Error("Run not found");
+      if (runSessionRegistry.get(runId)) {
+        throw new Error("Wait for the run to finish before undoing its changes.");
+      }
+      const changes = await runsRepo.findTurnChanges(runId, turnId);
+      if (!changes) throw new Error("This turn has no recorded changes.");
+      if (changes.undoneAt) throw new Error("These changes were already undone.");
+      if (changes.truncated) {
+        throw new Error(
+          "This turn's changes were too large to store in full, so they can't be undone.",
+        );
+      }
+      // Reverse-applying would take the parallel run's edits to these files too.
+      if (changes.files.some((f) => f.shared)) {
+        throw new Error(
+          "A parallel run changed some of these files too, so this turn can't be undone automatically.",
+        );
+      }
+      const workspace = run.workspaceId
+        ? await workspaceService.get(run.workspaceId)
+        : null;
+      if (!workspace) throw new Error("Workspace not found");
 
-    const { diffText, ...summary } = changes;
-    const applies = await gitService.canApplyPatch(
-      workspace.rootPath,
-      diffText,
-      {
-        reverse: true,
-      },
-    );
-    if (!applies) {
-      throw new Error(
-        "Some of these files changed after this turn, so its changes can't be undone automatically.",
-      );
-    }
-    await gitService.applyPatch(workspace.rootPath, diffText, {
-      reverse: true,
-    });
-    const undoneAt = new Date();
-    await runsRepo.markTurnChangesUndone(changes.id, undoneAt);
+      if (run.isArchived || workspace.isArchived) throw new Error("Restore the run and workspace before undoing changes.");
+      return runGitOperation({ workspaceId: workspace.id, operationId: `turn-undo:${runId}:${turnId}`, runId, turnId, changesId: changes.id }, "undo-turn", async (scope) => {
+        await scope.bind(workspace.rootPath);
+        const result = await scope.step("applied", async () => {
+          const targetRoot = await fs.promises.realpath(workspace.rootPath);
+          const peerIds = new Set([...runSessionRegistry.active()].map((session) => session.runId));
+          for (const id of startingRunResponseIds()) if (id !== runId) peerIds.add(id);
+          for (const id of peerIds) {
+            const peer = await runsRepo.findRunById(id);
+            if (!peer?.workspaceId) continue;
+            const peerWorkspace = await workspaceService.get(peer.workspaceId);
+            const peerRoot = peerWorkspace ? await fs.promises.realpath(peerWorkspace.rootPath).catch(() => null) : null;
+            if (peer.workspaceId === workspace.id || peerRoot === targetRoot) throw new Error("Wait for workspace runs to finish before undoing changes.");
+          }
+          const { diffText, ...summary } = changes;
+          const applies = await gitService.canApplyPatch(workspace.rootPath, diffText, { reverse: true });
+          if (!applies) throw new Error("Some of these files changed after this turn, so its changes can't be undone automatically.");
+          await gitService.applyPatch(workspace.rootPath, diffText, { reverse: true });
+          return { ...summary, undoneAt: new Date() };
+        });
+        await scope.step("marked", () => runsRepo.markTurnChangesUndone(changes.id, result.undoneAt));
 
-    // The workspace's own diff (sidebar count, Changes tab) moved underneath it.
-    await workspaceService
-      .resyncDiff(workspace.id)
-      .catch((err) =>
-        console.error(
-          `[RunsService] resyncDiff after undo failed for ${runId}:`,
-          err,
-        ),
-      );
-    emit("runs:diffUpdated", {
-      runId,
-      workspaceId: workspace.id,
-      ts: Date.now(),
+        // The workspace's own diff (sidebar count, Changes tab) moved underneath it.
+        await workspaceService
+          .resyncDiff(workspace.id)
+          .catch((err) =>
+            console.error(
+              `[RunsService] resyncDiff after undo failed for ${runId}:`,
+              err,
+            ),
+          );
+        emit("runs:diffUpdated", {
+          runId,
+          workspaceId: workspace.id,
+          ts: Date.now(),
+        });
+        return result;
+      });
     });
-    return { ...summary, undoneAt };
   },
 
   async deleteRunSession(runId: string): Promise<void> {

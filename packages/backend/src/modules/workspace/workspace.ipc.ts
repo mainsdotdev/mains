@@ -1,3 +1,4 @@
+import { openWorkspaceDiffs } from "./workspace-diff-lifecycle";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { workspaceService } from "./workspace.service";
@@ -22,6 +23,7 @@ import type {
 // applied by handle().
 // ─────────────────────────────────────────────────────────────
 export function registerWorkspaceIpc(): void {
+  openWorkspaceDiffs();
   openRecordLifecycles();
   openWorkspaceIntakes();
   // ── lifecycle ──

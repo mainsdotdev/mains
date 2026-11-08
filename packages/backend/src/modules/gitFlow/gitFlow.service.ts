@@ -23,7 +23,6 @@ import {
   workspaceService,
   logWorkspaceActivity,
   emitFindingsChanged,
-  recordWorkspaceDiff,
 } from "../workspace";
 import { runSessionRegistry } from "../runs/run-session-registry";
 import { gitService, parsePerFileDiffStats, type DiffFileStatus } from "../git";
@@ -350,22 +349,7 @@ export const gitFlowService = {
       // post-commit state (clean working tree).
       const newHead = await gitService.getHeadSha(rootPath).catch(() => null);
 
-      if (workspaceId && newHead) {
-        await workspaceService.deleteDiffs(workspaceId);
-        try {
-          const snapshot = await gitService.captureDiffSnapshot(
-            rootPath,
-            newHead,
-          );
-          if (snapshot.files.length > 0) {
-            await recordWorkspaceDiff(workspaceId, runId, snapshot);
-          }
-        } catch (err) {
-          // Best-effort: the commit itself succeeded; the stale pre-commit diff
-          // row is already gone, which is the important part.
-          console.error("[GitFlow] Post-commit diff recapture failed:", err);
-        }
-      }
+      if (workspaceId && newHead) await workspaceService.resyncDiff(workspaceId);
 
       if (runId && newHead) {
         runSessionRegistry.get(runId)?.updateBaseRef(newHead);

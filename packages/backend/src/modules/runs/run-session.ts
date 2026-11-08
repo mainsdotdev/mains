@@ -24,6 +24,8 @@ import {
   workspaceService,
   recordWorkspaceDiff,
   clearWorkspaceDiff,
+  captureWorkspaceDiff,
+  createWorkspaceDiffScheduler,
 } from "../workspace";
 import { createWorkAdapter } from "../providers/adapters";
 import { runSessionRegistry } from "./run-session-registry";
@@ -170,9 +172,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   let initialTurnReady: Promise<void> | null = null;
   let resolvedToolCallsReady: Promise<void> | null = null;
   let turnCounter: number = ctx.seedTurnIndex ?? -1;
-  let liveDiffTimer: NodeJS.Timeout | null = null;
-  let liveDiffInFlight = false;
-  let liveDiffPending = false;
+  const liveDiff = workspaceId ? createWorkspaceDiffScheduler(workspaceId, recomputeLiveDiff, LIVE_DIFF_DEBOUNCE_MS, execution.cwd) : null;
   const pendingToolCalls = new Map<string, number>();
   // callKey → DB tool call id, retained for the whole run. pendingToolCalls is
   // emptied on completion, but subagent and background-task events arrive AFTER
@@ -572,14 +572,19 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
    */
   async function snapshotCurrentDiff(): Promise<DiffSnapshot | null> {
     if (!workspaceId) return null;
-    const head = await gitService.getHeadSha(execution.cwd).catch(() => null);
-    // Fall back to the run-start sha only when HEAD is unreadable, so a git
-    // hiccup degrades to the old behaviour instead of dropping the diff.
-    const ref = head ?? baseRef;
-    if (!ref) return null;
-    return gitService
-      .captureDiffSnapshot(execution.cwd, ref)
-      .catch(() => null);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const head = await gitService.getHeadSha(execution.cwd).catch(() => null);
+      const ref = head ?? baseRef;
+      if (!ref) return null;
+      const snapshot = await gitService.captureDiffSnapshot(execution.cwd, ref).catch(() => null);
+      if (!snapshot) return null;
+      const currentHead = await gitService.getHeadSha(execution.cwd).catch(() => null);
+      // The fallback can be read for compatibility, but an unreadable HEAD
+      // cannot replace the workspace's last authoritative projection.
+      if (!head || !currentHead) return null;
+      if (currentHead === head) return snapshot;
+    }
+    return null;
   }
 
   /**
@@ -588,21 +593,21 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
    * (or otherwise resolved changes) between runs, leaving a stale diff row
    * pointing at a now-merged baseRef.
    */
-  async function clearStaleWorkspaceDiff(): Promise<void> {
+  async function clearStaleWorkspaceDiff(current: () => boolean): Promise<void> {
     if (!workspaceId) return;
-    if (await clearWorkspaceDiff(workspaceId)) {
+    if (await clearWorkspaceDiff(workspaceId, current)) {
       broadcastDiffUpdated();
     }
   }
 
   // ─── Live diff scheduler ───
-  async function recomputeLiveDiff(): Promise<void> {
+  async function recomputeLiveDiff(current: () => boolean): Promise<void> {
     if (!workspaceId || !lifecycle.acceptsEvents) return;
     const snapshot = await snapshotCurrentDiff();
-    if (!snapshot || !lifecycle.acceptsEvents) return;
+    if (!snapshot || !lifecycle.acceptsEvents || !current()) return;
     if (snapshot.files.length === 0) {
       try {
-        await clearStaleWorkspaceDiff();
+        await clearStaleWorkspaceDiff(current);
       } catch (err) {
         console.error(`[RunSession ${runId}] clearStaleWorkspaceDiff failed:`, err);
       }
@@ -614,53 +619,24 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       return;
     }
     try {
-      await recordWorkspaceDiff(workspaceId, runId, snapshot);
+      await recordWorkspaceDiff(workspaceId, runId, snapshot, current);
       broadcastDiffUpdated();
     } catch (err) {
       console.error(`[RunSession ${runId}] recomputeLiveDiff failed:`, err);
     }
   }
 
-  async function runLiveDiff(): Promise<void> {
-    if (!lifecycle.acceptsEvents) return;
-    if (liveDiffInFlight) {
-      liveDiffPending = true;
-      return;
-    }
-    liveDiffInFlight = true;
-    try {
-      await recomputeLiveDiff();
-    } finally {
-      liveDiffInFlight = false;
-      if (liveDiffPending) {
-        liveDiffPending = false;
-        void runLiveDiff();
-      }
-    }
-  }
-
   function scheduleLiveDiff(): void {
-    if (!workspaceId || !lifecycle.acceptsEvents) return;
-    if (liveDiffTimer) clearTimeout(liveDiffTimer);
-    liveDiffTimer = setTimeout(() => {
-      liveDiffTimer = null;
-      void trackProjection(runLiveDiff());
-    }, LIVE_DIFF_DEBOUNCE_MS);
+    if (lifecycle.acceptsEvents) liveDiff?.schedule();
   }
 
-  function clearLiveDiffSchedule(): void {
-    if (liveDiffTimer) {
-      clearTimeout(liveDiffTimer);
-      liveDiffTimer = null;
-    }
-    liveDiffPending = false;
-  }
+  function clearLiveDiffSchedule(): void { liveDiff?.cancel(); }
 
   // ─── Final diff persistence at completion ───
   async function persistFinalDiff(): Promise<void> {
     if (!workspaceId) return;
     clearLiveDiffSchedule();
-    // The run-start HEAD is only a fallback when the current HEAD is unreadable.
+    // Join the initial baseline read before capturing the final projection.
     if (baseRefCaptured) {
       try {
         await baseRefCaptured;
@@ -668,23 +644,27 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         // captureBaseRef swallows its own errors; guard anyway.
       }
     }
-    const snapshot = await snapshotCurrentDiff();
-    if (!snapshot) return;
-    if (snapshot.files.length === 0) {
-      try {
-        await clearStaleWorkspaceDiff();
-      } catch (err) {
-        console.error(`[RunSession ${runId}] clearStaleWorkspaceDiff failed:`, err);
-      }
-      return;
-    }
-
     try {
-      await recordWorkspaceDiff(workspaceId, runId, snapshot);
-      broadcastDiffUpdated();
-    } catch (err) {
-      console.error(`[RunSession ${runId}] persistFinalDiff failed:`, err);
-    }
+      await captureWorkspaceDiff(workspaceId, async (current) => {
+        const snapshot = await snapshotCurrentDiff();
+        if (!snapshot || !current()) return;
+        if (snapshot.files.length === 0) {
+          try {
+            await clearStaleWorkspaceDiff(current);
+          } catch (err) {
+            console.error(`[RunSession ${runId}] clearStaleWorkspaceDiff failed:`, err);
+          }
+          return;
+        }
+
+        try {
+          await recordWorkspaceDiff(workspaceId, runId, snapshot, current);
+          broadcastDiffUpdated();
+        } catch (err) {
+          console.error(`[RunSession ${runId}] persistFinalDiff failed:`, err);
+        }
+      }, execution.cwd);
+    } catch (error) { console.error(`[RunSession ${runId}] Final diff capture unavailable:`, error); }
   }
 
   // ─── Projection rules (was handleRunEvent's switch in runs.service.ts) ───
