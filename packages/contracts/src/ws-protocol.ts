@@ -30,8 +30,9 @@ export interface WsInvokeMessage {
   /**
    * Idempotency key for a mutation from a paired device: the router replays
    * the stored response for a repeated `commandId` instead of running the
-   * handler again, so a command re-sent after a dropped connection can't apply
-   * twice. Required on command channels for devices; ignored otherwise.
+   * handler again. An unconfirmed reservation replays uncertainty; protection
+   * lasts for the backend's receipt retention period.
+   * Required on command channels for devices; ignored otherwise.
    */
   commandId?: string;
 }

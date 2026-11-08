@@ -223,6 +223,11 @@ describe("startWsHost — paired devices and POST /pair", () => {
         store: {
           find: async (deviceId: string, commandId: string) =>
             rows.get(`${deviceId}:${commandId}`) ?? null,
+          reserve: async (deviceId: string, commandId: string, _channel: string, result: string) => {
+            const key = `${deviceId}:${commandId}`;
+            if (rows.has(key)) return false;
+            rows.set(key, result); return true;
+          },
           record: async (deviceId: string, commandId: string, _channel: string, result: string) => {
             rows.set(`${deviceId}:${commandId}`, result);
           },

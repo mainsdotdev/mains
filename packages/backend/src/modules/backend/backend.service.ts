@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import { CHANNELS } from "@mains/contracts/channels";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { registeredChannels } from "../../ipc-kit";
+import { PENDING_COMMAND_RESULT } from "../../ipc-kit/command-delivery";
 import { generateToken, hashToken, tokensMatch } from "../../ipc-kit/ws-auth";
 import { backendRepo } from "./backend.repo";
 import { parseDeviceName, parsePairDeviceInput } from "./backend.validation";
@@ -323,13 +324,16 @@ export const backendService = {
     find(deviceId: string, commandId: string): Promise<string | null> {
       return backendRepo.findCommandReceipt(deviceId, commandId);
     },
+    reserve(deviceId: string, commandId: string, channel: string, result: string): Promise<boolean> {
+      return backendRepo.insertCommandReceipt({ deviceId, commandId, channel, result });
+    },
     async record(
       deviceId: string,
       commandId: string,
       channel: string,
       result: string,
     ): Promise<void> {
-      await backendRepo.insertCommandReceipt({ deviceId, commandId, channel, result });
+      await backendRepo.completeCommandReceipt(deviceId, commandId, channel, PENDING_COMMAND_RESULT, result);
       // Piggyback the sweep on writes: cheap (indexed) and needs no timer.
       await backendRepo.pruneCommandReceipts(new Date(Date.now() - COMMAND_RECEIPT_TTL_MS));
     },

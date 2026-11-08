@@ -77,7 +77,8 @@ import {
   readHistoryContent,
   applyConversationSettings,
 } from "./sync";
-import { isConnectionLoss, WsTransport, type CloseInfo } from "./ws-transport";
+import { WsTransport, type CloseInfo } from "./ws-transport";
+import { deliverCommand } from "./command-delivery";
 import {
   clearAllStreamingMessages,
   clearStreamingMessages,
@@ -738,9 +739,9 @@ class BackendSession {
   }
 
   /**
-   * Issue a mutation with exactly-once semantics. The same `commandId` is
-   * re-sent after a dropped connection until the Mac answers — its receipt
-   * store guarantees the handler ran at most once — or the deadline passes.
+   * Retry the same command identity after connection loss, within one backend
+   * and deadline. The backend reserves a receipt before effects; interrupted
+   * results remain uncertain instead of being executed again.
    * A `success: false` reply is an answer, not a reason to retry.
    */
   async command<T = unknown>(
@@ -748,19 +749,11 @@ class BackendSession {
     args: unknown[] = [],
     options: { timeoutMs?: number; backendId?: string } = {},
   ): Promise<ServiceResponse<T>> {
-    const commandId = newCommandId();
-    const deadline = Date.now() + (options.timeoutMs ?? 60_000);
-    for (;;) {
-      const transport = await this.waitForConnected(deadline);
-      if (options.backendId && this.snapshot.backend?.backendId !== options.backendId) {
-        throw new Error("The connected computer changed");
-      }
-      try {
-        return (await transport.invoke(channel, args, { commandId })) as ServiceResponse<T>;
-      } catch (error) {
-        if (!isConnectionLoss(error) || Date.now() >= deadline) throw error;
-      }
-    }
+    const backendId = options.backendId ?? this.snapshot.backend?.backendId;
+    return deliverCommand<T>({
+      waitForConnected: (deadline) => this.waitForConnected(deadline),
+      isCurrent: () => this.snapshot.backend?.backendId === backendId,
+    }, channel, args, newCommandId(), options.timeoutMs);
   }
 
   /** Resolve with the live transport once the session is `connected`. */

@@ -4,6 +4,7 @@ import { createTestDb } from "../../../test/setup-db";
 import { appSettings } from "../../db/schema";
 import { clearHandlers, registerHandler } from "../../ipc-kit";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
+import { PENDING_COMMAND_RESULT } from "../../ipc-kit/command-delivery";
 import type { DatabaseInstance } from "../../db/types";
 
 let db: DatabaseInstance;
@@ -189,7 +190,12 @@ describe("backendService", () => {
       const { deviceId } = await backendService.pairDevice(phone(code));
 
       expect(await backendService.commandReceipts.find(deviceId, "c1")).toBeNull();
+      expect(await backendService.commandReceipts.reserve(deviceId, "c1", "runs:continue", PENDING_COMMAND_RESULT)).toBe(true);
+      expect(await backendService.commandReceipts.reserve(deviceId, "c1", "runs:continue", PENDING_COMMAND_RESULT)).toBe(false);
+      expect(await backendService.commandReceipts.find(deviceId, "c1")).toBe(PENDING_COMMAND_RESULT);
       await backendService.commandReceipts.record(deviceId, "c1", "runs:continue", "{\"success\":true}");
+      expect(await backendService.commandReceipts.find(deviceId, "c1")).toBe("{\"success\":true}");
+      await expect(backendService.commandReceipts.record(deviceId, "c1", "runs:continue", "replacement")).rejects.toThrow(/no longer pending/);
       expect(await backendService.commandReceipts.find(deviceId, "c1")).toBe("{\"success\":true}");
     });
   });
