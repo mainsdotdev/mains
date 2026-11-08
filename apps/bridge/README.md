@@ -858,6 +858,13 @@ logging failure cannot change a quota or publication decision.
 
 ## R2 garbage collection
 
+`src/blob-lifecycle.ts` owns reservations, upload intents, immutable receipts,
+restart recovery, publication eligibility and deletion transitions. `quota.ts`
+applies account limits and authorization through that owner; `blob-gc.ts` installs
+the durable reference/inventory triggers. Normal and recovered receipts share
+one atomic commit, including GC grace renewal. No separate persisted phase or
+new storage schema is introduced.
+
 Every new upsert authenticates a sorted, deduplicated `header.blobs` list of
 `{ blobId, size }`, including an empty list for records with no blobs. The list
 must exactly match the decrypted manifests. The hub can correlate opaque records
@@ -901,6 +908,12 @@ finishes any pending deletion before reserving the same content again. Incomplet
 or collected blobs cannot acquire new record ACKs. Backends republish exact large
 values, captured/cache bytes or verified source files before retrying; unavailable
 bytes leave their changes queued.
+
+A failed blob does not stop independent deletions in the same bounded batch.
+Each blob is attempted at most once per pass; failed intents remain charged and
+fenced, and maintenance still reports the failure for alarm retry. A legacy
+upload recovered from R2 without an intent also renews the full publication
+grace period before it becomes collectible.
 
 Upgrade hub and backends together: earlier validators do not recognize the new
 authenticated header or `blobMissing` ACK. Backend migration `0038` runs a

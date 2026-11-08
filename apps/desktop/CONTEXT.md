@@ -282,6 +282,9 @@ legacy roots once with original clocks; unknown legacy references pause new GC
 until the original writer updates/resumes or those records are deleted. Hub and
 backends must upgrade together for the authenticated header extension.
 
+**Bridge blob lifecycle**: `apps/bridge/src/blob-lifecycle.ts` is the hub's owner of reservation → upload intent → stored receipt → collectible/deleting → absent transitions. Its phase is derived from existing SQL receipts, references and intents, with live upload ownership in memory. `quota.ts` applies account policy through it; `blob-gc.ts` installs the transactional inventory/reference triggers. Normal, interrupted and legacy upload recovery share one atomic receipt/grace commit, so an SQL failure preserves the charge and GC pin, and a recovered physical file gets time to publish its metadata. GC fences metadata before physical deletion and releases quota only after the deletion receipt commits. One blob's failure leaves it charged and retryable while other eligible blobs continue, once each within the bounded batch. A new reservation for the same blob finishes any pending deletion first.
+_Avoid_: releasing a live upload reservation by deadline alone; acknowledging metadata from an uncommitted or deleting chunk; clearing a deletion charge before physical deletion and its SQL receipt; recovering stored bytes without renewing grace; letting one failed deletion stop independent reclamation.
+
 B9 adds a dormant Claude session mirror. After a turn, the Claude driver closes
 the query and imports native main/subagent JSONL and metadata through the SDK's
 `importSessionToStore`. Once Bridge tracking is enabled, exact opaque entries
