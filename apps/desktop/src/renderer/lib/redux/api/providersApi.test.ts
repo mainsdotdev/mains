@@ -60,6 +60,30 @@ async function watchCommands(path = "/workspace", id = "claude_code") {
 
 describe("provider discovery cache", () => {
   it.each(["install", "uninstall", "enable", "update"])(
+    "refreshes authoritative inventory after failed plugin %s without invalidating another provider",
+    async (operation) => {
+      await watchCommands("/first");
+      await watchCommands("/other", "codex");
+      const plugin = store.dispatch(providersApi.endpoints.readProviderPlugin.initiate(detail));
+      subscriptions.push(plugin);
+      await plugin.unwrap();
+      revision = 2;
+      mocks.invoke.mockResolvedValueOnce({ success: false, error: "Native step failed" });
+      const input = { providerId: "claude_code", pluginId: "demo@market" };
+      const mutation = operation === "install" ? providersApi.endpoints.installProviderPlugin.initiate(input)
+        : operation === "uninstall" ? providersApi.endpoints.uninstallProviderPlugin.initiate(input)
+          : operation === "enable" ? providersApi.endpoints.setProviderPluginEnabled.initiate({ ...input, enabled: false })
+            : providersApi.endpoints.updateProviderPlugin.initiate(input);
+      await expect(store.dispatch(mutation).unwrap()).rejects.toBe("Native step failed");
+      await vi.waitFor(() => {
+        expect(providersApi.endpoints.getProviderCommands.select(commands("/first"))(store.getState()).data?.[0].name).toBe("v2");
+        expect(providersApi.endpoints.readProviderPlugin.select(detail)(store.getState()).data?.description).toBe("v2");
+      });
+      expect(calls(CHANNELS.providers.getCommands, "codex")).toBe(1);
+    },
+  );
+
+  it.each(["install", "uninstall", "enable", "update"])(
     "refreshes commands in every workspace and plugin details after plugin %s, scoped to its provider",
     async (operation) => {
       await watchCommands("/first");

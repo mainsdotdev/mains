@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ComponentProps, ReactNode } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
@@ -8,15 +8,16 @@ import { setTransport, resetTransport } from "@/lib/transport/registry";
 
 const mocks = vi.hoisted(() => ({
   getPlugins: vi.fn(), readPlugin: vi.fn(), refetch: vi.fn(), open: vi.fn(), startOAuth: vi.fn(),
+  install: vi.fn(), uninstall: vi.fn(), enable: vi.fn(), update: vi.fn(), success: vi.fn(), error: vi.fn(),
   listeners: new Set<(event: ProviderConnectorsUpdatedEvent) => void>(),
 }));
 vi.mock("@/lib/redux/api", () => ({
   useGetProviderPluginsQuery: mocks.getPlugins,
   useReadProviderPluginQuery: mocks.readPlugin,
-  useInstallProviderPluginMutation: () => [vi.fn(), {}],
-  useUninstallProviderPluginMutation: () => [vi.fn(), {}],
-  useSetProviderPluginEnabledMutation: () => [vi.fn(), {}],
-  useUpdateProviderPluginMutation: () => [vi.fn(), {}],
+  useInstallProviderPluginMutation: () => [mocks.install, {}],
+  useUninstallProviderPluginMutation: () => [mocks.uninstall, {}],
+  useSetProviderPluginEnabledMutation: () => [mocks.enable, {}],
+  useUpdateProviderPluginMutation: () => [mocks.update, {}],
   useStartProviderConnectorOAuthMutation: () => [mocks.startOAuth, {}],
 }));
 vi.mock("@/components/ui", () => ({
@@ -32,7 +33,7 @@ vi.mock("@/components/ui", () => ({
   Select: () => null,
   CopyButton: () => null,
   AsciiSpinner: () => null,
-  toast: { error: vi.fn() },
+  toast: { error: mocks.error, success: mocks.success },
 }));
 import ProviderPlugins from "./provider-plugins";
 
@@ -64,10 +65,57 @@ beforeEach(() => {
   mocks.refetch.mockReset();
   mocks.getPlugins.mockReturnValue({ data: pluginData, isLoading: false });
   mocks.readPlugin.mockReturnValue({ refetch: mocks.refetch });
+  for (const mutation of [mocks.install, mocks.uninstall, mocks.enable, mocks.update]) {
+    mutation.mockReturnValue({ unwrap: async () => {} });
+  }
 });
 afterEach(() => { cleanup(); resetTransport(); mocks.listeners.clear(); });
 
 describe("plugin detail navigation", () => {
+  it("preserves a pending plugin's controls while another plugin finishes and navigation returns", async () => {
+    let finish!: () => void;
+    mocks.update.mockReturnValueOnce({ unwrap: () => new Promise<void>((resolve) => { finish = resolve; }) });
+    const first = { ...plugin, source: { type: "local", path: "/market" }, updateAvailable: true };
+    const second = { ...first, id: "calendar@market", name: "calendar", interface: { ...plugin.interface, displayName: "Calendar" } };
+    mocks.getPlugins.mockReturnValue({ data: {
+      ...pluginData, marketplaces: [{ ...pluginData.marketplaces[0], plugins: [first, second] }],
+    }, isLoading: false });
+    render(<MemoryRouter initialEntries={[`/plugins?plugin=${encodeURIComponent(plugin.id)}`]}>
+      <ProviderPlugins providerId="claude_code" />
+    </MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to plugins" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Calendar" }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Update" })); });
+    fireEvent.click(screen.getByRole("button", { name: "Back to plugins" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Gmail" }));
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall" }));
+    expect(mocks.uninstall).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Disable" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { finish(); });
+    expect((screen.getByRole("button", { name: "Disable" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("blocks every competing action while the selected plugin is updating", async () => {
+    let finish!: () => void;
+    mocks.update.mockReturnValue({ unwrap: () => new Promise<void>((resolve) => { finish = resolve; }) });
+    mocks.getPlugins.mockReturnValue({ data: {
+      ...pluginData, marketplaces: [{ ...pluginData.marketplaces[0], plugins: [{
+        ...plugin, source: { type: "local", path: "/market" }, updateAvailable: true,
+      }] }],
+    }, isLoading: false });
+    render(<MemoryRouter initialEntries={[`/plugins?plugin=${encodeURIComponent(plugin.id)}`]}>
+      <ProviderPlugins providerId="claude_code" />
+    </MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall" }));
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+    expect(mocks.enable).not.toHaveBeenCalled();
+    expect(mocks.uninstall).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+  });
+
   it("refreshes the connection on returning from hosted setup and replaces Connect with Connected", async () => {
     const detail = {
       summary: plugin, skills: [], mcpServers: [], apps: [{

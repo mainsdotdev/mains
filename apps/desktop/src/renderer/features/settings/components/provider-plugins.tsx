@@ -8,7 +8,6 @@ import {
   Text,
   Button,
   CopyButton,
-  toast,
   AsciiSpinner,
   Input,
   Select,
@@ -18,10 +17,6 @@ import {
 import {
   useGetProviderPluginsQuery,
   useReadProviderPluginQuery,
-  useInstallProviderPluginMutation,
-  useUninstallProviderPluginMutation,
-  useSetProviderPluginEnabledMutation,
-  useUpdateProviderPluginMutation,
 } from "@/lib/redux/api";
 import type {
   ConnectorMcpServerInfo,
@@ -34,6 +29,7 @@ import { getPluginInstallBlockReason } from "../../../../shared/plugin-install-a
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { appEvents } from "@/lib/transport/events";
+import { usePluginMutations } from "../hooks/use-plugin-mutations";
 import { useConnectorOAuth } from "../hooks/use-connector-oauth";
 import {
   Search,
@@ -477,6 +473,7 @@ function PluginDetail({
   onUpdate,
   installScope,
   onScopeChange,
+  isBusy,
   isInstalling,
   isToggling,
   isUpdating,
@@ -491,6 +488,7 @@ function PluginDetail({
   onUpdate: () => void;
   installScope: PluginScope;
   onScopeChange: (scope: PluginScope) => void;
+  isBusy: boolean;
   isInstalling: boolean;
   isToggling: boolean;
   isUpdating: boolean;
@@ -616,7 +614,7 @@ function PluginDetail({
                   )}
                   <Button
                     onClick={onInstall}
-                    disabled={isInstalling || Boolean(installBlockReason)}
+                    disabled={isBusy || Boolean(installBlockReason)}
                     title={installBlockReason ?? undefined}
                     variant="primary"
                   >
@@ -632,7 +630,7 @@ function PluginDetail({
               ) : (
                 <>
                   {plugin.updateAvailable && (
-                    <Button onClick={onUpdate} disabled={isUpdating} variant="primary">
+                    <Button onClick={onUpdate} disabled={isBusy} variant="primary">
                       {isUpdating ? (
                         <div className="px-1.5">
                           <AsciiSpinner variant="null" />
@@ -643,7 +641,7 @@ function PluginDetail({
                     </Button>
                   )}
                   {supportsEnableToggle && (
-                    <Button onClick={onToggleEnabled} disabled={isToggling} variant="secondary">
+                    <Button onClick={onToggleEnabled} disabled={isBusy} variant="secondary">
                       {isToggling ? (
                         <div className="px-1.5">
                           <AsciiSpinner variant="null" />
@@ -655,7 +653,7 @@ function PluginDetail({
                       )}
                     </Button>
                   )}
-                  <Button onClick={onUninstall} disabled={isInstalling} variant="secondary">
+                  <Button onClick={onUninstall} disabled={isBusy} variant="secondary">
                     {isInstalling ? (
                       <div className="px-1.5">
                         <AsciiSpinner variant="null" />
@@ -1030,7 +1028,7 @@ function ProviderPluginCatalog({
   selectedPluginId,
   onSelectPlugin,
 }: {
-  providerId?: string;
+  providerId: string;
   selectedPluginId: string | null;
   onSelectPlugin: (pluginId: string | null) => void;
 }) {
@@ -1042,14 +1040,7 @@ function ProviderPluginCatalog({
     refetchOnFocus: false,
     refetchOnReconnect: false,
   });
-  const [installPlugin, { isLoading: isInstalling }] =
-    useInstallProviderPluginMutation();
-  const [uninstallPlugin, { isLoading: isUninstalling }] =
-    useUninstallProviderPluginMutation();
-  const [setPluginEnabled, { isLoading: isToggling }] =
-    useSetProviderPluginEnabledMutation();
-  const [updatePlugin, { isLoading: isUpdating }] =
-    useUpdateProviderPluginMutation();
+  const mutations = usePluginMutations(providerId);
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
@@ -1175,67 +1166,10 @@ function ProviderPluginCatalog({
     return "";
   }, [selectedPluginId, pluginData]);
 
-  const [actionInFlight, setActionInFlight] = useState<string | null>(null);
-
-  const handleInstall = useCallback(
-    async (pluginId: string) => {
-      setActionInFlight(pluginId);
-      try {
-        await installPlugin({ providerId, pluginId, scope: installScope }).unwrap();
-        toast.success("Plugin installed");
-      } catch (err: any) {
-        toast.error(extractErrorMessage(err, "Failed to install plugin"));
-      } finally {
-        setActionInFlight(null);
-      }
-    },
-    [installPlugin, providerId, installScope],
-  );
-
-  const handleUninstall = useCallback(
-    async (pluginId: string) => {
-      setActionInFlight(pluginId);
-      try {
-        await uninstallPlugin({ providerId, pluginId }).unwrap();
-        toast.success("Plugin uninstalled");
-      } catch (err: any) {
-        toast.error(extractErrorMessage(err, "Failed to uninstall plugin"));
-      } finally {
-        setActionInFlight(null);
-      }
-    },
-    [uninstallPlugin, providerId],
-  );
-
-  const handleToggleEnabled = useCallback(
-    async (pluginId: string, enabled: boolean) => {
-      setActionInFlight(pluginId);
-      try {
-        await setPluginEnabled({ providerId, pluginId, enabled }).unwrap();
-        toast.success(enabled ? "Plugin enabled" : "Plugin disabled");
-      } catch (err: any) {
-        toast.error(extractErrorMessage(err, "Failed to update plugin"));
-      } finally {
-        setActionInFlight(null);
-      }
-    },
-    [setPluginEnabled, providerId],
-  );
-
-  const handleUpdate = useCallback(
-    async (pluginId: string) => {
-      setActionInFlight(pluginId);
-      try {
-        await updatePlugin({ providerId, pluginId }).unwrap();
-        toast.success("Plugin updated");
-      } catch (err: any) {
-        toast.error(extractErrorMessage(err, "Failed to update plugin"));
-      } finally {
-        setActionInFlight(null);
-      }
-    },
-    [updatePlugin, providerId],
-  );
+  const handleInstall = (pluginId: string) => mutations.perform({ type: "install", pluginId, scope: installScope });
+  const handleUninstall = (pluginId: string) => mutations.perform({ type: "uninstall", pluginId });
+  const handleToggleEnabled = (pluginId: string, enabled: boolean) => mutations.perform({ type: "setEnabled", pluginId, enabled });
+  const handleUpdate = (pluginId: string) => mutations.perform({ type: "update", pluginId });
 
   if (isLoading) {
     return (
@@ -1265,6 +1199,7 @@ function ProviderPluginCatalog({
 
   // Detail view
   if (selectedPlugin) {
+    const pending = mutations.pending(selectedPlugin.id)?.type;
     return (
       <PluginDetail
         plugin={selectedPlugin}
@@ -1277,12 +1212,10 @@ function ProviderPluginCatalog({
         onUpdate={() => handleUpdate(selectedPlugin.id)}
         installScope={installScope}
         onScopeChange={setInstallScope}
-        isInstalling={
-          (isInstalling || isUninstalling) &&
-          actionInFlight === selectedPlugin.id
-        }
-        isToggling={isToggling && actionInFlight === selectedPlugin.id}
-        isUpdating={isUpdating && actionInFlight === selectedPlugin.id}
+        isBusy={Boolean(pending)}
+        isInstalling={pending === "install" || pending === "uninstall"}
+        isToggling={pending === "setEnabled"}
+        isUpdating={pending === "update"}
       />
     );
   }
@@ -1358,9 +1291,7 @@ function ProviderPluginCatalog({
                   onSelect={() => onSelectPlugin(p.id)}
                   onInstall={() => handleInstall(p.id)}
                   onUninstall={() => handleUninstall(p.id)}
-                  isInstalling={
-                    (isInstalling || isUninstalling) && actionInFlight === p.id
-                  }
+                  isInstalling={Boolean(mutations.pending(p.id))}
                 />
               </div>
             ))}
@@ -1382,9 +1313,7 @@ function ProviderPluginCatalog({
                 onSelect={() => onSelectPlugin(p.id)}
                 onInstall={() => handleInstall(p.id)}
                 onUninstall={() => handleUninstall(p.id)}
-                isInstalling={
-                  (isInstalling || isUninstalling) && actionInFlight === p.id
-                }
+                isInstalling={Boolean(mutations.pending(p.id))}
               />
             ))}
           </div>

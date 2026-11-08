@@ -3,6 +3,7 @@
 // Creates appropriate adapter based on provider configuration
 // ─────────────────────────────────────────────────────────────
 
+import { createPluginMutationLifecycle, type PluginMutation } from "../../../../shared/plugin-mutation-lifecycle";
 import { ResourceCleanupError } from "../../../runtime/resource-lifecycle";
 import type { ProviderResponse } from "../providers.dto";
 import { providerAccountCacheKey, providerCatalogConfigKey } from "../../../../shared/provider-catalog";
@@ -423,28 +424,50 @@ export async function readPluginForProvider(provider: ProviderResponse, pluginNa
   return adapter.readPlugin(pluginName, marketplacePath);
 }
 
+// This claim outlives a renderer, transport timeout or adapter cache refresh.
+// Another client must wait for actual native settlement before mutating this plugin.
+const pluginMutations = new Map<string, ReturnType<typeof createPluginMutationLifecycle>>();
+function mutatePlugin(provider: ProviderResponse, request: PluginMutation): Promise<void> {
+  let owner = pluginMutations.get(provider.id);
+  if (!owner) { owner = createPluginMutationLifecycle(); pluginMutations.set(provider.id, owner); }
+  return owner.run(request, async (captured) => {
+    const adapter = createWorkAdapter(provider);
+    const refreshOnFailure = async (work: () => Promise<void>) => {
+      try { await work(); }
+      catch (error) {
+        // A failed install/update can already have changed native files.
+        // Re-read inventory instead of retaining the previous cached state.
+        adapter.invalidateCatalogs?.();
+        throw error;
+      }
+    };
+    switch (captured.type) {
+      case "install":
+        if (!adapter.installPlugin) throw new Error(`Provider "${provider.displayName}" does not support plugin installation.`);
+        return refreshOnFailure(() => adapter.installPlugin!(captured.pluginId, captured.scope));
+      case "uninstall":
+        if (!adapter.uninstallPlugin) throw new Error(`Provider "${provider.displayName}" does not support plugin uninstallation.`);
+        return refreshOnFailure(() => adapter.uninstallPlugin!(captured.pluginId));
+      case "setEnabled":
+        if (!adapter.setPluginEnabled) throw new Error(`Provider "${provider.displayName}" does not support enabling/disabling plugins.`);
+        return refreshOnFailure(() => adapter.setPluginEnabled!(captured.pluginId, captured.enabled));
+      case "update":
+        if (!adapter.updatePlugin) throw new Error(`Provider "${provider.displayName}" does not support updating plugins.`);
+        return refreshOnFailure(() => adapter.updatePlugin!(captured.pluginId));
+    }
+  });
+}
+
 export async function installPluginForProvider(provider: ProviderResponse, pluginId: string, scope?: PluginScope): Promise<void> {
-  const adapter = createWorkAdapter(provider);
-  if (!adapter.installPlugin) {
-    throw new Error(`Provider "${provider.displayName}" does not support plugin installation.`);
-  }
-  return adapter.installPlugin(pluginId, scope);
+  return mutatePlugin(provider, { type: "install", pluginId, scope });
 }
 
 export async function uninstallPluginForProvider(provider: ProviderResponse, pluginId: string): Promise<void> {
-  const adapter = createWorkAdapter(provider);
-  if (!adapter.uninstallPlugin) {
-    throw new Error(`Provider "${provider.displayName}" does not support plugin uninstallation.`);
-  }
-  return adapter.uninstallPlugin(pluginId);
+  return mutatePlugin(provider, { type: "uninstall", pluginId });
 }
 
 export async function setPluginEnabledForProvider(provider: ProviderResponse, pluginId: string, enabled: boolean): Promise<void> {
-  const adapter = createWorkAdapter(provider);
-  if (!adapter.setPluginEnabled) {
-    throw new Error(`Provider "${provider.displayName}" does not support enabling/disabling plugins.`);
-  }
-  return adapter.setPluginEnabled(pluginId, enabled);
+  return mutatePlugin(provider, { type: "setEnabled", pluginId, enabled });
 }
 
 export async function getCodexMemorySettingsForProvider(provider: ProviderResponse) {
@@ -470,11 +493,7 @@ export async function resetCodexMemoriesForProvider(provider: ProviderResponse):
 }
 
 export async function updatePluginForProvider(provider: ProviderResponse, pluginId: string): Promise<void> {
-  const adapter = createWorkAdapter(provider);
-  if (!adapter.updatePlugin) {
-    throw new Error(`Provider "${provider.displayName}" does not support updating plugins.`);
-  }
-  return adapter.updatePlugin(pluginId);
+  return mutatePlugin(provider, { type: "update", pluginId });
 }
 
 export async function listConnectorsForProvider(
