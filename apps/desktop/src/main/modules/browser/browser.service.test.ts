@@ -103,6 +103,135 @@ describe("browserService — tabs by chat", () => {
     expect(audio.close).not.toHaveBeenCalled();
   });
 
+  it("keeps the tab, active view and attachment when a page vetoes explicit close", async () => {
+    await browserService.createTab("https://example.com/unsaved");
+    const id = browserService.activeTabId!;
+    const record = browserService.tabs.get(id)!;
+    const contents = liveView(record, { dirty: true });
+    browserService.attached = true;
+    browserService.visible = true;
+    const state = await browserService.closeTab(id);
+    expect(state.activeTabId).toBe(id);
+    expect(state.tabs.map((tab) => tab.tabId)).toEqual([id]);
+    expect(browserService.tabs.get(id)).toBe(record);
+    expect(record.view?.webContents).toBe(contents);
+    expect(record.isClosing).toBe(false);
+    expect(browserService.attached).toBe(true);
+    expect(browserService.visible).toBe(true);
+    expect(contents.close).toHaveBeenCalledExactlyOnceWith({ waitForBeforeUnload: true });
+  });
+
+  it("joins repeated closes until native destruction is confirmed", async () => {
+    await browserService.createTab("https://example.com/page");
+    const id = browserService.activeTabId!;
+    const contents = liveView(browserService.tabs.get(id)!);
+    contents.close.mockImplementation(() => {});
+    const first = browserService.closeTab(id), second = browserService.closeTab(id);
+    expect(contents.close).toHaveBeenCalledOnce();
+    expect(browserService.tabs.has(id)).toBe(true);
+    contents.isDestroyed.mockReturnValue(true); contents.emit("destroyed");
+    expect((await first).tabs).toEqual([]);
+    expect((await second).tabs).toEqual([]);
+    expect(contents.close).toHaveBeenCalledOnce();
+  });
+  it("shares native close when explicit close overlaps an idle suspension", async () => {
+    await browserService.createTab("https://example.com/draft");
+    const id = browserService.activeTabId!, record = browserService.tabs.get(id)!;
+    const contents = liveView(record);
+    contents.close.mockImplementation(() => {});
+    const suspending = browserService._hibernateTab(record);
+    await vi.waitFor(() => expect(contents.close).toHaveBeenCalledOnce());
+    const closing = browserService.closeTab(id);
+    expect(contents.close).toHaveBeenCalledOnce();
+    expect(browserService.tabs.has(id)).toBe(true);
+    contents.isDestroyed.mockReturnValue(true); contents.emit("destroyed");
+    expect(await suspending).toBe(true);
+    expect((await closing).tabs).toEqual([]);
+    expect(contents.close).toHaveBeenCalledOnce();
+  });
+  it("retains a replacement view when an old native close finishes", async () => {
+    await browserService.createTab("https://example.com/page");
+    const id = browserService.activeTabId!, record = browserService.tabs.get(id)!;
+    const old = liveView(record);
+    old.close.mockImplementation(() => {});
+    const closing = browserService.closeTab(id);
+    const replacement = liveView(record);
+    old.isDestroyed.mockReturnValue(true); old.emit("destroyed");
+    expect((await closing).activeTabId).toBe(id);
+    expect(record.view?.webContents).toBe(replacement);
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect((await browserService.closeTab(id)).tabs).toEqual([]);
+  });
+
+  it("retains an unconfirmed close on timeout and allows a later retry", async () => {
+    vi.useFakeTimers();
+    try {
+      await browserService.createTab("https://example.com/page");
+      const id = browserService.activeTabId!, record = browserService.tabs.get(id)!;
+      const contents = liveView(record);
+      contents.close.mockImplementationOnce(() => {});
+      const closing = browserService.closeTab(id);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await closing).activeTabId).toBe(id);
+      expect(record.isClosing).toBe(false);
+      expect(record.view?.webContents).toBe(contents);
+      expect((await browserService.closeTab(id)).tabs).toEqual([]);
+      expect(contents.close).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not detach the new conversation when the old conversation's last tab finishes closing", async () => {
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/page");
+    const id = browserService.activeTabId!;
+    const contents = liveView(browserService.tabs.get(id)!);
+    contents.close.mockImplementation(() => {});
+    browserService.attached = true; browserService.visible = true;
+    const closing = browserService.closeTab(id);
+    await browserService.setContext("chat-b");
+    await browserService.createTab("https://example.com/new-conversation");
+    browserService.attached = true; browserService.visible = true;
+    const nextId = browserService.activeTabId;
+    contents.isDestroyed.mockReturnValue(true); contents.emit("destroyed");
+    const state = await closing;
+    expect(state.ownerKey).toBe("chat-b");
+    expect(state.activeTabId).toBe(nextId);
+    expect(browserService.attached).toBe(true);
+    expect(browserService.visible).toBe(true);
+    expect(browserService.tabs.has(id)).toBe(false);
+  });
+
+  it.each(["view", "navigation"])("discards a pending hibernation capture after its %s changes", async (change) => {
+    await browserService.createTab("https://example.com/draft");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const contents = liveView(record);
+    let captured!: (value: unknown) => void;
+    contents.executeJavaScript.mockImplementationOnce(() => new Promise((resolve) => { captured = resolve as typeof captured; }));
+    const sleeping = browserService._hibernateTab(record);
+    if (change === "view") liveView(record);
+    else vi.spyOn(contents, "getURL").mockReturnValue("https://example.com/next");
+    captured({ url: "https://example.com/draft", x: 0, y: 0, fields: [] });
+    expect(await sleeping).toBe(false);
+    expect(contents.close).not.toHaveBeenCalled();
+    expect(record.suspendedPageState).toBeNull();
+  });
+
+  it("ignores callbacks from a replaced native view", async () => {
+    await browserService.createTab("https://example.com/page");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const old = liveView(record);
+    Object.assign(old, { setWindowOpenHandler: vi.fn() });
+    browserService._wireView(record, record.view!);
+    const current = liveView(record);
+    const reset = vi.spyOn(record.deviceEmulationQueue, "reset");
+    old.emit("render-process-gone"); old.emit("destroyed");
+    old.emit("page-favicon-updated", {}, ["https://example.com/old.ico"]);
+    expect(record.view?.webContents).toBe(current);
+    expect(record.isCrashed).toBe(false);
+    expect(record.faviconUrl).toBeNull();
+    expect(reset).not.toHaveBeenCalled();
+  });
+
   it("keeps an oversized draft alive and cancels sleep if its tab reactivates during capture", async () => {
     await browserService.createTab("https://example.com/draft");
     const record = browserService.tabs.get(browserService.activeTabId!)!;
@@ -194,6 +323,7 @@ describe("browserService — tabs by chat", () => {
         setWindowOpenHandler: vi.fn(),
       },
     } as unknown as Parameters<typeof browserService._wireView>[1];
+    record.view = view;
     browserService._wireView(record, view);
     browserService.visible = true;
     const send = vi.spyOn(browserService, "_sendToRenderer").mockImplementation(() => undefined);
@@ -254,6 +384,7 @@ describe("browserService — tabs by chat", () => {
       on: (name: string, listener: (...args: unknown[]) => void) => { listeners.set(name, listener); },
       setWindowOpenHandler: vi.fn(), executeJavaScript,
     } } as unknown as Parameters<typeof browserService._wireView>[1];
+    record.view = view;
     browserService._wireView(record, view);
     browserService.selectMode = true;
     const send = vi.spyOn(browserService, "_sendToRenderer").mockImplementation(() => undefined);

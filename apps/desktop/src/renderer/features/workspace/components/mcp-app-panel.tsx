@@ -11,6 +11,7 @@ import { setPendingRunId } from "@/lib/redux/slices/workspaceSlice";
 import { mcpAppConversationPath } from "../lib/mcp-app-panel";
 import { mcpAppCompatibility } from "@/lib/mcp-app-extensions";
 import { McpAppWorkspace } from "./mcp-app-workspace";
+import { createTabResourceLifecycle } from "../../../../shared/tab-resource-lifecycle";
 
 export const MCP_APP_IDLE_MS = 2 * 60 * 1000;
 
@@ -31,13 +32,26 @@ function AppContent() {
   const [reloadKey, reload] = useReducer((value: number) => value + 1, 0);
   const [startedDocumentId, setStartedDocumentId] = useState<string | null>(null);
   const beforeSuspend = useRef<(() => Promise<void>) | null>(null);
+  const [resourceLifecycle] = useState(() => createTabResourceLifecycle<void>());
   const registerBeforeSuspend = useCallback((callback: () => Promise<void>) => {
     beforeSuspend.current = callback;
-    return () => { if (beforeSuspend.current === callback) beforeSuspend.current = null; };
-  }, []);
+    return () => {
+      if (beforeSuspend.current === callback) beforeSuspend.current = null;
+      resourceLifecycle.release(callback);
+    };
+  }, [resourceLifecycle]);
+  const prepareResource = useCallback(() => {
+    const callback = beforeSuspend.current;
+    return callback ? resourceLifecycle.prepare(callback, callback) : null;
+  }, [resourceLifecycle]);
   const documentId = panel?.document?.id;
   const { register } = usePreviewTabLifecycle();
-  useEffect(() => documentId ? register(documentId, async () => { await beforeSuspend.current?.(); }) : undefined, [documentId, register]);
+  useEffect(() => documentId ? register(documentId, async () => {
+    const request = prepareResource();
+    if (!request) return;
+    await request.result;
+    if (!request.current()) throw new Error("App changed while saving; retry closing this tab");
+  }) : undefined, [documentId, register, prepareResource]);
   const currentDocument = useRef(documentId);
   useEffect(() => {
     currentDocument.current = documentId;
@@ -54,18 +68,19 @@ function AppContent() {
     // state is saved by the app bridge and supplied again on initialization.
     let canceled = false;
     const timer = setTimeout(() => {
-      const teardown = beforeSuspend.current;
-      if (!teardown) { setStartedDocumentId(null); return; }
-      void teardown().then(() => {
+      const request = prepareResource();
+      if (!request) { setStartedDocumentId(null); return; }
+      void request.result.then(() => {
+        if (!request.current()) return;
         if (canceled && currentDocument.current === documentId) reload();
         else if (!canceled) setStartedDocumentId(null);
       }, (error) => {
         // A failed state save keeps the canvas alive rather than losing work.
-        toast.error(error instanceof Error ? error.message : "Could not save app state");
+        if (request.current()) toast.error(error instanceof Error ? error.message : "Could not save app state");
       });
     }, MCP_APP_IDLE_MS);
     return () => { canceled = true; clearTimeout(timer); };
-  }, [panel?.isOpen, startedDocumentId, documentId]);
+  }, [panel?.isOpen, startedDocumentId, documentId, prepareResource]);
 
 
   if (!panel?.document) return null;

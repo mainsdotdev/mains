@@ -1,4 +1,6 @@
 import { CAPTURE_PAGE_STATE, restorePageStateScript, type BrowserPageState } from "./browser-page-state";
+import { closeBrowserView } from "./browser-view-close";
+import { createTabResourceLifecycle } from "../../../shared/tab-resource-lifecycle";
 import {
   app,
   BrowserWindow,
@@ -127,12 +129,14 @@ interface BrowserTabRecord {
   /** Includes Chromium page state for this session only; never written to disk. */
   suspendedHistory: BrowserHistorySnapshot | null;
   suspendedPageState: BrowserPageState | null;
-  hibernatePromise: Promise<boolean> | null;
+  readonly hibernatePromise: Promise<boolean> | null;
+  hibernateLifecycle: ReturnType<typeof createTabResourceLifecycle<boolean>>;
+  closeLifecycle: ReturnType<typeof createTabResourceLifecycle<boolean>>;
   lastUsedAt: number;
   view: WebContentsView | null;
   viewPromise: Promise<WebContentsView> | null;
   deviceEmulationQueue: BrowserDeviceEmulationQueue;
-  isClosing: boolean;
+  readonly isClosing: boolean;
 }
 
 interface PersistedBrowserTab {
@@ -182,6 +186,8 @@ function createTabRecord(
   id: string = randomUUID(),
   ownerKey = DEFAULT_OWNER_KEY,
 ): BrowserTabRecord {
+  const hibernateLifecycle = createTabResourceLifecycle<boolean>(Boolean);
+  const closeLifecycle = createTabResourceLifecycle<boolean>(Boolean);
   return {
     id,
     ownerKey,
@@ -198,12 +204,14 @@ function createTabRecord(
     history: null,
     suspendedHistory: null,
     suspendedPageState: null,
-    hibernatePromise: null,
+    hibernateLifecycle,
+    closeLifecycle,
+    get hibernatePromise() { return hibernateLifecycle.pending; },
     lastUsedAt: 0,
     view: null,
     viewPromise: null,
     deviceEmulationQueue: createBrowserDeviceEmulationQueue(),
-    isClosing: false,
+    get isClosing() { return closeLifecycle.phase !== "live"; },
   };
 }
 
@@ -751,8 +759,12 @@ export const browserService = {
 
   _wireView(record: BrowserTabRecord, view: WebContentsView) {
     const contents = view.webContents;
+    const current = () => this.tabs.get(record.id) === record && record.view === view;
+    const events: NodeJS.EventEmitter = contents;
+    const on = ((event: string, listener: (...args: any[]) => void) =>
+      events.on(event, (...args: any[]) => { if (current()) listener(...args); })) as typeof contents.on;
 
-    contents.on("before-mouse-event", (_event, mouse) => {
+    on("before-mouse-event", (_event, mouse) => {
       if (mouse.type !== "mouseDown" || !this.visible || this.activeTabId !== record.id) return;
       // The live page is a separate WebContentsView, so DOM click handlers in
       // the app renderer cannot collapse its floating chat.
@@ -760,6 +772,7 @@ export const browserService = {
     });
 
     contents.setWindowOpenHandler(({ url }) => {
+      if (!current()) return { action: "deny" };
       if (isAllowedBrowserUrl(url)) {
         void this.createTab(url, record.ownerKey).catch((error) => {
           console.warn("[browser] Failed to open popup in a new tab:", error);
@@ -770,7 +783,7 @@ export const browserService = {
       return { action: "deny" };
     });
 
-    contents.on("context-menu", (_event, params) => {
+    on("context-menu", (_event, params) => {
       const host = this.host;
       if (
         !host ||
@@ -783,7 +796,7 @@ export const browserService = {
       }
 
       const ifAlive = (action: () => void) => () => {
-        if (!contents.isDestroyed()) action();
+        if (current() && !contents.isDestroyed()) action();
       };
       const template = buildBrowserContextMenu(
         params,
@@ -841,7 +854,7 @@ export const browserService = {
       });
     });
 
-    contents.on("will-navigate", (event, url) => {
+    on("will-navigate", (event, url) => {
       if (
         isAllowedBrowserUrl(url) ||
         (record.htmlPreviewPath && isBrowserPreviewUrlForTab(record.id, url))
@@ -853,7 +866,7 @@ export const browserService = {
       this._openExternalIfAllowed(url);
     });
 
-    contents.on("before-input-event", (event, input) => {
+    on("before-input-event", (event, input) => {
       if (input.type !== "keyDown" || input.isAutoRepeat) return;
       const shortcutInput = {
         code: input.code,
@@ -948,7 +961,7 @@ export const browserService = {
       this._syncRecord(record);
       this._refreshHistoryMetadata(record);
     };
-    contents.on(
+    on(
       "did-start-navigation",
       (_event, _url, _isSameDocument, isMainFrame) => {
         if (!isMainFrame) return;
@@ -961,35 +974,35 @@ export const browserService = {
         record.deviceEmulationQueue.beginNavigation();
       },
     );
-    contents.on("did-finish-load", syncAndRefreshHistory);
-    contents.on("did-navigate", (_event, url) => {
+    on("did-finish-load", syncAndRefreshHistory);
+    on("did-navigate", (_event, url) => {
       this._syncRecord(record);
       this._recordHistoryVisit(url);
       this._refreshHistoryMetadata(record);
     });
-    contents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
+    on("did-navigate-in-page", (_event, url, isMainFrame) => {
       this._syncRecord(record);
       if (!isMainFrame) return;
       this._recordHistoryVisit(url);
       this._refreshHistoryMetadata(record);
     });
-    contents.on("page-title-updated", syncAndRefreshHistory);
-    contents.on("did-start-loading", () => {
+    on("page-title-updated", syncAndRefreshHistory);
+    on("did-start-loading", () => {
       record.deviceEmulationQueue.beginNavigation();
       sync();
     });
-    contents.on("did-stop-loading", () => {
+    on("did-stop-loading", () => {
       void record.deviceEmulationQueue.readyAfterPaint(contents);
       sync();
     });
-    contents.on("page-favicon-updated", (_event, favicons) => {
+    on("page-favicon-updated", (_event, favicons) => {
       record.faviconUrl =
         favicons.find((url) => /^https?:/i.test(url)) ?? null;
       this._schedulePersist();
       this._emitState();
       this._refreshHistoryMetadata(record);
     });
-    contents.on("found-in-page", (_event, result) => {
+    on("found-in-page", (_event, result) => {
       const payload: BrowserFindResult = {
         tabId: record.id,
         activeMatchOrdinal: result.activeMatchOrdinal,
@@ -998,18 +1011,18 @@ export const browserService = {
       };
       this._sendToRenderer(CHANNELS.browser.findResult, payload);
     });
-    contents.on("render-process-gone", () => {
+    on("render-process-gone", () => {
       record.deviceEmulationQueue.reset();
       record.isCrashed = true;
       record.isLoading = false;
       this._emitState();
     });
-    contents.on("destroyed", () => {
+    on("destroyed", () => {
       record.deviceEmulationQueue.reset();
       if (record.view === view) record.view = null;
     });
 
-    contents.on("console-message", (event) => {
+    on("console-message", (event) => {
       const message = event.message;
       if (!message.startsWith(INSPECTOR_SENTINEL)) return;
       if (record.id !== this.activeTabId || !this.selectMode) return;
@@ -1090,8 +1103,12 @@ export const browserService = {
 
       if (record.isClosing) {
         record.deviceEmulationQueue.reset();
-        if (!view.webContents.isDestroyed()) view.webContents.close();
-        if (record.view === view) record.view = null;
+        // A user close still owns this view and must honor beforeunload. A
+        // discarded context/window has retired it and may release a late view.
+        if (this.tabs.get(record.id) !== record) {
+          if (!view.webContents.isDestroyed()) view.webContents.close();
+          if (record.view === view) record.view = null;
+        }
         throw new Error("Browser tab is closing");
       }
 
@@ -1310,10 +1327,11 @@ export const browserService = {
     if (record.hibernatePromise) return record.hibernatePromise;
     const view = record.view;
     const contents = view?.webContents;
-    const protectedPage = () => !contents || contents.isDestroyed() || record.viewPromise ||
+    const protectedPage = () => !contents || contents.isDestroyed() || record.view !== view || record.isClosing ||
+      this.tabs.get(record.id) !== record || record.viewPromise ||
       (this.visible && record.id === this.activeTabId) || contents.isCurrentlyAudible() || contents.isLoading();
     if (!contents || protectedPage()) return Promise.resolve(false);
-    const task = (async () => {
+    return record.hibernateLifecycle.prepare(view!, async (current) => {
       let pageState: BrowserPageState;
       let captureTimer: NodeJS.Timeout | undefined;
       try {
@@ -1325,7 +1343,7 @@ export const browserService = {
         ]);
       } catch { return false; }
       finally { clearTimeout(captureTimer); }
-      if (!pageState || pageState.overflow || protectedPage()) return false;
+      if (!current() || !pageState || pageState.overflow || protectedPage() || pageState.url !== contents.getURL()) return false;
       this._snapshotRecord(record);
       const entries = contents.navigationHistory.getAllEntries();
       const index = contents.navigationHistory.getActiveIndex();
@@ -1339,33 +1357,21 @@ export const browserService = {
       record.suspendedHistory = snapshot;
       record.suspendedPageState = pageState;
       record.deviceEmulationQueue.reset();
-      return new Promise<boolean>((resolve) => {
-        const finish = (closed: boolean, retainSnapshot = false) => {
-          clearTimeout(timer);
-          contents.removeListener("destroyed", onDestroyed);
-          contents.removeListener("will-prevent-unload", onPrevented);
-          if (!closed && !retainSnapshot) { record.suspendedHistory = null; record.suspendedPageState = null; }
-          else if (closed) {
-            if (record.view?.webContents === contents) record.view = null;
-            if (this.host && !this.host.isDestroyed() && view) {
-              try { this.host.contentView.removeChildView(view); } catch { /* Already detached. */ }
-            }
-          }
-          resolve(closed);
-        };
-        const onDestroyed = () => finish(true);
-        // A page with unsaved work may veto hibernation. Never force that unload.
-        const onPrevented = () => finish(false);
-        // A delayed beforeunload can finish after our deadline. Keep the draft
-        // backup in that case so a later wake can still recover it.
-        const timer = setTimeout(() => finish(contents.isDestroyed(), true), 2_000);
-        contents.once("destroyed", onDestroyed);
-        contents.once("will-prevent-unload", onPrevented);
-        try { contents.close({ waitForBeforeUnload: true }); } catch { finish(false); }
-      });
-    })().finally(() => { record.hibernatePromise = null; });
-    record.hibernatePromise = task;
-    return task;
+      const result = await closeBrowserView(contents);
+      if (!current() || (record.view && record.view !== view)) return false;
+      if (result === "closed") {
+        if (record.view === view) record.view = null;
+        if (this.host && !this.host.isDestroyed() && view) {
+          try { this.host.contentView.removeChildView(view); } catch { /* Already detached. */ }
+        }
+      } else if (result !== "timeout") {
+        record.suspendedHistory = null;
+        record.suspendedPageState = null;
+      }
+      // A delayed native unload can finish after timeout. Retain its draft
+      // backup until this same view wakes or is confirmed destroyed.
+      return result === "closed";
+    }).result;
   },
 
   async _trimLiveViews() {
@@ -1683,7 +1689,8 @@ export const browserService = {
     this._persistDownloadsNow();
     this._persistHistoryNow();
     for (const record of this.tabs.values()) {
-      record.isClosing = true;
+      record.closeLifecycle.release();
+      record.hibernateLifecycle.release();
       record.deviceEmulationQueue.reset();
       if (record.view && !record.view.webContents.isDestroyed()) {
         if (this.host && !this.host.isDestroyed()) {
@@ -1831,7 +1838,8 @@ export const browserService = {
 
     for (const [tabId, record] of this.tabs) {
       if (!matches(record.ownerKey)) continue;
-      record.isClosing = true;
+      record.closeLifecycle.release();
+      record.hibernateLifecycle.release();
       record.deviceEmulationQueue.reset();
       if (record.viewPromise) {
         try {
@@ -2094,51 +2102,59 @@ export const browserService = {
     this._loadPersistedTabs();
     const record = this.tabs.get(tabId);
     if (!record || record.ownerKey !== this.activeOwnerKey) throw new Error("Browser tab not found");
-    const orderedIds = Array.from(this.tabs.values())
-      .filter((tab) => tab.ownerKey === record.ownerKey)
-      .map((tab) => tab.id);
-    const closingIndex = orderedIds.indexOf(tabId);
-    record.isClosing = true;
-    record.deviceEmulationQueue.reset();
+    if (record.closeLifecycle.phase === "released") return this.getState();
+    await record.closeLifecycle.prepare(record, async (current) => {
+      const orderedIds = Array.from(this.tabs.values())
+        .filter((tab) => tab.ownerKey === record.ownerKey)
+        .map((tab) => tab.id);
+      const closingIndex = orderedIds.indexOf(tabId);
+      record.deviceEmulationQueue.reset();
 
-    if (record.viewPromise) {
-      try {
-        await record.viewPromise;
-      } catch {
-        // Nothing left to close if view creation failed.
-      }
-    }
-    if (record.view && !record.view.webContents.isDestroyed()) {
-      if (this.host && !this.host.isDestroyed()) {
+      if (record.viewPromise) {
         try {
-          this.host.contentView.removeChildView(record.view);
+          await record.viewPromise;
         } catch {
-          // It may already be detached.
+          // Nothing left to close if view creation failed.
         }
       }
-      record.view.webContents.close();
-    }
-    this.tabs.delete(tabId);
+      if (!current() || this.tabs.get(tabId) !== record) return false;
+      const view = record.view;
+      if (view && !view.webContents.isDestroyed()) {
+        if (await closeBrowserView(view.webContents) !== "closed") {
+          return false;
+        }
+        if (!current() || this.tabs.get(tabId) !== record || (record.view && record.view !== view)) return false;
+        if (this.host && !this.host.isDestroyed()) {
+          try {
+            this.host.contentView.removeChildView(view);
+          } catch {
+            // It may already be detached.
+          }
+        }
+      }
+      this.tabs.delete(tabId);
 
-    const remaining = Array.from(this.tabs.values())
-      .filter((tab) => tab.ownerKey === record.ownerKey)
-      .map((tab) => tab.id);
+      const remaining = Array.from(this.tabs.values())
+        .filter((tab) => tab.ownerKey === record.ownerKey)
+        .map((tab) => tab.id);
 
-    if (this.activeTabId === tabId) {
-      this.activeTabId =
-        remaining[Math.min(closingIndex, remaining.length - 1)] ?? remaining[0] ?? null;
-      if (this.activeTabId) this.activeTabIdsByOwner[record.ownerKey] = this.activeTabId;
-      else delete this.activeTabIdsByOwner[record.ownerKey];
-      this.selectMode = false;
-      this._sendToRenderer(CHANNELS.browser.selectModeChanged, {
-        enabled: false,
-      });
-      if (remaining.length) await this._mountActiveView();
-    }
-    if (!remaining.length) this.detach();
+      if (this.activeTabId === tabId) {
+        this.activeTabId =
+          remaining[Math.min(closingIndex, remaining.length - 1)] ?? remaining[0] ?? null;
+        if (this.activeTabId) this.activeTabIdsByOwner[record.ownerKey] = this.activeTabId;
+        else delete this.activeTabIdsByOwner[record.ownerKey];
+        this.selectMode = false;
+        this._sendToRenderer(CHANNELS.browser.selectModeChanged, {
+          enabled: false,
+        });
+        if (remaining.length) await this._mountActiveView();
+      }
+      if (!remaining.length && this.activeOwnerKey === record.ownerKey) this.detach();
 
-    this._schedulePersist();
-    this._emitState();
+      this._schedulePersist();
+      this._emitState();
+      return true;
+    }).result;
     return this.getState();
   },
 

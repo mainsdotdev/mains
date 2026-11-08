@@ -105,4 +105,18 @@ describe("shared preview shell", () => {
     expect(h.state.getState().preview.byOwner[key].tabs).toHaveLength(2);
     expect(h.state.getState().preview.byOwner[key].activeTabId).toBe("page");
   });
+  it("keeps the replacement app tab when an old save finishes after reload", async () => {
+    const h = harness([{ kind: "app", id: "app", title: "Canvas" }]);
+    let saved!: () => void;
+    const unregisterOld = h.prepare("app", () => new Promise<void>((resolve) => { saved = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "Close Canvas" }));
+    const saveReplacement = vi.fn(async () => {});
+    h.prepare("app", saveReplacement);
+    unregisterOld();
+    await act(async () => saved());
+    expect(h.state.getState().preview.byOwner[key].tabs).toHaveLength(1);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close Canvas" })));
+    expect(saveReplacement).toHaveBeenCalledOnce();
+    expect(h.state.getState().preview.byOwner[key].tabs).toHaveLength(0);
+  });
 });

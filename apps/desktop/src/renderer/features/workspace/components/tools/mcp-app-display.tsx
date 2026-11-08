@@ -7,7 +7,7 @@ import {
   type McpUiResourceCsp,
   type McpUiResourcePermissions,
 } from "@modelcontextprotocol/ext-apps/app-bridge";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
@@ -289,12 +289,15 @@ function McpAppRuntime({
     () =>
       registerBeforeSuspend?.(async () => {
         if (!initializedRef.current || !bridgeRef.current) return;
+        const bridge = bridgeRef.current;
         try {
-          await bridgeRef.current.teardownResource({}, { timeout: 1_500 });
-        } catch {
-          // Compatibility apps may not implement teardown. Their widget state is
-          // already saved by setWidgetState; the conversation lives in the host.
+          await bridge.teardownResource({}, { timeout: 1_500 });
+        } catch (error) {
+          // The optional method can be absent. A save failure or timeout must
+          // preserve this live resource and block suspend/close for retry.
+          if (!error || typeof error !== "object" || !("code" in error) || error.code !== ErrorCode.MethodNotFound) throw error;
         }
+        if (bridgeRef.current !== bridge) throw new Error("App changed while saving; retry closing this tab");
       }),
     [registerBeforeSuspend],
   );

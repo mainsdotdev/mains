@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 
 const mocks = vi.hoisted(() => ({
   readResource: vi.fn(),
@@ -40,6 +41,7 @@ const mocks = vi.hoisted(() => ({
     capabilities: Record<string, unknown>;
     getAppCapabilities: ReturnType<typeof vi.fn>;
     setHostContext: ReturnType<typeof vi.fn>;
+    teardownResource: ReturnType<typeof vi.fn>;
   }>,
 }));
 
@@ -66,6 +68,7 @@ vi.mock(
       close = vi.fn().mockResolvedValue(undefined);
       sendToolInput = vi.fn().mockResolvedValue(undefined);
       sendToolResult = vi.fn().mockResolvedValue(undefined);
+      teardownResource = vi.fn().mockResolvedValue({});
       onmessage?: (
         request: { content: unknown; _meta?: Record<string, unknown> },
         extra?: { signal: AbortSignal },
@@ -179,6 +182,37 @@ describe("MCP App tool synchronization", () => {
     structuredContent: { flights: ["IST → TYO"] },
     _meta: { searchId: "search-1" },
   };
+
+  it.each([
+    new McpError(ErrorCode.InternalError, "Could not save the draft"),
+    new McpError(ErrorCode.RequestTimeout, "App save timed out"),
+  ])("keeps a failed app state save visible to the suspend/close barrier and allows retry (%s)", async (error) => {
+    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", mimeType: "text/html;profile=mcp-app", meta: { availableDisplayModes: ["inline", "fullscreen"] } } });
+    let prepare!: () => Promise<void>;
+    render(createElement(McpAppDisplay, { ...props, output,
+      registerBeforeSuspend: (callback) => { prepare = callback; return () => {}; } }));
+    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+    const bridge = mocks.bridges[0];
+    act(() => bridge.oninitialized?.());
+    bridge.teardownResource.mockRejectedValueOnce(error);
+    await expect(prepare()).rejects.toBe(error);
+    expect(screen.getByTitle("Flights interactive app")).toBeTruthy();
+    expect(bridge.close).not.toHaveBeenCalled();
+    await expect(prepare()).resolves.toBeUndefined();
+    expect(bridge.teardownResource).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows teardown when an initialized app explicitly does not implement the optional method", async () => {
+    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", mimeType: "text/html;profile=mcp-app", meta: { availableDisplayModes: ["inline", "fullscreen"] } } });
+    let prepare!: () => Promise<void>;
+    render(createElement(McpAppDisplay, { ...props, output,
+      registerBeforeSuspend: (callback) => { prepare = callback; return () => {}; } }));
+    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+    const bridge = mocks.bridges[0];
+    act(() => bridge.oninitialized?.());
+    bridge.teardownResource.mockRejectedValueOnce(new McpError(ErrorCode.MethodNotFound, "Unsupported method"));
+    await expect(prepare()).resolves.toBeUndefined();
+  });
 
   it("shows a readable fallback for an omitted bootstrap result without creating an iframe or bridge", () => {
     render(
