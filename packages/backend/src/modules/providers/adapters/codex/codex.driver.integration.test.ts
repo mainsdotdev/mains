@@ -141,6 +141,75 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it("cancels startup during the CLI probe without spawning an app-server after shutdown", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-probe-"));
+    tempDirs.push(dir);
+    const gate = path.join(dir, "version-ready");
+    const logPath = path.join(dir, "protocol.jsonl");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_VERSION_GATE", gate);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const opening = driver.createSession(request("startup-probe"));
+    const rejected = expect(opening).rejects.toThrow(/canceled/);
+    let closing: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(fs.existsSync(`${gate}.waiting`)).toBe(true), { timeout: 2000 });
+      closing = driver.shutdown?.();
+    } finally {
+      fs.writeFileSync(gate, "ready");
+      await closing;
+    }
+    await rejected;
+    expect(readProtocolLog(logPath)).toEqual([]);
+  });
+
+  it("cancels a pending initialize and permits a clean startup after shutdown", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-cancel-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_HANG_METHOD", "initialize");
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const opening = driver.createSession(request("startup-cancel"));
+    const rejected = expect(opening).rejects.toThrow("App-server stopping");
+    expect(await waitForProtocolMessage(logPath, (m) => m.method === "initialize", 2000)).toBeDefined();
+    await Promise.all([driver.shutdown?.(), driver.shutdown?.()]);
+    await rejected;
+    expect(readProtocolLog(logPath).map((m) => m.method)).toEqual(["initialize"]);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_HANG_METHOD", "");
+    await driver.createSession(request("startup-after-cancel"));
+    expect(readProtocolLog(logPath).filter((m) => m.method === "initialize")).toHaveLength(2);
+    expect(readProtocolLog(logPath).filter((m) => m.method === "initialized")).toHaveLength(1);
+  });
+
+  it("shares startup through the initialize handshake before serving concurrent callers", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-startup-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    const gate = path.join(dir, "initialize-ready");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_INITIALIZE_GATE", gate);
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const first = driver.createSession(request("startup-first"));
+    const outcomes = Promise.allSettled([first]);
+    expect(await waitForProtocolMessage(logPath, (m) => m.method === "initialize", 2000)).toBeDefined();
+    const second = driver.createSession(request("startup-second"));
+    const both = Promise.allSettled([first, second]);
+    try {
+      expect(await waitForProtocolMessage(logPath, (m) => m.method !== "initialize", 100)).toBeUndefined();
+    } finally {
+      fs.writeFileSync(gate, "ready");
+      await outcomes;
+      await both;
+    }
+    expect((await both).every((result) => result.status === "fulfilled")).toBe(true);
+    expect(readProtocolLog(logPath).filter((m) => m.method === "initialize")).toHaveLength(1);
+    expect(readProtocolLog(logPath).slice(0, 2).map((m) => m.method)).toEqual(["initialize", "initialized"]);
+  });
+
   describe("input acceptance history", () => {
     function turn(id: string, clientId: string) {
       return { id, rootTurnId: null, itemsView: "full", status: "completed", error: null,
@@ -999,7 +1068,7 @@ describe("codex.driver / app-server protocol", () => {
     });
   });
 
-  it("rejects an app-server that does not expose the current initialize contract", async () => {
+  it("rolls back an incompatible initialize and can retry with a compatible process", async () => {
     process.env.MAINS_CODEX_FIXTURE_LEGACY_INITIALIZE = "1";
 
     const driver = createCodexDriver({
@@ -1013,6 +1082,8 @@ describe("codex.driver / app-server protocol", () => {
     ).rejects.toThrow(
       `Codex app-server initialize response is incompatible with protocol ${CODEX_APP_SERVER_PROTOCOL_VERSION}`,
     );
+    delete process.env.MAINS_CODEX_FIXTURE_LEGACY_INITIALIZE;
+    await expect(driver.createSession(request("run-initialize-retry"))).resolves.toBeDefined();
   });
 
   it("scopes skill discovery to the requested workspace", async () => {
@@ -2359,11 +2430,12 @@ describe("codex.driver / app-server protocol", () => {
   });
 
   it(
-    "fails pending RPCs immediately when app-server exits",
+    "fails pending RPCs on exit and can acquire a replacement server",
     async () => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
       tempDirs.push(tempDir);
-      process.env.MAINS_CODEX_FIXTURE_LOG = path.join(tempDir, "protocol.jsonl");
+      const logPath = path.join(tempDir, "protocol.jsonl");
+      process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
 
       const driver = createCodexDriver({
         binary: fixtureBinary,
@@ -2385,6 +2457,19 @@ describe("codex.driver / app-server protocol", () => {
       expect(outcome.status).toBe("failed");
       expect(outcome.summary).toMatch(/app-server.*(?:exit|close)/i);
       expect(Date.now() - startedAt).toBeLessThan(1000);
+      const gate = path.join(tempDir, "replacement-ready");
+      vi.stubEnv("MAINS_CODEX_FIXTURE_INITIALIZE_GATE", gate);
+      const replacement = driver.createSession(request("run-after-crash"));
+      const settled = Promise.allSettled([replacement]);
+      try {
+        await vi.waitFor(() => expect(readProtocolLog(logPath).filter((m) => m.method === "initialize")).toHaveLength(2), { timeout: 2000 });
+        await expect(driver.getGoal?.("run-crash")).resolves.toBeNull();
+        expect(readProtocolLog(logPath).filter((m) => m.method === "thread/goal/get")).toHaveLength(0);
+      } finally {
+        fs.writeFileSync(gate, "ready");
+        await settled;
+      }
+      await expect(replacement).resolves.toBeDefined();
     },
     35_000,
   );

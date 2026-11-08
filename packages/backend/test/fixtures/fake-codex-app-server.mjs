@@ -9,6 +9,11 @@ const fixtureCliVersion =
   process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.166.0";
 
 if (process.argv.includes("--version")) {
+  const gate = process.env.MAINS_CODEX_FIXTURE_VERSION_GATE;
+  if (gate) {
+    fs.writeFileSync(`${gate}.waiting`, "waiting");
+    while (!fs.existsSync(gate)) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   process.stdout.write(`codex-cli ${fixtureCliVersion}\n`);
   process.exit(0);
 }
@@ -141,8 +146,8 @@ input.on("line", (line) => {
   if (process.env.MAINS_CODEX_FIXTURE_HANG_METHOD === method) return;
 
   switch (method) {
-    case "initialize":
-      respond(
+    case "initialize": {
+      const initialize = () => respond(
         id,
         process.env.MAINS_CODEX_FIXTURE_LEGACY_INITIALIZE === "1"
           ? { userAgent: "mains-test-codex-app-server" }
@@ -153,7 +158,14 @@ input.on("line", (line) => {
               platformOs: "macos",
             },
       );
+      const gate = process.env.MAINS_CODEX_FIXTURE_INITIALIZE_GATE;
+      const complete = () => {
+        if (gate && !fs.existsSync(gate)) setTimeout(complete, 10).unref();
+        else initialize();
+      };
+      complete();
       break;
+    }
 
     case "thread/turns/list": {
       const pages = JSON.parse(process.env.MAINS_CODEX_FIXTURE_HISTORY_PAGES ?? '[{"cursor":null,"result":{"data":[],"nextCursor":null,"backwardsCursor":null}}]');

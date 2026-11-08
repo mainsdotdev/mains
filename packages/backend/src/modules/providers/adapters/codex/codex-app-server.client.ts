@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { spawnProvider as spawn, killProviderProcess } from "../provider-process";
 import {
   createLogger,
@@ -34,6 +35,26 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * absent → starting → running → stopping → closed (ownership released).
+ * Stop/IO failure can also retire starting; only spawn publishes running and
+ * only close releases the child. RPC state and framing belong to that owner.
+ */
+interface ProcessSession {
+  child: ChildProcess;
+  phase: "starting" | "running" | "stopping" | "closed";
+  started: Promise<void>;
+  resolveStarted: () => void;
+  rejectStarted: (error: Error) => void;
+  closed: Promise<void>;
+  resolveClosed: () => void;
+  startError?: Error;
+  killTimer?: ReturnType<typeof setTimeout>;
+  pending: Map<number | string, PendingRequest>;
+  jsonBuffer: string;
+  decoder: StringDecoder;
 }
 
 function isServerRequest(message: unknown): message is JsonRpcRequest {
@@ -73,9 +94,8 @@ function isResponse(message: unknown): message is JsonRpcResponse {
  * owns process lifetime, request correlation, buffering, routing, and cleanup.
  */
 export class CodexAppServer {
-  private child: ChildProcess | null = null;
+  private process: ProcessSession | null = null;
   private nextId = 1;
-  private pendingRequests = new Map<number | string, PendingRequest>();
   private notificationHandler:
     | ((method: string, params: unknown) => void)
     | null = null;
@@ -90,65 +110,93 @@ export class CodexAppServer {
       ) => void)
     | null = null;
   private onClose: (() => void) | null = null;
-  private stderrBuffer = "";
-  private jsonBuffer = "";
 
   constructor(
     private readonly logger: AdapterLogger = createLogger("[CodexAppServer]"),
   ) {}
 
-  async start(
+  start(
     binaryPath: string,
     cwd: string,
     env?: Record<string, string>,
   ): Promise<void> {
-    if (this.child) return;
-
-    const spawnEnv: Record<string, string | undefined> = {
-      ...process.env,
-      ...env,
-    };
-
-    this.child = spawn(binaryPath, ["app-server"], {
-      cwd,
-      env: spawnEnv,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    if (!this.child.stdout || !this.child.stdin) {
-      throw new Error("Failed to get stdio pipes from codex app-server");
+    if (this.process) {
+      return this.process.phase === "stopping"
+        ? Promise.reject(new Error("App-server stopping"))
+        : this.process.started;
     }
 
-    this.child.stdout.on("data", (chunk: Buffer) => {
-      this.jsonBuffer += chunk.toString();
-      this.drainJsonBuffer();
-      if (this.jsonBuffer.length > 32 * 1024 * 1024) {
-        this.logger.error(
-          `jsonBuffer exceeded 32MB (${this.jsonBuffer.length} bytes), resetting`,
-        );
-        this.jsonBuffer = "";
+    let child: ChildProcess;
+    try {
+      child = spawn(binaryPath, ["app-server"], {
+        cwd, env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    let resolveStarted!: () => void;
+    let rejectStarted!: (error: Error) => void;
+    let resolveClosed!: () => void;
+    const started = new Promise<void>((resolve, reject) => {
+      resolveStarted = resolve; rejectStarted = reject;
+    });
+    const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
+    const session: ProcessSession = {
+      child, phase: "starting", started, resolveStarted, rejectStarted,
+      closed, resolveClosed,
+      pending: new Map(), jsonBuffer: "", decoder: new StringDecoder("utf8"),
+    };
+    this.process = session;
+    child.once("spawn", () => {
+      if (session.phase !== "starting") return;
+      session.phase = "running";
+      session.resolveStarted();
+    });
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (!this.isCurrent(session)) return;
+      session.jsonBuffer += session.decoder.write(chunk);
+      this.drainJsonBuffer(session);
+      if (session.jsonBuffer.length > 32 * 1024 * 1024) {
+        this.logger.error(`jsonBuffer exceeded 32MB (${session.jsonBuffer.length} bytes), resetting`);
+        session.jsonBuffer = "";
       }
     });
-
-    this.child.stderr?.on("data", (data: Buffer) => {
-      this.stderrBuffer += data.toString();
-      if (this.stderrBuffer.length > 2048) {
-        this.stderrBuffer = this.stderrBuffer.slice(-2048);
-      }
-    });
-
-    this.child.on("close", (code) => {
+    child.stderr?.resume();
+    child.once("close", (code) => {
+      const error = session.startError ?? new Error(`Codex app-server exited with code ${code}`);
+      session.phase = "closed";
+      clearTimeout(session.killTimer);
+      this.rejectPending(session, error);
+      session.rejectStarted(error);
+      session.jsonBuffer = "";
+      session.resolveClosed();
+      if (this.process !== session) return;
+      this.process = null;
       this.logger.info(`App-server process exited with code ${code}`);
-      this.cleanup(new Error(`Codex app-server exited with code ${code}`));
       this.onClose?.();
     });
-
-    this.child.on("error", (error) => {
+    child.on("error", (error) => {
+      if (this.process !== session || session.phase === "closed") return;
       this.logger.error("App-server process error:", error.message);
-      this.cleanup(
-        new Error(`Codex app-server process error: ${error.message}`),
-      );
+      void this.stopSession(session, new Error(`Codex app-server process error: ${error.message}`));
     });
+    child.once("exit", (code) => {
+      // No new RPCs after exit, even if inherited stdio delays the close event.
+      if (session.phase !== "closed") {
+        void this.stopSession(session, new Error(`Codex app-server exited with code ${code}`));
+      }
+    });
+    for (const [name, stream] of [["stdin", child.stdin], ["stdout", child.stdout], ["stderr", child.stderr]] as const) {
+      stream?.on("error", (error: Error) => {
+        if (this.process === session && session.phase !== "closed") {
+          void this.stopSession(session, new Error(`Codex app-server ${name} error: ${error.message}`));
+        }
+      });
+    }
+    if (!child.stdout || !child.stdin) {
+      void this.stopSession(session, new Error("Failed to get stdio pipes from codex app-server"));
+    }
+    return session.started;
   }
 
   setNotificationHandler(
@@ -183,7 +231,8 @@ export class CodexAppServer {
     params: CodexAppServerParams<Method>,
     timeoutMs = 30000,
   ): Promise<CodexAppServerResult<Method>> {
-    if (!this.child?.stdin) {
+    const session = this.process;
+    if (!session || !this.isCurrent(session)) {
       throw new Error("App-server not running");
     }
 
@@ -197,17 +246,20 @@ export class CodexAppServer {
 
     return new Promise<CodexAppServerResult<Method>>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        reject(new Error(`RPC timeout: ${method} (${timeoutMs}ms)`));
+        this.settleRequest(session, requestId, new Error(`RPC timeout: ${method} (${timeoutMs}ms)`));
       }, timeoutMs);
 
-      this.pendingRequests.set(requestId, {
+      session.pending.set(requestId, {
         resolve: (value) =>
           resolve(value as CodexAppServerResult<Method>),
         reject,
         timer,
       });
-      this.writeMessage(message);
+      try {
+        this.writeMessage(message, session);
+      } catch (error) {
+        this.settleRequest(session, requestId, error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -232,44 +284,62 @@ export class CodexAppServer {
   }
 
   get isRunning(): boolean {
-    return this.child !== null && this.child.exitCode === null;
+    return this.process !== null && this.isCurrent(this.process);
   }
 
-  async stop(): Promise<void> {
-    if (!this.child) return;
+  stop(): Promise<void> {
+    return this.process
+      ? this.stopSession(this.process, new Error("App-server stopping"))
+      : Promise.resolve();
+  }
 
-    for (const pending of this.pendingRequests.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("App-server stopping"));
-    }
-    this.pendingRequests.clear();
+  /** Only this transition retires a live transport. Ownership lasts until close. */
+  private stopSession(session: ProcessSession, error: Error): Promise<void> {
+    if (session.phase === "closed" || session.phase === "stopping") return session.closed;
+    session.phase = "stopping";
+    session.startError = error;
+    this.rejectPending(session, error);
+    session.jsonBuffer = "";
+    session.killTimer = setTimeout(() => killProviderProcess(session.child), 3000);
+    try { session.child.stdin?.end(); }
+    catch { killProviderProcess(session.child); }
+    return session.closed;
+  }
 
-    const child = this.child;
-    this.cleanup();
+  private isCurrent(session: ProcessSession): boolean {
+    return this.process === session && session.phase === "running" &&
+      session.child.exitCode === null && session.child.signalCode === null;
+  }
 
+  /** Remove before settling: response, timeout, stop and IO failure compete once. */
+  private settleRequest(session: ProcessSession, id: number | string, error?: Error, result?: unknown): void {
+    const pending = session.pending.get(id);
+    if (!pending) return;
+    session.pending.delete(id);
+    clearTimeout(pending.timer);
+    if (error) pending.reject(error);
+    else pending.resolve(result);
+  }
+
+  private rejectPending(session: ProcessSession, error: Error): void {
+    for (const id of session.pending.keys()) this.settleRequest(session, id, error);
+  }
+
+  private writeMessage(message: unknown, session = this.process): void {
+    if (!session || !this.isCurrent(session)) return;
+    const payload = `${JSON.stringify(message)}\n`;
     try {
-      child.stdin?.end();
-      await new Promise<void>((resolve) => {
-        const killTimer = setTimeout(() => {
-          killProviderProcess(child);
-          resolve();
-        }, 3000);
-        child.on("close", () => {
-          clearTimeout(killTimer);
-          resolve();
-        });
+      session.child.stdin!.write(payload, (error) => {
+        if (error && this.isCurrent(session)) {
+          void this.stopSession(session, new Error(`Codex app-server write failed: ${error.message}`));
+        }
       });
-    } catch {
-      killProviderProcess(child);
+    } catch (error) {
+      void this.stopSession(session, error instanceof Error ? error : new Error(String(error)));
     }
   }
 
-  private writeMessage(message: unknown): void {
-    if (!this.child?.stdin) return;
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
-  }
-
-  private handleMessage(rawMessage: string): void {
+  private handleMessage(session: ProcessSession, rawMessage: string): void {
     if (!rawMessage.trim()) return;
 
     let message: unknown;
@@ -280,20 +350,9 @@ export class CodexAppServer {
     }
 
     if (isResponse(message)) {
-      const pending = this.pendingRequests.get(message.id);
-      if (!pending) return;
-
-      this.pendingRequests.delete(message.id);
-      clearTimeout(pending.timer);
-      if (message.error) {
-        pending.reject(
-          new Error(
-            `${message.error.message} (code: ${message.error.code})`,
-          ),
-        );
-      } else {
-        pending.resolve(message.result);
-      }
+      this.settleRequest(session, message.id,
+        message.error ? new Error(`${message.error.message} (code: ${message.error.code})`) : undefined,
+        message.result);
       return;
     }
 
@@ -316,24 +375,24 @@ export class CodexAppServer {
    * Extract complete JSON objects from stdout without relying on line
    * boundaries. Some app-server payloads can span multiple chunks or lines.
    */
-  private drainJsonBuffer(): void {
-    while (this.jsonBuffer.length > 0) {
-      const trimStart = this.jsonBuffer.search(/\S/);
+  private drainJsonBuffer(session: ProcessSession): void {
+    while (this.isCurrent(session) && session.jsonBuffer.length > 0) {
+      const trimStart = session.jsonBuffer.search(/\S/);
       if (trimStart === -1) {
-        this.jsonBuffer = "";
+        session.jsonBuffer = "";
         return;
       }
       if (trimStart > 0) {
-        this.jsonBuffer = this.jsonBuffer.slice(trimStart);
+        session.jsonBuffer = session.jsonBuffer.slice(trimStart);
       }
 
-      if (this.jsonBuffer[0] !== "{") {
-        const nextBrace = this.jsonBuffer.indexOf("{", 1);
+      if (session.jsonBuffer[0] !== "{") {
+        const nextBrace = session.jsonBuffer.indexOf("{", 1);
         if (nextBrace === -1) {
-          this.jsonBuffer = "";
+          session.jsonBuffer = "";
           return;
         }
-        this.jsonBuffer = this.jsonBuffer.slice(nextBrace);
+        session.jsonBuffer = session.jsonBuffer.slice(nextBrace);
         continue;
       }
 
@@ -342,8 +401,8 @@ export class CodexAppServer {
       let escaped = false;
       let endIndex = -1;
 
-      for (let index = 0; index < this.jsonBuffer.length; index += 1) {
-        const character = this.jsonBuffer[index];
+      for (let index = 0; index < session.jsonBuffer.length; index += 1) {
+        const character = session.jsonBuffer[index];
         if (escaped) {
           escaped = false;
           continue;
@@ -369,22 +428,10 @@ export class CodexAppServer {
 
       if (endIndex === -1) return;
 
-      const rawMessage = this.jsonBuffer.slice(0, endIndex + 1);
-      this.jsonBuffer = this.jsonBuffer.slice(endIndex + 1);
-      this.handleMessage(rawMessage);
+      const rawMessage = session.jsonBuffer.slice(0, endIndex + 1);
+      session.jsonBuffer = session.jsonBuffer.slice(endIndex + 1);
+      this.handleMessage(session, rawMessage);
     }
   }
 
-  private cleanup(pendingError?: Error): void {
-    if (pendingError) {
-      for (const pending of this.pendingRequests.values()) {
-        clearTimeout(pending.timer);
-        pending.reject(pendingError);
-      }
-      this.pendingRequests.clear();
-    }
-
-    this.child = null;
-    this.jsonBuffer = "";
-  }
 }

@@ -30,6 +30,8 @@ import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
 import type { McpServerOauthLoginCompletedNotification } from "./codex-app-server-protocol/generated/v2/McpServerOauthLoginCompletedNotification";
 import { getBackendRuntime } from "../../../../runtime/backend-runtime";
+import type { ResourceScope } from "../../../../runtime/resource-lifecycle";
+import { createCodexServerLifecycle } from "./codex-server-lifecycle";
 import type {
   CliUpdateResult,
   AccountInfo,
@@ -416,7 +418,7 @@ export function mapPersistedCodexSubAgents(
  */
 export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   let appServer: CodexAppServer | null = null;
-  let appServerStartPromise: Promise<CodexAppServer> | null = null;
+  const serverLifecycle = createCodexServerLifecycle(() => appServer?.isRunning ?? false);
   let codexVersionPromise: Promise<string | null> | null = null;
   let codexCompatibilityPromise: Promise<void> | null = null;
   const mcpThreadResumePromises = new Map<string, Promise<void>>();
@@ -455,8 +457,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   const capabilities = createCodexCapabilities({
     getDefaultModel: () => config.defaultModel,
     ensureServer: (cwd) => ensureServer(cwd),
-    getRunningServer: () =>
-      appServer?.isRunning ? appServer : null,
+    getRunningServer,
     getCliHealth: () => getCodexCliHealth(),
     logger: codexLogger,
   });
@@ -678,7 +679,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   // Ensure app-server is running
   // ─────────────────────────────────────────────────────────────
 
-  async function startServer(cwd?: string): Promise<CodexAppServer> {
+  async function startServer(scope: ResourceScope, cwd?: string): Promise<CodexAppServer> {
+    await ensureCompatibleCodexVersion();
+    scope.assertActive();
     const binaryPath = findCodexBinary();
     const spawnCwd = cwd ?? os.homedir();
     logInfo(`Starting app-server: ${binaryPath} app-server (cwd: ${spawnCwd}, HOME=${process.env.HOME}, homedir=${os.homedir()})`);
@@ -686,13 +689,20 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     const server = new CodexAppServer(codexLogger);
     const env = buildCodexEnv(binaryPath);
 
-    await server.start(binaryPath, spawnCwd, env);
-    appServer = server;
-    runCoordinator.installDispatcher(server);
-
+    // Register ownership before the first await. Abort settles an in-flight
+    // handshake; rollback still waits for the actual child close.
+    const cancel = () => { void server.stop(); };
+    scope.signal.addEventListener("abort", cancel, { once: true });
+    scope.defer(async () => {
+      scope.signal.removeEventListener("abort", cancel);
+      await server.stop();
+      if (appServer === server) appServer = null;
+    });
     server.setOnClose(() => {
-      if (appServer === server) {
-        appServer = null;
+      if (appServer !== server) return;
+      appServer = null;
+      if (serverLifecycle.ready) {
+        void serverLifecycle.retire().catch((error) => logError("App-server cleanup failed:", error));
       }
       mcpThreadResumePromises.clear();
       mcpApps.clear();
@@ -700,6 +710,11 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       realtime.serverClosed();
       runCoordinator.handleServerClose();
     });
+
+    await server.start(binaryPath, spawnCwd, env);
+    scope.assertActive();
+    appServer = server;
+    runCoordinator.installDispatcher(server);
 
     // Handshake: initialize → initialized (required before any other RPC)
     const initializeResponse = await server.sendRequest("initialize", {
@@ -715,6 +730,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         extensions: { "openai/form": {} },
       },
     });
+    scope.assertActive();
     if (
       typeof initializeResponse.userAgent !== "string" ||
       typeof initializeResponse.codexHome !== "string" ||
@@ -810,30 +826,13 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     return server;
   }
 
-  async function ensureServer(cwd?: string): Promise<CodexAppServer> {
-    if (appServer?.isRunning) return appServer;
-    if (appServerStartPromise) return appServerStartPromise;
+  // Every read of an existing transport uses the same readiness rule.
+  function getRunningServer(): CodexAppServer | null {
+    return serverLifecycle.ready && appServer?.isRunning ? appServer : null;
+  }
 
-    const startPromise = ensureCompatibleCodexVersion().then(() =>
-      startServer(cwd),
-    );
-    appServerStartPromise = startPromise;
-    try {
-      return await startPromise;
-    } catch (error) {
-      const failedServer = appServer;
-      if (failedServer) {
-        await failedServer.stop().catch(() => undefined);
-        if (appServer === failedServer) {
-          appServer = null;
-        }
-      }
-      throw error;
-    } finally {
-      if (appServerStartPromise === startPromise) {
-        appServerStartPromise = null;
-      }
-    }
+  function ensureServer(cwd?: string): Promise<CodexAppServer> {
+    return serverLifecycle.start((scope) => startServer(scope, cwd));
   }
 
   async function findThreadIdForRun(runId: string): Promise<string | null> {
@@ -893,9 +892,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     reviewSession: sessionAcquisition.reviewSession,
     startRealtime: realtime.start,
     stopRealtime: realtime.stop,
-    abortNativeRun: (runId) => runCoordinator.abortNativeRun(appServer, runId),
+    abortNativeRun: (runId) => runCoordinator.abortNativeRun(getRunningServer(), runId),
 
-    steerRun: (request) => runCoordinator.steerRun(appServer, request),
+    steerRun: (request) => runCoordinator.steerRun(getRunningServer(), request),
 
     async getInputStatus(runId, clientUserMessageId, sessionId) {
       const threadId = runCoordinator.getSessionThread(runId) ?? sessionId;
@@ -927,7 +926,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       signal,
     ): Promise<DriverOutcome> {
       return runCoordinator.executeTurn(
-        appServer,
+        getRunningServer(),
         sessionParam as CodexRunSession,
         onEvent,
         signal,
@@ -937,7 +936,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     async cleanup(sessionParam): Promise<void> {
       const session = sessionParam as CodexRunSession;
       await runCoordinator.cleanupRun(
-        appServer,
+        getRunningServer(),
         session.runId,
       );
     },
@@ -1073,10 +1072,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       capabilities.shutdown();
       mcpApps.clear();
 
-      if (appServer) {
-        await appServer.stop();
-        appServer = null;
-      }
+      await serverLifecycle.close();
 
       logInfo("Shutdown complete");
     },
@@ -1150,8 +1146,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
           runCoordinator.getSessionThread(runId) ??
           (await runsRepo.findRunById(runId))?.sessionId ??
           undefined;
-        if (!threadId || !appServer?.isRunning) return null;
-        const result = await appServer.sendRequest("thread/goal/get", {
+        const server = getRunningServer();
+        if (!threadId || !server) return null;
+        const result = await server.sendRequest("thread/goal/get", {
           threadId,
         });
         return mapGoalSnapshot(
