@@ -15,6 +15,8 @@ const sdk = vi.hoisted(() => ({
   events: [] as any[], tierError: null as Error | null,
   result: undefined as any,
   catalogue: [] as any[],
+  startGate: undefined as Promise<void> | undefined,
+  backgroundGate: undefined as Promise<any> | undefined,
 }));
 const CATALOGUE = [
   { id: "auto", name: "Auto" },
@@ -29,7 +31,7 @@ vi.mock("@github/copilot-sdk", () => {
   function session(config: { model?: string }) {
     let listener: (event: any) => void = () => {};
     const result = {
-      rpc: { model: { getCurrent: vi.fn(async () => ({ modelId: config.model ?? sdk.inheritedModel,
+      rpc: { commands: { list: vi.fn(() => sdk.backgroundGate ?? Promise.resolve({ commands: [] })) }, mode: { set: vi.fn().mockResolvedValue({}) }, model: { getCurrent: vi.fn(async () => ({ modelId: config.model ?? sdk.inheritedModel,
         autoTier: sdk.inheritedTier, pendingAutoTier: sdk.pendingTier, activatingAutoTier: sdk.activatingTier })) } },
       setAutoTier: vi.fn(async () => {
         if (sdk.tierError) throw sdk.tierError;
@@ -40,7 +42,7 @@ vi.mock("@github/copilot-sdk", () => {
       on: vi.fn((handler) => { listener = handler; return () => {}; }),
       sendAndWait: vi.fn(async () => {
         for (const event of sdk.events) listener(event);
-        return sdk.result ?? { type: "assistant.message", data: { content: "ok" } };
+        return sdk.backgroundGate ?? sdk.result ?? { type: "assistant.message", data: { content: "ok" } };
       }),
     };
     sdk.sessions.push(result);
@@ -52,7 +54,7 @@ vi.mock("@github/copilot-sdk", () => {
       forStdio: (options: unknown) => options,
     },
     CopilotClient: class {
-      start = vi.fn().mockResolvedValue(undefined);
+      start = vi.fn(() => sdk.startGate ?? Promise.resolve());
       stop = vi.fn().mockResolvedValue([]);
       forceStop = vi.fn().mockResolvedValue(undefined);
       ping = vi.fn().mockResolvedValue({ message: "ok" });
@@ -91,6 +93,8 @@ describe("Copilot session settings and SDK callbacks", () => {
     sdk.tierError = null;
     sdk.result = undefined;
     sdk.catalogue = CATALOGUE;
+    sdk.startGate = undefined;
+    sdk.backgroundGate = undefined;
     approvals.request.mockReset().mockImplementation(async (request) => ({ requestId: request.requestId, approved: true }));
     approvals.guard.mockReset().mockResolvedValue(null);
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), "mains-copilot-sessions-"));
@@ -103,6 +107,383 @@ describe("Copilot session settings and SDK callbacks", () => {
     restoreRuntime();
     vi.restoreAllMocks();
     fs.rmSync(fixture, { recursive: true, force: true });
+  });
+
+  it("shares initialization without exposing a client whose start is still pending", async () => {
+    let release!: () => void;
+    sdk.startGate = new Promise<void>((resolve) => { release = resolve; });
+    const current = driver();
+    const first = current.createSession(request({ runId: "start-first" }));
+    await vi.waitFor(() => expect(sdk.clients[0]?.start.mock.calls.length).toBe(1));
+    const second = current.createSession(request({ runId: "start-second" }));
+    const results = Promise.allSettled([first, second]);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sdk.clients[0].createSession.mock.calls.length).toBe(0);
+    } finally { release(); await results; }
+    expect((await results).every((result) => result.status === "fulfilled")).toBe(true);
+    expect(sdk.clients).toHaveLength(1);
+    expect(sdk.clients[0].start).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases a failed startup and retries with a fresh client", async () => {
+    let fail!: (error: Error) => void;
+    sdk.startGate = new Promise<void>((_resolve, reject) => { fail = reject; });
+    const current = driver();
+    const first = current.createSession(request());
+    const rejected = expect(first).rejects.toThrow("startup failed");
+    await vi.waitFor(() => expect(sdk.clients[0]?.start.mock.calls.length).toBe(1));
+    fail(new Error("startup failed")); await rejected;
+    expect(sdk.clients[0].stop).toHaveBeenCalledTimes(1);
+    sdk.startGate = undefined;
+    await expect(current.createSession(request())).resolves.toBeDefined();
+    expect(sdk.clients).toHaveLength(2);
+  });
+
+  it("does not send a prompt when the caller already canceled the run", async () => {
+    const current = driver();
+    const acquired = await current.createSession(request());
+    const abort = new AbortController(); abort.abort();
+    await expect(current.executePrompt(acquired.session, acquired.prompt, () => {}, abort.signal)).resolves.toMatchObject({ status: "canceled" });
+    expect(sdk.sessions[0].sendAndWait.mock.calls.length).toBe(0);
+  });
+
+  it("drains startup during shutdown without publishing or probing the retired client", async () => {
+    let release!: () => void;
+    let nativeLive = false;
+    sdk.startGate = new Promise<void>((resolve) => { release = resolve; }).then(() => { nativeLive = true; });
+    const current = driver();
+    const opening = current.createSession(request());
+    const rejected = expect(opening).rejects.toThrow("shut down");
+    await vi.waitFor(() => expect(sdk.clients[0]?.start).toHaveBeenCalledTimes(1));
+    sdk.clients[0].stop.mockImplementation(async () => { nativeLive = false; return []; });
+    let closed = false;
+    const closing = current.shutdown!().then(() => { closed = true; });
+    try {
+      await vi.waitFor(() => expect(sdk.clients[0].stop).toHaveBeenCalledTimes(1));
+      expect(closed).toBe(false);
+    } finally { release(); await Promise.all([rejected, closing]); }
+    expect(nativeLive).toBe(false);
+    expect(sdk.clients[0].ping).not.toHaveBeenCalled();
+    expect(sdk.clients[0].createSession).not.toHaveBeenCalled();
+    await expect(current.createSession(request())).rejects.toThrow("shut down");
+    expect(sdk.clients).toHaveLength(1);
+  });
+
+  it("does not let a delayed todo read suppress the next turn's identical snapshot", async () => {
+    const current = driver();
+    const first = await current.createSession(request());
+    let finishFirst!: (value: unknown) => void;
+    let readFirst!: (value: unknown) => void;
+    sdk.sessions[0].sendAndWait.mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve; }));
+    sdk.sessions[0].rpc.plan = { readSqlTodos: vi.fn(() => new Promise((resolve) => { readFirst = resolve; })) };
+    const firstEvents: WorkRunEvent[] = [];
+    const firstTurn = current.executePrompt(first.session, first.prompt, (event) => { firstEvents.push(event); }, new AbortController().signal);
+    await vi.waitFor(() => expect(sdk.sessions[0].sendAndWait).toHaveBeenCalledOnce());
+    sdk.sessions[0].on.mock.calls[0][0]({ type: "session.todos_changed", data: {} });
+    finishFirst({ data: { content: "first" } }); await firstTurn;
+
+    const second = await current.resumeSession!({ ...request(), message: "continue" });
+    const rows = { rows: [{ id: "todo-1", title: "Same task", status: "pending" }] };
+    let finishSecond!: (value: unknown) => void;
+    sdk.sessions[1].sendAndWait.mockReturnValueOnce(new Promise((resolve) => { finishSecond = resolve; }));
+    sdk.sessions[1].rpc.plan = { readSqlTodos: vi.fn().mockResolvedValue(rows) };
+    const secondEvents: WorkRunEvent[] = [];
+    const secondTurn = current.executePrompt(second.session, second.prompt, (event) => { secondEvents.push(event); }, new AbortController().signal);
+    try {
+      await vi.waitFor(() => expect(sdk.sessions[1].sendAndWait).toHaveBeenCalledOnce());
+      readFirst(rows); await new Promise<void>((resolve) => setImmediate(resolve));
+      sdk.sessions[1].on.mock.calls[0][0]({ type: "session.todos_changed", data: {} });
+      await vi.waitFor(() => expect(secondEvents.filter((event) => event.type === "tool_call" && event.toolName === "UpdateTodos")).toHaveLength(2));
+      expect(firstEvents.filter((event) => event.type === "tool_call" && event.toolName === "UpdateTodos")).toHaveLength(0);
+    } finally { finishSecond({ data: { content: "second" } }); await secondTurn; }
+  });
+
+  it.each(["native session lost", "native abort failed"])("fails on native error %s even when sendAndWait never settles", async (message) => {
+    const current = driver();
+    const acquired = await current.createSession(request());
+    sdk.sessions[0].sendAndWait.mockReturnValueOnce(new Promise(() => {}));
+    const controller = new AbortController();
+    const turn = current.executePrompt(acquired.session, acquired.prompt, () => {}, controller.signal);
+    let outcome: unknown;
+    void turn.then((value) => { outcome = value; });
+    try {
+      await vi.waitFor(() => expect(sdk.sessions[0].sendAndWait).toHaveBeenCalledOnce());
+      sdk.sessions[0].on.mock.calls[0][0]({ type: "session.error", data: { message, errorType: "transport" } });
+      await vi.waitFor(() => expect(outcome).toMatchObject({ status: "failed", summary: message }));
+      expect(sdk.sessions[0].disconnect).toHaveBeenCalledOnce();
+    } finally { controller.abort(); await turn; }
+  });
+
+  it("rejects a retired session's plan callback instead of routing it into a resumed turn", async () => {
+    const current = driver();
+    const input = request({ configSnapshot: { permissionMode: "plan" } });
+    const first = await current.createSession(input);
+    const oldConfig = sdk.clients[0].createSession.mock.calls[0][0] as SessionConfig;
+    await current.executePrompt(first.session, first.prompt, () => {}, new AbortController().signal);
+    const next = await current.resumeSession!({ ...input, message: "continue" });
+    let finish!: (value: unknown) => void;
+    sdk.sessions[1].sendAndWait.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const events: WorkRunEvent[] = [];
+    const turn = current.executePrompt(next.session, next.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    try {
+      await vi.waitFor(() => expect(sdk.sessions[1].sendAndWait).toHaveBeenCalledOnce());
+      await expect(oldConfig.onExitPlanModeRequest!({ planContent: "Retired plan", summary: "Retired plan", actions: ["exit_only"], recommendedAction: "exit_only" }, { sessionId: input.runId })).rejects.toThrow();
+      expect(events).not.toContainEqual(expect.objectContaining({ toolName: "ExitPlanMode" }));
+    } finally { finish({ data: { content: "ok" } }); await turn; }
+  });
+
+  it.each(["stop", "stream", "disconnect"])("retains failed %s ownership and retries only unfinished shutdown work", async (failure) => {
+    const current = driver();
+    const acquired = await current.createSession(request());
+    if (failure !== "disconnect") {
+      sdk.clients[0].stop.mockRejectedValueOnce(new Error("stop failed"));
+      sdk.clients[0].forceStop.mockRejectedValueOnce(new Error(failure === "stream" ? "ERR_STREAM_DESTROYED" : "force stop failed"));
+    } else sdk.sessions[0].disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
+    await expect(current.shutdown!()).rejects.toThrow("failed");
+    await current.shutdown!();
+    await current.cleanup!(acquired.session);
+    expect(sdk.clients[0].stop).toHaveBeenCalledTimes(failure !== "disconnect" ? 2 : 1);
+    expect(sdk.sessions[0].disconnect).toHaveBeenCalledTimes(failure === "disconnect" ? 2 : 1);
+    await expect(current.createSession(request())).rejects.toThrow("shut down");
+    expect(sdk.clients).toHaveLength(1);
+  });
+
+  it("keeps a prepared session's client until disconnect succeeds before applying new credentials", async () => {
+    const current = driver({ cliUrl: undefined, githubToken: "old" });
+    const prepared = await current.createSession(request());
+    current.updateConfig!({ githubToken: "new" });
+    sdk.sessions[0].disconnect.mockRejectedValueOnce(new Error("disconnect failed"));
+    await expect(current.cleanup!(prepared.session)).rejects.toThrow("disconnect failed");
+    await current.listModels!();
+    expect(sdk.clients).toHaveLength(1);
+    expect(sdk.clients[0].stop).not.toHaveBeenCalled();
+    await current.cleanup!(prepared.session);
+    await current.resumeSession!({ ...request(), message: "continue" });
+    expect(sdk.clients[0].stop).toHaveBeenCalledOnce();
+    expect(sdk.sessions[0].disconnect).toHaveBeenCalledTimes(2);
+    expect(sdk.clients[1].options.gitHubToken).toBe("new");
+  });
+
+  it("joins a late session acquisition and disconnects it once during concurrent shutdown", async () => {
+    const current = driver();
+    await current.listModels!();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const create = sdk.clients[0].createSession.getMockImplementation();
+    sdk.clients[0].createSession.mockImplementationOnce(async (config: SessionConfig) => {
+      const value = await create(config); await gate; return value;
+    });
+    const opening = current.createSession(request());
+    const rejected = expect(opening).rejects.toThrow("shut down");
+    await vi.waitFor(() => expect(sdk.sessions).toHaveLength(1));
+    const closing = [current.shutdown!(), current.shutdown!()];
+    release();
+    await Promise.all([rejected, ...closing]);
+    expect(sdk.clients[0].stop).toHaveBeenCalledOnce();
+    expect(sdk.sessions[0].disconnect).toHaveBeenCalledOnce();
+    expect(sdk.sessions[0].sendAndWait).not.toHaveBeenCalled();
+  });
+
+  it.each(["abort", "timeout", "shutdown"])("settles a hanging send on %s and ignores its late reply", async (reason) => {
+    const current = driver({ timeout: reason === "timeout" ? 25 : 60_000 });
+    const acquired = await current.createSession(request());
+    let release!: (value: unknown) => void;
+    sdk.sessions[0].sendAndWait.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    const controller = new AbortController();
+    const events: WorkRunEvent[] = [];
+    const turn = current.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, controller.signal);
+    let outcome: unknown;
+    void turn.then((value) => { outcome = value; });
+    try {
+      await vi.waitFor(() => expect(sdk.sessions[0].sendAndWait).toHaveBeenCalledOnce());
+      if (reason === "abort") controller.abort();
+      if (reason === "shutdown") await current.shutdown!();
+      await vi.waitFor(() => expect(outcome).toMatchObject({ status: reason === "timeout" ? "failed" : "canceled" }));
+      expect(sdk.sessions[0].abort).toHaveBeenCalledOnce();
+      expect(sdk.sessions[0].disconnect).toHaveBeenCalledOnce();
+      const count = events.length;
+      release({ data: { content: "late", messageId: "late-id" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(events).toHaveLength(count);
+    } finally { release({ data: { content: "late" } }); await turn; }
+  });
+
+  it("discards retired listeners' idle, error, usage and output events on a resumed run", async () => {
+    const current = driver();
+    const first = await current.createSession(request());
+    const oldEvents: WorkRunEvent[] = [];
+    await current.executePrompt(first.session, first.prompt, (event) => { oldEvents.push(event); }, new AbortController().signal);
+    const count = oldEvents.length;
+    const oldListener = sdk.sessions[0].on.mock.calls[0][0];
+    const next = await current.resumeSession!({ ...request(), message: "continue" });
+    let release!: (value: unknown) => void;
+    sdk.sessions[1].sendAndWait.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    const events: WorkRunEvent[] = [];
+    const turn = current.executePrompt(next.session, next.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    try {
+      await vi.waitFor(() => expect(sdk.sessions[1].sendAndWait).toHaveBeenCalledOnce());
+      for (const event of [
+        { type: "session.idle", data: {} },
+        { type: "session.error", data: { message: "old error" } },
+        { type: "assistant.usage", data: { inputTokens: 999, outputTokens: 999 } },
+        { type: "assistant.message", data: { content: "old output" } },
+        { type: "tool.execution_start", data: { toolCallId: "old-tool", toolName: "write" } },
+      ]) oldListener(event);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(oldEvents).toHaveLength(count);
+      expect(events).toHaveLength(0);
+    } finally { release({ data: { content: "current" } }); }
+    await expect(turn).resolves.toMatchObject({ status: "succeeded", summary: "current", usage: undefined });
+  });
+
+  it("isolates identical native tool ids across concurrent runs and interrupts only the failed run", async () => {
+    const current = driver();
+    const first = await current.createSession(request({ runId: "first" }));
+    const second = await current.createSession(request({ runId: "second" }));
+    let fail!: (error: Error) => void;
+    let finish!: (value: unknown) => void;
+    sdk.sessions[0].sendAndWait.mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject; }));
+    sdk.sessions[1].sendAndWait.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const firstEvents: WorkRunEvent[] = [], secondEvents: WorkRunEvent[] = [];
+    const firstTurn = current.executePrompt(first.session, first.prompt, (event) => { firstEvents.push(event); }, new AbortController().signal);
+    const secondTurn = current.executePrompt(second.session, second.prompt, (event) => { secondEvents.push(event); }, new AbortController().signal);
+    try {
+      await vi.waitFor(() => expect(sdk.sessions[1].sendAndWait).toHaveBeenCalledOnce());
+      sdk.sessions[0].on.mock.calls[0][0]({ type: "tool.execution_start", data: { toolCallId: "same-id", toolName: "write" } });
+      sdk.sessions[1].on.mock.calls[0][0]({ type: "tool.execution_start", data: { toolCallId: "same-id", toolName: "read" } });
+      fail(new Error("first failed"));
+      await expect(firstTurn).resolves.toMatchObject({ status: "failed" });
+      expect(firstEvents).toContainEqual(expect.objectContaining({ type: "tool_call", toolName: "write", metadata: expect.objectContaining({ phase: "complete", interrupted: true }) }));
+      expect(secondEvents).toHaveLength(1);
+      sdk.sessions[1].on.mock.calls[0][0]({ type: "tool.execution_end", data: { toolCallId: "same-id", result: "contents", success: true } });
+      finish({ data: { content: "second" } });
+      await expect(secondTurn).resolves.toMatchObject({ status: "succeeded" });
+      expect(secondEvents).toContainEqual(expect.objectContaining({ type: "tool_call", toolName: "read", metadata: expect.objectContaining({ phase: "end" }) }));
+    } finally { fail(new Error("done")); finish({ data: { content: "done" } }); await Promise.all([firstTurn, secondTurn]); }
+  });
+
+  it.each(["success", "error", "undefined"])("drains admitted output before releasing the session (projection: %s)", async (projection) => {
+    sdk.events = [{ type: "assistant.message", data: { content: "projected output" } }];
+    const current = driver();
+    const acquired = await current.createSession(request());
+    let resolve!: () => void, reject!: (error: unknown) => void;
+    const projected = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    const onEvent = vi.fn(() => projected);
+    const turn = current.executePrompt(acquired.session, acquired.prompt, onEvent, new AbortController().signal);
+    let settled = false;
+    void turn.then(() => { settled = true; }, () => { settled = true; });
+    await vi.waitFor(() => expect(onEvent).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    expect(sdk.sessions[0].disconnect).not.toHaveBeenCalled();
+    if (projection !== "success") {
+      reject(projection === "error" ? new Error("persistence failed") : undefined);
+      if (projection === "error") await expect(turn).rejects.toThrow("persistence failed");
+      else await expect(turn).rejects.toBeUndefined();
+    } else {
+      resolve();
+      await expect(turn).resolves.toMatchObject({ status: "succeeded" });
+    }
+    expect(sdk.sessions[0].disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("releases a client whose initialization ping fails before allowing a fresh startup", async () => {
+    let release!: () => void;
+    sdk.startGate = new Promise<void>((resolve) => { release = resolve; });
+    const current = driver();
+    const opening = current.createSession(request());
+    const rejected = expect(opening).rejects.toThrow("init ping failed");
+    await vi.waitFor(() => expect(sdk.clients[0]?.start).toHaveBeenCalledOnce());
+    sdk.clients[0].ping.mockRejectedValueOnce(new Error("init ping failed"));
+    release(); await rejected;
+    expect(sdk.clients[0].stop).toHaveBeenCalledOnce();
+    expect(sdk.clients[0].createSession).not.toHaveBeenCalled();
+    sdk.startGate = undefined;
+    await current.createSession(request());
+    expect(sdk.clients).toHaveLength(2);
+  });
+
+  it.each(["generateText", "generateTitle", "listCommands"] as const)("owns and cancels a pending %s session during shutdown", async (operation) => {
+    let release!: (value: unknown) => void;
+    sdk.backgroundGate = new Promise((resolve) => { release = resolve; });
+    const current = driver();
+    const result = operation === "listCommands" ? current.listCommands!(fixture) : current[operation]!("summarize");
+    const completed = operation === "listCommands" ? expect(result).resolves.toEqual([]) : expect(result).rejects.toThrow("shut down");
+    await vi.waitFor(() => expect(sdk.sessions).toHaveLength(1));
+    await vi.waitFor(() => expect(operation === "listCommands" ? sdk.sessions[0].rpc.commands.list : sdk.sessions[0].sendAndWait).toHaveBeenCalledOnce());
+    await current.shutdown!(); await completed;
+    expect(sdk.sessions[0].disconnect).toHaveBeenCalledOnce();
+    release({ data: { content: "late" }, commands: [{ name: "late" }] });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sdk.sessions[0].disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("discards a model response arriving after shutdown without repopulating the cache", async () => {
+    const current = driver();
+    const prepared = await current.createSession(request());
+    await current.cleanup!(prepared.session);
+    let release!: (value: unknown) => void;
+    sdk.clients[0].rpc.models.list.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    const listing = current.listModels!();
+    await vi.waitFor(() => expect(sdk.clients[0].rpc.models.list).toHaveBeenCalledOnce());
+    await current.shutdown!();
+    await expect(listing).resolves.toEqual([]);
+    release({ models: CATALOGUE });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await expect(current.listModels!()).resolves.toEqual([]);
+    expect(sdk.clients).toHaveLength(1);
+    expect(sdk.clients[0].rpc.models.list).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an approval delivered after its owning session was cleaned up", async () => {
+    const current = driver();
+    await current.createSession(request());
+    const config = sdk.clients[0].createSession.mock.calls[0][0] as SessionConfig;
+    let approve!: (value: unknown) => void;
+    approvals.request.mockReturnValueOnce(new Promise((resolve) => { approve = resolve; }));
+    const answer = config.onPermissionRequest!({ kind: "url", url: "https://example.test", intention: "Fetch" }, { sessionId: "run-fast" });
+    const rejected = expect(answer).rejects.toThrow();
+    await current.shutdown!();
+    approve({ approved: true }); await rejected;
+    await expect(config.onUserInputRequest!({ question: "Old question" }, { sessionId: "run-fast" })).rejects.toThrow();
+    expect(approvals.request).toHaveBeenCalledOnce();
+  });
+
+  it("does not interrupt an earlier turn's unfinished tool when a resumed turn fails", async () => {
+    sdk.events = [{ type: "tool.execution_start", data: { toolCallId: "old-tool", toolName: "write" } }];
+    const current = driver();
+    const first = await current.createSession(request());
+    await current.executePrompt(first.session, first.prompt, () => {}, new AbortController().signal);
+    sdk.events = [];
+    const next = await current.resumeSession!({ ...request(), message: "continue" });
+    sdk.sessions[1].sendAndWait.mockRejectedValueOnce(new Error("next failed"));
+    const events: WorkRunEvent[] = [];
+    await expect(current.executePrompt(next.session, next.prompt, (event) => { events.push(event); }, new AbortController().signal)).resolves.toMatchObject({ status: "failed" });
+    expect(events.filter((event) => event.type === "tool_call")).toHaveLength(0);
+  });
+
+  it("finishes an admitted todo start/complete pair before disconnecting when the prompt ends", async () => {
+    const current = driver();
+    const acquired = await current.createSession(request());
+    let finish!: (value: unknown) => void, project!: () => void;
+    sdk.sessions[0].sendAndWait.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    sdk.sessions[0].rpc.plan = { readSqlTodos: vi.fn().mockResolvedValue({ rows: [{ title: "Task", status: "pending" }] }) };
+    const projecting = new Promise<void>((resolve) => { project = resolve; });
+    const events: WorkRunEvent[] = [];
+    const turn = current.executePrompt(acquired.session, acquired.prompt, async (event) => {
+      events.push(event);
+      if (events.length === 1) await projecting;
+    }, new AbortController().signal);
+    try {
+      await vi.waitFor(() => expect(sdk.sessions[0].sendAndWait).toHaveBeenCalledOnce());
+      sdk.sessions[0].on.mock.calls[0][0]({ type: "session.todos_changed", data: {} });
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+      finish({ data: { content: "done" } });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sdk.sessions[0].disconnect).not.toHaveBeenCalled();
+    } finally { project(); finish({ data: { content: "done" } }); await turn; }
+    expect(events).toHaveLength(2);
+    expect(events).toMatchObject([{ metadata: { phase: "start" } }, { metadata: { phase: "complete" } }]);
   });
 
   it("enables Auto's latency preset from the conversation snapshot on create and resume", async () => {
