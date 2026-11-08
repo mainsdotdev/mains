@@ -1,3 +1,4 @@
+import { runGitOperation } from "../../runtime/git-operation-lifecycle";
 import { assertRecordAvailable, finishRecordDeletion, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
 import { assertOwnedRecord } from "../bridge";
 import { randomUUID } from "crypto";
@@ -1029,20 +1030,24 @@ export const workspaceService = {
    * the new one.
    */
   async switchBranch(workspaceId: string, branch: string): Promise<void> {
-    assertOwnedRecord("workspaces", workspaceId);
-    const workspace = await workspaceRepo.findById(workspaceId);
-    if (!workspace) throw new Error("Workspace not found");
-    if (!workspace.rootPath) throw new Error("Workspace has no root path");
-    if (!branch.trim()) throw new Error("Branch name is required");
+    return runGitOperation({ workspaceId, branch }, "switch-branch", async (scope) => {
+      assertOwnedRecord("workspaces", workspaceId);
+      const workspace = await workspaceRepo.findById(workspaceId);
+      if (!workspace) throw new Error("Workspace not found");
+      if (!workspace.rootPath) throw new Error("Workspace has no root path");
+      if (workspace.isArchived) throw new Error("Restore the workspace before running Git actions");
+      await scope.bind(workspace.rootPath);
+      if (!branch.trim()) throw new Error("Branch name is required");
 
-    await gitService.checkoutBranch(workspace.rootPath, branch);
-    // Read back rather than assuming: a remote name resolves to its local
-    // tracking branch, so what got checked out isn't always what was asked for.
-    const current = await gitService
-      .getCurrentBranch(workspace.rootPath)
-      .catch(() => branch);
-    emitGitStateChanged({ workspaceId, branch: current ?? branch, pathExists: true });
-    await this.resyncDiff(workspaceId);
+      await gitService.checkoutBranch(workspace.rootPath, branch);
+      // Read back rather than assuming: a remote name resolves to its local
+      // tracking branch, so what got checked out isn't always what was asked for.
+      const current = await gitService
+        .getCurrentBranch(workspace.rootPath)
+        .catch(() => branch);
+      emitGitStateChanged({ workspaceId, branch: current ?? branch, pathExists: true });
+      await this.resyncDiff(workspaceId);
+    });
   },
 
   /**
@@ -1063,28 +1068,32 @@ export const workspaceService = {
    * created.
    */
   async createBranch(workspaceId: string, branch: string): Promise<void> {
-    assertOwnedRecord("workspaces", workspaceId);
-    const workspace = await workspaceRepo.findById(workspaceId);
-    if (!workspace) throw new Error("Workspace not found");
-    if (!workspace.rootPath) throw new Error("Workspace has no root path");
-    if (!branch.trim()) throw new Error("Branch name is required");
-    const name = branch.trim();
+    return runGitOperation({ workspaceId, branch }, "create-branch", async (scope) => {
+      assertOwnedRecord("workspaces", workspaceId);
+      const workspace = await workspaceRepo.findById(workspaceId);
+      if (!workspace) throw new Error("Workspace not found");
+      if (!workspace.rootPath) throw new Error("Workspace has no root path");
+      if (workspace.isArchived) throw new Error("Restore the workspace before running Git actions");
+      await scope.bind(workspace.rootPath);
+      if (!branch.trim()) throw new Error("Branch name is required");
+      const name = branch.trim();
 
-    // Read the parent before the checkout moves HEAD off it.
-    const parent = await gitService
-      .getCurrentBranch(workspace.rootPath)
-      .catch(() => null);
+      // Read the parent before the checkout moves HEAD off it.
+      const parent = await gitService
+        .getCurrentBranch(workspace.rootPath)
+        .catch(() => null);
 
-    await gitService.createBranch(workspace.rootPath, name);
-    emitGitStateChanged({ workspaceId, branch: name, pathExists: true });
+      await gitService.createBranch(workspace.rootPath, name);
+      emitGitStateChanged({ workspaceId, branch: name, pathExists: true });
 
-    if (parent && parent !== "HEAD" && parent !== workspace.baseBranch) {
-      await workspaceRepo
-        .update(workspaceId, { baseBranch: parent })
-        .catch((error) =>
-          console.error("[Workspace] Failed to record PR base branch:", error),
-        );
-    }
+      if (parent && parent !== "HEAD" && parent !== workspace.baseBranch) {
+        await workspaceRepo
+          .update(workspaceId, { baseBranch: parent })
+          .catch((error) =>
+            console.error("[Workspace] Failed to record PR base branch:", error),
+          );
+      }
+    });
   },
 
   /** Rename the branch actually checked out in the workspace. */
@@ -1092,37 +1101,41 @@ export const workspaceService = {
     workspaceId: string,
     newBranchName: string,
   ): Promise<WorkspaceResponse> {
-    assertOwnedRecord("workspaces", workspaceId);
-    const workspace = await workspaceRepo.findById(workspaceId);
-    if (!workspace) throw new Error("Workspace not found");
-    if (!workspace.rootPath) {
-      throw new Error("Workspace has no root path");
-    }
-    const oldBranch = await gitService.getCurrentBranch(workspace.rootPath);
-    if (!oldBranch || oldBranch === "HEAD") {
-      throw new Error("Workspace has no named branch to rename");
-    }
-    const project = workspace.projectId
-      ? await projectsRepo.findById(workspace.projectId)
-      : null;
-    if (
-      oldBranch === workspace.baseBranch ||
-      oldBranch === project?.defaultBranch
-    ) {
-      throw new Error(
-        `Cannot rename protected base/default branch "${oldBranch}" from a workspace`,
-      );
-    }
+    return runGitOperation({ workspaceId, newBranchName }, "rename-branch", async (scope) => {
+      assertOwnedRecord("workspaces", workspaceId);
+      const workspace = await workspaceRepo.findById(workspaceId);
+      if (!workspace) throw new Error("Workspace not found");
+      if (!workspace.rootPath) {
+        throw new Error("Workspace has no root path");
+      }
+      if (workspace.isArchived) throw new Error("Restore the workspace before running Git actions");
+      await scope.bind(workspace.rootPath);
+      const oldBranch = await gitService.getCurrentBranch(workspace.rootPath);
+      if (!oldBranch || oldBranch === "HEAD") {
+        throw new Error("Workspace has no named branch to rename");
+      }
+      const project = workspace.projectId
+        ? await projectsRepo.findById(workspace.projectId)
+        : null;
+      if (
+        oldBranch === workspace.baseBranch ||
+        oldBranch === project?.defaultBranch
+      ) {
+        throw new Error(
+          `Cannot rename protected base/default branch "${oldBranch}" from a workspace`,
+        );
+      }
 
-    // A worktree's branch is owned by its source repo, not the checkout.
-    const worktree = workspace.metadata?.worktree;
-    const gitPath =
-      worktree?.enabled && worktree.sourcePath
-        ? worktree.sourcePath
-        : workspace.rootPath;
-    await gitService.renameBranch(gitPath, oldBranch, newBranchName);
-    emitGitStateChanged({ workspaceId, branch: newBranchName, pathExists: true });
-    return workspace;
+      // A worktree's branch is owned by its source repo, not the checkout.
+      const worktree = workspace.metadata?.worktree;
+      const gitPath =
+        worktree?.enabled && worktree.sourcePath
+          ? worktree.sourcePath
+          : workspace.rootPath;
+      await gitService.renameBranch(gitPath, oldBranch, newBranchName);
+      emitGitStateChanged({ workspaceId, branch: newBranchName, pathExists: true });
+      return workspace;
+    });
   },
 
   /**
@@ -1136,13 +1149,17 @@ export const workspaceService = {
    * the diff summary bar, its only caller.)
    */
   async discardPaths(workspaceId: string, paths: string[]): Promise<void> {
-    assertOwnedRecord("workspaces", workspaceId);
-    const workspace = await workspaceRepo.findById(workspaceId);
-    if (!workspace) throw new Error("Workspace not found");
-    if (!workspace.rootPath) throw new Error("Workspace has no root path");
-    if (paths.length === 0) return;
-    await gitService.discardPaths(workspace.rootPath, paths);
-    await this.resyncDiff(workspaceId);
+    return runGitOperation({ workspaceId, paths }, "discard-paths", async (scope) => {
+      assertOwnedRecord("workspaces", workspaceId);
+      const workspace = await workspaceRepo.findById(workspaceId);
+      if (!workspace) throw new Error("Workspace not found");
+      if (!workspace.rootPath) throw new Error("Workspace has no root path");
+      if (workspace.isArchived) throw new Error("Restore the workspace before running Git actions");
+      await scope.bind(workspace.rootPath);
+      if (paths.length === 0) return;
+      await gitService.discardPaths(workspace.rootPath, paths);
+      await this.resyncDiff(workspaceId);
+    });
   },
 
   // ─────────────────────────────────────────────────────────────

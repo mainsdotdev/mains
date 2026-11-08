@@ -17,9 +17,7 @@ import { assertOwnedRecord } from "../bridge";
 // ─────────────────────────────────────────────────────────────
 
 import { execFile } from "node:child_process";
-import { basename, join } from "node:path";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { basename } from "node:path";
 import { promisify } from "node:util";
 import {
   workspaceService,
@@ -33,6 +31,7 @@ import { projectsService } from "../projects";
 import { appSettingsService } from "../appSettings";
 import { prAttachmentStorage } from "./pr-attachment-storage";
 import { budgetDiff } from "./diff-budget";
+import { assertGitOperationsOpen, runGitOperation } from "../../runtime/git-operation-lifecycle";
 import { PR_ATTACHMENT_LIMIT, mapPrAttachmentUrls, type CreatePrPayload, type CreatePrResult, type PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 // `createWorkAdapter` is imported lazily inside the generation methods to break
 // the gitFlow ↔ providers/adapters (mains-tools) require cycle.
@@ -214,6 +213,7 @@ export const gitFlowService = {
     const workspace = await workspaceService.get(workspaceId);
     if (!workspace) throw new Error("Workspace not found");
     if (!workspace.rootPath) throw new Error("Workspace has no root path");
+    if (workspace.isArchived) throw new Error("Restore the workspace before running Git actions");
     return {
       rootPath: workspace.rootPath,
       projectId: workspace.projectId ?? null,
@@ -343,42 +343,46 @@ export const gitFlowService = {
     await this.stage(rootPath, params.stage);
     const result = await gitService.commit(rootPath, message);
 
-    // Recapture diff from the new HEAD so the Changes tab reflects the
-    // post-commit state (clean working tree).
-    const newHead = await gitService.getHeadSha(rootPath).catch(() => null);
+    // Native commit is the acceptance boundary; projection failures cannot
+    // turn an accepted commit into an invitation to create another.
+    try {
+      // Recapture diff from the new HEAD so the Changes tab reflects the
+      // post-commit state (clean working tree).
+      const newHead = await gitService.getHeadSha(rootPath).catch(() => null);
 
-    if (workspaceId && newHead) {
-      await workspaceService.deleteDiffs(workspaceId);
-      try {
-        const snapshot = await gitService.captureDiffSnapshot(
-          rootPath,
-          newHead,
-        );
-        if (snapshot.files.length > 0) {
-          await recordWorkspaceDiff(workspaceId, runId, snapshot);
+      if (workspaceId && newHead) {
+        await workspaceService.deleteDiffs(workspaceId);
+        try {
+          const snapshot = await gitService.captureDiffSnapshot(
+            rootPath,
+            newHead,
+          );
+          if (snapshot.files.length > 0) {
+            await recordWorkspaceDiff(workspaceId, runId, snapshot);
+          }
+        } catch (err) {
+          // Best-effort: the commit itself succeeded; the stale pre-commit diff
+          // row is already gone, which is the important part.
+          console.error("[GitFlow] Post-commit diff recapture failed:", err);
         }
-      } catch (err) {
-        // Best-effort: the commit itself succeeded; the stale pre-commit diff
-        // row is already gone, which is the important part.
-        console.error("[GitFlow] Post-commit diff recapture failed:", err);
       }
-    }
 
-    if (runId && newHead) {
-      runSessionRegistry.get(runId)?.updateBaseRef(newHead);
-    }
+      if (runId && newHead) {
+        runSessionRegistry.get(runId)?.updateBaseRef(newHead);
+      }
 
-    // Committed code is accepted — drop its review findings.
-    if (workspaceId) {
-      await workspaceService.deleteFindingsByWorkspace(workspaceId);
-      emitFindingsChanged(workspaceId);
-      logWorkspaceActivity({
-        workspaceId,
-        type: "commit",
-        title: message.split("\n")[0],
-        refId: newHead ?? undefined,
-      });
-    }
+      // Committed code is accepted — drop its review findings.
+      if (workspaceId) {
+        await workspaceService.deleteFindingsByWorkspace(workspaceId);
+        emitFindingsChanged(workspaceId);
+        logWorkspaceActivity({
+          workspaceId,
+          type: "commit",
+          title: message.split("\n")[0],
+          refId: newHead ?? undefined,
+        });
+      }
+    } catch (error) { console.error("[GitFlow] Commit accepted; workspace projection failed:", error); }
 
     return result;
   },
@@ -421,13 +425,10 @@ export const gitFlowService = {
     for (const label of params.labels ?? []) ghArgs.push("--label", label);
     for (const path of params.attachmentPaths ?? []) ghArgs.push("--attach", path);
 
-    const bodyDirectory = await mkdtemp(join(tmpdir(), "mains-pr-body-"));
     let stdout = "";
     let stderr = "";
     let warning: string | undefined;
-    try {
-      const bodyPath = join(bodyDirectory, "body.md");
-      await writeFile(bodyPath, params.body ?? "", { mode: 0o600 });
+    await prAttachmentStorage.withBody(params.body ?? "", async (bodyPath) => {
       ghArgs.push("--body-file", bodyPath);
       try {
         ({ stdout, stderr } = await execFileAsync("gh", ghArgs, {
@@ -439,19 +440,19 @@ export const gitFlowService = {
         const failure = error as { stdout?: string; stderr?: string };
         // gh may create the PR before reporting partial attachment failures.
         // Its URL is the proof of creation; closing the form prevents a duplicate.
-        if (!params.attachmentPaths?.length || !createdPrUrl(failure.stdout ?? "")) throw error;
+        if (!createdPrUrl(failure.stdout ?? "")) throw error;
         stdout = failure.stdout ?? "";
         stderr = failure.stderr ?? "";
-        warning = stderr.trim().slice(0, 2000) || "The pull request was created, but some attachments could not be uploaded.";
+        warning = stderr.trim().slice(0, 2000) || (params.attachmentPaths?.length ? "The pull request was created, but some attachments could not be uploaded." : "The pull request was created, but the CLI reported an error afterwards.");
       }
-    } finally { await rm(bodyDirectory, { recursive: true, force: true }).catch(() => undefined); }
+    });
 
     const output = stdout.trim();
     const prUrl = createdPrUrl(output);
     if (!prUrl) throw new Error("GitHub CLI did not return the created pull request URL.");
 
     if (workspaceId) {
-      logWorkspaceActivity({
+      try { logWorkspaceActivity({
         workspaceId,
         type: "pr",
         title: params.title,
@@ -462,7 +463,7 @@ export const gitFlowService = {
           draft: params.draft,
           labels: params.labels,
         },
-      });
+      }); } catch (error) { console.error("[GitFlow] Post-PR activity failed:", error); }
     }
 
     return { url: prUrl, stdout: output, stderr: stderr?.trim() || undefined, ...(warning ? { warning } : {}) };
@@ -763,79 +764,75 @@ export const gitFlowService = {
    */
   async commit(params: {
     workspaceId: string;
+    operationId?: string;
     message?: string;
     includeUnstaged?: boolean;
     providerId?: string;
     model?: string;
     push?: boolean;
   }): Promise<CommitResult> {
-    const { rootPath } = await this.resolveRoot(params.workspaceId);
-    const branch = await gitService.getCurrentBranch(rootPath);
-    if (!branch || branch === "HEAD") {
-      throw new Error("Cannot commit while HEAD is detached");
-    }
-
-    const stageMode: StageMode =
-      params.includeUnstaged === false ? "none" : "all";
-    await this.stage(rootPath, stageMode);
-
-    const staged = await gitService.getStagedDiff(rootPath);
-    if (!staged.trim()) throw new Error("No staged changes to commit");
-
-    let message = params.message?.trim() || "";
-    if (!message) {
-      if (!params.providerId) {
-        throw new Error(
-          "Provide a commit message or a provider to generate one",
-        );
-      }
-      message = await this.generateCommitMessage({
-        workspaceId: params.workspaceId,
-        rootPath,
-        providerId: params.providerId,
-        model: params.model,
-        stagedDiff: staged,
+    return runGitOperation(params, "commit", async (scope) => {
+      const { rootPath } = await this.resolveRoot(params.workspaceId);
+      await scope.bind(rootPath);
+      return scope.step("result", async () => {
+        const branch = await scope.step("branch", async () => {
+          const branch = await gitService.getCurrentBranch(rootPath);
+          if (!branch || branch === "HEAD") throw new Error("Cannot commit while HEAD is detached");
+          return branch;
+        });
+        const originalHead = await scope.step("initialHead", () => gitService.getHeadSha(rootPath).catch(() => null));
+        const pushRemotes = params.push ? await scope.step("pushRemotes", () => gitService.getRemotes(rootPath)) : undefined;
+        const result = await scope.step("committed", async () => {
+          const assertUnchanged = async () => {
+            if (await gitService.getCurrentBranch(rootPath) !== branch || await gitService.getHeadSha(rootPath).catch(() => null) !== originalHead) throw new Error("The branch or HEAD changed before commit acknowledgement. Inspect the repository before starting another commit.");
+          };
+          await assertUnchanged();
+          const stageMode: StageMode = params.includeUnstaged === false ? "none" : "all";
+          await this.stage(rootPath, stageMode);
+          const staged = await gitService.getStagedDiff(rootPath);
+          if (!staged.trim()) throw new Error("No staged changes to commit");
+          let message = params.message?.trim() || "";
+          if (!message) {
+            if (!params.providerId) throw new Error("Provide a commit message or a provider to generate one");
+            message = await this.generateCommitMessage({ workspaceId: params.workspaceId, rootPath,
+              providerId: params.providerId, model: params.model, stagedDiff: staged });
+          }
+          await assertUnchanged();
+          return this.performCommit({ workspaceId: params.workspaceId, rootPath, runId: null, message, stage: "none" });
+        });
+        if (params.push) {
+          const currentBranch = await gitService.getCurrentBranch(rootPath);
+          const currentHead = await gitService.getHeadSha(rootPath);
+          if (currentBranch !== branch || currentHead !== result.hash) throw new Error("The branch or HEAD changed after this commit; push the intended commit explicitly");
+          if (JSON.stringify(await gitService.getRemotes(rootPath)) !== JSON.stringify(pushRemotes)) throw new Error("The remote changed after this commit; inspect the push target before continuing");
+          await this.assertRemoteMatches(params.workspaceId, rootPath);
+          await gitService.push(rootPath, { branch });
+          logWorkspaceActivity({ workspaceId: params.workspaceId, type: "push", title: "You pushed changes", metadata: { branch } });
+        }
+        return { ...result, pushed: !!params.push };
       });
-    }
-
-    const result = await this.performCommit({
-      workspaceId: params.workspaceId,
-      rootPath,
-      runId: null,
-      message,
-      stage: "none", // already staged above
     });
-
-    let pushed = false;
-    if (params.push) {
-      await gitService.push(rootPath, { branch });
-      pushed = true;
-      logWorkspaceActivity({
-        workspaceId: params.workspaceId,
-        type: "push",
-        title: "You pushed changes",
-        metadata: { branch },
-      });
-    }
-
-    return { ...result, pushed };
   },
 
   /** Push the current branch (used by the standalone Push action). */
   async push(workspaceId: string): Promise<CommitResult> {
-    const { rootPath } = await this.resolveRoot(workspaceId);
-    const branch = await gitService.getCurrentBranch(rootPath);
-    if (!branch || branch === "HEAD") {
-      throw new Error("Cannot push while HEAD is detached");
-    }
-    await gitService.push(rootPath, { branch });
-    logWorkspaceActivity({
-      workspaceId,
-      type: "push",
-      title: "You pushed changes",
-      metadata: { branch },
+    return runGitOperation({ workspaceId }, "push", async (scope) => {
+      const { rootPath } = await this.resolveRoot(workspaceId);
+      await scope.bind(rootPath);
+      const branch = await gitService.getCurrentBranch(rootPath);
+      if (!branch || branch === "HEAD") {
+        throw new Error("Cannot push while HEAD is detached");
+      }
+      await this.assertRemoteMatches(workspaceId, rootPath);
+      await gitService.push(rootPath, { branch });
+      logWorkspaceActivity({
+        workspaceId,
+        type: "push",
+        title: "You pushed changes",
+        metadata: { branch },
+      });
+      return { hash: "", summary: "Pushed", pushed: true };
     });
-    return { hash: "", summary: "Pushed", pushed: true };
   },
 
   /**
@@ -848,33 +845,36 @@ export const gitFlowService = {
    * HEAD, the same correction a commit makes.
    */
   async pull(workspaceId: string): Promise<PullResult> {
-    const { rootPath } = await this.resolveRoot(workspaceId);
-    const branch = await gitService.getCurrentBranch(rootPath);
-    if (!branch || branch === "HEAD") {
-      throw new Error("Cannot pull while HEAD is detached");
-    }
-    // Never pull from a remote the project doesn't recognize.
-    await this.assertRemoteMatches(workspaceId, rootPath);
+    return runGitOperation({ workspaceId }, "pull", async (scope) => {
+      const { rootPath } = await this.resolveRoot(workspaceId);
+      await scope.bind(rootPath);
+      const branch = await gitService.getCurrentBranch(rootPath);
+      if (!branch || branch === "HEAD") {
+        throw new Error("Cannot pull while HEAD is detached");
+      }
+      // Never pull from a remote the project doesn't recognize.
+      await this.assertRemoteMatches(workspaceId, rootPath);
 
-    const { received } = await gitService.pullFastForward(rootPath);
-    if (received === 0) return { branch, received };
+      const { received } = await gitService.pullFastForward(rootPath);
+      if (received === 0) return { branch, received };
 
-    try {
-      await workspaceService.resyncDiff(workspaceId);
-    } catch (err) {
-      // Best-effort: the pull itself landed, which is the part that can't be
-      // retried for free. A stale diff row is fixed by the next resync.
-      console.error("[GitFlow] Post-pull diff resync failed:", err);
-    }
+      try {
+        await workspaceService.resyncDiff(workspaceId);
+      } catch (err) {
+        // Best-effort: the pull itself landed, which is the part that can't be
+        // retried for free. A stale diff row is fixed by the next resync.
+        console.error("[GitFlow] Post-pull diff resync failed:", err);
+      }
 
-    logWorkspaceActivity({
-      workspaceId,
-      type: "pull",
-      title: `You pulled ${received} commit${received === 1 ? "" : "s"}`,
-      metadata: { branch, commits: received },
+      logWorkspaceActivity({
+        workspaceId,
+        type: "pull",
+        title: `You pulled ${received} commit${received === 1 ? "" : "s"}`,
+        metadata: { branch, commits: received },
+      });
+
+      return { branch, received };
     });
-
-    return { branch, received };
   },
 
   // ───────────────────────────────────────────────────────────
@@ -947,78 +947,57 @@ export const gitFlowService = {
    */
   async publish(params: {
     workspaceId: string;
-    /** "owner/name" — owner is a GitHub user or org the account can create in. */
+    operationId?: string;
     ownerRepo: string;
     visibility: "private" | "public";
     remoteName?: string;
     protocol: "ssh" | "https";
   }): Promise<PublishResult> {
-    const { rootPath, projectId } = await this.resolveRoot(
-      params.workspaceId,
-    );
-    const remoteName = params.remoteName?.trim() || "origin";
-
-    const [owner, rawName] = params.ownerRepo.split("/").map((s) => s.trim());
-    const name = sanitizeRepoName(rawName || "");
-    if (!owner || !name) {
-      throw new Error(
-        "Enter a repository as owner/name (e.g. octocat/my-repo).",
-      );
-    }
-
-    // Don't clobber an existing remote of the same name.
-    const remotes = await gitService.getRemotes(rootPath).catch(() => []);
-    if (remotes.some((r) => r.name === remoteName)) {
-      throw new Error(`A remote named "${remoteName}" already exists.`);
-    }
-
-    // Create the empty repo on GitHub (no --source/--push: we wire the remote
-    // ourselves so the SSH/HTTPS choice is honored).
-    const ghArgs = [
-      "repo",
-      "create",
-      `${owner}/${name}`,
-      params.visibility === "private" ? "--private" : "--public",
-    ];
-    let htmlUrl = `https://github.com/${owner}/${name}`;
-    try {
-      const { stdout } = await execFileAsync("gh", ghArgs, {
-        cwd: rootPath,
-        timeout: 30_000,
+    return runGitOperation(params, "publish", async (scope) => {
+      const { rootPath, projectId } = await this.resolveRoot(params.workspaceId);
+      await scope.bind(rootPath);
+      return scope.step("result", async () => {
+        const remoteName = params.remoteName?.trim() || "origin";
+        if (!/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(remoteName)) throw new Error("Use a remote name containing letters, numbers, dots, underscores or hyphens, starting with a letter, number or underscore.");
+        if (params.visibility !== "private" && params.visibility !== "public" || params.protocol !== "ssh" && params.protocol !== "https") throw new Error("Invalid publish options");
+        const [owner, rawName, extra] = params.ownerRepo.split("/").map((value) => value.trim());
+        if (extra !== undefined || !/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(owner ?? "")) throw new Error("Enter a repository as owner/name (e.g. octocat/my-repo).");
+        const name = sanitizeRepoName(rawName || "");
+        if (!owner || !name) throw new Error("Enter a repository as owner/name (e.g. octocat/my-repo).");
+        const remoteUrl = params.protocol === "ssh" ? `git@github.com:${owner}/${name}.git` : `https://github.com/${owner}/${name}.git`;
+        const initial = await scope.step("preflight", async () => {
+          const remotes = await gitService.getRemotes(rootPath);
+          if (remotes.some((remote) => remote.name === remoteName)) throw new Error(`A remote named "${remoteName}" already exists.`);
+          const branch = await gitService.getCurrentBranch(rootPath);
+          if (!branch || branch === "HEAD") throw new Error("Cannot publish while HEAD is detached");
+          return { branch, head: await gitService.getHeadSha(rootPath).catch(() => null) };
+        });
+        const htmlUrl = await scope.step("repository", async () => {
+          try {
+            const { stdout } = await execFileAsync("gh", ["repo", "create", `${owner}/${name}`, params.visibility === "private" ? "--private" : "--public"], { cwd: rootPath, timeout: 30_000 });
+            return stdout.match(/https:\/\/github\.com\/[^\s]+/)?.[0] ?? `https://github.com/${owner}/${name}`;
+          } catch (error) { throw new Error((error as any)?.stderr?.trim?.() || "Failed to create the GitHub repository."); }
+        });
+        await scope.step("remote", async () => {
+          const remotes = await gitService.getRemotes(rootPath);
+          const current = remotes.find((remote) => remote.name === remoteName);
+          if (current && (current.fetchUrl !== remoteUrl || current.pushUrl !== remoteUrl)) throw new Error("The publish remote changed; refusing to replace it");
+          if (!current) await gitService.addRemote(rootPath, remoteName, remoteUrl);
+        });
+        const assertPublishRemote = async () => {
+          const remote = (await gitService.getRemotes(rootPath)).find((value) => value.name === remoteName);
+          if (!remote || remote.fetchUrl !== remoteUrl || remote.pushUrl !== remoteUrl) throw new Error("The publish remote changed; refusing to continue");
+        };
+        await assertPublishRemote();
+        await scope.step("pushed", async () => {
+          if (await gitService.getCurrentBranch(rootPath) !== initial.branch || await gitService.getHeadSha(rootPath).catch(() => null) !== initial.head) throw new Error("The branch or HEAD changed during publication; inspect the repository before continuing");
+          await gitService.push(rootPath, { setUpstream: true, remote: remoteName, branch: initial.branch });
+        });
+        await assertPublishRemote();
+        if (projectId) await scope.step("project", () => projectsService.update(projectId, { remoteOrigin: htmlUrl, defaultBranch: initial.branch }));
+        return { url: htmlUrl, branch: initial.branch, owner, repo: name };
       });
-      htmlUrl = stdout.match(/https:\/\/github\.com\/[^\s]+/)?.[0] ?? htmlUrl;
-    } catch (error) {
-      const stderr = (error as any)?.stderr?.trim?.();
-      throw new Error(stderr || "Failed to create the GitHub repository.");
-    }
-
-    // Wire the remote with the chosen protocol, then push + set upstream.
-    const remoteUrl =
-      params.protocol === "ssh"
-        ? `git@github.com:${owner}/${name}.git`
-        : `https://github.com/${owner}/${name}.git`;
-
-    const branch = await gitService
-      .getCurrentBranch(rootPath)
-      .catch(() => "main");
-
-    await gitService.addRemote(rootPath, remoteName, remoteUrl);
-    await gitService.push(rootPath, {
-      setUpstream: true,
-      remote: remoteName,
-      branch,
     });
-
-    // Record the origin + default branch on the project so assertRemoteMatches
-    // and future push/PR flows treat this as a normal remote-backed repo.
-    if (projectId) {
-      await projectsService.update(projectId, {
-        remoteOrigin: htmlUrl,
-        defaultBranch: branch,
-      });
-    }
-
-    return { url: htmlUrl, branch, owner, repo: name };
   },
 
   /**
@@ -1026,80 +1005,98 @@ export const gitFlowService = {
    * not supplied. Deterministic replacement for the "Create a PR" chat goal.
    */
   async createPr(params: CreatePrPayload): Promise<CreatePrResult> {
-    let attachments: ReturnType<typeof prAttachmentStorage.claim> | undefined;
-    try {
+    return runGitOperation(params, "pr", async (scope) => {
       const { rootPath } = await this.resolveRoot(params.workspaceId);
-      if (params.attachmentIds !== undefined) {
-        attachments = prAttachmentStorage.claim(params.workspaceId, params.attachmentIds);
-        if (attachments.paths.length) await assertGhMediaSupport(rootPath);
-      }
+      await scope.bind(rootPath);
+      return scope.step("result", async () => {
+        let accepted = false;
+        let attachments: ReturnType<typeof prAttachmentStorage.claim> | undefined;
+        try {
+          if (params.attachmentIds !== undefined) {
+            attachments = prAttachmentStorage.claim(params.workspaceId, params.attachmentIds);
+            if (attachments.paths.length) await assertGhMediaSupport(rootPath);
+          }
 
-      let title = params.title?.trim() || "";
-      let body = params.body ?? "";
-      // gh rewrites Markdown destinations, including table cells; raw HTML is not scanned by gh.
-      if (/<[a-z][a-z0-9-]*\s[^>]*mains-pr-attachment:/i.test(body)) throw new Error("Use Markdown image or video links for local PR attachments.");
-      body = mapPrAttachmentUrls(body, (id) => {
-        const path = attachments?.references.get(id);
-        if (!path) throw new Error("A referenced PR attachment is missing. Add the file again or remove its reference.");
-        // Encoding spaces, parentheses and table separators keeps the destination intact.
-        return encodeURI(path).replace(/[()'!]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+          let title = params.title?.trim() || "";
+          let body = params.body ?? "";
+          // gh rewrites Markdown destinations, including table cells; raw HTML is not scanned by gh.
+          if (/<[a-z][a-z0-9-]*\s[^>]*mains-pr-attachment:/i.test(body)) throw new Error("Use Markdown image or video links for local PR attachments.");
+          body = mapPrAttachmentUrls(body, (id) => {
+            const path = attachments?.references.get(id);
+            if (!path) throw new Error("A referenced PR attachment is missing. Add the file again or remove its reference.");
+            // Encoding spaces, parentheses and table separators keeps the destination intact.
+            return encodeURI(path).replace(/[()'!]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+          });
+          if (!title) {
+            if (!params.providerId) {
+              throw new Error("Provide a PR title or a provider to generate one");
+            }
+            const gen = await this.generatePrBody({
+              workspaceId: params.workspaceId,
+              providerId: params.providerId,
+              model: params.model,
+              // Same base the PR will target — otherwise the generated summary
+              // describes a diff against a branch we aren't opening against.
+              base: params.base,
+            });
+            title = gen.title;
+            if (!body) body = gen.body;
+          }
+
+          // Verify the remote BEFORE pushing — otherwise a drifted origin would
+          // upload commits to the wrong repo before performCreatePR's check aborts.
+          await this.assertRemoteMatches(params.workspaceId, rootPath);
+          const context = await scope.step("context", async () => {
+            const head = await gitService.getCurrentBranch(rootPath);
+            if (!head || head === "HEAD") throw new Error("Cannot create a pull request from a detached HEAD");
+            const base = params.base?.trim() || (await this.resolveBaseBranch(params.workspaceId)) || undefined;
+            if (base === head) throw new Error(`Cannot create a pull request from "${head}" to itself`);
+            return { head, base, hash: await gitService.getHeadSha(rootPath), remotes: await gitService.getRemotes(rootPath) };
+          });
+          if (await gitService.getCurrentBranch(rootPath) !== context.head || await gitService.getHeadSha(rootPath) !== context.hash ||
+            JSON.stringify(await gitService.getRemotes(rootPath)) !== JSON.stringify(context.remotes)) {
+            throw new Error("The branch, HEAD or remote changed during this PR operation; inspect the repository before continuing");
+          }
+          const { head, base } = context;
+
+          // Branch must exist on the remote before `gh pr create`.
+          await scope.step("pushed", () => gitService.push(rootPath, { branch: head }));
+
+          const result = await scope.step("created", () => this.performCreatePR({
+            workspaceId: params.workspaceId,
+            rootPath,
+            title,
+            body,
+            base,
+            head,
+            draft: params.draft,
+            attachmentPaths: attachments?.paths,
+          }), params.operationId ? async () => {
+            // A lost CLI acknowledgement must not blindly create a second PR.
+            const args = ["pr", "list", "--head", head, "--state", "open", "--json", "url,headRefName,baseRefName"];
+            if (base) args.push("--base", base);
+            const { stdout } = await execFileAsync("gh", args, { cwd: rootPath, timeout: 30_000 });
+            const rows: unknown = JSON.parse(stdout);
+            if (!Array.isArray(rows)) throw new Error("Could not reconcile the previous PR attempt");
+            const matches = rows.filter((row) => row?.headRefName === head && (!base || row?.baseRefName === base) && typeof row?.url === "string" && createdPrUrl(row.url));
+            if (matches.length > 1) throw new Error("Multiple existing pull requests match this branch. Inspect them before continuing.");
+            if (!matches.length) return undefined;
+            return { url: matches[0].url as string, stdout, ...(attachments?.paths.length ? { warning: "Recovered the existing pull request. Check its attachments before retrying media uploads." } : {}) };
+          } : undefined);
+          accepted = true;
+          return { url: result.url, ...(result.warning ? { warning: result.warning } : {}) };
+        } catch (error) {
+          // `gh` failures carry the useful message on stderr; surface it.
+          const stderr = (error as any)?.stderr?.trim?.();
+          if (stderr) throw new Error(stderr);
+          throw error;
+        } finally { await attachments?.release({ retain: !!params.operationId && !accepted }).catch((error) => { console.error("[GitFlow] PR attachment cleanup pending:", error); }); }
       });
-      if (!title) {
-        if (!params.providerId) {
-          throw new Error("Provide a PR title or a provider to generate one");
-        }
-        const gen = await this.generatePrBody({
-          workspaceId: params.workspaceId,
-          providerId: params.providerId,
-          model: params.model,
-          // Same base the PR will target — otherwise the generated summary
-          // describes a diff against a branch we aren't opening against.
-          base: params.base,
-        });
-        title = gen.title;
-        if (!body) body = gen.body;
-      }
-
-      // Verify the remote BEFORE pushing — otherwise a drifted origin would
-      // upload commits to the wrong repo before performCreatePR's check aborts.
-      await this.assertRemoteMatches(params.workspaceId, rootPath);
-      const head = await gitService.getCurrentBranch(rootPath);
-      if (!head || head === "HEAD") {
-        throw new Error("Cannot create a pull request from a detached HEAD");
-      }
-
-      // Resolve the PR base: explicit > workspace base branch > project default.
-      const base =
-        params.base?.trim() ||
-        (await this.resolveBaseBranch(params.workspaceId)) ||
-        undefined;
-      if (base === head) {
-        throw new Error(`Cannot create a pull request from "${head}" to itself`);
-      }
-
-      // Branch must exist on the remote before `gh pr create`.
-      await gitService.push(rootPath, { branch: head });
-
-      const result = await this.performCreatePR({
-        workspaceId: params.workspaceId,
-        rootPath,
-        title,
-        body,
-        base,
-        head,
-        draft: params.draft,
-        attachmentPaths: attachments?.paths,
-      });
-      return { url: result.url, ...(result.warning ? { warning: result.warning } : {}) };
-    } catch (error) {
-      // `gh` failures carry the useful message on stderr; surface it.
-      const stderr = (error as any)?.stderr?.trim?.();
-      if (stderr) throw new Error(stderr);
-      throw error;
-    } finally { await attachments?.release().catch(() => undefined); }
+    });
   },
 
   async stagePrAttachment(payload: PrAttachmentChunk): Promise<{ uploadId: string }> {
+    assertGitOperationsOpen();
     const { rootPath } = await this.resolveRoot(payload.workspaceId);
     if (!payload.uploadId) await assertGhMediaSupport(rootPath);
     return prAttachmentStorage.write(payload);

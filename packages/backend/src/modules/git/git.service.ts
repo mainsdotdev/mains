@@ -182,7 +182,10 @@ async function readOriginUrl(git: SimpleGit): Promise<string | null> {
 export const gitService = {
   /** Current branch name. */
   async getCurrentBranch(rootPath: string): Promise<string> {
-    const branch = await getGit(rootPath).revparse(["--abbrev-ref", "HEAD"]);
+    const git = getGit(rootPath);
+    // symbolic-ref also works before the branch has its first commit.
+    const branch = await git.raw(["symbolic-ref", "--quiet", "--short", "HEAD"])
+      .catch(() => git.revparse(["--abbrev-ref", "HEAD"]));
     return branch.trim();
   },
 

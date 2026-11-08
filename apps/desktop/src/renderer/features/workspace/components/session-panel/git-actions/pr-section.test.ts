@@ -1,15 +1,22 @@
 // @vitest-environment jsdom
 
-import { createElement, useState } from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createElement, useEffect, useState, useSyncExternalStore } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PrSection } from "./pr-section";
-import type { GitActionsPanel, PendingAction } from "./use-git-actions-panel";
-import { resetTransport, setTransport, type Transport } from "@/lib/transport";
+import { createGitActionsLifecycle } from "./git-actions-lifecycle";
+import type { GitActionsPanel } from "./use-git-actions-panel";
+import { onTransportChange, resetTransport, setTransport, type Transport } from "@/lib/transport";
 import { CHANNELS } from "@mains/contracts/channels";
 import { toastStore } from "@/components/ui";
 
+function useActions() {
+  const [actions] = useState(createGitActionsLifecycle);
+  const pending = useSyncExternalStore(actions.subscribe, actions.snapshot);
+  useEffect(() => { actions.activate(); const off = onTransportChange(() => actions.retire()); return () => { off(); actions.retire(); }; }, [actions]);
+  return { pending, begin: actions.begin };
+}
 const mediaInvoke = vi.fn();
 const revokeUrl = vi.fn();
 
@@ -64,10 +71,10 @@ afterEach(() => {
 
 describe("pull request editor", () => {
   function MediaHarness({ onClose = () => undefined }: { onClose?: () => void }) {
-    const [pending, setPending] = useState<PendingAction>(null);
+    const { pending, begin } = useActions();
     return createElement(PrSection, {
       panel: { workspaceId: "workspace-1", status: { branch: "feature", baseBranch: "main" }, isDefaultBranch: false,
-        pending, setPending, busy: pending !== null, isSectionOpen: () => true, toggleSection: () => undefined } as unknown as GitActionsPanel,
+        pending, begin, busy: pending !== null, isSectionOpen: () => true, toggleSection: () => undefined } as unknown as GitActionsPanel,
       providerId: "codex", onClose, onEditorOpenChange: () => undefined, onEditorTransitionEnd: () => undefined,
     });
   }
@@ -202,6 +209,8 @@ describe("pull request editor", () => {
     await user.click(screen.getAllByRole("button", { name: "Create pull request" })[1]);
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     expect(mutations.createPr).toHaveBeenLastCalledWith(expect.objectContaining({ attachmentIds: ["upload-1"] }));
+    expect(mutations.createPr.mock.calls[0][0].operationId).toBe(mutations.createPr.mock.calls[1][0].operationId);
+    expect(mediaInvoke.mock.calls.filter(([channel]) => channel === CHANNELS.gitFlow.stagePrAttachment)).toHaveLength(1);
     expect(toastStore.toasts.some((toast) => toast.message.includes("Pull request created. A video"))).toBe(true);
   });
 
@@ -212,13 +221,13 @@ describe("pull request editor", () => {
 
     function Harness() {
       const [isOpen, setIsOpen] = useState(false);
-      const [pending, setPending] = useState<PendingAction>(null);
+      const { pending, begin } = useActions();
       const panel = {
         workspaceId: "workspace-1",
         status: { branch: "feature", baseBranch: "main" },
         isDefaultBranch: false,
         pending,
-        setPending,
+        begin,
         busy: pending !== null,
         isSectionOpen: (section: string) => section === "pr" && isOpen,
         toggleSection: () => setIsOpen((value) => !value),
@@ -263,6 +272,7 @@ describe("pull request editor", () => {
     await waitFor(() => expect(mutations.createPr).toHaveBeenCalledOnce());
     expect(mutations.createPr).toHaveBeenCalledWith({
       workspaceId: "workspace-1",
+      operationId: expect.any(String),
       title: "A title",
       body: "A description",
       base: "main",
@@ -293,7 +303,7 @@ describe("pull request editor", () => {
       status: { branch: "feature", baseBranch: "main" },
       isDefaultBranch: false,
       pending: null,
-      setPending: vi.fn(),
+      begin: createGitActionsLifecycle().begin,
       busy: false,
       isSectionOpen: () => true,
       toggleSection: vi.fn(),
@@ -330,7 +340,7 @@ describe("pull request editor", () => {
         status: { branch: "feature", baseBranch: "main" },
         isDefaultBranch: onDefaultBranch,
         pending: null,
-        setPending: vi.fn(),
+        begin: createGitActionsLifecycle().begin,
         busy: false,
         isSectionOpen: () => rowOpen,
         toggleSection: () => setRowOpen((value) => !value),
@@ -363,4 +373,29 @@ describe("pull request editor", () => {
     await user.click(screen.getByRole("button", { name: "Change branch status" }));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+  it("ignores a retired PR completion while the replacement view owns another submission", async () => {
+    let oldResolve!: (value: { url: string }) => void, newResolve!: (value: { url: string }) => void;
+    mutations.createPr
+      .mockReturnValueOnce({ unwrap: () => new Promise((resolve) => { oldResolve = resolve; }) })
+      .mockReturnValueOnce({ unwrap: () => new Promise((resolve) => { newResolve = resolve; }) });
+    const oldClose = vi.fn(), newClose = vi.fn();
+    const old = render(createElement(MediaHarness, { onClose: oldClose }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Create pull request" })[1]);
+    await waitFor(() => expect(mutations.createPr).toHaveBeenCalledTimes(1));
+    old.unmount();
+    render(createElement(MediaHarness, { onClose: newClose }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Pull request title" }), { target: { value: "New draft" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Create pull request" })[1]);
+    await waitFor(() => expect(mutations.createPr).toHaveBeenCalledTimes(2));
+    await act(async () => oldResolve({ url: "https://github.com/acme/repo/pull/old" }));
+    expect(oldClose).not.toHaveBeenCalled(); expect(newClose).not.toHaveBeenCalled();
+    expect(mutations.openPullRequest).not.toHaveBeenCalled();
+    expect((screen.getByRole("textbox", { name: "Pull request title" }) as HTMLInputElement).value).toBe("New draft");
+    fireEvent.click(screen.getAllByRole("button", { name: "Create pull request" })[1]);
+    expect(mutations.createPr).toHaveBeenCalledTimes(2);
+    await act(async () => newResolve({ url: "https://github.com/acme/repo/pull/new" }));
+    await waitFor(() => expect(newClose).toHaveBeenCalledOnce());
+    expect(mutations.openPullRequest).toHaveBeenCalledExactlyOnceWith("https://github.com/acme/repo/pull/new");
+  });
+
 });

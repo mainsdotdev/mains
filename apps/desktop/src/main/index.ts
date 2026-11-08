@@ -87,7 +87,7 @@ import {
   registerFileExplorerDialogIpc,
   unregisterFileExplorerDialogIpc,
 } from "./modules/fileExplorer/fileExplorer.dialog.ipc";
-import { registerGitFlowIpc, unregisterGitFlowIpc } from "@mains/backend/modules/gitFlow";
+import { registerGitFlowIpc, unregisterGitFlowIpc, shutdownGitFlow } from "@mains/backend/modules/gitFlow";
 import {
   registerTerminalIpc,
   unregisterTerminalIpc,
@@ -1255,7 +1255,7 @@ async function cleanupAppResources() {
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
     stopBridgeNotifications?.();
-    await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles()]);
+    await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow()]);
     await bridgeService.stop();
     await localBackendService.shutdown();
     // Stop `tailscale serve` if this process started it (no-op otherwise)

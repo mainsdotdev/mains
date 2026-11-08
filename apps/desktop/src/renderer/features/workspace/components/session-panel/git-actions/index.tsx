@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
+import { onTransportChange } from "@/lib/transport";
+import { useGetAppSettingsQuery } from "@/lib/redux/api";
 import { useAppSelector } from "@/lib/redux/hooks";
 import { ChangesSection } from "./changes-section";
 import { BranchSection } from "./branch-section";
@@ -47,10 +49,15 @@ export function GitActionsSection({
     (state) => state.workspace.activeWorkspaceId,
   );
 
+  const backendId = useAppSelector((state) => state.backends.activeBackendId);
+  const { data: settings } = useGetAppSettingsQuery();
+  const [transportKey, setTransportKey] = useState(0);
+  useLayoutEffect(() => onTransportChange(() => setTransportKey((version) => version + 1)), []);
   if (!activeWorkspaceId) return null;
 
   return (
     <GitActions
+      key={JSON.stringify([activeWorkspaceId, backendId, settings?.accountId, transportKey])}
       workspaceId={activeWorkspaceId}
       providerId={providerId}
       onClose={onClose}

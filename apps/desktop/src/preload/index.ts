@@ -1071,6 +1071,7 @@ const api = {
     /** Stage (+ optionally generate message) + commit, optionally pushing */
     commit: (payload: {
       workspaceId: string;
+      operationId?: string;
       message?: string;
       includeUnstaged?: boolean;
       providerId?: string;

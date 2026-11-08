@@ -21,7 +21,7 @@ export function PullSection({ panel }: { panel: GitActionsPanel }) {
     hasRemote,
     hasUpstream,
     pending,
-    setPending,
+    begin,
     busy,
     refreshStatus,
   } = panel;
@@ -29,11 +29,14 @@ export function PullSection({ panel }: { panel: GitActionsPanel }) {
   const [pullGitFlow] = usePullGitFlowMutation();
 
   const handlePull = useCallback(async () => {
-    if (pending) return;
-    setPending("pull");
+    const lease = begin("pull", "");
+    if (!lease) return;
+    let accepted = false;
     const toastId = toast.loading("Pulling…");
     try {
       const result = await pullGitFlow(workspaceId).unwrap();
+      accepted = true;
+      if (!lease.current()) return;
       toast.success(
         result.received === 0
           ? "Already up to date"
@@ -42,13 +45,15 @@ export function PullSection({ panel }: { panel: GitActionsPanel }) {
       );
       refreshStatus();
     } catch (err) {
+      if (!lease.current()) return;
       // A pull that can't fast-forward changed nothing, and git's own wording
       // ("Not possible to fast-forward") is what says so.
       toast.error(extractErrorMessage(err, "Pull failed"), { id: toastId });
     } finally {
-      setPending(null);
+      if (!lease.current()) toast.dismiss(toastId);
+      lease.finish(accepted);
     }
-  }, [workspaceId, pending, setPending, pullGitFlow, refreshStatus]);
+  }, [workspaceId, begin, pullGitFlow, refreshStatus]);
 
   return (
     <PanelItem

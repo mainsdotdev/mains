@@ -37,6 +37,9 @@ export function ChangesSection({ panel }: { panel: GitActionsPanel }) {
   const dispatch = useAppDispatch();
   const {
     workspaceId,
+    begin,
+    capture,
+    busy,
     additions,
     deletions,
     changedFilePaths,
@@ -96,9 +99,11 @@ export function ChangesSection({ panel }: { panel: GitActionsPanel }) {
   const handleOpenFileDiff = useCallback(
     async (filePath: string) => {
       if (openingDiff) return;
+      const current = capture();
       setOpeningDiff(filePath);
       try {
         const cached = await fetchLatestDiff(workspaceId, true).unwrap();
+        if (!current()) return;
         const segment = cached?.diffText
           ? parseFileDiffSegment(filePath, cached.diffText)
           : "";
@@ -108,7 +113,9 @@ export function ChangesSection({ panel }: { panel: GitActionsPanel }) {
         }
 
         await resyncWorkspaceDiff(workspaceId).unwrap();
+        if (!current()) return;
         const fresh = await fetchLatestDiff(workspaceId, false).unwrap();
+        if (!current()) return;
         const freshSegment = fresh?.diffText
           ? parseFileDiffSegment(filePath, fresh.diffText)
           : "";
@@ -121,11 +128,12 @@ export function ChangesSection({ panel }: { panel: GitActionsPanel }) {
       } finally {
         setOpeningDiff(null);
       }
-      openFileInEditor(filePath);
+      if (current()) openFileInEditor(filePath);
     },
     [
       workspaceId,
       openingDiff,
+      capture,
       fetchLatestDiff,
       resyncWorkspaceDiff,
       openDiffInEditor,
@@ -140,11 +148,16 @@ export function ChangesSection({ panel }: { panel: GitActionsPanel }) {
    */
   const handleDiscard = useCallback(
     async ({ key, files }: DiscardRequest) => {
-      if (discarding || files.length === 0) return;
+      if (busy || discarding || files.length === 0) return;
       const paths = files.map((f) => f.path);
+      const lease = begin("discard", JSON.stringify(paths));
+      if (!lease) return;
+      let accepted = false;
       setDiscarding(key);
       try {
         await discardWorkspacePaths({ workspaceId, paths }).unwrap();
+        accepted = true;
+        if (!lease.current()) return;
         toast.success(
           paths.length === 1
             ? `Reverted ${paths[0].split("/").pop()}`
@@ -152,13 +165,14 @@ export function ChangesSection({ panel }: { panel: GitActionsPanel }) {
         );
         refreshStatus();
       } catch (err) {
+        if (!lease.current()) return;
         toast.error(extractErrorMessage(err, "Failed to revert changes."));
       } finally {
-        setDiscarding(null);
-        setConfirmDiscard(null);
+        if (lease.current()) { setDiscarding(null); setConfirmDiscard(null); }
+        lease.finish(accepted);
       }
     },
-    [workspaceId, discarding, discardWorkspacePaths, refreshStatus],
+    [workspaceId, busy, discarding, begin, discardWorkspacePaths, refreshStatus],
   );
 
   return (

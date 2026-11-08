@@ -38,6 +38,7 @@ Thumbs.db
 !/docs/design/
 /docs/design/*
 !/docs/design/windows-x64-beta.md
+!/docs/design/git-actions-lifecycle.md
 
 # Coverage
 coverage/

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Branch, Maximize, Minimize, PullRequest } from "@/components/ui/icons";
 import {
@@ -53,7 +53,7 @@ export function PrSection({
     status,
     isDefaultBranch,
     pending,
-    setPending,
+    begin,
     busy,
     isSectionOpen,
     toggleSection,
@@ -71,8 +71,6 @@ export function PrSection({
   const media = usePrAttachments(workspaceId, discardMediaReferences);
   const descriptionSelection = useRef<PrEditorSelection>({ value: "", start: 0, end: 0 });
   const sendingRef = useRef(false);
-  const uploadAbortRef = useRef<AbortController | null>(null);
-  useEffect(() => () => uploadAbortRef.current?.abort(), [workspaceId]);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const expandButtonRef = useRef<HTMLButtonElement>(null);
   const viewTransitionRef = useRef<ViewTransition | null>(null);
@@ -138,38 +136,46 @@ export function PrSection({
   const [generatePrBody, { isLoading: generatingPr }] =
     useGeneratePrBodyGitFlowMutation();
 
+  const draftRef = useRef("");
+  useLayoutEffect(() => { draftRef.current = JSON.stringify([prTitle, prBody, base, headBranch]); }, [prTitle, prBody, base, headBranch]);
   /** Explicit generation for the PR form — fills title + body. */
   const handleGeneratePr = useCallback(() => {
     if (!providerId || generatingPr || busy || sendingRef.current) return;
+    const lease = begin("generatePr", JSON.stringify([base, providerId]));
+    if (!lease) return;
+    const draft = draftRef.current;
     // Against the chosen base, so the description matches the PR's own diff.
     generatePrBody({ workspaceId, providerId, base: base || undefined })
       .unwrap()
       .then((generated) => {
+        if (!lease.current() || draftRef.current !== draft) return;
         setPrTitle(generated.title);
         setPrBody(generated.body);
       })
-      .catch((err) =>
-        toast.error(extractErrorMessage(err, "Failed to generate the PR description.")),
-      );
-  }, [workspaceId, providerId, generatingPr, generatePrBody, base, busy]);
+      .catch((err) => { if (lease.current()) toast.error(extractErrorMessage(err, "Failed to generate the PR description.")); })
+      .finally(() => lease.finish(true));
+  }, [workspaceId, providerId, generatingPr, generatePrBody, base, busy, begin]);
 
   const handleCreatePr = useCallback(async () => {
     if (busy || generatingPr || sendingRef.current) return;
+    const lease = begin("pr", JSON.stringify([prTitle.trim(), prBody, base, prDraft, providerId, media.assets.map((asset) => asset.id)]));
+    if (!lease) return;
     sendingRef.current = true;
-    const controller = new AbortController();
-    uploadAbortRef.current = controller;
-    setPending("pr");
+    let accepted = false;
     const toastId = toast.loading("Creating pull request…");
     try {
       const result = await withPrAttachments(workspaceId, media.assets.map((asset) => asset.file), (attachmentIds) => createPrGitFlow({
         workspaceId,
+        operationId: lease.operationId,
         title: prTitle.trim() || undefined,
         body: stagePrMediaReferences(prBody, media.assets.map((asset) => asset.id), attachmentIds).trim() || undefined,
         base: base || undefined,
         draft: prDraft,
         providerId,
         ...(attachmentIds.length ? { attachmentIds } : {}),
-      }).unwrap(), (message) => toast.loading(message, { id: toastId }), controller.signal);
+      }).unwrap(), (message) => { if (lease.current()) toast.loading(message, { id: toastId }); }, lease.signal, lease.operationId);
+      accepted = true;
+      if (!lease.current()) return;
       if (result.warning) toast(`Pull request created. ${result.warning}`, { id: toastId, duration: 12_000 });
       else toast.success("Pull request created", { id: toastId });
       media.clear();
@@ -179,20 +185,21 @@ export function PrSection({
       onClose();
       if (result.url && !openPullRequest(result.url)) void window.api.shell.openExternal(result.url);
     } catch (err) {
+      if (!lease.current()) return;
       toast.error(extractErrorMessage(err, "Failed to create PR"), {
         id: toastId,
       });
     } finally {
       sendingRef.current = false;
-      uploadAbortRef.current = null;
-      setPending(null);
+      if (!lease.current()) toast.dismiss(toastId);
+      lease.finish(accepted);
     }
   }, [
     workspaceId,
     busy,
     generatingPr,
     media,
-    setPending,
+    begin,
     createPrGitFlow,
     prTitle,
     prBody,
