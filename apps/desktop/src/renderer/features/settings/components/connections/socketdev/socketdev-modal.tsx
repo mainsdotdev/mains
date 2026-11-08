@@ -93,8 +93,8 @@ const CONFIG: ResourceWizardConfig = {
 export default function SocketDevModal(props: SocketDevModalProps) {
   const [getOrgs] = useLazyGetSocketDevOrganizationsQuery();
   const fetchAllResources = useCallback(
-    async (connectionId: string) => {
-      return getOrgs(connectionId).unwrap();
+    async (connectionId: string, scope?: string) => {
+      return getOrgs(scope ? { id: connectionId, scope } : connectionId).unwrap();
     },
     [getOrgs],
   );

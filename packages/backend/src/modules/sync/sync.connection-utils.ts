@@ -52,7 +52,7 @@ export async function getSelectedResources(
     }));
   } catch (error) {
     console.error("Error getting selected resources:", error);
-    return [];
+    throw error;
   }
 }
 
@@ -127,4 +127,11 @@ export function safeJsonParse<T = unknown>(json: string | null, fallback: T = {}
   } catch {
     return fallback;
   }
+}
+
+/** Selection itself is part of a fetch's scope, including direct Bridge writes. */
+export function captureResourceSelection(connectionId: string, kind: string): () => boolean {
+  const snapshot = () => JSON.stringify(getDb().select().from(connectionResources).where(and(eq(connectionResources.connectionId, connectionId), eq(connectionResources.kind, kind), eq(connectionResources.selected, true))).all());
+  const initial = snapshot();
+  return () => snapshot() === initial;
 }

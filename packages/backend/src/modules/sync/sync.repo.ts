@@ -198,6 +198,23 @@ export const syncRepo = {
     return stats;
   },
 
+  /** Records, subtype rows and cursor are one recoverable checkpoint. */
+  commitBatch(fetcherId: string, items: EntityInput[], cursors: SyncCursor[]): SyncJobStats {
+    let stats: SyncJobStats = { inserted: 0, updated: 0, skipped: 0, errors: 0 };
+    const failed = new Error("Sync batch rolled back");
+    try {
+      getDb().transaction(() => {
+        stats = this.upsertEntities(items);
+        if (stats.errors) throw failed;
+        this.saveCursors(fetcherId, cursors);
+      });
+      return stats;
+    } catch (error) {
+      if (error !== failed) throw error;
+      return { inserted: 0, updated: 0, skipped: items.length - stats.errors, errors: stats.errors };
+    }
+  },
+
   upsertEntitySync(
     item: EntityInput,
     accountId: string = DEFAULT_ACCOUNT_ID

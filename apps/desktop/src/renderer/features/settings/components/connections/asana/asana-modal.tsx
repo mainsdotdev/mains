@@ -94,8 +94,8 @@ const CONFIG: ResourceWizardConfig = {
 export default function AsanaModal(props: AsanaModalProps) {
   const [getProjects] = useLazyGetAsanaProjectsQuery();
   const fetchAllResources = useCallback(
-    async (connectionId: string) => {
-      return getProjects(connectionId).unwrap();
+    async (connectionId: string, scope?: string) => {
+      return getProjects(scope ? { id: connectionId, scope } : connectionId).unwrap();
     },
     [getProjects],
   );

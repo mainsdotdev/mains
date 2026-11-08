@@ -90,8 +90,8 @@ const CONFIG: ResourceWizardConfig = {
 export default function LinearModal(props: LinearModalProps) {
   const [getTeams] = useLazyGetLinearTeamsQuery();
   const fetchAllResources = useCallback(
-    async (connectionId: string) => {
-      return getTeams(connectionId).unwrap();
+    async (connectionId: string, scope?: string) => {
+      return getTeams(scope ? { id: connectionId, scope } : connectionId).unwrap();
     },
     [getTeams],
   );

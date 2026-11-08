@@ -1,3 +1,4 @@
+import type { ExpectedConnectionRevision, SavedConnectionCredentials } from "@mains/contracts/connection-lifecycle";
 // ─────────────────────────────────────────────────────────────
 // Resource Types
 // ─────────────────────────────────────────────────────────────
@@ -135,7 +136,7 @@ export interface UpdateConnectionStateRequest {
 // ─────────────────────────────────────────────────────────────
 // Credential Types
 // ─────────────────────────────────────────────────────────────
-export interface SaveCredentialsPayload {
+export interface SaveCredentialsPayload extends ExpectedConnectionRevision {
   provider: string;
   connectionId: string;
   // Provider-specific fields
@@ -159,14 +160,12 @@ export interface CredentialsCheckResult {
   connectionId: string;
 }
 
-export interface SaveCredentialsResult {
-  message: string;
-}
+export type SaveCredentialsResult = SavedConnectionCredentials;
 
 // ─────────────────────────────────────────────────────────────
 // Payload Types
 // ─────────────────────────────────────────────────────────────
-export interface SaveResourcesPayload {
+export interface SaveResourcesPayload extends ExpectedConnectionRevision {
   provider: string;
   connectionId: string;
   resources?: unknown[];

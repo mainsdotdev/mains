@@ -15,13 +15,14 @@ import {
   registerBackendIpc,
   unregisterBackendIpc,
 } from "./modules/backend";
-import { registerSyncIpc, unregisterSyncIpc } from "./modules/sync";
+import { registerSyncIpc, unregisterSyncIpc, shutdownSourceSync } from "./modules/sync";
 import {
   registerEntitiesHandlers,
   unregisterEntitiesHandlers,
 } from "./modules/entities";
 import {
   registerConnectionsHandlers,
+  shutdownConnections,
   unregisterConnectionsHandlers,
 } from "./modules/connections";
 import { registerSpaceIpc, unregisterSpaceIpc } from "./modules/space";
@@ -199,7 +200,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
     scope.defer(closeDatabase);
     await initializeDatabase({ verbose: false, enableWAL: true, busyTimeout: 5000 });
     scope.assertActive();
-    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs()]); });
+    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync()]); });
     scope.defer(async () => {
       runSessionRegistry.shutdownAll("Standalone server stopped during run");
       destroyAllTerminals();
@@ -238,7 +239,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
       commandReceipts: backendService.commandReceipts,
     });
     scope.defer(() => wsHost.close());
-    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs()]); });
+    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync()]); });
     scope.assertActive();
     scope.defer(async () => { await Promise.all([automationsService.stop(), pulseService.stop()]); });
     automationsService.start();

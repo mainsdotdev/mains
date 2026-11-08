@@ -40,6 +40,7 @@ Thumbs.db
 !/docs/design/windows-x64-beta.md
 !/docs/design/git-actions-lifecycle.md
 !/docs/design/workspace-edit-lifecycle.md
+!/docs/design/connection-sync-lifecycle.md
 
 # Coverage
 coverage/

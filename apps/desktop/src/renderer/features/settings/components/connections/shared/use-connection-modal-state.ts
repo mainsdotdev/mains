@@ -1,16 +1,12 @@
-import { useState, useReducer, useEffect, useCallback, useRef } from "react";
+import { useState, useReducer, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import { useLazyGetConnectionQuery, useRevokeConnectionMutation } from "@/lib/redux/api";
 import { toast } from "@/components/ui";
 import { withMinDelay } from "@/lib/with-min-delay";
+import { onTransportChange } from "@/lib/transport";
+import type { ConnectionWizardLifecycle } from "../../../lib/connection-wizard-lifecycle";
 
 type StepId = "loading" | "setToken" | "add" | "manage";
-
-interface InitState<TData> {
-  initializing: boolean;
-  targetStep: StepId | null;
-  data: Partial<TData>;
-}
-
+interface InitState<TData> { initializing: boolean; targetStep: StepId | null; data: Partial<TData> }
 export interface UseConnectionModalStateOptions<TData> {
   open: boolean;
   onClose: () => void;
@@ -18,105 +14,66 @@ export interface UseConnectionModalStateOptions<TData> {
   provider: string;
   appName: string;
   baseData: Partial<TData>;
-  /**
-   * Fetch the already-selected resources for this provider.
-   * Return a partial data object to merge into wizard data, or null to fall
-   * back to fetching just the connectionId via getConnection().
-   */
   fetchSelected: () => Promise<Partial<TData> | null>;
+  owner: ConnectionWizardLifecycle;
 }
 
-export function useConnectionModalState<TData>({
-  open,
-  onClose,
-  isConnected,
-  provider,
-  appName,
-  baseData,
-  fetchSelected,
-}: UseConnectionModalStateOptions<TData>) {
+export function useConnectionModalState<TData>({ open, onClose, isConnected, provider, appName, baseData, fetchSelected, owner }: UseConnectionModalStateOptions<TData>) {
   const [showRevokeConfirm, setShowRevokeConfirm] = useState(false);
   const [initState, setInitState] = useReducer(
     (_: InitState<TData>, next: InitState<TData>) => next,
     { initializing: true, targetStep: null, data: {} },
   );
-
   const [getConnection] = useLazyGetConnectionQuery();
   const [revokeConnection, { isLoading: isRevoking }] = useRevokeConnectionMutation();
-
-  // Use refs so the effect only re-runs when open/isConnected/provider changes,
-  // not when the inline callback identity changes on every render ("latest ref" pattern).
-  const fetchSelectedRef = useRef(fetchSelected);
-  fetchSelectedRef.current = fetchSelected; // eslint-disable-line react-hooks/refs
-  const baseDataRef = useRef(baseData);
-  baseDataRef.current = baseData; // eslint-disable-line react-hooks/refs
+  const options = useRef({ baseData, fetchSelected, isConnected });
+  useLayoutEffect(() => { options.current = { baseData, fetchSelected, isConnected }; });
+  useLayoutEffect(() => {
+    if (open) owner.attach();
+    const off = onTransportChange(() => owner.retire());
+    return () => { off(); owner.detach(); };
+  }, [owner, open, provider]);
 
   useEffect(() => {
-    if (!open) {
-      setInitState({ initializing: true, targetStep: null, data: {} });
-      return;
-    }
-
+    if (!open) return;
+    const lease = owner.begin("initialize");
+    if (!lease) return;
+    const captured = options.current;
     const load = async () => {
-      let finalStep: StepId = "setToken";
-      let finalData: Partial<TData> = baseDataRef.current;
-
-      if (isConnected) {
-        try {
-          await withMinDelay(
-            (async () => {
-              const selectedData = await fetchSelectedRef.current();
-
-              if (selectedData) {
-                finalData = { ...baseDataRef.current, ...selectedData };
-                finalStep = "manage";
-              } else {
-                const connection = await getConnection(provider).unwrap();
-                finalData = { ...baseDataRef.current, connectionId: connection.id };
-                finalStep = "manage";
-              }
-            })(),
-            600,
-          );
-        } catch (err) {
-          console.error(`[${provider}:loadInitialData]`, err);
-          try {
-            const connection = await getConnection(provider).unwrap();
-            finalData = { ...baseDataRef.current, connectionId: connection.id };
-            finalStep = "manage";
-          } catch { /* keep defaults */ }
+      let data = { ...captured.baseData }, targetStep: StepId = "setToken";
+      try {
+        const connection = await getConnection({ id: provider, scope: owner.scope }).unwrap();
+        lease.assertCurrent();
+        data = { ...data, connectionId: connection.id, revision: connection.revision };
+        if (captured.isConnected && connection.status === "active") {
+          const selected = await withMinDelay(captured.fetchSelected(), 600);
+          lease.assertCurrent();
+          data = { ...data, ...selected }; targetStep = "manage";
         }
+      } catch (error) {
+        if (!lease.current()) return;
+        data = { ...data, errorMessage: error instanceof Error ? error.message : "Could not load this connection. Please retry." };
+      } finally {
+        if (lease.move(targetStep)) setInitState({ initializing: false, targetStep, data });
+        lease.finish();
       }
-
-      setInitState({ initializing: false, targetStep: finalStep, data: finalData });
     };
-
-    load();
-  }, [open, isConnected, provider, getConnection]);
+    void load();
+    return () => lease.finish();
+  }, [open, provider, getConnection, owner]);
 
   const handleClose = useCallback(() => {
-    setShowRevokeConfirm(false);
-    onClose();
-  }, [onClose]);
-
+    owner.retire(); setShowRevokeConfirm(false); onClose();
+  }, [owner, onClose]);
   const handleRevoke = useCallback(async () => {
+    const lease = owner.begin("revoke");
+    if (!lease) return;
     try {
       await revokeConnection(provider).unwrap();
-      setShowRevokeConfirm(false);
-      handleClose();
-    } catch (err) {
-      console.error(`[${provider}:handleRevoke]`, err);
-      setShowRevokeConfirm(false);
-      toast.error(`Failed to revoke ${appName} access`);
-    }
-  }, [revokeConnection, provider, appName, handleClose]);
-
-  return {
-    initState,
-    showRevokeConfirm,
-    setShowRevokeConfirm,
-    handleClose,
-    handleRevoke,
-    isRevoking,
-  };
+      if (lease.current()) handleClose();
+    } catch {
+      if (lease.current()) { setShowRevokeConfirm(false); toast.error(`Failed to revoke ${appName} access`); }
+    } finally { lease.finish(); }
+  }, [owner, revokeConnection, provider, appName, handleClose]);
+  return { initState, showRevokeConfirm, setShowRevokeConfirm, handleClose, handleRevoke, isRevoking };
 }

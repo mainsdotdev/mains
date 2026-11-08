@@ -100,8 +100,8 @@ const CONFIG: ResourceWizardConfig = {
 export default function GitHubModal(props: GitHubModalProps) {
   const [getRepos] = useLazyGetGitHubReposQuery();
   const fetchAllResources = useCallback(
-    async (connectionId: string) => {
-      return getRepos(connectionId).unwrap();
+    async (connectionId: string, scope?: string) => {
+      return getRepos(scope ? { id: connectionId, scope } : connectionId).unwrap();
     },
     [getRepos],
   );

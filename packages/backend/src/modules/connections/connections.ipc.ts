@@ -1,3 +1,4 @@
+import { openConnectionLifecycle } from "./connection-lifecycle";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { connectionsService } from "./connections.service";
@@ -11,6 +12,7 @@ import { CHANNELS } from "@mains/contracts/channels";
 // Register Handlers
 // ─────────────────────────────────────────────────────────────
 export function registerConnectionsHandlers(): void {
+  openConnectionLifecycle();
   ipcMain.handle(
     CHANNELS.connections.listStates,
     handle(() => connectionsService.listStates()),

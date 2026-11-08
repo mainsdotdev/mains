@@ -39,13 +39,14 @@ import { DatabaseOwnershipError } from "@mains/backend/db/database-ownership";
 import { registerBrowserWindowSink } from "./ipc-kit/browser-window-sink";
 import { startBackendServer } from "@mains/backend/serve";
 import { registerAccountIpc, unregisterAccountIpc } from "@mains/backend/modules/account";
-import { registerSyncIpc, unregisterSyncIpc } from "@mains/backend/modules/sync";
+import { registerSyncIpc, unregisterSyncIpc, shutdownSourceSync } from "@mains/backend/modules/sync";
 import {
   registerEntitiesHandlers,
   unregisterEntitiesHandlers,
 } from "@mains/backend/modules/entities";
 import {
   registerConnectionsHandlers,
+  shutdownConnections,
   unregisterConnectionsHandlers,
 } from "@mains/backend/modules/connections";
 import { registerSpaceIpc, unregisterSpaceIpc } from "@mains/backend/modules/space";
@@ -1257,7 +1258,7 @@ async function cleanupAppResources() {
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
     stopBridgeNotifications?.();
-    await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs()]);
+    await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync()]);
     await bridgeService.stop();
     await localBackendService.shutdown();
     // Stop `tailscale serve` if this process started it (no-op otherwise)
