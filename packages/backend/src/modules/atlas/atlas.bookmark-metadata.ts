@@ -14,11 +14,13 @@ export function bookmarkUrl(value: unknown) {
 }
 
 /** Bounded, unauthenticated fetching. Every redirect is checked before fetching. */
-export async function fetchBookmarkResource(initial: string, image = false) {
-  const signal = AbortSignal.timeout(12000);
+export async function fetchBookmarkResource(initial: string, image = false, owner?: AbortSignal) {
+  const timeout = AbortSignal.timeout(12000);
+  const signal = owner ? AbortSignal.any([owner, timeout]) : timeout;
   let url = initial;
   const limit = image ? 5 * 1024 * 1024 : 2 * 1024 * 1024;
   for (let hop = 0; hop <= 5; hop++) {
+    signal.throwIfAborted();
     await assertPublicHttpUrl(url);
     signal.throwIfAborted();
     const response = await fetch(url, { signal, redirect: "manual", credentials: "omit",
@@ -43,7 +45,9 @@ export async function fetchBookmarkResource(initial: string, image = false) {
     let size = 0;
     try {
       while (true) {
+        signal.throwIfAborted();
         const { done, value } = await reader.read();
+        signal.throwIfAborted();
         if (done) break;
         size += value.length;
         if (size > limit) throw new Error("Page or image exceeds the download limit");

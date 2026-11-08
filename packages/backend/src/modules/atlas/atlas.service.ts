@@ -607,9 +607,11 @@ export const atlasService = {
     if (input.trashed !== undefined) {
       if (typeof input.trashed !== "boolean") throw new Error("Invalid Trash state");
       fields.trashedAt = input.trashed ? new Date() : null;
+      if (item.kind === "bookmark" && input.trashed) fields.bookmarkJob = atlasBookmarks.retire(owned(input));
     }
     atlasRepo.update(item.id, item.accountId, fields, metadata);
     emit(CHANNELS.atlas.changed, {});
+    if (item.kind === "bookmark" && input.trashed === false) atlasBookmarks.kick();
     return format(owned(input));
   },
   /** Use a bundled cover: its image is saved once per account and shared by every Page that picks it. */
@@ -625,7 +627,7 @@ export const atlasService = {
     // Deletion checks current covers and revision references in one transaction.
     atlasRepo.remove(item.id, item.accountId);
     emit(CHANNELS.atlas.changed, {});
-    if (item.storageKey) await removeFiles(item.id);
+    if (item.storageKey || item.kind === "bookmark") await removeFiles(item.id);
   },
   async isStoredFile(realPath: string) {
     if (!path.isAbsolute(realPath)) return false;

@@ -37,6 +37,8 @@ export function registerAtlasIpc() {
   atlasBookmarks.start();
 }
 export function unregisterAtlasIpc() {
-  atlasBookmarks.stop();
+  const closing = shutdownAtlasBookmarks();
   Object.values(CHANNELS.atlas).forEach((channel) => ipcMain.removeHandler(channel));
+  return closing;
 }
+export function shutdownAtlasBookmarks() { return atlasBookmarks.stop(); }

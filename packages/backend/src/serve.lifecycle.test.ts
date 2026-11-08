@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import DatabaseClient from "./db/client";
 import { databaseOwnershipPath } from "./db/database-ownership";
 import { configureIpcMainAdapter } from "./ipc-kit/ipc-main";
@@ -10,6 +10,8 @@ import { installTestBackendRuntime } from "../test/backend-runtime";
 import { startBackendServer, type BackendServer, type ServeOptions } from "./serve";
 import { withWorkspaceIntake } from "./modules/workspace/workspace-intake-lifecycle";
 import { recordKey, transitionRecord } from "./runtime/record-lifecycle";
+import { atlasService } from "./modules/atlas";
+import { atlasBookmarks } from "./modules/atlas/atlas.bookmarks";
 
 let directory: string, restoreRuntime: () => void, restoreIpc: () => void;
 let server: BackendServer | undefined, retry: (() => Promise<void>) | undefined;
@@ -31,6 +33,28 @@ afterEach(async () => {
 });
 
 describe("backend host acquisition and shutdown", () => {
+  it("drains Atlas preparations before closing SQLite and prevents a late bookmark write", async () => {
+    server = await start();
+    const gate = deferred(), entered = deferred();
+    const preferences = vi.spyOn(atlasBookmarks, "preferences").mockImplementationOnce(async () => {
+      entered.resolve(); await gate.promise; return { enabled: false, providerId: "", model: "" };
+    });
+    const saving = atlasService.saveBookmark({ accountId: "default", url: "https://example.com" });
+    const outcome = saving.then(() => "saved", (error: Error) => error.message);
+    await entered.promise;
+    let closed = false;
+    const closing = server.close().then(() => { closed = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      expect(DatabaseClient.getInstance().isReady()).toBe(true);
+      expect(fs.existsSync(databaseOwnershipPath(path.join(directory, "mains.db")))).toBe(true);
+    } finally { gate.resolve(); await outcome; await closing; preferences.mockRestore(); }
+    expect(await outcome).toContain("stopping");
+    expect(DatabaseClient.getInstance().isReady()).toBe(false);
+    server = await start();
+    expect(atlasService.list({ accountId: "default", kind: "bookmark" })).toEqual([]);
+  });
   it("drains accepted record side effects and their child cleanup before releasing SQLite", async () => {
     server = await start(); const gate = deferred(); let childFinished = false;
     await transitionRecord(recordKey("workspace", "retiring"), "archive", async ({ hold }) => {

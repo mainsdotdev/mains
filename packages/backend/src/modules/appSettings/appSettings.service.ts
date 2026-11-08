@@ -2,6 +2,7 @@ import { ACCOUNT_ID, SETTINGS_ID } from "./appSettings.constants";
 import { appSettingsRepo } from "./appSettings.repo";
 import { sanitizeAppSettingsPatch } from "./appSettings.validation";
 import type { AppSettingsRecord } from "./appSettings.dto";
+import type { AtlasAutoTagging } from "@mains/contracts/atlas";
 
 // ─────────────────────────────────────────────────────────────
 // Service - Business Logic
@@ -81,6 +82,14 @@ export const appSettingsService = {
       keyboardShortcutOverrides,
     });
     if (!updated) throw new Error("Failed to update keyboard shortcuts");
+    return updated;
+  },
+
+  /** Atlas owns consent revisions, model validation and ordered policy writes. */
+  async updateAtlasAutoTagging(config: AtlasAutoTagging): Promise<AppSettingsRecord> {
+    await this.ensureSettings();
+    const updated = await appSettingsRepo.update(SETTINGS_ID, { atlasAutoTagging: JSON.stringify(config) });
+    if (!updated) throw new Error("Failed to update automatic tagging settings");
     return updated;
   },
 

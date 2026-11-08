@@ -73,7 +73,7 @@ import {
   registerWorkspaceDialogIpc,
   unregisterWorkspaceDialogIpc,
 } from "./modules/workspace/workspace.dialog.ipc";
-import { registerAtlasIpc, unregisterAtlasIpc } from "@mains/backend/modules/atlas";
+import { registerAtlasIpc, unregisterAtlasIpc, shutdownAtlasBookmarks } from "@mains/backend/modules/atlas";
 import { registerRunsIpc, unregisterRunsIpc, configureRunNotificationSink, startAttachmentMaintenance, stopAttachmentMaintenance } from "@mains/backend/modules/runs";
 import { createElectronRunNotificationSink } from "./modules/runs/run-notifications";
 import { runSessionRegistry } from "@mains/backend/modules/runs";
@@ -1245,7 +1245,7 @@ function cleanupApp(): Promise<void> { return appLifecycle.close(); }
 async function cleanupAppResources() {
   try {
     console.log("Cleaning up application...");
-    await Promise.all([automationsService.stop(), pulseService.stop(), sshService.closeAllTunnels()]);
+    await Promise.all([automationsService.stop(), pulseService.stop(), sshService.closeAllTunnels(), shutdownAtlasBookmarks()]);
 
     // Destroy tray and the Dock menu's status feed
     hideTray();
@@ -1282,7 +1282,7 @@ async function cleanupAppResources() {
     unregisterWorkspaceDialogIpc();
     unregisterProjectsIpc();
     unregisterCollectionsIpc();
-    unregisterAtlasIpc();
+    await unregisterAtlasIpc();
     await stopAttachmentMaintenance();
     unregisterRunsIpc();
     unregisterFileExplorerIpc();

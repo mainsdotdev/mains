@@ -48,7 +48,7 @@ import {
   registerCollectionsIpc,
   unregisterCollectionsIpc,
 } from "./modules/collections";
-import { registerAtlasIpc, unregisterAtlasIpc } from "./modules/atlas";
+import { registerAtlasIpc, unregisterAtlasIpc, shutdownAtlasBookmarks } from "./modules/atlas";
 import { registerRunsIpc, unregisterRunsIpc, startAttachmentMaintenance, stopAttachmentMaintenance } from "./modules/runs";
 import { runSessionRegistry } from "./modules/runs/run-session-registry";
 import {
@@ -137,7 +137,7 @@ const DEFAULT_HOST = "127.0.0.1";
 
 interface BackendRegistration {
   register(): void;
-  unregister(): void;
+  unregister(): void | Promise<void>;
 }
 
 const BACKEND_REGISTRATIONS: readonly BackendRegistration[] = [
@@ -201,7 +201,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
     scope.defer(closeDatabase);
     await initializeDatabase({ verbose: false, enableWAL: true, busyTimeout: 5000 });
     scope.assertActive();
-    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync(), shutdownUserDecisions()]); });
+    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync(), shutdownUserDecisions(), shutdownAtlasBookmarks()]); });
     scope.defer(async () => {
       runSessionRegistry.shutdownAll("Standalone server stopped during run");
       destroyAllTerminals();
@@ -240,7 +240,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
       commandReceipts: backendService.commandReceipts,
     });
     scope.defer(() => wsHost.close());
-    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync(), shutdownUserDecisions()]); });
+    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync(), shutdownUserDecisions(), shutdownAtlasBookmarks()]); });
     scope.assertActive();
     scope.defer(async () => { await Promise.all([automationsService.stop(), pulseService.stop()]); });
     automationsService.start();

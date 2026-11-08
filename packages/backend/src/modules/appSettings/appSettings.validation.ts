@@ -15,7 +15,6 @@ const MUTABLE_FIELDS = new Set<keyof AppSettingsPatch>([
   "showMenuBarIcon",
   "commitInstructions",
   "prInstructions",
-  "atlasAutoTagging",
 ]);
 
 export function sanitizeAppSettingsPatch(
@@ -25,14 +24,6 @@ export function sanitizeAppSettingsPatch(
   const out: AppSettingsPatch = {};
   for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
     if (MUTABLE_FIELDS.has(key as keyof AppSettingsPatch)) {
-      if (key === "atlasAutoTagging") {
-        if (typeof value !== "string" || value.length > 2048) throw new Error("Invalid automatic tagging settings");
-        const config = JSON.parse(value);
-        if (!config || typeof config.enabled !== "boolean" || typeof config.providerId !== "string"
-          || typeof config.model !== "string" || config.providerId.length > 128 || config.model.length > 256
-          || (config.enabled && (!config.providerId.trim() || !config.model.trim())))
-          throw new Error("Choose a provider and model for automatic tagging");
-      }
       (out as Record<string, unknown>)[key] = value;
     }
   }

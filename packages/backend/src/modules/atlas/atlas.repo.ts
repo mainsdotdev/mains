@@ -10,6 +10,19 @@ export type AtlasRecord = typeof atlasItems.$inferSelect;
 export type RevisionRecord = typeof atlasPageRevisions.$inferSelect;
 
 export const atlasRepo = {
+  saveBookmark(id: string, accountId: string, fields: Partial<AtlasRecord> & { title: string }, tags?: string[]) {
+    getDb().transaction(() => {
+      if (atlasRepo.find(id, accountId)) atlasRepo.update(id, accountId, fields);
+      else atlasRepo.insert({ id, accountId, kind: "bookmark", ...fields });
+      if (tags) atlasRepo.setTags(id, accountId, tags, "user");
+    });
+  },
+  classifyBookmark(id: string, accountId: string, tags: string[], metadata: string, bookmarkJob: string) {
+    getDb().transaction(() => {
+      atlasRepo.setTags(id, accountId, tags, "ai");
+      atlasRepo.update(id, accountId, { metadata, bookmarkJob });
+    });
+  },
   itemTags(ids: string[], accountId: string): Map<string, AtlasItemTag[]> {
     const result = new Map<string, AtlasItemTag[]>();
     if (!ids.length) return result;
@@ -83,10 +96,12 @@ export const atlasRepo = {
     return !!getDb().select().from(atlasItemTags).where(and(eq(atlasItemTags.itemId, itemId),
       eq(atlasItemTags.tagId, tagId), eq(atlasItemTags.isExcluded, false))).get();
   },
-  pendingBookmarks() {
+  pendingBookmarks(offset = 0) {
     return getDb().select().from(atlasItems).where(and(eq(atlasItems.kind, "bookmark"), isNull(atlasItems.trashedAt),
-      sql`json_extract(${atlasItems.bookmarkJob}, '$.status') IN ('pending','running')`))
-      .orderBy(atlasItems.updatedAt).limit(50).all();
+      sql`CASE WHEN json_valid(${atlasItems.bookmarkJob}) THEN
+        json_extract(${atlasItems.bookmarkJob}, '$.status') IN ('pending','running')
+        AND json_extract(${atlasItems.bookmarkJob}, '$.nextAt') <= ${Date.now()} ELSE 0 END`))
+      .orderBy(atlasItems.updatedAt, atlasItems.id).limit(50).offset(offset).all();
   },
   list({ accountId, includePagePreview = false, kind, ids, trashed, collectionId,
     isFavorite, offset, limit }: AtlasListOptions) {
