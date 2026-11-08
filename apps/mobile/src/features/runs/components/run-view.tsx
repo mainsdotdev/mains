@@ -667,7 +667,7 @@ export function RunView({
           ) : null}
           {waiting.map((approval) => (
             <PendingApprovalCard
-              key={approval.requestId}
+              key={`${approval.requestId}:${approval.approvalToken ?? ""}`}
               approval={approval}
               now={now}
               providerId={providerId}
@@ -676,6 +676,7 @@ export function RunView({
                   approval.requestId,
                   approved,
                   answer,
+                  { backendId: approval.backendId, approvalToken: approval.approvalToken },
                 );
                 if (!result.success) throw new Error(result.error);
               }}
@@ -688,7 +689,7 @@ export function RunView({
           */}
           {questions && waiting.length === 0 && !isReplica && !history.end ? (
             <AsyncQuestionCard
-              key={questions.artifactId}
+              key={`${backendId}:${runId}:${questions.artifactId}`}
               runId={runId}
               providerId={providerId}
               pending={questions}

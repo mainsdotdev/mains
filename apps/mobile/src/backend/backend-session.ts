@@ -1,3 +1,4 @@
+import { createDecisionOwner } from "@mains/contracts/decision-owner";
 import * as Network from "expo-network";
 import { useSyncExternalStore } from "react";
 import { AppState } from "react-native";
@@ -461,18 +462,35 @@ class BackendSession {
     }
   }
 
+  /** Retain backend identity across recovery; a backend switch retires it permanently. */
+  captureDecisionOwner() {
+    const backendId = this.snapshot.backend?.backendId;
+    const owner = createDecisionOwner(() => !!backendId && this.snapshot.backend?.backendId === backendId);
+    let off: (() => void) | undefined;
+    return { ...owner,
+      attach: () => {
+        owner.attach(); off?.();
+        off = this.subscribe(() => { if (this.snapshot.backend?.backendId !== backendId) owner.retire(); });
+      },
+      detach: () => { off?.(); off = undefined; owner.detach(); },
+    };
+  }
+
   /** Answer an agent's request. The row leaves the projection as soon as the Mac confirms. */
   async respondToApproval(
     requestId: string,
     approved: boolean,
     answer?: string,
+    binding?: { backendId: string; approvalToken?: string | null },
   ): Promise<ServiceResponse<void>> {
+    const backendId = this.snapshot.backend?.backendId;
+    if (binding && binding.backendId !== backendId) return { success: false, error: "The approval backend changed. Reopen the conversation." };
     const body: ToolApprovalResponse = answer === undefined
       ? { requestId, approved }
       : { requestId, approved, answer };
+    if (binding?.approvalToken) body.approvalToken = binding.approvalToken;
     const result = await this.command<void>(CHANNELS.runs.toolApprovalResponse, [body]);
-    const backendId = this.snapshot.backend?.backendId;
-    if (result.success && backendId) deletePendingApproval(backendId, requestId);
+    if (result.success && backendId) deletePendingApproval(backendId, requestId, binding?.approvalToken);
     return result;
   }
 

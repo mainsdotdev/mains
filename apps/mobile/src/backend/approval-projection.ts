@@ -7,6 +7,7 @@ export function approvalRow(backendId: string, request: ToolApprovalRequest, exp
   return {
     backendId,
     requestId: request.requestId,
+    approvalToken: request.approvalToken ?? null,
     runId: request.runId,
     kind: request.kind,
     toolName: request.toolName,

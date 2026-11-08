@@ -54,7 +54,7 @@ vi.mock("@/features/workspace/hooks/use-workspace-runs", () => ({
       isLoading: false, error: mocks.error, executeRun: mocks.execute, continueRun: mocks.continue };
   },
 }));
-vi.mock("@/lib/transport", () => ({ getTransport: () => mocks.transport, appEvents: { providers: { onModelsUpdated: () => () => {} } } }));
+vi.mock("@/lib/transport", () => ({ onTransportChange: () => () => {}, getTransport: () => mocks.transport, appEvents: { providers: { onModelsUpdated: () => () => {} } } }));
 vi.mock("@/features/workspace/lib/conversation-settings-writer", () => ({
   persistConversationSettings: (...args: unknown[]) => mocks.invoke(...args),
   waitForConversationSettings: async () => {},

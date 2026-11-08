@@ -422,6 +422,7 @@ export const CHANNELS = {
     continue: "runs:continue",
     steer: "runs:steer",
     inputStatus: "runs:inputStatus",
+    decidePlan: "runs:decidePlan",
     answerAsyncQuestions: "runs:answerAsyncQuestions",
     dismissAsyncQuestions: "runs:dismissAsyncQuestions",
     createRealtimeConversation: "runs:createRealtimeConversation",

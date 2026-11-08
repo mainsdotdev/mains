@@ -1,3 +1,5 @@
+import { openUserDecisions } from "./user-decision-runtime";
+import type { PlanDecisionPayload } from "@mains/contracts/plan-decision";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { ok } from "@mains/contracts/service-response";
@@ -47,6 +49,7 @@ import type {
 // IPC Handlers
 // ─────────────────────────────────────────────────────────────
 export function registerRunsIpc(): void {
+  openUserDecisions();
   const getHistory = handle((payload: ReadRunHistoryPayload) => runsService.getHistoryPage(payload));
   ipcMain.handle(CHANNELS.runs.getHistory, (ctx: IpcInvokeContext, payload: ReadRunHistoryPayload) =>
     getHistory(ctx, ctx?.deviceId ? { ...payload, profile: "mobile" } : payload));
@@ -209,6 +212,7 @@ export function registerRunsIpc(): void {
 
   ipcMain.handle(CHANNELS.runs.steer, handle((payload: RunSteerPayload) => runsService.steerRun(payload)));
   ipcMain.handle(CHANNELS.runs.inputStatus, handle((payload: RunInputStatusPayload) => runsService.getInputStatus(payload)));
+  ipcMain.handle(CHANNELS.runs.decidePlan, handle((payload: PlanDecisionPayload) => runsService.decidePlan(payload)));
   ipcMain.handle(CHANNELS.runs.answerAsyncQuestions, handle((payload: AnswerAsyncQuestionsPayload) => runsService.answerAsyncQuestions(payload)));
   ipcMain.handle(CHANNELS.runs.dismissAsyncQuestions, handle((payload: DismissAsyncQuestionsPayload) => runsService.dismissAsyncQuestions(payload)));
 
@@ -306,10 +310,9 @@ export function registerRunsIpc(): void {
   // Tool Approval (interactive)
   ipcMain.handle(
     CHANNELS.runs.toolApprovalResponse,
-    async (_, response: ToolApprovalResponse) => {
+    handle((response: ToolApprovalResponse) => {
       handleToolApprovalResponse(response);
-      return ok(undefined);
-    },
+    }),
   );
 
   // Requests still waiting on the user — for a client (phone) that connected
@@ -323,6 +326,7 @@ export function registerRunsIpc(): void {
 export function unregisterRunsIpc(): void {
   ipcMain.removeHandler(CHANNELS.runs.steer);
   ipcMain.removeHandler(CHANNELS.runs.inputStatus);
+  ipcMain.removeHandler(CHANNELS.runs.decidePlan);
   ipcMain.removeHandler(CHANNELS.runs.answerAsyncQuestions);
   ipcMain.removeHandler(CHANNELS.runs.dismissAsyncQuestions);
   [

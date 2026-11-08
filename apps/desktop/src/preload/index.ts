@@ -1,3 +1,4 @@
+import type { PlanDecisionPayload, PlanDecisionResult } from "@mains/contracts/plan-decision";
 import type { WriteFileTextOptions } from "@mains/contracts/file-text";
 import type { BridgeSignInInput, BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
 import type { AtlasAutoTagging, AtlasSaveBookmark, AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
@@ -830,6 +831,7 @@ const api = {
     }) => ipcRenderer.invoke(CHANNELS.runs.continue, payload),
     steer: (payload: RunSteerPayload) => ipcRenderer.invoke(CHANNELS.runs.steer, payload),
     inputStatus: (payload: RunInputStatusPayload) => ipcRenderer.invoke(CHANNELS.runs.inputStatus, payload),
+    decidePlan: (payload: PlanDecisionPayload): Promise<ServiceResponse<PlanDecisionResult>> => ipcRenderer.invoke(CHANNELS.runs.decidePlan, payload),
     answerAsyncQuestions: (payload: AnswerAsyncQuestionsPayload): Promise<ServiceResponse<AnswerAsyncQuestionsResponse>> => ipcRenderer.invoke(CHANNELS.runs.answerAsyncQuestions, payload),
     dismissAsyncQuestions: (payload: DismissAsyncQuestionsPayload): Promise<ServiceResponse<void>> => ipcRenderer.invoke(CHANNELS.runs.dismissAsyncQuestions, payload),
     createRealtimeConversation: (payload: CreateRealtimeConversationPayload): Promise<ServiceResponse<CreateRealtimeConversationResponse>> => ipcRenderer.invoke(CHANNELS.runs.createRealtimeConversation, payload),

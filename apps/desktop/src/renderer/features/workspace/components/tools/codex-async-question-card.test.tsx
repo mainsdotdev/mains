@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => {
   })) });
   return { send: vi.fn(), dismiss: vi.fn().mockResolvedValue(undefined), nativeRespond: vi.fn() };
 });
-vi.mock("../../lib/async-question-answers", () => ({ sendAsyncQuestionAnswers: mocks.send, dismissAsyncQuestions: mocks.dismiss }));
+vi.mock("../../lib/async-question-answers", () => ({ sendAsyncQuestionAnswers: (payload: unknown) => mocks.send(payload), dismissAsyncQuestions: (payload: unknown) => mocks.dismiss(payload) }));
 vi.mock("../../hooks", () => ({
   usePluginLogoMap: () => new Map(), renderPluginIcon: () => null, normalizeSlug: (value: string) => value,
 }));

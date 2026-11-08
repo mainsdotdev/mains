@@ -41,6 +41,7 @@ Thumbs.db
 !/docs/design/git-actions-lifecycle.md
 !/docs/design/workspace-edit-lifecycle.md
 !/docs/design/connection-sync-lifecycle.md
+!/docs/design/user-decisions-lifecycle.md
 
 # Coverage
 coverage/

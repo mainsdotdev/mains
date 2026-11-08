@@ -245,3 +245,51 @@ describe("Codex async question answers", () => {
     });
   });
 });
+it("does not resume a prepared answer after the user dismisses it, but permits a new explicit answer", async () => {
+  const { payload, operations } = await fixture();
+  let release!: (value: { accepted: boolean }) => void;
+  operations.getInputStatus.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+  const answer = answerAsyncQuestions(payload, operations);
+  await vi.waitFor(() => expect(operations.getInputStatus).toHaveBeenCalledTimes(1));
+  await dismissAsyncQuestions(payload);
+  release({ accepted: false });
+  await expect(answer).rejects.toThrow(/changed|dismiss/i);
+  expect(operations.steerRun).not.toHaveBeenCalled();
+  await expect(answerAsyncQuestions(payload, operations)).resolves.toMatchObject({ accepted: true });
+});
+it("keeps Stop authoritative over an answer waiting for its delivery check", async () => {
+  const { retireAnswer } = await import("./async-answer-lifecycle");
+  const { payload, operations } = await fixture();
+  let release!: (value: { accepted: boolean }) => void;
+  operations.getInputStatus.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+  const reply = answerAsyncQuestions(payload, operations);
+  await vi.waitFor(() => expect(operations.getInputStatus).toHaveBeenCalledTimes(1));
+  retireAnswer(payload.runId); await runsRepo.updateRun(payload.runId, { status: "canceled" });
+  release({ accepted: false }); await expect(reply).rejects.toThrow("changed");
+  expect(operations.steerRun).not.toHaveBeenCalled(); expect(operations.continueRun).not.toHaveBeenCalled();
+});
+it("drains and fences user decisions before reopening a fresh generation", async () => {
+  const { openUserDecisions, shutdownUserDecisions } = await import("./user-decision-runtime");
+  const { payload, operations } = await fixture();
+  let release!: (value: { accepted: boolean }) => void;
+  operations.getInputStatus.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+  const reply = answerAsyncQuestions(payload, operations);
+  await vi.waitFor(() => expect(operations.getInputStatus).toHaveBeenCalledTimes(1));
+  const stop = shutdownUserDecisions();
+  await expect(answerAsyncQuestions(payload, operations)).rejects.toThrow("shutting down");
+  release({ accepted: false }); await expect(reply).rejects.toThrow("changed"); await stop;
+  expect(operations.steerRun).not.toHaveBeenCalled();
+  openUserDecisions(); await expect(answerAsyncQuestions(payload, operations)).resolves.toMatchObject({ accepted: true });
+});
+it("rechecks dismissal inside native send preflight after high-level steering preparation", async () => {
+  const { assertAsyncQuestionCanReply } = await import("./run-async-questions");
+  const { payload, operations, accept } = await fixture();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  operations.steerRun.mockImplementationOnce(async (input) => { await gate; await assertAsyncQuestionCanReply(input.runId, input.asyncQuestionReply!); await accept(input); });
+  const reply = answerAsyncQuestions(payload, operations);
+  await vi.waitFor(() => expect(operations.steerRun).toHaveBeenCalledTimes(1));
+  await dismissAsyncQuestions(payload); release();
+  await expect(reply).rejects.toThrow("changed");
+  expect(await runsRepo.findInputArtifact(payload.runId, asyncQuestionMessageId(payload.artifactId))).toBeNull();
+});

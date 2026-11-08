@@ -1,6 +1,7 @@
+import { backendSession } from "@/backend/backend-session";
 import * as Haptics from "expo-haptics";
 import * as Linking from "expo-linking";
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
 import type { PendingApprovalRow } from "@/db/schema";
@@ -227,6 +228,8 @@ export function PendingApprovalCard({
   const provider = useProviderAccentPair(providerId);
   const hues = useSystemHues();
   const soft = useSoftTint();
+  const [owner] = useState(() => backendSession.captureDecisionOwner());
+  useLayoutEffect(() => { owner.attach(); return () => owner.detach(); }, [owner]);
   const [selected, setSelected] = useState<string[]>([]);
   const [freeText, setFreeText] = useState("");
   const [allowForRun, setAllowForRun] = useState(false);
@@ -250,21 +253,25 @@ export function PendingApprovalCard({
   const hiddenParamCount = Math.max(0, toolDisplay.params.length - VISIBLE_PARAMS_INITIAL);
 
   const respond = async (label: string, decision: ApprovalDecision) => {
-    if (!onRespond || sending) return;
+    if (!onRespond || sending || now >= approval.expiresAt.getTime()) return;
+    const lease = owner.begin();
+    if (!lease) return;
     setSending(label);
     setError(null);
     try {
       await onRespond(decision);
-      if (process.env.EXPO_OS === "ios") {
+      if (lease.current() && process.env.EXPO_OS === "ios") {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
     } catch (caught) {
+      if (!lease.current()) return;
       setError(caught instanceof Error ? caught.message : "Could not send the answer");
       if (process.env.EXPO_OS === "ios") {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       }
     } finally {
-      setSending(null);
+      if (lease.current()) setSending(null);
+      lease.finish();
     }
   };
 

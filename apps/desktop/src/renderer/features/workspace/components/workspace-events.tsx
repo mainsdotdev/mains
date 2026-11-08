@@ -1,3 +1,4 @@
+import type { PlanDecisionResult } from "@mains/contracts/plan-decision";
 import { Fragment, type ReactNode, RefObject, useMemo, useRef, useState, useCallback, useEffect } from "react";
 import {
   ToolCallGroup,
@@ -437,8 +438,8 @@ interface WorkspaceEventsProps {
   variant?: ProviderVariant;
   onForkRun?: (sourceRunId: string, message: string) => Promise<string | null>;
   onSuggestionSelect?: (suggestion: string) => void;
-  onApplyPlan?: () => void;
-  onDismissPlan?: () => void;
+  onApplyPlan?: (toolCallId: number) => Promise<PlanDecisionResult>;
+  onDismissPlan?: (toolCallId: number) => Promise<PlanDecisionResult>;
   hasPendingPlanApproval?: boolean;
   floatingChat?: boolean;
   history?: TranscriptHistory;
@@ -713,6 +714,7 @@ export function WorkspaceEvents({
             planToolName === "create plan" ||
             planToolName === "exitplanmode" ? (
               <PlanDisplay
+                key={`${activeRun?.id}:${group.events[0].id}`}
                 event={group.events[0]}
                 interactionMode={
                   variant === "claude" && planToolName === "exitplanmode"

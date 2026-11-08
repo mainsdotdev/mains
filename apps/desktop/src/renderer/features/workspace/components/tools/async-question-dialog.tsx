@@ -1,4 +1,6 @@
-import { cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type ReactNode } from "react";
+import { createDecisionOwner } from "@mains/contracts/decision-owner";
+import { getTransport, onTransportChange } from "@/lib/transport";
+import { cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ComponentProps, type ReactElement, type ReactNode } from "react";
 import { animate } from "motion/react";
 import { asyncQuestionMessageId, readAsyncQuestionAnswer, readAsyncQuestionReply, readAsyncQuestions, readAsyncQuestionState,
   type AsyncQuestion, type AsyncQuestionAnswer, type AsyncQuestionState } from "@mains/contracts/async-questions";
@@ -54,6 +56,15 @@ export function AsyncQuestionDialogProvider({ ownerKey, runId, runStatus, turns,
   historical?: boolean;
   children: ReactNode;
 }) {
+  const [transportRevision, advanceTransport] = useReducer((value: number) => value + 1, 0);
+  useLayoutEffect(() => onTransportChange(advanceTransport), []);
+  const transport = getTransport();
+  const decisionKey = `${ownerKey}:${runId}:${transportRevision}`;
+  const owner = useMemo(() => ({ ...createDecisionOwner(() => getTransport() === transport), decisionKey }), [decisionKey, transport]);
+  useLayoutEffect(() => {
+    owner.attach(); const off = onTransportChange(() => owner.retire());
+    return () => { off(); owner.detach(); };
+  }, [owner]);
   const [drafts, setDrafts] = useState(() => new Map<string, QuestionDraft>());
   const [requested, setRequested] = useState<{ key: string; lifecycle: string; supersededBy?: number } | null>(null);
   const inFlight = useRef(new Set<string>());
@@ -121,11 +132,13 @@ export function AsyncQuestionDialogProvider({ ownerKey, runId, runStatus, turns,
     const last = index === source.questions.length - 1;
     const submit = async (answer: string) => {
       if (inFlight.current.has(source.key)) return;
+      const lease = owner.begin();
+      if (!lease) return;
       const answers = draft.answers.map((value, answerIndex) => answerIndex === index ? answer.trim() : value.trim());
       inFlight.current.add(source.key);
       updateDraft(source, (previous) => ({ ...previous, answers, status: "sending", error: undefined }));
       try {
-        const result = await sendAsyncQuestionAnswers({ runId, artifactId: source.artifactId, answers, checkOnly: unknown });
+        const result = await sendAsyncQuestionAnswers({ runId, artifactId: source.artifactId, answers, checkOnly: unknown }, transport, lease.assertCurrent);
         updateDraft(source, (previous) => result.accepted && result.answer
           ? { ...previous, status: "editing", error: undefined, accepted: result.answer }
           : { ...previous, status: "unknown", error: "Delivery has not been confirmed yet. Check again." });
@@ -135,6 +148,7 @@ export function AsyncQuestionDialogProvider({ ownerKey, runId, runStatus, turns,
           status: unknown || /delivery is unknown|previous answer is still being delivered/i.test(message) ? "unknown" : "editing" }));
       } finally {
         inFlight.current.delete(source.key);
+        lease.finish();
       }
     };
     dialog = {
@@ -142,14 +156,16 @@ export function AsyncQuestionDialogProvider({ ownerKey, runId, runStatus, turns,
         header: source.questions.length > 1 ? `Question ${index + 1} of ${source.questions.length}` : undefined,
         options: source.questions[index].options?.map((label) => ({ label })), timestamp: source.timestamp },
       onRespond(id, approved, answer) {
-        if (id !== requestId || sending || inFlight.current.has(source.key)) return;
+        if (!owner.current() || id !== requestId || sending || inFlight.current.has(source.key)) return;
         if (!approved) {
+          const lease = owner.begin();
+          if (!lease) return;
           updateDraft(source, (previous) => ({ ...previous, dismissed: true, dismissError: undefined }));
-          setRequested(null);
-          void dismissAsyncQuestions({ runId, artifactId: source.artifactId }).catch(() => {
+          setRequested((previous) => previous?.key === source.key ? null : previous);
+          void dismissAsyncQuestions({ runId, artifactId: source.artifactId }, transport, lease.assertCurrent).catch(() => {
             updateDraft(source, (previous) => ({ ...previous,
               dismissError: "Could not save dismissal. Reopen the questions and dismiss again to retry." }));
-          });
+          }).finally(lease.finish);
         } else if (answer?.trim()) {
           if (!last && !unknown) {
             updateDraft(source, (previous) => previous.index !== index ? previous : ({ ...previous, index: index + 1,
@@ -161,10 +177,11 @@ export function AsyncQuestionDialogProvider({ ownerKey, runId, runStatus, turns,
         value: draft.answers[index] ?? "", busy: sending, readOnly: unknown, error: draft.error,
         submitLabel: sending ? "Sending…" : unknown ? "Check delivery" : last ? "Submit" : "Next",
         onChange(value) {
+          if (!owner.current()) return;
           updateDraft(source, (previous) => ({ ...previous, error: undefined,
             answers: previous.answers.map((answer, answerIndex) => answerIndex === index ? value : answer) }));
         },
-        onPrevious: index > 0 && !unknown ? () => updateDraft(source, (previous) => ({ ...previous, index: index - 1, error: undefined })) : undefined,
+        onPrevious: index > 0 && !unknown ? () => { if (owner.current()) updateDraft(source, (previous) => ({ ...previous, index: index - 1, error: undefined })); } : undefined,
       },
     };
   }

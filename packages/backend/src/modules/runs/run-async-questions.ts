@@ -1,3 +1,4 @@
+import { admitAnswer, answerSubmissions as submissions, retireAnswer, type AnswerSubmission } from "./async-answer-lifecycle";
 import {
   asyncQuestionMessageId, formatAsyncQuestionReply, readAsyncQuestionAnswer,
   readAsyncQuestionReply, readAsyncQuestions, readAsyncQuestionState,
@@ -19,13 +20,6 @@ interface AnswerOperations {
   getInputStatus(payload: RunInputStatusPayload): Promise<{ accepted: boolean }>;
 }
 
-// Shared by every client of this backend. A lost receipt never permits a resend.
-const submissions = new Map<string, {
-  reply: AsyncQuestionReply;
-  uncertain: boolean;
-  promise?: Promise<AnswerAsyncQuestionsResponse>;
-}>();
-
 async function findQuestion(payload: DismissAsyncQuestionsPayload) {
   const run = await runsRepo.findRunById(payload.runId);
   if (!run) throw new Error("Run not found");
@@ -39,14 +33,22 @@ async function findQuestion(payload: DismissAsyncQuestionsPayload) {
 }
 
 export async function dismissAsyncQuestions(payload: DismissAsyncQuestionsPayload): Promise<void> {
+  return admitAnswer(payload.runId, payload.artifactId, async () => {
   await findQuestion(payload);
+  retireAnswer(payload.runId, payload.artifactId);
   if (await runsRepo.dismissAsyncQuestions(payload.runId, payload.artifactId)) {
     emit(CHANNELS.runs.eventPersisted, { runId: payload.runId });
   }
+  });
 }
 
 /** Recheck at the native send seam too, so a stale client cannot steer new work. */
+export function assertAsyncQuestionDecisionCurrent(runId: string, reply: AsyncQuestionReply): void {
+  submissions.get(JSON.stringify([runId, reply.artifactId]))?.assertCurrent?.();
+}
+
 export async function assertAsyncQuestionCanReply(runId: string, reply: AsyncQuestionReply): Promise<void> {
+  assertAsyncQuestionDecisionCurrent(runId, reply);
   const artifact = await runsRepo.findArtifactById(reply.artifactId);
   if (!artifact || artifact.runId !== runId || artifact.metadata?.source !== "codex_async_questions" ||
       artifact.metadata.isFromSubagent === true) throw new Error("Question not found in this conversation.");
@@ -54,12 +56,14 @@ export async function assertAsyncQuestionCanReply(runId: string, reply: AsyncQue
       await runsRepo.findAsyncQuestionSupersedingInput(runId, reply.artifactId)) {
     throw new Error("This question no longer needs an answer because a newer message was sent.");
   }
+  assertAsyncQuestionDecisionCurrent(runId, reply);
 }
 
 export async function answerAsyncQuestions(
   payload: AnswerAsyncQuestionsPayload,
   operations: AnswerOperations,
 ): Promise<AnswerAsyncQuestionsResponse> {
+  return admitAnswer(payload.runId, payload.artifactId, async (assertCurrent) => {
   const { run, metadata } = await findQuestion(payload);
   const saved = readAsyncQuestionAnswer(metadata.asyncQuestionAnswer);
   if (saved) {
@@ -77,7 +81,7 @@ export async function answerAsyncQuestions(
     throw new Error("The previous answer is still being delivered. Check its delivery before changing it.");
   }
   if (previous?.promise) return previous.promise;
-  const submission = previous ?? { reply, uncertain: false };
+  const submission: AnswerSubmission = previous ?? { reply, uncertain: false, phase: "checking", assertCurrent };
   // A read-only check must not consume another client's explicit Send action.
   if (previous || !payload.checkOnly) submissions.set(key, submission);
   const clientUserMessageId = asyncQuestionMessageId(reply.artifactId);
@@ -85,6 +89,7 @@ export async function answerAsyncQuestions(
   const input = { message, asyncQuestionReply: submission.reply };
 
   const record = async (acceptedReply: AsyncQuestionReply): Promise<AnswerAsyncQuestionsResponse> => {
+    submission.phase = "accepted";
     const answer = { ...acceptedReply, clientUserMessageId };
     if (await runsRepo.recordAsyncQuestionAnswer(run.id, answer)) emit(CHANNELS.runs.eventPersisted, { runId: run.id });
     if (submissions.get(key) === submission) submissions.delete(key);
@@ -108,11 +113,15 @@ export async function answerAsyncQuestions(
         return await record(submission.reply);
       }
       if (payload.checkOnly || submission.uncertain) return { accepted: false };
+      submission.phase = "preparing";
+      assertCurrent();
       await assertAsyncQuestionCanReply(run.id, submission.reply);
       if (run.isArchived) throw new Error("Unarchive this conversation before sending a message.");
       const current = await runsRepo.findRunById(run.id);
       if (!current) throw new Error("Run not found");
       const send = { runId: run.id, accountId: run.accountId, clientUserMessageId, ...input };
+      assertCurrent();
+      submission.phase = "invoked";
       invoked = true;
       if (current.status === "running") {
         try {
@@ -125,6 +134,7 @@ export async function answerAsyncQuestions(
           const latest = await runsRepo.findRunById(run.id);
           if (!latest || latest.status === "running" || latest.status === "queued" || runSessionRegistry.get(run.id)) throw error;
           await assertAsyncQuestionCanReply(run.id, submission.reply);
+          assertCurrent();
           await operations.continueRun(send);
         }
       } else {
@@ -136,6 +146,7 @@ export async function answerAsyncQuestions(
       const text = error instanceof Error ? error.message : String(error);
       if (accepted || invoked && isRunInputDeliveryUncertain(text)) {
         submission.uncertain = true;
+        submission.phase = "uncertain";
         throw new Error(`Delivery is unknown. Check delivery before sending again. ${text}`);
       }
       if (submissions.get(key) === submission) submissions.delete(key);
@@ -146,4 +157,5 @@ export async function answerAsyncQuestions(
     }
   })();
   return submission.promise;
+  });
 }

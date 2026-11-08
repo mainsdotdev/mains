@@ -3658,6 +3658,33 @@ describe("runsService", () => {
       return createRun(db, { status: "succeeded", ...overrides });
     }
 
+    it.each(["question", "plan"] as const)("does not deliver a %s stopped during continuation preparation", async (kind) => {
+      createProvider(db, { id: "codex" });
+      const run = createContinuableRun({ providerId: "codex", accountId: "default", mode: "chat" });
+      let release!: () => void;
+      let reached!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const preparing = new Promise<void>((resolve) => { reached = resolve; });
+      const adapter = setupContinueAdapter({ canResumeSession: vi.fn(async () => { reached(); await gate; return true; }) });
+      const pending = kind === "question"
+        ? runsService.answerAsyncQuestions({ runId: run.id, accountId: "default", answers: ["Staging"],
+            artifactId: await runsRepo.insertArtifact({ runId: run.id, kind: "report", content: "Environment?",
+              metadata: { source: "codex_async_questions", questions: [{ title: "Environment?", options: null }] } }) })
+        : runsService.decidePlan({ runId: run.id, accountId: "default", decision: "apply",
+            toolCallId: createToolCall(db, { runId: run.id, toolName: "Plan", status: "done" }).id });
+      void pending.catch(() => {});
+      try {
+        await preparing;
+        // The idle row has no native work to stop yet; the Stop still retires
+        // the admitted decision that is preparing its continuation.
+        await expect(runsService.abortRun(run.id)).rejects.toThrow("not running");
+        release();
+        await expect(pending).rejects.toThrow(/changed|dismissed/);
+        expect(adapter.continueRun).not.toHaveBeenCalled();
+        expect(runSessionRegistry.get(run.id)).toBeUndefined();
+      } finally { release(); await pending.catch(() => {}); await flushBackground(); }
+    });
+
     it("waits for session cleanup even after its run row becomes terminal", async () => {
       const workspace = createWorkspace(db);
       createContinuableRun({ id: "closing-run", workspaceId: workspace.id, accountId: "default", status: "running" });

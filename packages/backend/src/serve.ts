@@ -1,3 +1,4 @@
+import { shutdownUserDecisions } from "./modules/runs";
 import { shutdownRecordLifecycles } from "./runtime/record-lifecycle";
 import { createResourceLifecycle } from "./runtime/resource-lifecycle";
 import DatabaseClient, { closeDatabase, initializeDatabase } from "./db/client";
@@ -200,7 +201,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
     scope.defer(closeDatabase);
     await initializeDatabase({ verbose: false, enableWAL: true, busyTimeout: 5000 });
     scope.assertActive();
-    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync()]); });
+    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync(), shutdownUserDecisions()]); });
     scope.defer(async () => {
       runSessionRegistry.shutdownAll("Standalone server stopped during run");
       destroyAllTerminals();
@@ -239,7 +240,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
       commandReceipts: backendService.commandReceipts,
     });
     scope.defer(() => wsHost.close());
-    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync()]); });
+    scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync(), shutdownUserDecisions()]); });
     scope.assertActive();
     scope.defer(async () => { await Promise.all([automationsService.stop(), pulseService.stop()]); });
     automationsService.start();

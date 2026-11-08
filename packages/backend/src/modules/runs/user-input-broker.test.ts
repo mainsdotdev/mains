@@ -70,7 +70,7 @@ describe("resolution broadcast", () => {
     await expect(promise).resolves.toMatchObject({ approved: true });
     expect(send).toHaveBeenCalledWith(
       CHANNELS.runs.toolApprovalResolved,
-      { requestId: "answered" },
+      expect.objectContaining({ requestId: "answered" }),
       { runId: "run-1" },
     );
   });
@@ -90,7 +90,7 @@ describe("resolution broadcast", () => {
     for (const requestId of ["a", "b"]) {
       expect(send).toHaveBeenCalledWith(
         CHANNELS.runs.toolApprovalResolved,
-        { requestId },
+        expect.objectContaining({ requestId }),
         { runId: "run-1" },
       );
     }
@@ -174,7 +174,7 @@ describe("permission prompt restrictions", () => {
       defaultToNo: true, suppressAlwaysAllowRule: true,
     };
     const response = requestToolApproval(request);
-    expect(send).toHaveBeenCalledWith(CHANNELS.runs.toolApprovalRequest, request, { runId: "run-1" });
+    expect(send).toHaveBeenCalledWith(CHANNELS.runs.toolApprovalRequest, expect.objectContaining(request), { runId: "run-1" });
     expect(listPendingApprovals()[0]).toMatchObject(request);
     handleToolApprovalResponse({ requestId: request.requestId, approved: true });
     await expect(response).resolves.toMatchObject({ approved: true });
@@ -232,7 +232,7 @@ describe("user-input-broker", () => {
     });
     expect(send).toHaveBeenCalledWith(
       CHANNELS.runs.toolApprovalResolved,
-      { requestId: "request-1" },
+      expect.objectContaining({ requestId: "request-1" }),
       { runId: "run-1" },
     );
   });
@@ -291,7 +291,7 @@ describe("approval notification", () => {
     await expect(promise).resolves.toEqual({ requestId: "req-1", approved: true });
     expect(send).toHaveBeenCalledWith(
       CHANNELS.runs.toolApprovalResolved,
-      { requestId: "req-1" },
+      expect.objectContaining({ requestId: "req-1" }),
       { runId: "run-1" },
     );
     expect(close).toHaveBeenCalledTimes(1);
@@ -351,4 +351,57 @@ describe("approval notification", () => {
     await flush();
     expect(close).toHaveBeenCalledTimes(1);
   });
+});
+it("does not let an old notification answer a replacement request with the same id", async () => {
+  const handlers: Array<{ isPending(): boolean; respond(response: ToolApprovalResponse): void }> = [];
+  mocks.getSettings.mockResolvedValue({ notifyOnToolApproval: true });
+  mocks.showApprovalNotification.mockImplementation(async (_request, next) => { handlers.push(next); return { close: vi.fn() }; });
+  const req = { requestId: "reused-notification", runId: "run-1", toolName: "Bash", kind: "tool_approval" as const, timestamp: Date.now() };
+  const first = requestToolApproval(req);
+  await new Promise((resolve) => setImmediate(resolve));
+  cancelPendingRequest(req.requestId); await first;
+  const second = requestToolApproval({ ...req, timestamp: req.timestamp + 1 });
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(handlers[0].isPending()).toBe(false);
+  handlers[0].respond({ requestId: req.requestId, approved: true });
+  expect(listPendingApprovals()).toHaveLength(1);
+  handleToolApprovalResponse({ requestId: req.requestId, approvalToken: listPendingApprovals()[0].approvalToken, approved: false }); await second;
+});
+it("rejects a stale client token after an approval id is reused", async () => {
+  const req = { requestId: "reused-client", runId: "run-1", toolName: "Bash", kind: "tool_approval" as const, timestamp: Date.now() };
+  const first = requestToolApproval(req), old = listPendingApprovals()[0];
+  handleToolApprovalResponse({ requestId: req.requestId, approvalToken: old.approvalToken, approved: false }); await first;
+  const second = requestToolApproval(req), fresh = listPendingApprovals()[0];
+  expect(fresh.approvalToken).not.toBe(old.approvalToken);
+  expect(() => handleToolApprovalResponse({ requestId: req.requestId, approvalToken: old.approvalToken, approved: true })).toThrow("changed");
+  expect(listPendingApprovals()).toHaveLength(1);
+  handleToolApprovalResponse({ requestId: req.requestId, approvalToken: fresh.approvalToken, approved: true }); await second;
+});
+it("settles even when closing the native notification throws", async () => {
+  mocks.getSettings.mockResolvedValue({ notifyOnToolApproval: true });
+  mocks.showApprovalNotification.mockResolvedValue({ close: () => { throw new Error("Native notification unavailable"); } });
+  const response = requestToolApproval({ requestId: "cleanup-failure", runId: "run-1", toolName: "Bash", kind: "tool_approval", timestamp: Date.now() });
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(() => handleToolApprovalResponse({ requestId: "cleanup-failure", approved: true })).not.toThrow();
+  await expect(response).resolves.toMatchObject({ approved: true });
+  expect(listPendingApprovals()).toEqual([]);
+});
+it("does not let a later native request overwrite another run's pending permission", async () => {
+  const request = { requestId: "conflict", runId: "run-1", toolName: "Bash", kind: "tool_approval" as const, timestamp: Date.now() };
+  const first = requestToolApproval(request);
+  await expect(requestToolApproval({ ...request, runId: "run-2" })).rejects.toThrow("another request");
+  expect(listPendingApprovals()[0].runId).toBe("run-1");
+  cancelPendingRequest(request.requestId); await first;
+});
+it("does not accept a permission after its deadline even if the timer callback has not run", async () => {
+  vi.useFakeTimers(); vi.setSystemTime(new Date("2026-11-08T12:00:00Z"));
+  const reply = requestToolApproval({ requestId: "deadline", runId: "run-1", toolName: "Bash", kind: "tool_approval", timestamp: Date.now(), autoResolutionMs: 500 });
+  vi.setSystemTime(new Date("2026-11-08T12:00:01Z"));
+  expect(() => handleToolApprovalResponse({ requestId: "deadline", approved: true })).toThrow("expired");
+  await expect(reply).resolves.toMatchObject({ approved: false });
+});
+it("rejects a malformed answer without settling its pending request", async () => {
+  const reply = requestToolApproval({ requestId: "invalid-response", runId: "run-1", toolName: "Bash", kind: "tool_approval", timestamp: Date.now() });
+  expect(() => handleToolApprovalResponse({ requestId: "invalid-response", approved: "yes" } as unknown as ToolApprovalResponse)).toThrow("Invalid");
+  expect(listPendingApprovals()).toHaveLength(1); cancelPendingRequest("invalid-response"); await reply;
 });

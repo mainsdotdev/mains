@@ -5,7 +5,7 @@ import type { Transport } from "@/lib/transport/types";
 import { dismissAsyncQuestions, sendAsyncQuestionAnswers } from "./async-question-answers";
 
 const state = vi.hoisted(() => ({ transport: null as unknown as Transport }));
-vi.mock("@/lib/transport", () => ({ getTransport: () => state.transport }));
+vi.mock("@/lib/transport", () => ({ getTransport: () => state.transport, onTransportChange: () => () => {} }));
 
 const payload = { runId: "run", artifactId: 12, answers: ["Staging"] };
 const accepted = { accepted: true, answer: { artifactId: 12, answers: ["Staging"], clientUserMessageId: asyncQuestionMessageId(12) } };

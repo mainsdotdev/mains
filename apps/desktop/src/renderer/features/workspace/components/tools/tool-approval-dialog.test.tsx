@@ -279,3 +279,13 @@ describe("MCP form approval dialog", () => {
     expect(onRespond).toHaveBeenCalledExactlyOnceWith("form-2", true, JSON.stringify({ calendar: "work", seats: 2, notify: true, people: ["okan"] }));
   });
 });
+it("retains form values when the backend rejects an answer and permits retry", async () => {
+  const respond = vi.fn().mockRejectedValueOnce(new Error("Approval connection unavailable")).mockResolvedValue(undefined);
+  const user = userEvent.setup();
+  render(<ToolApprovalDialog request={request({ properties: { title: { type: "string", title: "Title" } }, required: ["title"] })} onRespond={respond} />);
+  await user.type(screen.getByRole("textbox", { name: "Title" }), "Keep this answer");
+  await user.click(screen.getByRole("button", { name: "Submit" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("unavailable");
+  expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("Keep this answer");
+  await user.click(screen.getByRole("button", { name: "Submit" })); expect(respond).toHaveBeenCalledTimes(2);
+});

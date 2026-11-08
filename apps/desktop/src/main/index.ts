@@ -1,3 +1,4 @@
+import { shutdownUserDecisions } from "@mains/backend/modules/runs";
 import { createResourceLifecycle, type ResourceScope } from "@mains/backend/runtime/resource-lifecycle";
 import { shutdownRecordLifecycles } from "@mains/backend/runtime/record-lifecycle";
 if (process.platform === "win32") {
@@ -1258,7 +1259,7 @@ async function cleanupAppResources() {
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
     stopBridgeNotifications?.();
-    await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync()]);
+    await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync(), shutdownUserDecisions()]);
     await bridgeService.stop();
     await localBackendService.shutdown();
     // Stop `tailscale serve` if this process started it (no-op otherwise)

@@ -553,6 +553,8 @@ export type ApprovalKind = "tool_approval" | "ask_user" | "elicitation";
 /** The `runs:toolApprovalRequest` push — an agent waiting on the user. */
 export interface ToolApprovalRequest {
   requestId: string;
+  /** Opaque broker incarnation; echo with a response to reject stale decisions. */
+  approvalToken?: string;
   runId: string;
   toolName: string;
   toolInput?: Record<string, unknown>;
@@ -586,6 +588,7 @@ export interface PendingApproval extends ToolApprovalRequest {
 
 export interface ToolApprovalResolvedEvent {
   requestId: string;
+  approvalToken?: string;
 }
 
 /**
@@ -596,6 +599,7 @@ export interface ToolApprovalResolvedEvent {
  */
 export interface ToolApprovalResponse {
   requestId: string;
+  approvalToken?: string;
   approved: boolean;
   answer?: string;
 }

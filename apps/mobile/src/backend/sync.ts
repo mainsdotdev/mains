@@ -243,9 +243,9 @@ function upsertArtifact(backendId: string, runId: string, artifact: RunArtifactR
 }
 
 /** Drop one request locally — right after the phone answered it. */
-export function deletePendingApproval(backendId: string, requestId: string): void {
+export function deletePendingApproval(backendId: string, requestId: string, approvalToken?: string | null): void {
   runProjectionWrite(pendingApprovals, () => db.delete(pendingApprovals)
-    .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.requestId, requestId)))
+    .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.requestId, requestId), approvalToken ? eq(pendingApprovals.approvalToken, approvalToken) : undefined))
     .run());
 }
 
@@ -959,9 +959,9 @@ export function attachRunEvents(
   });
 
   const offApprovalResolved = transport.subscribe(CHANNELS.runs.toolApprovalResolved, (payload) => {
-    const { requestId } = payload as ToolApprovalResolvedEvent;
+    const { requestId, approvalToken } = payload as ToolApprovalResolvedEvent;
     runProjectionWrite(pendingApprovals, () => db.delete(pendingApprovals)
-      .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.requestId, requestId)))
+      .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.requestId, requestId), approvalToken ? eq(pendingApprovals.approvalToken, approvalToken) : undefined))
       .run());
   });
 

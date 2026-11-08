@@ -1,4 +1,6 @@
-import { useState, useCallback, useMemo } from "react";
+import { createDecisionOwner } from "@mains/contracts/decision-owner";
+import { onTransportChange } from "@/lib/transport";
+import { useState, useCallback, useMemo, useLayoutEffect, useReducer } from "react";
 import { ArrowUp, ChevronLeft, Close, Question } from "@/components/ui/icons";
 import { Body, Button, Caption, Checkbox, Input, Text } from "@/components/ui";
 import {
@@ -24,7 +26,7 @@ const VISIBLE_PARAMS_INITIAL = 4;
 
 interface ToolApprovalDialogProps {
   request: ToolApprovalRequest;
-  onRespond: (requestId: string, approved: boolean, answer?: string) => void;
+  onRespond: (requestId: string, approved: boolean, answer?: string) => void | Promise<void>;
   variant?: ProviderVariant;
   /** Forms keep their actions visible within this height while fields scroll. */
   maxHeight?: string;
@@ -253,7 +255,31 @@ function ParamRow({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 export function ToolApprovalDialog(props: ToolApprovalDialogProps) {
-  return <ToolApprovalDialogContents key={props.request.requestId} {...props} />;
+  const [revision, advance] = useReducer((value: number) => value + 1, 0);
+  useLayoutEffect(() => onTransportChange(advance), []);
+  const identity = `${props.request.requestId}:${props.request.approvalToken ?? ""}:${revision}`;
+  const owner = useMemo(() => ({ ...createDecisionOwner(), identity }), [identity]);
+  const [sending, setSending] = useState<typeof owner>();
+  const [failure, setFailure] = useState<{ owner: typeof owner; message: string }>();
+  useLayoutEffect(() => {
+    owner.attach(); const off = onTransportChange(() => owner.retire());
+    return () => { off(); owner.detach(); };
+  }, [owner]);
+  const respond = (...args: Parameters<ToolApprovalDialogProps["onRespond"]>) => {
+    const lease = owner.begin();
+    if (!lease) return;
+    setSending(owner); setFailure(undefined);
+    let result: void | Promise<void>;
+    try { result = props.onRespond(...args); }
+    catch (error) { result = Promise.reject(error); }
+    void Promise.resolve(result).catch((error) => {
+      if (lease.current()) setFailure({ owner, message: error instanceof Error ? error.message : "Could not send the decision. Retry." });
+    }).finally(() => { if (lease.current()) setSending(undefined); lease.finish(); });
+  };
+  return <fieldset className="contents" disabled={sending === owner} aria-busy={sending === owner}>
+    <ToolApprovalDialogContents key={identity} {...props} onRespond={respond} />
+    {failure?.owner === owner && <Caption role="alert" tone="danger" className="block px-4 py-2">{failure.message}</Caption>}
+  </fieldset>;
 }
 
 function ToolApprovalDialogContents({

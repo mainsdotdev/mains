@@ -1,3 +1,7 @@
+import { assertNoPlanDecisionPatch } from "@mains/contracts/plan-decision";
+import { assertPlanContinuationCurrent, decidePlan } from "./plan-decision-lifecycle";
+import type { PlanDecisionPayload } from "@mains/contracts/plan-decision";
+import { retireAnswer } from "./async-answer-lifecycle";
 import { runGitOperation } from "../../runtime/git-operation-lifecycle";
 import { runTurnUndo } from "./run-turn-changes-lifecycle";
 import { assertOwnedRecord, bridgeService } from "../bridge";
@@ -15,7 +19,7 @@ import type {
 } from "@mains/contracts/realtime";
 import { insertRunInputArtifact } from "./run-input-artifact";
 import { assertRunCanContinue, canSteerRun, claimRunResponse, isRunResponseStarting, startingRunResponseIds } from "./run-lifecycle";
-import { answerAsyncQuestions, assertAsyncQuestionCanReply, dismissAsyncQuestions } from "./run-async-questions";
+import { answerAsyncQuestions, assertAsyncQuestionCanReply, assertAsyncQuestionDecisionCurrent, dismissAsyncQuestions } from "./run-async-questions";
 import type { AnswerAsyncQuestionsPayload, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import { providerTurnLineageMetadata } from "../../../shared/provider-turn-lineage";
 import {
@@ -2045,6 +2049,7 @@ export const runsService = {
     payload: UpdateToolCallPayload,
   ): Promise<void> {
     assertOwnedRecord("tool_calls", id);
+    assertNoPlanDecisionPatch(payload);
     await runsRepo.updateToolCall(id, payload);
   },
 
@@ -2464,6 +2469,7 @@ export const runsService = {
       if (existing.workspaceId) assertRecordAvailable(recordKey("workspace", existing.workspaceId));
       assertRunCanContinue(existing, runSessionRegistry.get(runId)?.phase, realtimeConnections.has(runId));
       if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
+      assertPlanContinuationCurrent(runId, payload.clientUserMessageId);
       const uploads = sanitizeRunAttachments(
         payload.attachments,
         await browserCaptureDir(),
@@ -2515,6 +2521,9 @@ export const runsService = {
             throw new Error("Session cannot be resumed (not found or expired)");
           }
         }
+
+        if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
+        assertPlanContinuationCurrent(runId, payload.clientUserMessageId);
 
         const attachments = await prepareRunAttachments(
           runId,
@@ -2605,6 +2614,15 @@ export const runsService = {
           if (!fresh) throw new Error("Run workspace no longer exists");
           assertWorkspaceCanExecute(fresh);
         }
+
+        // Complete every awaited preparation before registering the native
+        // session; Stop/dismiss must still be able to retire this decision.
+        const space = await findSpaceForRun(run.spaceId);
+        if (payload.asyncQuestionReply) {
+          await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
+          assertAsyncQuestionDecisionCurrent(runId, payload.asyncQuestionReply);
+        }
+        assertPlanContinuationCurrent(runId, payload.clientUserMessageId);
         const session = createRunSession({
           onTurnClosed: runsService.snapshotBridgeOutputs,
           runId,
@@ -2617,10 +2635,6 @@ export const runsService = {
             : undefined,
           seedTurnIndex,
         });
-
-        // Re-derive the harness from the run row's mode snapshot — the space's
-        // current mode is irrelevant, but its system prompt is re-read live.
-        const space = await findSpaceForRun(run.spaceId);
 
         let acceptInput: () => void = () => {};
         const inputAccepted = new Promise<void>((resolve) => {
@@ -2735,6 +2749,7 @@ export const runsService = {
     if (runSessionRegistry.get(run.id) !== activeSession || !canSteerRun(run.status, activeSession?.phase)) {
       throw new Error(RUN_INPUT_ERRORS.turnChanged);
     }
+    if (payload.asyncQuestionReply) assertAsyncQuestionDecisionCurrent(run.id, payload.asyncQuestionReply);
     const { turnId } = await adapter.steerRun({
       runId: run.id,
       message: payload.message,
@@ -2748,6 +2763,11 @@ export const runsService = {
       skills: payload.contextSkills,
     });
     return { runId: run.id, turnId };
+  },
+
+  decidePlan(payload: PlanDecisionPayload) {
+    assertOwnedRecord("runs", payload.runId);
+    return decidePlan(payload, this);
   },
 
   answerAsyncQuestions(payload: AnswerAsyncQuestionsPayload) {
@@ -3029,6 +3049,7 @@ export const runsService = {
    */
   async abortRun(runId: string): Promise<void> {
     assertOwnedRecord("runs", runId);
+    retireAnswer(runId);
     const run = await runsRepo.findRunById(runId);
     if (!run) throw new Error("Run not found");
     if (run.status !== "running" && run.status !== "queued") {
