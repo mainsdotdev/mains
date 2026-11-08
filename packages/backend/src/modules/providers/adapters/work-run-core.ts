@@ -4,7 +4,7 @@
 // `createWorkRunAdapter(driver)` returns a WorkRunAdapter that wraps the
 // driver in the cross-cutting bits every provider needs: status emission,
 // per-run state map, AbortController plumbing, artifact collection, sessionId
-// persistence, cleanup, and 1:1 delegation of the optional methods.
+// persistence, cleanup, shared shutdown, and delegation of capability methods.
 //
 // What lives here, what lives in the driver:
 //
@@ -20,6 +20,7 @@
 //     cancelPendingRequests)                 (CLI subprocess, ACP server, …)
 // ─────────────────────────────────────────────────────────────
 
+import { abortWorkRun, createWorkRunLifecycle } from "./work-run-lifecycle";
 import { runsRepo } from "../../runs/runs.repo";
 import { cancelPendingRequests } from "../../runs/user-input-broker";
 import { emitUserPromptArtifact } from "./adapter.shared";
@@ -37,25 +38,6 @@ import type {
   WorkRunArtifactSummary,
 } from "../../../../shared/adapter.types";
 
-interface RunSlot {
-  session: unknown;
-  controller: AbortController;
-}
-
-/**
- * Live runs, keyed by runId — module scope, NOT per adapter instance.
- *
- * A settings write no longer rebuilds the adapter (the factory refreshes the
- * cached instance's config in place), but an adapter can still be replaced
- * mid-run — `shutdownWorkAdapter`, a provider disable/enable cycle, tests.
- * Instance-local bookkeeping would leave the in-flight run unreachable through
- * the new instance: `abortRun` would resolve silently while the driver kept
- * working. Run ids are globally unique and every entry is removed in
- * `runLifecycle`'s finally, so keying them here makes control reach a run
- * regardless of which instance owns it.
- */
-const runState = new Map<string, RunSlot>();
-
 /** Union of the request types that carry user-prompt content. */
 type UserPromptRequest =
   | WorkRunRequest
@@ -67,6 +49,10 @@ function getUserPromptContent(req: UserPromptRequest): string {
 }
 
 export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
+  const lifecycle = createWorkRunLifecycle({
+    cleanup: driver.cleanup?.bind(driver), cancelRequests: cancelPendingRequests,
+    shutdown: driver.shutdown?.bind(driver),
+  });
   /** Wrap the caller's onEvent so Core can observe and enrich every event. */
   function wrapOnEvent(
     onEvent: WorkRunEventHandler,
@@ -105,20 +91,24 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
 
   async function runLifecycle(
     runId: string,
-    acquire: () => Promise<AcquiredSession>,
+    acquire: (publish: WorkRunEventHandler, receipt: (work: () => Promise<void>) => Promise<void>) => Promise<AcquiredSession>,
     userPromptReq: UserPromptRequest | null,
     onEvent: WorkRunEventHandler,
   ): Promise<WorkRunResult> {
     const collected: WorkRunArtifactSummary[] = [];
-    const controller = new AbortController();
-    const wrapped = wrapOnEvent(onEvent, collected);
+    let lease: ReturnType<typeof lifecycle.claim> | undefined;
+    const deliver = wrapOnEvent(onEvent, collected);
+    const wrapped: WorkRunEventHandler = (event) => lease!.publish(event, () => deliver(event));
 
     try {
+      lease = lifecycle.claim(runId);
       await wrapped({ type: "status", status: "running" });
-
-      const acquired = await acquire();
-      runState.set(runId, { session: acquired.session, controller });
+      lease.assertActive();
+      const acquired = await acquire(wrapped, lease.receipt);
+      lease.acquired(acquired.session);
+      lease.assertActive();
       await persistSessionId(runId, acquired.sessionId);
+      lease.assertActive();
 
       if (userPromptReq && !("clientUserMessageId" in userPromptReq && userPromptReq.clientUserMessageId && driver.steerRun)) {
         // The three UserPromptRequest variants all carry these fields, but TS
@@ -143,18 +133,15 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
         });
       }
 
-      const outcome = await driver.executePrompt(
+      lease.execute();
+      const outcome = await lease.complete(await driver.executePrompt(
         acquired.session,
         acquired.prompt,
         wrapped,
-        controller.signal,
-      );
+        lease.signal,
+      ));
 
-      await wrapped({
-        type: "status",
-        status: outcome.status,
-        error: outcome.summary,
-      });
+      await lease.terminal(() => deliver({ type: "status", status: outcome.status, error: outcome.summary }));
 
       return {
         status: outcome.status,
@@ -165,28 +152,20 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await onEvent({
-        type: "status",
-        status: "failed",
-        error: msg,
-        ts: Date.now(),
-      });
-      return { status: "failed", summary: msg };
+      const outcome = lease ? await lease.complete({ status: "failed", summary: msg }) : { status: "failed" as const, summary: msg };
+      if (lease) await lease.terminal(() => deliver({ type: "status", status: outcome.status, error: outcome.summary }));
+      return outcome;
     } finally {
-      const slot = runState.get(runId);
-      if (slot) {
-        try {
-          await driver.cleanup?.(slot.session);
-        } catch (err) {
-          console.warn(`[WorkRunCore] cleanup threw for ${runId}:`, err);
-        }
-        runState.delete(runId);
+      if (lease) {
+        try { await lease.close(); }
+        catch (error) { console.warn(`[WorkRunCore] cleanup threw for ${runId}:`, error); }
+        lease.finished();
       }
-      cancelPendingRequests(runId);
     }
   }
 
   const adapter: WorkRunAdapter = {
+    shutdown: lifecycle.shutdown,
     startRun(request, onEvent) {
       return runLifecycle(
         request.runId,
@@ -196,21 +175,9 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
       );
     },
     abortRun: async (runId: string) => {
-      const slot = runState.get(runId);
-      if (!slot) {
-        if (driver.abortNativeRun) {
-          await driver.abortNativeRun(runId);
-          return;
-        }
-        // Resolving silently here is what let a failed stop look like a
-        // successful one; the caller can only fall back to its force-finalize
-        // timer, which marks the run canceled while the driver keeps going.
-        console.warn(
-          `[WorkRunCore] abortRun: no live run "${runId}" — nothing to abort`,
-        );
-        return;
-      }
-      slot.controller.abort();
+      if (await abortWorkRun(runId)) return;
+      if (driver.abortNativeRun) await driver.abortNativeRun(runId);
+      else console.warn(`[WorkRunCore] abortRun: no live run "${runId}" — nothing to abort`);
     },
   };
 
@@ -219,17 +186,17 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.continueRun = (request, onEvent) => {
       let resolvedModel: string | undefined;
       let projection: Promise<void> | undefined;
-      const input = request.clientUserMessageId && driver.steerRun ? {
-        ...request,
-        onInputAccepted: (turnId: string) => projection ??= (async () => {
-          await emitUserPromptArtifact(onEvent, request.message, {
-            ...request, contextSkills: request.skills,
-            model: resolvedModel, providerTurnId: turnId,
-          });
-          await request.onInputAccepted?.(turnId);
-        })(),
-      } : request;
-      return runLifecycle(request.runId, async () => {
+      return runLifecycle(request.runId, async (publish, receipt) => {
+        const input = request.clientUserMessageId && driver.steerRun ? {
+          ...request,
+          onInputAccepted: (turnId: string) => projection ??= receipt(async () => {
+            await emitUserPromptArtifact(publish, request.message, {
+              ...request, contextSkills: request.skills,
+              model: resolvedModel, providerTurnId: turnId,
+            });
+            await request.onInputAccepted?.(turnId);
+          }),
+        } : request;
         const acquired = await resume(input);
         resolvedModel = acquired.model;
         return acquired;
@@ -259,7 +226,6 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.updateConfig = driver.updateConfig.bind(driver);
   if (driver.invalidateCatalogs)
     adapter.invalidateCatalogs = driver.invalidateCatalogs.bind(driver);
-  if (driver.shutdown) adapter.shutdown = driver.shutdown.bind(driver);
   if (driver.canResumeSession)
     adapter.canResumeSession = driver.canResumeSession.bind(driver);
   if (driver.archiveSession)

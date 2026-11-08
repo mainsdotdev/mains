@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ProviderDriver } from "../../../../shared/adapter.types";
 import type { ProviderResponse } from "../providers.dto";
+import { ResourceCleanupError } from "../../../runtime/resource-lifecycle";
 
 const createCodexDriver = vi.fn();
 const createClaudeDriver = vi.fn();
@@ -19,6 +20,9 @@ import {
   updateCliForProvider,
   listSkillsForProvider,
   refreshWorkAdapterConfig,
+  getWorkAdapter,
+  shutdownWorkAdapter,
+  shutdownAllWorkAdapters,
 } from "./adapter.factory";
 
 function fakeDriver(): ProviderDriver & { updateConfig: ReturnType<typeof vi.fn> } {
@@ -44,6 +48,54 @@ describe("createWorkAdapter", () => {
   beforeEach(() => {
     clearAdapterCache();
     vi.clearAllMocks();
+  });
+
+  it("retains a failed shutdown in the cache so the same owner can be retried", async () => {
+    const driver = { ...fakeDriver(), shutdown: vi.fn().mockRejectedValueOnce(new Error("close failed")).mockResolvedValue(undefined) };
+    createCodexDriver.mockReturnValue(driver);
+    const provider = codexProvider({});
+    const adapter = createWorkAdapter(provider);
+    await expect(shutdownWorkAdapter(provider.id)).rejects.toThrow("close failed");
+    expect(getWorkAdapter(provider.id)).toBe(adapter);
+    expect(createWorkAdapter(provider)).toBe(adapter);
+    expect(createCodexDriver).toHaveBeenCalledTimes(1);
+    await shutdownWorkAdapter(provider.id);
+    expect(getWorkAdapter(provider.id)).toBeUndefined();
+    expect(driver.shutdown).toHaveBeenCalledTimes(2);
+  });
+
+  it("cannot evict a replacement adapter when an older shutdown completes late", async () => {
+    let release!: () => void;
+    const old = { ...fakeDriver(), shutdown: vi.fn(() => new Promise<void>((resolve) => { release = resolve; })) };
+    createCodexDriver.mockReturnValue(old);
+    const provider = codexProvider({});
+    const original = createWorkAdapter(provider);
+    const stopping = shutdownWorkAdapter(provider.id);
+    await vi.waitFor(() => expect(old.shutdown).toHaveBeenCalledTimes(1));
+    expect(getWorkAdapter(provider.id)).toBe(original);
+    clearAdapterCache();
+    createCodexDriver.mockReturnValue(fakeDriver());
+    const replacement = createWorkAdapter(provider);
+    release(); await stopping;
+    expect(getWorkAdapter(provider.id)).toBe(replacement);
+    await shutdownWorkAdapter(provider.id);
+  });
+
+  it("reports bulk shutdown failure, retains failed owners, and retries only those owners", async () => {
+    const failed = { ...fakeDriver(), shutdown: vi.fn().mockRejectedValueOnce(new Error("native shutdown failed")).mockResolvedValue(undefined) };
+    const successful = { ...fakeDriver(), shutdown: vi.fn().mockResolvedValue(undefined) };
+    createCodexDriver.mockReturnValue(failed);
+    createClaudeDriver.mockReturnValue(successful);
+    const codex = createWorkAdapter(codexProvider({}));
+    createWorkAdapter({ ...codexProvider({}), id: "claude_code", displayName: "Claude" });
+    const error: unknown = await shutdownAllWorkAdapters().catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(ResourceCleanupError);
+    expect(getWorkAdapter("codex")).toBe(codex);
+    expect(getWorkAdapter("claude_code")).toBeUndefined();
+    await (error as ResourceCleanupError).close();
+    expect(getWorkAdapter("codex")).toBeUndefined();
+    expect(failed.shutdown).toHaveBeenCalledTimes(2);
+    expect(successful.shutdown).toHaveBeenCalledTimes(1);
   });
 
   /**

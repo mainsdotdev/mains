@@ -3,6 +3,7 @@
 // Creates appropriate adapter based on provider configuration
 // ─────────────────────────────────────────────────────────────
 
+import { ResourceCleanupError } from "../../../runtime/resource-lifecycle";
 import type { ProviderResponse } from "../providers.dto";
 import { providerAccountCacheKey, providerCatalogConfigKey } from "../../../../shared/provider-catalog";
 import type {
@@ -260,10 +261,8 @@ export function getWorkAdapter(providerId: string): WorkRunAdapter | undefined {
 export async function shutdownWorkAdapter(providerId: string): Promise<void> {
   const adapter = adapterCache.get(providerId);
   if (adapter) {
-    adapterCache.delete(providerId);
-    if (adapter.shutdown) {
-      await adapter.shutdown();
-    }
+    await adapter.shutdown?.();
+    if (adapterCache.get(providerId) === adapter) adapterCache.delete(providerId);
   }
 }
 
@@ -272,20 +271,9 @@ export async function shutdownWorkAdapter(providerId: string): Promise<void> {
  * Should be called on app quit
  */
 export async function shutdownAllWorkAdapters(): Promise<void> {
-  const shutdownPromises: Promise<void>[] = [];
-
-  for (const [providerId, adapter] of adapterCache) {
-    if (adapter.shutdown) {
-      shutdownPromises.push(
-        adapter.shutdown().catch((err) => {
-          console.error(`[AdapterFactory] Error shutting down ${providerId}:`, err);
-        })
-      );
-    }
-  }
-
-  await Promise.all(shutdownPromises);
-  adapterCache.clear();
+  const results = await Promise.allSettled([...adapterCache.keys()].map(shutdownWorkAdapter));
+  const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+  if (errors.length) throw new ResourceCleanupError(errors, "Failed to shut down provider adapters", shutdownAllWorkAdapters);
 }
 
 /**

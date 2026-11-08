@@ -964,9 +964,11 @@ export interface ProviderDriver extends RealtimeAdapterControls {
    */
   updateConfig?(config: AdapterConfig): void;
 
+  /** Close native provider resources; Core also drains its owned executions and cleanup. */
+  shutdown?(): Promise<void>;
+
   // ── Pass-through methods (Core delegates 1:1 to the matching WorkRunAdapter method) ──
   invalidateCatalogs?(): void;
-  shutdown?(): Promise<void>;
   canResumeSession?(runId: string): Promise<boolean>;
   archiveSession?(runId: string): Promise<void>;
   unarchiveSession?(runId: string): Promise<void>;

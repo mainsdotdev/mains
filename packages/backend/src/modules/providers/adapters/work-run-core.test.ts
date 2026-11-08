@@ -10,12 +10,14 @@
 //   - cleanup ordering (driver.cleanup runs in finally; cancelPendingRequests fires)
 //   - optional verbs (continueRun/forkRun/reviewRun) only attach when Driver supports them
 //   - Driver-thrown errors translate to status=failed with the error message
-//   - 1:1 delegation of pass-through methods (shutdown)
+//   - shared shutdown with or without a driver-specific hook
 // ─────────────────────────────────────────────────────────────
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
+  AcquiredSession,
   WorkRunEvent,
+  WorkRunEventHandler,
   WorkRunRequest,
   WorkRunContinueRequest,
   WorkRunForkRequest,
@@ -96,6 +98,297 @@ function makeReviewReq(
 describe("createWorkRunAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("cancels acquisition before a late session can execute its prompt", async () => {
+    const fake = createFakeDriver();
+    let acquired!: (value: AcquiredSession) => void;
+    const opening = new Promise<AcquiredSession>((resolve) => { acquired = resolve; });
+    const create = vi.fn(() => opening);
+    fake.driver.createSession = create;
+    const adapter = createWorkRunAdapter(fake.driver);
+    const events: WorkRunEvent[] = [];
+    const pending = adapter.startRun(makeStartReq({ runId: "stop-during-acquire" }), (event) => { events.push(event); });
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await adapter.abortRun!("stop-during-acquire");
+    const session = { id: "late-session" };
+    acquired({ session, prompt: "must not execute", sessionId: "late-native-id" });
+    await expect(pending).resolves.toMatchObject({ status: "canceled" });
+    expect(fake.calls.executePrompt).toHaveLength(0);
+    expect(fake.calls.cleanup).toEqual([session]);
+    expect(events.filter((event) => event.type === "artifact")).toEqual([]);
+    expect(updateRunMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("rejects a concurrent claim without disturbing its owner (replacement=%s)", async (replacement) => {
+    const fake = createFakeDriver({ awaitAbort: true });
+    const adapter = createWorkRunAdapter(fake.driver);
+    const other = replacement ? createWorkRunAdapter(createFakeDriver().driver) : adapter;
+    const request = makeStartReq({ runId: `duplicate-${replacement}` });
+    const first = adapter.startRun(request, () => {});
+    await vi.waitFor(() => expect(fake.calls.executePrompt).toHaveLength(1));
+    const duplicateEvents: WorkRunEvent[] = [];
+    try {
+      await expect(other.startRun(request, (event) => { duplicateEvents.push(event); })).resolves.toMatchObject({ status: "failed", summary: expect.stringContaining("already") });
+      expect(duplicateEvents).toEqual([]);
+      expect(fake.calls.cleanup).toHaveLength(0);
+      expect(cancelPendingRequestsMock).not.toHaveBeenCalled();
+    } finally { await other.abortRun!(request.runId); await first; }
+    expect(fake.calls.cleanup).toHaveLength(1);
+  });
+
+  it("ignores an old execution's callbacks after another adapter starts the same run", async () => {
+    const fake = createFakeDriver();
+    let retired!: WorkRunEventHandler;
+    const execute = fake.driver.executePrompt;
+    fake.driver.executePrompt = async (...args) => { retired = args[2]; return execute(...args); };
+    const first = createWorkRunAdapter(fake.driver);
+    const oldEvents: WorkRunEvent[] = [];
+    const request = makeStartReq({ runId: "reused-run-id" });
+    const result = await first.startRun(request, (event) => { oldEvents.push(event); });
+    const before = oldEvents.length;
+    const next = createFakeDriver({ awaitAbort: true });
+    const second = createWorkRunAdapter(next.driver);
+    const active = second.startRun(request, () => {});
+    await vi.waitFor(() => expect(next.calls.executePrompt).toHaveLength(1));
+    try {
+      await retired({ type: "artifact", kind: "file", path: "retired-output.txt" });
+      expect(oldEvents).toHaveLength(before);
+      expect(result.artifacts).toEqual([]);
+    } finally { await first.abortRun!(request.runId); await active; }
+    expect(next.calls.cleanup).toEqual([{ id: request.runId }]);
+  });
+
+  it("waits for an accepted continuation receipt before cleaning up its session", async () => {
+    const fake = createFakeDriver(); fake.enable("resumeSession");
+    fake.driver.steerRun = vi.fn().mockResolvedValue({ turnId: "native" });
+    let release!: () => void, writing!: () => void;
+    const write = new Promise<void>((resolve) => { release = resolve; });
+    const entered = new Promise<void>((resolve) => { writing = resolve; });
+    let receipt!: Promise<void>;
+    fake.driver.executePrompt = async () => {
+      receipt = fake.calls.resumeSession[0].onInputAccepted!("native");
+      return { status: "succeeded" };
+    };
+    const adapter = createWorkRunAdapter(fake.driver);
+    let ended = false;
+    const pending = adapter.continueRun!(makeContinueReq({ runId: "accepted-write", clientUserMessageId: "accepted-id" }), async (event) => {
+      if (event.type === "artifact" && event.kind === "user-prompt") { writing(); await write; }
+    });
+    void pending.then(() => { ended = true; });
+    await entered;
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(ended).toBe(false);
+      expect(fake.calls.cleanup).toHaveLength(0);
+    } finally { release(); await receipt; await pending; }
+    expect(fake.calls.cleanup).toHaveLength(1);
+  });
+
+  it("shutdown cancels a pending acquisition, joins cleanup, and closes admission", async () => {
+    const fake = createFakeDriver();
+    let release!: (value: AcquiredSession) => void;
+    const session = { id: "opened-during-shutdown" };
+    const create = vi.fn(() => new Promise<AcquiredSession>((resolve) => { release = resolve; }));
+    fake.driver.createSession = create;
+    const shutdown = vi.fn(async () => { release({ session, prompt: "must not execute" }); });
+    fake.driver.shutdown = shutdown;
+    const adapter = createWorkRunAdapter(fake.driver);
+    const pending = adapter.startRun(makeStartReq({ runId: "shutdown-acquire" }), () => {});
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await Promise.all([adapter.shutdown!(), adapter.shutdown!()]);
+    await expect(pending).resolves.toMatchObject({ status: "canceled" });
+    expect(fake.calls.executePrompt).toHaveLength(0);
+    expect(fake.calls.cleanup).toEqual([session]);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    await expect(adapter.startRun(makeStartReq({ runId: "after-shutdown" }), () => {})).resolves.toMatchObject({ status: "failed", summary: expect.stringContaining("shut down") });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors Stop from the initial status callback before acquiring a session", async () => {
+    const fake = createFakeDriver();
+    const adapter = createWorkRunAdapter(fake.driver);
+    const request = makeStartReq({ runId: "stop-before-acquire" });
+    const result = await adapter.startRun(request, async (event) => {
+      if (event.type === "status" && event.status === "running") await adapter.abortRun!(request.runId);
+    });
+    expect(result.status).toBe("canceled");
+    expect(fake.calls.createSession).toHaveLength(0);
+    expect(fake.calls.cleanup).toHaveLength(0);
+    expect(cancelPendingRequestsMock).toHaveBeenCalledExactlyOnceWith(request.runId);
+  });
+
+  it("finishes an admitted session-id write before cleaning up a canceled preparation", async () => {
+    let release!: () => void;
+    updateRunMock.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    const fake = createFakeDriver();
+    const adapter = createWorkRunAdapter(fake.driver);
+    const events: WorkRunEvent[] = [];
+    const request = makeStartReq({ runId: "stop-during-persist" });
+    const pending = adapter.startRun(request, (event) => { events.push(event); });
+    await vi.waitFor(() => expect(updateRunMock).toHaveBeenCalledTimes(1));
+    await adapter.abortRun!(request.runId);
+    expect(fake.calls.cleanup).toHaveLength(0);
+    release();
+    await expect(pending).resolves.toMatchObject({ status: "canceled" });
+    expect(fake.calls.executePrompt).toHaveLength(0);
+    expect(events.filter((event) => event.type === "artifact")).toEqual([]);
+    expect(fake.calls.cleanup).toHaveLength(1);
+  });
+
+  it("keeps Stop authoritative when a driver returns a late success", async () => {
+    const fake = createFakeDriver({ awaitAbort: true, outcome: { status: "succeeded" } });
+    const adapter = createWorkRunAdapter(fake.driver);
+    const events: WorkRunEvent[] = [];
+    const request = makeStartReq({ runId: "late-driver-success" });
+    const pending = adapter.startRun(request, (event) => { events.push(event); });
+    await vi.waitFor(() => expect(fake.calls.executePrompt).toHaveLength(1));
+    await adapter.abortRun!(request.runId);
+    await expect(pending).resolves.toMatchObject({ status: "canceled" });
+    expect(events.filter((event) => event.type === "status").map((event) => event.status)).toEqual(["running", "canceled"]);
+  });
+
+  it("retains a failed cleanup claim and retries it through Stop", async () => {
+    const fake = createFakeDriver();
+    const cleanup = vi.fn().mockRejectedValueOnce(new Error("native cleanup failed")).mockResolvedValue(undefined);
+    fake.driver.cleanup = cleanup;
+    const adapter = createWorkRunAdapter(fake.driver);
+    const request = makeStartReq({ runId: "retry-cleanup" });
+    await adapter.startRun(request, () => {});
+    await expect(adapter.startRun(request, () => {})).resolves.toMatchObject({ status: "failed", summary: expect.stringContaining("cleanup") });
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(cancelPendingRequestsMock).not.toHaveBeenCalled();
+    await adapter.abortRun!(request.runId);
+    expect(cleanup).toHaveBeenCalledTimes(2);
+    expect(cancelPendingRequestsMock).toHaveBeenCalledExactlyOnceWith(request.runId);
+    await expect(adapter.startRun(request, () => {})).resolves.toMatchObject({ status: "succeeded" });
+    expect(cleanup).toHaveBeenCalledTimes(3);
+  });
+
+  it("attempts final status once and still cleans up when its subscriber rejects", async () => {
+    const fake = createFakeDriver();
+    const adapter = createWorkRunAdapter(fake.driver);
+    let terminalAttempts = 0;
+    await expect(adapter.startRun(makeStartReq({ runId: "terminal-sink-failed" }), async (event) => {
+      if (event.type === "status" && event.status !== "running") { terminalAttempts++; throw new Error("terminal write failed"); }
+    })).rejects.toThrow("terminal write failed");
+    expect(terminalAttempts).toBe(1);
+    expect(fake.calls.cleanup).toHaveLength(1);
+    expect(cancelPendingRequestsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a retired continuation acceptance callback without publishing or acknowledging it", async () => {
+    const fake = createFakeDriver(); fake.enable("resumeSession");
+    fake.driver.steerRun = vi.fn().mockResolvedValue({ turnId: "native" });
+    const accepted = vi.fn();
+    const events: WorkRunEvent[] = [];
+    const adapter = createWorkRunAdapter(fake.driver);
+    await adapter.continueRun!(makeContinueReq({ runId: "retired-receipt", clientUserMessageId: "retired-id", onInputAccepted: accepted }), (event) => { events.push(event); });
+    const before = events.length;
+    await expect(fake.calls.resumeSession[0].onInputAccepted!("native")).rejects.toThrow("closed before confirming input");
+    expect(events).toHaveLength(before);
+    expect(accepted).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed admitted write even when the driver does not await its event callback", async () => {
+    const fake = createFakeDriver();
+    fake.driver.executePrompt = async (_session, _prompt, publish) => {
+      void Promise.resolve(publish({ type: "artifact", kind: "file", path: "unrecorded.txt" })).catch(() => {});
+      return { status: "succeeded" };
+    };
+    const adapter = createWorkRunAdapter(fake.driver);
+    const statuses: string[] = [];
+    const result = await adapter.startRun(makeStartReq({ runId: "event-write-failed" }), async (event) => {
+      if (event.type === "artifact" && event.kind === "file") throw new Error("artifact write failed");
+      if (event.type === "status") statuses.push(event.status);
+    });
+    expect(result).toMatchObject({ status: "failed", summary: "artifact write failed" });
+    expect(statuses).toEqual(["running", "failed"]);
+    expect(fake.calls.cleanup).toHaveLength(1);
+  });
+
+  it("shares shutdown and waits for per-run cleanup even without a native shutdown hook", async () => {
+    const fake = createFakeDriver({ awaitAbort: true });
+    let finish!: () => void, cleaning!: () => void;
+    const entered = new Promise<void>((resolve) => { cleaning = resolve; });
+    fake.driver.cleanup = vi.fn(() => { cleaning(); return new Promise<void>((resolve) => { finish = resolve; }); });
+    const adapter = createWorkRunAdapter(fake.driver);
+    const pending = adapter.startRun(makeStartReq({ runId: "shutdown-drain" }), () => {});
+    await vi.waitFor(() => expect(fake.calls.executePrompt).toHaveLength(1));
+    const closing = adapter.shutdown!();
+    expect(adapter.shutdown!()).toBe(closing);
+    let closed = false; void closing.then(() => { closed = true; });
+    await entered;
+    expect(closed).toBe(false);
+    await expect(adapter.startRun(makeStartReq({ runId: "blocked-during-shutdown" }), () => {})).resolves.toMatchObject({ status: "failed" });
+    finish(); await closing;
+    await expect(pending).resolves.toMatchObject({ status: "canceled" });
+    expect(fake.driver.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps admission closed after native shutdown fails and permits a shutdown retry", async () => {
+    const fake = createFakeDriver();
+    const shutdown = vi.fn().mockRejectedValueOnce(new Error("native shutdown failed")).mockResolvedValue(undefined);
+    fake.driver.shutdown = shutdown;
+    const adapter = createWorkRunAdapter(fake.driver);
+    await expect(adapter.shutdown!()).rejects.toThrow("native shutdown failed");
+    await expect(adapter.startRun(makeStartReq({ runId: "failed-shutdown" }), () => {})).resolves.toMatchObject({ status: "failed" });
+    expect(fake.calls.createSession).toHaveLength(0);
+    await adapter.shutdown!(); await adapter.shutdown!();
+    expect(shutdown).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries failed run cleanup without shutting down an already released native driver again", async () => {
+    const fake = createFakeDriver();
+    const cleanup = vi.fn().mockRejectedValueOnce(new Error("first cleanup failed"))
+      .mockRejectedValueOnce(new Error("cleanup still failed")).mockResolvedValue(undefined);
+    const shutdown = vi.fn().mockResolvedValue(undefined);
+    fake.driver.cleanup = cleanup; fake.driver.shutdown = shutdown;
+    const adapter = createWorkRunAdapter(fake.driver);
+    const request = makeStartReq({ runId: "shutdown-cleanup-retry" });
+    await adapter.startRun(request, () => {});
+    await expect(adapter.shutdown!()).rejects.toThrow("cleanup still failed");
+    await adapter.shutdown!();
+    expect(cleanup).toHaveBeenCalledTimes(3);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    const replacement = createWorkRunAdapter(createFakeDriver().driver);
+    await expect(replacement.startRun(request, () => {})).resolves.toMatchObject({ status: "succeeded" });
+  });
+
+  it("shuts down only its own executions while cross-instance Stop still reaches the current owner", async () => {
+    const first = createFakeDriver(); first.enable("shutdown");
+    const other = createFakeDriver({ awaitAbort: true }); other.enable("shutdown");
+    const old = createWorkRunAdapter(first.driver), current = createWorkRunAdapter(other.driver);
+    const request = makeStartReq({ runId: "other-adapter-owner" });
+    const pending = current.startRun(request, () => {});
+    await vi.waitFor(() => expect(other.calls.executePrompt).toHaveLength(1));
+    await old.shutdown!();
+    expect(other.calls.executePrompt[0].signalAborted).toBe(false);
+    expect(other.calls.shutdown).toBe(0);
+    await old.abortRun!(request.runId);
+    await expect(pending).resolves.toMatchObject({ status: "canceled" });
+    await current.shutdown!();
+  });
+
+  it("preserves native accepted-input receipts during Stop while dropping late output", async () => {
+    const fake = createFakeDriver();
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => { started = resolve; });
+    fake.driver.executePrompt = async (_session, _prompt, publish, signal) => {
+      started();
+      await new Promise<void>((resolve) => { signal.addEventListener("abort", () => resolve(), { once: true }); });
+      await publish({ type: "log", message: "late output", level: "info" });
+      await publish({ type: "artifact", kind: "user-prompt", content: "Native accepted input", metadata: { clientUserMessageId: "accepted-after-stop" } });
+      return { status: "succeeded" };
+    };
+    const adapter = createWorkRunAdapter(fake.driver);
+    const events: WorkRunEvent[] = [];
+    const request = makeStartReq({ runId: "receipt-during-stop" });
+    const pending = adapter.startRun(request, (event) => { events.push(event); });
+    await running; await adapter.abortRun!(request.runId);
+    await expect(pending).resolves.toMatchObject({ status: "canceled" });
+    expect(events.filter((event) => event.type === "log")).toEqual([]);
+    expect(events.filter((event) => event.type === "artifact" && event.metadata?.clientUserMessageId === "accepted-after-stop")).toHaveLength(1);
   });
 
   describe("startRun lifecycle", () => {
@@ -489,7 +782,7 @@ describe("createWorkRunAdapter", () => {
     });
   });
 
-  describe("pass-through delegation", () => {
+  describe("shared shutdown capability", () => {
     it("attaches shutdown when driver provides it", async () => {
       const fake = createFakeDriver();
       fake.enable("shutdown");
@@ -500,10 +793,11 @@ describe("createWorkRunAdapter", () => {
       expect(fake.calls.shutdown).toBe(1);
     });
 
-    it("does not attach shutdown when driver lacks it", () => {
+    it("supports shared shutdown without a driver-specific hook", async () => {
       const fake = createFakeDriver();
       const adapter = createWorkRunAdapter(fake.driver);
-      expect(adapter.shutdown).toBeUndefined();
+      await adapter.shutdown!();
+      expect(fake.calls.shutdown).toBe(0);
     });
   });
 });
