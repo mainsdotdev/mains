@@ -4,18 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AtlasItem } from "@mains/contracts/atlas";
 import { AtlasBookmarkEditor } from "./atlas-bookmark-editor";
 
-const mocks = vi.hoisted(() => ({ save: vi.fn(), success: vi.fn(), aiEnabled: false }));
+const mocks = vi.hoisted(() => ({ save: vi.fn(), success: vi.fn() }));
+const bookmark = { id: "bookmark", url: "https://example.com", title: "Saved", description: "Original", tags: [] } as unknown as AtlasItem;
 vi.mock("@/lib/redux/api", () => ({ useListCollectionsQuery: () => ({ data: [{ id: "project", name: "Research" }] }) }));
 vi.mock("@/lib/redux/api/atlasApi", () => ({
   useListAtlasTagsQuery: () => ({ data: [{ id: "react", name: "React", count: 1 }, { id: "ts", name: "TypeScript", count: 1 }] }),
-  useAtlasAutoTaggingQuery: () => ({ currentData: { enabled: mocks.aiEnabled, providerId: "codex", model: "small" } }),
   useSaveAtlasBookmarkMutation: () => [mocks.save, { isLoading: false }],
 }));
 vi.mock("@/lib/transport", () => ({ getTransport: () => "local" }));
 vi.mock("@/components/ui", async (original) => ({ ...await original<typeof import("@/components/ui")>(), toast: { success: mocks.success } }));
 beforeEach(() => {
   vi.clearAllMocks(); mocks.save.mockReturnValue({ unwrap: async () => ({ id: "bookmark" }) });
-  mocks.aiEnabled = false;
   document.documentElement.style.fontSize = "16px";
   Element.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
@@ -33,8 +32,8 @@ describe("Atlas bookmark editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save bookmark" }));
     await waitFor(() => expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ collectionId: "project" })));
   });
-  it("adds a tag with Enter without submitting, then saves the URL, note and project together", async () => {
-    const close = vi.fn(); render(<AtlasBookmarkEditor accountId="account" collectionId="project" onClose={close} />);
+  it("adds a tag with Enter while editing without submitting, then saves the URL, note and project together", async () => {
+    const close = vi.fn(); render(<AtlasBookmarkEditor accountId="account" item={bookmark} collectionId="project" onClose={close} />);
     fireEvent.change(screen.getByRole("textbox", { name: "URL" }), { target: { value: "https://example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Tags" }));
     const search = screen.getByRole("searchbox", { name: "Search tags" });
@@ -48,7 +47,7 @@ describe("Atlas bookmark editor", () => {
     expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ accountId: "account", url: "https://example.com", tags: ["react"], note: "Read this later", collectionId: "project" }));
   });
   it("saves multiple existing tag identities together with a new tag", async () => {
-    render(<AtlasBookmarkEditor accountId="account" onClose={vi.fn()} />);
+    render(<AtlasBookmarkEditor accountId="account" item={bookmark} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Tags" }));
     fireEvent.click(screen.getByRole("option", { name: "React" }));
     fireEvent.click(screen.getByRole("option", { name: "TypeScript" }));
@@ -60,17 +59,23 @@ describe("Atlas bookmark editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save bookmark" }));
     await waitFor(() => expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ tags: ["react", "ts", "Deep research"] })));
   });
-  it("distinguishes page-sourced fields from optional AI tags when AI is off", () => {
+  it("only asks for URL and project when adding a bookmark", () => {
     render(<AtlasBookmarkEditor accountId="account" onClose={vi.fn()} />);
-    expect(screen.getAllByText("From page")).toHaveLength(2);
-    expect(screen.getByText("AI off")).toBeTruthy();
-    expect(screen.getByText(/Enable AI suggestions in Settings/)).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "URL" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Project" })).toBeTruthy();
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Tags" })).toBeNull();
+    expect(screen.queryByText(/From page|AI-assisted|AI off|Automatic fields/)).toBeNull();
   });
-  it("shows that enabled AI adds tags after saving", () => {
-    mocks.aiEnabled = true;
-    render(<AtlasBookmarkEditor accountId="account" onClose={vi.fn()} />);
-    expect(screen.getByText("AI-assisted")).toBeTruthy();
-    expect(screen.getByText(/AI adds tags and identifies the content type after saving/)).toBeTruthy();
+  it("shows the editable fields without page or AI assistance labels", () => {
+    render(<AtlasBookmarkEditor accountId="account" item={bookmark} onClose={vi.fn()} />);
+    expect(screen.getByRole("textbox", { name: "URL" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Title" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Description" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Note" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Tags" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Project" })).toBeTruthy();
+    expect(screen.queryByText(/From page|AI-assisted|AI off|AI adds tags|Enable AI suggestions|Automatic fields/)).toBeNull();
   });
   it("retains the draft and shows a recoverable save error", async () => {
     mocks.save.mockReturnValue({ unwrap: async () => { throw new Error("This URL is already saved in Atlas"); } });

@@ -116,7 +116,7 @@ export function XtermTerminal({
 }: XtermTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
+  const fitRef = useRef<(() => void) | null>(null);
   const transport = useSyncExternalStore(onTransportChange, getTransport);
   const { darkMode } = useDarkMode();
   const [ptyReady, setPtyReady] = useState(false);
@@ -144,10 +144,8 @@ export function XtermTerminal({
     const term = termRef.current;
     if (!term || term.options.fontFamily === fontFamily) return;
     term.options.fontFamily = fontFamily;
-    fitAddonRef.current?.fit();
-    const dims = fitAddonRef.current?.proposeDimensions();
-    if (dims) void transport.invoke(CHANNELS.terminal.resize, [id, dims.cols, dims.rows]).catch(() => {});
-  }, [fontFamily, id, transport]);
+    fitRef.current?.();
+  }, [fontFamily]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -166,7 +164,6 @@ export function XtermTerminal({
     term.loadAddon(fitAddon);
 
     termRef.current = term;
-    fitAddonRef.current = fitAddon;
 
     term.open(container);
 
@@ -174,24 +171,38 @@ export function XtermTerminal({
     let generation = 0;
     let frame = 0;
     let ready = false;
+    let lastSize: { cols: number; rows: number } | null = null;
     let observedExit: number | null = null;
     const replay = createTerminalReplay((data) => { if (!disposed && data) term.write(data); });
     setPtyReady(false);
     setError(null);
     setExitCode(null);
 
+    const syncSize = () => {
+      if (!ready || (lastSize?.cols === term.cols && lastSize.rows === term.rows)) return;
+      const size = { cols: term.cols, rows: term.rows };
+      lastSize = size;
+      const failed = () => { if (lastSize === size) lastSize = null; };
+      void transport.invoke(CHANNELS.terminal.resize, [id, size.cols, size.rows])
+        .then((result) => { if (!result.success) failed(); }).catch(failed);
+    };
+    const fitNow = () => {
+      if (disposed || !container.clientWidth || !container.clientHeight) return false;
+      fitAddon.fit();
+      syncSize();
+      return true;
+    };
+    fitRef.current = fitNow;
     const fit = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        if (disposed || !container.clientWidth || !container.clientHeight) return;
-        fitAddon.fit();
-        const dims = fitAddon.proposeDimensions();
-        if (dims && ready) void transport.invoke(CHANNELS.terminal.resize, [id, dims.cols, dims.rows]).catch(() => {});
+        fitNow();
       });
     };
     const connect = async () => {
       const attempt = ++generation;
       ready = false;
+      lastSize = null;
       observedExit = null;
       setPtyReady(false);
       replay.begin();
@@ -205,12 +216,14 @@ export function XtermTerminal({
           throw new Error("Could not connect to terminal. Restart Mains and try again.");
         }
         term.reset();
+        const fitted = fitNow();
         replay.restore(snapshot);
         ready = observedExit === null && snapshot.session.status === "running";
         setPtyReady(ready);
         setExitCode(observedExit ?? snapshot.session.exitCode);
         setError(null);
-        fit();
+        if (fitted) syncSize();
+        else fit();
       } catch (err) {
         if (!disposed && attempt === generation) setError(err instanceof Error ? err.message : "Could not connect to terminal.");
       }
@@ -260,7 +273,7 @@ export function XtermTerminal({
       // managed view. Stop actions and backend shutdown own PTY destruction.
       if (!persistent) void transport.invoke(CHANNELS.terminal.destroy, [id]).catch(() => {});
       termRef.current = null;
-      fitAddonRef.current = null;
+      fitRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, rootPath, persistent, transport, retry]);

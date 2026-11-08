@@ -475,7 +475,7 @@ export const FileExplorer = memo(function FileExplorer({
           )}
         </div>
         <Button
-          variant="icon" iconSize="xs"
+          variant="icon" iconSize="sm"
           onClick={() => setReloadToken((t) => t + 1)}
           title="Refresh explorer"
         >
@@ -483,7 +483,7 @@ export const FileExplorer = memo(function FileExplorer({
         </Button>
         {onCollapseAll && (
           <Button
-            variant="icon" iconSize="xs"
+            variant="icon" iconSize="sm"
             onClick={onCollapseAll}
             title="Collapse all folders"
           >
