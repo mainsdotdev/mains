@@ -1,3 +1,5 @@
+import { CursorAcpServer } from "./cursor-acp";
+import { createCursorLifecycle, CursorCanceledError, type CursorRunOwner, type CursorPromptOwner } from "./cursor-lifecycle";
 import { providerProcessPath, providerLoginCommand } from "../../providers.utils";
 // ─────────────────────────────────────────────────────────────
 // Cursor ProviderDriver
@@ -7,8 +9,10 @@ import { providerProcessPath, providerLoginCommand } from "../../providers.utils
 // work-run-core.ts to expose the WorkRunAdapter interface.
 //
 // What this file owns:
-//   - The ACP subprocess (CursorAcpServer) — single shared server.
-//   - Per-run MainsMcpStdioServer bridges.
+//   - ACP initialization and session protocol semantics.
+//   - Event/permission mapping for owned prompts and Mains MCP bridges.
+// Native transport lives in cursor-acp.ts; runtime, bridge and prompt ownership
+// transitions live in cursor-lifecycle.ts.
 //   - Per-run streaming buffers (on the Session object).
 //   - ACP session/update → WorkRunEvent mapping (mapNotification, normalizeToolCall).
 //   - Server-request handlers for permission approval & cursor extensions.
@@ -20,8 +24,7 @@ import { providerProcessPath, providerLoginCommand } from "../../providers.utils
 //   - cleanup ordering, cancelPendingRequests
 // ─────────────────────────────────────────────────────────────
 
-import type { ChildProcess } from "node:child_process";
-import { spawnProvider as spawn, killProviderProcess } from "../provider-process";
+import { spawnProvider as spawn } from "../provider-process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -64,42 +67,6 @@ import type { ModeId } from "@mains/contracts/modes";
 import type { MainsToolContext } from "../mains-tools.core";
 
 // ─────────────────────────────────────────────────────────────
-// JSON-RPC types
-// ─────────────────────────────────────────────────────────────
-
-interface JsonRpcRequest {
-  jsonrpc?: "2.0";
-  id: number | string;
-  method: string;
-  params?: unknown;
-}
-
-interface JsonRpcNotification {
-  jsonrpc?: "2.0";
-  method: string;
-  params?: unknown;
-}
-
-interface JsonRpcResponse {
-  jsonrpc?: "2.0";
-  id: number | string;
-  result?: unknown;
-  error?: { code: number; message: string; data?: unknown };
-}
-
-function isServerRequest(msg: unknown): msg is JsonRpcRequest {
-  return typeof msg === "object" && msg !== null && "method" in msg && "id" in msg;
-}
-
-function isServerNotification(msg: unknown): msg is JsonRpcNotification {
-  return typeof msg === "object" && msg !== null && "method" in msg && !("id" in msg);
-}
-
-function isResponse(msg: unknown): msg is JsonRpcResponse {
-  return typeof msg === "object" && msg !== null && "id" in msg && !("method" in msg);
-}
-
-// ─────────────────────────────────────────────────────────────
 // Per-run session state (handed back to Core as the opaque `session`)
 // ─────────────────────────────────────────────────────────────
 
@@ -110,6 +77,7 @@ interface CursorSession {
   agentMessageIndex: number;
   agentMessageStreamId: string;
   mcpServer: MainsMcpStdioServer;
+  owner: CursorRunOwner<CursorAcpServer>;
   /** Streamed ephemerally, never persisted. */
   agentThoughtBuffer: string;
   /**
@@ -132,287 +100,6 @@ const { info: logInfo, error: logError, warn: logWarn } = createLogger("[CursorD
 // ─────────────────────────────────────────────────────────────
 // ACP server process manager
 // ─────────────────────────────────────────────────────────────
-
-interface PendingRequest {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-class CursorAcpServer {
-  private child: ChildProcess | null = null;
-  private nextId = 1;
-  private pendingRequests = new Map<number | string, PendingRequest>();
-  private notificationHandler: ((method: string, params: unknown) => void) | null = null;
-  private serverRequestHandler:
-    | ((id: number | string, method: string, params: unknown) => void)
-    | null = null;
-  private onClose: (() => void) | null = null;
-  private stderrBuffer = "";
-  private jsonBuffer = "";
-
-  async start(binaryPath: string, env?: Record<string, string>): Promise<void> {
-    if (this.child) return;
-
-    const spawnEnv: Record<string, string | undefined> = {
-      ...process.env,
-      ...env,
-    };
-
-    this.child = spawn(binaryPath, ["acp"], {
-      env: spawnEnv,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    if (!this.child.stdout || !this.child.stdin) {
-      throw new Error("Failed to get stdio pipes from cursor acp");
-    }
-
-    this.child.stdout.on("data", (chunk: Buffer) => {
-      this.jsonBuffer += chunk.toString();
-      this.drainJsonBuffer();
-      if (this.jsonBuffer.length > 32 * 1024 * 1024) {
-        logError(
-          `jsonBuffer exceeded 32MB (${this.jsonBuffer.length} bytes), resetting`,
-        );
-        this.jsonBuffer = "";
-      }
-    });
-
-    this.child.stderr?.on("data", (data: Buffer) => {
-      this.stderrBuffer += data.toString();
-      if (this.stderrBuffer.length > 2048) {
-        this.stderrBuffer = this.stderrBuffer.slice(-2048);
-      }
-    });
-
-    this.child.on("close", (code, signal) => {
-      const tail = this.stderrBuffer.trim();
-      logInfo(
-        `ACP process exited code=${code} signal=${signal ?? "none"}${tail ? ` stderr:\n${tail}` : " (no stderr)"}`,
-      );
-      for (const [, pending] of this.pendingRequests) {
-        clearTimeout(pending.timer);
-        pending.reject(
-          new Error(`ACP server exited (code=${code}, signal=${signal ?? "none"})`),
-        );
-      }
-      this.pendingRequests.clear();
-      this.cleanup();
-      this.onClose?.();
-    });
-
-    this.child.on("error", (err) => {
-      logError("ACP process error:", err.message);
-      for (const pending of this.pendingRequests.values()) {
-        clearTimeout(pending.timer);
-        pending.reject(err);
-      }
-      this.pendingRequests.clear();
-      this.cleanup();
-      this.onClose?.();
-    });
-  }
-
-  setNotificationHandler(handler: (method: string, params: unknown) => void): void {
-    this.notificationHandler = handler;
-  }
-
-  setServerRequestHandler(
-    handler: (id: number | string, method: string, params: unknown) => void,
-  ): void {
-    this.serverRequestHandler = handler;
-  }
-
-  setOnClose(handler: () => void): void {
-    this.onClose = handler;
-  }
-
-  async sendRequest(method: string, params?: unknown, timeoutMs = 30000): Promise<unknown> {
-    if (!this.child?.stdin) {
-      throw new Error("ACP server not running");
-    }
-
-    const reqId = this.nextId++;
-    const message: JsonRpcRequest = {
-      jsonrpc: "2.0",
-      id: reqId,
-      method,
-      ...(params !== undefined ? { params } : {}),
-    };
-
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingRequests.delete(reqId);
-        reject(new Error(`RPC timeout: ${method} (${timeoutMs}ms)`));
-      }, timeoutMs);
-
-      this.pendingRequests.set(reqId, { resolve, reject, timer });
-      this.writeMessage(message);
-    });
-  }
-
-  respondToRequest(id: number | string, result: unknown): void {
-    this.writeMessage({ jsonrpc: "2.0", id, result });
-  }
-
-  respondToRequestError(id: number | string, code: number, message: string): void {
-    this.writeMessage({ jsonrpc: "2.0", id, error: { code, message } });
-  }
-
-  sendNotification(method: string, params?: unknown): void {
-    this.writeMessage({
-      jsonrpc: "2.0",
-      method,
-      ...(params !== undefined ? { params } : {}),
-    });
-  }
-
-  get isRunning(): boolean {
-    return this.child !== null && this.child.exitCode === null;
-  }
-
-  async stop(): Promise<void> {
-    if (!this.child) return;
-
-    for (const [, pending] of this.pendingRequests) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("ACP server stopping"));
-    }
-    this.pendingRequests.clear();
-
-    const child = this.child;
-    this.cleanup();
-
-    try {
-      child.stdin?.end();
-      try {
-        killProviderProcess(child, "SIGTERM");
-      } catch {
-        /* already exited */
-      }
-      await new Promise<void>((resolve) => {
-        const killTimer = setTimeout(() => {
-          try {
-            killProviderProcess(child);
-          } catch {
-            /* already exited */
-          }
-          resolve();
-        }, 500);
-        child.on("close", () => {
-          clearTimeout(killTimer);
-          resolve();
-        });
-      });
-    } catch {
-      killProviderProcess(child);
-    }
-  }
-
-  private writeMessage(message: unknown): void {
-    if (!this.child?.stdin) return;
-    const encoded = JSON.stringify(message);
-    this.child.stdin.write(`${encoded}\n`);
-  }
-
-  private handleLine(line: string): void {
-    if (!line.trim()) return;
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      return;
-    }
-
-    if (isResponse(parsed)) {
-      const pending = this.pendingRequests.get(parsed.id);
-      if (pending) {
-        this.pendingRequests.delete(parsed.id);
-        clearTimeout(pending.timer);
-        if (parsed.error) {
-          pending.reject(
-            new Error(`${parsed.error.message} (code: ${parsed.error.code})`),
-          );
-        } else {
-          pending.resolve(parsed.result);
-        }
-      }
-    } else if (isServerRequest(parsed)) {
-      this.serverRequestHandler?.(parsed.id, parsed.method, parsed.params);
-    } else if (isServerNotification(parsed)) {
-      this.notificationHandler?.(parsed.method, parsed.params);
-    }
-  }
-
-  private drainJsonBuffer(): void {
-    while (this.jsonBuffer.length > 0) {
-      const trimStart = this.jsonBuffer.search(/\S/);
-      if (trimStart === -1) {
-        this.jsonBuffer = "";
-        return;
-      }
-      if (trimStart > 0) {
-        this.jsonBuffer = this.jsonBuffer.slice(trimStart);
-      }
-
-      if (this.jsonBuffer[0] !== "{") {
-        const nextBrace = this.jsonBuffer.indexOf("{", 1);
-        if (nextBrace === -1) {
-          this.jsonBuffer = "";
-          return;
-        }
-        this.jsonBuffer = this.jsonBuffer.slice(nextBrace);
-        continue;
-      }
-
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      let endIdx = -1;
-
-      for (let i = 0; i < this.jsonBuffer.length; i++) {
-        const ch = this.jsonBuffer[i];
-        if (escaped) {
-          escaped = false;
-          continue;
-        }
-        if (ch === "\\") {
-          if (inString) escaped = true;
-          continue;
-        }
-        if (ch === '"') {
-          inString = !inString;
-          continue;
-        }
-        if (inString) continue;
-        if (ch === "{") depth++;
-        else if (ch === "}") {
-          depth--;
-          if (depth === 0) {
-            endIdx = i;
-            break;
-          }
-        }
-      }
-
-      if (endIdx === -1) {
-        return;
-      }
-
-      const jsonStr = this.jsonBuffer.slice(0, endIdx + 1);
-      this.jsonBuffer = this.jsonBuffer.slice(endIdx + 1);
-
-      this.handleLine(jsonStr);
-    }
-  }
-
-  private cleanup(): void {
-    this.child = null;
-    this.jsonBuffer = "";
-  }
-}
 
 
 export type CursorEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
@@ -692,13 +379,10 @@ export async function applyCursorSessionMode(
 // ─────────────────────────────────────────────────────────────
 
 export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver {
-  let acpServer: CursorAcpServer | null = null;
-  let serverStarting: Promise<CursorAcpServer> | undefined;
-  const mcpServers = new Map<string, MainsMcpStdioServer>();
-  const activePrompts = new Map<string, {
-    onNotification: (method: string, params: unknown) => void;
-    onRequest: (id: number | string, method: string, params: unknown) => void;
-  }>();
+  const lifecycle = createCursorLifecycle({
+    create: () => new CursorAcpServer(), initialize: initializeServer, ready: wireServer,
+    retired: () => { catalogGeneration++; commandCacheByCwd.clear(); },
+  });
 
   // Cross-run memos
   const sessionIdMap = new Map<string, string>(); // runId → cursor sessionId
@@ -737,23 +421,11 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
   async function acquireCursorSession(
     ctx: MainsToolContext,
     mode: ModeId | undefined,
-    acquire: (server: MainsMcpStdioServer) => Promise<AcquiredSession>,
+    acquire: (bridge: MainsMcpStdioServer, server: CursorAcpServer, owner: CursorRunOwner<CursorAcpServer>) => Promise<AcquiredSession>,
   ): Promise<AcquiredSession> {
     const runId = ctx.runId;
     if (!runId) throw new Error("Cursor MCP bridge requires a run id");
-    await mcpServers.get(runId)?.stop();
-    mcpServers.delete(runId);
-    const server = new MainsMcpStdioServer(ctx, mode);
-    try {
-      await server.start();
-      mcpServers.set(runId, server);
-      logInfo(`Mains MCP stdio bridge started`);
-      return await acquire(server);
-    } catch (err) {
-      await server.stop().catch(() => {});
-      if (mcpServers.get(runId) === server) mcpServers.delete(runId);
-      throw err;
-    }
+    return lifecycle.acquire(runId, () => new MainsMcpStdioServer(ctx, mode), acquire);
   }
 
   function buildAcpEnv(binaryPath: string): Record<string, string> {
@@ -771,80 +443,54 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
   }
 
   /**
-   * Spawn an `agent acp` process and run the ACP handshake (initialize +
-   * authenticate), returning the ready server. Does NOT touch the shared
-   * `acpServer` field, so it's safe to use for isolated, throwaway probe
-   * processes as well as the long-lived run server.
+   * Initialize a shared or probe transport under its lifecycle owner. Every
+   * awaited handshake step checks that shutdown has not retired the owner.
    */
-  async function startInitializedServer(): Promise<CursorAcpServer> {
+  async function initializeServer(server: CursorAcpServer, check: () => void): Promise<void> {
     const binaryPath = findCursorBinary();
-    const server = new CursorAcpServer();
-    try {
-      await server.start(binaryPath, buildAcpEnv(binaryPath));
+    await server.start(binaryPath, buildAcpEnv(binaryPath));
+    check();
 
-      // ACP handshake
-      const initResult = (await server.sendRequest("initialize", {
-        protocolVersion: 1,
-        clientInfo: { name: "mains", title: "Mains Desktop", version: "1.0.0" },
-        clientCapabilities: {
-          // Opt into the parameterized model picker so `session/new` and
-          // `session/set_config_option` return a `configOptions` array (model +
-          // reasoning effort + fast/thinking tunables). Drives effort discovery
-          // in listModels and effort application in configureSession.
-          _meta: { parameterizedModelPicker: true },
-          cursorExtensions: {
-            askQuestion: true,
-            createPlan: true,
-            updateTodos: true,
-            task: true,
-            generateImage: true,
-          },
+    // ACP handshake
+    const initResult = (await server.sendRequest("initialize", {
+      protocolVersion: 1,
+      clientInfo: { name: "mains", title: "Mains Desktop", version: "1.0.0" },
+      clientCapabilities: {
+        // Opt into the parameterized model picker so `session/new` and
+        // `session/set_config_option` return a `configOptions` array (model +
+        // reasoning effort + fast/thinking tunables). Drives effort discovery
+        // in listModels and effort application in configureSession.
+        _meta: { parameterizedModelPicker: true },
+        cursorExtensions: {
+          askQuestion: true,
+          createPlan: true,
+          updateTodos: true,
+          task: true,
+          generateImage: true,
         },
-      })) as Record<string, unknown>;
-      server.sendNotification("initialized");
+      },
+    })) as Record<string, unknown>;
+    check();
+    server.sendNotification("initialized");
 
-      const authMethods = initResult?.authMethods as Array<{ id: string }> | undefined;
-      if (authMethods && authMethods.length > 0) {
-        const methodId = authMethods[0].id;
-        await server.sendRequest("authenticate", { methodId });
-      }
-      return server;
-    } catch (err) {
-      await server.stop();
-      throw err;
+    const authMethods = initResult?.authMethods as Array<{ id: string }> | undefined;
+    if (authMethods && authMethods.length > 0) {
+      const methodId = authMethods[0].id;
+      await server.sendRequest("authenticate", { methodId });
     }
+    check();
   }
 
-  async function ensureServer(): Promise<CursorAcpServer> {
-    if (acpServer?.isRunning) return acpServer;
-    if (serverStarting) return serverStarting;
-    serverStarting = (async () => {
-      logInfo("Starting ACP server: agent acp");
-      const server = await startInitializedServer();
-      acpServer = server;
-      const ownerFor = (params: unknown) => {
-        const sessionId = (params as { sessionId?: unknown } | null)?.sessionId;
-        if (typeof sessionId === "string") return activePrompts.get(sessionId);
-        // Some Cursor extension payloads omit sessionId. Never guess between
-        // concurrent prompts; only an unambiguous active owner can receive them.
-        return activePrompts.size === 1 ? activePrompts.values().next().value : undefined;
-      };
-      server.setNotificationHandler((method, params) => ownerFor(params)?.onNotification(method, params));
-      server.setServerRequestHandler((id, method, params) => {
-        const owner = ownerFor(params);
-        if (owner) owner.onRequest(id, method, params);
-        else server.respondToRequestError(id, -32000, "No active Cursor session for this request");
-      });
+  function wireServer(server: CursorAcpServer): void {
+    const ownerFor = (params: unknown) => lifecycle.ownerFor(server, (params as { sessionId?: unknown } | null)?.sessionId);
+    server.setNotificationHandler((method, params) => ownerFor(params)?.onNotification(method, params));
+    server.setServerRequestHandler((id, method, params) => {
+      const owner = ownerFor(params);
+      if (owner) owner.onRequest(id, method, params);
+      else server.respondToRequestError(id, -32000, "No active Cursor session for this request");
+    });
 
-      server.setOnClose(() => {
-        if (acpServer === server) acpServer = null;
-      });
-
-      logInfo("ACP server initialized and authenticated");
-      return server;
-    })();
-    try { return await serverStarting; }
-    finally { serverStarting = undefined; }
+    logInfo("ACP server initialized and authenticated");
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -917,16 +563,19 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     enrichmentInFlight = true;
     let probe: CursorAcpServer | null = null;
     try {
-      probe = await startInitializedServer();
+      probe = await lifecycle.probe();
+      lifecycle.check(probe);
       const sn = (await probe.sendRequest("session/new", {
         cwd: os.homedir(),
         mcpServers: [],
       })) as Record<string, unknown>;
+      lifecycle.check(probe);
       const sessionId = sn?.sessionId as string | undefined;
       if (!sessionId) return;
 
       let changed = false;
       for (const id of todo) {
+        lifecycle.check(probe);
         capsAttempted.add(id);
         try {
           const res = (await probe.sendRequest(
@@ -934,16 +583,19 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
             { sessionId, configId: modelConfigId, value: id },
             15000,
           )) as Record<string, unknown> | undefined;
+          lifecycle.check(probe);
           const caps = extractCursorModelCaps(
             res?.configOptions as CursorConfigOption[] | undefined,
           );
           modelCapsCache.set(id, caps);
           changed = true;
         } catch {
+          lifecycle.check(probe);
           /* leave uncached; retried on a future launch */
         }
       }
 
+      lifecycle.check(probe);
       if (changed) {
         saveCapsCache();
         broadcastModelsUpdated();
@@ -956,7 +608,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     } finally {
       if (probe) {
         try {
-          await probe.stop();
+          await lifecycle.release(probe);
         } catch {
           /* ignore */
         }
@@ -1433,8 +1085,14 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     server: CursorAcpServer,
     cs: CursorSession,
     onEvent: WorkRunEventHandler,
+    prompt: CursorPromptOwner,
   ): (id: number | string, method: string, params: unknown) => Promise<void> {
+    const isCurrent = () => prompt.running;
+    const respond = (id: number | string, result: unknown) => {
+      if (isCurrent()) server.respondToRequest(id, result);
+    };
     return async (id, method, params) => {
+      if (!isCurrent()) return;
       const p = params as Record<string, unknown> | undefined;
 
       switch (method) {
@@ -1456,7 +1114,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           const acpLocations = toolCall?.locations as Array<{ path?: string }> | undefined;
 
           if (isMainsToolTitle(acpTitle)) {
-            server.respondToRequest(id, {
+            respond(id, {
               outcome: { outcome: "selected", optionId: allowAlwaysId },
             });
             break;
@@ -1471,7 +1129,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
 
           try {
             const result = await requestToolApproval({
-              requestId: String(id),
+              requestId: `${cs.agentMessageStreamId}-${cs.agentMessageIndex}-${id}`,
               runId: cs.runId,
               toolName: approvalToolName,
               toolInput: approvalInput,
@@ -1480,20 +1138,20 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
             });
 
             if (!result.approved) {
-              server.respondToRequest(id, {
+              respond(id, {
                 outcome: { outcome: "selected", optionId: rejectOnceId },
               });
             } else if (result.answer === "acceptForSession") {
-              server.respondToRequest(id, {
+              respond(id, {
                 outcome: { outcome: "selected", optionId: allowAlwaysId },
               });
             } else {
-              server.respondToRequest(id, {
+              respond(id, {
                 outcome: { outcome: "selected", optionId: allowOnceId },
               });
             }
           } catch {
-            server.respondToRequest(id, { outcome: { outcome: "cancelled" } });
+            respond(id, { outcome: { outcome: "cancelled" } });
           }
           break;
         }
@@ -1503,7 +1161,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           const title = p?.title as string | undefined;
 
           if (!questions || questions.length === 0) {
-            server.respondToRequest(id, {
+            respond(id, {
               outcome: { outcome: "skipped", reason: "No questions provided" },
             });
             break;
@@ -1517,7 +1175,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
 
           try {
             const result = await requestToolApproval({
-              requestId: String(id),
+              requestId: `${cs.agentMessageStreamId}-${cs.agentMessageIndex}-${id}`,
               runId: cs.runId,
               toolName: title ?? "Question",
               toolInput: {},
@@ -1529,7 +1187,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
             });
 
             if (!result.approved) {
-              server.respondToRequest(id, { outcome: { outcome: "cancelled" } });
+              respond(id, { outcome: { outcome: "cancelled" } });
             } else if (result.answer) {
               const answerLabels = result.answer.split(", ");
               const selectedOptionIds = qOptions
@@ -1544,22 +1202,22 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
               }
 
               if (selectedOptionIds.length > 0) {
-                server.respondToRequest(id, {
+                respond(id, {
                   outcome: {
                     outcome: "answered",
                     answers: [{ questionId: qId, selectedOptionIds }],
                   },
                 });
               } else {
-                server.respondToRequest(id, {
+                respond(id, {
                   outcome: { outcome: "skipped", reason: result.answer },
                 });
               }
             } else {
-              server.respondToRequest(id, { outcome: { outcome: "skipped" } });
+              respond(id, { outcome: { outcome: "skipped" } });
             }
           } catch {
-            server.respondToRequest(id, { outcome: { outcome: "cancelled" } });
+            respond(id, { outcome: { outcome: "cancelled" } });
           }
           break;
         }
@@ -1610,44 +1268,46 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           const content = sections.join("\n").trim();
 
           if (content) {
-            const planToolCallId =
-              (p?.toolCallId as string | undefined) ?? `cursor-plan-${Date.now()}`;
-            const startedAt = Date.now();
-            await onEvent({
-              type: "tool_call",
-              toolName: "Plan",
-              input: { plan: content },
-              startedAt,
-              metadata: {
-                phase: "start",
-                toolCallId: planToolCallId,
-                isProject,
-                cursorExtension: "create_plan",
-              },
-            });
-            await onEvent({
-              type: "tool_call",
-              toolName: "Plan",
-              input: { plan: content },
-              output: { planStatus: "pending" },
-              startedAt,
-              endedAt: Date.now(),
-              metadata: {
-                phase: "complete",
-                toolCallId: planToolCallId,
-                isProject,
-                cursorExtension: "create_plan",
-              },
+            await prompt.project(async () => {
+              const planToolCallId =
+                (p?.toolCallId as string | undefined) ?? `cursor-plan-${Date.now()}`;
+              const startedAt = Date.now();
+              await onEvent({
+                type: "tool_call",
+                toolName: "Plan",
+                input: { plan: content },
+                startedAt,
+                metadata: {
+                  phase: "start",
+                  toolCallId: planToolCallId,
+                  isProject,
+                  cursorExtension: "create_plan",
+                },
+              });
+              await onEvent({
+                type: "tool_call",
+                toolName: "Plan",
+                input: { plan: content },
+                output: { planStatus: "pending" },
+                startedAt,
+                endedAt: Date.now(),
+                metadata: {
+                  phase: "complete",
+                  toolCallId: planToolCallId,
+                  isProject,
+                  cursorExtension: "create_plan",
+                },
+              });
             });
           }
 
-          server.respondToRequest(id, { outcome: { outcome: "accepted" } });
+          respond(id, { outcome: { outcome: "accepted" } });
           break;
         }
 
         default: {
           logWarn(`Unsupported ACP server request: ${method}`);
-          server.respondToRequestError(id, -32601, `Unsupported: ${method}`);
+          if (isCurrent()) server.respondToRequestError(id, -32601, `Unsupported: ${method}`);
           break;
         }
       }
@@ -1938,9 +1598,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         rootPath: request.execution.cwd,
         runId,
       };
-      return acquireCursorSession(mainsCtx, request.mode, async (mainsMcp) => {
-        const server = await ensureServer();
-
+      return acquireCursorSession(mainsCtx, request.mode, async (mainsMcp, server, owner) => {
         logInfo(
           `Creating session (model: ${resolvedModel || "default"}, cwd: ${request.execution.cwd})`,
         );
@@ -1973,7 +1631,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           agentMessage: new CursorMessageStream(),
           agentMessageIndex: 0,
           agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
-          mcpServer: mainsMcp,
+          mcpServer: mainsMcp, owner,
           agentThoughtBuffer: "",
           toolCallCache: new Map(),
           skippedToolCallIds: new Set(),
@@ -1996,10 +1654,8 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         rootPath: request.execution.cwd,
         runId,
       };
-      return acquireCursorSession(mainsCtx, request.mode, async (mainsMcp) => {
+      return acquireCursorSession(mainsCtx, request.mode, async (mainsMcp, server, owner) => {
         const mcpServersConfig = mainsMcp ? [mainsMcp.mcpConfig] : [];
-        const server = await ensureServer();
-
         let sessionId = sessionIdMap.get(runId);
         if (!sessionId) {
           const run = await runsRepo.findRunById(runId);
@@ -2065,7 +1721,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           agentMessage: new CursorMessageStream(),
           agentMessageIndex: 0,
           agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
-          mcpServer: mainsMcp,
+          mcpServer: mainsMcp, owner,
           agentThoughtBuffer: "",
           toolCallCache: new Map(),
           skippedToolCallIds: new Set(),
@@ -2095,8 +1751,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         rootPath: request.execution.cwd,
         runId,
       };
-      return acquireCursorSession(mainsCtx, request.mode, async (mainsMcp) => {
-        const server = await ensureServer();
+      return acquireCursorSession(mainsCtx, request.mode, async (mainsMcp, server, owner) => {
 
         const sessionResult = (await server.sendRequest("session/new", {
           cwd: request.execution.cwd,
@@ -2130,7 +1785,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           agentMessage: new CursorMessageStream(),
           agentMessageIndex: 0,
           agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
-          mcpServer: mainsMcp,
+          mcpServer: mainsMcp, owner,
           agentThoughtBuffer: "",
           toolCallCache: new Map(),
           skippedToolCallIds: new Set(),
@@ -2154,13 +1809,16 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       const timeout = config.timeout ?? 3_600_000;
       if (signal.aborted) return { status: "canceled" };
 
-      const server = acpServer;
+      const server = cs.owner.server;
+      try { cs.owner.assertActive(); }
+      catch (error) { return { status: "failed", summary: error instanceof Error ? error.message : String(error) }; }
       if (!server || !server.isRunning) {
         return { status: "failed", summary: "ACP server not running" };
       }
 
       // Wire abort: when signal fires, send session/cancel notification
-      const onAbort = () => {
+      let execution!: CursorPromptOwner;
+      const sendCancel = () => {
         if (server.isRunning) {
           try {
             server.sendNotification("session/cancel", { sessionId: cs.sessionId });
@@ -2169,66 +1827,61 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           }
         }
       };
-      signal.addEventListener("abort", onAbort, { once: true });
 
-      if (activePrompts.has(cs.sessionId)) {
-        signal.removeEventListener("abort", onAbort);
-        return { status: "failed", summary: "Cursor session already has an active prompt" };
-      }
-      let eventQueue = Promise.resolve();
-      let eventError: unknown;
-      const enqueue = (task: () => Promise<void>) => {
-        eventQueue = eventQueue.then(task).catch((err) => {
-          eventError ??= err;
-          logError("Failed to project Cursor event:", err);
-        });
+      const onAbort = () => {
+        if (execution.signal.aborted) return;
+        execution.cancel(); sendCancel();
       };
-      const emitQueued: WorkRunEventHandler = (event) => {
-        enqueue(async () => { await onEvent(event); });
-        return eventQueue;
-      };
-      activePrompts.set(cs.sessionId, {
-        onNotification(method, params) {
-          const p = params as { update?: { sessionUpdate?: string; title?: unknown } } | undefined;
-          if (method === "session/update" && p?.update?.sessionUpdate === "session_info_update") {
-            const title = typeof p.update.title === "string"
-              ? p.update.title.replace(/(?:<\|eos\|>)+\s*$/, "").trim() : "";
-            if (title) {
-              enqueue(async () => { await runsRepo.updateRun(cs.runId, { title }); });
-            }
-            return;
-          }
-          for (const event of mapNotification(method, params, cs)) {
-            void emitQueued(event);
-          }
-        },
-        onRequest: buildServerRequestHandler(server, cs, emitQueued),
-      });
-
-      // Wire MCP bridge events
-      cs.mcpServer.setEventHandler(emitQueued);
-
+      const emitQueued: WorkRunEventHandler = (event) => execution.project(() => onEvent(event));
       try {
-        let outcome: DriverOutcome;
+        execution = cs.owner.begin(cs.sessionId, {
+          onNotification(method, params) {
+            const p = params as { update?: { sessionUpdate?: string; title?: unknown } } | undefined;
+            if (method === "session/update" && p?.update?.sessionUpdate === "session_info_update") {
+              const title = typeof p.update.title === "string"
+                ? p.update.title.replace(/(?:<\|eos\|>)+\s*$/, "").trim() : "";
+              if (title) {
+                void execution.project(async () => { await runsRepo.updateRun(cs.runId, { title }); });
+              }
+              return;
+            }
+            for (const event of mapNotification(method, params, cs)) {
+              void emitQueued(event);
+            }
+          },
+          onRequest: (id, method, params) => {
+            void buildServerRequestHandler(server, cs, onEvent, execution)(id, method, params).catch((error) => logError("Cursor request handler failed:", error));
+          },
+        });
+      } catch (error) {
+        return { status: "failed", summary: error instanceof Error ? error.message : String(error) };
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+
+      let outcome!: DriverOutcome;
+      try {
+        cs.mcpServer.setEventHandler(emitQueued);
         try {
-          const promptResult = (await server.sendRequest(
+          const promptResult = (await execution.run(() => server.sendRequest(
             "session/prompt",
             { sessionId: cs.sessionId, prompt: [{ type: "text", text: prompt }] },
-            timeout,
-          )) as Record<string, unknown>;
+            timeout, execution.signal,
+          ))) as Record<string, unknown>;
           const stopReason = promptResult?.stopReason as string | undefined;
           outcome = { ...mapStopReasonToOutcome(stopReason), stopReason };
         } catch (err) {
-          outcome = signal.aborted ? { status: "canceled" } : {
+          outcome = signal.aborted || execution.signal.reason instanceof CursorCanceledError ? { status: "canceled" } : {
             status: "failed", summary: err instanceof Error ? err.message : String(err),
           };
           // A timed-out prompt may still be executing in Cursor.
-          if (server.isRunning) onAbort();
+          if (server.isRunning && !execution.signal.aborted) {
+            execution.cancel(err instanceof Error ? err : new Error(String(err)));
+            sendCancel();
+          }
         }
-        activePrompts.delete(cs.sessionId);
-        await eventQueue;
+        await execution.drain();
         cs.mcpServer.setEventHandler(null);
-        if (eventError) throw eventError;
 
         // Flush remaining agent message buffer
         const message = cs.agentMessage.finish();
@@ -2255,28 +1908,39 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
                 ? { messagePhase: "final_answer" } : {}) },
           });
         }
-        return outcome;
       } finally {
-        activePrompts.delete(cs.sessionId);
-        signal.removeEventListener("abort", onAbort);
-        await eventQueue;
-        cs.mcpServer.setEventHandler(null);
-        cs.agentMessage = new CursorMessageStream();
-        cs.agentThoughtBuffer = "";
-        for (const [source, streamId] of [
-          ["agent_message_streaming", `${cs.agentMessageStreamId}-${cs.agentMessageIndex}`],
-          ["agent_thought_streaming", `cursor-think-${cs.runId}`],
-        ]) {
-          await onEvent({ type: "artifact", kind: "report", content: "", metadata: { source }, ephemeral: true, streamId });
+        try {
+          try { await execution.drain(); }
+          finally {
+            cs.mcpServer.setEventHandler(null);
+            cs.agentMessage = new CursorMessageStream();
+            cs.agentThoughtBuffer = "";
+            cs.toolCallCache.clear(); cs.skippedToolCallIds.clear();
+            for (const [source, streamId] of [
+              ["agent_message_streaming", `${cs.agentMessageStreamId}-${cs.agentMessageIndex}`],
+              ["agent_thought_streaming", `cursor-think-${cs.runId}`],
+            ]) {
+              await onEvent({ type: "artifact", kind: "report", content: "", metadata: { source }, ephemeral: true, streamId });
+            }
+            cs.agentMessageIndex++;
+          }
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+          await execution.finish();
         }
-        cs.agentMessageIndex++;
       }
+      if (execution.signal.aborted) {
+        const reason: unknown = execution.signal.reason;
+        return reason instanceof CursorCanceledError ? { status: "canceled" } : {
+          status: "failed", summary: reason instanceof Error ? reason.message : String(reason),
+        };
+      }
+      return outcome;
     },
 
     async cleanup(session): Promise<void> {
       const cs = session as CursorSession;
-      await cs.mcpServer.stop();
-      if (mcpServers.get(cs.runId) === cs.mcpServer) mcpServers.delete(cs.runId);
+      await cs.owner.close();
       // Session identity survives so session/load can resume with a fresh bridge.
     },
 
@@ -2307,28 +1971,24 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     },
 
     async shutdown(): Promise<void> {
+      await lifecycle.shutdown();
       sessionIdMap.clear();
-
-      await Promise.all([...mcpServers.values()].map((server) => server.stop().catch(() => {})));
-      mcpServers.clear();
-
-      if (acpServer) {
-        await acpServer.stop();
-        acpServer = null;
-      }
 
       logInfo("Shutdown complete");
     },
 
     async listModels(): Promise<ModelInfo[]> {
       try {
+        lifecycle.assertRunning();
         loadCapsCache();
-        const server = await ensureServer();
+        const server = await lifecycle.ensure();
+        lifecycle.check(server);
         const result = (await server.sendRequest("session/new", {
           cwd: os.homedir(),
           mcpServers: [],
         })) as Record<string, unknown>;
 
+        lifecycle.check(server);
         const configOptions = result?.configOptions as CursorConfigOption[] | undefined;
         const modelOption = configOptions ? findCursorModelOption(configOptions) : undefined;
         const modelConfigId = modelOption?.id ?? "model";
@@ -2424,16 +2084,22 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       // we don't disturb the shared run server's notification routing.
       let probe: CursorAcpServer | null = null;
       try {
-        probe = await startInitializedServer();
+        probe = await lifecycle.probe();
         const p = probe;
+        lifecycle.check(p);
+        const signal = lifecycle.signal(p);
         const commands = await new Promise<CommandInfo[]>((resolve) => {
           let settled = false;
           const finish = (cmds: CommandInfo[]) => {
             if (settled) return;
             settled = true;
+            clearTimeout(timer); signal.removeEventListener("abort", onAbort);
             resolve(cmds);
           };
+          const onAbort = () => finish([]);
           const timer = setTimeout(() => finish([]), 6000);
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) onAbort();
           p.setNotificationHandler((method, params) => {
             if (method !== "session/update") return;
             const update = (params as Record<string, unknown>)?.update as
@@ -2449,6 +2115,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
             finish([]);
           });
         });
+        lifecycle.check(p);
         if (commands.length > 0 && generation === catalogGeneration) commandCacheByCwd.set(cwd, commands);
         return commands;
       } catch (error) {
@@ -2459,7 +2126,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       } finally {
         if (probe) {
           try {
-            await probe.stop();
+            await lifecycle.release(probe);
           } catch {
             /* ignore */
           }
