@@ -395,6 +395,24 @@ _Avoid_: importing `electron` from a module reachable through `serve.ts`; adding
 an Electron-shaped fake to the Node entry; exporting an Electron adapter through
 a barrel used by backend modules.
 
+**scheduled execution**:
+Pulse and Automations share `packages/backend/src/runtime/scheduler-lifecycle.ts`
+for execution ownership, timer replacement, generation retirement and bounded
+retry deadlines. Manual, catch-up and timer launches for one id share a pending
+execution. Background scheduling starts explicitly; Stop cancels timers, retires
+unlaunched preparation and drains accepted results before either host tears down
+providers or SQLite. Restart cannot revive an older preparation. Edits/deletion
+retire that item's pending launch; a later explicit manual launch may still run
+an inactive item. Pulse rechecks each due row after awaits, claims its next slot
+before preparation and conditionally restores a retired, unlaunched claim for
+catch-up. Accepted completions retain their receipt without overwriting a newer
+schedule. Automations create their durable run receipt before invoking an action;
+receipt failures retry after 1–30 seconds, while ordinary action failures keep
+the normal interval and error history. The owner breaks waits longer than Node's
+timer range into bounded waits and checks the actual due time before dispatch.
+Pulse calendar math still uses device-local time; automation intervals remain
+completion-based unless the user edited their next schedule during execution.
+
 **standalone server**:
 The plain-Node backend composed by `apps/server/src/standalone-server.ts` and
 `apps/server/src/server-cli.ts`. The application owns one SQLite database,

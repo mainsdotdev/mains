@@ -1224,6 +1224,7 @@ async function initializeApp() {
 async function cleanupApp() {
   try {
     console.log("Cleaning up application...");
+    await Promise.all([automationsService.stop(), pulseService.stop()]);
 
     // Destroy tray and the Dock menu's status feed
     hideTray();
@@ -1274,9 +1275,7 @@ async function cleanupApp() {
     unregisterMcpAppsProtocolHandler();
     unregisterStatsIpc();
     unregisterUpdatesIpc();
-    automationsService.stop();
     unregisterAutomationsIpc();
-    pulseService.stop();
     unregisterPulseIpc();
     unregisterGuardsIpc();
     unregisterPullRequestsIpc();

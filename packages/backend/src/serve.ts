@@ -210,9 +210,8 @@ export async function startBackendServer(
     automationsService.start();
     pulseService.start();
   } catch (error) {
+    await Promise.all([automationsService.stop(), pulseService.stop()]);
     await bridgeService.stop();
-    automationsService.stop();
-    pulseService.stop();
     unregisterBackendRegistrations(registered);
     await closeDatabase();
     throw error;
@@ -248,9 +247,8 @@ export async function startBackendServer(
       commandReceipts: backendService.commandReceipts,
     });
   } catch (error) {
+    await Promise.all([automationsService.stop(), pulseService.stop()]);
     await bridgeService.stop();
-    automationsService.stop();
-    pulseService.stop();
     unregisterBackendRegistrations(registered);
     await closeDatabase();
     throw error;
@@ -300,11 +298,10 @@ export async function startBackendServer(
   const close = (): Promise<void> => {
     if (stopPromise) return stopPromise;
     stopPromise = (async () => {
+      await Promise.all([automationsService.stop(), pulseService.stop()]);
       await wsHost.close();
       await bridgeService.stop();
       await tailscaleService.stopServeIfActive();
-      automationsService.stop();
-      pulseService.stop();
       runSessionRegistry.shutdownAll("Standalone server stopped during run");
       destroyAllTerminals();
       await shutdownAllWorkAdapters();
