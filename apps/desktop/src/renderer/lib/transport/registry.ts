@@ -21,9 +21,10 @@ export function getTransport(): Transport {
 }
 
 /** Swap the active transport (e.g. point the UI at a remote backend). */
-export function setTransport(next: Transport): void {
+export function setTransport(next: Transport, beforeNotify?: () => void): void {
   if (next === activeTransport) return;
   activeTransport = next;
+  beforeNotify?.();
   for (const listener of listeners) listener(activeTransport);
 }
 

@@ -12,6 +12,8 @@ export { appEvents } from "./events";
 export { appApi } from "./api";
 export {
   connectRemoteBackend,
+  beginRemoteBackendSwitch,
+  cancelRemoteBackendSwitch,
   disconnectRemoteBackend,
   getActiveRemote,
 } from "./backend";

@@ -244,8 +244,10 @@ const api = {
   },
   // SSH tunneling for remote backends (runs the local ssh client; not served remotely)
   ssh: {
+    cancelTunnelOpen: (requestId: string) => ipcRenderer.invoke(CHANNELS.ssh.cancelTunnelOpen, requestId),
     discoverHosts: () => ipcRenderer.invoke(CHANNELS.ssh.discoverHosts),
     openTunnel: (input: {
+      requestId?: string;
       host: string;
       remotePort: number;
       remoteCommand?: string | null;

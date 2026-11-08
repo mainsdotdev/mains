@@ -384,6 +384,9 @@ Three neighbouring modules are easy to confuse, so the split is by *direction*:
 - **localBackend** — exposing this machine (WS host lifecycle, bind/port, Tailscale serve, addresses). Desktop-only, real `ipcMain` (local-only control: a remote client must never toggle the exposure it rides on). Owns the desktop-facing pairing handlers (`localBackend:createPairingCode/listPairedDevices/revokePairedDevice` + the `pairedDevicesChanged` push) because a code needs the host's reachable addresses.
 - **remoteBackends** — *other* backends this desktop connects to: the encrypted at-rest store for their pairing tokens (`remoteBackends:setToken/getToken/deleteToken`; the catalog of `KnownBackend`s lives in the renderer). Formerly `backendAuth`.
 
+**backend selection and SSH ownership**:
+The owners in [Backend selection lifecycle](docs/design/backend-switch-lifecycle.md) cover inventory 46 and 54. `backend-switch-lifecycle.ts` admits the latest intent before SSH or credential preparation; only a still-current, verified socket can replace the active backend. Transport and selected-backend state publish together before transport observers run. A retired candidate releases only its own late resources, while a failed candidate preserves the current connection. `ssh-tunnel-lifecycle.ts` owns port allocation, actual process spawn, HTTP probing and confirmed child closure. Request nonces correlate cancellation before readiness; signal delivery and exit do not substitute for close. Main shutdown fences opens before awaiting cleanup and drains admitted native jobs. Settings unmount retires preparation while committed connections remain app-scoped.
+
 
 **backend runtime**:
 The small host-capability seam in `packages/backend/src/runtime/backend-runtime.ts`. Backend

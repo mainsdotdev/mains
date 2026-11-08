@@ -223,6 +223,7 @@ export const CHANNELS = {
     scanWorkspace: "guards:scanWorkspace",
   },
   ssh: {
+    cancelTunnelOpen: "ssh:cancelTunnelOpen",
     discoverHosts: "ssh:discoverHosts",
     openTunnel: "ssh:openTunnel",
     closeTunnel: "ssh:closeTunnel",

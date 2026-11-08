@@ -4,6 +4,8 @@ import { CHANNELS } from "@mains/contracts/channels";
 import { sshService, type OpenTunnelInput } from "./ssh.service";
 
 export function registerSshIpc(): void {
+  sshService.start();
+  ipcMain.handle(CHANNELS.ssh.cancelTunnelOpen, handle((requestId: string) => sshService.cancelTunnelOpen(requestId)));
   ipcMain.handle(
     CHANNELS.ssh.discoverHosts,
     handle(() => sshService.discoverHosts()),
@@ -19,6 +21,7 @@ export function registerSshIpc(): void {
 }
 
 export function unregisterSshIpc(): void {
+  ipcMain.removeHandler(CHANNELS.ssh.cancelTunnelOpen);
   ipcMain.removeHandler(CHANNELS.ssh.discoverHosts);
   ipcMain.removeHandler(CHANNELS.ssh.openTunnel);
   ipcMain.removeHandler(CHANNELS.ssh.closeTunnel);

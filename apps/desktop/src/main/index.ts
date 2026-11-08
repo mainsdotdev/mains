@@ -1245,7 +1245,7 @@ function cleanupApp(): Promise<void> { return appLifecycle.close(); }
 async function cleanupAppResources() {
   try {
     console.log("Cleaning up application...");
-    await Promise.all([automationsService.stop(), pulseService.stop()]);
+    await Promise.all([automationsService.stop(), pulseService.stop(), sshService.closeAllTunnels()]);
 
     // Destroy tray and the Dock menu's status feed
     hideTray();
@@ -1253,9 +1253,6 @@ async function cleanupAppResources() {
 
     // Destroy all terminal PTY instances
     destroyAllTerminals();
-
-    // Tear down any open SSH tunnels
-    sshService.closeAllTunnels();
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
     stopBridgeNotifications?.();
