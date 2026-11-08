@@ -111,7 +111,7 @@ export function DeveloperChatList({ workspaces, gitStateByWorkspaceId, searchQue
         action={target ? { label: `New chat in ${project.name}`, onClick: () => newChat(target) } : undefined}>
         <div className={SIDEBAR_PROJECT_ITEMS_CLASS}>
           {projectChats.slice(0, shown).map((run) => renderChat(run, true))}
-          {!projectChats.length && <div className={`flex items-center ${SIDEBAR_PROJECT_CHILD_ROW_CLASS}`}><Text as="span" size="xxs" tone="muted">No chats yet</Text></div>}
+          {!projectChats.length && <div className={`flex items-center ${SIDEBAR_PROJECT_CHILD_ROW_CLASS}`}><Text as="span" size="s" tone="faint" className="opacity-60">No chats yet</Text></div>}
           {projectChats.length > shown && <Button onClick={() => setShownByProject((previous) => ({ ...previous,
             [project.id]: shown + PROJECT_ROWS }))} className={`${SIDEBAR_PROJECT_CHILD_ROW_CLASS} block w-full text-left text-xs text-primary-500`}>Show more</Button>}
         </div>

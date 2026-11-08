@@ -33,7 +33,7 @@ import {
   Refresh,
   Search,
   Trash,
-  Filter,
+  Layers,
   ArrowUp,
   Generate,
   Settings,
@@ -599,8 +599,9 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           )}
           <AtlasMenu
             label="Filter Atlas"
-            className={`ml-auto size-8 rounded-full ${project || params.get("tag") ? "text-accent" : "text-primary-500 hover:bg-primary-100 dark:hover:bg-primary-900"}`}
-            trigger={<Filter className="size-4" />}
+            variant="filter"
+            className={(open) => `ml-auto ${open || project || params.get("tag") ? "bg-primary/80 dark:bg-primary/10 glass-outline text-primary-900 dark:text-primary-100" : ""}`}
+            trigger={<Layers className="w-3.5 h-3.5" />}
           >
             {(close) => (
               <>

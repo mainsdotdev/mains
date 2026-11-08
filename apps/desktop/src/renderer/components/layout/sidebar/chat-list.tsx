@@ -43,6 +43,7 @@ import { useActiveSpace } from "@/hooks/use-active-space";
 import { resolveRunSpaceTarget } from "@/features/workspace/lib/background-runs";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
+import { SIDEBAR_PROJECT_CHILD_ROW_CLASS } from "@/lib/sidebar-layout";
 import { iconColorClass, splitStoredIcon } from "@/lib/icon-registry";
 import { useChatActions } from "@/features/workspace/hooks/use-chat-actions";
 import { SidebarGroupSection } from "./sidebar-group-section";
@@ -153,13 +154,9 @@ export function SidebarChatList({
     !query && collectionRows.length > 1 && !isReorderingCollections;
 
   // Empty states. Waits for the collections query, so "No projects yet" never
-  // flashes before the list arrives. Recents stays up with a note when there
-  // are no chats at all; a search that matches nothing says so instead of
-  // leaving the sidebar blank.
+  // flashes before the list arrives. A search that matches nothing says so
+  // instead of leaving the sidebar blank.
   const hasNoProjects = !!collections && collectionRows.length === 0;
-  const hasNoChats = !query && (recentRuns?.length ?? 0) === 0;
-  const filterHidesChats =
-    !query && (recentRuns?.length ?? 0) > 0 && runs.length === 0;
   const hasNoMatches =
     !!query &&
     pinnedRuns.length === 0 &&
@@ -401,8 +398,8 @@ export function SidebarChatList({
                         {collectionRuns.length > 0 ? (
                           collectionRuns.map((run) => renderChat(run))
                         ) : (
-                          <div className="pl-2.5 pr-2.5 py-1">
-                            <Text as="span" size="xxs" tone="muted">
+                          <div className={`flex items-center ${SIDEBAR_PROJECT_CHILD_ROW_CLASS}`}>
+                            <Text as="span" size="s" tone="faint" className="opacity-60">
                               No chats
                             </Text>
                           </div>
@@ -417,9 +414,7 @@ export function SidebarChatList({
           {hasNoProjects && <EmptyListNote>No projects yet</EmptyListNote>}
         </div>
       )}
-      {(standaloneRuns.length > 0 ||
-        hasNoChats ||
-        (filterHidesChats && collectionRows.length === 0)) && (
+      {standaloneRuns.length > 0 && (
         <SidebarGroupSection
           groupKey="recents"
           label="Recents"
@@ -428,17 +423,11 @@ export function SidebarChatList({
           // arrive.
           count={Math.min(standaloneRuns.length, RECENTS_LIMIT)}
         >
-          {hasNoChats || filterHidesChats ? (
-            <EmptyListNote>
-              {hasNoChats ? "No chats yet" : "No chats"}
-            </EmptyListNote>
-          ) : (
-            <div className="flex flex-col space-y-0.5">
-              {standaloneRuns
-                .slice(0, RECENTS_LIMIT)
-                .map((run) => renderChat(run))}
-            </div>
-          )}
+          <div className="flex flex-col space-y-0.5">
+            {standaloneRuns
+              .slice(0, RECENTS_LIMIT)
+              .map((run) => renderChat(run))}
+          </div>
         </SidebarGroupSection>
       )}
       {hasNoMatches && <EmptyListNote>No matching chats</EmptyListNote>}
@@ -507,7 +496,7 @@ export function SidebarChatList({
 function EmptyListNote({ children }: { children: ReactNode }) {
   return (
     <div className="flex items-center justify-center h-16">
-      <Text size="xs">{children}</Text>
+      <Text size="s" tone="faint">{children}</Text>
     </div>
   );
 }
