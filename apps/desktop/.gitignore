@@ -57,6 +57,7 @@ Thumbs.db
 !/docs/design/window-lifecycle.md
 !/docs/design/browser-interaction-lifecycle.md
 !/docs/design/remote-access-lifecycle.md
+!/docs/design/github-device-flow-lifecycle.md
 
 # Coverage
 coverage/

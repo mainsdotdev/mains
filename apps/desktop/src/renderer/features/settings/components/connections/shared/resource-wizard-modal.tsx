@@ -80,6 +80,7 @@ export interface ResourceWizardConfig {
     render: (ctx: {
       submitValues: (values: Record<string, string>) => Promise<void>;
       submitting: boolean;
+      isCurrent: () => boolean;
     }) => ReactNode;
   };
 
@@ -305,7 +306,7 @@ function CredentialsStep({
           }`}
           aria-hidden={method === "token"}
         >
-          {method === "alternative" ? alternative.render({ submitValues, submitting: loading }) : null}
+          {method === "alternative" ? alternative.render({ submitValues, submitting: loading, isCurrent: owner.current }) : null}
           {data.errorMessage ? <ErrorText>{data.errorMessage}</ErrorText> : null}
         </div>
       </div>

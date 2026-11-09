@@ -53,9 +53,10 @@ const CONFIG: ResourceWizardConfig = {
   credentialAlternative: {
     label: "Sign in with GitHub",
     tokenLabel: "Access token",
-    render: ({ submitValues, submitting }) => (
+    render: ({ submitValues, submitting, isCurrent }) => (
       <GitHubDeviceFlowPanel
         submitting={submitting}
+        isCurrent={isCurrent}
         onToken={(token) => submitValues({ token })}
       />
     ),

@@ -17,6 +17,7 @@ export function createConnectionWizardLifecycle(isCurrent: () => boolean) {
   const usable = () => active && !retired && isCurrent();
   return {
     scope: crypto.randomUUID(),
+    current: usable,
     attach() { if (!retired) active = true; },
     detach() { active = false; pending = undefined; step = "loading"; },
     retire() { retired = true; active = false; pending = undefined; },
