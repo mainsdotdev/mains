@@ -10,10 +10,10 @@ import { aliasSet, clockOf, compareClock, deleted, getClock, quote, rowWhere, ty
 import { readRow, type BridgeStore, type OutboxEntry } from "./bridge.store";
 import type { BridgeBlobs } from "./bridge.blobs";
 import { createBridgeValueBlobs } from "./bridge.value-blobs";
+import { bindBridgeBlobManifest, releasableBridgeCaptures } from "./bridge.blob-lifecycle";
 
 export type BridgeFileTable = "run_attachments" | "run_artifacts" | "collection_sources" | "atlas_items" | "provider_session_entries";
 const fileTables: readonly string[] = ["run_attachments", "run_artifacts", "collection_sources", "atlas_items", "provider_session_entries"];
-const sameClock = (a: RowClock, b: RowClock | undefined) => !!b && compareClock(clockOf(a), clockOf(b)) === 0;
 const within = (root: string, file: string) => { const relative = path.relative(root, file); return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative); };
 
 async function snapshotFile(file: string, roots: string[]): Promise<Buffer | undefined> {
@@ -92,7 +92,9 @@ export function createBridgeBlobRecords(options: { sqlite: SQLiteInstance; backe
       return bytes ? blobs.capture(bytes, { column: "metadata", sourcePath: file, name: path.basename(file), mime }) : undefined;
     },
     ready(store: BridgeStore, entry: OutboxEntry) { return !needsFiles(entry) || getClock(store.sqlite, entry.table_name, entry.pk, entry.register)?.blob_refs_json != null; },
-    async acknowledged(clock: RowClock) { await blobs.releaseCaptured(JSON.parse(clock.blob_refs_json ?? "[]")); },
+    async acknowledged(clock: RowClock) {
+      await blobs.releaseCaptured(releasableBridgeCaptures(sqlite, JSON.parse(clock.blob_refs_json ?? "[]")));
+    },
     /** An orphan may have expired while this backend was offline before ACK.
      * Republish the exact captured identity, never substitute newer file bytes. */
     async republish(store: BridgeStore, clock: RowClock) {
@@ -185,8 +187,7 @@ export function createBridgeBlobRecords(options: { sqlite: SQLiteInstance; backe
         }
       }
       // No await between checking the generation and binding its already uploaded blobs.
-      if (sameClock(clock, getClock(sqlite, entry.table_name, entry.pk, entry.register)))
-        sqlite.prepare("UPDATE bridge_row_clock SET blob_refs_json=? WHERE table_name=? AND pk=? AND register=?").run(JSON.stringify(refs), entry.table_name, entry.pk, entry.register);
+      bindBridgeBlobManifest(sqlite, clock, refs);
     },
     async resolve(table: BridgeFileTable, localId: string | number, column?: string, sourcePath?: string): Promise<string> {
       if (!fileTables.includes(table)) throw new Error("Invalid Bridge file table");

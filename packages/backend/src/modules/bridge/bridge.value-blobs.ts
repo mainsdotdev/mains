@@ -2,9 +2,10 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { BRIDGE_BLOB_MAX_BYTES, type BridgeBlobRef } from "@mains/contracts/bridge-blobs";
 import type { BridgeUpsertBody } from "@mains/contracts/bridge-protocol";
-import { clockOf, compareClock, definition, getClock, type RowClock } from "./bridge.sql";
+import { definition, getClock, type RowClock } from "./bridge.sql";
 import { portableValues, type BridgeStore, type OutboxEntry } from "./bridge.store";
 import type { BridgeBlobs } from "./bridge.blobs";
+import { bindBridgeBlobManifest } from "./bridge.blob-lifecycle";
 
 const fieldLimit = 128 * 1024, registerLimit = 256 * 1024;
 const encode = (value: string) => Buffer.from(JSON.stringify(value));
@@ -46,9 +47,7 @@ export function createBridgeValueBlobs(blobs: BridgeBlobs) {
         const retained = previous.find((ref) => ref.kind === "value" && ref.column === field.column && blobs.matches(ref, field.bytes));
         refs.push(retained ?? { ...await blobs.publish(field.bytes, { column: field.column, name: "value.json", mime: "application/json" }), kind: "value" });
       }
-      const current = getClock(store.sqlite, entry.table_name, entry.pk, entry.register);
-      if (current && compareClock(clockOf(clock), clockOf(current)) === 0)
-        store.sqlite.prepare("UPDATE bridge_row_clock SET blob_refs_json=? WHERE table_name=? AND pk=? AND register=?").run(JSON.stringify(refs), entry.table_name, entry.pk, entry.register);
+      bindBridgeBlobManifest(store.sqlite, clock, refs);
     },
     async restore(body: BridgeUpsertBody, known: ReadonlyMap<string, string> = new Map()): Promise<Map<string, string>> {
       if (valueBlobBytes(body) > BRIDGE_BLOB_MAX_BYTES) throw new Error("Bridge large fields exceed 50 MiB per record");

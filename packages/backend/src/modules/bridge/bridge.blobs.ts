@@ -6,6 +6,7 @@ import { BRIDGE_BLOB_CHUNK_BYTES, BRIDGE_BLOB_CIPHER_OVERHEAD, BRIDGE_BLOB_MAX_B
   validateBridgeBlobIdentity, type BridgeBlobRef, type BridgeBlobPresignResult } from "@mains/contracts/bridge-blobs";
 import { createBridgeBlobCrypto } from "./bridge.blob-crypto";
 import { requestBridgeChunk } from "./bridge.blob-transfer";
+import { createBridgeBlobLifecycle } from "./bridge.blob-lifecycle";
 
 export interface BridgeBlobsOptions {
   accountKey: Uint8Array; dataDir: string; url: string; token: string | (() => Promise<string>);
@@ -19,12 +20,8 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
   const root = join(options.dataDir, "bridge", "blobs");
   const uploads = join(options.dataDir, "bridge", "uploads");
   const origin = new URL(options.url.replace(/^ws/, "http"));
-  const jobs = new Map<string, Promise<string>>(), pinned = new Set<string>();
+  const lifecycle = createBridgeBlobLifecycle();
   const opened = new Map<string, BridgeBlobRef>();
-  const activeDownloads = new Set<string>(), waiting: Array<() => void> = [];
-  let downloadSlots = 2;
-  const abort = new AbortController();
-  let stopped = false;
   async function directory() {
     for (const dir of [join(options.dataDir, "bridge"), root]) {
       await fs.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -70,7 +67,7 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
     let total = files.reduce((sum, file) => sum + file.size, 0);
     for (const file of files.sort((a, b) => a.time - b.time)) {
       if (total <= (options.cacheLimitBytes ?? 256 * 1024 * 1024)) break;
-      if (file.path === keep || pinned.has(file.path) || file.partial && activeDownloads.has(basename(file.path).slice(7))) continue;
+      if (file.path === keep || lifecycle.pinned(file.path) || file.partial && lifecycle.pinned(`partial:${basename(file.path).slice(7)}`)) continue;
       await fs.rm(file.path, { recursive: file.partial, force: true }).catch(() => {}); total -= file.size;
     }
   }
@@ -85,8 +82,8 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
     } finally { await fs.unlink(temp).catch(() => {}); }
   }
   async function request(url: string, init: RequestInit = {}) {
-    if (stopped) throw new Error("Bridge blob transfer is stopped");
-    return fetch(url, { ...init, redirect: "error", signal: AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]) });
+    lifecycle.assertActive();
+    return fetch(url, { ...init, redirect: "error", signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(30_000)]) });
   }
   async function readBounded(response: Response, expected: number): Promise<Uint8Array> {
     const reader = response.body?.getReader(); if (!reader) throw new Error("Missing Bridge chunk body");
@@ -102,7 +99,7 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
     return bytes;
   }
   async function urls(ref: BridgeBlobRef, op: "get" | "put") {
-    const token = typeof options.token === "function" ? await options.token() : options.token;
+    const token = await lifecycle.wait(() => typeof options.token === "function" ? options.token() : options.token);
     const response = await request(new URL("/v1/blobs/presign", origin).toString(), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ op, blobs: [{ blobId: ref.blobId, size: ref.size }] }) });
     if (!response.ok) {
@@ -140,7 +137,7 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
         if (sealed) crypto.open(ref, chunk.index, sealed); // Never trust an incomplete/tampered local part.
       } catch { sealed = undefined; }
       if (!sealed) {
-        const response = await requestBridgeChunk(chunk.url, { signal: abort.signal });
+        const response = await requestBridgeChunk(chunk.url, { signal: lifecycle.signal });
         if (!response.ok) throw new Error(`Bridge file is unavailable (${response.status})`);
         sealed = await readBounded(response, bridgeBlobChunkSize(ref.size, chunk.index) + BRIDGE_BLOB_CIPHER_OVERHEAD);
         crypto.open(ref, chunk.index, sealed);
@@ -155,101 +152,121 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
     await fs.rm(partial, { recursive: true, force: true });
     return path;
   }
+  async function publishBytes(bytes: Uint8Array, description: Pick<BridgeBlobRef, "column" | "name" | "mime" | "sourcePath">): Promise<BridgeBlobRef> {
+    if (bytes.length > BRIDGE_BLOB_MAX_BYTES) throw new Error("Bridge file exceeds 50 MiB");
+    const ref: BridgeBlobRef = { ...description, name: basename(description.name), blobId: crypto.id(bytes), size: bytes.length };
+    const path = cachePath(ref), release = lifecycle.pin(path);
+    try {
+      await save(ref, bytes);
+      for (const chunk of await urls(ref, "put")) {
+        if (chunk.exists) continue;
+        const plaintext = bytes.subarray(chunk.index * BRIDGE_BLOB_CHUNK_BYTES, (chunk.index + 1) * BRIDGE_BLOB_CHUNK_BYTES);
+        const response = await requestBridgeChunk(chunk.url, { body: Buffer.from(crypto.seal(ref, chunk.index, plaintext)), signal: lifecycle.signal });
+        if (!response.ok) {
+          if (response.status === 403 && (await response.text()).includes("Bridge subscription required")) throw new Error("Bridge subscription required; local files remain queued");
+          throw new Error(`Bridge blob upload failed (${response.status})`);
+        }
+      }
+      return ref;
+    } finally { release(); }
+  }
   const api = {
     matches(ref: BridgeBlobRef, bytes: Uint8Array): boolean {
-      validateBridgeBlobIdentity(ref); return bytes.length === ref.size && crypto.id(bytes) === ref.blobId;
+      lifecycle.assertActive(); validateBridgeBlobIdentity(ref); return bytes.length === ref.size && crypto.id(bytes) === ref.blobId;
     },
-    cached(ref: BridgeBlobRef): Promise<string | undefined> { validateBridgeBlobIdentity(ref); return cached(ref); },
-    async isCachedFile(realPath: string): Promise<boolean> {
-      const ref = opened.get(realPath); if (!ref) return false;
-      try { await directory(); const file = await cached(ref); return !!file && await fs.realpath(file) === realPath; }
-      catch { return false; }
+    cached(ref: BridgeBlobRef): Promise<string | undefined> { validateBridgeBlobIdentity(ref); ref = { ...ref }; return lifecycle.run(() => cached(ref)); },
+    isCachedFile(realPath: string): Promise<boolean> {
+      if (!lifecycle.active) return Promise.resolve(false);
+      return lifecycle.run(async () => {
+        const ref = opened.get(realPath); if (!ref) return false;
+        try { await directory(); const file = await cached(ref); return !!file && await fs.realpath(file) === realPath; }
+        catch { return false; }
+      });
     },
-    async capture(bytes: Uint8Array, description: Pick<BridgeBlobRef, "column" | "name" | "mime" | "sourcePath">): Promise<BridgeBlobRef> {
-      if (bytes.length > BRIDGE_BLOB_MAX_BYTES) throw new Error("Bridge file exceeds 50 MiB");
-      const ref: BridgeBlobRef = { ...description, name: basename(description.name), blobId: crypto.id(bytes), size: bytes.length };
-      await directory(); await fs.mkdir(uploads, { recursive: true, mode: 0o700 });
-      if ((await fs.lstat(uploads)).isSymbolicLink()) throw new Error("Unsafe Bridge upload directory");
-      const target = join(uploads, ref.blobId), temp = join(uploads, `.pending-${randomUUID()}`);
-      try {
-        const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
-        try { if ((await handle.stat()).size === ref.size) { verify(ref, await handle.readFile()); return ref; } }
-        finally { await handle.close(); }
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      try { await fs.writeFile(temp, bytes, { flag: "wx", mode: 0o600 }); await fs.chmod(temp, 0o444); await fs.rename(temp, target); }
-      finally { await fs.unlink(temp).catch(() => {}); }
-      return ref;
-    },
-    async publishCaptured(ref: BridgeBlobRef, recover?: () => Promise<Uint8Array | undefined>): Promise<void> {
-      validateBridgeBlobIdentity(ref);
-      const chunks = await urls(ref, "put");
-      if (chunks.every((chunk) => chunk.exists)) return;
-      await directory();
-      let bytes: Uint8Array | undefined;
-      try {
+    capture(bytes: Uint8Array, description: Pick<BridgeBlobRef, "column" | "name" | "mime" | "sourcePath">): Promise<BridgeBlobRef> {
+      if (bytes.length > BRIDGE_BLOB_MAX_BYTES) return Promise.reject(new Error("Bridge file exceeds 50 MiB"));
+      bytes = Uint8Array.from(bytes); description = { ...description };
+      return lifecycle.run(async () => {
+        const ref: BridgeBlobRef = { ...description, name: basename(description.name), blobId: crypto.id(bytes), size: bytes.length };
+        await directory(); await fs.mkdir(uploads, { recursive: true, mode: 0o700 });
         if ((await fs.lstat(uploads)).isSymbolicLink()) throw new Error("Unsafe Bridge upload directory");
-        const handle = await fs.open(join(uploads, ref.blobId), constants.O_RDONLY | constants.O_NOFOLLOW);
+        const target = join(uploads, ref.blobId), temp = join(uploads, `.pending-${randomUUID()}`);
         try {
-          if ((await handle.stat()).size !== ref.size) throw new Error("Bridge output snapshot is damaged");
-          bytes = await handle.readFile(); verify(ref, bytes);
-        } finally { await handle.close(); }
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      if (!bytes) {
-        const file = await cached(ref);
-        if (file) {
-          const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+          const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+          try { if ((await handle.stat()).size === ref.size) { verify(ref, await handle.readFile()); return ref; } }
+          finally { await handle.close(); }
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        try { await fs.writeFile(temp, bytes, { flag: "wx", mode: 0o600 }); await fs.chmod(temp, 0o444); await fs.rename(temp, target); }
+        finally { await fs.unlink(temp).catch(() => {}); }
+        return ref;
+      });
+    },
+    publishCaptured(ref: BridgeBlobRef, recover?: () => Promise<Uint8Array | undefined>): Promise<void> {
+      ref = { ...ref };
+      return lifecycle.run(async () => {
+        validateBridgeBlobIdentity(ref);
+        const chunks = await urls(ref, "put");
+        if (chunks.every((chunk) => chunk.exists)) return;
+        await directory();
+        let bytes: Uint8Array | undefined;
+        try {
+          if ((await fs.lstat(uploads)).isSymbolicLink()) throw new Error("Unsafe Bridge upload directory");
+          const handle = await fs.open(join(uploads, ref.blobId), constants.O_RDONLY | constants.O_NOFOLLOW);
           try {
-            if ((await handle.stat()).size !== ref.size) throw new Error("Bridge cached file has changed");
-            bytes = await handle.readFile();
+            if ((await handle.stat()).size !== ref.size) throw new Error("Bridge output snapshot is damaged");
+            bytes = await handle.readFile(); verify(ref, bytes);
           } finally { await handle.close(); }
-        } else bytes = await recover?.();
-      }
-      if (!bytes) throw new Error("Bridge file is unavailable locally; its change remains queued");
-      verify(ref, bytes);
-      await api.publish(bytes, ref);
-      // Snapshots remain durable until their metadata is acknowledged. They are
-      // separate from the disposable download LRU, including across restarts.
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        if (!bytes) {
+          const file = await cached(ref);
+          if (file) {
+            const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+            try {
+              if ((await handle.stat()).size !== ref.size) throw new Error("Bridge cached file has changed");
+              bytes = await handle.readFile();
+            } finally { await handle.close(); }
+          } else bytes = await recover?.();
+        }
+        if (!bytes) throw new Error("Bridge file is unavailable locally; its change remains queued");
+        verify(ref, bytes);
+        await publishBytes(bytes, ref);
+        // Snapshots remain durable until their metadata is acknowledged. They are
+        // separate from the disposable download LRU, including across restarts.
+      });
     },
     async releaseCaptured(refs: BridgeBlobRef[]): Promise<void> {
       try { if ((await fs.lstat(uploads)).isSymbolicLink()) return; } catch { return; }
       for (const ref of refs) { validateBridgeBlobIdentity(ref); await fs.unlink(join(uploads, ref.blobId)).catch(() => {}); }
     },
-    async publish(bytes: Uint8Array, description: Pick<BridgeBlobRef, "column" | "name" | "mime" | "sourcePath">): Promise<BridgeBlobRef> {
-      if (bytes.length > BRIDGE_BLOB_MAX_BYTES) throw new Error("Bridge file exceeds 50 MiB");
-      const ref: BridgeBlobRef = { ...description, name: basename(description.name), blobId: crypto.id(bytes), size: bytes.length };
-      const path = cachePath(ref); pinned.add(path);
-      try {
-        await save(ref, bytes);
-        for (const chunk of await urls(ref, "put")) {
-          if (chunk.exists) continue;
-          const plaintext = bytes.subarray(chunk.index * BRIDGE_BLOB_CHUNK_BYTES, (chunk.index + 1) * BRIDGE_BLOB_CHUNK_BYTES);
-          const response = await requestBridgeChunk(chunk.url, { body: Buffer.from(crypto.seal(ref, chunk.index, plaintext)), signal: abort.signal });
-          if (!response.ok) {
-            if (response.status === 403 && (await response.text()).includes("Bridge subscription required")) throw new Error("Bridge subscription required; local files remain queued");
-            throw new Error(`Bridge blob upload failed (${response.status})`);
-          }
-        }
-        return ref;
-      } finally { pinned.delete(path); }
+    publish(bytes: Uint8Array, description: Pick<BridgeBlobRef, "column" | "name" | "mime" | "sourcePath">): Promise<BridgeBlobRef> {
+      if (bytes.length > BRIDGE_BLOB_MAX_BYTES) return Promise.reject(new Error("Bridge file exceeds 50 MiB"));
+      const snapshot = Uint8Array.from(bytes), metadata = { ...description };
+      return lifecycle.run(() => publishBytes(snapshot, metadata));
     },
     resolve(ref: BridgeBlobRef): Promise<string> {
       validateBridgeBlobIdentity(ref);
-      const key = `${ref.blobId}:${ref.size}:${safeExtension(ref.name)}`;
-      const current = jobs.get(key); if (current) return current;
-      const target = cachePath(ref); pinned.add(target);
-      const job = (async () => {
-        if (downloadSlots) downloadSlots--; else await new Promise<void>((resolve) => waiting.push(resolve));
-        activeDownloads.add(ref.blobId);
-        try { if (stopped) throw new Error("Bridge blob transfer is stopped"); return await download(ref); }
-        finally { activeDownloads.delete(ref.blobId); const next = waiting.shift(); if (next) next(); else downloadSlots++; }
-      })().then(async (file) => {
-        opened.set(await fs.realpath(file), ref);
-        if (opened.size > 512) opened.delete(opened.keys().next().value!);
-        return file;
-      }).finally(() => { jobs.delete(key); pinned.delete(target); });
-      jobs.set(key, job); return job;
+      ref = { ...ref };
+      const target = cachePath(ref), key = `${ref.blobId}:${ref.size}:${safeExtension(ref.name)}`;
+      return lifecycle.run(async () => {
+        const release = lifecycle.pin(target);
+        let releaseSource: (() => void) | undefined;
+        try {
+          let file = await cached(ref);
+          if (!file) {
+            file = await lifecycle.download(`${ref.blobId}:${ref.size}`, async () => {
+              const releasePartial = lifecycle.pin(`partial:${ref.blobId}`);
+              try { return await download(ref); } finally { releasePartial(); }
+            });
+            releaseSource = lifecycle.pin(file);
+            if (file !== target) file = await save(ref, await fs.readFile(file));
+          }
+          opened.set(await fs.realpath(file), { ...ref });
+          if (opened.size > 512) opened.delete(opened.keys().next().value!);
+          return file;
+        } finally { releaseSource?.(); release(); }
+      }, `resolve:${key}`);
     },
-    async stop() { stopped = true; abort.abort(); await Promise.allSettled(jobs.values()); opened.clear(); crypto.destroy(); },
+    stop() { return lifecycle.stop(() => { opened.clear(); crypto.destroy(); }); },
   };
   return api;
 }

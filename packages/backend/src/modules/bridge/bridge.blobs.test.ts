@@ -49,6 +49,23 @@ async function node(account: string, backendId: string, options: { schemaVersion
 }
 
 describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQLite backends", () => {
+  it("retains a shared captured snapshot until every queued publication acknowledges it", async () => {
+    const account = randomUUID(), a = await node(account, "A");
+    const source = join(a.dataDir, "shared-output.png"); await fs.writeFile(source, image);
+    const ref = await a.records.captureOutput(source, [a.dataDir], "image/png"); expect(ref).toBeDefined();
+    for (const runId of ["first-output", "second-output"]) {
+      a.sqlite.prepare("INSERT INTO runs(id,owner_backend_id,account_id,provider_id,title) VALUES(?,'A','default','codex',?)").run(runId, runId);
+      a.sqlite.prepare("INSERT INTO run_artifacts(run_id,kind,content,metadata) VALUES(?,'report','Captured output',?)")
+        .run(runId, JSON.stringify({ bridgeOutputs: [{ path: source, kind: "image", blobRef: ref }] }));
+    }
+    await fs.writeFile(source, Buffer.from("a later version"));
+    await a.engine.push("account");
+    await a.engine.push("run:first-output");
+    expect(await fs.readFile(join(a.dataDir, "bridge", "uploads", ref!.blobId))).toEqual(image);
+    await a.engine.push("run:second-output");
+    await expect(fs.stat(join(a.dataDir, "bridge", "uploads", ref!.blobId))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("backfills legacy roots once with original clocks, preserving files across upgrade and restart", async () => {
     const sealing = createBridgeSealingCodec(key);
     const legacy: BridgeCodec = { open: sealing.open, seal(header, body) {
