@@ -562,7 +562,7 @@ export function createCodexRunCoordinator(
       const runId = runIdForLiveThread(method, params);
       const sink = runId ? runSinks.get(runId) : undefined;
       if (!runId || !sink) {
-        requestBroker.rejectInactive(server, id, method);
+        requestBroker.rejectInactive(server, id, method, params);
         return;
       }
 

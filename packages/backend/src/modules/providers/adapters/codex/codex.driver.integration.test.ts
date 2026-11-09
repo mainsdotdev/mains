@@ -19,6 +19,7 @@ vi.setConfig({ testTimeout: 30_000 });
 const approvalHarness = vi.hoisted(() => ({
   requests: [] as Array<Record<string, unknown>>,
   formAnswer: undefined as string | undefined,
+  commandAnswer: undefined as string | undefined,
 }));
 
 vi.mock("../../../runs/user-input-broker", () => ({
@@ -29,7 +30,8 @@ vi.mock("../../../runs/user-input-broker", () => ({
     return {
       requestId: request.requestId,
       approved: true,
-      answer: request.kind === "elicitation" ? approvalHarness.formAnswer ?? "Yes" : "Yes",
+      answer: request.kind === "elicitation" ? approvalHarness.formAnswer ?? "Yes"
+        : request.toolName === "Bash" ? approvalHarness.commandAnswer : "Yes",
     };
   }),
 }));
@@ -122,6 +124,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   approvalHarness.requests.length = 0;
   approvalHarness.formAnswer = undefined;
+  approvalHarness.commandAnswer = undefined;
   delete process.env.MAINS_CODEX_FIXTURE_LOG;
   delete process.env.MAINS_CODEX_FIXTURE_EFFORTS;
   delete process.env.MAINS_CODEX_FIXTURE_VERSION;
@@ -141,6 +144,43 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it.each([
+    ["0.153.0", false], ["0.162.1", false], ["0.166.0", false], ["0.167.0", true],
+  ])("negotiates required human approval with CLI %s (enabled=%s)", async (version, enabled) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-human-capability-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_VERSION", version);
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    await driver.createSession(request("human-capability"));
+    const initialize = readProtocolLog(logPath).find((message) => message.method === "initialize");
+    const capabilities = (initialize?.params as { capabilities: Record<string, unknown> }).capabilities;
+    expect(capabilities.experimentalApi).toBe(true);
+    if (enabled) expect(capabilities.requiredHumanApproval).toBe(true);
+    else expect(capabilities).not.toHaveProperty("requiredHumanApproval");
+  });
+
+  it("routes a native human command to one-call approval and waits for the response", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-human-command-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    approvalHarness.commandAnswer = "acceptForSession";
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const nativeRequest = { ...request("human-command"), goal: "human command approval" };
+    const acquired = await driver.createSession(nativeRequest);
+    const outcome = await driver.executePrompt(acquired.session, acquired.prompt, async () => {}, new AbortController().signal);
+    expect(outcome.status).toBe("succeeded");
+    expect(approvalHarness.requests).toContainEqual(expect.objectContaining({
+      runId: "human-command", kind: "tool_approval", toolName: "Bash", suppressAlwaysAllowRule: true,
+      toolInput: expect.objectContaining({ command: "deploy production" }),
+    }));
+    expect(readProtocolLog(logPath)).toContainEqual(expect.objectContaining({ id: 904, result: { decision: "accept" } }));
+  });
+
   it.each(["active", "paused", "blocked", "usageLimited", "budgetLimited"])("preserves a native %s goal on continuation and an inheriting fork", async (status) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-goal-inherit-")); tempDirs.push(dir);
     const logPath = path.join(dir, "protocol.jsonl"); vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);

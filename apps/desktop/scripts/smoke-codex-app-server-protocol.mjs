@@ -41,7 +41,7 @@ function assertContains(relativePath, snippets) {
   }
 }
 
-async function smokeRuntime() {
+async function smokeRuntime(cliVersion) {
   const child = spawn(codexBinary, ["app-server"], {
     cwd: process.cwd(),
     stdio: ["pipe", "pipe", "pipe"],
@@ -107,6 +107,7 @@ async function smokeRuntime() {
       capabilities: {
         experimentalApi: true,
         requestAttestation: false,
+        ...(compareVersions(cliVersion, "0.167.0") >= 0 ? { requiredHumanApproval: true } : {}),
       },
     });
     for (const field of [
@@ -263,6 +264,15 @@ try {
     ]);
     assertContains("v2/Account.ts", ['"type": "gcp"', "workspaceName: string | null"]);
   }
+  if (compareVersions(versionOutput, "0.167.0") >= 0) {
+    assertContains("InitializeCapabilities.ts", ["requiredHumanApproval?: boolean"]);
+    assertContains("v2/CommandExecutionApprovalKind.ts", ['"humanCommand"']);
+    assertContains("v2/CommandExecutionRequestApprovalParams.ts", [
+      "kind: CommandExecutionApprovalKind", "availableDecisions?: Array<CommandExecutionApprovalDecision>",
+    ]);
+    assertContains("v2/UserInput.ts", ['"type": "audio", } & ({ url: string, } | { fileId: string, })']);
+    assertContains("ContentItem.ts", ['"type": "input_audio", } & ({ audio_url: string, } | { file_id: string, })']);
+  }
   assertContains("v2/McpResourceReadParams.ts", [
     "threadId?: string | null",
     "originCallId?: string | null",
@@ -280,7 +290,7 @@ try {
     "developer_instructions: string | null",
   ]);
 
-  await smokeRuntime();
+  await smokeRuntime(versionOutput);
   process.stdout.write(`Codex app-server smoke passed for ${versionOutput}.\n`);
 } finally {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });

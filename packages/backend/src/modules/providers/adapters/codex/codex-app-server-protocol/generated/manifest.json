@@ -1,5 +1,5 @@
 {
-  "cliVersion": "0.166.0",
+  "cliVersion": "0.167.0",
   "files": [
     {
       "path": "AbsolutePathBuf.ts",
@@ -31,7 +31,7 @@
     },
     {
       "path": "ContentItem.ts",
-      "sha256": "85966046f5abe7d74754cb5a8dc385a13f87de5daa3cc12fe2258efc5226e935"
+      "sha256": "b2edc531ffa54672edfdb4471b7d050466fb04db5ae6caae73c28950cfbe948b"
     },
     {
       "path": "ConversationTextRole.ts",
@@ -63,7 +63,7 @@
     },
     {
       "path": "InitializeCapabilities.ts",
-      "sha256": "dee58273861971585e0615804eaf50ba4690cd4846f02ed352ed211887a022a5"
+      "sha256": "744ccfe4b48827f351d00f4fcaf8b28596f1710f37036850ffeda1b4e4412408"
     },
     {
       "path": "InitializeParams.ts",
@@ -226,6 +226,18 @@
       "sha256": "ea590d1f4fd2021082260a30baea62c8fcf55b97c3c8eac6a0e16bba5a1d2e58"
     },
     {
+      "path": "v2/AdditionalFileSystemPermissions.ts",
+      "sha256": "c26c68250553698af4f9affd0b991e64e5841384f07199940d6f211f0cef11be"
+    },
+    {
+      "path": "v2/AdditionalNetworkPermissions.ts",
+      "sha256": "7b1a37a73699dfea562f7b4cc1b71cffa8f42371b11248dc7ff7582c0f8e3f94"
+    },
+    {
+      "path": "v2/AdditionalPermissionProfile.ts",
+      "sha256": "fc0a2e090759c96073369e1bccad3ee5c0e88f508508cb9e406fda17ca4942a2"
+    },
+    {
       "path": "v2/AgentMessageDelivery.ts",
       "sha256": "2fa497987aab791b697c9dee5cdd634ec566bf0b82cd56b5a796f26241a95957"
     },
@@ -334,6 +346,22 @@
       "sha256": "df8e6909e1e46e352ada64e766c3d6c93552199ce2448b35b83912efb2fe8917"
     },
     {
+      "path": "v2/CommandExecutionApprovalDecision.ts",
+      "sha256": "9283d7206bc8df353c4fcc9a14682b5f69f7f288d666f975356762ed49d5bc6b"
+    },
+    {
+      "path": "v2/CommandExecutionApprovalKind.ts",
+      "sha256": "f76c84822bbe645eab3cae2976f9f41721c57e68624a5ab3be3e06c0d9dec694"
+    },
+    {
+      "path": "v2/CommandExecutionRequestApprovalParams.ts",
+      "sha256": "531eaecb38d8c93ed389ada2482f6e2d7d6fa5351adf423706bf6e6eeddf60dc"
+    },
+    {
+      "path": "v2/CommandExecutionRequestApprovalResponse.ts",
+      "sha256": "454ceee4decc66a9c070273d4344fa8a0187732cd884b8b60edda3a17766aa95"
+    },
+    {
       "path": "v2/CommandExecutionSource.ts",
       "sha256": "f915112d4ef81b80d65ab1c5c106fa7e46f24ee2d7969f752abda1c786e53327"
     },
@@ -406,6 +434,10 @@
       "sha256": "bd4b06afea9395a426f8facc9d800f4b201fea44fab667f854710acff4c8f393"
     },
     {
+      "path": "v2/ExecPolicyAmendment.ts",
+      "sha256": "eae3c3f9c81a40ffffe5de29e274b322db8200591ba39306daa27794a2deffa0"
+    },
+    {
       "path": "v2/ExperimentalFeature.ts",
       "sha256": "2de02b9c1426f552df38b289f638a4f41bc0395477532fdffe36ea390be078fa"
     },
@@ -420,6 +452,34 @@
     {
       "path": "v2/ExperimentalFeatureStage.ts",
       "sha256": "70de16db64325f2201f5b10b6492b4a13d6acd1c02f65f8d8af1738d2fb751d8"
+    },
+    {
+      "path": "v2/FileChangeApprovalDecision.ts",
+      "sha256": "8a5aa00ea5e9c7b0856da23daa6e799dc1c5f15d16553ce59390ec73b65c8430"
+    },
+    {
+      "path": "v2/FileChangeRequestApprovalParams.ts",
+      "sha256": "32ec2fef83e1e17db98ea0b9b86baaa5c8bf2e8979988f5ad8fef3a93ab15074"
+    },
+    {
+      "path": "v2/FileChangeRequestApprovalResponse.ts",
+      "sha256": "527a9af90f753e2b7f1852415523443fc9745376bb2c4b0b735f900c8da8fc71"
+    },
+    {
+      "path": "v2/FileSystemAccessMode.ts",
+      "sha256": "36689572cd7c9e23ec2fa01912b8ca2abd331608dfd89b691b87351b5e520389"
+    },
+    {
+      "path": "v2/FileSystemPath.ts",
+      "sha256": "e0279cd26713e84898352d23f02798912ca2ff69c796f58ff9606a6cd5f4d45f"
+    },
+    {
+      "path": "v2/FileSystemSandboxEntry.ts",
+      "sha256": "f27cc590b6aa56f41c8c9168c6012c0e562e952bc2657421e9fa48c108084151"
+    },
+    {
+      "path": "v2/FileSystemSpecialPath.ts",
+      "sha256": "b38fce284661d5495836cf6c0833547912845146cb06de542041ec776a4d9bfd"
     },
     {
       "path": "v2/FileUpdateChange.ts",
@@ -600,6 +660,22 @@
     {
       "path": "v2/NetworkAccess.ts",
       "sha256": "3622aa2cccf2a1835cd561d97187db75eba8cc379c03e56b5d1c91ab901da9dc"
+    },
+    {
+      "path": "v2/NetworkApprovalContext.ts",
+      "sha256": "f5fb2588e2a7caf33d4d25f8f98e03f6abd58e1cfc65d6ae6d918536d417c825"
+    },
+    {
+      "path": "v2/NetworkApprovalProtocol.ts",
+      "sha256": "50489d7ee01bb75b2ad453e2f976e8b92a3334a973637c0c36ccd1c547a0d894"
+    },
+    {
+      "path": "v2/NetworkPolicyAmendment.ts",
+      "sha256": "2219666281d984a6edf51fcdbd93df7b88e4c51f4fe8a306989e68f430ffb2fe"
+    },
+    {
+      "path": "v2/NetworkPolicyRuleAction.ts",
+      "sha256": "8d6d5aa29ce47bdaec03eedc56543629344b9a424a293258116f44a212b507fc"
     },
     {
       "path": "v2/NonSteerableTurnKind.ts",
@@ -1167,7 +1243,7 @@
     },
     {
       "path": "v2/UserInput.ts",
-      "sha256": "c033ab3da70c17ceae32e8b4770a2557f8ef9f59c07c5419387a45c55193fc59"
+      "sha256": "a07ec6b0d7ff04a6ec92458f0ecb171f7daa54e6e3bde661b5ca94e5e9495b1e"
     },
     {
       "path": "v2/WebSearchAction.ts",

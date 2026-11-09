@@ -16,6 +16,42 @@ import {
 } from "../adapter.shared";
 import { getBackendRuntime } from "../../../../runtime/backend-runtime";
 import { parseElicitationSchema, validateElicitationContent } from "../../../../../shared/mcp-elicitation";
+import type { CommandExecutionApprovalDecision } from "./codex-app-server-protocol/generated/v2/CommandExecutionApprovalDecision";
+import type { CommandExecutionRequestApprovalParams } from "./codex-app-server-protocol/generated/v2/CommandExecutionRequestApprovalParams";
+import type { CommandExecutionRequestApprovalResponse } from "./codex-app-server-protocol/generated/v2/CommandExecutionRequestApprovalResponse";
+import type { FileChangeRequestApprovalParams } from "./codex-app-server-protocol/generated/v2/FileChangeRequestApprovalParams";
+import type { FileChangeRequestApprovalResponse } from "./codex-app-server-protocol/generated/v2/FileChangeRequestApprovalResponse";
+
+type CommandApprovalParams = Partial<CommandExecutionRequestApprovalParams>;
+
+// Older supported servers omit kind and availableDecisions. Explicitly supplied
+// choices, including an empty list, are authoritative for newer servers.
+function commandApprovalDecisions(params: CommandApprovalParams | undefined) {
+  const decisions = new Set<CommandExecutionApprovalDecision>(
+    params?.availableDecisions ?? ["accept", "acceptForSession", "decline", "cancel"],
+  );
+  if (params?.kind === "humanCommand") decisions.delete("acceptForSession");
+  return decisions;
+}
+
+function respondCommandApproval(
+  server: CodexServerResponder,
+  id: number | string,
+  params: CommandApprovalParams | undefined,
+  requested: Extract<CommandExecutionApprovalDecision, string>,
+): void {
+  const decisions = commandApprovalDecisions(params);
+  const decision = decisions.has(requested) ? requested
+    : requested === "acceptForSession" && decisions.has("accept") ? "accept"
+    : decisions.has("decline") ? "decline"
+    : decisions.has("cancel") ? "cancel"
+    : null;
+  if (decision === null) {
+    server.respondToRequestError(id, -32602, "Codex offered no supported command approval decision.");
+    return;
+  }
+  server.respondToRequest(id, { decision } satisfies CommandExecutionRequestApprovalResponse);
+}
 
 export interface CodexServerResponder {
   respondToRequest(
@@ -134,10 +170,11 @@ export function createCodexRequestBroker(
   // popping approval dialogs. Auto-decline anything that would surface
   // UI so a stale background turn can't grab the user's attention.
   if (runIsDead) {
-    if (
-      method === "item/commandExecution/requestApproval" ||
-      method === "item/fileChange/requestApproval"
-    ) {
+    if (method === "item/commandExecution/requestApproval") {
+      respondCommandApproval(server, id, params as CommandApprovalParams | undefined, "decline");
+      return;
+    }
+    if (method === "item/fileChange/requestApproval") {
       server.respondToRequest(id, { decision: "decline" });
       return;
     }
@@ -168,13 +205,19 @@ export function createCodexRequestBroker(
     // commandActions/reason. Dispatch to the renderer's Bash preview.
     // Response shape: { decision: "accept" | "acceptForSession" | "decline" | "cancel" }.
     case "item/commandExecution/requestApproval": {
-      const command = (p?.command as string) ?? "";
-      const cwd = (p?.cwd as string) ?? undefined;
-      const reason = (p?.reason as string) ?? undefined;
-      const networkApprovalContext = p?.networkApprovalContext as
-        | { host?: string; protocol?: string }
-        | null
-        | undefined;
+      const approval = params as CommandApprovalParams | undefined;
+      const decisions = commandApprovalDecisions(approval);
+      // The shared dialog offers one-call approval, optionally a session grant.
+      // A policy-amendment-only prompt needs a richer UI; never invent a grant
+      // or silently turn a one-call click into a persistent permission.
+      if (!decisions.has("accept") || (!decisions.has("decline") && !decisions.has("cancel"))) {
+        respondCommandApproval(server, id, approval, "decline");
+        break;
+      }
+      const command = approval?.command ?? "";
+      const cwd = approval?.cwd ?? undefined;
+      const reason = approval?.reason ?? undefined;
+      const networkApprovalContext = approval?.networkApprovalContext;
       const displayCommand =
         command ||
         (
@@ -191,11 +234,11 @@ export function createCodexRequestBroker(
           : { blocked: false };
       } catch (error) {
         logger.error("Command guard failed:", error);
-        server.respondToRequest(id, { decision: "decline" });
+        respondCommandApproval(server, id, approval, "decline");
         break;
       }
       if (guardResult.blocked) {
-        server.respondToRequest(id, { decision: "decline" });
+        respondCommandApproval(server, id, approval, "decline");
         break;
       }
 
@@ -211,34 +254,40 @@ export function createCodexRequestBroker(
             ...(networkApprovalContext
               ? { networkApprovalContext }
               : {}),
-            ...(p?.commandActions
-              ? { commandActions: p.commandActions }
+            ...(approval?.commandActions
+              ? { commandActions: approval.commandActions }
               : {}),
-            ...(p?.proposedExecpolicyAmendment
+            ...(approval?.proposedExecpolicyAmendment
               ? {
                   proposedExecpolicyAmendment:
-                    p.proposedExecpolicyAmendment,
+                    approval.proposedExecpolicyAmendment,
                 }
               : {}),
-            ...(p?.proposedNetworkPolicyAmendments
+            ...(approval?.proposedNetworkPolicyAmendments
               ? {
                   proposedNetworkPolicyAmendments:
-                    p.proposedNetworkPolicyAmendments,
+                    approval.proposedNetworkPolicyAmendments,
                 }
               : {}),
-            ...(p?.environmentId
-              ? { environmentId: p.environmentId }
+            ...(approval?.environmentId
+              ? { environmentId: approval.environmentId }
+              : {}),
+            ...(approval?.additionalPermissions
+              ? { additionalPermissions: approval.additionalPermissions }
               : {}),
           },
           kind: "tool_approval",
-          timestamp: now(),
+          ...(!decisions.has("acceptForSession") ? { suppressAlwaysAllowRule: true } : {}),
+          // Native replay retains its start time, so the shared broker can
+          // recognize the same pending request instead of opening another UI.
+          timestamp: approval?.startedAtMs ?? now(),
         });
-        const decision = !result.approved ? "decline"
+        const decision = !result.approved ? result.answer === "cancel" ? "cancel" : "decline"
           : result.answer === "acceptForSession" ? "acceptForSession"
           : "accept";
-        server.respondToRequest(id, { decision });
+        respondCommandApproval(server, id, approval, decision);
       } catch {
-        server.respondToRequest(id, { decision: "decline" });
+        respondCommandApproval(server, id, approval, "decline");
       }
       break;
     }
@@ -249,8 +298,9 @@ export function createCodexRequestBroker(
     // same patch, we surface them under a generic "FileChange" tool so
     // the dialog falls back to the key/value table renderer.
     case "item/fileChange/requestApproval": {
-      const itemId = (p?.itemId as string) ?? (p?.item_id as string) ?? "";
-      const reason = (p?.reason as string) ?? undefined;
+      const approval = params as Partial<FileChangeRequestApprovalParams> | undefined;
+      const itemId = approval?.itemId ?? (p?.item_id as string) ?? "";
+      const reason = approval?.reason ?? undefined;
       const cached = itemId ? getRunState(runId)?.fileChangeItems.get(itemId) : undefined;
 
       const single = cached && cached.length === 1 ? cached[0] : undefined;
@@ -293,7 +343,7 @@ export function createCodexRequestBroker(
         const decision = !result.approved ? "decline"
           : result.answer === "acceptForSession" ? "acceptForSession"
           : "accept";
-        server.respondToRequest(id, { decision });
+        server.respondToRequest(id, { decision } satisfies FileChangeRequestApprovalResponse);
       } catch {
         server.respondToRequest(id, { decision: "decline" });
       }
@@ -612,9 +662,12 @@ export function createCodexRequestBroker(
     server: CodexServerResponder,
     id: number | string,
     method: string,
+    params?: unknown,
   ): void {
     switch (method) {
       case "item/commandExecution/requestApproval":
+        respondCommandApproval(server, id, params as CommandApprovalParams | undefined, "decline");
+        return;
       case "item/fileChange/requestApproval":
         server.respondToRequest(id, { decision: "decline" });
         return;

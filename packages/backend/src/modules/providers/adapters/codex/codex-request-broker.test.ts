@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createApprovalLifecycle } from "../../../runs/user-input-lifecycle";
 import type {
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -95,6 +96,107 @@ async function handle(
 }
 
 describe("Codex request broker", () => {
+  it("requires a fresh one-call decision for human commands, including a replayed request", async () => {
+    const pending = vi.fn();
+    const lifecycle = createApprovalLifecycle({ pending, settled: vi.fn() });
+    const { broker, requestApproval } = createHarness((request) => lifecycle.request(request));
+    const responder = createResponder();
+    const params = {
+      kind: "humanCommand", command: "deploy production", startedAtMs: 1_700_000_000_000,
+      availableDecisions: ["accept", "acceptForSession", "decline", "cancel"],
+    };
+    try {
+      const first = handle(broker, responder.server, "item/commandExecution/requestApproval", params);
+      await vi.waitFor(() => expect(pending).toHaveBeenCalledTimes(1));
+      const replay = handle(broker, responder.server, "item/commandExecution/requestApproval", { ...params });
+      await vi.waitFor(() => expect(requestApproval).toHaveBeenCalledTimes(2));
+      expect(pending).toHaveBeenCalledTimes(1);
+      const approval = lifecycle.list()[0];
+      expect(approval).toMatchObject({ suppressAlwaysAllowRule: true, timestamp: params.startedAtMs });
+      lifecycle.respond({ requestId: approval.requestId, approvalToken: approval.approvalToken, approved: true, answer: "acceptForSession" });
+      await Promise.all([first, replay]);
+      expect(responder.responses).toEqual([
+        { id: 42, result: { decision: "accept" } },
+        { id: 42, result: { decision: "accept" } },
+      ]);
+
+      const next = handle(broker, responder.server, "item/commandExecution/requestApproval", { ...params, startedAtMs: params.startedAtMs + 1 });
+      await vi.waitFor(() => expect(pending).toHaveBeenCalledTimes(2));
+      const nextApproval = lifecycle.list()[0];
+      expect(nextApproval.approvalToken).not.toBe(approval.approvalToken);
+      expect(() => lifecycle.respond({ requestId: approval.requestId, approvalToken: approval.approvalToken, approved: true })).toThrow("changed");
+      lifecycle.respond({ requestId: nextApproval.requestId, approvalToken: nextApproval.approvalToken, approved: false });
+      await next;
+      expect(responder.responses.at(-1)?.result).toEqual({ decision: "decline" });
+    } finally { lifecycle.close(); }
+  });
+
+  it.each([{ availableDecisions: undefined }, { availableDecisions: ["accept", "decline", "cancel"] }])("never returns a session grant for a human command with decisions $availableDecisions", async ({ availableDecisions }) => {
+    const { broker, requestApproval } = createHarness();
+    const responder = createResponder();
+    await handle(broker, responder.server, "item/commandExecution/requestApproval", {
+      kind: "humanCommand", command: "deploy production", availableDecisions,
+    });
+    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({ suppressAlwaysAllowRule: true }));
+    expect(responder.responses).toEqual([{ id: 42, result: { decision: "accept" } }]);
+  });
+
+  it("hides unsupported session grants and forwards requested extra permissions", async () => {
+    const { broker, requestApproval } = createHarness();
+    const responder = createResponder();
+    await handle(broker, responder.server, "item/commandExecution/requestApproval", {
+      kind: "command", command: "read protected files", availableDecisions: ["accept", "decline"],
+      additionalPermissions: { fileSystem: { read: ["/protected"] } },
+    });
+    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      suppressAlwaysAllowRule: true,
+      toolInput: expect.objectContaining({ additionalPermissions: { fileSystem: { read: ["/protected"] } } }),
+    }));
+    expect(responder.responses).toEqual([{ id: 42, result: { decision: "accept" } }]);
+  });
+
+  it.each([false, true])("uses the offered cancel decision for denied or dead commands (dead=%s)", async (dead) => {
+    const { broker, requestApproval } = createHarness(async (request) => ({ requestId: request.requestId, approved: false }));
+    const responder = createResponder();
+    const params = { kind: "humanCommand", command: "deploy production", availableDecisions: ["accept", "cancel"] };
+    await handle(broker, responder.server, "item/commandExecution/requestApproval", params, dead);
+    broker.rejectInactive(responder.server, "inactive", "item/commandExecution/requestApproval", params);
+    expect(responder.responses).toEqual([
+      { id: 42, result: { decision: "cancel" } }, { id: "inactive", result: { decision: "cancel" } },
+    ]);
+    expect(requestApproval).toHaveBeenCalledTimes(dead ? 0 : 1);
+  });
+
+  it("preserves an explicit cancellation when the server offers it", async () => {
+    const { broker } = createHarness(async (request) => ({ requestId: request.requestId, approved: false, answer: "cancel" }));
+    const responder = createResponder();
+    await handle(broker, responder.server, "item/commandExecution/requestApproval", {
+      command: "deploy production", availableDecisions: ["accept", "decline", "cancel"],
+    });
+    expect(responder.responses).toEqual([{ id: 42, result: { decision: "cancel" } }]);
+  });
+
+  it.each([
+    { availableDecisions: ["decline"] },
+    { availableDecisions: ["acceptForSession", "decline"] },
+    { availableDecisions: [{ acceptWithExecpolicyAmendment: { execpolicy_amendment: ["deploy"] } }, "decline"] },
+  ])("does not offer a one-call button when the server only offers $availableDecisions", async ({ availableDecisions }) => {
+    const { broker, requestApproval } = createHarness();
+    const responder = createResponder();
+    await handle(broker, responder.server, "item/commandExecution/requestApproval", { command: "deploy production", availableDecisions });
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(responder.responses).toEqual([{ id: 42, result: { decision: "decline" } }]);
+  });
+
+  it.each([{ availableDecisions: [] }, { availableDecisions: ["accept"] }])("fails closed when there is no supported rejection in $availableDecisions", async ({ availableDecisions }) => {
+    const { broker, requestApproval } = createHarness();
+    const responder = createResponder();
+    await handle(broker, responder.server, "item/commandExecution/requestApproval", { availableDecisions });
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(responder.responses).toEqual([]);
+    expect(responder.errors).toEqual([{ id: 42, code: -32602, message: "Codex offered no supported command approval decision." }]);
+  });
+
   it("declines UI requests from dead or inactive runs without prompting", async () => {
     const { broker, requestApproval } = createHarness();
     const dead = createResponder();

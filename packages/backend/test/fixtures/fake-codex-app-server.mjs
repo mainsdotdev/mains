@@ -6,7 +6,7 @@ import process from "node:process";
 import { setTimeout } from "node:timers";
 
 const fixtureCliVersion =
-  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.166.0";
+  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.167.0";
 
 if (process.argv.includes("--version")) {
   const gate = process.env.MAINS_CODEX_FIXTURE_VERSION_GATE;
@@ -453,6 +453,22 @@ input.on("line", (line) => {
               }],
             },
           });
+        }
+        if (prompt.includes("human command approval")) {
+          pendingDynamicTools.set(904, { threadId: params.threadId, turnId });
+          send({
+            jsonrpc: "2.0",
+            id: 904,
+            method: "item/commandExecution/requestApproval",
+            params: {
+              kind: "humanCommand", threadId: params.threadId, turnId,
+              itemId: "human-command-1", startedAtMs: Date.now(), environmentId: null,
+              command: "deploy production", cwd: "/workspace",
+              reason: "This command requires fresh human approval.",
+              availableDecisions: ["accept", "decline", "cancel"],
+            },
+          });
+          return;
         }
         if (prompt.includes("network approval")) {
           send({

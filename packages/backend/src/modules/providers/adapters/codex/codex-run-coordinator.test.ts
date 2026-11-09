@@ -13,11 +13,14 @@ function deferred<T>() {
 function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoordinator>) => void) {
   const coordinator = createCodexRunCoordinator();
   let notify!: (method: string, params: unknown) => void;
+  let serverRequest!: (id: number | string, method: string, params: unknown) => void;
   const ack = deferred<{ turnId: string }>();
   const sendRequest = vi.fn((method: string, _params: unknown) => method === "turn/steer" ? ack.promise : Promise.resolve({}));
   const server = { isRunning: true, sendRequest,
     setNotificationHandler: (callback: typeof notify) => { notify = callback; },
-    setServerRequestHandler: () => {},
+    setServerRequestHandler: (callback: typeof serverRequest) => { serverRequest = callback; },
+    respondToRequest: vi.fn(),
+    respondToRequestError: vi.fn(),
   } as unknown as CodexAppServer;
   coordinator.installDispatcher(server);
   coordinator.registerRun({ runId: "run", threadId: "parent", mainsCtx: { workspaceId: null, rootPath: null, runId: "run" } });
@@ -29,10 +32,23 @@ function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoo
       notify("turn/started", { threadId: "parent", turn: { id: "turn-parent", status: "inProgress" } });
     },
   }, async (event) => { events.push(event); }, new AbortController().signal);
-  return { coordinator, server, ack, sendRequest, events, finished, notify: (method: string, params: unknown) => notify(method, params) };
+  return { coordinator, server, ack, sendRequest, events, finished,
+    serverRequest: (id: number | string, method: string, params: unknown) => serverRequest(id, method, params),
+    notify: (method: string, params: unknown) => notify(method, params) };
 }
 
 describe("Codex active input delivery", () => {
+  it("rejects an unowned human approval using its offered choices without borrowing the live run", async () => {
+    const h = liveRun();
+    try {
+      h.serverRequest("replayed-approval", "item/commandExecution/requestApproval", {
+        threadId: "unowned-thread", kind: "humanCommand", availableDecisions: ["accept", "cancel"],
+      });
+      expect(h.server.respondToRequest).toHaveBeenCalledExactlyOnceWith("replayed-approval", { decision: "cancel" });
+      expect(h.server.respondToRequestError).not.toHaveBeenCalled();
+    } finally { h.coordinator.shutdown(); await h.finished; }
+  });
+
   it("binds initial input before queued echoes race synchronous turn completion", async () => {
     let input!: ReturnType<ReturnType<typeof createCodexRunCoordinator>["trackInput"]>;
     const project = vi.fn().mockResolvedValue(undefined);

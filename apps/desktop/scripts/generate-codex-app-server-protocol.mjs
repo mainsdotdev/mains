@@ -23,6 +23,10 @@ const temporaryRoot = fs.mkdtempSync(
 const roots = [
   "InitializeParams.ts",
   "InitializeResponse.ts",
+  "v2/CommandExecutionRequestApprovalParams.ts",
+  "v2/CommandExecutionRequestApprovalResponse.ts",
+  "v2/FileChangeRequestApprovalParams.ts",
+  "v2/FileChangeRequestApprovalResponse.ts",
   "v2/ConfigValueWriteParams.ts",
   "v2/ConfigWriteResponse.ts",
   "v2/AppsInstalledParams.ts",

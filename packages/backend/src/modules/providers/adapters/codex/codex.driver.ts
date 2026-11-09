@@ -85,7 +85,7 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.166.0";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.167.0";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
 
@@ -640,6 +640,8 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     runCoordinator.installDispatcher(server);
 
     // Handshake: initialize → initialized (required before any other RPC)
+    const cliVersion = await getCodexVersion();
+    scope.assertActive();
     const initializeResponse = await server.sendRequest("initialize", {
       clientInfo: {
         name: "mains",
@@ -649,6 +651,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       capabilities: {
         experimentalApi: true,
         requestAttestation: false,
+        ...(cliVersion && (compareCodexVersions(cliVersion, "0.167.0") ?? -1) >= 0
+          ? { requiredHumanApproval: true }
+          : {}),
         mcpServerOpenaiFormElicitation: true,
         extensions: { "openai/form": {} },
       },
