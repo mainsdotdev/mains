@@ -14,6 +14,9 @@ function inspector() {
 function flushPaint() {
   for (let i = 0; i < 2; i++) frames.splice(0).forEach((callback) => callback(0));
 }
+function lastCaptureId(): string {
+  return JSON.parse(String(vi.mocked(console.log).mock.calls.at(-1)![0]).slice(INSPECTOR_SENTINEL.length)).captureId;
+}
 
 beforeEach(() => {
   frames = [];
@@ -24,11 +27,71 @@ beforeEach(() => {
 });
 afterEach(() => {
   evaluate(buildInspectorScript(false));
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("browser annotation inspector", () => {
+  it("ignores an old capture acknowledgement after timeout and retry", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    document.getElementById("title")!.click();
+    const root = inspector();
+    (root.querySelector(".add") as HTMLButtonElement).click();
+    flushPaint();
+    const first = lastCaptureId();
+    vi.advanceTimersByTime(15001);
+    const comment = root.querySelector("textarea")!;
+    comment.value = "Retry draft";
+    (root.querySelector(".add") as HTMLButtonElement).click();
+    flushPaint();
+    const retry = lastCaptureId();
+    expect(retry).toBeTypeOf("string");
+    expect(retry).not.toBe(first);
+    evaluate(buildInspectorCaptureCompleteScript(undefined, first));
+    expect((root.querySelector(".card") as HTMLElement).hidden).toBe(true);
+    expect(comment.value).toBe("Retry draft");
+    evaluate(buildInspectorCaptureCompleteScript(undefined, retry));
+    expect(root.querySelectorAll(".chip")).toHaveLength(0);
+  });
+
+  it("ignores a previous inspector instance's capture receipt after reinstall", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    document.getElementById("title")!.click();
+    (inspector().querySelector(".add") as HTMLButtonElement).click();
+    flushPaint();
+    const previous = lastCaptureId();
+    evaluate(buildInspectorScript(false)); evaluate(buildInspectorScript(true));
+    document.getElementById("link")!.click();
+    const root = inspector();
+    const comment = root.querySelector("textarea")!; comment.value = "New inspector";
+    (root.querySelector(".add") as HTMLButtonElement).click(); flushPaint();
+    const current = lastCaptureId();
+    evaluate(buildInspectorCaptureCompleteScript("Old failure", previous));
+    expect(comment.value).toBe("New inspector");
+    expect(root.querySelector(".help")!.textContent).not.toBe("Old failure");
+    evaluate(buildInspectorCaptureCompleteScript(undefined, current));
+    expect(root.querySelectorAll(".chip")).toHaveLength(0);
+  });
+
+  it("coalesces repeated Add clicks while waiting for capture acknowledgement", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    document.getElementById("title")!.click();
+    const add = inspector().querySelector(".add") as HTMLButtonElement;
+    add.click(); add.click(); flushPaint(); add.click(); flushPaint();
+    expect(log).toHaveBeenCalledOnce();
+  });
+
+  it("does not emit a capture canceled before its two paint frames complete", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    document.getElementById("title")!.click();
+    (inspector().querySelector(".add") as HTMLButtonElement).click();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flushPaint();
+    expect(log).toHaveBeenCalledExactlyOnceWith(INSPECTOR_SENTINEL + '{"cancel":true}');
+    expect(document.querySelector("[data-mains-inspector]")).toBeNull();
+  });
   it("keeps nested and separate selections in one comment group until Add", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const navigate = vi.fn();
@@ -50,7 +113,7 @@ describe("browser annotation inspector", () => {
     expect(payload.elements.map((element: { selector: string }) => element.selector)).toEqual(["#content", "#title", "#link"]);
     expect(payload.elements[0].text).toBe("IntroductionGuides");
     expect(document.documentElement.hasAttribute("data-mains-inspect")).toBe(true);
-    evaluate(buildInspectorCaptureCompleteScript());
+    evaluate(buildInspectorCaptureCompleteScript(undefined, lastCaptureId()));
     document.getElementById("link")!.click();
     expect(root.querySelector(".count")!.textContent).toBe("1 selected item");
     expect(comment.value).toBe("");
@@ -85,7 +148,7 @@ describe("browser annotation inspector", () => {
     comment.value = "Keep this draft";
     (root.querySelector(".add") as HTMLButtonElement).click();
     flushPaint();
-    evaluate(buildInspectorCaptureCompleteScript("Capture failed"));
+    evaluate(buildInspectorCaptureCompleteScript("Capture failed", lastCaptureId()));
     expect((root.querySelector(".card") as HTMLElement).hidden).toBe(false);
     expect(root.querySelector(".help")!.textContent).toBe("Capture failed");
     expect(comment.value).toBe("Keep this draft");

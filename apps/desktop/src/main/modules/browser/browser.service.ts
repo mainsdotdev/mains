@@ -53,7 +53,6 @@ import type {
   BrowserClearDataResult,
   BrowserDeviceEmulation,
   BrowserDownload,
-  BrowserDownloadState,
   BrowserFindResult,
   BrowserHistoryEntry,
   BrowserNavState,
@@ -76,6 +75,7 @@ import {
 } from "./browser-device";
 import { keyboardShortcutsService } from "../keyboardShortcuts";
 import { buildBrowserContextMenu } from "./browser-context-menu";
+import { canPresentBrowserView, createBrowserDownloadLifecycle, createBrowserOperationLifecycle, restoredBrowserDownloadState } from "../../../shared/browser-lifecycle";
 import {
   KEYBOARD_SHORTCUTS,
   matchesKeyboardShortcut,
@@ -99,13 +99,6 @@ const DOWNLOADS_PERSIST_VERSION = 1;
 const HISTORY_PERSIST_VERSION = 1;
 const MAX_DOWNLOADS = 100;
 const EXTERNAL_PROTOCOLS = new Set(["mailto:", "tel:"]);
-const DOWNLOAD_STATES = new Set<BrowserDownloadState>([
-  "progressing",
-  "paused",
-  "completed",
-  "cancelled",
-  "interrupted",
-]);
 
 interface BrowserHistorySnapshot {
   entries: NavigationEntry[];
@@ -248,9 +241,7 @@ function downloadNavigationKey(webContentsId: number, url: string): string {
 function normalizedDownload(value: unknown): BrowserDownload | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Partial<BrowserDownload>;
-  const state = DOWNLOAD_STATES.has(record.state as BrowserDownloadState)
-    ? (record.state as BrowserDownloadState)
-    : null;
+  const state = restoredBrowserDownloadState(record.state);
   if (
     typeof record.id !== "string" ||
     !record.id ||
@@ -274,8 +265,7 @@ function normalizedDownload(value: unknown): BrowserDownload | null {
     savePath: record.savePath,
     sourceUrl: record.sourceUrl,
     mimeType: typeof record.mimeType === "string" ? record.mimeType : "",
-    state:
-      state === "progressing" || state === "paused" ? "interrupted" : state,
+    state,
     receivedBytes: Math.max(0, Number(record.receivedBytes) || 0),
     totalBytes: Math.max(0, Number(record.totalBytes) || 0),
     speedBytesPerSecond: 0,
@@ -359,6 +349,7 @@ function sanitizedHistory(
 }
 
 export const browserService = {
+  presentationLifecycle: createBrowserOperationLifecycle(),
   tabs: new Map<string, BrowserTabRecord>(),
   activeTabId: null as string | null,
   activeOwnerKey: DEFAULT_OWNER_KEY,
@@ -376,6 +367,7 @@ export const browserService = {
   historyLoaded: false,
   historyEntries: [] as BrowserHistoryEntry[],
   activeDownloadItems: new Map<string, DownloadItem>(),
+  downloadLifecycles: new Map<string, ReturnType<typeof createBrowserDownloadLifecycle>>(),
   reservedDownloadPaths: new Set<string>(),
   recentDownloadUrls: new Set<string>(),
   idleTimer: null as NodeJS.Timeout | null,
@@ -576,17 +568,16 @@ export const browserService = {
     };
     this.downloads.set(id, download);
     this.activeDownloadItems.set(id, item);
-    this._scheduleDownloadsPersist();
-    this._emitDownloads();
+    const lifecycle = createBrowserDownloadLifecycle();
+    this.downloadLifecycles.set(id, lifecycle);
+    const owned = () => this.downloads.get(id) === download && this.activeDownloadItems.get(id) === item;
 
-    item.on("updated", (_event, state) => {
+    const onUpdated = (_event: unknown, state: string) => {
       const current = this.downloads.get(id);
-      if (!current) return;
-      current.state = item.isPaused()
-        ? "paused"
-        : state === "interrupted"
-          ? "interrupted"
-          : "progressing";
+      if (!owned() || !current) return;
+      const next = lifecycle.update(state === "interrupted", item.isPaused());
+      if (!next) return;
+      current.state = next;
       current.receivedBytes = Math.max(0, item.getReceivedBytes());
       current.totalBytes = Math.max(0, item.getTotalBytes());
       current.speedBytesPerSecond = Math.max(
@@ -596,14 +587,20 @@ export const browserService = {
       current.updatedAt = new Date().toISOString();
       this._scheduleDownloadsPersist();
       this._emitDownloads();
-    });
+    };
 
-    item.once("done", (_event, state) => {
+    const onDone = (_event: unknown, state: "completed" | "cancelled" | "interrupted") => {
+      if (!owned()) return;
+      const terminal = lifecycle.finish(state);
+      if (!terminal) return;
       const current = this.downloads.get(id);
+      item.removeListener("updated", onUpdated);
+      item.removeListener("done", onDone);
       this.activeDownloadItems.delete(id);
+      this.downloadLifecycles.delete(id);
       this.reservedDownloadPaths.delete(savePath);
       if (!current) return;
-      current.state = state;
+      current.state = terminal;
       current.receivedBytes = Math.max(0, item.getReceivedBytes());
       current.totalBytes = Math.max(
         current.receivedBytes,
@@ -615,7 +612,11 @@ export const browserService = {
       current.updatedAt = new Date().toISOString();
       this._scheduleDownloadsPersist();
       this._emitDownloads();
-    });
+    };
+    item.on("updated", onUpdated);
+    item.once("done", onDone);
+    this._scheduleDownloadsPersist();
+    this._emitDownloads();
   },
 
   _findHost(): BrowserWindow | null {
@@ -965,6 +966,8 @@ export const browserService = {
       "did-start-navigation",
       (_event, _url, _isSameDocument, isMainFrame) => {
         if (!isMainFrame) return;
+        this.presentationLifecycle.retire(`capture:${record.id}`);
+        if (record.id === this.activeTabId) this.presentationLifecycle.retire("inspection");
         if (record.id === this.activeTabId && this.selectMode) {
           this.selectMode = false;
           this._sendToRenderer(CHANNELS.browser.selectModeChanged, { enabled: false });
@@ -1025,24 +1028,28 @@ export const browserService = {
     on("console-message", (event) => {
       const message = event.message;
       if (!message.startsWith(INSPECTOR_SENTINEL)) return;
-      if (record.id !== this.activeTabId || !this.selectMode) return;
+      if (record.id !== this.activeTabId) return;
       const raw = message.slice(INSPECTOR_SENTINEL.length);
       try {
         const parsed = JSON.parse(raw);
         if (parsed?.cancel) {
+          this.presentationLifecycle.retire("inspection");
+          this.presentationLifecycle.retire(`capture:${record.id}`);
           this.selectMode = false;
           this._sendToRenderer(CHANNELS.browser.selectModeChanged, {
             enabled: false,
           });
           return;
         }
+        if (!this.selectMode) return;
         if (parsed?.type !== "browser_selection") return;
-        void this._handleSelection(parsed as Omit<BrowserSelectionPayload, "id">, record)
+        void this._handleSelection(parsed as Omit<BrowserSelectionPayload, "id">, record, typeof parsed.captureId === "string" ? parsed.captureId : undefined)
           .catch(async (error) => {
             console.warn("[browser] failed to capture annotation:", error);
             if (!contents.isDestroyed()) {
               await contents.executeJavaScript(buildInspectorCaptureCompleteScript(
                 "Could not capture this selection. Try adding it again.",
+                typeof parsed.captureId === "string" ? parsed.captureId : undefined,
               )).catch(() => {});
             }
           });
@@ -1384,93 +1391,103 @@ export const browserService = {
   },
 
   async _mountActiveView() {
-    if (!this._canShowView() || !this.host || this.host.isDestroyed()) return;
-    const expectedTabId = this._activeTab().id;
-    const record = this.tabs.get(expectedTabId);
-    if (!record) return;
-    const view = await this._ensureTabView(record);
-    if (
-      !this._canShowView() ||
-      !this.host ||
-      this.host.isDestroyed() ||
-      this.activeTabId !== expectedTabId
-    ) {
-      view.setVisible(false);
-      if (this.visible) await this._trimLiveViews();
-      return;
-    }
-    if (!this.host.contentView.children.includes(view)) {
-      this.host.contentView.addChildView(view);
-    }
-    if (this.bounds) view.setBounds(this.bounds);
-    // The renderer owns the new-tab page, including its clickable history.
-    view.setVisible(record.url !== BLANK_URL);
-    this._scheduleDeviceEmulation(record);
-    void record.deviceEmulationQueue.readyAfterPaint(view.webContents);
-    // A focused floating chat is a separate child window. Remounting a tab or
-    // restoring its visibility must not steal keyboard focus from its input.
-    if (record.url !== BLANK_URL && BrowserWindow.getFocusedWindow() === this.host) {
-      view.webContents.focus();
-    }
-    record.lastUsedAt = Date.now();
-    await this._trimLiveViews();
+    const host = this.host;
+    if (!this._canShowView() || !host || host.isDestroyed()) return;
+    const record = this._activeTab();
+    const ownerKey = this.activeOwnerKey;
+    const request = this.presentationLifecycle.begin("mount", () =>
+      this._canShowView() && this.host === host && !host.isDestroyed() &&
+      this.activeOwnerKey === ownerKey && this.activeTabId === record.id &&
+      this.tabs.get(record.id) === record && !record.isClosing);
+    if (!request) return;
+    try {
+      const view = await this._ensureTabView(record);
+      if (!request.current() || record.view !== view || view.webContents.isDestroyed()) {
+        // An obsolete mount must not hide a view already accepted by its
+        // successor, including a detach/reattach of the same native view.
+        const presented = this._canShowView() && this.activeTabId === record.id &&
+          this.tabs.get(record.id) === record && record.view === view && this.host &&
+          !this.host.isDestroyed() && this.host.contentView.children.includes(view);
+        if (!presented) view.setVisible(false);
+        return;
+      }
+      if (!host.contentView.children.includes(view)) host.contentView.addChildView(view);
+      if (this.bounds) view.setBounds(this.bounds);
+      view.setVisible(record.url !== BLANK_URL);
+      this._scheduleDeviceEmulation(record);
+      void record.deviceEmulationQueue.readyAfterPaint(view.webContents);
+      if (record.url !== BLANK_URL && BrowserWindow.getFocusedWindow() === host) view.webContents.focus();
+      record.lastUsedAt = Date.now();
+      await this._trimLiveViews();
+    } finally { request.release(); }
   },
 
-  async _handleSelection(payload: Omit<BrowserSelectionPayload, "id">, record: BrowserTabRecord) {
+  async _handleSelection(payload: Omit<BrowserSelectionPayload, "id">, record: BrowserTabRecord, captureId?: string) {
     const id = randomUUID();
     const contents = record.view?.webContents;
     if (!contents || contents.isDestroyed()) return;
     const isAnnotation = Array.isArray(payload.elements) && payload.elements.length > 0;
     if (isAnnotation && payload.elements!.length > 30) throw new Error("Too many selected elements");
 
-    const elementRect = this._clampRect(payload.rect, payload.viewport);
+    const ownerKey = record.ownerKey;
+    const url = record.url;
+    const request = this.presentationLifecycle.begin(`capture:${record.id}`, () =>
+      this.selectMode && this.tabs.get(record.id) === record && record.ownerKey === ownerKey &&
+      record.view?.webContents === contents && record.url === url && !record.isClosing && !contents.isDestroyed());
+    if (!request) return;
+    try {
+      const elementRect = this._clampRect(payload.rect, payload.viewport);
 
-    // The viewport includes every visible selected outline, including nested
-    // selections. Capture the emitting tab even if the active tab changes.
-    const element = await this._capture(
-      isAnnotation ? undefined : elementRect,
-      `${isAnnotation ? "annotation" : "element"}-${id}`,
-      contents,
-    );
-    if (isAnnotation && !element) throw new Error("Could not capture the annotation");
-    pruneCaptureCache();
+      // Capture the emitting page's viewport, including nested outlines.
+      // The receipt below fences later owner, page and mode changes.
+      const element = await this._capture(
+        isAnnotation ? undefined : elementRect,
+        `${isAnnotation ? "annotation" : "element"}-${id}`,
+        contents,
+      );
+      if (!request.current()) { if (element) safeUnlink(element.filePath); return; }
+      if (isAnnotation && !element) throw new Error("Could not capture the annotation");
+      pruneCaptureCache();
 
-    const result: BrowserSelectionResult = {
-      id,
-      ownerKey: record.ownerKey,
-      type: "browser_selection",
-      url: payload.url,
-      title: payload.title,
-      selector: payload.selector,
-      tagName: payload.tagName,
-      text: payload.text,
-      styles: payload.styles,
-      rect: payload.rect,
-      pageRect: payload.pageRect,
-      scroll: payload.scroll,
-      viewport: payload.viewport,
-      devicePixelRatio: payload.devicePixelRatio,
-      componentName: payload.componentName,
-      sourceFile: payload.sourceFile,
-      timestamp: payload.timestamp,
-      ...(isAnnotation ? {
-        elements: payload.elements,
-        comment: typeof payload.comment === "string" ? payload.comment.slice(0, 4000) : "",
-      } : {}),
-      screenshotPath: element?.filePath,
-      screenshotCaptureName: captureBasename(element?.filePath),
-      screenshotMimeType: "image/png",
-    };
+      const result: BrowserSelectionResult = {
+        id,
+        ownerKey,
+        type: "browser_selection",
+        url: payload.url,
+        title: payload.title,
+        selector: payload.selector,
+        tagName: payload.tagName,
+        text: payload.text,
+        styles: payload.styles,
+        rect: payload.rect,
+        pageRect: payload.pageRect,
+        scroll: payload.scroll,
+        viewport: payload.viewport,
+        devicePixelRatio: payload.devicePixelRatio,
+        componentName: payload.componentName,
+        sourceFile: payload.sourceFile,
+        timestamp: payload.timestamp,
+        ...(isAnnotation ? {
+          elements: payload.elements,
+          comment: typeof payload.comment === "string" ? payload.comment.slice(0, 4000) : "",
+        } : {}),
+        screenshotPath: element?.filePath,
+        screenshotCaptureName: captureBasename(element?.filePath),
+        screenshotMimeType: "image/png",
+      };
 
-    if (isAnnotation) {
-      if (!contents.isDestroyed()) {
-        await contents.executeJavaScript(buildInspectorCaptureCompleteScript()).catch(() => {});
+      if (isAnnotation) {
+        if (!contents.isDestroyed()) {
+          await contents.executeJavaScript(buildInspectorCaptureCompleteScript(undefined, captureId)).catch(() => {});
+        }
       }
-    } else {
-      this.selectMode = false;
-      this._sendToRenderer(CHANNELS.browser.selectModeChanged, { enabled: false });
-    }
-    this._sendToRenderer(CHANNELS.browser.selection, result);
+      if (!request.current()) { if (element) safeUnlink(element.filePath); return; }
+      if (!isAnnotation) {
+        this.selectMode = false;
+        this._sendToRenderer(CHANNELS.browser.selectModeChanged, { enabled: false });
+      }
+      this._sendToRenderer(CHANNELS.browser.selection, result);
+    } finally { request.release(); }
   },
 
   _clampRect(
@@ -1633,6 +1650,7 @@ export const browserService = {
   async attach(bounds: BrowserBounds): Promise<BrowserState> {
     const host = this._findHost();
     if (!host) throw new Error("No active window");
+    this.presentationLifecycle.retire();
     this.host = host;
     this.bounds = {
       x: Math.max(0, Math.floor(bounds.x)),
@@ -1650,6 +1668,7 @@ export const browserService = {
   },
 
   detach(): null {
+    this.presentationLifecycle.retire();
     // A late overlay cleanup cannot reattach a panel that has since closed.
     this.attached = false;
     const activeRecord = this.activeTabId
@@ -1672,6 +1691,7 @@ export const browserService = {
   },
 
   destroy(): null {
+    this.presentationLifecycle.retire();
     this._clearIdleTimer();
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
@@ -1740,6 +1760,7 @@ export const browserService = {
   async setContext(ownerKey: string, showBlankTab = false): Promise<BrowserState> {
     this._loadPersistedTabs();
     if (ownerKey === this.activeOwnerKey) return this.getState();
+    this.presentationLifecycle.retire();
     if (this.activeTabId) {
       this.activeTabIdsByOwner[this.activeOwnerKey] = this.activeTabId;
     }
@@ -2004,13 +2025,25 @@ export const browserService = {
     const download = this.downloads.get(downloadId);
     if (!download) throw new Error("Download not found");
     const item = this.activeDownloadItems.get(downloadId);
-    if (!item) throw new Error("Download is no longer active");
-    item.cancel();
+    const lifecycle = this.downloadLifecycles.get(downloadId);
+    if (!item || !lifecycle) throw new Error("Download is no longer active");
+    if (!lifecycle.cancel()) return this.getDownloads();
+    const previous = { state: download.state, speedBytesPerSecond: download.speedBytesPerSecond, updatedAt: download.updatedAt };
     download.state = "cancelled";
     download.speedBytesPerSecond = 0;
     download.updatedAt = new Date().toISOString();
-    this._scheduleDownloadsPersist();
-    this._emitDownloads();
+    try { item.cancel(); }
+    catch (error) {
+      if (lifecycle.rejectCancel()) {
+        Object.assign(download, previous);
+        this._scheduleDownloadsPersist(); this._emitDownloads();
+        throw error;
+      }
+    }
+    if (this.activeDownloadItems.get(downloadId) === item) {
+      this._scheduleDownloadsPersist();
+      this._emitDownloads();
+    }
     return this.getDownloads();
   },
 
@@ -2163,41 +2196,49 @@ export const browserService = {
     const next = this.tabs.get(tabId);
     if (!next || next.ownerKey !== this.activeOwnerKey) throw new Error("Browser tab not found");
 
-    const previous = this.activeTabId ? this.tabs.get(this.activeTabId) : null;
-    if (previous && previous.id !== next.id && previous.view) {
-      previous.deviceEmulationQueue.cancel();
-      if (this.selectMode && !previous.view.webContents.isDestroyed()) {
-        try {
-          await previous.view.webContents.executeJavaScript(
-            buildInspectorScript(false),
-          );
-        } catch {
-          // The previous page may have navigated or closed mid-switch.
-        }
-      }
-      this._snapshotRecord(previous);
-      previous.view.setVisible(false);
-      if (this.host && !this.host.isDestroyed()) {
-        try {
-          this.host.contentView.removeChildView(previous.view);
-        } catch {
-          // It may already be detached.
-        }
-      }
-    }
+    const ownerKey = this.activeOwnerKey;
+    const request = this.presentationLifecycle.begin("activation", () =>
+      this.activeOwnerKey === ownerKey && this.tabs.get(tabId) === next && !next.isClosing, { replaceScope: true });
+    if (!request) return this.getState();
 
-    if (this.selectMode) {
-      this.selectMode = false;
-      this._sendToRenderer(CHANNELS.browser.selectModeChanged, {
-        enabled: false,
-      });
-    }
-    this.activeTabId = next.id;
-    this.activeTabIdsByOwner[this.activeOwnerKey] = next.id;
-    await this._mountActiveView();
-    this._schedulePersist();
-    this._emitState();
-    return this.getState();
+    try {
+      const previous = this.activeTabId ? this.tabs.get(this.activeTabId) : null;
+      if (previous && previous.id !== next.id && previous.view) {
+        previous.deviceEmulationQueue.cancel();
+        if (this.selectMode && !previous.view.webContents.isDestroyed()) {
+          try {
+            await previous.view.webContents.executeJavaScript(
+              buildInspectorScript(false),
+            );
+          } catch {
+            // The previous page may have navigated or closed mid-switch.
+          }
+        }
+        if (!request.current()) return this.getState();
+        this._snapshotRecord(previous);
+        previous.view.setVisible(false);
+        if (this.host && !this.host.isDestroyed()) {
+          try {
+            this.host.contentView.removeChildView(previous.view);
+          } catch {
+            // It may already be detached.
+          }
+        }
+      }
+
+      if (this.selectMode) {
+        this.selectMode = false;
+        this._sendToRenderer(CHANNELS.browser.selectModeChanged, {
+          enabled: false,
+        });
+      }
+      this.activeTabId = next.id;
+      this.activeTabIdsByOwner[this.activeOwnerKey] = next.id;
+      await this._mountActiveView();
+      this._schedulePersist();
+      this._emitState();
+      return this.getState();
+    } finally { request.release(); }
   },
 
   setBounds(bounds: BrowserBounds): null {
@@ -2232,7 +2273,7 @@ export const browserService = {
       this._clearIdleTimer();
       // The active owner may have changed while a renderer overlay hid the
       // native view. Reattach (or create) that owner's view before browsing.
-      void this._mountActiveView();
+      void this._mountActiveView().catch((error) => console.warn("[browser] failed to present view:", error));
       this._scheduleDeviceEmulation(record);
       if (view && !view.webContents.isDestroyed()) {
         void record.deviceEmulationQueue.readyAfterPaint(view.webContents);
@@ -2244,7 +2285,7 @@ export const browserService = {
   },
 
   _canShowView(): boolean {
-    return this.attached && this.visible && this.suppressionLeases.size === 0;
+    return canPresentBrowserView(this.attached, this.visible, this.suppressionLeases.size);
   },
 
   /** Overlays release only their own lease; panel visibility remains its owner's choice. */
@@ -2252,7 +2293,7 @@ export const browserService = {
     if (suppressed) this.suppressionLeases.add(lease);
     else this.suppressionLeases.delete(lease);
     if (this._canShowView()) {
-      void this._mountActiveView();
+      void this._mountActiveView().catch((error) => console.warn("[browser] failed to present view:", error));
     } else {
       for (const record of this.tabs.values()) record.view?.setVisible(false);
     }
@@ -2458,16 +2499,30 @@ export const browserService = {
   },
 
   async setSelectMode(enabled: boolean, theme?: BrowserAnnotationTheme): Promise<{ enabled: boolean }> {
-    const contents = this._activeTab().view?.webContents;
+    const record = this._activeTab();
+    const view = record.view;
+    const contents = view?.webContents;
     if (!contents || contents.isDestroyed()) {
       this.selectMode = false;
       throw new Error("No browser tab");
     }
-    await contents.executeJavaScript(buildInspectorScript(enabled, theme), true);
-    this.selectMode = enabled;
-    this._sendToRenderer(CHANNELS.browser.selectModeChanged, { enabled });
-    if (enabled) contents.focus();
-    return { enabled };
+    const url = record.url;
+    const ownerKey = record.ownerKey;
+    const request = this.presentationLifecycle.begin("inspection", () =>
+      this.tabs.get(record.id) === record && record.view === view && record.url === url &&
+      record.ownerKey === ownerKey && this.activeTabId === record.id && this.activeOwnerKey === ownerKey &&
+      !record.isClosing && !contents.isDestroyed());
+    if (!request) return { enabled: this.selectMode };
+    this.presentationLifecycle.retire(`capture:${record.id}`);
+    if (!enabled) this.selectMode = false;
+    try {
+      await contents.executeJavaScript(buildInspectorScript(enabled, theme), true);
+      if (!request.current()) return { enabled: this.selectMode };
+      this.selectMode = enabled;
+      this._sendToRenderer(CHANNELS.browser.selectModeChanged, { enabled });
+      if (enabled) contents.focus();
+      return { enabled };
+    } finally { request.release(); }
   },
 
   getNavState(): BrowserNavState {

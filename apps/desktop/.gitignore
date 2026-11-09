@@ -55,6 +55,7 @@ Thumbs.db
 !/docs/design/mcp-app-lifecycle.md
 !/docs/design/conversation-ui-lifecycle.md
 !/docs/design/window-lifecycle.md
+!/docs/design/browser-interaction-lifecycle.md
 
 # Coverage
 coverage/
