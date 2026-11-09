@@ -50,6 +50,7 @@ Thumbs.db
 !/docs/design/transcript-history-lifecycle.md
 !/docs/design/terminal-auth-lifecycle.md
 !/docs/design/turn-input-lifecycle.md
+!/docs/design/bridge-connection-lifecycle.md
 
 # Coverage
 coverage/

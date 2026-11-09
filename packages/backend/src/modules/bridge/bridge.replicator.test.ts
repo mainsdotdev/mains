@@ -106,6 +106,35 @@ describe("Bridge development configuration", () => {
 });
 
 describe.skipIf(!networkMode)("Bridge background replication for desktop/server viewers", () => {
+  it("does not mark a reopened view ready from its retired pull", async () => {
+    const account = randomUUID(), a = await node(account, "A"); run(a); await a.replicator.syncNow();
+    const original = websocket.createBridgeWebSocketTransport;
+    let pulling!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => { pulling = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let held = false;
+    vi.spyOn(websocket, "createBridgeWebSocketTransport").mockImplementation((options) => {
+      const transport = original(options), pull = transport.pull;
+      transport.pull = async (stream, after, limit) => {
+        const result = await pull(stream, after, limit);
+        if (stream === "run:r" && !held) { held = true; pulling(); await gate; }
+        return result;
+      };
+      return transport;
+    });
+    const b = await node(account, "B"); await b.replicator.syncNow();
+    b.replicator.watchRun("r", "old-view");
+    const syncing = b.replicator.syncNow();
+    try {
+      await entered;
+      b.replicator.unwatchRun("old-view"); b.replicator.watchRun("r", "new-view");
+      release(); await syncing;
+      expect(b.replicator.getStatus().runs).toEqual([{ runId: "r", ready: false, error: null }]);
+      await b.replicator.syncNow();
+      expect(b.replicator.getStatus().runs).toEqual([{ runId: "r", ready: true, error: null }]);
+    } finally { release(); await syncing; }
+  });
+
   it("keeps unrelated account/run writes and watched pulls live while one account file is damaged", async () => {
     const account = randomUUID(), dataDir = await fs.mkdtemp(join(tmpdir(), "bridge-isolation-"));
     cleanups.push(() => fs.rm(dataDir, { recursive: true, force: true }));

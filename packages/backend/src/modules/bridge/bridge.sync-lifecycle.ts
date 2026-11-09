@@ -94,8 +94,10 @@ export function createBridgeSyncLifecycle(options: { autoStart?: boolean; active
     stop(cleanup: (pending: Promise<void> | undefined) => Promise<void>) {
       if (stopping) return stopping;
       phase = "stopped"; generation++; cancelTimer();
-      stopping = Promise.resolve().then(() => cleanup(inFlight));
-      return stopping;
+      const request = Promise.resolve().then(() => cleanup(inFlight));
+      stopping = request;
+      void request.catch(() => { if (stopping === request) stopping = undefined; });
+      return request;
     },
   };
 }

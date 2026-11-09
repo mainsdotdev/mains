@@ -69,6 +69,15 @@ async function fixture(extra: Partial<BridgeReplicatorOptions> = {}) {
 }
 
 describe("Bridge sync ownership", () => {
+  it("retries failed native teardown without reopening replication admission", async () => {
+    const f = await fixture(); await f.replicator.syncNow();
+    f.gateway.close.mockImplementationOnce(() => { throw new Error("Native socket cleanup failed"); });
+    await expect(f.replicator.stop()).rejects.toThrow("Native socket cleanup failed");
+    await expect(f.replicator.syncNow()).rejects.toThrow("stopped");
+    await expect(f.replicator.stop()).resolves.toBeUndefined();
+    expect(f.gateway.close).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps normal writes queued while read-only, but applies remote changes and publishes tombstones", async () => {
     const f = await fixture(); await f.replicator.syncNow();
     f.sqlite.exec("INSERT INTO collections(id,account_id,name) VALUES('remove','default','Remove')"); await f.replicator.syncNow();

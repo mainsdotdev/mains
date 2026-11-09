@@ -1,6 +1,7 @@
 import { createBridgeSyncLifecycle } from "./bridge.sync-lifecycle";
+import { createBridgeRunWatches } from "./bridge.run-watch-lifecycle";
 import { createHash } from "node:crypto";
-import type { BridgeStatus, BridgeBackendInfo, BridgeRunState, BridgeQuota } from "@mains/contracts/bridge";
+import type { BridgeStatus, BridgeBackendInfo, BridgeQuota } from "@mains/contracts/bridge";
 import type { BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
 import type { SQLiteInstance } from "../../db/types";
 import { createBridgeEngine } from "./bridge.engine";
@@ -37,7 +38,6 @@ export interface BridgeReplicatorOptions {
   dataDir?: string;
   stageLocalBeforePull?: boolean;
 }
-const watcherLeaseMs = 90_000;
 const quotaRefreshIntervalMs = 60_000;
 const fallbackPollIntervalMs = 300_000;
 
@@ -78,8 +78,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       quotaDirty = true;
     }
   }
-  const watchers = new Map<string, { runId: string; expires: number }>();
-  const runStates = new Map<string, BridgeRunState>();
+  const watches = createBridgeRunWatches();
   const online = new Map<string, boolean>();
   const notify = () => {
     if (!lifecycle.stopped) { try { options.onStatus?.(); } catch { /* UI listeners cannot interrupt durable replication. */ } }
@@ -169,13 +168,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     stageLocalBeforePull: options.stageLocalBeforePull || !!binding?.enrollment_staging });
   sqlite.prepare("UPDATE bridge_config SET account_fingerprint=? WHERE id=1").run(fingerprint);
 
-  function watchedRuns(): string[] {
-    const now = Date.now();
-    for (const [id, watcher] of watchers) if (watcher.expires < now) watchers.delete(id);
-    const runs = [...new Set([...watchers.values()].map((value) => value.runId))].sort();
-    for (const id of runStates.keys()) if (!runs.includes(id)) runStates.delete(id);
-    return runs;
-  }
+  const watchedRuns = watches.ids;
   function schedule(delay: number) {
     lifecycle.schedule(delay, (due) => {
       const streams = ["account", ...watchedRuns().map((id) => `run:${id}`)].join(",");
@@ -200,10 +193,11 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     lifecycle.beginCycle();
     const incoming = new Set(changedStreams); changedStreams.clear();
     const safetyDue = Date.now() >= nextSafetyPullAt;
+    const watched = watches.snapshot();
     let pullAll = pullAllRequested || !initialized || safetyDue;
     pullAllRequested = false;
     try {
-      const streams: BridgeStream[] = ["account", ...watchedRuns().map((id): BridgeStream => `run:${id}`)];
+      const streams: BridgeStream[] = ["account", ...watched.map(({ value }): BridgeStream => `run:${value.runId}`)];
       const signature = streams.join(",");
       if (subscribed !== signature) { await transport.subscribe(streams); if (!current()) return; subscribed = signature; pullAll = true; }
       if (membershipStale || safetyDue) { membershipStale = false; await refreshMembership(); if (!current()) return; await heartbeat(current); }
@@ -245,12 +239,14 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         await publish(stream, deletesOnly || Date.now() < lifecycle.writeRetryAt || !engine.canPushRun(stream.slice(4)));
       }
       if (!deletesOnly) lifecycle.progress(sent, pending(), outboxSignature());
-      for (const runId of watchedRuns()) {
+      for (const ticket of watched) {
+        const runId = ticket.value.runId;
         if (!current()) return;
+        if (!watches.current(ticket)) continue;
         if (!pullAll && !incoming.has(`run:${runId}`)) continue;
         await engine.pull(`run:${runId}`);
         if (!current()) return;
-        runStates.set(runId, { runId, ready: true, error: null });
+        watches.ready(ticket);
       }
       // Local publishing and incremental hints cannot postpone the safety read.
       if (pullAll) nextSafetyPullAt = Date.now() + (options.idleIntervalMs ?? fallbackPollIntervalMs);
@@ -276,10 +272,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       state = /connection|timed out/i.test(error) ? "offline" : "error";
       online.clear(); subscribed = ""; pullAllRequested = true; membershipStale = true;
       for (const stream of incoming) changedStreams.add(stream);
-      for (const runId of watchedRuns()) {
-        const previous = runStates.get(runId);
-        runStates.set(runId, { runId, ready: previous?.ready ?? false, error });
-      }
+      watches.fail(watched, error);
       notify(); throw cause;
     } finally {
       if (!current() && !lifecycle.stopped) {
@@ -318,20 +311,12 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       if (lifecycle.stopped) throw new Error("Bridge replicator is stopped");
       const run = sqlite.prepare("SELECT owner_backend_id FROM runs WHERE id=?").get(runId) as { owner_backend_id: string } | undefined;
       if (!run) throw new Error("Run not found");
-      if (run.owner_backend_id === backendId) return;
-      if (watchers.size >= 512 && !watchers.has(watcherId)) throw new Error("Too many open Bridge views");
-      const runs = watchedRuns();
-      if (!runs.includes(runId) && runs.length >= 127) throw new Error("Too many open Bridge streams");
-      watchers.set(watcherId, { runId, expires: Date.now() + watcherLeaseMs });
-      if (!runStates.has(runId)) {
-        const cached = !!sqlite.prepare("SELECT 1 FROM bridge_cursors WHERE stream=?").get(`run:${runId}`);
-        runStates.set(runId, { runId, ready: cached, error: null });
-      }
-      notify(); if (!runs.includes(runId)) api.wake();
+      const changed = watches.watch(runId, watcherId, run.owner_backend_id === backendId,
+        () => !!sqlite.prepare("SELECT 1 FROM bridge_cursors WHERE stream=?").get(`run:${runId}`));
+      notify(); if (changed) api.wake();
     },
     unwatchRun(watcherId: string) {
-      const before = watchedRuns().join(",");
-      if (watchers.delete(watcherId)) { const after = watchedRuns().join(","); notify(); if (before !== after) api.wake(); }
+      if (watches.unwatch(watcherId)) { notify(); api.wake(); }
     },
     getStatus(): BridgeStatus {
       const peers = sqlite.prepare("SELECT backend_id,label,platform,last_seen_ms FROM bridge_peers ORDER BY backend_id").all() as { backend_id: string; label: string; platform: string | null; last_seen_ms: number | null }[];
@@ -347,11 +332,11 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       return { enabled: true, state: (state === "connected" || state === "syncing") && readOnly() ? "read-only" : state, backendId, label: config.label, lastSyncedAt, error,
         pendingRecords: pending(), rejectedRecords: engine.unverified(), blockedRecordCount: blocked.total, blockedRecords: blocked.records,
         writeRetryAt: Date.now() < lifecycle.writeRetryAt ? new Date(lifecycle.writeRetryAt).toISOString() : null,
-        backends: [...backends.values()], runs: [...runStates.values()], quota: displayQuota };
+        backends: [...backends.values()], runs: watches.status(), quota: displayQuota };
     },
     stop() { return lifecycle.stop(async (pending) => {
       transport.close(); await blobs?.stop(); await pending?.catch(() => {}); await engine.stop(); membershipSecret.fill(0);
-      watchers.clear(); online.clear();
+      watches.stop(); online.clear();
     }); },
   };
   schedule(0);
