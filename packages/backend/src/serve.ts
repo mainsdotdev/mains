@@ -13,6 +13,7 @@ import { generateToken } from "./ipc-kit/ws-auth";
 import { registerAccountIpc, unregisterAccountIpc } from "./modules/account";
 import {
   backendService,
+  clearPairingCodes,
   registerBackendIpc,
   unregisterBackendIpc,
 } from "./modules/backend";
@@ -229,6 +230,7 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
       serveLocalDocument: (url) => serveLocalDocument(url),
       verifyDeviceToken: (deviceToken) =>
         backendService.verifyDeviceToken(deviceToken),
+      retirePairingCodes: clearPairingCodes,
       pairDevice: (body) => backendService.pairDevice(body),
       createPairingCode: (endpoints) =>
         backendService.createPairingCode(endpoints),

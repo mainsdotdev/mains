@@ -62,6 +62,18 @@ describe("startWsHost — paired devices and POST /pair", () => {
     return JSON.parse(await responsePromise).result.data;
   }
 
+  it("retires pairing authority once as soon as shutdown starts", async () => {
+    let retired = 0;
+    host = await startWsHost({ port: 0, host: "127.0.0.1", token: SHARED_TOKEN,
+      retirePairingCodes: () => { retired++; },
+    });
+    const first = host.close(), second = host.close();
+    expect(retired).toBe(1);
+    expect(first).toBe(second);
+    expect(() => host!.createWebLogin("http://127.0.0.1")).toThrow(/closing/);
+    await first;
+  });
+
   it("accepts a device token and hands its deviceId to handlers", async () => {
     host = await startWsHost({
       port: 0,
@@ -181,6 +193,18 @@ describe("startWsHost — paired devices and POST /pair", () => {
 
     expect(client.readyState).toBe(WebSocket.OPEN);
     expect(await whoAmI(client)).toEqual({ clientId: expect.any(String) });
+  });
+  it("rejects authentication that was already pending when its device was disconnected", async () => {
+    let finish!: (value: { deviceId: string }) => void, verifying = false;
+    host = await startWsHost({ port: 0, host: "127.0.0.1", token: SHARED_TOKEN,
+      verifyDeviceToken: async () => { verifying = true; return new Promise((resolve) => { finish = resolve; }); },
+    });
+    client = new WebSocket(`ws://127.0.0.1:${host.port}`, buildSubprotocols(DEVICE_TOKEN));
+    const outcome = new Promise<string>((resolve) => { client!.once("open", () => resolve("opened")); client!.once("error", (error) => resolve(error.message)); });
+    await until(() => verifying);
+    expect(host.disconnectDevice("d1")).toBe(0);
+    finish({ deviceId: "d1" });
+    expect(await outcome).toBe("Unexpected server response: 401");
   });
 
   it("tracks which devices are connected and reports each change", async () => {

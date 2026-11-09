@@ -21,6 +21,10 @@ function pulse() {
   return pulseService.create("default", { mode: "work", providerId: "claude_code", model: "sonnet", title: "Digest", prompt: "Summarize",
     frequency: "hourly", hour: 9, minute: 30, timezone: "UTC" });
 }
+function makePulsesDue() {
+  // SQLite's unixepoch() uses the real clock, independent of Vitest's Date.
+  fixture.sqlite.prepare("UPDATE pulses SET next_run_at=?").run(Math.floor(Date.now() / 1000) - 1);
+}
 function automation(handler: () => Promise<string | null>, intervalMinutes = 1) {
   automationsService.registerAction("test:scheduled", handler);
   return automationsService.create("default", { name: "Scheduled test", kind: "custom", action: "test:scheduled", intervalMinutes });
@@ -65,7 +69,7 @@ describe("Scheduled execution through real SQLite services", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const first = pulse(), second = pulse();
     pulseService.update(first.id, { prompt: "fail once" });
-    fixture.sqlite.exec("UPDATE pulses SET next_run_at=unixepoch()-1");
+    makePulsesDue();
     let failed = false;
     vi.mocked(runsService.executeRun).mockImplementation(async (input) => {
       if (input.goal === "fail once" && !failed) { failed = true; throw new Error("Temporary provider failure"); }
@@ -99,7 +103,7 @@ describe("Scheduled execution through real SQLite services", () => {
 
   it("keeps a canceled scheduled Pulse due for catch-up after restart", async () => {
     const saved = pulse(), entered = deferred<void>(), gate = deferred<void>(), getAll = spaceService.getAll.bind(spaceService);
-    fixture.sqlite.exec("UPDATE pulses SET next_run_at=unixepoch()-1");
+    makePulsesDue();
     vi.spyOn(spaceService, "getAll").mockImplementationOnce(async () => {
       const spaces = await getAll(); entered.resolve(); await gate.promise; return spaces;
     });
@@ -147,7 +151,7 @@ describe("Scheduled execution through real SQLite services", () => {
   it("rechecks each due Pulse after an earlier launch yields to a manual launch", async () => {
     const a = pulse(), b = pulse(), entered = deferred<void>(), gate = deferred<void>();
     pulseService.update(a.id, { prompt: "first" }); pulseService.update(b.id, { prompt: "second" });
-    fixture.sqlite.exec("UPDATE pulses SET next_run_at=unixepoch()-1");
+    makePulsesDue();
     let held: string | undefined;
     vi.mocked(runsService.executeRun).mockImplementation(async (input) => {
       const runId = createRun(fixture.db, { providerId: "claude_code", mode: "work" }).id;

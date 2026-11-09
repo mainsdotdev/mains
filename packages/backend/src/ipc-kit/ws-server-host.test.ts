@@ -367,6 +367,20 @@ describe("startWsHost browser sessions and HTTP image proxy", () => {
     );
     expect(error).toBe("Unexpected server response: 401");
   });
+  it("retires an already-open socket when its browser session is evicted", async () => {
+    const { host: currentHost } = await startBrowserHost();
+    const origin = `http://127.0.0.1:${currentHost.port}`;
+    const first = await exchangeLogin(currentHost);
+    const browser = new WebSocket(`ws://127.0.0.1:${currentHost.port}/__mains/ws`, buildSubprotocols(), {
+      headers: { Cookie: cookiePair(cookies(first), "mains_web_"), Origin: origin },
+    });
+    let closed = false; browser.on("close", () => { closed = true; });
+    try {
+      await opened(browser);
+      for (let index = 0; index < 128; index++) expect((await exchangeLogin(currentHost)).status).toBe(204);
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 1000 });
+    } finally { browser.terminate(); }
+  });
 
   it("marks cookies Secure when the login link is HTTPS", async () => {
     const { host: currentHost } = await startBrowserHost();

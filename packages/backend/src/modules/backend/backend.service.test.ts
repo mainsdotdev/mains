@@ -8,6 +8,7 @@ import { PENDING_COMMAND_RESULT } from "../../ipc-kit/command-delivery";
 import type { DatabaseInstance } from "../../db/types";
 
 let db: DatabaseInstance;
+let sqlite: ReturnType<typeof createTestDb>["sqlite"];
 let cleanup: () => void;
 
 vi.mock("../../db/client", () => ({
@@ -52,7 +53,7 @@ function parseLink(link: string) {
 
 describe("backendService", () => {
   beforeEach(() => {
-    ({ db, cleanup } = createTestDb());
+    ({ db, sqlite, cleanup } = createTestDb());
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-25T10:00:00Z"));
   });
@@ -201,6 +202,11 @@ describe("backendService", () => {
   });
 
   describe("createPairingCode", () => {
+    it("does not publish a code whose owner was cleared while its descriptor was loading", async () => {
+      const creating = backendService.createPairingCode(ENDPOINTS);
+      clearPairingCodes();
+      await expect(creating).rejects.toThrow(/no longer active/);
+    });
     it("refuses when the phone would have nothing to reach", async () => {
       await expect(backendService.createPairingCode([])).rejects.toThrow(
         /network access or Tailscale/,
@@ -222,6 +228,50 @@ describe("backendService", () => {
   });
 
   describe("pairDevice", () => {
+    it("admits exactly one of concurrent exchanges for the same code", async () => {
+      const { code } = await backendService.createPairingCode(ENDPOINTS);
+      const outcomes = await Promise.allSettled([
+        backendService.pairDevice(phone(code)), backendService.pairDevice(phone(code)),
+      ]);
+      expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(await backendService.listPairedDevices()).toHaveLength(1);
+    });
+
+    it("keeps a code spent after a database failure and allows a newly issued code", async () => {
+      const { code } = await backendService.createPairingCode(ENDPOINTS);
+      sqlite.exec("CREATE TRIGGER reject_pair BEFORE INSERT ON paired_devices BEGIN SELECT RAISE(ABORT, 'pairing unavailable'); END");
+      await expect(backendService.pairDevice(phone(code))).rejects.toThrow();
+      sqlite.exec("DROP TRIGGER reject_pair");
+      await expect(backendService.pairDevice(phone(code))).rejects.toThrow(/invalid or has expired/);
+      expect(await backendService.listPairedDevices()).toEqual([]);
+      const fresh = await backendService.createPairingCode(ENDPOINTS);
+      await expect(backendService.pairDevice(phone(fresh.code))).resolves.toMatchObject({ deviceId: expect.any(String) });
+    });
+
+    it("revokes its own inserted device when authority retires during the database write", async () => {
+      const { code } = await backendService.createPairingCode(ENDPOINTS);
+      sqlite.function("retire_pairing", () => { clearPairingCodes(); return 0; });
+      sqlite.exec("CREATE TRIGGER retire_pair AFTER INSERT ON paired_devices BEGIN SELECT retire_pairing(); END");
+      await expect(backendService.pairDevice(phone(code))).rejects.toThrow(/no longer active/);
+      expect(await backendService.listPairedDevices()).toEqual([]);
+      expect(sqlite.prepare("SELECT revoked_at FROM paired_devices").get()).toMatchObject({ revoked_at: expect.any(Number) });
+    });
+
+    it("evicts only the oldest of 33 outstanding codes", async () => {
+      const codes = [];
+      for (let index = 0; index < 33; index++) codes.push(await backendService.createPairingCode(ENDPOINTS));
+      await expect(backendService.pairDevice(phone(codes[0].code))).rejects.toThrow(/invalid or has expired/);
+      await backendService.pairDevice(phone(codes[1].code));
+      await backendService.pairDevice(phone(codes[32].code));
+      expect(await backendService.listPairedDevices()).toHaveLength(2);
+    });
+    it("retires an admitted exchange when pairing authority is cleared before it commits", async () => {
+      const { code } = await backendService.createPairingCode(ENDPOINTS);
+      const exchanging = backendService.pairDevice(phone(code));
+      clearPairingCodes();
+      await expect(exchanging).rejects.toThrow(/no longer active/);
+      expect(await backendService.listPairedDevices()).toEqual([]);
+    });
     it("exchanges a live code for a device token and the descriptor", async () => {
       const { code } = await backendService.createPairingCode(ENDPOINTS);
 
@@ -262,7 +312,7 @@ describe("backendService", () => {
 
     it("rejects a code past its five minutes", async () => {
       const { code } = await backendService.createPairingCode(ENDPOINTS);
-      vi.advanceTimersByTime(CODE_TTL_MS + 1);
+      vi.advanceTimersByTime(CODE_TTL_MS);
 
       await expect(backendService.pairDevice(phone(code))).rejects.toThrow(
         /invalid or has expired/,
@@ -292,6 +342,14 @@ describe("backendService", () => {
   });
 
   describe("verifyDeviceToken", () => {
+    it("refuses an earlier verification when revocation starts before it settles", async () => {
+      const { code } = await backendService.createPairingCode(ENDPOINTS);
+      const { deviceId, deviceToken } = await backendService.pairDevice(phone(code));
+      const verification = backendService.verifyDeviceToken(deviceToken);
+      await backendService.revokePairedDevice(deviceId);
+      expect(await verification).toBeNull();
+      expect(await backendService.verifyDeviceToken(deviceToken)).toBeNull();
+    });
     it("resolves a live token to its device and records the sighting", async () => {
       const { code } = await backendService.createPairingCode(ENDPOINTS);
       const { deviceId, deviceToken } = await backendService.pairDevice(

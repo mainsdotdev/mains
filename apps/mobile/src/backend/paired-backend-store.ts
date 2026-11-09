@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import { createCredentialPersistence } from "./credential-persistence";
 
 /**
  * The one Mac this phone is paired with, kept in the platform keychain. The
@@ -19,6 +20,14 @@ export interface PairedBackend {
 }
 
 const KEY = "mains.pairedBackend";
+const credentials = createCredentialPersistence({
+  read: () => SecureStore.getItemAsync(KEY),
+  write: (value) => SecureStore.setItemAsync(KEY, value, {
+    // Background reconnects can read it after the first unlock following reboot.
+    keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+  }),
+  remove: () => SecureStore.deleteItemAsync(KEY),
+});
 
 function isPairedBackend(value: unknown): value is PairedBackend {
   if (!value || typeof value !== "object") return false;
@@ -34,7 +43,7 @@ function isPairedBackend(value: unknown): value is PairedBackend {
 }
 
 export async function loadPairedBackend(): Promise<PairedBackend | null> {
-  const raw = await SecureStore.getItemAsync(KEY);
+  const raw = await credentials.load();
   if (!raw) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -44,14 +53,10 @@ export async function loadPairedBackend(): Promise<PairedBackend | null> {
   }
 }
 
-export async function savePairedBackend(backend: PairedBackend): Promise<void> {
-  await SecureStore.setItemAsync(KEY, JSON.stringify(backend), {
-    // Readable after the first unlock following a reboot, so a background
-    // reconnect (push → sync) can open a socket without the phone being unlocked.
-    keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
-  });
+export async function savePairedBackend(backend: PairedBackend, options: { signal?: AbortSignal } = {}): Promise<void> {
+  await credentials.save(JSON.stringify(backend), options.signal);
 }
 
 export async function forgetPairedBackend(): Promise<void> {
-  await SecureStore.deleteItemAsync(KEY);
+  await credentials.forget();
 }

@@ -9,6 +9,7 @@ import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { createAuthFence } from "@mains/contracts/auth-lifecycle";
 import {
   WS_SUBPROTOCOL,
   extractToken,
@@ -20,6 +21,7 @@ import {
   createWebSessionManager,
   type WebLoginLink,
   type WebSessionManager,
+  type WebSessionLease,
 } from "./web-session";
 export type { WebLoginLink } from "./web-session";
 import { WebSocketSink } from "./websocket-sink";
@@ -107,6 +109,8 @@ export interface WsHostOptions {
    * the code is created inside the already-running server process.
    */
   createPairingCode?: (endpoints: string[]) => Promise<unknown>;
+  /** Retire process-local pairing authority before this host drains. */
+  retirePairingCodes?: () => void;
   /** List device sessions for authenticated local administration. */
   listPairedDevices?: () => Promise<unknown>;
   /** Revoke one device session for authenticated local administration. */
@@ -560,6 +564,7 @@ function createStaticHandler(webRoot: string) {
  * See docs/design/remote-backend.md.
  */
 export function startWsHost(options: WsHostOptions): Promise<WsHost> {
+  const deviceAuth = createAuthFence();
   const token = options.token;
   let closing = false, closePromise: Promise<void> | undefined;
   const pending = new Set<Promise<void>>();
@@ -584,6 +589,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   const staticHandler = webRoot ? createStaticHandler(webRoot) : null;
   const webSessions = createWebSessionManager();
   const createWebLogin = (baseUrl: string): WebLoginLink => {
+    if (closing) throw new Error("Backend is closing");
     if (!webRoot) throw new Error("Web UI is not available on this backend");
     return webSessions.createLogin(baseUrl);
   };
@@ -597,7 +603,10 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
       req.method === "POST" &&
       pathname === "/pair"
     ) {
-      track(handlePairing(req, res, options.pairDevice));
+      track(handlePairing(req, res, (body) => {
+        if (closing) throw new Error("Backend is closing");
+        return options.pairDevice!(body);
+      }));
     } else if (
       options.createPairingCode &&
       req.method === "POST" &&
@@ -607,7 +616,10 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         req,
         res,
         token,
-        options.createPairingCode,
+        (endpoints) => {
+          if (closing) throw new Error("Backend is closing");
+          return options.createPairingCode!(endpoints);
+        },
       ));
     } else if (
       req.method === "POST" &&
@@ -678,16 +690,19 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   // Device identity survives from the handshake to the `connection` event via
   // the request object, which `ws` hands to both.
   const authenticatedDevices = new WeakMap<IncomingMessage, VerifiedDevice>();
-  const authenticatedWebSessions = new WeakMap<IncomingMessage, number>();
+  const authenticatedRequests = new WeakMap<IncomingMessage, () => boolean>();
+  const authenticatedWebSessions = new WeakMap<IncomingMessage, WebSessionLease>();
   const authorize = async (req: IncomingMessage): Promise<boolean> => {
     const raw = req.headers["sec-websocket-protocol"];
     const header = Array.isArray(raw) ? raw.join(",") : raw;
     const presented = extractToken(parseProtocolHeader(header));
     if (tokensMatch(token, presented)) return true;
     if (presented && options.verifyDeviceToken) {
+      const current = deviceAuth.observe();
       const device = await options.verifyDeviceToken(presented).catch(() => null);
-      if (device) {
+      if (device && current(device.deviceId)) {
         authenticatedDevices.set(req, device);
+        authenticatedRequests.set(req, () => current(device.deviceId));
         return true;
       }
     }
@@ -696,13 +711,14 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
     const requestPath = (req.url ?? "/").split("?")[0];
     const webSession =
       requestPath === "/__mains/ws"
-        ? webSessions.verifySession(
+        ? webSessions.authorizeSession(
             readCookie(req, webSessions.sessionCookieName),
             requestOrigin(req),
           )
         : null;
     if (webSession) {
-      authenticatedWebSessions.set(req, webSession.expiresAt);
+      authenticatedWebSessions.set(req, webSession);
+      authenticatedRequests.set(req, webSession.current);
       return true;
     }
     return false;
@@ -722,7 +738,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
       track(authorize(info.req)
         .catch(() => false)
         .then((allowed) => {
-          if (!closing && allowed) cb(true);
+          if (!closing && allowed && (authenticatedRequests.get(info.req)?.() ?? true)) cb(true);
           else cb(false, 401, "Unauthorized");
         }));
     },
@@ -731,7 +747,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   // Which paired device each open socket belongs to, for disconnectDevice.
   const socketDevices = new WeakMap<WebSocket, string>();
   wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
-    if (closing) { socket.terminate(); return; }
+    if (closing || authenticatedRequests.get(req)?.() === false) { socket.terminate(); return; }
     const device = authenticatedDevices.get(req);
     if (device) {
       socketDevices.set(socket, device.deviceId);
@@ -743,17 +759,21 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
       );
       options.onDeviceConnectionChange?.(device.deviceId);
     }
-    const webSessionExpiresAt = authenticatedWebSessions.get(req);
-    if (webSessionExpiresAt !== undefined) {
+    const webSession = authenticatedWebSessions.get(req);
+    if (webSession) {
+      const revoke = () => socket.terminate();
+      webSession.signal.addEventListener("abort", revoke, { once: true });
       const expiryTimer = setTimeout(
         () => socket.terminate(),
-        Math.max(0, webSessionExpiresAt - Date.now()),
+        Math.max(0, webSession.expiresAt - Date.now()),
       );
-      socket.once("close", () => clearTimeout(expiryTimer));
+      expiryTimer.unref();
+      socket.once("close", () => { clearTimeout(expiryTimer); webSession.signal.removeEventListener("abort", revoke); });
     }
-    serveConnection(adaptSocket(socket, device), sink, {
+    const authorized = () => !closing && (authenticatedRequests.get(req)?.() ?? true);
+    serveConnection(adaptSocket(socket, device, authorized), sink, {
       commandReceipts: options.commandReceipts,
-      accepting: () => !closing,
+      accepting: () => !closing && (authenticatedRequests.get(req)?.() ?? true),
       track,
     });
   });
@@ -763,6 +783,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
     const failStart = (error: Error) => {
       if (listening || failed) return;
       failed = true; closing = true;
+      options.retirePairingCodes?.();
       unregisterSink(); webSessions.clear();
       for (const client of wss.clients) client.terminate();
       wss.close(() => {}); httpServer.close(() => {});
@@ -785,6 +806,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         webUiAvailable: webRoot !== null,
         createWebLogin,
         disconnectDevice: (deviceId) => {
+          deviceAuth.retire(deviceId);
           let dropped = 0;
           for (const client of wss.clients) {
             if (socketDevices.get(client) !== deviceId) continue;
@@ -806,9 +828,11 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         close: () => {
           if (closePromise) return closePromise;
           closing = true;
+          deviceAuth.clear();
+          options.retirePairingCodes?.();
+          webSessions.clear();
           closePromise = Promise.resolve().then(async () => {
             unregisterSink();
-            webSessions.clear();
             // Force live connections closed first. httpServer.close() waits for
             // active sockets to drain, and wss.close() does NOT terminate its
             // clients — so a single connected WS client (the normal case for an
@@ -829,16 +853,17 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   });
 }
 
-function adaptSocket(socket: WebSocket, device?: VerifiedDevice): WsConnection {
+function adaptSocket(socket: WebSocket, device?: VerifiedDevice, authorized: () => boolean = () => true): WsConnection {
   return {
     id: randomUUID(),
     deviceId: device?.deviceId,
     allowedChannels: device?.channels,
     commandChannels: device?.commandChannels,
     eventChannels: device?.eventChannels,
-    send: (data) => socket.send(data),
+    send: (data) => { if (authorized()) socket.send(data); else socket.terminate(); },
     onMessage: (listener) =>
       socket.on("message", (raw: RawData, isBinary: boolean) => {
+        if (!authorized()) { socket.terminate(); return; }
         if (!isBinary) listener(raw.toString());
       }),
     onClose: (listener) => socket.on("close", () => listener()),

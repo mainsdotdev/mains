@@ -40,13 +40,17 @@ export function isPairDeviceResult(value: unknown): value is PairDeviceResult {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
   const backend = v.backend as Record<string, unknown> | undefined;
+  const nonempty = (field: unknown): field is string => typeof field === "string" && field.trim().length > 0;
   return (
-    typeof v.deviceId === "string" &&
-    typeof v.deviceToken === "string" &&
+    nonempty(v.deviceId) &&
+    nonempty(v.deviceToken) &&
     !!backend &&
-    typeof backend.backendId === "string" &&
-    typeof backend.name === "string" &&
-    typeof backend.protocolVersion === "number"
+    nonempty(backend.backendId) &&
+    nonempty(backend.name) &&
+    nonempty(backend.appVersion) &&
+    typeof backend.protocolVersion === "number" && Number.isSafeInteger(backend.protocolVersion) && backend.protocolVersion > 0 &&
+    Array.isArray(backend.capabilities) && backend.capabilities.every((item) => typeof item === "string") &&
+    typeof backend.serverTime === "string" && Number.isFinite(Date.parse(backend.serverTime))
   );
 }
 

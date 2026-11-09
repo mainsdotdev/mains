@@ -18,6 +18,7 @@ import { tailscaleService } from "@mains/backend/modules/tailscale";
 import { appSettingsService } from "@mains/backend/modules/appSettings";
 import {
   backendService,
+  clearPairingCodes,
   type PairedDevice,
   type PairingCode,
 } from "@mains/backend/modules/backend";
@@ -252,6 +253,7 @@ async function reconcileHost(): Promise<void> {
       // stamp verifying records reaches the list with the connection change
       // below, once the socket is open and counts as connected.
       verifyDeviceToken: (token) => backendService.verifyDeviceToken(token),
+      retirePairingCodes: clearPairingCodes,
       pairDevice: async (body) => {
         const result = await backendService.pairDevice(body);
         notifyPairedDevicesChanged();
