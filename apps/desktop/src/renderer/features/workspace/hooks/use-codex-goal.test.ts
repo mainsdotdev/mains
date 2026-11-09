@@ -1,18 +1,19 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GoalInfo } from "@/lib/redux/api/providersApi";
 
 type GoalUpdate = { providerId: string; runId: string; goal: GoalInfo | null };
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn(), set: vi.fn(), clear: vi.fn(), listeners: new Set<(event: GoalUpdate) => void>(),
+  transport: {},
 }));
 vi.mock("@/lib/redux/api/providersApi", () => ({
   useLazyGetProviderGoalQuery: () => [mocks.fetch],
   useSetProviderGoalMutation: () => [mocks.set, { isLoading: false }],
   useClearProviderGoalMutation: () => [mocks.clear, { isLoading: false }],
 }));
-vi.mock("@/lib/transport", () => ({ appEvents: { providers: {
+vi.mock("@/lib/transport", () => ({ getTransport: () => mocks.transport, onTransportChange: () => () => {}, appEvents: { providers: {
   onGoalUpdated: (listener: (event: GoalUpdate) => void) => {
     mocks.listeners.add(listener);
     return () => { mocks.listeners.delete(listener); };
@@ -32,6 +33,7 @@ afterEach(() => { cleanup(); mocks.listeners.clear(); vi.useRealTimers(); });
 describe("Codex goal provenance", () => {
   it("marks edits, pause, resume and explicit removal as user actions", async () => {
     const { result } = renderHook(() => useCodexGoal("codex", "run-1", true));
+    await waitFor(() => expect(result.current.goal).not.toBeNull());
     await act(async () => { await result.current.updateObjective("Updated goal"); });
     await act(async () => { await result.current.pause(); });
     await act(async () => { await result.current.resume(); });

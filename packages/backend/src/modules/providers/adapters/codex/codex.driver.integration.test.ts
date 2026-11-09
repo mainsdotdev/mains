@@ -141,6 +141,47 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it.each(["active", "paused", "blocked", "usageLimited", "budgetLimited"])("preserves a native %s goal on continuation and an inheriting fork", async (status) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-goal-inherit-")); tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl"); vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_FORK_GOAL", "1");
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000, goalMode: true }); drivers.push(driver);
+    await driver.createSession(request("goal-source"));
+    await driver.setGoal!("goal-source", { status });
+    await driver.resumeSession!({ ...request("goal-source"), message: "Follow-up that must not replace the goal" });
+    await driver.forkSession!({ ...request("goal-fork"), sourceRunId: "goal-source", message: "Fork follow-up" });
+    await expect(driver.getGoal!("goal-source")).resolves.toMatchObject({ objective: "Return structured output", status });
+    await expect(driver.getGoal!("goal-fork")).resolves.toMatchObject({ threadId: "thread-1-fork", objective: "Return structured output", status });
+    expect(readProtocolLog(logPath).filter((entry) => entry.method === "thread/goal/set")).toHaveLength(2);
+  });
+  it("renews a native completed goal as active on continuation", async () => {
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000, goalMode: true }); drivers.push(driver);
+    await driver.createSession(request("goal-renew"));
+    await driver.setGoal!("goal-renew", { status: "complete" });
+    await driver.resumeSession!({ ...request("goal-renew"), message: "Next objective" });
+    await expect(driver.getGoal!("goal-renew")).resolves.toMatchObject({ objective: "Next objective", status: "active" });
+  });
+  it("does not automatically clear a goal that is still active on the provider", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-goal-clear-")); tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl"); vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000, goalMode: true }); drivers.push(driver);
+    await driver.createSession(request("run-goal-clear"));
+    await expect(driver.clearGoal!("run-goal-clear", "automatic")).resolves.toBe(false);
+    expect(readProtocolLog(logPath).some((entry) => entry.method === "thread/goal/clear")).toBe(false);
+    await expect(driver.getGoal!("run-goal-clear")).resolves.toMatchObject({ status: "active", objective: "Return structured output" });
+  });
+  it("preserves an established goal when continuation goal lookup fails", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-goal-preserve-")); tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_GOAL_GET_ERROR", "1");
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000, goalMode: true }); drivers.push(driver);
+    await driver.createSession(request("run-goal-preserve"));
+    await driver.resumeSession!({ ...request("run-goal-preserve"), message: "A small follow-up" });
+    const writes = readProtocolLog(logPath).filter((entry) => entry.method === "thread/goal/set");
+    expect(writes).toHaveLength(1);
+    expect(writes[0].params).toEqual({ threadId: "thread-1", objective: "Return structured output", origin: "automatic" });
+  });
   it("cancels startup during the CLI probe without spawning an app-server after shutdown", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-probe-"));
     tempDirs.push(dir);
@@ -292,6 +333,7 @@ describe("codex.driver / app-server protocol", () => {
     await expect(driver.setGoal?.("run-goal-origin", { status: "active" })).resolves.toMatchObject({ status: "active" });
     await expect(driver.clearGoal?.("run-goal-origin")).resolves.toBe(true);
     await driver.setGoal?.("run-goal-origin", { objective: "Next objective" });
+    await driver.setGoal?.("run-goal-origin", { status: "complete" });
     await expect(driver.clearGoal?.("run-goal-origin", "automatic")).resolves.toBe(true);
     const mutations = readProtocolLog(logPath).filter((entry) => entry.method === "thread/goal/set" || entry.method === "thread/goal/clear");
     expect(mutations.map((entry) => entry.params)).toEqual([
@@ -301,6 +343,7 @@ describe("codex.driver / app-server protocol", () => {
       { threadId: "thread-1", status: "active", origin: "user" },
       { threadId: "thread-1", origin: "user" },
       { threadId: "thread-1", objective: "Next objective", origin: "user" },
+      { threadId: "thread-1", status: "complete", origin: "user" },
       { threadId: "thread-1", origin: "automatic" },
     ]);
   });

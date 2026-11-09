@@ -242,6 +242,10 @@ input.on("line", (line) => {
     case "thread/fork": {
       const threadId = `${params.threadId}-fork`;
       activeThreads.add(threadId);
+      // Opt-in scenario: the provider returns an inherited goal on the fork.
+      if (process.env.MAINS_CODEX_FIXTURE_FORK_GOAL === "1" && threadGoals.has(params.threadId)) {
+        threadGoals.set(threadId, { ...threadGoals.get(params.threadId), threadId });
+      }
       respond(id, {
         model: fixtureResponseModel(params),
         thread: {
@@ -672,6 +676,10 @@ input.on("line", (line) => {
     }
 
     case "thread/goal/get":
+      if (process.env.MAINS_CODEX_FIXTURE_GOAL_GET_ERROR === "1") {
+        respondError(id, -32603, "Goal lookup failed");
+        break;
+      }
       respond(id, { goal: threadGoals.get(params.threadId) ?? null });
       break;
 
