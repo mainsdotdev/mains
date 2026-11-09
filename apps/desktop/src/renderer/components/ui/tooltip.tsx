@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../../lib/cn";
 import Text from "./text";
+import { useOverlayLifecycle } from "@/hooks/use-overlay-lifecycle";
 
 export type TooltipPosition =
   | "top"
@@ -50,13 +51,7 @@ export default function Tooltip({
   constrainToViewport = false,
   interactive = false,
 }: TooltipProps) {
-  const [isVisible, setIsVisible] = useState(false);
-  const [shouldRender, setShouldRender] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0 });
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const autoHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const frameRef = useRef<number | null>(null);
   const triggerRef = useRef<HTMLSpanElement>(null);
   const tooltipRef = useRef<HTMLElement>(null);
 
@@ -110,65 +105,19 @@ export default function Tooltip({
     setCoords({ top, left });
   };
 
-  // Every scheduled callback is tracked so a newer show/hide replaces it and
-  // unmount cancels it — an orphaned one sets state after the component (or a
-  // test's jsdom) is gone.
-  const cancelPending = () => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-    if (hideTimeoutRef.current) {
-      clearTimeout(hideTimeoutRef.current);
-      hideTimeoutRef.current = null;
-    }
-    if (autoHideTimeoutRef.current) {
-      clearTimeout(autoHideTimeoutRef.current);
-      autoHideTimeoutRef.current = null;
-    }
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
-  };
-
-  const showTooltip = () => {
-    if (disabled) return;
-    // Hover and focus can both open it, and a pending hide would close it again.
-    cancelPending();
-    timeoutRef.current = setTimeout(() => {
-      timeoutRef.current = null;
-      updatePosition();
-      setShouldRender(true);
-      frameRef.current = requestAnimationFrame(() => {
-        frameRef.current = null;
-        setIsVisible(true);
-      });
-      if (autoHideAfter !== undefined) {
-        autoHideTimeoutRef.current = setTimeout(() => {
-          autoHideTimeoutRef.current = null;
-          hideTooltip();
-        }, autoHideAfter);
-      }
-    }, delay);
-  };
-
-  const hideTooltip = () => {
-    cancelPending();
-    setIsVisible(false);
-    hideTimeoutRef.current = setTimeout(() => {
-      hideTimeoutRef.current = null;
-      setShouldRender(false);
-    }, 100);
-  };
-
-  useEffect(() => cancelPending, []);
+  const overlay = useOverlayLifecycle({ exitMs: 100, disabled, scope: target, beforeOpen: updatePosition });
+  const shouldRender = overlay.isVisible;
+  const isVisible = overlay.isAnimatedIn;
+  const showTooltip = (source = "pointer") => overlay.engage(source, { delay, autoHideAfter });
+  const hideTooltip = () => overlay.close();
 
   const showRef = useRef(showTooltip);
   const hideRef = useRef(hideTooltip);
+  const leaveRef = useRef(overlay.release);
   useEffect(() => {
     showRef.current = showTooltip;
     hideRef.current = hideTooltip;
+    leaveRef.current = overlay.release;
   });
   useLayoutEffect(() => {
     const tooltip = tooltipRef.current;
@@ -211,19 +160,24 @@ export default function Tooltip({
 
   useEffect(() => {
     if (!target || disabled) return;
-    const show = () => showRef.current();
-    const hide = () => hideRef.current();
+    let current = true;
+    const show = () => { if (current && target.isConnected) showRef.current("pointer"); };
+    const hide = () => { if (current) leaveRef.current("pointer"); };
+    const focus = () => { if (current && target.isConnected) showRef.current("focus"); };
+    const blur = () => { if (current) leaveRef.current("focus"); };
+    const dismiss = () => { if (current) hideRef.current(); };
     target.addEventListener("mouseenter", show);
     target.addEventListener("mouseleave", hide);
-    target.addEventListener("focus", show);
-    target.addEventListener("blur", hide);
-    if (hideOnClick) target.addEventListener("click", hide);
+    target.addEventListener("focus", focus);
+    target.addEventListener("blur", blur);
+    if (hideOnClick) target.addEventListener("click", dismiss);
     return () => {
+      current = false;
       target.removeEventListener("mouseenter", show);
       target.removeEventListener("mouseleave", hide);
-      target.removeEventListener("focus", show);
-      target.removeEventListener("blur", hide);
-      if (hideOnClick) target.removeEventListener("click", hide);
+      target.removeEventListener("focus", focus);
+      target.removeEventListener("blur", blur);
+      if (hideOnClick) target.removeEventListener("click", dismiss);
     };
   }, [target, disabled, hideOnClick]);
 
@@ -264,12 +218,11 @@ export default function Tooltip({
           onMouseEnter={
             interactive
               ? () => {
-                  cancelPending();
-                  setIsVisible(true);
+                  overlay.engage("card", { immediate: true });
                 }
               : undefined
           }
-          onMouseLeave={interactive ? hideTooltip : undefined}
+          onMouseLeave={interactive ? () => overlay.release("card") : undefined}
           style={{
             position: "fixed",
             top: coords.top,
@@ -306,11 +259,11 @@ export default function Tooltip({
         ref={triggerRef}
         role="presentation"
         style={{ display: "contents" }}
-        onMouseEnter={showTooltip}
-        onMouseLeave={hideTooltip}
-        onFocus={showTooltip}
-        onBlur={hideTooltip}
-        onClick={hideOnClick ? hideTooltip : undefined}
+        onMouseEnter={() => showTooltip("pointer")}
+        onMouseLeave={() => overlay.release("pointer")}
+        onFocus={() => showTooltip("focus")}
+        onBlur={() => overlay.release("focus")}
+        onClick={hideOnClick ? () => hideTooltip() : undefined}
         onKeyDown={(event) => {
           if (event.key === "Escape") hideTooltip();
         }}

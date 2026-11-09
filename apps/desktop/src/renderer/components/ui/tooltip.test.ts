@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Tooltip, { type TooltipProps } from "./tooltip";
+import { installOverlayFrameClock } from "@/lib/overlay-test-fixtures";
 
 afterEach(() => {
   cleanup();
@@ -19,6 +20,51 @@ afterEach(() => {
 });
 
 describe("Tooltip", () => {
+  it("keeps a focused hint open after the pointer leaves, then closes on blur", () => {
+    vi.useFakeTimers();
+    render(createElement(Tooltip, { content: "Focused hint", delay: 0 }, createElement("button", null, "Trigger")));
+    const trigger = screen.getByRole("presentation");
+    fireEvent.mouseEnter(trigger); fireEvent.focus(trigger); act(() => vi.advanceTimersByTime(50));
+    fireEvent.mouseLeave(trigger); act(() => vi.advanceTimersByTime(200));
+    expect(screen.queryByRole("tooltip")).not.toBeNull();
+    fireEvent.blur(trigger); act(() => vi.advanceTimersByTime(100)); expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it.each(["waiting", "open"])("retires a %s hint when disabled and does not resurrect it on re-enable", (phase) => {
+    vi.useFakeTimers();
+    const props = { content: "Retired hint", delay: 50 };
+    const view = render(createElement(Tooltip, props, createElement("button", null, "Trigger")));
+    fireEvent.mouseEnter(screen.getByRole("presentation"));
+    if (phase === "open") act(() => vi.advanceTimersByTime(100));
+    view.rerender(createElement(Tooltip, { ...props, disabled: true }, createElement("button", null, "Trigger")));
+    act(() => vi.advanceTimersByTime(200));
+    view.rerender(createElement(Tooltip, props, createElement("button", null, "Trigger")));
+    expect(screen.queryByRole("tooltip")).toBeNull(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retires the old external trigger and its captured native listener on replacement", () => {
+    vi.useFakeTimers();
+    const first = document.createElement("button"), next = document.createElement("button"); document.body.append(first, next);
+    const subscriptions = vi.spyOn(first, "addEventListener");
+    const view = render(createElement(Tooltip, { content: "External hint", target: first, delay: 0 }));
+    const listener = subscriptions.mock.calls.find((call) => call[0] === "mouseenter")?.[1]; expect(typeof listener).toBe("function");
+    fireEvent.mouseEnter(first); act(() => vi.advanceTimersByTime(50)); expect(screen.queryByRole("tooltip")).not.toBeNull();
+    view.rerender(createElement(Tooltip, { content: "External hint", target: next, delay: 0 })); expect(screen.queryByRole("tooltip")).toBeNull();
+    act(() => { if (typeof listener === "function") listener(new MouseEvent("mouseenter")); vi.advanceTimersByTime(200); });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.mouseEnter(next); act(() => vi.advanceTimersByTime(50)); expect(screen.queryByRole("tooltip")).not.toBeNull();
+    view.unmount(); first.remove(); next.remove(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retires a show frame already queued when the tooltip unmounts", () => {
+    vi.useFakeTimers(); const frames = installOverlayFrameClock();
+    const view = render(createElement(Tooltip, { content: "Hint", delay: 0 }, createElement("button", null, "Trigger")));
+    fireEvent.mouseEnter(screen.getByRole("presentation")); act(() => vi.advanceTimersByTime(0));
+    const queued = frames.take(); expect(queued.length).toBe(1); view.unmount();
+    act(() => { for (const callback of queued) callback(0); });
+    expect(frames.count()).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
   it("fits a usage card inside the viewport and repositions after async content grows", () => {
     vi.useFakeTimers();
     let resize!: () => void;
@@ -110,6 +156,8 @@ describe("Tooltip", () => {
         createElement("button", null, "Trigger"),
       ),
     );
+    fireEvent.mouseEnter(screen.getByRole("presentation"));
+    act(() => vi.advanceTimersByTime(50));
     fireEvent.mouseLeave(screen.getByRole("presentation"));
     expect(vi.getTimerCount()).toBe(1);
 

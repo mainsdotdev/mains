@@ -10,6 +10,8 @@ import {
 import { createPortal } from "react-dom";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { isAppReady } from "@/lib/app-ready";
+import { useOverlayLifecycle } from "@/hooks/use-overlay-lifecycle";
+import { restoreOverlayFocus } from "@/lib/overlay-lifecycle";
 import { Button } from "./button";
 import { focusNextFrom } from "./focus-navigation";
 import Text, { Caption } from "./text";
@@ -115,11 +117,12 @@ export default function Select<T extends string = string>(
   const generatedId = useId();
   const triggerId = id ?? `${generatedId}-trigger`;
   const listboxId = `${generatedId}-listbox`;
-  const [isOpen, setIsOpen] = useState(false);
+  const overlay = useOverlayLifecycle({ frames: 2, disabled });
+  const { open: openOverlay, close: closeOverlay } = overlay;
+  const isOpen = !disabled && overlay.isVisible;
+  const animateIn = overlay.isAnimatedIn;
   const [activeIndex, setActiveIndex] = useState(-1);
   const [query, setQuery] = useState("");
-  const [animateIn, setAnimateIn] = useState(false);
-  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -134,17 +137,6 @@ export default function Select<T extends string = string>(
     width: 0,
     maxHeight: 0,
   });
-
-  // Reset enter animation on each open. Before the app-ready latch animations
-  // are globally disabled, so render the final state immediately.
-  if (isOpen !== prevIsOpen) {
-    setPrevIsOpen(isOpen);
-    setAnimateIn(isOpen && !isAppReady());
-  }
-
-  // A control that goes disabled mid-interaction closes its list: the portaled
-  // options outlive the trigger, and would stay clickable above an inert one.
-  if (disabled && isOpen) setIsOpen(false);
 
   const selectedValues = props.multiple ? props.value : [props.value];
   const selectedIndex = options.findIndex((option) =>
@@ -187,12 +179,13 @@ export default function Select<T extends string = string>(
     !!limitReached &&
     (!("option" in entry) || !selectedValues.includes(entry.option.value));
 
-  const setOpen = (open: boolean) => {
+  const setOpen = useCallback((open: boolean) => {
     if (open === notifiedOpenRef.current) return;
+    if (open) openOverlay({ immediate: !isAppReady() });
+    else closeOverlay();
     notifiedOpenRef.current = open;
-    setIsOpen(open);
     onOpenChangeRef.current?.(open);
-  };
+  }, [openOverlay, closeOverlay]);
 
   const updateDropdownPosition = useCallback(() => {
     if (!triggerRef.current) return;
@@ -227,7 +220,7 @@ export default function Select<T extends string = string>(
   const closeMenu = (restoreTriggerFocus: boolean) => {
     setOpen(false);
     if (restoreTriggerFocus) {
-      requestAnimationFrame(() => triggerRef.current?.focus());
+      overlay.frame(() => restoreOverlayFocus(triggerRef.current));
     }
   };
 
@@ -373,9 +366,7 @@ export default function Select<T extends string = string>(
         event.preventDefault();
         event.stopPropagation();
         setOpen(false);
-        requestAnimationFrame(() =>
-          focusNextFrom(triggerRef.current, event.shiftKey),
-        );
+        overlay.frame(() => focusNextFrom(triggerRef.current, event.shiftKey));
         break;
     }
   };
@@ -422,18 +413,6 @@ export default function Select<T extends string = string>(
     };
   }, [isOpen, updateDropdownPosition]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    let raf2 = 0;
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setAnimateIn(true));
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      if (raf2) cancelAnimationFrame(raf2);
-    };
-  }, [isOpen]);
-
   useClickOutside(
     containerRef,
     () => {
@@ -442,9 +421,10 @@ export default function Select<T extends string = string>(
     dropdownRef,
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onOpenChangeRef.current = onOpenChange;
-  }, [onOpenChange]);
+    if (disabled && notifiedOpenRef.current) setOpen(false);
+  }, [onOpenChange, disabled, setOpen]);
 
   useEffect(
     () => () => {

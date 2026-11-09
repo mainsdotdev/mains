@@ -63,6 +63,7 @@ Thumbs.db
 !/docs/design/speech-preview-lifecycle.md
 !/docs/design/pr-detail-lifecycle.md
 !/docs/design/voice-task-lifecycle.md
+!/docs/design/overlay-feedback-lifecycle.md
 
 # Coverage
 coverage/
