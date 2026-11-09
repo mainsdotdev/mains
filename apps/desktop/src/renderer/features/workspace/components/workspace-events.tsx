@@ -68,6 +68,7 @@ import { TurnChangesCard } from "./turn-changes-card";
 import { TranscriptList, type TranscriptListRow } from "./transcript-list";
 import { createTranscriptViewCache, TranscriptItemScope, TranscriptViewProvider, useTranscriptValue } from "../lib/transcript-view-state";
 import { useReplicaView } from "@/hooks/use-replica-view";
+import { ToolActivityPresenceProvider } from "../lib/tool-activity-presence";
 
 function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
@@ -791,17 +792,19 @@ export function WorkspaceEvents({
     event.content.trim().length > 0,
   ), [displayEvents]);
 
-  // Latest thinking: ephemeral Cursor stream (cursor-think-*) or legacy persisted [thinking] logs
+  // Foreground thoughts are scoped to the current prompt, including legacy logs.
   const latestThinking = useMemo(() => {
-    const reversed = [...currentEvents].reverse();
-    const streamed = reversed.find(
-      (e) => e.type === "artifact" && e.metadata?.kind === "thinking" && e.content.trim(),
-    );
-    if (streamed) return streamed.content;
-    const last = reversed.find(
-      (e) => e.type === "log" && e.content.startsWith("[thinking] "),
-    );
-    return last ? last.content.slice("[thinking] ".length) : undefined;
+    for (let index = currentEvents.length - 1; index >= 0; index--) {
+      const event = currentEvents[index];
+      if (event.metadata?.isFromSubagent || event.metadata?.parentToolCallId) continue;
+      if (event.type === "artifact" && event.metadata?.kind === "user-prompt" && event.metadata.streaming !== true) break;
+      if (event.type === "artifact" && event.metadata?.kind === "thinking" && event.content.trim()) return event.content;
+      if (event.type === "log") {
+        const prefix = ["[thinking] ", "[reasoning] "].find((value) => event.content.startsWith(value));
+        if (prefix && event.content.slice(prefix.length).trim()) return event.content.slice(prefix.length);
+      }
+    }
+    return undefined;
   }, [currentEvents]);
 
   const hasActiveImageGeneration = useMemo(
@@ -817,7 +820,7 @@ export function WorkspaceEvents({
   // The view cache restores scroll position and accordion state across tabs.
 
   return (
-    <TranscriptViewProvider view={transcriptView}><Text as="div" size="sm" tone="inherit" className="group/voice-chat relative h-full flex flex-col">
+    <TranscriptViewProvider view={transcriptView}><ToolActivityPresenceProvider><Text as="div" size="sm" tone="inherit" className="group/voice-chat relative h-full flex flex-col">
       {/* Content area */}
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {isNewRunActive && !isSubmitting && (
@@ -892,6 +895,6 @@ export function WorkspaceEvents({
         </>
       )}
       {!floatingChat && !replica && <RealtimeVoiceBar runId={activeRun?.id} />}
-    </Text></TranscriptViewProvider>
+    </Text></ToolActivityPresenceProvider></TranscriptViewProvider>
   );
 }

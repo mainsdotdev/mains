@@ -36,6 +36,7 @@ function createRunState(
     fileChangeBuffers: new Map(),
     fileChangeItems: new Map(),
     commandOutputBuffers: new Map(),
+    reasoningBuffers: new Map(),
     emittedImagePaths: new Set(),
     emittedDocPaths: new Set(),
     emittedVisualizationKeys: new Set(),
@@ -74,6 +75,53 @@ afterEach(() => {
 });
 
 describe("Codex event mapper", () => {
+  it("streams indexed reasoning summaries separately from command progress", () => {
+    const { mapper } = createHarness();
+    const delta = (summaryIndex: number, text: string) => mapper.mapNotification(
+      "item/reasoning/summaryTextDelta",
+      { threadId: "thread-parent", itemId: "reason-1", summaryIndex, delta: text }, "run-1",
+    );
+    expect(delta(0, "**Inspecting")).toContainEqual(expect.objectContaining({
+      type: "artifact", kind: "thinking", content: "**Inspecting", ephemeral: true,
+      streamId: "codex-think-run-1-reason-1",
+    }));
+    expect(delta(1, "Checking callers")).toContainEqual(expect.objectContaining({ content: "**Inspecting\n\nChecking callers" }));
+    expect(delta(0, " the hero**")).toContainEqual(expect.objectContaining({ content: "**Inspecting the hero**\n\nChecking callers" }));
+    expect(mapper.mapNotification("item/commandExecution/outputDelta", {
+      threadId: "thread-parent", itemId: "cmd", delta: "Compiled successfully\n",
+    }, "run-1")).toContainEqual(expect.objectContaining({ kind: "tool_progress", content: "Compiled successfully" }));
+  });
+
+  it.each([
+    { summary: ["Checking exports"], content: ["Detailed provider text"] },
+    { summary: [], content: ["Checking exports"] },
+    { text: "Checking exports" },
+  ])("shows completed reasoning snapshots until the next foreground activity: %j", (snapshot) => {
+    const { mapper } = createHarness();
+    const complete = mapper.mapNotification("item/completed", {
+      threadId: "thread-parent", item: { id: "reason-1", type: "reasoning", ...snapshot },
+    }, "run-1");
+    expect(complete).toContainEqual(expect.objectContaining({ type: "artifact", kind: "thinking", content: "Checking exports", ephemeral: true }));
+    expect(complete.some((event) => event.type === "log")).toBe(false);
+    expect(mapper.mapNotification("item/reasoning/summaryTextDelta", {
+      threadId: "thread-parent", itemId: "reason-1", delta: "Late duplicate", summaryIndex: 0,
+    }, "run-1")).toEqual([]);
+    expect(mapper.mapNotification("item/started", {
+      threadId: "thread-parent", item: { id: "cmd", type: "commandExecution", command: "npm test" },
+    }, "run-1")).toContainEqual(expect.objectContaining({ kind: "thinking", content: "", streamId: "codex-think-run-1-reason-1" }));
+  });
+
+  it("keeps subagent and old-turn reasoning out of the foreground and clears turn status", () => {
+    const { mapper, state } = createHarness();
+    state.turnId = "turn-1";
+    const params = { threadId: "thread-parent", turnId: "turn-1", itemId: "reason-1", delta: "Inspecting", summaryIndex: 0 };
+    expect(mapper.mapNotification("item/reasoning/summaryTextDelta", { ...params, threadId: "child" }, "run-1")).toEqual([]);
+    expect(mapper.mapNotification("item/reasoning/summaryTextDelta", { ...params, turnId: "old" }, "run-1")).toEqual([]);
+    mapper.mapNotification("item/reasoning/summaryTextDelta", params, "run-1");
+    expect(mapper.mapNotification("turn/completed", { threadId: "thread-parent", turn: { id: "turn-1", status: "completed" } }, "run-1"))
+      .toContainEqual(expect.objectContaining({ kind: "thinking", content: "" }));
+  });
+
   it.each([
     ["modelNotFound", "Choose another model"],
     ["policyCapacityUnavailable", "Try again later"],

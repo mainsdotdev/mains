@@ -394,15 +394,15 @@ export function useWorkspaceRuns(
     if (activeStreams.length === 0) return dbEvents;
 
     const streamRunEvents: RunEvent[] = activeStreams.map((se) => {
-      // Live progress for codex commands (e.g. npm install) routes to the
-      // AsciiLoader status line, not into the main timeline as an
-      // agent-message bubble.
+      // Command progress and provider thoughts stay out of assistant bubbles;
+      // command stdout must never be mistaken for a reasoning summary.
       const kind =
         se.kind === "user-prompt" ? "user-prompt"
           : se.kind === "image_generation" ? "image_generation"
           : se.kind === "thinking" ? "thinking"
+          : se.kind === "tool_progress" ? "tool_progress"
           : se.streamId.startsWith("cursor-think-") ? "thinking"
-          : se.streamId.startsWith("codex-cmd-") ? "thinking"
+          : se.streamId.startsWith("codex-cmd-") ? "tool_progress"
           : se.streamId.startsWith("claude-think-") ? "thinking"
           : "report";
       return {

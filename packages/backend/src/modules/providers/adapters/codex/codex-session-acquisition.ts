@@ -156,6 +156,7 @@ function buildCodexConfigOverrides(
   additionalDirectories: string[],
 ): CodexConfigOverrides {
   return {
+    model_reasoning_summary: "auto",
     sandbox_workspace_write: {
       network_access: networkAccess,
       writable_roots: additionalDirectories,

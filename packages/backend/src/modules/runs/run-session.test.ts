@@ -2080,6 +2080,7 @@ describe("RunSession", () => {
           fileChangeBuffers: new Map(),
           fileChangeItems: new Map(),
           commandOutputBuffers: new Map(),
+          reasoningBuffers: new Map(),
           emittedImagePaths: new Set(),
           emittedDocPaths: new Set(),
           emittedVisualizationKeys: new Set(),

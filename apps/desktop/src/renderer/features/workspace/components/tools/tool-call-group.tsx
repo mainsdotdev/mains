@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TOOL_ROW_TEXT } from "./_shared";
 import { ArrowUp } from "@/components/ui/icons";
 import { prepareToolCalls } from "../../lib/group-tool-calls";
@@ -14,6 +14,7 @@ import type { EventGroup } from "../../lib/group-events";
 import { Button } from "@/components/ui";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import { useTranscriptValue } from "../../lib/transcript-view-state";
+import { useVisibleToolCalls } from "../../lib/tool-activity-presence";
 
 const TOOL_GROUP_LABEL_TEXT =
   "text-primary-600 dark:text-primary-600 group-hover:text-primary-600 group-hover:dark:text-primary-200";
@@ -73,6 +74,12 @@ function ToolCallGroupImpl({
   // every remaining invocation renders as a peer inside the main tool group.
   const toolEvents = prepareToolCalls(group.events);
   const toolCount = toolEvents.length;
+  // Cumulative edit rows can represent several call ids. Track the original
+  // identities too, while excluding calls rendered only in the plan summary.
+  const visibleToolIds = useMemo(() => toolCount > 0 && (toolCount === 1 || isExpanded)
+    ? group.events.filter((event) => resolveTool(event.content).groupKey !== "task-plan").map((event) => event.id)
+    : [], [group.events, toolCount, isExpanded]);
+  useVisibleToolCalls(visibleToolIds);
 
   // Single tool call: skip the outer group wrapper entirely.
   if (toolCount === 1) {

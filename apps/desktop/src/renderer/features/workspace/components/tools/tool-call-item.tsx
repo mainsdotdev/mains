@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useVisibleToolCalls } from "../../lib/tool-activity-presence";
 import { isDeferredToolOutput, type DeferredToolOutput } from "@mains/contracts/runs";
 import { appApi } from "@/lib/transport";
 import { useReplicaView } from "@/hooks/use-replica-view";
@@ -291,6 +292,8 @@ const DISPATCH: Renderer[] = [
 ];
 
 export function ToolCallItem(props: ToolCallItemProps) {
+  const visibleToolIds = useMemo(() => [props.event.id], [props.event.id]);
+  useVisibleToolCalls(visibleToolIds);
   return <TranscriptItemScope id={props.event.id}>
     {isDeferredToolOutput(props.event.metadata?.output)
       ? <DeferredOutputRow {...props} deferred={props.event.metadata.output} />

@@ -291,6 +291,12 @@ describe("useWorkspaceRuns streaming transcript", () => {
     expect(view.result.current.currentEvents[0].metadata).toMatchObject({ kind: "thinking", streaming: true });
   });
 
+  it("keeps legacy command previews separate from reasoning", async () => {
+    streaming.events = [{ ...preview("Compiled successfully"), streamId: "codex-cmd-run-a-item-1" }];
+    const view = await transcript([]);
+    expect(view.result.current.currentEvents[0].metadata).toMatchObject({ kind: "tool_progress", streaming: true });
+  });
+
   it("retains content-based reconciliation for providers without a persisted stream identity", async () => {
     streaming.events = [{ ...preview("Hello", "report", false), streamId: "claude-msg-run-a-0" }];
     const view = await transcript([{ id: 2, kind: "report", content: "Hello" }]);

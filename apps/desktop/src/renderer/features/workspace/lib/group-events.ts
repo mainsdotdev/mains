@@ -197,11 +197,12 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
       if (event.metadata?.isFromSubagent) {
         continue;
       }
-      flushToolGroup();
-      // Cursor agent thought stream — UI-only (e.g. loader), not a chat bubble
-      if (event.metadata?.kind === "thinking") {
+      // Live status belongs to the activity line, not a chat bubble or a
+      // boundary between otherwise adjacent tool calls.
+      if (event.metadata?.kind === "thinking" || event.metadata?.kind === "tool_progress") {
         continue;
       }
+      flushToolGroup();
       const isUserPrompt = event.metadata?.kind === "user-prompt";
       const isPromptSuggestion = event.metadata?.kind === "prompt_suggestion";
       const isImage = event.metadata?.kind === "image";
