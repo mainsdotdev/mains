@@ -1,4 +1,5 @@
-import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createTranscriptPaging, TranscriptScroll, PIN_DISTANCE } from "@mains/contracts/transcript-viewport";
 import type { RunEvent } from "../types";
 import type { TranscriptHistory } from "./use-run-history";
 import { rememberTranscriptPosition, type TranscriptViewState } from "../lib/transcript-view-state";
@@ -10,34 +11,46 @@ export function useTranscriptScroll(
   events: RunEvent[], visible: boolean, history?: TranscriptHistory, view?: TranscriptViewState | null,
 ) {
   const container = useRef<HTMLDivElement>(null);
-  const following = useRef(true);
+  const [intent] = useState(() => new TranscriptScroll());
   const landed = useRef<string | null>(null);
-  const anchor = useRef<Anchor | null>(null);
-  const paging = useRef(false);
+  const [paging] = useState(() => createTranscriptPaging<Anchor>(intent));
+  const offset = useRef<number | null>(null);
+  const scope = useRef<string | null>(runId);
   const latestRevision = useRef(0);
   const wasVisible = useRef(false);
   const resizeFrame = useRef<number | null>(null);
   const eventRevision = useMemo(() => Symbol(String(events.length)), [events]);
+  useLayoutEffect(() => {
+    scope.current = visible ? runId : null;
+    return () => {
+      scope.current = null;
+      paging.reset();
+      if (resizeFrame.current !== null) cancelAnimationFrame(resizeFrame.current);
+      resizeFrame.current = null;
+    };
+  }, [paging, runId, visible]);
 
   const page = useCallback(async (direction: "older" | "newer" | "latest" | "refresh") => {
     const element = container.current;
-    if (!element || !history || history.loading || paging.current) return;
-    paging.current = true;
+    if (!element || !history || history.loading || scope.current !== runId) return;
     const toLatest = direction === "latest" || (direction === "refresh" && !history.latestRevision);
-    following.current = toLatest;
-    history.setFollowing(toLatest);
     const top = element.getBoundingClientRect().top;
     const row = Array.from(element.querySelectorAll<HTMLElement>("[data-history-id]"))
       .find((candidate) => candidate.getBoundingClientRect().bottom > top);
-    anchor.current = !toLatest && row
+    const lease = paging.begin(!toLatest && row
       ? { id: row.dataset.historyId!, top: row.getBoundingClientRect().top - top, revision: eventRevision }
-      : null;
+      : null, toLatest);
+    if (!lease) return;
+    history.setFollowing(toLatest);
     try {
       await (direction === "older" ? history.loadOlder() : direction === "newer" ? history.loadNewer() : direction === "refresh" ? history.retry() : history.loadLatest());
+    } catch {
+      if (lease.current()) history.setFollowing(false);
+      lease.finish(true);
     } finally {
-      paging.current = false;
+      lease.finish();
     }
-  }, [container, eventRevision, history]);
+  }, [container, eventRevision, history, intent, paging, runId]);
 
   useLayoutEffect(() => {
     const element = container.current;
@@ -48,42 +61,53 @@ export function useTranscriptScroll(
       latestRevision.current = history?.latestRevision ?? 0;
       landed.current = runId;
       const restore = landing && view?.scrollOffset != null && view.latestRevision === (history?.latestRevision ?? 0);
-      following.current = restore ? view.followTail : true;
-      anchor.current = null;
-      element.scrollTop = restore && !view.followTail ? view.scrollOffset! : element.scrollHeight;
+      if (restore ? view.followTail : !history?.historical && history?.following !== false) intent.follow();
+      else intent.pause();
+      paging.clearAnchor();
+      if (restore && !view.followTail) element.scrollTop = view.scrollOffset!;
+      else if (intent.pinned) element.scrollTop = element.scrollHeight;
+      offset.current = element.scrollTop;
       if (view) rememberTranscriptPosition(view, { latestRevision: history?.latestRevision ?? 0 });
       return;
     }
-    if (history?.error) anchor.current = null;
-    const saved = anchor.current;
+    if (history?.error) paging.clearAnchor();
+    const saved = paging.anchor;
     if (saved && saved.revision !== eventRevision) {
       const row = Array.from(element.querySelectorAll<HTMLElement>("[data-history-id]"))
         .find((candidate) => candidate.dataset.historyId === saved.id);
       if (row) element.scrollTop += row.getBoundingClientRect().top - element.getBoundingClientRect().top - saved.top;
-      anchor.current = null;
-    } else if (!saved && following.current) {
+      paging.clearAnchor();
+      offset.current = element.scrollTop;
+    } else if (!saved && intent.pinned) {
       element.scrollTop = element.scrollHeight;
+      offset.current = element.scrollTop;
     }
-  }, [container, runId, eventRevision, visible, history?.error, history?.latestRevision, view]);
+  }, [container, runId, eventRevision, visible, history?.error, history?.latestRevision, history?.historical, history?.following, view, intent, paging]);
 
   const onResize = useCallback(() => {
+    if (scope.current !== runId) return;
     if (resizeFrame.current !== null) cancelAnimationFrame(resizeFrame.current);
     resizeFrame.current = requestAnimationFrame(() => {
       resizeFrame.current = null;
-      if (following.current && container.current) container.current.scrollTop = container.current.scrollHeight;
+      if (scope.current === runId && intent.pinned && container.current) {
+        container.current.scrollTop = container.current.scrollHeight;
+        offset.current = container.current.scrollTop;
+      }
     });
-  }, []);
-  useLayoutEffect(() => () => { if (resizeFrame.current !== null) cancelAnimationFrame(resizeFrame.current); }, []);
+  }, [intent, runId]);
 
   const onScroll = useCallback(() => {
     const element = container.current;
-    if (!element || paging.current || landed.current !== runId) return;
-    const atEnd = element.scrollHeight - element.clientHeight - element.scrollTop < 80;
-    following.current = atEnd && !history?.hasNewer;
-    if (view) rememberTranscriptPosition(view, { scrollOffset: element.scrollTop, followTail: following.current });
-    history?.setFollowing(following.current);
-    if (element.scrollTop < 200 && !atEnd && history?.hasOlder) void page("older");
-    else if (atEnd && history?.hasNewer) void page("newer");
-  }, [container, runId, history, page, view]);
+    if (!element || paging.loading || landed.current !== runId || scope.current !== runId) return;
+    const movement = offset.current === null ? 0 : element.scrollTop - offset.current;
+    offset.current = element.scrollTop;
+    if (Math.abs(movement) < 1) return;
+    const atEnd = element.scrollHeight - element.clientHeight - element.scrollTop < PIN_DISTANCE;
+    if (atEnd && !history?.hasNewer) intent.follow(); else intent.pause();
+    if (view) rememberTranscriptPosition(view, { scrollOffset: element.scrollTop, followTail: intent.pinned });
+    history?.setFollowing(intent.pinned);
+    if (movement < 0 && element.scrollTop < 200 && !atEnd && history?.hasOlder) void page("older");
+    else if (movement > 0 && atEnd && history?.hasNewer) void page("newer");
+  }, [container, runId, history, page, view, intent, paging]);
   return { container, onScroll, page, onResize };
 }

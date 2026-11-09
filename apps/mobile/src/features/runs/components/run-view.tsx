@@ -1,5 +1,5 @@
 import { useRouter, type Href } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, View, Pressable, type NativeScrollEvent } from "react-native";
 import Animated, { FadeIn, FadeOut, useAnimatedStyle } from "react-native-reanimated";
 // Not Reanimated's: its own hook is deprecated (iOS bugs) and points here.
@@ -23,7 +23,7 @@ import type {
 import { useRunData } from "../hooks/use-run-data";
 import { useOptimisticPrompt } from "../hooks/use-optimistic-prompt";
 import { useRunOperations } from "../hooks/use-run-operations";
-import { TranscriptScroll, transcriptEnd, hasScrollMomentum, type ScrollDecision } from "../lib/transcript-scroll";
+import { TranscriptScroll, createTranscriptPaging, transcriptEnd, hasScrollMomentum, type ScrollDecision } from "../lib/transcript-scroll";
 
 import { AsciiLoader } from "./ascii-loader";
 import { ComposerBar, composerBottomPadding } from "./composer/composer-bar";
@@ -110,7 +110,7 @@ export function RunView({
   const rootRef = useRef<View>(null);
   const metrics = useRef({ frame: 0, content: 0, offset: null as number | null });
   /** A touch pauses chasing; moving away from the end enters history reading. */
-  const scrollIntent = useRef(new TranscriptScroll());
+  const [scrollIntent] = useState(() => new TranscriptScroll());
   const clearComposerSource = useCallback(() => {
     setDraft("");
     setContextSkills([]);
@@ -238,7 +238,7 @@ export function RunView({
         {
           onAccepted: () => {
             clearComposerSource();
-            scrollIntent.current.follow();
+            scrollIntent.follow();
             setHistoryFollowing(backendId, runId, true);
           },
         },
@@ -263,7 +263,7 @@ export function RunView({
             origin,
             attachments: sentAttachments,
           });
-          scrollIntent.current.follow();
+          scrollIntent.follow();
           setHistoryFollowing(backendId, runId, true);
         },
         onOptimisticRollback: () => {
@@ -356,12 +356,14 @@ export function RunView({
    * through.
    */
   const rowLayouts = useRef(new Map<string, { y: number; height: number }>());
-  const pageAnchor = useRef<{ key: string; offset: number; items: typeof items } | null>(null);
-  const paging = useRef(false);
+  const [paging] = useState(() => createTranscriptPaging<{ key: string; offset: number; items: typeof items }>(scrollIntent));
+  useLayoutEffect(() => () => { paging.reset(); }, [paging, backendId, runId]);
   useEffect(() => {
     const keys = new Set(rows.map((row) => row.key));
     for (const key of rowLayouts.current.keys()) if (!keys.has(key)) rowLayouts.current.delete(key);
-  }, [rows]);
+    const anchor = paging.anchor;
+    if (anchor && anchor.items !== items && !keys.has(anchor.key)) paging.clearAnchor();
+  }, [rows, items, paging]);
   /** Whether the way back down is on screen; the ref keeps `onScroll` cheap. */
   const [awayFromEnd, setAwayFromEnd] = useState(false);
   const away = useRef(false);
@@ -382,7 +384,7 @@ export function RunView({
   const reviewJump = () => {
     const { frame, content, offset } = metrics.current;
     if (frame === 0 || content === 0 || offset === null) return;
-    const next = scrollIntent.current.showJump({ frame, content, offset, restOffset, bottomInset }, history.hasNewer);
+    const next = scrollIntent.showJump({ frame, content, offset, restOffset, bottomInset }, history.hasNewer);
     if (next === away.current) return;
     away.current = next;
     setAwayFromEnd(next);
@@ -390,17 +392,17 @@ export function RunView({
   useEffect(() => {
     const { frame, content, offset } = metrics.current;
     if (frame === 0 || content === 0 || offset === null) return;
-    const next = scrollIntent.current.showJump({ frame, content, offset, restOffset, bottomInset }, history.hasNewer);
+    const next = scrollIntent.showJump({ frame, content, offset, restOffset, bottomInset }, history.hasNewer);
     if (next === away.current) return;
     away.current = next;
     setAwayFromEnd(next);
-  }, [restOffset, bottomInset, history.hasNewer]);
+  }, [restOffset, bottomInset, history.hasNewer, scrollIntent]);
 
   /** The scroll itself. Everything else that has to follow it lives in `place`. */
   const scrollIntoPlace = (animated: boolean) => {
     const { frame, content, offset } = metrics.current;
     if (frame === 0 || content === 0) return;
-    if (scrollIntent.current.dragging) return;
+    if (scrollIntent.dragging) return;
     // A transcript that fits stays at rest under the header; scrolling a short
     // one "to the end" is what used to slide its first message off the top.
     const max = transcriptEnd({ frame, content, offset, restOffset, bottomInset });
@@ -411,7 +413,7 @@ export function RunView({
     // Unpinned, the only move is back into range: when the content shrinks
     // under the reader — a turn folding as its run settles — iOS leaves the
     // offset past the end, showing nothing, until something scrolls.
-    if (!scrollIntent.current.pinned && current !== null && current <= max) return;
+    if (!scrollIntent.pinned && current !== null && current <= max) return;
     if (current !== null && Math.abs(max - current) < 1) return;
     // An animated scroll reports its presentation offset through `onScroll`.
     // Writing the destination here would make a bubble measured mid-animation
@@ -432,40 +434,37 @@ export function RunView({
 
   /** The way back down: start following the end again, then go to it. */
   const pageHistory = async (direction: "older" | "newer" | "latest" | "refresh") => {
-    if (paging.current || history.loading || !connected) return;
-    paging.current = true;
+    if (paging.loading || history.loading || !connected) return;
     const toLatest = direction === "latest" || !history.loaded;
-    if (toLatest) scrollIntent.current.follow();
-    else scrollIntent.current.pause();
-    setHistoryFollowing(backendId, runId, toLatest);
-    reviewJump();
     const offset = metrics.current.offset ?? 0;
     const first = rows.find((row) => {
       const layout = rowLayouts.current.get(row.key);
       return layout && layout.y + layout.height > offset + topInset;
     });
-    pageAnchor.current = !toLatest && first
+    const lease = paging.begin(!toLatest && first
       ? { key: first.key, offset: rowLayouts.current.get(first.key)!.y - offset, items }
-      : null;
+      : null, toLatest);
+    if (!lease) return;
+    setHistoryFollowing(backendId, runId, toLatest);
+    reviewJump();
     try {
       await backendSession.pageRunHistory(runId, direction);
+      if (!lease.land()) return;
       // Identical-height pages need an explicit landing as no size event fires.
       if (toLatest) place(true);
     } catch {
-      pageAnchor.current = null;
-      if (toLatest && history.hasNewer) {
-        scrollIntent.current.pause();
-        setHistoryFollowing(backendId, runId, false);
-        reviewJump();
-      }
+      if (!lease.current()) return;
+      lease.finish(true);
+      setHistoryFollowing(backendId, runId, false);
+      reviewJump();
     } finally {
-      paging.current = false;
+      lease.finish();
     }
   };
   const jumpToEnd = () => {
-    if (paging.current || (history.hasNewer && (history.loading || !connected))) return;
-    pageAnchor.current = null;
-    const decision = scrollIntent.current.jump(history);
+    if (paging.loading || (history.hasNewer && (history.loading || !connected))) return;
+    paging.clearAnchor();
+    const decision = scrollIntent.jump(history);
     applyScrollDecision(decision);
     if (!decision.page) place(true);
   };
@@ -478,14 +477,14 @@ export function RunView({
   });
   const applyScrollDecision = (decision: ScrollDecision) => {
     if (decision.following !== null) setHistoryFollowing(backendId, runId, decision.following);
-    if (decision.page && !paging.current && !pageAnchor.current) void pageHistory(decision.page);
+    if (decision.page && !paging.loading && !paging.anchor) void pageHistory(decision.page);
   };
   const settle = (event: NativeScrollEvent, endDrag = false) => {
     const momentum = endDrag && hasScrollMomentum(event.contentOffset.y, event.targetContentOffset?.y, event.velocity?.y);
-    applyScrollDecision(scrollIntent.current.settle({ ...geometry(event),
+    applyScrollDecision(scrollIntent.settle({ ...geometry(event),
       offset: endDrag ? event.targetContentOffset?.y ?? event.contentOffset.y : event.contentOffset.y,
     }, history, momentum));
-    if (!scrollIntent.current.dragging && scrollIntent.current.pinned) place(true);
+    if (!scrollIntent.dragging && scrollIntent.pinned) place(true);
     else reviewJump();
   };
 
@@ -560,7 +559,7 @@ export function RunView({
           // Existing rows and the outgoing phrase move as one continuous
           // transition. The phrase projects its destination through whatever
           // distance remains in this native scroll.
-          if (!pageAnchor.current) place(placed.current || continuationPresentation !== null);
+          if (!paging.anchor) place(placed.current || continuationPresentation !== null);
           // The first rows land in one piece and without animation; from a
           // beat later on, growth — a streaming answer, the keyboard's room —
           // is followed with one.
@@ -572,17 +571,17 @@ export function RunView({
         }}
         onScroll={(event) => {
           metrics.current.offset = event.nativeEvent.contentOffset.y;
-          if (!paging.current && !pageAnchor.current) applyScrollDecision(scrollIntent.current.move(geometry(event.nativeEvent), history));
+          if (!paging.loading && !paging.anchor) applyScrollDecision(scrollIntent.move(geometry(event.nativeEvent), history));
           reviewJump();
         }}
         onScrollBeginDrag={(event) => {
-          applyScrollDecision(scrollIntent.current.beginDrag(geometry(event.nativeEvent)));
+          applyScrollDecision(scrollIntent.beginDrag(geometry(event.nativeEvent)));
         }}
         onScrollEndDrag={(event) => settle(event.nativeEvent, true)}
         onMomentumScrollEnd={(event) => settle(event.nativeEvent)}
       >
         {(history.hasOlder || history.error) && (
-          <Pressable disabled={history.loading || !connected} onPress={() => void pageHistory(history.error ? "refresh" : "older")}>
+          <Pressable disabled={history.loading || !connected} onPress={() => void pageHistory(history.error ? history.retryDirection ?? "refresh" : "older")}>
             <ThemedText variant="subhead" style={{ textAlign: "center", paddingVertical: spacing.sm }}>
               {history.loading ? "Loading earlier messages…" : history.error ? "Retry loading messages" : "Load earlier messages"}
             </ThemedText>
@@ -608,12 +607,12 @@ export function RunView({
             <View key={row.key} onLayout={(event) => {
               const layout = event.nativeEvent.layout;
               rowLayouts.current.set(row.key, { y: layout.y, height: layout.height });
-              const anchor = pageAnchor.current;
+              const anchor = paging.anchor;
               if (anchor?.key === row.key && anchor.items !== items) {
                 const y = layout.y - anchor.offset;
-                pageAnchor.current = null;
+                paging.clearAnchor();
                 metrics.current.offset = y;
-                scrollIntent.current.rebase(y);
+                scrollIntent.rebase(y);
                 listRef.current?.scrollTo({ y, animated: false });
               }
             }}>

@@ -5,6 +5,8 @@ import { createRunCache } from "../lib/run-cache";
 const { getHistory } = vi.hoisted(() => ({ getHistory: vi.fn() }));
 vi.mock("@/lib/transport", () => ({ appApi: { runs: { getHistory } } }));
 import { useRunHistory } from "./use-run-history";
+import { getTransport, setTransport } from "@/lib/transport/registry";
+import { IpcTransport } from "@/lib/transport/ipc-transport";
 
 const cursor = (id: number) => ({ timestamp: id * 1000, source: "artifact" as const, id });
 function page(first: number, count = 10, end: number | null = null) {
@@ -15,9 +17,103 @@ function page(first: number, count = 10, end: number | null = null) {
     last: cursor(99), hasOlder: first > 0, hasNewer: end != null,
   } };
 }
-beforeEach(() => getHistory.mockReset());
+beforeEach(() => { getHistory.mockReset(); });
 
 describe("bounded transcript cache", () => {
+  it("retires an old backend response permanently through an A to B to A switch", async () => {
+    const original = getTransport(), cache = createRunCache();
+    let finish!: (value: ReturnType<typeof page>) => void;
+    getHistory.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; })).mockResolvedValueOnce(page(80));
+    const view = renderHook(() => useRunHistory(cache, "r"));
+    let pending!: Promise<void>;
+    await act(async () => { pending = view.result.current.load("r"); await Promise.resolve(); });
+    act(() => { setTransport(new IpcTransport()); setTransport(original); });
+    expect(view.result.current.history.loading).toBe(false);
+    // The new generation must not wait for the old native read.
+    await act(() => view.result.current.load("r"));
+    await act(async () => { finish(page(90)); await pending; });
+    expect(view.result.current.runEvents.r[0].content).toBe("message-80");
+    view.unmount();
+  });
+  it("lets independent conversations finish their first loads concurrently", async () => {
+    const pending = new Map<string, (result: ReturnType<typeof page>) => void>();
+    getHistory.mockImplementation(({ runId }: { runId: string }) => new Promise((resolve) => pending.set(runId, resolve)));
+    const cache = createRunCache();
+    const view = renderHook(() => useRunHistory(cache, "r"));
+    let first!: Promise<void>, second!: Promise<void>;
+    await act(async () => { first = view.result.current.load("r"); second = view.result.current.load("other"); await Promise.resolve(); });
+    act(() => view.result.current.history.setFollowing(false));
+    await act(async () => { pending.get("other")!(page(80)); await second; });
+    await act(async () => { pending.get("r")!(page(90)); await first; });
+    expect(view.result.current.runEvents.other?.[0].content).toBe("message-80");
+    expect(view.result.current.runEvents.r[0].content).toBe("message-90");
+    expect(view.result.current.history.following).toBe(false);
+    view.unmount();
+  });
+  it("retries failed older-page navigation from the last confirmed window", async () => {
+    getHistory.mockResolvedValueOnce(page(90))
+      .mockResolvedValueOnce({ success: false, error: "offline" })
+      .mockResolvedValueOnce(page(70, 30, 100));
+    const cache = createRunCache();
+    const view = renderHook(() => useRunHistory(cache, "r"));
+    await act(() => view.result.current.load("r"));
+    await act(() => view.result.current.history.loadOlder());
+    expect(view.result.current.runEvents.r[0].content).toBe("message-90");
+    await act(() => view.result.current.history.retry());
+    expect(getHistory.mock.calls.at(-1)?.[0]).toMatchObject({ direction: "older", cursor: cursor(90) });
+    expect(view.result.current.history.historical).toBe(true);
+    view.unmount();
+  });
+  it("refreshes an already loaded empty conversation without repeatedly treating it as a fresh latest page", async () => {
+    getHistory.mockResolvedValue({ ...page(0, 0), data: { ...page(0, 0).data, start: null, last: null } });
+    const cache = createRunCache(), view = renderHook(() => useRunHistory(cache, "r"));
+    await act(() => view.result.current.load("r"));
+    const revision = view.result.current.history.latestRevision;
+    await act(() => view.result.current.load("r"));
+    expect(getHistory.mock.calls.at(-1)?.[0]).toMatchObject({ direction: "refresh", end: null });
+    expect(view.result.current.history.latestRevision).toBe(revision);
+    view.unmount();
+  });
+
+  it("forget releases an abandoned read and its late result cannot replace a reopened conversation", async () => {
+    let finish!: (value: ReturnType<typeof page>) => void;
+    getHistory.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; })).mockResolvedValueOnce(page(80));
+    const cache = createRunCache(), view = renderHook(() => useRunHistory(cache, "r"));
+    let pending!: Promise<void>;
+    await act(async () => { pending = view.result.current.load("r"); await Promise.resolve(); });
+    act(() => view.result.current.forget("r"));
+    await act(() => view.result.current.load("r"));
+    await act(async () => { finish(page(90)); await pending; });
+    expect(view.result.current.runEvents.r[0].content).toBe("message-80");
+    view.unmount();
+  });
+
+  it("evicting an in-flight retained window fences its response before a fresh reopen", async () => {
+    getHistory.mockResolvedValue(page(90));
+    const cache = createRunCache(), view = renderHook(() => useRunHistory(cache, "r"));
+    await act(() => view.result.current.load("r"));
+    let finish!: (value: ReturnType<typeof page>) => void, pending!: Promise<void>;
+    getHistory.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    await act(async () => { pending = view.result.current.load("r"); await Promise.resolve(); });
+    for (const id of ["a", "b", "c", "d"]) await act(() => view.result.current.load(id));
+    expect(view.result.current.runEvents.r).toBeUndefined();
+    getHistory.mockResolvedValueOnce(page(80));
+    await act(() => view.result.current.load("r"));
+    await act(async () => { finish(page(90)); await pending; });
+    expect(view.result.current.runEvents.r[0].content).toBe("message-80");
+    view.unmount();
+  });
+
+  it("unmounting the history owner prevents a native completion from repopulating its cache", async () => {
+    let finish!: (value: ReturnType<typeof page>) => void, pending!: Promise<void>;
+    getHistory.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const cache = createRunCache(), view = renderHook(() => useRunHistory(cache, "r"));
+    await act(async () => { pending = view.result.current.load("r"); await Promise.resolve(); });
+    view.unmount();
+    finish(page(90)); await pending;
+    expect(cache.isLoaded("r")).toBe(false);
+  });
+
   it("invalidates a saved viewport when an evicted run opens a fresh latest page", async () => {
     getHistory.mockResolvedValue(page(90));
     const cache = createRunCache();

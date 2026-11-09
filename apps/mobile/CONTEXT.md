@@ -36,11 +36,19 @@ background status events synchronize conversation metadata rather than history.
 _Avoid_: Downloading all history, treating a prompt-count limit as a data-size
 limit, accumulating full tool output while reading chunks.
 
+Inventory 94 + 95 + 56 uses `@mains/contracts/transcript-history` for window
+transitions, failed-direction retry and the per-backend/run request queue.
+Adjacent waiting refreshes join; directional navigation preserves its place.
+Transport replacement/detach, forget and eviction retire old writers and release
+their waiters. Sync builds bounds at history dispatch and replaces disposable
+rows transactionally before publishing confirmed metadata. Pending first loads
+do not count as retained completed windows. See [Transcript history lifecycle](../desktop/docs/design/transcript-history-lifecycle.md).
+
 **Live transcript acknowledgement**:
 The streaming store uses `@mains/contracts/transcript-stream`, shared with desktop. Terminal status settles parent prose until the matching durable stream id arrives; late deltas cannot replace settled or acknowledged text. Durable response items retain `metadata.streamId`, so identical text from an older identified answer cannot hide a new live message. Older servers without stream ids use a timestamp-constrained text fallback. Backend replacement clears stream state and fences old transport callbacks. See [Run projection lifecycle](../desktop/docs/design/run-projection-lifecycle.md) for inventory 5, 6, 16.
 
 **Transcript scroll**:
-Touching the transcript pauses native chasing without freezing its history window. Only an upward departure beyond 80pt from the inset-aware end leaves following mode; returning near the actual end restores it when no newer page is missing. A single floating arrow is offered beyond 220pt or when a historical window has newer messages. Streaming growth and programmatic jumps do not flash the arrow. Drag/momentum intent gates automatic paging by direction, while anchor corrections reset motion tracking. Pages that fit the viewport use the explicit earlier/newer load controls, so rubber-band bounces cannot replace them. `features/runs/lib/transcript-scroll.ts` owns these decisions independently of native rendering.
+Touching the transcript pauses native chasing without freezing its history window. Only an upward departure beyond 80pt from the inset-aware end leaves following mode; returning near the actual end restores it when no newer page is missing. A single floating arrow is offered beyond 220pt or when a historical window has newer messages. Streaming growth and programmatic jumps do not flash the arrow. Drag/momentum intent gates automatic paging by direction, while anchor corrections reset motion tracking. Pages that fit the viewport use the explicit earlier/newer load controls, so rubber-band bounces cannot replace them. `features/runs/lib/transcript-scroll.ts` re-exports the portable `@mains/contracts/transcript-viewport` owner. Its page lease scopes native anchors and late landing/finally callbacks to their original view; latest starts chasing only after its page is confirmed.
 _Avoid_: Freezing history at touch-down, inserting a Jump to latest row into the transcript, treating programmatic offsets as user gestures, chasing the end during deceleration.
 
 **Execution progress**:

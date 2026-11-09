@@ -2,7 +2,7 @@
 // Run cache — the transcript hook's bookkeeping state machine
 //
 // Plain (React-free) index extracted from use-workspace-runs.ts so the LRU,
-// loaded flags and in-flight dedup are testable through their
+// loaded flags and finalization are testable through their
 // interface rather than woven through async callbacks. The hook holds one
 // stable instance and owns all data-fetching + setState; this module owns
 // only the bookkeeping and its invariants.
@@ -26,11 +26,6 @@ export interface RunCache {
   isFinalized(runId: string): boolean;
   /** A continued or voice-delegated run gets a new terminal transition. */
   markRunning(runId: string): void;
-  /** Admit one load per run. Returns false (and queues a trailing reload) when one is already running. */
-  tryAcquireLoad(runId: string): boolean;
-  clearPending(runId: string): void;
-  hasPending(runId: string): boolean;
-  releaseLoad(runId: string): void;
   /** Reset cache contents (LRU, loaded, finalized) — mirrors the hook's clearState. */
   clear(): void;
 }
@@ -42,9 +37,6 @@ export function createRunCache(): RunCache {
   const loadedRunIds = new Set<string>();
   /** Runs whose terminal transition we've already handled (prevents double-toast). */
   const finalizedRunIds = new Set<string>();
-  /** Admits one load per run; a request mid-load queues a single trailing reload. */
-  const inFlightLoads = new Set<string>();
-  const pendingReload = new Set<string>();
 
   function pruneLoaded(allowed: Set<string>): void {
     for (const id of loadedRunIds) if (!allowed.has(id)) loadedRunIds.delete(id);
@@ -89,31 +81,7 @@ export function createRunCache(): RunCache {
       finalizedRunIds.delete(runId);
     },
 
-    tryAcquireLoad(runId) {
-      if (inFlightLoads.has(runId)) {
-        pendingReload.add(runId); // coalesce; refresh once the in-flight load finishes
-        return false;
-      }
-      inFlightLoads.add(runId);
-      return true;
-    },
-
-    clearPending(runId) {
-      pendingReload.delete(runId);
-    },
-
-    hasPending(runId) {
-      return pendingReload.has(runId);
-    },
-
-    releaseLoad(runId) {
-      inFlightLoads.delete(runId);
-      pendingReload.delete(runId);
-    },
-
     clear() {
-      // Matches the original clearState: in-flight/pending are left alone — an
-      // in-flight load self-heals via its own releaseLoad in `finally`.
       recentRunIds.length = 0;
       loadedRunIds.clear();
       finalizedRunIds.clear();

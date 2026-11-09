@@ -47,6 +47,7 @@ Thumbs.db
 !/docs/design/atlas-bookmark-lifecycle.md
 !/docs/design/document-attachment-lifecycle.md
 !/docs/design/pairing-auth-lifecycle.md
+!/docs/design/transcript-history-lifecycle.md
 
 # Coverage
 coverage/

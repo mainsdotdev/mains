@@ -67,7 +67,7 @@ import { snapshotRunSettingConfig, type ConversationSettings } from "@mains/cont
 
 import { ProtocolMismatchError } from "./connection-supervisor";
 import type { WsTransport } from "./ws-transport";
-import { historyRequest, historyLoaded, historyLoading, forgetHistory } from "./run-history";
+import { historyRequest, historyLoaded, historyLoading, forgetHistory, forgetBackendHistory, retireHistoryTransport, historyRequests, historyKey } from "./run-history";
 import { approvalRow } from "./approval-projection";
 import { forgetRunOutputs } from "./output-cache";
 import { confirmDeletedRuns } from "./output-retention";
@@ -816,21 +816,23 @@ export function readHistoryContent(transport: WsTransport, request: ReadRunHisto
 
 // ── Per-run ──
 
-const inFlight = new Map<string, Promise<void>>();
-const pendingAgain = new Set<string>();
-
-async function syncRunOnce(transport: WsTransport, backendId: string, runId: string, direction: ReadRunHistoryPayload["direction"]): Promise<void> {
-  historyLoading(backendId, runId, true);
+async function syncRunOnce(transport: WsTransport, backendId: string, runId: string, direction: ReadRunHistoryPayload["direction"], signal: AbortSignal): Promise<void> {
+  let request = historyRequest(backendId, runId, direction);
+  historyLoading(backendId, runId, true, null, request.direction);
   try {
     const run = await invoke<RunResponse | null>(transport, CHANNELS.runs.getById, [runId]);
+    if (signal.aborted) return;
     if (!run) {
       deleteRunGone(backendId, runId);
       return;
     }
+    // A reading pause can arrive while the metadata lookup is pending.
+    request = historyRequest(backendId, runId, request.direction);
     const [page, approvals] = await Promise.all([
-      invoke<RunHistoryPage>(transport, CHANNELS.runs.getHistory, [historyRequest(backendId, runId, direction)]),
+      invoke<RunHistoryPage>(transport, CHANNELS.runs.getHistory, [request]),
       invoke<PendingApproval[]>(transport, CHANNELS.runs.listPendingApprovals, [runId]),
     ]);
+    if (signal.aborted) return;
     // These are disposable phone projections. Complete history remains on the
     // backend; replace only this run's local window in one SQLite transaction.
     projectionTransaction(() => {
@@ -844,9 +846,10 @@ async function syncRunOnce(transport: WsTransport, backendId: string, runId: str
       runProjectionWrite(pendingApprovals, () => db.delete(pendingApprovals).where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.runId, runId))).run());
       for (const request of approvals) upsertApproval(backendId, request, request.expiresAt);
     });
-    historyLoaded(backendId, runId, page);
+    if (!signal.aborted) historyLoaded(backendId, runId, page, request.direction);
   } catch (error) {
-    historyLoading(backendId, runId, false, error instanceof Error ? error.message : "Could not load conversation history");
+    if (signal.aborted) return;
+    historyLoading(backendId, runId, false, error instanceof Error ? error.message : "Could not load conversation history", request.direction);
     throw error;
   }
 }
@@ -857,26 +860,8 @@ async function syncRunOnce(transport: WsTransport, backendId: string, runId: str
  * concurrent syncs can't interleave into a partial transcript.
  */
 export function syncRun(transport: WsTransport, backendId: string, runId: string, direction: ReadRunHistoryPayload["direction"] = "refresh"): Promise<void> {
-  const key = `${backendId}:${runId}`;
-  const running = inFlight.get(key);
-  if (running) {
-    if (direction !== "refresh") return running.catch(() => {}).then(() => syncRun(transport, backendId, runId, direction));
-    pendingAgain.add(key);
-    return running;
-  }
-  const task = (async () => {
-    try {
-      do {
-        pendingAgain.delete(key);
-        await syncRunOnce(transport, backendId, runId, direction);
-        direction = "refresh";
-      } while (pendingAgain.has(key));
-    } finally {
-      inFlight.delete(key);
-    }
-  })();
-  inFlight.set(key, task);
-  return task;
+  return historyRequests.run(historyKey(backendId, runId), transport, direction,
+    (signal) => syncRunOnce(transport, backendId, runId, direction, signal));
 }
 
 /** Only the run row — for `runs:updated` (title landed, etc.). */
@@ -966,6 +951,7 @@ export function attachRunEvents(
   });
 
   return () => {
+    retireHistoryTransport(transport);
     offStatus();
     offDiff();
     offGitState();
@@ -992,6 +978,7 @@ export function runExists(backendId: string, runId: string): boolean {
 
 /** Drop everything cached for a backend (forgetting a Mac). */
 export function clearBackend(backendId: string): void {
+  forgetBackendHistory(backendId);
   projectionTransaction(() => {
     runProjectionWrite(runOutputs, () => db.delete(runOutputs).where(eq(runOutputs.backendId, backendId)).run());
     runProjectionWrite(runAttachmentFiles, () => db.delete(runAttachmentFiles).where(eq(runAttachmentFiles.backendId, backendId)).run());

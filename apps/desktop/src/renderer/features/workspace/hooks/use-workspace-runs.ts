@@ -11,7 +11,8 @@
  * Both reach back through the same three seams (`registerNewRun`,
  * `loadRunDetails`, `onRunUpdated`), which is the whole contract between them
  * and this hook. Bookkeeping that isn't React state at all — the retained-run
- * LRU, loaded flags, in-flight dedup — lives in `lib/run-cache.ts`.
+ * LRU, loaded flags, finalization — lives in `lib/run-cache.ts`. History request
+ * ordering and refresh coalescing belong to the shared transcript owner.
  */
 
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
@@ -140,27 +141,8 @@ export function useWorkspaceRuns(
 
   // --- Data loading ---
 
-  const loadRunDetailsOnce = loadHistory;
-
-  /** Public entry point: runs at most one `loadRunDetailsOnce` per run at a time,
-   *  with a single trailing refresh if another request arrived while it ran. This
-   *  keeps the selected window and its committed event base consistent — concurrent refreshes coalesce while paging is serialized
-   *  by useRunHistory. */
-  const loadRunDetails = useCallback(
-    async (runId: string) => {
-      // Admit one load per run; a request mid-load queues a single trailing reload.
-      if (!cache.tryAcquireLoad(runId)) return;
-      try {
-        do {
-          cache.clearPending(runId);
-          await loadRunDetailsOnce(runId);
-        } while (cache.hasPending(runId));
-      } finally {
-        cache.releaseLoad(runId);
-      }
-    },
-    [loadRunDetailsOnce, cache],
-  );
+  // Refresh coalescing and navigation now share the history owner's queue.
+  const loadRunDetails = loadHistory;
 
   /** Select a newly created run and catch up even if its first push already fired. */
   const registerNewRun = useCallback(async (runId: string): Promise<string | null> => {
