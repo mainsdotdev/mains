@@ -132,7 +132,7 @@ vi.mock("./use-run-operations", () => ({
   }),
 }));
 vi.mock("./use-run-sync", () => ({
-  useRunSync: () => ({ finalizeRun: vi.fn() }),
+  useRunSync: () => ({ finalizeRun: vi.fn(), beginRunRead: () => ({ current: () => true, release: () => {} }) }),
 }));
 vi.mock("./use-streaming-events", () => ({
   useStreamingEvents: () => ({ streamingEvents: [], clearTurnStreams: vi.fn() }),

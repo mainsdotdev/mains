@@ -341,8 +341,9 @@ export function useWorkspaceRuns(
 
   // --- Delegated subjects ---
 
-  const { finalizeRun } = useRunSync({
+  const { finalizeRun, beginRunRead } = useRunSync({
     runs,
+    scopeKey: JSON.stringify([viewKey, providerId, mode]),
     activeRunId,
     cache,
     loadRunDetails,
@@ -476,24 +477,29 @@ export function useWorkspaceRuns(
       // Always reconcile on tab focus. Besides refreshing the transcript,
       // this is the immediate fallback for a dropped/backgrounded status push.
       void loadRunDetails(runId);
+      const request = beginRunRead(runId);
+      if (!request) return;
       void (async () => {
-        const result = await appApi.runs.getById(runId);
-        if (revision !== selectionRevisionRef.current || !result.success || !result.data) return;
-        const run = result.data;
-        if (run.isArchived ||
-          (providerId && run.providerId !== providerId) ||
-          (mode && run.mode !== mode) ||
-          (workspaceId && run.workspaceId !== workspaceId)) return;
+        try {
+          const result = await appApi.runs.getById(runId);
+          if (!request.current() || revision !== selectionRevisionRef.current || !result.success || !result.data) return;
+          const run = result.data;
+          if (run.isArchived ||
+            (providerId && run.providerId !== providerId) ||
+            (mode && run.mode !== mode) ||
+            (workspaceId && run.workspaceId !== workspaceId)) return;
 
-        // The other renderer can create a run after this window loaded its
-        // workspace. Selecting it must also make its tab available locally.
-        setRuns((previous) => previous.some((item) => item.id === run.id)
-          ? previous.map((item) => item.id === run.id ? run : item)
-          : [run, ...previous]);
-        if (wasPending) await finalizeRun(run);
+          // The other renderer can create a run after this window loaded its
+          // workspace. Selecting it must also make its tab available locally.
+          setRuns((previous) => previous.some((item) => item.id === run.id)
+            ? previous.map((item) => item.id === run.id ? run : item)
+            : [run, ...previous]);
+          if (wasPending) await finalizeRun(run, request.current);
+        } catch { /* Failed metadata refresh preserves the selected context for retry. */ }
+        finally { request.release(); }
       })();
     },
-    [runs, loadRunDetails, finalizeRun, workspaceId, providerId, mode],
+    [runs, loadRunDetails, finalizeRun, workspaceId, providerId, mode, beginRunRead],
   );
 
   const activeRun = runs.find((r) => r.id === activeRunId);

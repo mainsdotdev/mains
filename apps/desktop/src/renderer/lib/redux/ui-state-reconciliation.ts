@@ -7,9 +7,12 @@ import {
   workspaceIdFromViewKey,
   workspaceIdFromPreviewOwnerKey,
 } from "../../../shared/ui-state-keys";
-import { getTransport, type Transport } from "../transport";
+import type { Transport } from "../transport";
+import { createConversationReadLifecycle } from "../conversation-lifecycle";
 import type { AppDispatch, RootState } from "./index";
 import { forgetDeletedUiContext, type DeletedUiContext } from "./ui-state-cleanup";
+
+const reconciliation = createConversationReadLifecycle();
 
 export function collectUiContextCandidates(
   state: RootState,
@@ -69,39 +72,41 @@ export async function reconcilePersistedUiState(
   backendId: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const stillConnected = () =>
-    !signal?.aborted &&
-    getTransport() === transport &&
-    (getState().backends.activeBackendId ?? "local") === backendId &&
-    transport.status() === "connected";
-  if (!stillConnected()) return;
+  const owner = reconciliation.begin(backendId, transport, {
+    valid: () => (getState().backends.activeBackendId ?? "local") === backendId, signal,
+  });
+  if (!owner) return;
+  const stillConnected = owner.current;
+  try {
+    if (!stillConnected()) return;
 
-  let browserOwnerKeys: string[] = [];
-  const browser = typeof window === "undefined" ? undefined : window.api?.browser;
-  if (browser?.listOwnerKeys) {
-    try {
-      const result = await browser.listOwnerKeys();
-      if (result.success && Array.isArray(result.data)) browserOwnerKeys = result.data;
-    } catch {
-      // The renderer still has its own records to check.
-    }
-  }
-  if (!stillConnected()) return;
-  const candidates = collectUiContextCandidates(getState(), backendId, browserOwnerKeys);
-
-  // A missing result is authoritative only for a successful get-by-ID call.
-  // Offline backends and failed calls leave local state untouched for retry.
-  for (let start = 0; start < candidates.length && stillConnected(); start += 8) {
-    await Promise.all(candidates.slice(start, start + 8).map(async (target) => {
-      const channel = target.kind === "run" ? CHANNELS.runs.getById : CHANNELS.workspace.get;
+    let browserOwnerKeys: string[] = [];
+    const browser = typeof window === "undefined" ? undefined : window.api?.browser;
+    if (browser?.listOwnerKeys) {
       try {
-        const result = await transport.invoke(channel, [target.id]);
-        if (result.success && result.data === null && stillConnected()) {
-          forgetDeletedUiContext(dispatch, target, getState().runQueue?.byOwner);
-        }
+        const result = await browser.listOwnerKeys();
+        if (result.success && Array.isArray(result.data)) browserOwnerKeys = result.data;
       } catch {
-        // Retry on a later connection rather than guessing that it was deleted.
+        // The renderer still has its own records to check.
       }
-    }));
-  }
+    }
+    if (!stillConnected()) return;
+    const candidates = collectUiContextCandidates(getState(), backendId, browserOwnerKeys);
+
+    // A missing result is authoritative only for a successful get-by-ID call.
+    // Offline backends and failed calls leave local state untouched for retry.
+    for (let start = 0; start < candidates.length && stillConnected(); start += 8) {
+      await Promise.all(candidates.slice(start, start + 8).map(async (target) => {
+        const channel = target.kind === "run" ? CHANNELS.runs.getById : CHANNELS.workspace.get;
+        try {
+          const result = await transport.invoke(channel, [target.id]);
+          if (result.success && result.data === null && stillConnected()) {
+            forgetDeletedUiContext(dispatch, target, getState().runQueue?.byOwner);
+          }
+        } catch {
+          // Retry on a later connection rather than guessing that it was deleted.
+        }
+      }));
+    }
+  } finally { owner.release(); }
 }

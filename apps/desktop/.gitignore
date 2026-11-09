@@ -53,6 +53,7 @@ Thumbs.db
 !/docs/design/bridge-connection-lifecycle.md
 !/docs/design/bridge-blob-lifecycle.md
 !/docs/design/mcp-app-lifecycle.md
+!/docs/design/conversation-ui-lifecycle.md
 
 # Coverage
 coverage/

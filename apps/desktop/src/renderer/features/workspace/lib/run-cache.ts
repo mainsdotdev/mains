@@ -12,6 +12,8 @@
 // fetches the latest history page again.
 // ─────────────────────────────────────────────────────────────
 
+import { createConversationFinalizationLifecycle } from "@/lib/conversation-lifecycle";
+
 /** Most-recent runs whose event/turn caches we retain; older ones are evicted. */
 export const MAX_RETAINED_RUNS = 4;
 
@@ -23,6 +25,7 @@ export interface RunCache {
   isLoaded(runId: string): boolean;
   markLoaded(runId: string): void;
   markFinalized(runId: string): boolean;
+  claimFinalization(runId: string): { current(): boolean } | null;
   isFinalized(runId: string): boolean;
   /** A continued or voice-delegated run gets a new terminal transition. */
   markRunning(runId: string): void;
@@ -36,7 +39,7 @@ export function createRunCache(): RunCache {
   /** Runs whose first history page has loaded — absent means new or evicted. */
   const loadedRunIds = new Set<string>();
   /** Runs whose terminal transition we've already handled (prevents double-toast). */
-  const finalizedRunIds = new Set<string>();
+  const terminal = createConversationFinalizationLifecycle();
 
   function pruneLoaded(allowed: Set<string>): void {
     for (const id of loadedRunIds) if (!allowed.has(id)) loadedRunIds.delete(id);
@@ -68,23 +71,22 @@ export function createRunCache(): RunCache {
     },
 
     markFinalized(runId) {
-      if (finalizedRunIds.has(runId)) return false;
-      finalizedRunIds.add(runId);
-      return true;
+      return !!terminal.claim(runId);
     },
+    claimFinalization: terminal.claim,
 
     isFinalized(runId) {
-      return finalizedRunIds.has(runId);
+      return terminal.has(runId);
     },
 
     markRunning(runId) {
-      finalizedRunIds.delete(runId);
+      terminal.running(runId);
     },
 
     clear() {
       recentRunIds.length = 0;
       loadedRunIds.clear();
-      finalizedRunIds.clear();
+      terminal.clear();
     },
   };
 }
