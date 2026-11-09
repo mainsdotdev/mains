@@ -31,7 +31,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const iconStyles =
-  "inline-flex shrink-0 items-center justify-center rounded-xl text-primary-500 enabled:hover:bg-primary-100 enabled:hover:text-primary-700 focus-visible:bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent/40 dark:enabled:hover:bg-primary-900 dark:enabled:hover:text-primary-300 dark:focus-visible:bg-primary-900 [&>svg]:shrink-0";
+  "inline-flex shrink-0 items-center justify-center rounded-xl text-primary-600 enabled:hover:bg-primary-300/20 focus-visible:bg-primary-300/20 focus-visible:ring-2 focus-visible:ring-accent/40 dark:text-primary-400 dark:enabled:hover:bg-primary/10 dark:focus-visible:bg-primary/10 [&>svg]:shrink-0";
 
 const variantStyles: Record<ButtonVariant, string> = {
   // Glass variants carry no bg-*/hover:bg-* — the `glass-*` utility owns the
