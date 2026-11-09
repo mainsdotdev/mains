@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { readCodexPermissions } from "./codex-permissions";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1651,6 +1652,7 @@ export function createCodexCapabilities(
     listRealtimeVoices,
     getAccountInfo,
     getRateLimits,
+    getCodexPermissions: async (cwd?: string) => readCodexPermissions(await options.ensureServer(cwd), cwd),
     getCodexMemorySettings,
     setCodexMemorySetting,
     resetCodexMemories,

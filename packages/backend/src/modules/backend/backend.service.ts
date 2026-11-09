@@ -75,6 +75,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // offers, so a phone can attach one the way the desktop's "@" menu does.
   // Read-only listings — installing or editing a skill stays off this list.
   CHANNELS.providers.getSkills,
+  CHANNELS.providers.getCodexPermissions,
   CHANNELS.providers.getCommands,
 ]);
 

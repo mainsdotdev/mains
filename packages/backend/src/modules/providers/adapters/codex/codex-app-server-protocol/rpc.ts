@@ -76,6 +76,10 @@ import type { TurnSteerResponse } from "./generated/v2/TurnSteerResponse";
 import type { TurnStartParams } from "./generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "./generated/v2/TurnStartResponse";
 
+import type { PermissionProfileListParams } from "./generated/v2/PermissionProfileListParams";
+import type { PermissionProfileListResponse } from "./generated/v2/PermissionProfileListResponse";
+import type { ConfigRequirementsReadResponse } from "./generated/v2/ConfigRequirementsReadResponse";
+
 interface RpcMethod<Params, Result> {
   params: Params;
   result: Result;
@@ -108,6 +112,8 @@ export interface CodexAppServerRpc {
   >;
   "skills/list": RpcMethod<SkillsListParams, SkillsListResponse>;
 
+  "permissionProfile/list": RpcMethod<PermissionProfileListParams, PermissionProfileListResponse>;
+  "configRequirements/read": RpcMethod<undefined, ConfigRequirementsReadResponse>;
   "config/value/write": RpcMethod<ConfigValueWriteParams, ConfigWriteResponse>;
   "config/read": RpcMethod<
     { includeLayers?: boolean; cwd?: string | null },

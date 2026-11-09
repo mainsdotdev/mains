@@ -733,6 +733,7 @@ export const runsService = {
       composeConfigSnapshot(mode, space.providerId, null),
       undefined,
       payload.conversationSettings,
+      { inheritProviderPermissions: true },
     );
     const configSnapshot = normalizeAdditionalDirectories(
       composeConfigSnapshot(mode, space.providerId, {
@@ -2170,6 +2171,7 @@ export const runsService = {
         composeConfigSnapshot(mode, payload.providerId, payload.configSnapshot),
         payload.model,
         payload.conversationSettings,
+        { inheritProviderPermissions: payload.configSnapshot?.sandboxMode === undefined },
       );
       const configSnapshot = normalizeAdditionalDirectories(
         composeConfigSnapshot(mode, payload.providerId, {
@@ -2361,6 +2363,7 @@ export const runsService = {
         payload.configSnapshot,
         payload.model,
         payload.conversationSettings,
+        { inheritProviderPermissions: payload.configSnapshot?.sandboxMode === undefined },
       );
       const configSnapshot = composeConfigSnapshot(mode, payload.providerId, {
         ...payload.configSnapshot,

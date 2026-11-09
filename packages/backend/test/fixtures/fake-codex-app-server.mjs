@@ -181,6 +181,12 @@ input.on("line", (line) => {
       break;
     }
 
+    case "configRequirements/read":
+      respond(id, { requirements: process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS) : null });
+      break;
+    case "permissionProfile/list":
+      respond(id, { data: process.env.MAINS_CODEX_FIXTURE_PROFILES ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_PROFILES) : [], nextCursor: null });
+      break;
     case "thread/start": {
       const threadId = `thread-${nextThreadId++}`;
       activeThreads.add(threadId);

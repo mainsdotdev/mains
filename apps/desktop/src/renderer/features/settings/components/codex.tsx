@@ -1,3 +1,5 @@
+import { codexPermissionValue, codexPermissionPatch, codexPermissionBlockReason } from "@mains/contracts/codex-permissions";
+import { codexPermissionOptions } from "@/lib/codex-permission-options";
 import { useEffect, useState } from "react";
 import { appEvents } from "@/lib/transport";
 import { Alert, Button, FullAccessConfirmationModal, Select, Text, Toggle, toast } from "@/components/ui";
@@ -11,6 +13,7 @@ import {
   useGetProviderAccountInfoQuery,
   useConsumeProviderRateLimitResetCreditMutation,
   useGetProviderRealtimeVoicesQuery,
+  useGetCodexPermissionsQuery,
   useGetCodexMemorySettingsQuery,
   useSetCodexMemorySettingMutation,
   useResetCodexMemoriesMutation,
@@ -33,7 +36,6 @@ import {
   useProviderSettings,
   type ProviderUsageRow,
 } from "./provider-settings-shared";
-import { CODEX_SANDBOX_MODES } from "@/lib/provider-modes";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
 import { getProviderVariant } from "@/lib/provider-variants";
 import { extractErrorMessage } from "@/lib/extract-error-message";
@@ -64,12 +66,6 @@ const APPROVAL_OPTIONS: Array<{
     description: "Run without asking for approval",
   },
 ];
-
-const SANDBOX_OPTIONS = CODEX_SANDBOX_MODES.map((m) => ({
-  value: m.value,
-  label: m.label,
-  description: m.description,
-}));
 
 function CodexMemorySection({ providerEnabled }: { providerEnabled: boolean }) {
   const settings = useGetCodexMemorySettingsQuery(PROVIDER_IDS.codex, {
@@ -217,6 +213,12 @@ function CodexMemorySection({ providerEnabled }: { providerEnabled: boolean }) {
 export default function CodexSettings() {
   const { provider, isLoading, error, config, updateConfig, updating } =
     useProviderSettings<CodexAdapterConfig>(PROVIDER_IDS.codex, "codex");
+  const permissions = useGetCodexPermissionsQuery({ id: PROVIDER_IDS.codex }, { skip: !provider?.isEnabled, refetchOnMountOrArgChange: true });
+  const permissionValue = codexPermissionValue(config);
+  const permissionOptions = codexPermissionOptions(permissions.currentData, !!permissions.error, permissionValue);
+  const allowedPermissions = permissionOptions.filter((option) => !option.disabledReason);
+  const approvalOptions = APPROVAL_OPTIONS.filter((option) => !permissions.currentData?.allowedApprovalPolicies || permissions.currentData.allowedApprovalPolicies.includes(option.value));
+  const [pendingPermission, setPendingPermission] = useState("danger-full-access");
   const voices = useGetProviderRealtimeVoicesQuery(PROVIDER_IDS.codex, {
     skip: !provider?.isEnabled,
     refetchOnMountOrArgChange: true,
@@ -264,7 +266,9 @@ export default function CodexSettings() {
     useConsumeProviderRateLimitResetCreditMutation();
 
   const approvalMode = config.approvalMode ?? "on-request";
-  const sandboxMode = config.sandboxMode ?? "workspace-write";
+  const permissionDescription = permissions.error ? "Could not load Codex permissions. Reopen settings to retry."
+    : permissions.currentData ? codexPermissionBlockReason(permissions.currentData, permissionValue) ?? "Choose a sandbox mode or a named Codex permission profile"
+    : "Loading Codex permissions…";
   const networkAccessEnabled = config.networkAccessEnabled ?? true;
   const webSearchMode = config.webSearchMode ?? "live";
   const skipGitRepoCheck = config.skipGitRepoCheck ?? false;
@@ -441,7 +445,8 @@ export default function CodexSettings() {
           <Select
             value={approvalMode}
             aria-label="Approval policy"
-            options={APPROVAL_OPTIONS}
+            options={approvalOptions}
+            disabled={!permissions.currentData || !!permissions.error || updating}
             onChange={(value) => {
               updateConfig({ approvalMode: value });
               const label =
@@ -452,31 +457,34 @@ export default function CodexSettings() {
         </SettingsRow>
         <SettingsDivider />
         <SettingsRow
-          title="Sandbox Mode"
-          description="Controls file and network isolation for the agent"
+          title="Permissions"
+          description={permissionDescription}
         >
           <Select
-            value={sandboxMode}
-            aria-label="Sandbox mode"
-            options={SANDBOX_OPTIONS}
+            value={permissionValue}
+            aria-label="Codex permissions"
+            options={allowedPermissions}
+            disabled={!permissions.currentData || !!permissions.error || updating}
+            onOpenChange={(open) => { if (open) void permissions.refetch(); }}
             onChange={(value) => {
-              if (value === "danger-full-access") {
+              if (value === "danger-full-access" || value === "profile::danger-full-access") {
+                setPendingPermission(value);
                 setIsFullAccessConfirmationOpen(true);
                 return;
               }
-              updateConfig({ sandboxMode: value });
+              updateConfig(codexPermissionPatch(value));
               const label =
-                SANDBOX_OPTIONS.find((o) => o.value === value)?.label ?? value;
-              toast.success(`Sandbox: ${label}`);
+                allowedPermissions.find((o) => o.value === value)?.label ?? value;
+              toast.success(`Permissions: ${label}`);
             }}
           />
         </SettingsRow>
         <SettingsDivider />
         <SettingsRow
           title="Network Access"
-          description="Allow network access within workspace-write sandbox mode"
+          description={config.permissionProfile ? "Network access is controlled by the selected permission profile" : "Allow network access within workspace-write sandbox mode"}
         >
-          <Toggle
+          {config.permissionProfile ? <Text size="s">Defined by profile</Text> : <Toggle
             enabled={networkAccessEnabled}
             aria-label="Allow network access"
             onChange={(enabled) => {
@@ -485,7 +493,7 @@ export default function CodexSettings() {
                 enabled ? "Network access enabled" : "Network access disabled",
               );
             }}
-          />
+          />}
         </SettingsRow>
         <SettingsDivider />
         <SettingsRow
@@ -549,8 +557,9 @@ export default function CodexSettings() {
         onCancel={() => setIsFullAccessConfirmationOpen(false)}
         onConfirm={() => {
           setIsFullAccessConfirmationOpen(false);
-          updateConfig({ sandboxMode: "danger-full-access" });
-          toast.success("Sandbox: Full Access");
+          if (!allowedPermissions.some((option) => option.value === pendingPermission)) return;
+          updateConfig(codexPermissionPatch(pendingPermission));
+          toast.success("Permissions: Full Access");
         }}
       />
 

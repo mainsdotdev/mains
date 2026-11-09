@@ -343,6 +343,7 @@ export const CHANNELS = {
     connectorsUpdated: "providers:connectorsUpdated",
     getRateLimits: "providers:getRateLimits",
     getRealtimeVoices: "providers:getRealtimeVoices",
+    getCodexPermissions: "providers:getCodexPermissions",
     getCodexMemorySettings: "providers:getCodexMemorySettings",
     setCodexMemorySetting: "providers:setCodexMemorySetting",
     resetCodexMemories: "providers:resetCodexMemories",

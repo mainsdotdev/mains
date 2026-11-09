@@ -78,7 +78,7 @@ export function RunView({
   const openModel = (providerId: string) =>
     router.push({ pathname: "/model", params: { providerId, runId } } as Href);
   const openRunOptions = (providerId: string) =>
-    router.push({ pathname: "/run-options", params: { providerId, runId } } as Href);
+    router.push({ pathname: "/run-options", params: { providerId, runId, ...(workspacePath ? { workspacePath } : {}) } } as Href);
 
   const {
     loading: initialLoading,

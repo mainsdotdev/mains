@@ -5,10 +5,16 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MODE_CONFIGS } from "@/lib/mode-config";
 
-const mocks = vi.hoisted(() => ({ mode: "developer" as "developer" | "work" | "chat" }));
+const mocks = vi.hoisted(() => ({ mode: "developer" as "developer" | "work" | "chat", requiresNamedProfile: false }));
 
 vi.mock("@/hooks/use-mode-config", () => ({
   useModeConfig: () => MODE_CONFIGS[mocks.mode],
+}));
+
+vi.mock("@/lib/redux/api/providersApi", () => ({
+  useGetCodexPermissionsQuery: () => ({ currentData: { profilesSupported: true,
+    profiles: [":read-only", ":workspace", ":danger-full-access"].map((id) => ({ id, description: null, allowed: true })),
+    allowedSandboxModes: null, allowedApprovalPolicies: null, requiresNamedProfile: mocks.requiresNamedProfile }, refetch: vi.fn() }),
 }));
 
 import { InputToolbar } from "./input-toolbar";
@@ -27,9 +33,29 @@ function nativeToolbarProps(): Parameters<typeof InputToolbar>[0] {
   };
 }
 
-beforeEach(() => { mocks.mode = "developer"; });
+beforeEach(() => { mocks.mode = "developer"; mocks.requiresNamedProfile = false; });
 
 describe("floating composer controls", () => {
+  it("does not duplicate built-in permissions returned as native profiles", () => {
+    render(createElement(InputToolbar, nativeToolbarProps()));
+    fireEvent.click(screen.getByRole("button", { name: "Permission mode" }));
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(3);
+    expect(screen.queryByText(":workspace")).toBeNull();
+  });
+
+  it("keeps native profile selection readable and confirms native Full Access before changing it", () => {
+    mocks.requiresNamedProfile = true;
+    const props = { ...nativeToolbarProps(), permissionMode: "profile::workspace" };
+    render(createElement(InputToolbar, props));
+    fireEvent.click(screen.getByRole("button", { name: "Permission mode" }));
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(3);
+    expect(screen.getByRole("menuitemradio", { name: /Workspace Write/ }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Full Access/ }));
+    expect(props.onPermissionModeChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(props.onPermissionModeChange).toHaveBeenCalledExactlyOnceWith("profile::danger-full-access");
+  });
+
   it("confirms every Codex Full Access selection before changing the mode", () => {
     const props = nativeToolbarProps();
     const { rerender } = render(createElement(InputToolbar, props));

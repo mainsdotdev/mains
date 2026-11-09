@@ -244,6 +244,7 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.generateText = driver.generateText.bind(driver);
   if (driver.getRateLimits)
     adapter.getRateLimits = driver.getRateLimits.bind(driver);
+  if (driver.getCodexPermissions) adapter.getCodexPermissions = driver.getCodexPermissions.bind(driver);
   if (driver.getCodexMemorySettings)
     adapter.getCodexMemorySettings = driver.getCodexMemorySettings.bind(driver);
   if (driver.setCodexMemorySetting)

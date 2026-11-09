@@ -1,3 +1,4 @@
+import { codexPermissionValue, codexPermissionPatch } from "@mains/contracts/codex-permissions";
 import { useEffect, useMemo, useCallback } from "react";
 import { appEvents } from "@/lib/transport";
 import {
@@ -60,7 +61,7 @@ export function useProviderModels(
   });
   const config = (conversationConfig ?? providerData?.config ?? {}) as Record<string, any>;
 
-  const permissionMode: string = config[caps.permissionKey] ?? caps.permissionDefault;
+  const permissionMode: string = activeProviderId === "codex" ? codexPermissionValue(config) : config[caps.permissionKey] ?? caps.permissionDefault;
   const thinkingMode = caps.thinkingCoupledToEffort
     ? !!config.modelReasoningEffort
     : !!config.thinkingMode;
@@ -82,8 +83,8 @@ export function useProviderModels(
   const goalMode: boolean = caps.supportsGoalMode && !!config.goalMode;
 
   const handlePermissionModeChange = useCallback(async (mode: string) => {
-    await onConfigChange?.({ [caps.permissionKey]: mode });
-  }, [caps, onConfigChange]);
+    await onConfigChange?.(activeProviderId === "codex" ? codexPermissionPatch(mode) : { [caps.permissionKey]: mode });
+  }, [activeProviderId, caps, onConfigChange]);
 
   const handlePlanModeToggle = useCallback(async () => {
     await onConfigChange?.({ planMode: !planMode, ...(!planMode ? { goalMode: false } : {}) });

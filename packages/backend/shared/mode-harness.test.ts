@@ -158,6 +158,7 @@ describe("composeConfigSnapshot", () => {
       }),
     ).toEqual({
       sandboxMode: "read-only",
+      permissionProfile: "",
       planMode: false,
       goalMode: false,
     });
@@ -174,6 +175,7 @@ describe("composeConfigSnapshot", () => {
     ).toEqual({
       effortLevel: "high",
       sandboxMode: "read-only",
+      permissionProfile: "",
       planMode: false,
       goalMode: false,
     });

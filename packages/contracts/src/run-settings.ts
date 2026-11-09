@@ -44,6 +44,7 @@ export const RUN_SETTING_CONFIG_KEYS = [
   "modelReasoningEffort",
   "permissionMode",
   "sandboxMode",
+  "permissionProfile",
   "mode",
   "fastMode",
   "serviceTier",
@@ -57,6 +58,8 @@ export interface RunSettingConfig {
   modelReasoningEffort?: string;
   permissionMode?: string;
   sandboxMode?: string;
+  /** Named Codex profile; empty explicitly selects the legacy sandbox. */
+  permissionProfile?: string;
   mode?: string;
   serviceTier?: string;
   thinkingMode?: boolean;
@@ -108,6 +111,7 @@ export function snapshotRunSettingConfig(providerId: string, config: Record<stri
     effortLevel: "", modelReasoningEffort: "", thinkingMode,
     ultracode: false, fastMode: false, serviceTier: "", goalMode: false, planMode: false,
     ...(permissionKey ? { [permissionKey]: defaults[providerId] } : {}),
+    ...(providerId === PROVIDER_IDS.codex ? { permissionProfile: "" } : {}),
     ...pickRunSettingConfig(config),
   };
 }

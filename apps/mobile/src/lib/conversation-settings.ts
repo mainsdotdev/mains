@@ -1,3 +1,4 @@
+import { codexPermissionPatch } from "@mains/contracts/codex-permissions";
 import {
   conversationSettingsFrom,
   permissionConfigKeyFor,
@@ -115,7 +116,8 @@ export function patchConversationSettings(providerId: string, settings: Conversa
   }
   if (patch.permissionMode !== undefined) {
     const key = permissionConfigKeyFor(providerId);
-    if (key) Object.assign(config, { [key]: patch.permissionMode });
+    if (providerId === "codex") Object.assign(config, codexPermissionPatch(patch.permissionMode));
+    else if (key) Object.assign(config, { [key]: patch.permissionMode });
   }
   if (patch.fastMode !== undefined) {
     if (providerId === "codex") config.serviceTier = patch.fastMode ? "fast" : "default";

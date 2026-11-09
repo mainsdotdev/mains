@@ -65,9 +65,9 @@ async function smokeRuntime(cliVersion) {
     pending.delete(String(message.id));
     if (message.error) {
       waiter.reject(
-        new Error(
+        Object.assign(new Error(
           `${message.error.message} (code: ${message.error.code ?? "unknown"})`,
-        ),
+        ), { code: message.error.code }),
       );
     } else {
       waiter.resolve(message.result);
@@ -139,6 +139,21 @@ async function smokeRuntime(cliVersion) {
     const models = await request("model/list", {});
     if (!Array.isArray(models?.data)) {
       throw new Error("model/list did not return data[]");
+    }
+
+    try {
+      const requirements = await request("configRequirements/read", undefined);
+      if (!requirements || !("requirements" in requirements)) throw new Error("configRequirements/read did not return requirements");
+    } catch (error) {
+      if (error.code !== -32601) throw error;
+    }
+    try {
+      const profiles = await request("permissionProfile/list", { cwd: process.cwd(), limit: 100 });
+      if (!Array.isArray(profiles?.data) || profiles.data.some((profile) => typeof profile.id !== "string" || typeof profile.allowed !== "boolean")) {
+        throw new Error("permissionProfile/list did not return permission summaries");
+      }
+    } catch (error) {
+      if (error.code !== -32601) throw error;
     }
 
     const started = await request("thread/start", {

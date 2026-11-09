@@ -471,6 +471,12 @@ export async function setPluginEnabledForProvider(provider: ProviderResponse, pl
   return mutatePlugin(provider, { type: "setEnabled", pluginId, enabled });
 }
 
+export async function getCodexPermissionsForProvider(provider: ProviderResponse, cwd?: string) {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.getCodexPermissions) throw new Error("Codex permission discovery is unavailable.");
+  return adapter.getCodexPermissions(cwd);
+}
+
 export async function getCodexMemorySettingsForProvider(provider: ProviderResponse) {
   const adapter = createWorkAdapter(provider);
   if (!adapter.getCodexMemorySettings) throw new Error("Codex memory settings are unavailable.");

@@ -27,6 +27,7 @@ import {
   installPluginForProvider,
   uninstallPluginForProvider,
   setPluginEnabledForProvider,
+  getCodexPermissionsForProvider,
   getCodexMemorySettingsForProvider,
   setCodexMemorySettingForProvider,
   resetCodexMemoriesForProvider,
@@ -175,6 +176,7 @@ export const providersService = {
         throw new Error(`Unknown permission mode "${mode}" for ${id}`);
       }
       config[key] = mode;
+      if (id === PROVIDER_IDS.codex) config.permissionProfile = "";
     }
 
     if (patch.fastMode !== undefined) {
@@ -330,6 +332,12 @@ export const providersService = {
   ): Promise<void> {
     const provider = await requireEnabledProvider(id);
     await setPluginEnabledForProvider(provider, pluginId, enabled);
+  },
+
+  async getCodexPermissions(id: string, cwd?: string) {
+    const provider = await requireEnabledProvider(id);
+    if (cwd !== undefined && (typeof cwd !== "string" || !cwd || cwd.length > 32_768)) throw new Error("Invalid permission workspace");
+    return getCodexPermissionsForProvider(provider, cwd);
   },
 
   async getCodexMemorySettings(id: string): Promise<CodexMemorySettings> {

@@ -3,6 +3,7 @@
 // Agent/work runtime oriented interfaces for code-writing flows
 // ─────────────────────────────────────────────────────────────
 
+import type { CodexPermissionCatalog } from "@mains/contracts/codex-permissions";
 import type { ClaudePermissionMode } from "@mains/contracts/claude-permission-modes";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModeId } from "@mains/contracts/modes";
@@ -753,6 +754,7 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
   ): Promise<ConsumeRateLimitResetCreditOutcome>;
 
   /** Read the Codex host's memory preferences from App Server. */
+  getCodexPermissions?(cwd?: string): Promise<CodexPermissionCatalog>;
   getCodexMemorySettings?(): Promise<CodexMemorySettings>;
   /** Set one Codex memory preference; `allowToolAssistedChats` is the UI-facing inverse. */
   setCodexMemorySetting?(setting: CodexMemorySetting, enabled: boolean): Promise<void>;
@@ -988,6 +990,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   consumeRateLimitResetCredit?(
     params: ConsumeRateLimitResetCreditParams,
   ): Promise<ConsumeRateLimitResetCreditOutcome>;
+  getCodexPermissions?(cwd?: string): Promise<CodexPermissionCatalog>;
   getCodexMemorySettings?(): Promise<CodexMemorySettings>;
   setCodexMemorySetting?(setting: CodexMemorySetting, enabled: boolean): Promise<void>;
   resetCodexMemories?(): Promise<void>;
@@ -1147,6 +1150,7 @@ export interface CodexAdapterConfig {
   approvalMode?: "untrusted" | "on-request" | "never";
   /** Sandbox mode for file/network isolation */
   sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
+  permissionProfile?: string;
   /** App-server effort identifier, advertised per model by model/list. */
   modelReasoningEffort?: EffortLevel;
   /**

@@ -949,6 +949,7 @@ export function WorkspaceInput({
       modelEffortLevelsByDisplayName={modelEffortLevelsByDisplayName}
       onModelChange={handleModelChange}
       isLoadingModels={isLoadingModels}
+      workspacePath={workspacePath}
       permissionMode={permissionMode}
       onPermissionModeChange={handlePermissionModeChange}
       planMode={planMode}

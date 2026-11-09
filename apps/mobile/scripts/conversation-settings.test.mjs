@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { initialConversationSettings, modelSelectionPatch, patchConversationSettings, projectRunConfig } from "../src/lib/conversation-settings.ts";
 import { createConversationSettingsWriter, createSettingsIntents } from "../src/lib/conversation-settings-writer.ts";
-import { dedupeModelsByPrettyName, parseServiceTiers, runSettingsFromConfig } from "../src/lib/models.ts";
+import { dedupeModelsByPrettyName, parseServiceTiers, runSettingsFromConfig, permissionShortLabel } from "../src/lib/models.ts";
+import { codexPermissionChoices } from "../../../packages/contracts/src/codex-permissions.ts";
 
 const a = { model: "chat-a", config: { modelReasoningEffort: "high", sandboxMode: "workspace-write", serviceTier: "ultrafast", goalMode: true, planMode: true } };
 const b = { model: "chat-b", config: { modelReasoningEffort: "low", sandboxMode: "read-only" } };
@@ -36,13 +37,34 @@ test("new chats remember accepted preferences but reset Plan/Goal, while deliber
 
 test("sheet edits change one conversation and preserve provider-specific effort and permission keys", () => {
   const changed = patchConversationSettings("codex", a, { model: "next", effortLevel: "FutureEffort", permissionMode: "read-only", fastMode: false });
-  assert.deepEqual(changed, { model: "next", config: { ...a.config, modelReasoningEffort: "FutureEffort", thinkingMode: true, sandboxMode: "read-only", serviceTier: "default" } });
+  assert.deepEqual(changed, { model: "next", config: { ...a.config, modelReasoningEffort: "FutureEffort", thinkingMode: true, sandboxMode: "read-only", permissionProfile: "", serviceTier: "default" } });
   assert.equal(a.model, "chat-a");
   assert.equal(patchConversationSettings("copilot_cli", b, { effortLevel: "" }).config.thinkingMode, false);
   const claude = patchConversationSettings("claude_code", { model: "opus", config: {} }, { effortLevel: "ultracode", permissionMode: "auto" });
   assert.equal(claude.config.ultracode, true);
   assert.equal(patchConversationSettings("claude_code", claude, { effortLevel: "medium" }).config.ultracode, false);
   assert.equal(patchConversationSettings("cursor", b, { permissionMode: "ask" }).config.mode, "ask");
+});
+
+test("native permission profiles survive conversation snapshots and legacy selection clears them", () => {
+  const profile = patchConversationSettings("codex", a, { permissionMode: "profile:project-edit" });
+  assert.equal(profile.config.permissionProfile, "project-edit");
+  assert.equal(runSettingsFromConfig("codex", profile.config).permissionMode, "profile:project-edit");
+  assert.deepEqual(projectRunConfig({ conversationSettings: profile }), { conversationSettings: profile });
+  assert.equal(patchConversationSettings("codex", profile, { permissionMode: "read-only" }).config.permissionProfile, "");
+  assert.equal(a.config.permissionProfile, undefined);
+});
+
+test("the phone shows one choice per built-in permission and readable native-profile labels", () => {
+  const catalog = { profilesSupported: true, requiresNamedProfile: false, allowedSandboxModes: null, allowedApprovalPolicies: null,
+    profiles: [":read-only", ":workspace", ":danger-full-access", "project-edit"].map((id) => ({ id, description: null, allowed: true })) };
+  const choices = codexPermissionChoices(catalog, "profile::workspace");
+  assert.equal(choices.length, 4);
+  assert.deepEqual(choices.slice(0, 3).map((choice) => choice.sandboxMode), ["read-only", "workspace-write", "danger-full-access"]);
+  assert.equal(choices[1].value, "profile::workspace");
+  assert.equal(permissionShortLabel("codex", "profile::workspace"), "Write");
+  assert.equal(permissionShortLabel("codex", "profile::danger-full-access"), "Full Access");
+  assert.equal(permissionShortLabel("codex", "profile:project-edit"), "project-edit");
 });
 
 test("the phone caches only run-setting keys, never provider credentials or execution paths", () => {

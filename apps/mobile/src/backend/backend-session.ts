@@ -445,6 +445,15 @@ class BackendSession {
    * this is for the moments a stale listing shows: opening the picker, or a
    * plugin installed on the Mac since the phone last connected.
    */
+  async getCodexPermissions(cwd?: string): Promise<import("@mains/contracts/codex-permissions").CodexPermissionCatalog> {
+    const transport = this.transport;
+    if (!transport) throw new Error("Connect to Mains to load Codex permissions.");
+    const result = await transport.invoke(CHANNELS.providers.getCodexPermissions, ["codex", cwd]) as ServiceResponse<import("@mains/contracts/codex-permissions").CodexPermissionCatalog>;
+    if (this.transport !== transport) throw new Error("The backend connection changed. Reopen permissions.");
+    if (!result.success) throw new Error(result.error);
+    return result.data;
+  }
+
   async refreshContextSources(
     providerId: string,
     workspacePath?: string | null,

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   accountInfo: undefined as AccountInfo | undefined,
   voiceCatalog: vi.fn(() => ({ data: undefined as RealtimeVoiceCatalog | undefined })),
   voiceSettings: vi.fn((_props: { catalog?: RealtimeVoiceCatalog | null }) => null),
+  permissionCatalog: { profilesSupported: true, profiles: [] as Array<{ id: string; description: string | null; allowed: boolean }>, allowedSandboxModes: null as string[] | null, allowedApprovalPolicies: null as string[] | null, requiresNamedProfile: false },
   memorySettings: {
     supported: true,
     memoriesEnabled: true,
@@ -29,6 +30,7 @@ vi.mock("@/lib/redux/api", () => ({
   useGetProviderAccountInfoQuery: () => ({ data: mocks.accountInfo, isLoading: false }),
   useGetProviderRealtimeVoicesQuery: mocks.voiceCatalog,
   useConsumeProviderRateLimitResetCreditMutation: () => [vi.fn(), { isLoading: false }],
+  useGetCodexPermissionsQuery: () => ({ currentData: mocks.permissionCatalog, refetch: vi.fn() }),
   useGetCodexMemorySettingsQuery: () => ({ data: mocks.memorySettings, isLoading: false, isFetching: false, error: null }),
   useSetCodexMemorySettingMutation: () => [mocks.setMemorySetting, { isLoading: false }],
   useResetCodexMemoriesMutation: () => [mocks.resetMemories, { isLoading: false }],
@@ -56,6 +58,7 @@ import CodexSettings from "./codex";
 
 beforeEach(() => {
   mocks.updateConfig.mockClear();
+  mocks.permissionCatalog = { profilesSupported: true, profiles: [], allowedSandboxModes: null, allowedApprovalPolicies: null, requiresNamedProfile: false };
   mocks.accountInfo = undefined;
   mocks.voiceCatalog.mockReset().mockReturnValue({ data: undefined });
   mocks.voiceSettings.mockClear();
@@ -68,6 +71,19 @@ beforeEach(() => {
 });
 
 describe("Codex account settings", () => {
+  it("offers allowed profiles and persists their native id rather than a sandbox value", async () => {
+    mocks.permissionCatalog.requiresNamedProfile = true;
+    mocks.permissionCatalog.profiles = [
+      { id: "project-edit", description: "Project files only", allowed: true },
+      { id: "forbidden-profile", description: "Blocked by policy", allowed: false },
+    ];
+    render(<CodexSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Codex permissions" }));
+    fireEvent.click(await screen.findByRole("option", { name: /project-edit/ }));
+    expect(screen.queryByRole("option", { name: /forbidden-profile/ })).toBeNull();
+    expect(mocks.updateConfig).toHaveBeenCalledWith({ permissionProfile: "project-edit" });
+  });
+
   it("shows a Google Cloud account as connected", () => {
     mocks.accountInfo = { account: { type: "gcp" }, requiresOpenaiAuth: false };
     render(<CodexSettings />);
@@ -138,7 +154,7 @@ describe("Codex sandbox settings", () => {
   it("only saves Full Access after confirmation", () => {
     render(<CodexSettings />);
     const chooseFullAccess = () => {
-      fireEvent.click(screen.getByRole("button", { name: "Sandbox mode" }));
+      fireEvent.click(screen.getByRole("button", { name: "Codex permissions" }));
       fireEvent.click(screen.getByRole("option", { name: /Full Access/ }));
     };
 
@@ -151,6 +167,7 @@ describe("Codex sandbox settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     expect(mocks.updateConfig).toHaveBeenCalledExactlyOnceWith({
       sandboxMode: "danger-full-access",
+      permissionProfile: "",
     });
   });
 });

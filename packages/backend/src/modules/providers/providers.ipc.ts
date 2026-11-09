@@ -118,6 +118,7 @@ export function registerProvidersIpc(): void {
     handle((id: string) => providersService.getRealtimeVoices(id)),
   );
 
+  ipcMain.handle(CHANNELS.providers.getCodexPermissions, handle((id: string, cwd?: string) => providersService.getCodexPermissions(id, cwd)));
   ipcMain.handle(
     CHANNELS.providers.getCodexMemorySettings,
     handle((id: string) => providersService.getCodexMemorySettings(id)),
@@ -265,6 +266,7 @@ export function unregisterProvidersIpc(): void {
     CHANNELS.providers.getRateLimits,
     CHANNELS.providers.consumeRateLimitResetCredit,
     CHANNELS.providers.getRealtimeVoices,
+    CHANNELS.providers.getCodexPermissions,
     CHANNELS.providers.getCodexMemorySettings,
     CHANNELS.providers.setCodexMemorySetting,
     CHANNELS.providers.resetCodexMemories,

@@ -139,6 +139,8 @@ afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_OAUTH;
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_TURN_LINEAGE;
   delete process.env.MAINS_CODEX_FIXTURE_RPC_ERROR;
+  delete process.env.MAINS_CODEX_FIXTURE_PROFILES;
+  delete process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS;
   await Promise.all(drivers.splice(0).map((driver) => driver.shutdown?.()));
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -146,6 +148,51 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it("sends named permissions without legacy sandbox overrides on create, resume, and fork", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-permission-profiles-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_PROFILES = JSON.stringify([{ id: "project-edit", description: "Project only", allowed: true }]);
+    process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS = JSON.stringify({ allowedPermissionProfiles: { "project-edit": true } });
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 1000, sandboxMode: "danger-full-access", permissionProfile: "project-edit" });
+    drivers.push(driver);
+    const acquired = await driver.createSession(request("profile-source"));
+    await driver.executePrompt(acquired.session, acquired.prompt, async () => {}, new AbortController().signal);
+    const resumed = await driver.resumeSession!({ runId: "profile-source", accountId: "account-1", execution: request("profile-source").execution, message: "Continue" });
+    await driver.executePrompt(resumed.session, resumed.prompt, async () => {}, new AbortController().signal);
+    await driver.forkSession!({ runId: "profile-fork", sourceRunId: "profile-source", accountId: "account-1", execution: request("profile-fork").execution, message: "Fork" });
+    const requests = readProtocolLog(logPath).filter((entry) => ["thread/start", "thread/resume", "thread/fork"].includes(String(entry.method)));
+    expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "thread/resume", "thread/fork"]);
+    for (const entry of requests) {
+      expect(entry.params).toMatchObject({ permissions: "project-edit", config: { model_reasoning_summary: "auto" } });
+      expect(entry.params).not.toHaveProperty("sandbox");
+      expect((entry.params as any).config).not.toHaveProperty("sandbox_workspace_write");
+    }
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "permissionProfile/list")?.params).toMatchObject({ cwd: request("profile-source").execution.cwd });
+  });
+
+  it("blocks forbidden permissions before a native thread is created", async () => {
+    process.env.MAINS_CODEX_FIXTURE_PROFILES = JSON.stringify([{ id: "forbidden", description: null, allowed: false }]);
+    const driver = createCodexDriver({ binary: fixtureBinary, permissionProfile: "forbidden" });
+    drivers.push(driver);
+    await expect(driver.createSession(request("forbidden-profile"))).rejects.toThrow("does not allow this profile");
+    await expect(driver.createSession({ ...request("missing-profile"), configSnapshot: { permissionProfile: "missing" } })).rejects.toThrow("unavailable");
+  });
+
+  it("keeps Chat read-only even with a writable default and a managed named-profile requirement", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-chat-permissions-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_PROFILES = JSON.stringify([{ id: ":read-only", description: null, allowed: true }, { id: "project-edit", description: null, allowed: true }]);
+    process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS = JSON.stringify({ allowedPermissionProfiles: { ":read-only": true, "project-edit": true } });
+    const driver = createCodexDriver({ binary: fixtureBinary, permissionProfile: "project-edit", sandboxMode: "danger-full-access" });
+    drivers.push(driver);
+    await driver.createSession({ ...request("readonly-profile"), mode: "chat", configSnapshot: { sandboxMode: "read-only", permissionProfile: "" } });
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/start")?.params).toMatchObject({ permissions: ":read-only" });
+  });
+
   it("broadcasts watched skill changes without requiring a running turn", async () => {
     vi.stubEnv("MAINS_CODEX_FIXTURE_SKILLS_CHANGED", "1");
     const send = vi.fn();

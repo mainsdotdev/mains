@@ -2,6 +2,7 @@ import { baseApi } from "./baseApi";
 import { appEvents } from "@/lib/transport/events";
 import type { RootState } from "../index";
 import { providerAccountCacheKey, providerCatalogConfigKey } from "@mains/backend/shared/provider-catalog";
+import type { CodexPermissionCatalog } from "@mains/contracts/codex-permissions";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModelServiceTier } from "@mains/contracts/run-settings";
 import type { DetectedClis } from "@mains/contracts/provider-cli";
@@ -377,6 +378,10 @@ export const providersApi = baseApi.injectEndpoints({
       keepUnusedDataFor: 300,
     }),
 
+    getCodexPermissions: builder.query<CodexPermissionCatalog, { id: string; workspacePath?: string }>({
+      query: ({ id, workspacePath }) => ({ handler: CHANNELS.providers.getCodexPermissions, args: [id, workspacePath] }),
+      providesTags: (_result, _error, { id }) => [{ type: "Providers", id }],
+    }),
     getCodexMemorySettings: builder.query<CodexMemorySettings, string>({
       query: (id) => ({
         handler: CHANNELS.providers.getCodexMemorySettings,
@@ -650,6 +655,7 @@ export const {
   useDisableProviderMutation,
   useGetProviderModelsQuery,
   useGetProviderRealtimeVoicesQuery,
+  useGetCodexPermissionsQuery,
   useGetCodexMemorySettingsQuery,
   useSetCodexMemorySettingMutation,
   useResetCodexMemoriesMutation,

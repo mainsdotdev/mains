@@ -532,6 +532,7 @@ const api = {
     },
     getRateLimits: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRateLimits, id),
     getRealtimeVoices: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRealtimeVoices, id),
+    getCodexPermissions: (id: string, cwd?: string) => ipcRenderer.invoke(CHANNELS.providers.getCodexPermissions, id, cwd),
     getCodexMemorySettings: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getCodexMemorySettings, id),
     setCodexMemorySetting: (id: string, setting: "memoriesEnabled" | "allowToolAssistedChats", enabled: boolean) =>
       ipcRenderer.invoke(CHANNELS.providers.setCodexMemorySetting, id, setting, enabled),
