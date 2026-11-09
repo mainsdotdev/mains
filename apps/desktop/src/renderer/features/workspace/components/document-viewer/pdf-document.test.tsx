@@ -37,6 +37,7 @@ describe("PDF document lifetime", () => {
     native.getDocument.mockReturnValue({ promise: Promise.resolve({ numPages: 1, getPage: vi.fn(async () => p) }), destroy });
     const view = render(<PdfDocument doc={doc} zoom={1} />);
     await screen.findByLabelText("Page 1");
+    await waitFor(() => expect(native.visible).toHaveLength(1));
     act(() => native.visible[0]([{ isIntersecting: true }]));
     await waitFor(() => expect(p.render).toHaveBeenCalledTimes(1));
     view.rerender(<PdfDocument doc={doc} zoom={2} />);
@@ -60,6 +61,7 @@ describe("PDF document lifetime", () => {
     native.getDocument.mockReturnValue({ promise: Promise.resolve({ numPages: 1, getPage: vi.fn(async () => p) }), destroy: vi.fn() });
     const view = render(<PdfDocument doc={doc} zoom={1} />);
     await screen.findByLabelText("Page 1");
+    await waitFor(() => expect(native.visible).toHaveLength(1));
     act(() => native.visible[0]([{ isIntersecting: true }]));
     await waitFor(() => expect(p.render).toHaveBeenCalledOnce());
     try {

@@ -8,6 +8,8 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.{ts,tsx}"],
     setupFiles: ["src/test/global-setup.ts"],
+    // JSDOM suites need CPU time inside their existing async deadlines.
+    maxWorkers: 2,
     coverage: {
       provider: "v8",
       include: ["src/main/**"],

@@ -270,6 +270,7 @@ const DISPATCH: Renderer[] = [
         status={eventToolStatus(ctx.event)}
         runId={typeof runId === "string" ? runId : undefined}
         mcpApp={mcpApp}
+        backgroundTask={(ctx.event.metadata?.task as TaskMetadata | undefined)?.taskType === "mcp_task"}
       />
     );
   },

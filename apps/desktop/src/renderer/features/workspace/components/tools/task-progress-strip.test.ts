@@ -4,6 +4,7 @@ import {
   type SubagentMetadata,
   type TaskMetadata,
 } from "./task-progress-strip";
+import { eventToolStatus } from "./_shared";
 
 // Payloads mirror what the Claude CLI actually produces: a `sleep` backgrounded
 // into a local_bash task (summary echoes the description, real output lives in
@@ -31,6 +32,28 @@ const AGENT_TASK: TaskMetadata = {
 };
 
 describe("selectTaskPresentation", () => {
+  it("shows an MCP server's current status inline after the tool call acknowledges backgrounding", () => {
+    const task: TaskMetadata = { taskType: "mcp_task", phase: "progress", status: "running", description: "Export report",
+      summary: "Writing 3 rows", isBackgrounded: true, backgroundActive: true };
+    expect(selectTaskPresentation(task)).toMatchObject({ tone: "running", label: "MCP task working", description: "Writing 3 rows" });
+    expect(eventToolStatus({ metadata: { status: "done", task } } as any)).toBe("running");
+    expect(selectTaskPresentation({ ...task, backgroundActive: false })).toMatchObject({ tone: "idle", label: "MCP task idle" });
+    expect(eventToolStatus({ metadata: { status: "done", task: { ...task, backgroundActive: false } } } as any)).toBe("queued");
+  });
+
+  it.each([
+    ["completed", "ok", "MCP task finished", "done"],
+    ["failed", "error", "MCP task failed", "error"],
+    ["stopped", "warn", "MCP task stopped", "canceled"],
+  ] as const)("uses the MCP task's %s outcome ahead of the tool acknowledgement", (status, tone, label, callStatus) => {
+    const task: TaskMetadata = { taskType: "mcp_task", phase: "completed", status, description: "Export report",
+      summary: "Export finished", outputFile: "/tmp/report.output",
+      resourceLinks: [{ uri: "https://example.test/report.csv", name: "Report" }] };
+    expect(selectTaskPresentation(task)).toMatchObject({ tone, label, description: "Export report",
+      detail: "Export finished\n\nReport: https://example.test/report.csv", outputFile: "/tmp/report.output" });
+    expect(eventToolStatus({ metadata: { status: "done", task } } as any)).toBe(callStatus);
+  });
+
   it("does not infer success when a background task leaves the live set", () => {
     expect(selectTaskPresentation({ taskType: "local_agent", status: "running", isBackgrounded: true, backgroundActive: false }))
       .toMatchObject({ tone: "idle", label: "Subagent idle" });

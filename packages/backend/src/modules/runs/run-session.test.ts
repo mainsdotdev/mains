@@ -1428,6 +1428,66 @@ describe("RunSession", () => {
   // round-tripping: the spawning call's provider id and the child's link to
   // it. Projected through the real repo into the real (in-memory) DB.
   describe("project — subagent parent linkage", () => {
+    it("persists independent MCP task outcomes and files after their tool acknowledgements", async () => {
+      const session = makeSession();
+      const cs = { runId: "r1", state: { hasAssistantContent: false }, toolCallIndex: new Map(), taskIndex: new Map(),
+        permissionMode: createClaudePermissionModeRef("default") } as any;
+      const project = async (message: Record<string, unknown>) => {
+        for (const event of mapSDKMessage({ session_id: "sdk", uuid: "u", parent_tool_use_id: null, ...message } as any, cs))
+          await session.project(event);
+      };
+      await project({ type: "assistant", message: { role: "assistant", content: ["one", "two"].map((id) => (
+        { type: "tool_use", id, name: "mcp__reports__export", input: { id } }
+      )) } });
+      for (const id of ["one", "two"]) {
+        await project({ type: "system", subtype: "task_started", task_id: `task-${id}`, run_id: "001",
+          tool_use_id: id, task_type: "mcp_task", description: `Export ${id}` });
+        await project({ type: "user", message: { role: "user", content: [
+          { type: "tool_result", tool_use_id: id, content: "Running in background" },
+        ] } });
+      }
+      await project({ type: "system", subtype: "task_progress", task_id: "task-one", run_id: "001", summary: "Writing rows" });
+      const pending = await runsRepo.findToolCallsByRun("r1");
+      expect(pending).toHaveLength(2);
+      expect(pending[0].metadata?.task).toMatchObject({ taskType: "mcp_task", status: "running", summary: "Writing rows" });
+      const resourceLinks = [{ uri: "https://example.test/one.csv", name: "Export one", mimeType: "text/csv" }];
+      await project({ type: "system", subtype: "task_updated", task_id: "task-one", run_id: "001", patch: { status: "completed" } });
+      await project({ type: "system", subtype: "task_notification", task_id: "task-one", run_id: "001", status: "completed",
+        summary: "Exported 3 rows", output_file: "/tmp/one.output", resource_links: resourceLinks });
+      await project({ type: "system", subtype: "task_notification", task_id: "task-two", run_id: "001", status: "failed",
+        summary: "Service unavailable" });
+      await session.finalize({ status: "succeeded" });
+      const calls = await runsRepo.findToolCallsByRun("r1");
+      expect(calls[0].metadata?.task).toMatchObject({ taskId: "task-one", status: "completed", summary: "Exported 3 rows",
+        outputFile: "/tmp/one.output", resourceLinks });
+      expect(calls[1].metadata?.task).toMatchObject({ taskId: "task-two", status: "failed", error: "Service unavailable" });
+      expect(calls.every((call) => !call.metadata?.subagent)).toBe(true);
+    });
+
+    it.each(["succeeded", "failed", "canceled"] as const)("does not infer MCP task success when its observer ends with %s", async (status) => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "mcp__reports__export", metadata: { phase: "start", toolCallId: "export" } });
+      await session.project({ type: "task", phase: "started", taskId: "report", toolCallId: "export", taskType: "mcp_task",
+        providerRunId: "001", status: "running", isBackgrounded: true, backgroundActive: true });
+      await session.finalize({ status });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({
+        taskId: "report", status: "stopped", backgroundActive: false,
+      });
+    });
+
+    it("clears a previous MCP execution's resource links when it resumes", async () => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "mcp__reports__export", metadata: { phase: "start", toolCallId: "export" } });
+      const task = { type: "task" as const, taskId: "report", toolCallId: "export", taskType: "mcp_task" };
+      await session.project({ ...task, phase: "completed", providerRunId: "001", status: "completed",
+        resourceLinks: [{ uri: "https://example.test/old.csv", name: "Old" }] });
+      await session.project({ ...task, phase: "started", providerRunId: "002", status: "running" });
+      await session.project({ ...task, phase: "completed", providerRunId: "001", status: "completed",
+        resourceLinks: [{ uri: "https://example.test/old.csv", name: "Late old result" }] });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({ providerRunId: "002", status: "running" });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).not.toHaveProperty("resourceLinks");
+    });
+
     it.each([undefined, "002"])("does not reopen a settled subagent with execution %s from a late running event", async (providerRunId) => {
       const session = makeSession();
       await session.project({ type: "tool_call", toolName: "Agent", metadata: { phase: "start", toolCallId: "late-running" } });

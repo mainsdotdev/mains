@@ -668,6 +668,8 @@ export interface SDKSystemMessage {
   last_tool_name?: string;
   summary?: string;
   output_file?: string;
+  /** CLI-owned links from a background MCP task's final result. */
+  resource_links?: unknown[];
   skip_transcript?: boolean;
   usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number };
   // subtype: "task_updated" — a wire-safe subset of the changed task fields
@@ -2075,6 +2077,7 @@ export function mapTaskMessage(
     case "task_notification": {
       const status = msg.status === "completed" || msg.status === "failed" || msg.status === "stopped" ? msg.status : undefined;
       return { ...base, phase: "completed", status, summary: msg.summary, outputFile: msg.output_file,
+        resourceLinks: status === "completed" && task.taskType === "mcp_task" ? msg.resource_links : undefined,
         usage, error: status === "failed" ? msg.summary : undefined };
     }
     default:
@@ -2531,6 +2534,7 @@ export function mapSDKMessage(
         const matchingBackground = background && background.run_id === systemMsg.run_id;
         const taskEvent = mapTaskMessage(matchingBackground ? {
           ...systemMsg,
+          task_type: systemMsg.task_type ?? background.task_type,
           parent_task_id: systemMsg.parent_task_id ?? background.parent_task_id,
           is_backgrounded: systemMsg.is_backgrounded ?? true,
           ambient: systemMsg.ambient ?? background.ambient ?? false,
@@ -3450,6 +3454,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     const options: SDKOptions = {
       ...processOptions,
+      // Only model runs consume native task notifications. App/control hosts
+      // need the synchronous result, and one-shot generation has no task owner.
+      ...(runId ? { env: { ...processOptions.env,
+        CLAUDE_AUTO_BACKGROUND_TASKS: processOptions.env?.CLAUDE_AUTO_BACKGROUND_TASKS ?? "1",
+      } } : {}),
       model,
       ...buildClaudePermissionModeOptions(
         permissionMode,

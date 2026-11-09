@@ -2456,6 +2456,37 @@ describe("mapSDKMessage native task identity", () => {
   const snapshot = (cs: any, tasks: Record<string, unknown>[]) =>
     mapSDKMessage(system("background_tasks_changed", { tasks }), cs);
 
+  it("keeps MCP status and final resource links on their own call after its acknowledgement", () => {
+    const cs = makeClaudeSession();
+    const background = { task_id: "report", run_id: "001", task_type: "mcp_task", description: "Build report" };
+    snapshot(cs, [background]);
+    mapSDKMessage(system("task_started", { task_id: "report", run_id: "001", tool_use_id: "call-report" }), cs);
+    cs.toolCallIndex.set("call-report", { toolName: "mcp__reports__build", input: {} });
+    mapSDKMessage({ type: "user", parent_tool_use_id: null, message: { role: "user", content: [
+      { type: "tool_result", tool_use_id: "call-report", content: "Running in the background" },
+    ] } } as any, cs);
+    expect(mapSDKMessage(system("task_progress", { task_id: "report", run_id: "001", summary: "Exporting 3 rows" }), cs))
+      .toContainEqual(expect.objectContaining({ type: "task", taskType: "mcp_task", toolCallId: "call-report",
+        status: "running", summary: "Exporting 3 rows" }));
+    const resourceLinks = [{ uri: "https://example.test/report.csv", name: "Report", mimeType: "text/csv" }];
+    mapSDKMessage(system("task_updated", { task_id: "report", run_id: "001", patch: { status: "completed" } }), cs);
+    const final = system("task_notification", { task_id: "report", run_id: "001", status: "completed",
+      summary: "Exported 3 rows", output_file: "/tmp/report.output", resource_links: resourceLinks });
+    expect(mapSDKMessage(final, cs)).toContainEqual(expect.objectContaining({ type: "task", taskType: "mcp_task",
+      toolCallId: "call-report", status: "completed", summary: "Exported 3 rows", resourceLinks }));
+    expect(mapSDKMessage(final, cs)).toEqual([]);
+    expect(mapSDKMessage(system("task_progress", { task_id: "report", run_id: "001", summary: "Late progress" }), cs)).toEqual([]);
+  });
+
+  it.each(["failed", "stopped"])("retains the MCP task's %s outcome without publishing result links", (status) => {
+    const cs = makeClaudeSession();
+    mapSDKMessage(system("task_started", { task_id: "report", tool_use_id: "call-report", task_type: "mcp_task" }), cs);
+    const [event] = mapSDKMessage(system("task_notification", { task_id: "report", status, summary: "Export stopped",
+      resource_links: [{ uri: "https://example.test/incomplete", name: "Incomplete" }] }), cs);
+    expect(event).toMatchObject({ type: "task", phase: "completed", status, taskType: "mcp_task", toolCallId: "call-report" });
+    expect(event).toHaveProperty("resourceLinks", undefined);
+  });
+
   it("uses agent_id for child messages even without parent_tool_use_id", () => {
     const cs = makeClaudeSession();
     start(cs, "agent-1", "spawn-1");

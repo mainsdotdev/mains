@@ -260,6 +260,8 @@ export interface WorkRunTaskEvent {
   summary?: string;
   /** Path to the task's captured output — where a backgrounded command's real output lands. */
   outputFile?: string;
+  /** Provider-owned resource links from a completed background MCP task. */
+  resourceLinks?: unknown[];
   /** Most recent tool the task ran (progress phase). */
   lastToolName?: string;
   /** Token/tool/duration totals reported for the task. */

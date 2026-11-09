@@ -10,6 +10,7 @@ import {
 import { ArrowUp } from "@/components/ui/icons";
 import { Button, SquareSpinner, Text } from "@/components/ui";
 import type { RunEvent } from "../../types";
+import { subagentStateOf, type SubagentTaskMeta } from "../../lib/subagent-identity";
 
 const ToolDiffBodyContent = lazy(() => import("./tool-diff-body"));
 
@@ -33,6 +34,12 @@ export function useToolStatus(): ToolStatus {
 
 /** Read a normalized `ToolStatus` off an event's metadata (unknown → "done"). */
 export function eventToolStatus(event: RunEvent): ToolStatus {
+  const task = event.metadata?.task as SubagentTaskMeta | undefined;
+  if (task?.taskType === "mcp_task") {
+    // Its tool_result only acknowledges backgrounding; the task owns the outcome.
+    const state = subagentStateOf({ toolName: "", callStatus: "", task });
+    return { running: "running", idle: "queued", done: "done", failed: "error", stopped: "canceled" }[state] as ToolStatus;
+  }
   const raw = event.metadata?.status;
   if (
     raw === "running" ||

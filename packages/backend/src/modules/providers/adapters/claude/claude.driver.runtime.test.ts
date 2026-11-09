@@ -137,6 +137,88 @@ esac
     return prepared;
   }
 
+  it.each([undefined, "0"])("opts model runs into native MCP tasks while preserving override %s", async (override) => {
+    vi.stubEnv("CLAUDE_AUTO_BACKGROUND_TASKS", override);
+    const driver = createClaudeDriver({ settingSources: [] });
+    const request = { runId: "mcp-tasks", accountId: "account-1", goal: "Build report",
+      execution: { workspaceId: null, cwd: fixture } };
+    const first = await driver.createSession(request);
+    const resumed = await driver.resumeSession!({ ...request, message: "Continue" });
+    const forked = await driver.forkSession!({ ...request, runId: "mcp-fork", sourceRunId: request.runId, message: "Fork" });
+    try {
+      for (const prepared of [first, resumed, forked]) {
+        expect((prepared.session as any).options.env.CLAUDE_AUTO_BACKGROUND_TASKS).toBe(override ?? "1");
+        // With no separate task-stop UI, global Stop must still kill background work.
+        expect((prepared.session as any).options.perTaskStopAffordance).toBeUndefined();
+      }
+    } finally {
+      await driver.shutdown?.();
+    }
+  });
+
+  it("drains MCP notifications after the foreground result without turning a task failure into a run failure", async () => {
+    const events: WorkRunEvent[] = [];
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close, async *[Symbol.asyncIterator]() {
+      const base = { session_id: options.sessionId, uuid: "u", parent_tool_use_id: null };
+      yield { ...base, type: "assistant", message: { role: "assistant", content: [
+        { type: "tool_use", id: "export", name: "mcp__reports__export", input: {} },
+      ] } };
+      yield { ...base, type: "system", subtype: "task_started", task_id: "report", run_id: "001",
+        tool_use_id: "export", task_type: "mcp_task", description: "Export report" };
+      yield { ...base, type: "user", message: { role: "user", content: [
+        { type: "tool_result", tool_use_id: "export", content: "Running in background" },
+      ] } };
+      yield { ...base, type: "result", subtype: "success", stop_reason: "end_turn", result: "Export started",
+        is_error: false, total_cost_usd: 0, num_turns: 1, duration_ms: 1, modelUsage: {}, permission_denials: [] };
+      yield { ...base, type: "system", subtype: "task_progress", task_id: "report", run_id: "001", summary: "Writing rows" };
+      yield { ...base, type: "system", subtype: "task_notification", task_id: "report", run_id: "001",
+        status: "failed", summary: "Export service unavailable" };
+    } }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await driver.createSession({ runId: "mcp-late-result", accountId: "account-1", goal: "Export",
+      execution: { workspaceId: null, cwd: fixture } });
+    try {
+      const outcome = await driver.executePrompt(prepared.session, prepared.prompt, (event) => { events.push(event); }, new AbortController().signal);
+      expect(outcome.status).toBe("succeeded");
+      expect(events).toContainEqual(expect.objectContaining({ type: "task", toolCallId: "export", taskType: "mcp_task",
+        status: "running", summary: "Writing rows" }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "task", toolCallId: "export", taskType: "mcp_task",
+        status: "failed", error: "Export service unavailable" }));
+    } finally {
+      await driver.cleanup?.(prepared.session);
+    }
+  });
+
+  it("interrupts background MCP work on Stop and discards its late result", async () => {
+    const events: WorkRunEvent[] = [];
+    const request = vi.fn().mockResolvedValue({});
+    const abort = new AbortController();
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close, request, async *[Symbol.asyncIterator]() {
+      const base = { session_id: options.sessionId, uuid: "u", parent_tool_use_id: null };
+      yield { ...base, type: "system", subtype: "task_started", task_id: "report", run_id: "001",
+        tool_use_id: "export", task_type: "mcp_task", description: "Export report" };
+      ready();
+      await new Promise<void>((resolve) => options.abortController.signal.addEventListener("abort", () => resolve(), { once: true }));
+      yield { ...base, type: "system", subtype: "task_notification", task_id: "report", run_id: "001",
+        status: "completed", resource_links: [{ uri: "https://example.test/late.csv", name: "Late" }] };
+    } }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await driver.createSession({ runId: "mcp-stop", accountId: "account-1", goal: "Export",
+      execution: { workspaceId: null, cwd: fixture } });
+    const execution = driver.executePrompt(prepared.session, prepared.prompt, (event) => { events.push(event); }, abort.signal);
+    await started;
+    abort.abort();
+    await expect(execution).resolves.toMatchObject({ status: "canceled" });
+    expect(request).toHaveBeenCalledWith({ subtype: "interrupt", cancel_queued: true });
+    expect(sdk.close).toHaveBeenCalledOnce();
+    expect(events.filter((event) => event.type === "task")).toEqual([
+      expect.objectContaining({ phase: "started", taskType: "mcp_task" }),
+    ]);
+    await driver.cleanup?.(prepared.session);
+  });
+
   it.each([undefined, "continue", "block"] as const)("preserves the hook failure policy %s", async (onFailure) => {
     const failure = new Error("hook failed");
     const driver = createClaudeDriver({ settingSources: [], hooks: {
@@ -623,6 +705,7 @@ console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"avai
     try {
       await Promise.all([driver.readMcpAppResource!(input), driver.readMcpAppResource!(input)]);
       expect(sdk.query.mock.calls.length).toBe(1);
+      expect(sdk.query.mock.calls[0][0].options.env.CLAUDE_AUTO_BACKGROUND_TASKS).toBeUndefined();
       expect(resource).toHaveBeenCalledTimes(2);
     } finally { await driver.shutdown?.(); }
     expect(sdk.close).toHaveBeenCalledTimes(1);

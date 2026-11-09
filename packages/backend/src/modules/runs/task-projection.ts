@@ -8,7 +8,7 @@ const TERMINAL_TASK_STATUSES = new Set([
   "stopped",
 ]);
 const RESET_TASK_OUTCOME = {
-  phase: null, status: null, summary: null, outputFile: null, lastToolName: null,
+  phase: null, status: null, summary: null, outputFile: null, resourceLinks: null, lastToolName: null,
   usage: null, error: null, skipTranscript: null, isBackgrounded: null, backgroundActive: null, ambient: null,
 };
 
@@ -129,6 +129,7 @@ export function createTaskProjection(runId: string, toolProjection: ToolAnchors)
       // Where a backgrounded command's real output landed. The run itself never
       // carries that output, so this path is the only handle on it.
       outputFile: event.outputFile ?? (newExecution ? null : undefined),
+      resourceLinks: lateProgress ? undefined : event.resourceLinks ?? (newExecution ? null : undefined),
       lastToolName: event.lastToolName ?? (newExecution ? null : undefined),
       usage: event.usage ?? (newExecution ? null : undefined),
       error: lateProgress ? undefined : event.error ?? (newExecution ? null : undefined),
@@ -154,7 +155,7 @@ export function createTaskProjection(runId: string, toolProjection: ToolAnchors)
         const metadata = call.metadata as Record<string, unknown> | null;
         const subagent = metadata?.subagent as { phase?: string } | undefined;
         const task = metadata?.task as
-          | { phase?: string; status?: string; error?: string }
+          | { phase?: string; status?: string; error?: string; taskType?: string }
           | undefined;
         const patch: Record<string, unknown> = {};
 
@@ -169,7 +170,10 @@ export function createTaskProjection(runId: string, toolProjection: ToolAnchors)
           task.phase !== "completed" &&
           !TERMINAL_TASK_STATUSES.has(task.status ?? "")
         ) {
-          patch.task = { status: settledState, updatedAt: Date.now() };
+          // A foreground answer cannot prove that a remote MCP job succeeded.
+          // Once the query closes, this host is no longer observing that job.
+          patch.task = { status: task.taskType === "mcp_task" ? "stopped" : settledState,
+            backgroundActive: false, updatedAt: Date.now() };
         }
 
         if (Object.keys(patch).length === 0) continue;
