@@ -912,7 +912,6 @@ export const runsService = {
               },
             ],
           });
-          await runsService.updateRun(runId, { title: args.title });
           return {
             id: runId,
             taskKey: args.taskKey,
@@ -925,6 +924,9 @@ export const runsService = {
           };
         },
         async persist(link) {
+          // The coordinator already owns the created worker before either
+          // checkpoint. A retry must save this link, never execute work again.
+          await runsService.updateRun(link.id, { title: link.title });
           await insertRunInputArtifact(run.id, {
             type: "artifact",
             kind: "report",

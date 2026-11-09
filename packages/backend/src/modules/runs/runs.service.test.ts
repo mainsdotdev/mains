@@ -230,6 +230,58 @@ describe("runsService", () => {
       } finally { await runsService.stopRealtime({ ...h.payload, connectionId: "next-call" }); h.voice({ type: "closed", reason: "ended" }); }
     });
 
+    it("does not execute a delegated task twice when its title checkpoint fails", async () => {
+      const space = createSpace(db, { providerId: "codex", mode: "chat" });
+      const h = voiceFixture(false, space.id);
+      const worker = createRun(db, { providerId: "codex", spaceId: space.id, mode: "chat", status: "running" });
+      const execute = vi.spyOn(runsService, "executeRun").mockResolvedValue({ runId: worker.id });
+      const update = vi.spyOn(runsService, "updateRun");
+      try {
+        await runsService.startRealtime(h.payload);
+        update.mockRejectedValueOnce(new Error("Title checkpoint failed"));
+        const tools = h.startRealtime.mock.calls[0][0].voiceTools!;
+        const args = { taskKey: "hero", title: "Hero refactor", prompt: "Refactor the hero" };
+        await expect(tools.start(args)).rejects.toThrow("checkpoint failed");
+        await expect(tools.start(args)).resolves.toMatchObject({ runId: worker.id, reused: true });
+        expect(execute).toHaveBeenCalledOnce();
+        const cards = (await runsRepo.findArtifactsByRun(h.run.id)).filter((artifact) => artifact.metadata?.kind === "voice-task");
+        expect(cards).toHaveLength(1); expect(cards[0].metadata?.voiceTask).toMatchObject({ id: worker.id, taskKey: "hero" });
+        expect((await runsService.getRunById(worker.id))?.title).toBe(args.title);
+      } finally { await runsService.stopRealtime(h.payload); }
+    });
+
+    it("persists a late delegated worker after voice closes and recovers it in a new call", async () => {
+      const space = createSpace(db, { providerId: "codex", mode: "chat" });
+      const h = voiceFixture(false, space.id);
+      const worker = createRun(db, { providerId: "codex", spaceId: space.id, mode: "chat", status: "running" });
+      let resolveWorker!: (result: { runId: string }) => void;
+      const created = new Promise<{ runId: string }>((resolve) => { resolveWorker = resolve; });
+      const execute = vi.spyOn(runsService, "executeRun").mockReturnValue(created);
+      const cancel = vi.spyOn(runsService, "cancelRun");
+      try {
+        await runsService.startRealtime(h.payload);
+        const tools = h.startRealtime.mock.calls[0][0].voiceTools!;
+        const args = { taskKey: "hero", title: "Late hero refactor", prompt: "Refactor the hero" };
+        const starting = tools.start(args);
+        await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+        await runsService.stopRealtime(h.payload);
+        resolveWorker({ runId: worker.id });
+        await expect(starting).resolves.toMatchObject({ runId: worker.id, status: "started" });
+        await expect(tools.send({ runId: worker.id, message: "Stale correction", messageId: "stale" })).rejects.toThrow("ended");
+        const cards = (await runsRepo.findArtifactsByRun(h.run.id)).filter((artifact) => artifact.metadata?.kind === "voice-task");
+        expect(cards).toHaveLength(1); expect(cards[0].metadata?.voiceTask).toMatchObject({ id: worker.id, taskKey: "hero" });
+        await runsService.startRealtime({ ...h.payload, connectionId: "next-call" });
+        const next = h.startRealtime.mock.calls[1][0].voiceTools!;
+        await expect(next.start(args)).resolves.toMatchObject({ runId: worker.id, reused: true });
+        expect(execute).toHaveBeenCalledOnce(); expect(cancel).not.toHaveBeenCalled();
+        expect((await runsService.getRunById(worker.id))?.status).toBe("running");
+      } finally {
+        resolveWorker({ runId: worker.id });
+        await runsService.stopRealtime({ ...h.payload, connectionId: "next-call" });
+        h.voice({ type: "closed", reason: "ended" });
+      }
+    });
+
     it("creates a blank conversation with selected settings without writing a prompt or starting work", async () => {
       createProvider(db, { id: "codex" });
       const space = createSpace(db, { providerId: "codex", mode: "work" });
