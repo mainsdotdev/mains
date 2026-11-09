@@ -63,6 +63,8 @@ interface SelectBaseProps<T extends string = string> {
   disabled?: boolean;
   size?: SelectSize;
   onOpenChange?: (open: boolean) => void;
+  /** Keep the default anchored spring, or reveal vertically without scaling the options. */
+  animationDirection?: "origin" | "up" | "down";
   /** Show each option's full description in a tooltip on hover or focus. */
   showOptionDescriptionTooltip?: boolean;
   searchable?: boolean;
@@ -99,6 +101,7 @@ export default function Select<T extends string = string>(
     disabled,
     size = "md",
     onOpenChange,
+    animationDirection = "origin",
     showOptionDescriptionTooltip = false,
     searchable = props.multiple ?? false,
     searchPlaceholder = "Search options",
@@ -199,14 +202,14 @@ export default function Select<T extends string = string>(
       top: rect.bottom,
       left: rect.left,
       width: rect.width,
-      // Preserve the 15rem cap while leaving room at the viewport edge.
+      // Multiple selection gets a little more room for its taller rows.
       maxHeight: Math.max(
         0,
-        Math.min(15 * rootFontSize, window.innerHeight - rect.bottom - 8) -
+        Math.min((props.multiple ? 18 : 15) * rootFontSize, window.innerHeight - rect.bottom - 8) -
           (searchable ? 44 : 0),
       ),
     });
-  }, [searchable]);
+  }, [props.multiple, searchable]);
 
   const openMenu = (preferredIndex: number, focusSearch = searchable) => {
     setQuery("");
@@ -510,11 +513,14 @@ export default function Select<T extends string = string>(
           <div
             ref={dropdownRef}
             data-dropdown-portal="true"
+            data-animation-direction={animationDirection}
             onKeyDown={handleListboxKeyDown}
             onMouseDown={(event) => event.stopPropagation()}
             className={`fixed z-(--z-modal-critical)
               overflow-hidden rounded-b-xl border border-t-0 border-primary-950/10 shadow-lg dark:border-primary/10
-              ${animateIn ? "animate-dropdown-in" : "dropdown-prewarm"}
+              ${animationDirection !== "origin"
+                ? `dropdown-vertical ${animateIn ? "animate-dropdown-vertical-in" : "dropdown-prewarm-vertical"}`
+                : animateIn ? "animate-dropdown-in" : "dropdown-prewarm"}
               origin-top
                bg-primary-50  dark:bg-primary-950`}
             style={{
@@ -581,16 +587,17 @@ export default function Select<T extends string = string>(
                         : undefined
                     }
                     className={`
-                      flex w-full cursor-pointer items-center gap-1 px-3 py-1 rounded-[10px] text-left ${OPTION_SIZE[size]}
+                      flex w-full cursor-pointer items-center px-3 text-left ${OPTION_SIZE[size]}
+                      ${props.multiple ? "gap-2 rounded-lg py-1.5" : "gap-1 rounded-[10px] py-1"}
                       text-primary-900 transition-colors focus:outline-none dark:text-primary
                       hover:bg-primary-950/5 focus:bg-primary-950/5 dark:hover:bg-primary/5 dark:focus:bg-primary/5
-                      ${isSelected || isActive ? "bg-primary-950/5 dark:bg-primary/10" : ""}
+                      ${isSelected || !props.multiple && isActive ? "bg-primary-950/5 dark:bg-primary/10" : isActive ? "bg-primary-950/5 dark:bg-primary/5" : ""}
                     `}
                   >
                     {option ? (
                       <>
                         {props.multiple && (
-                          <CheckboxMark checked={isSelected} className="mr-1" />
+                          <CheckboxMark checked={isSelected} />
                         )}
                         {option.icon}
                       </>

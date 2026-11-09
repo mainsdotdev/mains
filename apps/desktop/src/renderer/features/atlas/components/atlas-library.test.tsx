@@ -20,7 +20,8 @@ const mocks = vi.hoisted(() => ({
   empty: [],
   items: [] as AtlasListItem[],
   generated: [] as AtlasGeneratedFile[],
-  list: vi.fn(),
+  list: vi.fn(), setTags: vi.fn(),
+  tags: [{ id: "react", name: "React", count: 1 }, { id: "ts", name: "TypeScript", count: 1 }],
   queryResult: undefined as ((options: AtlasLibraryOptions) => AtlasLibraryPage) | undefined,
   previewImages: {} as Record<string, string>,
   fetching: false,
@@ -28,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   fetchApps: vi.fn(), openWith: vi.fn(), openWithApp: true, appsLoading: false,
   appsByPath: {} as Record<string, FileHandlerApp[]>,
   bridgeStatus: undefined as { backends: Array<{ backendId: string; label: string; online: boolean | null; lastSeen: string | null; platform: string | null }> } | undefined,
-  resolveAttachmentPath: vi.fn(), resolveFilePath: vi.fn(),
+  resolveAttachmentPath: vi.fn(), resolveFilePath: vi.fn(), resolveAtlasFile: vi.fn(),
 }));
 
 vi.mock("@/lib/redux/api", () => ({
@@ -49,7 +50,8 @@ vi.mock("@/lib/redux/api/atlasApi", () => ({
       ...mocks.items.map(savedEntry), ...mocks.generated.map((file) => generatedEntry(file)),
     ]), isFetching: mocks.fetching || options.page === mocks.pendingPage, refetch: vi.fn() };
   },
-  useListAtlasTagsQuery: () => ({ data: [] }),
+  useListAtlasTagsQuery: () => ({ data: mocks.tags }),
+  useSetAtlasTagsMutation: () => [mocks.setTags, { isLoading: false }],
   useEnrichAtlasBookmarkMutation: () => [vi.fn(), {}],
   useCreateAtlasPageMutation: () => [mocks.create, { isLoading: false }],
   useUpdateAtlasItemMutation: () => [vi.fn(), {}],
@@ -65,7 +67,7 @@ vi.mock("@/hooks/use-space-provider-variant", async () => {
 });
 vi.mock("@/lib/transport", () => ({ appApi: { runArtifacts: {
   resolveAttachmentPath: mocks.resolveAttachmentPath, resolveFilePath: mocks.resolveFilePath,
-} }, getTransport: () => mocks.transport }));
+}, atlas: { resolveFile: mocks.resolveAtlasFile } }, getTransport: () => mocks.transport }));
 vi.mock("@/features/bridge/hooks/use-bridge", () => ({ useBridgeStatus: () => ({ data: mocks.bridgeStatus }) }));
 vi.mock("@/hooks/use-document-viewer", () => ({ useDocumentViewer: () => ({ open: vi.fn() }) }));
 vi.mock("@/hooks/use-local-image-url", () => ({ useLocalImageUrl: (path?: string) => path ? "mains-localimg://preview" : undefined }));
@@ -137,6 +139,8 @@ beforeEach(() => {
   mocks.appsByPath = {};
   mocks.bridgeStatus = undefined;
   mocks.openWith.mockResolvedValue({ success: true });
+  mocks.resolveAtlasFile.mockResolvedValue({ success: true, data: null });
+  mocks.setTags.mockReturnValue({ unwrap: async () => ({}) });
   vi.stubGlobal("api", { shell: { openFileWithBundle: mocks.openWith } });
   mocks.create.mockImplementation(() => ({ unwrap: async () => ({ item: { id: "new-page" } }) }));
 });
@@ -176,6 +180,68 @@ describe("Atlas bookmark tags", () => {
   });
 });
 
+describe("Tags across Atlas item types", () => {
+  it.each([
+    ["page", "grid"], ["page", "list"], ["file", "grid"], ["file", "list"], ["image", "grid"], ["image", "list"],
+  ] as const)("displays and edits tags on a saved %s in %s view", async (kind, layout) => {
+    mocks.items = [{ id: "saved", accountId: "account", kind, title: "Tagged item", tags: [{ id: "react", name: "React", source: "user" }],
+      metadata: null, collectionId: null, sourceRunId: null, sourceKey: null, path: kind === "image" ? "/atlas/image.png" : null,
+      fileName: null, mimeType: null, byteSize: null, isFavorite: false, trashedAt: null,
+      version: 1, createdAt: "2026-10-07", updatedAt: "2026-10-07" }];
+    setup(`/atlas?type=${kind}&layout=${layout}`);
+    expect(screen.getByRole("button", { name: "#React" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Tagged item" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit tags" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Edit tags" }));
+    fireEvent.click(dialog.getByRole("button", { name: "Tags" }));
+    fireEvent.click(screen.getByRole("option", { name: "TypeScript" }));
+    fireEvent.keyDown(screen.getByRole("searchbox", { name: "Search tags" }), { key: "Escape" });
+    fireEvent.click(dialog.getByRole("button", { name: "Save tags" }));
+    await waitFor(() => expect(mocks.setTags).toHaveBeenCalledWith({ accountId: "account", id: "saved", tags: ["react", "ts"] }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "#React" }));
+    expect(mocks.list).toHaveBeenLastCalledWith(expect.objectContaining({ tagId: "react" }));
+  });
+
+  it("offers tag creation for an untagged saved item", () => {
+    mocks.items = [{ id: "page", accountId: "account", kind: "page", title: "No tags", metadata: null,
+      collectionId: null, sourceRunId: null, sourceKey: null, path: null, fileName: null, mimeType: null, byteSize: null,
+      isFavorite: false, trashedAt: null, version: 1, createdAt: "2026-10-07", updatedAt: "2026-10-07" }];
+    setup("/atlas?type=page");
+    fireEvent.click(screen.getByRole("button", { name: "Actions for No tags" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add tags" }));
+    expect(screen.getByRole("dialog", { name: "Edit tags" })).toBeTruthy();
+  });
+
+  it("keeps unsaved generated files on the existing Save to Atlas path", () => {
+    mocks.generated = [{ sourceKey: "generated", runId: "run", runTitle: "Images", collectionId: null, kind: "image",
+      path: "/generated.png", fileName: "generated.png", mimeType: "image/png", byteSize: 1, modifiedAt: "2026-10-07" }];
+    setup("/atlas?type=image");
+    fireEvent.click(screen.getByRole("button", { name: "List view" }));
+    expect(screen.getByRole("list", { name: "Atlas items" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Actions for generated.png" }));
+    expect(screen.getByRole("menuitem", { name: "Save to Atlas" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Add tags|Edit tags/ })).toBeNull();
+  });
+});
+
+describe("Page cover previews", () => {
+  it.each(["grid", "list"])("resolves the Page cover behind its icon in %s view and falls back if the image fails", async (layout) => {
+    mocks.resolveAtlasFile.mockResolvedValue({ success: true, data: "/atlas/cover.png" });
+    mocks.items = [{ id: "page", accountId: "account", kind: "page", title: "Covered page", metadata: { coverFileId: "cover", icon: "emoji:😁" },
+      collectionId: null, sourceRunId: null, sourceKey: null, path: null, fileName: null, mimeType: null, byteSize: null,
+      isFavorite: false, trashedAt: null, version: 1, createdAt: "2026-10-07", updatedAt: "2026-10-07" }];
+    setup(`/atlas?type=page&layout=${layout}`);
+    const preview = screen.getByRole("button", { name: layout === "grid" ? "Open Covered page" : "Covered page" });
+    await waitFor(() => expect(preview.querySelector("img")?.getAttribute("src")).toBe("mains-localimg://preview"));
+    expect(mocks.resolveAtlasFile).toHaveBeenCalledWith({ accountId: "account", id: "cover" });
+    expect(preview.textContent).toContain("😁");
+    fireEvent.error(preview.querySelector("img")!);
+    expect(preview.querySelector("img")).toBeNull();
+    expect(preview.textContent).toContain("😁");
+  });
+});
+
 describe("Atlas library pagination", () => {
   function pages() {
     const entries = Array.from({ length: 51 }, (_, index) => savedEntry({
@@ -191,17 +257,17 @@ describe("Atlas library pagination", () => {
   it("shows 50 rows, navigates with Previous/Next, and restores pages through browser history", () => {
     pages();
     setup("/atlas?type=file&view=saved");
-    expect(screen.getAllByRole("row")).toHaveLength(51);
+    expect(within(screen.getByRole("list", { name: "Atlas items" })).getAllByRole("listitem")).toHaveLength(50);
     expect(screen.queryByRole("button", { name: "Report 50" })).toBeNull();
     expect((screen.getByRole("button", { name: "Previous" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByTestId("url").textContent).toBe("/atlas?type=file&view=saved&page=2");
-    expect(screen.getAllByRole("row")).toHaveLength(2);
+    expect(within(screen.getByRole("list", { name: "Atlas items" })).getAllByRole("listitem")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Report 50" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Report 0" })).toBeNull();
     expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Browser back" }));
-    expect(screen.getAllByRole("row")).toHaveLength(51);
+    expect(within(screen.getByRole("list", { name: "Atlas items" })).getAllByRole("listitem")).toHaveLength(50);
     fireEvent.click(screen.getByRole("button", { name: "Browser forward" }));
     expect(screen.getByText(/Page 2/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Previous" }));

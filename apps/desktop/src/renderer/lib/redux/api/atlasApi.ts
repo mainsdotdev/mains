@@ -23,7 +23,8 @@ export const atlasApi = baseApi.injectEndpoints({
       query: (input) => ({ handler: CHANNELS.atlas.removeTag, args: [input] }), invalidatesTags: ["Atlas"],
     }),
     setAtlasTags: builder.mutation<AtlasItem, AtlasIdentity & { tags: string[] }>({
-      query: (input) => ({ handler: CHANNELS.atlas.setTags, args: [input] }), invalidatesTags: ["Atlas"],
+      query: (input) => ({ handler: CHANNELS.atlas.setTags, args: [input] }),
+      invalidatesTags: (_r, error, { id }) => error ? [] : ["Atlas", { type: "AtlasPage", id }],
     }),
     atlasAutoTagging: builder.query<AtlasAutoTagging, { accountId: string }>({
       query: (input) => ({ handler: CHANNELS.atlas.getAutoTagging, args: [input] }), providesTags: ["Atlas"],

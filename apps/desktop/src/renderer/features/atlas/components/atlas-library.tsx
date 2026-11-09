@@ -71,13 +71,15 @@ import {
 import { ATLAS_TEMPLATES } from "../lib/atlas-templates";
 import { AtlasMenu } from "./atlas-menu";
 import { AtlasFileIcon } from "./atlas-file-icon";
-import { AtlasPageIcon } from "./atlas-page-icon";
 import { AtlasPageCard } from "./atlas-page-card";
 import { resolveReplicaFile, useAtlasFilePath } from "../hooks/use-atlas-file-path";
 import { AtlasImagePreview } from "./atlas-image-preview";
 import { useAtlasOwnerKey } from "../hooks/use-atlas-tabs";
 import { AtlasBookmarkEditor } from "./atlas-bookmark-editor";
 import { AtlasBookmarkCard } from "./atlas-bookmark-card";
+import { AtlasItemRow } from "./atlas-item-row";
+import { AtlasItemTags } from "./atlas-item-tags";
+import { AtlasTagEditor } from "./atlas-tag-editor";
 import { AtlasOrganization } from "./atlas-organization";
 
 const templateIcons = [
@@ -136,24 +138,6 @@ function ImageTile({ entry, onOpen, fill = false, device }: { entry: Entry; onOp
   );
 }
 
-function ImageThumbnail({ entry }: { entry: Entry }) {
-  const path = useAtlasFilePath(entry.saved?.accountId, entry.saved?.id, entry.path, entry.generated);
-  const src = useLocalImageUrl(path, 256, entry.date);
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  return src && src !== failedSrc ? (
-    <img
-      src={src}
-      alt=""
-      loading="lazy"
-      decoding="async"
-      onError={() => setFailedSrc(src)}
-      className="size-full object-cover"
-    />
-  ) : (
-    <Picture className="size-4" />
-  );
-}
-
 export function AtlasLibrary({ accountId }: { accountId: string }) {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
@@ -178,13 +162,14 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const page = Number.isSafeInteger(rawPage) && rawPage > 0 && rawPage <= 100000 ? rawPage : 1;
   const [preview, setPreview] = useState<Entry | null>(null);
   const [bookmarkEditor, setBookmarkEditor] = useState<AtlasItem | "new" | null>(null);
+  const [tagEditor, setTagEditor] = useState<AtlasItem | null>(null);
   const [managingTags, setManagingTags] = useState(false);
   const { data: tags = [] } = useListAtlasTagsQuery({ accountId });
   const [enrichBookmark] = useEnrichAtlasBookmarkMutation();
   const searchRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const previousPage = useRef(page);
-  const grid = type === "image" || params.get("layout") === "grid" || type === "bookmark" && params.get("layout") !== "list";
+  const grid = params.get("layout") === "grid" || (type === "image" || type === "bookmark") && params.get("layout") !== "list";
   const library = useAtlasLibraryQuery({
     accountId, type, scope, page,
     collectionId: collectionId || undefined,
@@ -359,6 +344,11 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
             <Page className="size-4" />
             Open
           </DropdownMenuItem>
+          {entry.saved && !entry.saved.trashedAt && (
+            <DropdownMenuItem onClick={() => { close(); setTagEditor(entry.saved!); }}>
+              <Bookmark className="size-4" />{entry.saved.tags?.length ? "Edit tags" : "Add tags"}
+            </DropdownMenuItem>
+          )}
           {/* Another device's file is saved to Atlas from that device. */}
           {entry.kind === "bookmark" && entry.saved && <>
             <DropdownMenuItem onClick={() => { close(); setBookmarkEditor(entry.saved!); }}><Document className="size-4" />Edit bookmark</DropdownMenuItem>
@@ -455,6 +445,23 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
       )}
     </AtlasMenu>
   );
+  const imageCard = (entry: Entry) => (
+    <article key={entry.key} className="group relative mb-4 min-w-0 break-inside-avoid overflow-hidden rounded-xl glass-surface">
+      <div className="relative">
+        <ImageTile entry={entry} onOpen={() => show(entry)} device={deviceOf(entry)} />
+        <div className="absolute right-2 top-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{itemMenu(entry, true)}</div>
+      </div>
+      <div className="px-3 py-2.5">
+        <p className="mb-1 truncate text-s font-medium text-primary-900 dark:text-primary-100">{entry.title}</p>
+        <AtlasItemTags tags={entry.saved?.tags ?? []} onTag={(id) => setFilter("tag", id)} />
+        <div className={`mt-1 flex min-w-0 items-center gap-1 text-xxs text-primary-500 ${entry.saved?.isFavorite ? "pr-7" : ""}`}>
+          {!entry.saved && entry.generated && entry.generated.origin !== "attachment" && <Generate aria-hidden="true" className="size-3 shrink-0" />}
+          <span className="min-w-0 truncate">{originLabel(entry)}</span><span aria-hidden="true">·</span><span className="shrink-0">{activity(entry.date)}</span>
+        </div>
+      </div>
+      {entry.saved?.isFavorite && <Star filled role="img" aria-label="Favorite" className="pointer-events-none absolute bottom-3 right-3 size-3.5 text-accent" />}
+    </article>
+  );
   const scopes: { value: AtlasScope; label: string }[] = [
     { value: "all", label: "All" },
     ...(type === "image"
@@ -492,30 +499,28 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               onClick={() => navigate("/settings?section=atlas")}>
               <Settings className="size-4" />
             </Button>
-            {type !== "image" && (
-              <div
-                className="mr-1 hidden items-center gap-1 sm:flex"
-                role="group"
-                aria-label="Library layout"
-              >
-                {[true, false].map((value) => (
-                  <Button
-                    variant="icon"
-                    key={String(value)}
-                    aria-label={value ? "Grid view" : "List view"}
-                    aria-pressed={grid === value}
-                    className={`flex size-8 items-center justify-center  text-primary-500 focus-visible:ring-2 focus-visible:ring-accent/40 ${grid === value ? "bg-primary-200/70 dark:bg-primary-800/20" : "hover:bg-primary-100 dark:hover:bg-primary-900"}`}
-                    onClick={() => setFilter("layout", value ? "grid" : "list")}
-                  >
-                    {value ? (
-                      <Grid className="size-4" />
-                    ) : (
-                      <List className="size-4" />
-                    )}
-                  </Button>
-                ))}
-              </div>
-            )}
+            <div
+              className="mr-1 hidden items-center gap-1 sm:flex"
+              role="group"
+              aria-label="Library layout"
+            >
+              {[true, false].map((value) => (
+                <Button
+                  variant="icon"
+                  key={String(value)}
+                  aria-label={value ? "Grid view" : "List view"}
+                  aria-pressed={grid === value}
+                  className={`flex size-8 items-center justify-center  text-primary-500 focus-visible:ring-2 focus-visible:ring-accent/40 ${grid === value ? "bg-primary-200/70 dark:bg-primary-800/20" : "hover:bg-primary-100 dark:hover:bg-primary-900"}`}
+                  onClick={() => setFilter("layout", value ? "grid" : "list")}
+                >
+                  {value ? (
+                    <Grid className="size-4" />
+                  ) : (
+                    <List className="size-4" />
+                  )}
+                </Button>
+              ))}
+            </div>
             <div className="relative w-40 sm:w-56">
               <Search className="pointer-events-none absolute left-3 top-2 size-3.5 text-primary-500" />
               <Input
@@ -528,14 +533,20 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                 className="h-8 w-full rounded-full glass-input  pl-8 pr-3 text-xs "
               />
             </div>
-            {type === "image" && provider.supportsAtlas ? (
+            {type === "bookmark" ? (
+              <Button variant="primary" className="inline-flex gap-2" onClick={() => setBookmarkEditor("new")}>
+                <Bookmark aria-hidden="true" className="size-4" />
+                Add bookmark
+              </Button>
+            ) : type === "image" && provider.supportsAtlas ? (
               <Button
                 aria-label="New image"
-                className="text-primary-700 dark:text-primary-300 glass-primary px-3 py-1.5 text-s rounded-xl gap-1"
+                variant="primary"
+                className="inline-flex gap-2"
                 onClick={() => navigate(atlasImageCreatorHref(collectionId))}
               >
-                New
-
+                <Picture aria-hidden="true" className="size-4" />
+                New image
               </Button>
             ) : (
               <AtlasMenu
@@ -556,7 +567,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                       onClick={() => { close(); navigate(atlasImageCreatorHref(collectionId)); }}>
                       <Picture className="size-4" />New image
                     </DropdownMenuItem>}
-                    {provider.supportsAtlas && type !== "bookmark" && <><DropdownMenuItem
+                    {provider.supportsAtlas && <><DropdownMenuItem
                       onClick={() => {
                         close();
                         void newPage();
@@ -756,27 +767,9 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                 </Button>
               )}
           </div>
-        ) : type === "image" ? (
+        ) : type === "image" && grid ? (
           <div className="columns-2 gap-4 md:columns-3 xl:columns-4 2xl:columns-6">
-            {entries.map((entry) => (
-              <div
-                key={entry.key}
-                className="group relative mb-4 break-inside-avoid overflow-hidden rounded-xl border border-primary-200/60 dark:border-primary-800/70"
-              >
-                <ImageTile entry={entry} onOpen={() => show(entry)} device={deviceOf(entry)} />
-                <div className="absolute right-2 top-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                  {itemMenu(entry, true)}
-                </div>
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-primary-950/90 to-transparent px-3 pb-3 pt-8 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                  <p className="truncate text-xs font-medium text-primary-100">
-                    {entry.title}
-                  </p>
-                  <p className="mt-1 text-xxs text-primary-300">
-                    {originLabel(entry)}
-                  </p>
-                </div>
-              </div>
-            ))}
+            {entries.map(imageCard)}
           </div>
         ) : grid ? (
           <div className={type === "all"
@@ -793,151 +786,43 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                   imagePaths={previewImagePaths}
                   fitContent={type === "all"}
                   onOpen={() => show(entry)}
+                  onTag={(id) => setFilter("tag", id)}
                 />
               );
-              if (entry.kind === "image") return (
-                <div key={entry.key} className="group relative min-w-0 overflow-hidden rounded-3xl bg-primary-100 dark:bg-primary-900">
-                  <ImageTile entry={entry} onOpen={() => show(entry)} fill={type !== "all"} device={deviceOf(entry)} />
-                  <div className="absolute right-3 top-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                    {itemMenu(entry, true)}
-                  </div>
-                  <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-primary-950/90 to-transparent px-4 pb-4 pt-12 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                    <p className="truncate text-s font-medium text-primary-100">{entry.title}</p>
-                    <p className="mt-1 text-xs text-primary-300">{activity(entry.date)}</p>
-                  </div>
-                </div>
-              );
+              if (entry.kind === "image") return imageCard(entry);
               return (
-                <div
-                  key={entry.key}
-                  className="group rounded-3xl glass-surface"
-                >
-                  <Button
-                    aria-label={`Open ${entry.title}`}
-                    onClick={() => show(entry)}
-                    className="flex aspect-4/3 w-full items-center justify-center rounded-t-3xl bg-primary-100/70 focus-visible:ring-2 focus-visible:ring-accent/40 dark:bg-primary-900/70"
-                  >
-                    {entry.kind === "page" ? (
-                      <AtlasPageIcon
-                        icon={entry.saved?.metadata?.icon}
-                        className="size-10 text-4xl text-accent/70"
-                      />
-                    ) : (
-                      <AtlasFileIcon
-                        kind={entry.kind}
-                        fileName={entry.saved?.fileName ?? entry.generated?.fileName ?? entry.title}
-                        path={entry.path}
-                        className="size-10 text-accent/70"
-                      />
-                    )}
+                <article key={entry.key} className="group relative overflow-hidden rounded-xl glass-surface">
+                  <Button aria-label={`Open ${entry.title}`} onClick={() => show(entry)}
+                    className="flex aspect-2/1 max-h-36 w-full items-center justify-center bg-primary-100/70 focus-visible:ring-2 focus-visible:ring-accent/40 dark:bg-primary-900/70">
+                    <AtlasFileIcon kind={entry.kind} fileName={entry.saved?.fileName ?? entry.generated?.fileName ?? entry.title} path={entry.path} className="size-9 text-accent/70" />
                   </Button>
-                  <div className="flex items-center gap-2 p-3">
-                    <Button
-                      className="min-w-0 flex-1 text-left focus-visible:ring-2 focus-visible:ring-accent/40"
-                      onClick={() => show(entry)}
-                    >
-                      <Text size="s" className="truncate">
-                        {entry.title}
-                      </Text>
-                      <Muted className="mt-1 text-xs">
-                        {activity(entry.date)}
-                      </Muted>
-                    </Button>
-                    {itemMenu(entry)}
+                  <div className="p-3">
+                    <div className="mb-1 flex items-center gap-2">
+                      <Button className="min-w-0 flex-1 text-left focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => show(entry)}>
+                        <Text size="s" className="truncate">{entry.title}</Text>
+                      </Button>
+                      {itemMenu(entry)}
+                    </div>
+                    <AtlasItemTags tags={entry.saved?.tags ?? []} onTag={(id) => setFilter("tag", id)} />
+                    <Muted className={`mt-1 text-xxs ${entry.saved?.isFavorite ? "pr-7" : ""}`}>{activity(entry.date)}</Muted>
                   </div>
-                </div>
+                  {entry.saved?.isFavorite && <Star filled role="img" aria-label="Favorite" className="pointer-events-none absolute bottom-3 right-3 size-3.5 text-accent" />}
+                </article>
               );
             })}
           </div>
         ) : (
-          <table className="w-full table-fixed text-left text-s">
-            {type !== "bookmark" && <thead className="text-xs font-normal text-primary-500">
-              <tr className="border-b border-primary-200/50 dark:border-primary-900">
-                <th className="w-[56%] pb-3 pl-3 font-normal">Name</th>
-                <th className="hidden w-[24%] pb-3 font-normal sm:table-cell">
-                  Source
-                </th>
-                <th className="pb-3 font-normal">Last activity</th>
-                <th className="w-10">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>}
-            <tbody>
-              {entries.map((entry) => {
-                if (entry.kind === "bookmark" && entry.saved) return (
-                  <tr key={entry.key}>
-                    <td colSpan={4}>
-                      <AtlasBookmarkCard item={entry.saved} layout="list" menu={itemMenu(entry)} onOpen={() => show(entry)} onTag={(id) => setFilter("tag", id)} />
-                    </td>
-                  </tr>
-                );
-                const runId = entry.generated?.runId ?? entry.saved?.sourceRunId;
-                return (
-                  <tr
-                    key={entry.key}
-                    className="group relative isolate border-b border-primary-200/50 dark:border-primary-900"
-                  >
-                    <td className="py-2 pl-3 pr-4">
-                      {/* Keep the decoration inside a cell to avoid an anonymous table column. */}
-                      <span
-                        aria-hidden="true"
-                        className="pointer-events-none absolute inset-y-0 -inset-x-3 z-0 rounded-xl bg-primary-100/50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 dark:bg-primary-900/50"
-                      />
-                      <Button
-                        className="relative z-10 flex h-9 w-full items-center gap-3 text-left focus-visible:ring-2 focus-visible:ring-accent/40"
-                        onClick={() => show(entry)}
-                      >
-                        <span aria-hidden="true" className="flex size-8 shrink-0 overflow-hidden glass-outline glass-outline-soft items-center justify-center rounded-lg text-accent">
-                          {entry.kind === "page" ? (
-                            <AtlasPageIcon icon={entry.saved?.metadata?.icon} />
-                          ) : entry.kind === "image" ? (
-                            <ImageThumbnail entry={entry} />
-                          ) : (
-                            <AtlasFileIcon
-                              kind={entry.kind}
-                              fileName={entry.saved?.fileName ?? entry.generated?.fileName ?? entry.title}
-                              path={entry.path}
-                              className="size-4"
-                            />
-                          )}
-                        </span>
-                        <span className="min-w-0 truncate text-primary-800 dark:text-primary-200">
-                          {entry.title}
-                        </span>
-                        {entry.saved?.isFavorite && (
-                          <Star
-                            filled
-                            className="size-3 shrink-0 text-primary-500"
-                          />
-                        )}
-                      </Button>
-                    </td>
-                    <td className="relative z-10 hidden pr-5 text-xs text-primary-500 sm:table-cell">
-                      {runId ? (
-                        <Button
-                          className="block max-w-full truncate text-left hover:text-primary-800 focus-visible:ring-2 focus-visible:ring-accent/40 dark:hover:text-primary-200"
-                          onClick={() => void source(entry)}
-                        >
-                          {entry.generated?.runTitle ?? "Conversation"}
-                          {deviceOf(entry) && ` · ${deviceOf(entry)}`}
-                        </Button>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td
-                      className="relative z-10 text-xs text-primary-500"
-                      title={new Date(entry.date).toLocaleString()}
-                    >
-                      {activity(entry.date)}
-                    </td>
-                    <td className="relative z-10 pr-2 text-right">{itemMenu(entry)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <ul aria-label="Atlas items">
+            {entries.map((entry) => {
+              const runId = entry.generated?.runId ?? entry.saved?.sourceRunId;
+              const device = deviceOf(entry);
+              return <li key={entry.key}>
+                <AtlasItemRow entry={entry} menu={itemMenu(entry)} onOpen={() => show(entry)} onTag={(id) => setFilter("tag", id)}
+                  onSource={runId ? () => void source(entry) : undefined}
+                  sourceLabel={runId ? `${entry.generated?.runTitle ?? "Conversation"}${device ? ` · ${device}` : ""}` : undefined} />
+              </li>;
+            })}
+          </ul>
         )}
         {!loading && library.currentData && (page > 1 || library.currentData.hasNext) && (
           <nav aria-label="Atlas pagination" className="mt-4 px-2 flex items-center justify-between gap-4  dark:border-primary-900">
@@ -964,6 +849,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           generated={preview.saved ? undefined : preview.generated} onClose={() => setPreview(null)} />
       )}
       {bookmarkEditor && <AtlasBookmarkEditor accountId={accountId} item={bookmarkEditor === "new" ? undefined : bookmarkEditor} collectionId={collectionId} onClose={() => setBookmarkEditor(null)} />}
+      {tagEditor?.accountId === accountId && <AtlasTagEditor key={tagEditor.id} item={tagEditor} onClose={() => setTagEditor(null)} />}
       {managingTags && <AtlasOrganization accountId={accountId} onClose={() => setManagingTags(false)} />}
     </PageShell>
   );

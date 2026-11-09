@@ -17,10 +17,14 @@ function TagManager({ accountId }: { accountId: string }) {
   const [remove, removing] = useRemoveAtlasTagMutation();
   const [deleting, setDeleting] = useState<AtlasTag | null>(null);
   return <div className="flex min-h-0 flex-col overflow-hidden px-6 pb-6">
-    <Muted className="mb-5 shrink-0 text-xs">Tags are shared across your Atlas library. Renaming a tag updates every item that uses it.</Muted>
-    <div role="region" aria-label="Tags" className="max-h-80 min-h-0 overflow-y-auto overscroll-contain pr-1">
-    {tags.isLoading ? <Muted>Loading tags…</Muted> : tags.error ? <Text role="alert">{atlasError(tags.error)}</Text> : !tags.data?.length ? <Muted>No tags yet. Add one when saving a bookmark.</Muted> :
-      tags.data.map((tag) => <TagRow key={tag.id} accountId={accountId} tag={tag} onDelete={() => setDeleting(tag)} />)}
+    <Muted className="shrink-0 text-xs">Tags are shared across your Atlas library. Renaming a tag updates every item that uses it.</Muted>
+    <div className="relative flex max-h-80 min-h-0 flex-col">
+      <div role="region" aria-label="Tags" className="min-h-0 overflow-y-auto overscroll-contain py-6 pr-1 [scroll-padding-block:1.5rem]">
+        {tags.isLoading ? <Muted>Loading tags…</Muted> : tags.error ? <Text role="alert">{atlasError(tags.error)}</Text> : !tags.data?.length ? <Muted>No tags yet. Add one when saving a bookmark.</Muted> :
+          tags.data.map((tag) => <TagRow key={tag.id} accountId={accountId} tag={tag} onDelete={() => setDeleting(tag)} />)}
+      </div>
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-6 bg-linear-to-b from-(--glass-fill-surface) to-transparent" />
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-linear-to-t from-(--glass-fill-surface) to-transparent" />
     </div>
     <DeleteConfirmationModal isOpen={!!deleting} isDeleting={removing.isLoading} title={`Delete “${deleting?.name ?? "tag"}”?`}
       description="This removes the tag from every Atlas item. Your saved items are kept."
