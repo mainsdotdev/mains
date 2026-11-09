@@ -12,6 +12,7 @@ import {
   handleToolApprovalResponse,
   listPendingApprovals,
   requestToolApproval,
+  updatePendingRequest,
 } from "./user-input-broker";
 import type { ToolApprovalResponse } from "./runs.dto";
 
@@ -165,6 +166,26 @@ describe("listPendingApprovals", () => {
 });
 
 describe("permission prompt restrictions", () => {
+  it("publishes a revised patch under a new decision token without extending the approval deadline", async () => {
+    const send = vi.fn();
+    registerEventSink({ kind: "test", send });
+    const pending = requestToolApproval({ requestId: "patch", runId: "run-1", kind: "tool_approval", toolName: "Edit", toolInput: { diff: "old" }, timestamp: Date.now() });
+    const original = listPendingApprovals()[0];
+    expect(updatePendingRequest("patch", { toolInput: { diff: "new" } })).toBe(true);
+    const revised = listPendingApprovals()[0];
+    expect(revised).toMatchObject({ toolInput: { diff: "new" }, expiresAt: original.expiresAt });
+    expect(revised.approvalToken).not.toBe(original.approvalToken);
+    expect(original.toolInput).toEqual({ diff: "old" });
+    expect(send).toHaveBeenLastCalledWith(CHANNELS.runs.toolApprovalRequest, expect.objectContaining({ approvalToken: revised.approvalToken, toolInput: { diff: "new" } }), { runId: "run-1" });
+    expect(() => handleToolApprovalResponse({ requestId: "patch", approved: true, approvalToken: original.approvalToken })).toThrow("changed");
+    expect(() => handleToolApprovalResponse({ requestId: "patch", approved: true })).toThrow("changed");
+    updatePendingRequest("patch", { toolInput: { diff: "new" } });
+    expect(listPendingApprovals()[0].approvalToken).toBe(revised.approvalToken);
+    handleToolApprovalResponse({ requestId: "patch", approved: true, approvalToken: revised.approvalToken });
+    await expect(pending).resolves.toMatchObject({ approved: true });
+    expect(updatePendingRequest("patch", { toolInput: { diff: "later" } })).toBe(false);
+  });
+
   it("retains provider restrictions in both the push event and reconnect snapshot", async () => {
     const send = vi.fn();
     registerEventSink({ kind: "test", send });

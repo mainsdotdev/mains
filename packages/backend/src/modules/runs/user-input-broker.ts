@@ -4,6 +4,7 @@ import { emit } from "../../ipc-kit";
 import { CHANNELS } from "@mains/contracts/channels";
 import { showApprovalNotification } from "./run-notification-sink";
 import { createApprovalLifecycle } from "./user-input-lifecycle";
+import type { ApprovalPresentationPatch } from "./user-input-lifecycle";
 
 const lifecycle = createApprovalLifecycle({
   pending(lease) {
@@ -28,6 +29,7 @@ const lifecycle = createApprovalLifecycle({
 });
 
 export function requestToolApproval(request: ToolApprovalRequest): Promise<ToolApprovalResponse> { return lifecycle.request(request); }
+export function updatePendingRequest(requestId: string, patch: ApprovalPresentationPatch): boolean { return lifecycle.update(requestId, patch); }
 export function listPendingApprovals(runId?: string): PendingApproval[] { return lifecycle.list(runId); }
 export function handleToolApprovalResponse(response: ToolApprovalResponse): boolean { return lifecycle.respond(response); }
 export function cancelPendingRequest(requestId: string): void { lifecycle.cancel(requestId); }

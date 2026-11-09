@@ -1,4 +1,5 @@
 import { baseApi } from "./baseApi";
+import { appEvents } from "@/lib/transport/events";
 import type { RootState } from "../index";
 import { providerAccountCacheKey, providerCatalogConfigKey } from "@mains/backend/shared/provider-catalog";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
@@ -425,6 +426,14 @@ export const providersApi = baseApi.injectEndpoints({
       SkillInfo[],
       { id: string; workspacePath?: string }
     >({
+      async onCacheEntryAdded({ id, workspacePath }, { dispatch, cacheEntryRemoved }) {
+        const off = appEvents.providers.onSkillsUpdated(({ providerId }) => {
+          if (providerId === id) dispatch(baseApi.util.invalidateTags([
+            { type: "ProviderSkills", id: `${id}:${workspacePath ?? ""}` },
+          ]));
+        });
+        try { await cacheEntryRemoved; } finally { off(); }
+      },
       query: ({ id, workspacePath }) => ({
         handler: CHANNELS.providers.getSkills,
         args: [id, workspacePath],

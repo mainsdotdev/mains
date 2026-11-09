@@ -13,6 +13,7 @@ import type { MainsToolContext } from "../mains-tools.core";
 import { safeJson } from "../adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
 import { managedRunImageDir } from "../../../runs/run-execution";
+import { mapCodexRuntimeStatus, type CodexRuntimeStatusState } from "./codex-runtime-status";
 
 export interface CodexThreadItem {
   id: string;
@@ -44,9 +45,25 @@ function optionalString(value: unknown): string | undefined {
     : undefined;
 }
 
+function fileChanges(value: unknown): Array<{ path: string; kind: string; diff?: string }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((value) => {
+    const change = objectRecord(value);
+    if (typeof change?.path !== "string") return [];
+    return [{ path: change.path,
+      kind: optionalString(objectRecord(change.kind)?.type ?? change.kind) ?? "update",
+      diff: typeof (change.patch ?? change.unifiedDiff ?? change.diff) === "string"
+        ? (change.patch ?? change.unifiedDiff ?? change.diff) as string : undefined,
+    }];
+  });
+}
+
 /** The transcript and final run failure share the same user-facing guidance. */
 export function formatCodexError(error: unknown, fallback = "Codex request failed"): string {
   const payload = objectRecord(error);
+  const data = objectRecord(payload?.data);
+  if (data?.type === "modelProviderMismatch") return "This Codex chat belongs to a different model provider. Switch back to its saved provider, or fork the chat to continue with the current provider.";
+  if (data?.reason === "serverShuttingDown") return "Codex is shutting down. Wait for it to restart, then retry.";
   switch (payload?.codexErrorInfo ?? payload?.codex_error_info) {
     case "modelNotFound":
       return "The selected Codex model is unavailable. Choose another model and try again.";
@@ -63,6 +80,9 @@ export function formatCodexError(error: unknown, fallback = "Codex request faile
 
 const PARENT_STATUS_NOTIFICATIONS = new Set([
   "error", "model/rerouted", "modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted",
+  "model/safetyBuffering/updated", "model/verification", "item/autoApprovalReview/started",
+  "item/autoApprovalReview/completed", "autoApprovalReview/strictReviewRequired", "hook/started", "hook/completed",
+  "warning", "guardianWarning", "configWarning", "deprecationNotice",
 ]);
 
 /**
@@ -342,11 +362,12 @@ interface ReasoningBuffer {
   completed: boolean;
 }
 
-export interface CodexEventRunState {
+export interface CodexEventRunState extends CodexRuntimeStatusState {
   threadId: string | null;
   turnId: string | null;
   /** Survives usage flushing until this projection state is released. */
   reportedErrors?: Set<string>;
+  completedFileChangeItems?: Set<string>;
   currentMessageItemId: string | null;
   agentMessageBuffer: string;
   /** Prevents completed-item replay from duplicating persisted assistant text. */
@@ -616,6 +637,33 @@ export function createCodexEventMapper(
 ) {
   const getRunState = options.getRunState;
   const onReviewCompleted = options.onReviewCompleted;
+  const capturedFileNotifications = new WeakSet<object>();
+
+  /** Capture review evidence before async persistence or an approval response
+   * can overtake notifications from the same native stdout batch. */
+  function captureFileChanges(method: string, params: unknown, runId: string) {
+    const p = objectRecord(params);
+    if (!p || capturedFileNotifications.has(p)) return;
+    const item = objectRecord(p?.item);
+    const patch = method === "item/fileChange/patchUpdated";
+    const completed = method === "item/completed";
+    if (!patch && !((method === "item/started" || method === "item/updated" || completed) &&
+      (item?.type === "fileChange" || item?.type === "file_change"))) return;
+    const state = getRunState(runId);
+    const threadId = optionalString(p?.threadId ?? p?.thread_id);
+    const itemId = optionalString(patch ? p?.itemId : item?.id);
+    const changes = fileChanges(patch ? p?.changes : item?.changes);
+    if (!state || !itemId) return;
+    const child = threadId && state.threadId && threadId !== state.threadId;
+    if (child && !state.subAgents.has(threadId)) return;
+    const itemKey = child ? `${threadId}:${itemId}` : itemId;
+    capturedFileNotifications.add(p);
+    if (completed) { (state.completedFileChangeItems ??= new Set()).add(itemKey); return; }
+    if (!changes) return;
+    if (state.completedFileChangeItems?.has(itemKey)) return;
+    state.fileChangeItems.set(itemKey, changes);
+    return { threadId, itemId };
+  }
 
   // Usage accumulation per run
   const usageAccumulator = new Map<string, {
@@ -638,10 +686,10 @@ export function createCodexEventMapper(
 
   function mapError(error: unknown, runId: string, turnId: string | undefined, willRetry: boolean, ts: number): WorkRunEvent[] {
     const payload = objectRecord(error);
-    const rawMessage = optionalString(payload?.message) ?? optionalString(error) ?? "unknown";
+    const rawMessage = optionalString(payload?.nativeMessage ?? payload?.message) ?? optionalString(error) ?? "unknown";
     const codexErrorInfo = payload?.codexErrorInfo ?? payload?.codex_error_info;
     const additionalDetails = optionalString(payload?.additionalDetails ?? payload?.additional_details);
-    const key = JSON.stringify([turnId, willRetry, codexErrorInfo, rawMessage, additionalDetails]);
+    const key = JSON.stringify([turnId, willRetry, codexErrorInfo, rawMessage, additionalDetails, payload?.code, payload?.data]);
     const state = getRunState(runId);
     const reported = state ? (state.reportedErrors ??= new Set<string>()) : new Set<string>();
     if (reported.has(key)) return [];
@@ -654,6 +702,8 @@ export function createCodexEventMapper(
         ...(turnId ? { providerTurnId: turnId } : {}),
         ...(codexErrorInfo != null ? { codexErrorInfo } : {}),
         ...(additionalDetails ? { additionalDetails } : {}),
+        ...(typeof payload?.code === "number" ? { code: payload.code } : {}),
+        ...(payload?.data !== undefined ? { data: payload.data } : {}),
       },
     }];
   }
@@ -1620,6 +1670,7 @@ export function createCodexEventMapper(
   }
 
   function mapNotification(method: string, params: unknown, runId: string, model?: string): WorkRunEvent[] {
+    captureFileChanges(method, params, runId);
     const ts = Date.now();
     const events: WorkRunEvent[] = [];
     const p = params as Record<string, unknown> | undefined;
@@ -1643,7 +1694,18 @@ export function createCodexEventMapper(
     }
     model = (providerTurnId ? reroutedModels.get(runId)?.get(providerTurnId) : undefined) ?? model;
 
+    if (runState && (!threadId || !parentThreadId || threadId === parentThreadId)) {
+      const statuses = mapCodexRuntimeStatus(method, params, runState, ts);
+      if (statuses) {
+        events.push(...statuses);
+        if (method !== "turn/completed" && method !== "error" && method !== "thread/closed") return events;
+      }
+    }
+
     switch (method) {
+      case "item/fileChange/patchUpdated":
+        captureFileChanges(method, params, runId);
+        break;
       case "thread/started": {
         const thread = p?.thread as Record<string, unknown> | undefined;
         const threadId = (thread?.id ?? p?.threadId) as string | undefined;
@@ -3040,29 +3102,18 @@ export function createCodexEventMapper(
 
       case "file_change":
       case "fileChange": {
-        const changes = item.changes as Array<{ path: string; kind: string; patch?: string; unifiedDiff?: string; diff?: string }> | undefined;
+        const cached = runId ? getRunState(runId)?.fileChangeItems.get(item.id) : undefined;
+        const changes = fileChanges(item.changes) ?? cached;
         const patchStatus = item.status as string | undefined;
         // Item-level patch (some versions of Codex put it here)
         const itemPatch = (item.patch ?? item.unifiedDiff ?? item.diff) as string | undefined;
 
-        // Cache change details on start/update so item/fileChange/requestApproval
-        // (which only carries itemId/reason) can render a rich approval dialog.
-        if ((phase === "start" || phase === "update") && changes && changes.length > 0 && runId) {
-          const rs = getRunState(runId);
-          if (rs) {
-            rs.fileChangeItems.set(item.id, changes.map((c) => ({
-              path: c.path,
-              kind: c.kind,
-              diff: c.patch ?? c.unifiedDiff ?? c.diff,
-            })));
-          }
-        }
-
-        if (phase === "complete" && changes && changes.length > 0) {
+        if (phase === "complete" && changes) {
           // Retrieve accumulated diff from delta events, then clean up
           const runState = runId ? getRunState(runId) : undefined;
           const bufferedDiff = runState?.fileChangeBuffers.get(item.id);
           if (runState) {
+            (runState.completedFileChangeItems ??= new Set()).add(item.id);
             runState.fileChangeBuffers.delete(item.id);
             runState.fileChangeItems.delete(item.id);
           }
@@ -3070,7 +3121,7 @@ export function createCodexEventMapper(
           for (const change of changes) {
             const toolName = change.kind === "delete" ? "Delete" : (change.kind === "add" || change.kind === "create") ? "Write" : "Edit";
             // Prefer per-change patch → accumulated delta buffer → item-level patch
-            const diffContent = change.patch ?? change.unifiedDiff ?? change.diff
+            const diffContent = change.diff
               ?? (changes.length === 1 ? (bufferedDiff ?? itemPatch) : bufferedDiff);
 
             const fcId = `${item.id}-${change.path}`;
@@ -3585,6 +3636,13 @@ export function createCodexEventMapper(
 
 
   return {
+    captureFileChanges,
+    closeRuntimeStatuses(runId: string): WorkRunEvent[] {
+      const state = getRunState(runId);
+      if (!state) return [];
+      state.runtimeStatusesClosed = true;
+      return mapCodexRuntimeStatus("thread/closed", {}, state, Date.now()) ?? [];
+    },
     mapNotification,
     mapThreadItem,
     maybeResolveCollabSubAgents,

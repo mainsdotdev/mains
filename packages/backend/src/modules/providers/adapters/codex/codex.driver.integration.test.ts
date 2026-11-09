@@ -23,6 +23,7 @@ const approvalHarness = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../runs/user-input-broker", () => ({
+  updatePendingRequest: vi.fn(() => true),
   cancelPendingRequest: vi.fn(),
   cancelPendingRequests: vi.fn(),
   requestToolApproval: vi.fn(async (request: Record<string, unknown>) => {
@@ -137,6 +138,7 @@ afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_OAUTH_ERROR;
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_OAUTH;
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_TURN_LINEAGE;
+  delete process.env.MAINS_CODEX_FIXTURE_RPC_ERROR;
   await Promise.all(drivers.splice(0).map((driver) => driver.shutdown?.()));
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -144,6 +146,32 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it("broadcasts watched skill changes without requiring a running turn", async () => {
+    vi.stubEnv("MAINS_CODEX_FIXTURE_SKILLS_CHANGED", "1");
+    const send = vi.fn();
+    const off = registerEventSink({ kind: "test", send });
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    try {
+      await driver.createSession(request("idle-skills"));
+      await vi.waitFor(() => expect(send).toHaveBeenCalledWith(CHANNELS.providers.skillsUpdated, { providerId: "codex" }, undefined));
+    } finally { off(); }
+  });
+
+  it.each([
+    [{ type: "modelProviderMismatch" }, "different model provider"],
+    [{ reason: "serverShuttingDown" }, "shutting down"],
+  ])("persists native turn-start error details and explains %j without retrying the turn", async (data, guidance) => {
+    vi.stubEnv("MAINS_CODEX_FIXTURE_RPC_ERROR", JSON.stringify({ method: "turn/start", code: -32600, message: "Native rejection", data }));
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const session = await driver.createSession(request("failed-start"));
+    const events: Array<Record<string, unknown>> = [];
+    const outcome = await driver.executePrompt(session.session, session.prompt, async (event) => { events.push(event as unknown as Record<string, unknown>); }, new AbortController().signal);
+    expect(outcome).toMatchObject({ status: "failed", summary: expect.stringContaining(guidance) });
+    expect(events).toContainEqual(expect.objectContaining({ type: "log", level: "error", metadata: expect.objectContaining({ code: -32600, data, rawMessage: "Native rejection" }) }));
+  });
+
   it.each([
     ["0.153.0", false], ["0.162.1", false], ["0.166.0", false], ["0.167.0", true],
   ])("negotiates required human approval with CLI %s (enabled=%s)", async (version, enabled) => {

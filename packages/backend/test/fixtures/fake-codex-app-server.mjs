@@ -143,6 +143,11 @@ input.on("line", (line) => {
   }
 
   const { id, method, params = {} } = message;
+  const rpcError = process.env.MAINS_CODEX_FIXTURE_RPC_ERROR ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_RPC_ERROR) : null;
+  if (rpcError?.method === method) {
+    send({ id, error: { code: rpcError.code, message: rpcError.message, ...(rpcError.data !== undefined ? { data: rpcError.data } : {}) } });
+    return;
+  }
   if (process.env.MAINS_CODEX_FIXTURE_HANG_METHOD === method) return;
 
   switch (method) {
@@ -202,6 +207,7 @@ input.on("line", (line) => {
           turns: [],
         },
       });
+      if (process.env.MAINS_CODEX_FIXTURE_SKILLS_CHANGED === "1") notify("skills/changed", {});
       break;
     }
 

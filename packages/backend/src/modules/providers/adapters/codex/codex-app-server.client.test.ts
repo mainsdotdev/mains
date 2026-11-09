@@ -33,10 +33,27 @@ async function initialize(server: CodexAppServer): Promise<void> {
 
 afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_HANG_METHOD;
+  delete process.env.MAINS_CODEX_FIXTURE_RPC_ERROR;
   await Promise.all(servers.splice(0).map((server) => server.stop()));
 });
 
 describe("CodexAppServer", () => {
+  it.each([
+    { code: -32600, data: { type: "modelProviderMismatch", savedProvider: "original" } },
+    { code: -32600, data: { reason: "serverShuttingDown" } },
+    { code: -32001, data: null },
+    { code: -32602, data: undefined },
+  ])("preserves native RPC error code and data: %j", async ({ code, data }) => {
+    process.env.MAINS_CODEX_FIXTURE_RPC_ERROR = JSON.stringify({ method: "thread/resume", code, data, message: "Native request rejected" });
+    const server = await startServer();
+    await initialize(server);
+    const error = await server.sendRequest("thread/resume", { threadId: "thread" }).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ code, nativeMessage: "Native request rejected", message: `Native request rejected (code: ${code})` });
+    expect((error as { data?: unknown }).data).toEqual(data);
+    await expect(server.sendRequest("account/read", {})).resolves.toMatchObject({ requiresOpenaiAuth: false });
+  });
+
   it("rejects a failed spawn and can retry with a working binary", async () => {
     const server = new CodexAppServer();
     servers.push(server);

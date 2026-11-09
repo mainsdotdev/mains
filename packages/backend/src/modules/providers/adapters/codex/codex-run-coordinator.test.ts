@@ -10,7 +10,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoordinator>) => void) {
+function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoordinator>) => void, project?: (event: WorkRunEvent) => Promise<void>) {
   const coordinator = createCodexRunCoordinator();
   let notify!: (method: string, params: unknown) => void;
   let serverRequest!: (id: number | string, method: string, params: unknown) => void;
@@ -31,13 +31,54 @@ function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoo
       beforeStart?.(coordinator);
       notify("turn/started", { threadId: "parent", turn: { id: "turn-parent", status: "inProgress" } });
     },
-  }, async (event) => { events.push(event); }, new AbortController().signal);
+  }, async (event) => { events.push(event); await project?.(event); }, new AbortController().signal);
   return { coordinator, server, ack, sendRequest, events, finished,
     serverRequest: (id: number | string, method: string, params: unknown) => serverRequest(id, method, params),
     notify: (method: string, params: unknown) => notify(method, params) };
 }
 
 describe("Codex active input delivery", () => {
+  it("settles active status rows on shutdown and waits for their persistence", async () => {
+    const closing = deferred<void>();
+    const h = liveRun(undefined, async (event) => {
+      if (event.type === "log" && event.metadata?.source === "codex_runtime_status" && event.metadata.phase === "complete") await closing.promise;
+    });
+    h.notify("model/safetyBuffering/updated", { threadId: "parent", turnId: "turn-parent", model: "model", showBufferingUi: true });
+    await vi.waitFor(() => expect(h.events).toContainEqual(expect.objectContaining({ type: "log", metadata: expect.objectContaining({ phase: "start" }) })));
+    h.coordinator.shutdown();
+    let finished = false;
+    void h.finished.then(() => { finished = true; });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    expect(h.events).toContainEqual(expect.objectContaining({ type: "log", metadata: expect.objectContaining({ phase: "complete", status: "interrupted" }) }));
+    closing.resolve();
+    await expect(h.finished).resolves.toMatchObject({ status: "canceled" });
+  });
+
+  it("releases a failed start even if persisting its error also fails", async () => {
+    const h = liveRun(() => { throw Object.assign(new Error("Native rejection"), { code: -32600, data: { reason: "serverShuttingDown" } }); },
+      async () => { throw new Error("Error storage unavailable"); });
+    try {
+      await expect(h.finished).resolves.toMatchObject({ status: "failed", summary: "Error storage unavailable" });
+      expect(h.coordinator.hasLiveTurn("run")).toBe(false);
+    } finally { h.coordinator.shutdown(); }
+  });
+
+  it("keeps verification, buffering, reviews and hook failures informational until the turn ends", async () => {
+    const h = liveRun();
+    let finished = false;
+    void h.finished.then(() => { finished = true; });
+    h.notify("model/verification", { threadId: "parent", turnId: "turn-parent", verifications: ["trustedAccessForCyber"] });
+    h.notify("model/safetyBuffering/updated", { threadId: "parent", turnId: "turn-parent", model: "model", showBufferingUi: true });
+    h.notify("item/autoApprovalReview/completed", { threadId: "parent", turnId: "turn-parent", reviewId: "review", review: { status: "denied", rationale: "Policy" } });
+    h.notify("hook/completed", { threadId: "parent", turnId: "turn-parent", run: { id: "hook", eventName: "preToolUse", status: "blocked" } });
+    await vi.waitFor(() => expect(h.events.filter((event) => event.type === "log" && event.metadata?.source === "codex_runtime_status")).toHaveLength(4));
+    expect(finished).toBe(false);
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+    await expect(h.finished).resolves.toMatchObject({ status: "succeeded" });
+    h.coordinator.shutdown();
+  });
+
   it("rejects an unowned human approval using its offered choices without borrowing the live run", async () => {
     const h = liveRun();
     try {

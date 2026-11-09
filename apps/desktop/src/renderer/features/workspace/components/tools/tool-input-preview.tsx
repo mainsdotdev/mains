@@ -323,6 +323,15 @@ const RENDERERS: Record<string, Renderer> = {
 
   Delete: (input) => <FileMutationPreview kind="delete" input={input} />,
 
+  FileChange: (input) => (
+    <div className="space-y-3">
+      {(Array.isArray(input.changes) ? input.changes : []).map((value) => {
+        if (!value || typeof value !== "object" || typeof value.path !== "string") return null;
+        return <FileMutationPreview key={value.path} kind={value.kind === "delete" ? "delete" : value.kind === "add" ? "write" : "edit"} input={value} />;
+      })}
+    </div>
+  ),
+
   Apply_patch: (input) => (
     <FileMutationPreview kind="apply-patch" input={input} />
   ),
@@ -550,6 +559,7 @@ const SELF_CONTAINED_RENDERERS = new Set([
   "Create",
   "Delete",
   "Apply_patch",
+  "FileChange",
   "WebSearch",
   "[permission:shell]",
   "[permission:write]",

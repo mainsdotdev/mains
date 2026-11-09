@@ -665,7 +665,7 @@ function ToolApprovalDialogContents({
   // rich preview instead of dumping raw args in the generic param table.
   const showRichPreview =
     (resolved.isBuiltin ||
-      ["apply_patch", "rg"].includes(request.toolName.toLowerCase())) &&
+      ["apply_patch", "filechange", "rg"].includes(request.toolName.toLowerCase())) &&
     !!request.toolInput;
   const paramEntries = !showRichPreview
     ? buildParamEntries(request.toolInput)

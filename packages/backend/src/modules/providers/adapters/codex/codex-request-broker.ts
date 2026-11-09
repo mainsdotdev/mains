@@ -3,7 +3,8 @@ import type {
   ToolApprovalRequest,
   ToolApprovalResponse,
 } from "../../../runs/runs.dto";
-import { requestToolApproval } from "../../../runs/user-input-broker";
+import { requestToolApproval, updatePendingRequest } from "../../../runs/user-input-broker";
+import type { ApprovalPresentationPatch } from "../../../runs/user-input-lifecycle";
 import { guardsService } from "../../../guards/guards.service";
 import type { MainsToolContext } from "../mains-tools.core";
 import {
@@ -66,6 +67,7 @@ export interface CodexServerResponder {
 }
 
 export interface CodexRequestRunState {
+  threadId?: string | null;
   mode?: ModeId;
   fileChangeItems: Map<
     string,
@@ -94,6 +96,7 @@ interface CodexRequestBrokerOptions {
   requestApproval?: (
     request: ToolApprovalRequest,
   ) => Promise<ToolApprovalResponse>;
+  updateApproval?: (requestId: string, patch: ApprovalPresentationPatch) => boolean;
   checkCommand?: (
     command: string,
   ) => Promise<{ blocked: boolean }>;
@@ -115,6 +118,8 @@ export function createCodexRequestBroker(
     options.getMainsToolContext;
   const requestApproval =
     options.requestApproval ?? requestToolApproval;
+  const updateApproval = options.updateApproval ?? updatePendingRequest;
+  const fileApprovals = new Map<string, { runId: string; itemKey: string; reason?: string }>();
   const checkCommand =
     options.checkCommand ??
     ((command: string) => guardsService.checkCommand(command));
@@ -132,6 +137,38 @@ export function createCodexRequestBroker(
       new Set(toCodexDynamicTools(mode).map((tool) => tool.name)),
     ]),
   );
+
+  function fileItemKey(runId: string, threadId: string | undefined, itemId: string) {
+    const parentThreadId = getRunState(runId)?.threadId;
+    return threadId && parentThreadId && threadId !== parentThreadId ? `${threadId}:${itemId}` : itemId;
+  }
+
+  function filePresentation(runId: string, itemKey: string, reason?: string): Pick<ToolApprovalRequest, "toolName" | "toolInput"> {
+    const changes = getRunState(runId)?.fileChangeItems.get(itemKey) ?? [];
+    const single = changes.length === 1 ? changes[0] : undefined;
+    const kindLabel = (kind: string) => kind === "delete" ? "Delete" : kind === "add" || kind === "create" ? "Add" : "Edit";
+    return {
+      toolName: single ? single.kind === "delete" ? "Delete" : single.kind === "add" || single.kind === "create" ? "Write" : "Edit" : "FileChange",
+      toolInput: single ? {
+        file_path: single.path,
+        ...(single.diff ? { diff: single.diff } : {}),
+        ...(reason ? { description: reason } : {}),
+      } : {
+        _meta: {
+          tool_params_display: changes.map((change) => ({ display_name: kindLabel(change.kind), value: change.path })),
+          ...(reason ? { subtitle: reason } : {}),
+        },
+        ...(changes.length ? { changes } : {}),
+      },
+    };
+  }
+
+  function refreshFileApprovals(runId: string, threadId: string | undefined, itemId: string): void {
+    const itemKey = fileItemKey(runId, threadId, itemId);
+    for (const [requestId, pending] of fileApprovals) {
+      if (pending.runId === runId && pending.itemKey === itemKey) updateApproval(requestId, filePresentation(runId, itemKey, pending.reason));
+    }
+  }
 
   function parseToolArguments(
     value: unknown,
@@ -301,44 +338,17 @@ export function createCodexRequestBroker(
       const approval = params as Partial<FileChangeRequestApprovalParams> | undefined;
       const itemId = approval?.itemId ?? (p?.item_id as string) ?? "";
       const reason = approval?.reason ?? undefined;
-      const cached = itemId ? getRunState(runId)?.fileChangeItems.get(itemId) : undefined;
-
-      const single = cached && cached.length === 1 ? cached[0] : undefined;
-      const toolName = single
-        ? (single.kind === "delete" ? "Delete"
-          : (single.kind === "add" || single.kind === "create") ? "Write"
-          : "Edit")
-        : "FileChange";
-
-      const kindLabel = (k: string): string =>
-        k === "delete" ? "Delete"
-        : k === "add" || k === "create" ? "Add"
-        : "Edit";
-
-      const toolInput: Record<string, unknown> = single
-        ? {
-            file_path: single.path,
-            ...(single.diff ? { diff: single.diff } : {}),
-            ...(reason ? { description: reason } : {}),
-          }
-        : {
-            _meta: {
-              tool_params_display: (cached ?? []).map((c) => ({
-                display_name: kindLabel(c.kind),
-                value: c.path,
-              })),
-              ...(reason ? { subtitle: reason } : {}),
-            },
-          };
+      const itemKey = fileItemKey(runId, approval?.threadId, itemId);
+      const pending = { runId, itemKey, reason };
+      fileApprovals.set(String(id), pending);
 
       try {
         const result = await requestApproval({
           requestId: String(id),
           runId,
-          toolName,
-          toolInput,
+          ...filePresentation(runId, itemKey, reason),
           kind: "tool_approval",
-          timestamp: now(),
+          timestamp: approval?.startedAtMs ?? now(),
         });
         const decision = !result.approved ? "decline"
           : result.answer === "acceptForSession" ? "acceptForSession"
@@ -346,6 +356,8 @@ export function createCodexRequestBroker(
         server.respondToRequest(id, { decision } satisfies FileChangeRequestApprovalResponse);
       } catch {
         server.respondToRequest(id, { decision: "decline" });
+      } finally {
+        if (fileApprovals.get(String(id)) === pending) fileApprovals.delete(String(id));
       }
       break;
     }
@@ -711,6 +723,7 @@ export function createCodexRequestBroker(
   return {
     handleRequest,
     rejectInactive,
+    refreshFileApprovals,
   };
 }
 

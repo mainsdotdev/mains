@@ -27,6 +27,7 @@ import type {
   CodexRunSession,
 } from "./codex-run-coordinator";
 import type { CodexSubAgentRunMeta } from "./codex-event-mapper";
+import { formatCodexError } from "./codex-event-mapper";
 
 export const CODEX_ARCHIVED_CHAT_MESSAGE =
   "This chat is archived in Codex. Unarchive it in Codex to continue, or archive it in Mains to hide it from this workspace.";
@@ -122,12 +123,10 @@ export function isCodexUnavailableThreadError(
 export function normalizeCodexResumeError(
   error: unknown,
 ): Error {
-  if (isCodexArchivedThreadError(error)) {
-    return new Error(CODEX_ARCHIVED_CHAT_MESSAGE);
-  }
-  return error instanceof Error
-    ? error
-    : new Error(String(error));
+  const message = isCodexArchivedThreadError(error) ? CODEX_ARCHIVED_CHAT_MESSAGE
+    : formatCodexError(error, error instanceof Error ? error.message : String(error));
+  if (error instanceof Error && error.message === message) return error;
+  return Object.assign(new Error(message), error && typeof error === "object" ? error : {});
 }
 
 export function mapSandboxMode(

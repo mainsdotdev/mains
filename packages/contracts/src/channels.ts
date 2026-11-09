@@ -332,6 +332,8 @@ export const CHANNELS = {
     getModels: "providers:getModels",
     /** Push: emitted when async model-capability discovery enriches the model list. */
     modelsUpdated: "providers:modelsUpdated",
+    /** Push: watched skill files changed; refresh workspace-scoped skill lists. */
+    skillsUpdated: "providers:skillsUpdated",
     getPlugins: "providers:getPlugins",
     cancelPluginCatalog: "providers:cancelPluginCatalog",
     getInstalledPlugins: "providers:getInstalledPlugins",

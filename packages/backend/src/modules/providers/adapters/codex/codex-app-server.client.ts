@@ -31,6 +31,13 @@ interface JsonRpcResponse {
   error?: { code: number; message: string; data?: unknown };
 }
 
+/** Native JSON-RPC details survive transport rejection for domain handling. */
+export interface CodexRpcError extends Error {
+  code: number;
+  data?: unknown;
+  nativeMessage: string;
+}
+
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -351,7 +358,11 @@ export class CodexAppServer {
 
     if (isResponse(message)) {
       this.settleRequest(session, message.id,
-        message.error ? new Error(`${message.error.message} (code: ${message.error.code})`) : undefined,
+        message.error ? Object.assign(new Error(`${message.error.message} (code: ${message.error.code})`), {
+          name: "CodexRpcError", code: message.error.code,
+          ...(message.error.data !== undefined ? { data: message.error.data } : {}),
+          nativeMessage: message.error.message,
+        }) satisfies CodexRpcError : undefined,
         message.result);
       return;
     }

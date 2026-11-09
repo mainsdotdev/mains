@@ -456,6 +456,7 @@ describe("PAIRED_DEVICE_EVENTS", () => {
   it("is exactly the pushes the phone subscribes to", () => {
     expect([...PAIRED_DEVICE_EVENTS].sort()).toEqual([
       "providers:modelsUpdated",
+      "providers:skillsUpdated",
       "runs:diffUpdated",
       "runs:ephemeralEvent",
       "runs:eventPersisted",

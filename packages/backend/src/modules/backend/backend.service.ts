@@ -129,6 +129,7 @@ export const PAIRED_DEVICE_EVENTS: ReadonlySet<string> = new Set([
   CHANNELS.runs.toolApprovalResolved,
   CHANNELS.runs.diffUpdated,
   CHANNELS.providers.modelsUpdated,
+  CHANNELS.providers.skillsUpdated,
   CHANNELS.workspace.gitStateChanged,
 ]);
 

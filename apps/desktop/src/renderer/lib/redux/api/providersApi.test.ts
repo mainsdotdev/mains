@@ -5,6 +5,13 @@ import { baseApi } from "./baseApi";
 import { providersApi, type AccountInfo, type Provider } from "./providersApi";
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
+const skillEvents = vi.hoisted(() => ({ listeners: new Set<(event: { providerId: string }) => void>() }));
+vi.mock("@/lib/transport/events", () => ({ appEvents: { providers: {
+  onSkillsUpdated: (callback: (event: { providerId: string }) => void) => {
+    skillEvents.listeners.add(callback);
+    return () => { skillEvents.listeners.delete(callback); };
+  },
+} } }));
 vi.mock("@/lib/transport", () => ({ getTransport: () => ({ invoke: mocks.invoke }) }));
 
 function createStore() {
@@ -59,6 +66,25 @@ async function watchCommands(path = "/workspace", id = "claude_code") {
 }
 
 describe("provider discovery cache", () => {
+  it("refreshes watched skills in every workspace only for the changed provider", async () => {
+    for (const args of [commands("/first", "codex"), commands("/second", "codex"), commands("/other")]) {
+      const query = store.dispatch(providersApi.endpoints.getProviderSkills.initiate(args));
+      subscriptions.push(query);
+      await query.unwrap();
+    }
+    revision = 2;
+    for (const callback of skillEvents.listeners) callback({ providerId: "codex" });
+    await vi.waitFor(() => {
+      for (const path of ["/first", "/second"]) {
+        expect(providersApi.endpoints.getProviderSkills.select(commands(path, "codex"))(store.getState()).data?.[0].name).toBe("v2");
+      }
+    });
+    expect(calls(CHANNELS.providers.getSkills, "claude_code")).toBe(1);
+    expect(calls(CHANNELS.providers.getSkills, "codex")).toBe(4);
+    store.dispatch(baseApi.util.resetApiState());
+    await vi.waitFor(() => expect(skillEvents.listeners.size).toBe(0));
+  });
+
   it.each(["install", "uninstall", "enable", "update"])(
     "refreshes authoritative inventory after failed plugin %s without invalidating another provider",
     async (operation) => {

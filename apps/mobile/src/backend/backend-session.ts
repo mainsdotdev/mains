@@ -175,6 +175,7 @@ class BackendSession {
     refreshing: false,
   };
   private readonly listeners = new Set<() => void>();
+  private readonly contextSourceListeners = new Set<(providerId: string) => void>();
 
   private supervisor: ConnectionSupervisor | null = null;
   private unsubscribeSupervisor: (() => void) | null = null;
@@ -258,10 +259,16 @@ class BackendSession {
           if (this.transport === transport && this.snapshot.backend?.backendId === backend.backendId && event.runId === this.viewingRunId) receiveStreamingMessage(event);
         });
         const detachTargets = attachTargetEvents(transport, backend.backendId);
+        const detachSkills = transport.subscribe(CHANNELS.providers.skillsUpdated, (payload) => {
+          if (this.transport !== transport || this.snapshot.backend?.backendId !== backend.backendId) return;
+          const providerId = (payload as { providerId?: unknown })?.providerId;
+          if (typeof providerId === "string") for (const listener of this.contextSourceListeners) listener(providerId);
+        });
         this.detachEvents = () => {
           detachRuns();
           detachStreaming();
           detachTargets();
+          detachSkills();
         };
         if (this.viewingRunId) {
           void syncRun(transport, backend.backendId, this.viewingRunId).catch(() => {});
@@ -460,6 +467,11 @@ class BackendSession {
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  onContextSourcesChanged(listener: (providerId: string) => void): () => void {
+    this.contextSourceListeners.add(listener);
+    return () => { this.contextSourceListeners.delete(listener); };
   }
 
   /** Retain backend identity across recovery; a backend switch retires it permanently. */

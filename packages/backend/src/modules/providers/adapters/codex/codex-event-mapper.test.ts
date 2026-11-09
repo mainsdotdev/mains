@@ -65,6 +65,44 @@ function createHarness(state = createRunState()) {
   };
 }
 
+describe("Codex live patch evidence", () => {
+  it("keeps the latest patch when older item notifications are still waiting to project", () => {
+    const { mapper, state } = createHarness();
+    const original = { threadId: "thread-parent", item: { type: "fileChange", id: "change", changes: [{ path: "file.ts", kind: { type: "update" }, diff: "old" }] } };
+    const patch = { threadId: "thread-parent", itemId: "change", changes: [{ path: "file.ts", kind: { type: "delete" }, diff: "new\n" }] };
+    mapper.captureFileChanges("item/started", original, "run-1");
+    mapper.captureFileChanges("item/fileChange/patchUpdated", patch, "run-1");
+    mapper.mapNotification("item/started", original, "run-1");
+    expect(state.fileChangeItems.get("change")).toEqual([{ path: "file.ts", kind: "delete", diff: "new\n" }]);
+    expect(mapper.mapNotification("item/fileChange/patchUpdated", patch, "run-1")).toEqual([]);
+    mapper.mapNotification("item/completed", { threadId: "thread-parent", item: { id: "change", type: "fileChange", status: "completed", changes: [] } }, "run-1");
+    expect(state.fileChangeItems.has("change")).toBe(false);
+    mapper.captureFileChanges("item/fileChange/patchUpdated", { ...patch }, "run-1");
+    expect(state.fileChangeItems.has("change")).toBe(false);
+  });
+
+  it("isolates child patches by thread and supports empty updates", () => {
+    const { mapper, state } = createHarness();
+    state.subAgents.set("child", { threadId: "child" });
+    for (const threadId of ["thread-parent", "child"]) mapper.mapNotification("item/fileChange/patchUpdated", {
+      threadId, itemId: "same", changes: [{ path: `${threadId}.ts`, kind: { type: "add" }, diff: threadId }],
+    }, "run-1");
+    expect(state.fileChangeItems.get("same")?.[0].path).toBe("thread-parent.ts");
+    expect(state.fileChangeItems.get("child:same")?.[0].path).toBe("child.ts");
+    mapper.mapNotification("item/fileChange/patchUpdated", { threadId: "child", itemId: "same", changes: [] }, "run-1");
+    expect(state.fileChangeItems.get("child:same")).toEqual([]);
+    expect(state.fileChangeItems.get("same")).toHaveLength(1);
+  });
+
+  it("does not show a child's verification, review, hook or warning as a parent status", () => {
+    const { mapper } = createHarness();
+    for (const method of ["model/verification", "model/safetyBuffering/updated", "item/autoApprovalReview/started", "hook/started", "guardianWarning"]) {
+      expect(mapper.mapNotification(method, { threadId: "child", turnId: "child-turn", verifications: ["trustedAccessForCyber"], showBufferingUi: true,
+        reviewId: "review", review: { status: "inProgress" }, run: { id: "hook", eventName: "preToolUse" }, message: "Child warning" }, "run-1")).toEqual([]);
+    }
+  });
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   restoreRuntime?.();

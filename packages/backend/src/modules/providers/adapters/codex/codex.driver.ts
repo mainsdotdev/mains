@@ -675,6 +675,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     // (e.g. thread/name/updated for auto-generated titles)
     server.setBackgroundHandler((method, params) => {
       realtime.handleNotification(method, params);
+      if (method === "skills/changed") {
+        emit(CHANNELS.providers.skillsUpdated, { providerId: PROVIDER_IDS.codex });
+      }
       if (method === "thread/name/updated" || method === "thread/nameUpdated") {
         const p = params as Record<string, unknown> | undefined;
         const threadName = p?.threadName as string | undefined;
@@ -977,12 +980,12 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
 
     async shutdown(): Promise<void> {
       realtime.serverClosed();
-      runCoordinator.shutdown();
+      const closingStatuses = runCoordinator.shutdown();
       capabilities.shutdown();
       goals.shutdown();
       mcpApps.clear();
 
-      await serverLifecycle.close();
+      await Promise.all([serverLifecycle.close(), closingStatuses]);
 
       logInfo("Shutdown complete");
     },

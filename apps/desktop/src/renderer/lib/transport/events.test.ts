@@ -31,6 +31,7 @@ describe("appEvents", () => {
       appEvents.runs.onToolApprovalRequest(cb),
       appEvents.runs.onToolApprovalResolved(cb),
       appEvents.providers.onModelsUpdated(cb),
+      appEvents.providers.onSkillsUpdated(cb),
       appEvents.workspace.onScriptComplete(cb),
       appEvents.workspace.onGitStateChanged(cb),
       appEvents.terminal.onData(cb),
@@ -43,6 +44,7 @@ describe("appEvents", () => {
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.toolApprovalRequest, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.toolApprovalResolved, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.providers.modelsUpdated, cb);
+    expect(subscribe).toHaveBeenCalledWith(CHANNELS.providers.skillsUpdated, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.workspace.scriptComplete, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.workspace.gitStateChanged, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.terminal.data, cb);

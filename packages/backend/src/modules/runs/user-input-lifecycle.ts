@@ -13,6 +13,8 @@ export interface ApprovalLease {
   attach(notification: { close(): void }): void;
 }
 
+export type ApprovalPresentationPatch = Partial<Pick<ToolApprovalRequest, "toolName" | "toolInput" | "description">>;
+
 /** Approval admission, deadline, correlation and one settlement live here.
  * Provider request ids may be reused; client decisions bind to one incarnation.
  * Completed receipts retain hashes rather than secret question/form answers. */
@@ -20,7 +22,7 @@ export function createApprovalLifecycle(callbacks: {
   pending(lease: ApprovalLease): void;
   settled(request: ToolApprovalRequest, broadcast: boolean): void;
 }) {
-  type Entry = ApprovalLease & {
+  type Entry = Omit<ApprovalLease, "attach"> & {
     resolve(response: ToolApprovalResponse): void;
     promise: Promise<ToolApprovalResponse>;
     signature: string;
@@ -35,6 +37,19 @@ export function createApprovalLifecycle(callbacks: {
     requestId: response.requestId, approved: response.approved,
     ...(response.answer !== undefined && !(restricted && response.answer === "acceptForSession") ? { answer: response.answer } : {}),
   });
+  function publish(entry: Entry): void {
+    const request = entry.request;
+    const current = () => entry.current() && entry.request === request;
+    try {
+      callbacks.pending({
+        request, expiresAt: entry.expiresAt, current,
+        attach(notification) {
+          if (current()) entry.notification = notification;
+          else { try { notification.close(); } catch (error) { console.warn("[approvals] Could not close retired notification", error); } }
+        },
+      });
+    } catch (error) { console.warn("[approvals] Could not publish request", error); }
+  }
   function settle(entry: Entry, response: ToolApprovalResponse, broadcast = true): boolean {
     if (!entry.current()) return false;
     const restricted = entry.request.kind === "tool_approval" && !!entry.request.suppressAlwaysAllowRule;
@@ -62,14 +77,28 @@ export function createApprovalLifecycle(callbacks: {
         expiresAt: Date.now() + duration,
         current: () => pending.get(request.requestId) === entry,
         timer: setTimeout(() => settle(entry, canceled(request)), duration),
-        attach(notification) {
-          if (entry.current()) entry.notification = notification;
-          else { try { notification.close(); } catch (error) { console.warn("[approvals] Could not close retired notification", error); } }
-        },
       };
       pending.set(request.requestId, entry);
-      try { callbacks.pending(entry); } catch (error) { console.warn("[approvals] Could not publish request", error); }
+      publish(entry);
       return promise;
+    },
+    update(requestId: string, patch: ApprovalPresentationPatch): boolean {
+      const entry = pending.get(requestId);
+      if (!entry) return false;
+      if (Date.now() >= entry.expiresAt) { settle(entry, canceled(entry.request)); return false; }
+      const { approvalToken: _token, ...input } = entry.request;
+      const next = { ...input, ...structuredClone(patch) };
+      const key = signature(next);
+      if (entry.signature === key) return true;
+      // Changed evidence requires a new decision incarnation, retaining the
+      // original deadline and waiter. Every answering client must see the patch.
+      entry.request = { ...next, approvalToken: randomUUID() };
+      entry.signature = key;
+      entry.legacy = false;
+      try { entry.notification?.close(); } catch (error) { console.warn("[approvals] Could not close changed notification", error); }
+      entry.notification = undefined;
+      publish(entry);
+      return true;
     },
     respond(response: ToolApprovalResponse): boolean {
       if (!response || typeof response.requestId !== "string" || !response.requestId || typeof response.approved !== "boolean" ||

@@ -108,6 +108,7 @@ export function createCodexRunCoordinator(
   const runSinks = new Map<string, CodexRunSink>();
   const serverRequestOwners = new Map<string, string>();
   const turnOwners = new Map<string, string>();
+  const closingStatusWrites = new Set<Promise<void>>();
   const realtimeOwners = new Map<string, {
     model: string | undefined;
     work: RealtimeWorkHandlers;
@@ -519,6 +520,7 @@ export function createCodexRunCoordinator(
         if (state && threadId) {
           if (!state.threadId || threadId === state.threadId) {
             state.turnId = turnId;
+            state.runtimeStatusesClosed = false;
             // Initial turn/start input has no native id at admission. Bind it
             // before asynchronous handlers or a later completion change state.
             for (const input of runSinks.get(runId)?.inputs.values() ?? []) input.expectedTurnId ??= turnId;
@@ -539,6 +541,9 @@ export function createCodexRunCoordinator(
       }
       const sink = runSinks.get(runId);
       if (!sink) return;
+
+      const fileChange = eventMapper.captureFileChanges(method, params, runId);
+      if (fileChange) requestBroker.refreshFileApprovals(runId, fileChange.threadId, fileChange.itemId);
 
       sink.notificationQueue = sink.notificationQueue
         .then(() => sink.handleNotification(method, params))
@@ -646,7 +651,17 @@ export function createCodexRunCoordinator(
           }
         }
         cancelPendingRequests(runId);
-        resolve(result);
+        const closingStatuses = eventMapper.closeRuntimeStatuses(runId);
+        if (closingStatuses.length === 0) { resolve(result); return; }
+        // Admission is closed synchronously; accepted status persistence still
+        // belongs to this turn and must settle before its terminal outcome.
+        const closing = (async () => {
+          for (const event of closingStatuses) await onEvent(event);
+        })().then(() => resolve(result), (error) => resolve({
+          status: "failed", error: `Codex status persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+        }));
+        closingStatusWrites.add(closing);
+        void closing.then(() => closingStatusWrites.delete(closing));
       };
 
       const timeoutTimer = setTimeout(() => {
@@ -861,14 +876,20 @@ export function createCodexRunCoordinator(
       try {
         await session.startTurn();
       } catch (error) {
-        runSinks.get(session.runId)?.finalize({
-          status: "failed",
-          error:
-            error instanceof Error
-              ? error.message
-              : String(error),
-        });
-        await completion;
+        const state = activeRuns.get(session.runId);
+        try {
+          if (!signal.aborted && runSinks.has(session.runId)) {
+            for (const event of eventMapper.mapNotification("error", {
+              threadId: state?.threadId, turnId: state?.turnId, error, willRetry: false,
+            }, session.runId, session.model)) await onEvent(event);
+          }
+        } finally {
+          runSinks.get(session.runId)?.finalize({
+            status: "failed",
+            error: formatCodexError(error, String(error)),
+          });
+          await completion;
+        }
         throw error;
       }
       const result = await completion;
@@ -878,8 +899,7 @@ export function createCodexRunCoordinator(
         usage: eventMapper.flushUsage(session.runId),
       };
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error);
+      const message = formatCodexError(error, error instanceof Error ? error.message : String(error));
       logger.error("executeTurn failed:", message);
       eventMapper.flushUsage(session.runId);
       return { status: "failed", summary: message };
@@ -934,13 +954,12 @@ export function createCodexRunCoordinator(
     }
   }
 
-  function shutdown(): void {
+  function shutdown(): Promise<void> {
     realtimeOwners.clear();
     for (const [runId, state] of activeRuns) {
       state.aborted = true;
       cancelPendingRequests(runId);
     }
-    activeRuns.clear();
     sessionIdMap.clear();
     sessionSubAgents.clear();
     eventMapper.clear();
@@ -950,9 +969,11 @@ export function createCodexRunCoordinator(
         error: "Codex driver is shutting down",
       });
     }
+    activeRuns.clear();
     runSinks.clear();
     serverRequestOwners.clear();
     turnOwners.clear();
+    return Promise.all([...closingStatusWrites]).then(() => undefined);
   }
 
   return {

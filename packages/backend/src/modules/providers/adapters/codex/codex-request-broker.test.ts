@@ -45,6 +45,7 @@ function createHarness(
     approvedElicitationServers: new Set(),
   };
   const requestApproval = vi.fn(approval);
+  const updateApproval = vi.fn(() => true);
   const checkCommand = vi.fn(async () => ({ blocked: false }));
   const dispatchTool = vi.fn(async () => ({
     content: [{ type: "text" as const, text: "tool-result" }],
@@ -63,6 +64,7 @@ function createHarness(
           }
         : undefined,
     requestApproval,
+    updateApproval,
     checkCommand,
     dispatchTool,
     openExternal,
@@ -75,6 +77,7 @@ function createHarness(
     openExternal,
     requestApproval,
     runState,
+    updateApproval,
   };
 }
 
@@ -96,6 +99,27 @@ async function handle(
 }
 
 describe("Codex request broker", () => {
+  it("refreshes only the matching pending file approval and releases it after the decision", async () => {
+    let respond!: (response: ToolApprovalResponse) => void;
+    const h = createHarness(() => new Promise((resolve) => { respond = resolve; }));
+    h.runState.threadId = "parent";
+    h.runState.fileChangeItems.set("child:change", [{ path: "child.ts", kind: "update", diff: "old" }]);
+    h.runState.fileChangeItems.set("change", [{ path: "parent.ts", kind: "update", diff: "parent" }]);
+    const responder = createResponder();
+    const pending = handle(h.broker, responder.server, "item/fileChange/requestApproval", { threadId: "child", itemId: "change" });
+    expect(h.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ toolInput: { file_path: "child.ts", diff: "old" } }));
+    h.runState.fileChangeItems.set("child:change", [{ path: "child.ts", kind: "delete", diff: "new" }]);
+    h.broker.refreshFileApprovals("other-run", "child", "change");
+    h.broker.refreshFileApprovals("run-1", "parent", "change");
+    expect(h.updateApproval).not.toHaveBeenCalled();
+    h.broker.refreshFileApprovals("run-1", "child", "change");
+    expect(h.updateApproval).toHaveBeenCalledExactlyOnceWith("42", { toolName: "Delete", toolInput: { file_path: "child.ts", diff: "new" } });
+    respond({ requestId: "42", approved: false });
+    await pending;
+    h.broker.refreshFileApprovals("run-1", "child", "change");
+    expect(h.updateApproval).toHaveBeenCalledTimes(1);
+  });
+
   it("requires a fresh one-call decision for human commands, including a replayed request", async () => {
     const pending = vi.fn();
     const lifecycle = createApprovalLifecycle({ pending, settled: vi.fn() });

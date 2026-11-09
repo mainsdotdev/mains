@@ -61,6 +61,9 @@ export const appEvents = {
     ),
   },
   providers: {
+    onSkillsUpdated: bind<typeof window.api.providers.onSkillsUpdated>(
+      CHANNELS.providers.skillsUpdated,
+    ),
     onModelsUpdated: bind<typeof window.api.providers.onModelsUpdated>(
       CHANNELS.providers.modelsUpdated,
     ),

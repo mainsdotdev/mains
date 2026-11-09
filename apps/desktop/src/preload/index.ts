@@ -525,6 +525,11 @@ const api = {
     getCommands: (id: string, workspacePath?: string) =>
       ipcRenderer.invoke(CHANNELS.providers.getCommands, id, workspacePath),
     getSkills: (id: string, workspacePath?: string) => ipcRenderer.invoke(CHANNELS.providers.getSkills, id, workspacePath),
+    onSkillsUpdated: (callback: (data: { providerId: string }) => void) => {
+      const listener = (_: any, data: any) => callback(data);
+      ipcRenderer.on(CHANNELS.providers.skillsUpdated, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.providers.skillsUpdated, listener);
+    },
     getRateLimits: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRateLimits, id),
     getRealtimeVoices: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRealtimeVoices, id),
     getCodexMemorySettings: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getCodexMemorySettings, id),

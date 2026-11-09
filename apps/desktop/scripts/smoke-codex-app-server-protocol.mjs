@@ -265,6 +265,12 @@ try {
     assertContains("v2/Account.ts", ['"type": "gcp"', "workspaceName: string | null"]);
   }
   if (compareVersions(versionOutput, "0.167.0") >= 0) {
+    assertContains("ServerNotification.ts", [
+      '"method": "item/fileChange/patchUpdated"', '"method": "skills/changed"',
+      '"method": "model/safetyBuffering/updated"', '"method": "model/verification"',
+      '"method": "item/autoApprovalReview/started"', '"method": "item/autoApprovalReview/completed"',
+      '"method": "autoApprovalReview/strictReviewRequired"', '"method": "hook/started"', '"method": "hook/completed"',
+    ]);
     assertContains("InitializeCapabilities.ts", ["requiredHumanApproval?: boolean"]);
     assertContains("v2/CommandExecutionApprovalKind.ts", ['"humanCommand"']);
     assertContains("v2/CommandExecutionRequestApprovalParams.ts", [
