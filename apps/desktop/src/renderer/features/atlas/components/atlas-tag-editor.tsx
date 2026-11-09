@@ -32,7 +32,7 @@ export function AtlasTagEditor({ item, onClose }: { item: AtlasItem; onClose: ()
       <form className="min-h-0 overflow-y-auto px-6 pb-6" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         <Text size="s" tone="subtle" className="mb-5 line-clamp-2">{item.title}</Text>
         <label htmlFor={id} className="mb-1.5 block text-xs text-primary-600 dark:text-primary-400">Tags</label>
-        <Select id={id} aria-label="Tags" multiple size="sm" value={tags} onChange={setTags} animationDirection="down"
+        <Select id={id} aria-label="Tags" multiple showSelectedOptions={false} size="sm" value={tags} onChange={setTags} animationDirection="down"
           options={[...options.values()]} placeholder="Select or create tags" searchPlaceholder="Search tags"
           emptyMessage="No tags yet. Type to create one." maxSelected={30} maxSearchLength={64}
           disabled={saving.isLoading || known.isLoading}

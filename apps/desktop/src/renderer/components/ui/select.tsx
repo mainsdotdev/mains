@@ -83,6 +83,8 @@ export type SelectProps<T extends string = string> = SelectBaseProps<T> &
         /** Return a new option value; undefined leaves the query unselected. */
         onCreateOption?: (label: string) => T | undefined;
         maxSelected?: number;
+        /** Keep compact forms at one row; values remain visible in the trigger. */
+        showSelectedOptions?: boolean;
       }
   ) &
   (
@@ -403,9 +405,18 @@ export default function Select<T extends string = string>(
 
     document.addEventListener("scroll", schedulePositionUpdate, true);
     window.addEventListener("resize", schedulePositionUpdate);
+    // Centered dialogs move the trigger when their content grows, without a
+    // window resize or scroll. Track its layout ancestors as well as the field.
+    const observer = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(schedulePositionUpdate)
+      : undefined;
+    for (let element: HTMLElement | null = triggerRef.current; element; element = element.parentElement) {
+      observer?.observe(element);
+    }
 
     return () => {
       if (frameId) cancelAnimationFrame(frameId);
+      observer?.disconnect();
       document.removeEventListener("scroll", schedulePositionUpdate, true);
       window.removeEventListener("resize", schedulePositionUpdate);
     };
@@ -636,7 +647,7 @@ export default function Select<T extends string = string>(
           </div>,
           document.body,
         )}
-      {props.multiple && selectedOptions.length > 0 && (
+      {props.multiple && props.showSelectedOptions !== false && selectedOptions.length > 0 && (
         <div
           className="mt-2 flex flex-wrap gap-1.5"
           aria-label="Selected options"

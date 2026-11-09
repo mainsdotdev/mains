@@ -55,7 +55,7 @@ export function AtlasBookmarkEditor({ accountId, item, collectionId, onClose }: 
         </label>
         <div>
           <label htmlFor={`${prefix}-tags`} className="mb-1.5 block text-xs text-primary-600 dark:text-primary-400">Tags</label>
-          <Select id={`${prefix}-tags`} aria-label="Tags" multiple size="sm" value={tags} onChange={setTags} animationDirection="down"
+          <Select id={`${prefix}-tags`} aria-label="Tags" multiple showSelectedOptions={false} size="sm" value={tags} onChange={setTags} animationDirection="down"
             options={[...tagOptions.values()]}
             placeholder="Select or create tags" searchPlaceholder="Search tags" emptyMessage="No tags yet. Type to create one."
             disabled={saving.isLoading || knownTags.isLoading} maxSelected={30} maxSearchLength={64} onCreateOption={createTag} />

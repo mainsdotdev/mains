@@ -48,6 +48,30 @@ describe("Select", () => {
     expect(screen.getByLabelText("Selected values").textContent).toBe('["typescript"]');
     expect(screen.getByRole("listbox")).toBeTruthy();
   });
+  it("keeps the list attached when its enclosing layout resizes", async () => {
+    let resize!: ResizeObserverCallback;
+    const observe = vi.fn(), disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: ResizeObserverCallback) { resize = callback; }
+      observe = observe;
+      disconnect = disconnect;
+    });
+    const { unmount } = render(<Multiple />);
+    const trigger = screen.getByRole("button", { name: "Topics" });
+    let bottom = 300;
+    vi.spyOn(trigger, "getBoundingClientRect").mockImplementation(() =>
+      ({ bottom, left: 80, width: 400 }) as DOMRect);
+    fireEvent.click(trigger);
+    const dropdown = screen.getByRole("listbox").parentElement!;
+    expect(dropdown.style.top).toBe("300px");
+    // A centered dialog moves its trigger when content below it changes height.
+    bottom = 284;
+    expect(observe).toHaveBeenCalledWith(trigger.closest("form"));
+    resize([], {} as ResizeObserver);
+    await waitFor(() => expect(dropdown.style.top).toBe("284px"));
+    unmount();
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
   it("creates a typed option with Enter and resolves an existing label without creating duplicates", () => {
     const submit = vi.fn(), create = vi.fn((name: string) => name);
     render(<Multiple onSubmit={submit} onCreate={create} />);

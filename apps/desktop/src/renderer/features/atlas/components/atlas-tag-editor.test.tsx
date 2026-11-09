@@ -18,6 +18,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.transport = "local";
   mocks.save.mockReturnValue({ unwrap: async () => ({}) });
+  document.documentElement.style.fontSize = "16px";
   Element.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
   vi.stubGlobal("cancelAnimationFrame", (id: number) => window.clearTimeout(id));
@@ -30,6 +31,8 @@ describe("Atlas tag editor", () => {
     render(<AtlasTagEditor item={item} onClose={close} />);
     fireEvent.click(screen.getByRole("button", { name: "Tags" }));
     fireEvent.click(screen.getByRole("option", { name: "TypeScript" }));
+    expect(screen.queryByLabelText("Selected options")).toBeNull();
+    expect(screen.getByRole("button", { name: "Tags" }).textContent).toContain("React, TypeScript");
     const search = screen.getByRole("searchbox", { name: "Search tags" });
     fireEvent.change(search, { target: { value: "New topic" } });
     fireEvent.keyDown(search, { key: "Enter" });

@@ -51,6 +51,7 @@ describe("Atlas bookmark editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Tags" }));
     fireEvent.click(screen.getByRole("option", { name: "React" }));
     fireEvent.click(screen.getByRole("option", { name: "TypeScript" }));
+    expect(screen.queryByLabelText("Selected options")).toBeNull();
     const search = screen.getByRole("searchbox", { name: "Search tags" });
     fireEvent.change(search, { target: { value: "Deep research" } });
     fireEvent.keyDown(search, { key: "Enter" });

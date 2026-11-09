@@ -75,7 +75,7 @@ export function AtlasPageCard({ item, activity, menu, imagePaths, onOpen, onTag,
           </span>
         )}
       </Button>
-      <AtlasItemTags tags={item.tags ?? []} onTag={onTag} className="px-4" />
+      <AtlasItemTags tags={item.tags ?? []} onTag={onTag} className="px-4 pt-2" />
       <Muted className={`pb-3 pl-4 pt-1 text-xxs ${item.isFavorite ? "pr-10" : "pr-4"}`}>{activity}</Muted>
       {item.isFavorite && <Star filled role="img" aria-label="Favorite" className="pointer-events-none absolute bottom-3 right-3 size-3.5 text-accent" />}
     </article>
