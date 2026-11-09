@@ -78,6 +78,18 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); toastStore.dismissAll(); vi.useRealTimers(); });
 describe("shared MCP App panel", () => {
+  it.each([
+    { tool: "notion.notion-page-view", linkId: "account-1" },
+    { tool: "canva.openai-home", linkId: "synthetic_link::canva" },
+  ])("routes a direct $tool launch to its local notice without contacting the MCP server", async (metadata) => {
+    const blocked = { ...app, ...metadata, id: metadata.tool };
+    const h = harness();
+    await act(async () => h.result.current.openGlobal(blocked));
+    expect(h.pathname).toBe(mcpAppPath(blocked));
+    expect(mocks.openExtension).not.toHaveBeenCalled();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(toastStore.toasts).toHaveLength(0);
+  });
   it("keeps a newly opened app session alive during StrictMode effect replay", async () => {
     const h = harness("/code/ws-1", undefined, true);
     await openDraft(h);

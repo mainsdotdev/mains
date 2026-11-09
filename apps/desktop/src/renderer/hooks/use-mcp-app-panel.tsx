@@ -21,7 +21,7 @@ import { previewOwnerKey } from "@/features/workspace/lib/preview-tabs";
 import { sameMcpApp, sameMcpAppScope, mcpAppConversationPath, type McpAppScope } from "@/features/workspace/lib/mcp-app-panel";
 import { hasUsableMcpAppResult } from "@/features/workspace/lib/mcp-app-tool-result";
 import { McpAppCompatibilityNotice } from "@/features/workspace/components/mcp-app-compatibility-notice";
-import { mcpAppCompatibility, mcpAppPath } from "@/lib/mcp-app-extensions";
+import { mcpAppCompatibility, mcpAppLaunchIssue, mcpAppPath } from "@/lib/mcp-app-extensions";
 import { mcpAppContextItems, mcpAppContextState, mcpAppMessageText, normalizeMcpAppContext,
   type McpAppMessageOptions, type McpAppModelContextState } from "@/features/workspace/lib/mcp-app-context";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
@@ -171,6 +171,13 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
   };
 
   const openGlobal = useCallback(async (app: McpAppEntrypoint) => {
+    if (mcpAppLaunchIssue(app)) {
+      ++openingRevision.current;
+      setOpening(null);
+      setError(null);
+      navigate(mcpAppPath(app));
+      return;
+    }
     const scope = captureScope();
     const current = Object.values(panelsRef.current).find((panel) => sameMcpAppScope(panel.scope, scope) && sameMcpApp(panel.document.app, app));
     setError(null);
@@ -208,7 +215,7 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     } catch (reason) {
       if (isCurrent()) { const message = reason instanceof Error ? reason.message : String(reason); setError(message); toast.error(message); }
     } finally { if (revision === openingRevision.current) setOpening(null); }
-  }, [captureScope, activeContext, commit, reveal, showConversation]);
+  }, [captureScope, activeContext, commit, reveal, showConversation, navigate]);
 
   const openTool = useCallback((result: McpAppToolOpen, automatic = false) => {
     if (!hasUsableMcpAppResult(result.output)) return;
@@ -336,7 +343,7 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     return { document: panel?.document ?? null, scope: panel?.scope ?? null, ownerKey: panel?.ownerKey ?? null, runId: panel?.runId,
       isOpen, isExpanded: isOpen && preview.isExpanded, width,
       setWidth: (next) => dispatch(setBrowserPanelWidth(clamp(next, BROWSER_PANEL_WIDTH_MIN, BROWSER_PANEL_WIDTH_MAX))),
-      chatMode: panel?.chatMode ?? "input", chatVisible: !!panel?.chatVisible && !mcpAppCompatibility(panel?.document.app).notice,
+      chatMode: panel?.chatMode ?? "input", chatVisible: !!panel?.chatVisible && !mcpAppCompatibility(panel?.document.app).notice && !mcpAppLaunchIssue(panel?.document.app),
       chatHost: panel?.chatHost ?? null, ...bound, opening, error, openGlobal, openTool, close,
       toggleExpanded: preview.toggleExpanded, registerConversation, attachRun, appContext,
       modelContext: panel ? mcpAppContextState((ownItems ?? []).filter((item) => item.kind === "mcp-app"), id) : null };

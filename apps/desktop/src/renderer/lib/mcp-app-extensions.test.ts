@@ -1,12 +1,33 @@
 import { describe, expect, it } from "vitest";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
-import { mcpAppPinKey, normalizeMcpAppPins } from "./mcp-app-extensions";
+import { mcpAppLaunchIssue, mcpAppPinKey, normalizeMcpAppPins } from "./mcp-app-extensions";
 
 const app: McpAppEntrypoint = {
   id: JSON.stringify(["codex_apps", "magicpath.open", "magicpath", "old-link"]),
   name: "MagicPath", server: "codex_apps", tool: "magicpath.open", pluginId: "magicpath@catalog",
   connectorId: "magicpath", linkId: "old-link", resourceUri: "ui://canvas", entrypoints: ["global"], preferredModelDisplayMode: "fullscreen",
 };
+
+describe("MCP app launch availability", () => {
+  it("provides a browser fallback for the hosted Notion viewer", () => {
+    expect(mcpAppLaunchIssue({ ...app, tool: "notion.notion-page-view" })).toMatchObject({
+      kind: "unsupported", webUrl: "https://app.notion.com/",
+    });
+  });
+
+  it.each([null, "synthetic_link::canva"])("requires a Canva account for link %s", (linkId) => {
+    expect(mcpAppLaunchIssue({ ...app, tool: "canva.openai-home", linkId })?.kind).toBe("connection");
+  });
+
+  it("does not mistake authenticated, unknown or other servers' connections for a missing Canva account", () => {
+    for (const candidate of [app, { ...app, tool: "canva.openai-home" },
+      { ...app, tool: "canva.openai-home", linkId: undefined },
+      { ...app, server: "local", tool: "canva.openai-home", linkId: null },
+      { ...app, server: "local", tool: "notion.notion-page-view" }]) {
+      expect(mcpAppLaunchIssue(candidate)).toBeUndefined();
+    }
+  });
+});
 
 describe("logical MCP app pin identity", () => {
   it("survives reconnects, server changes, names, icons and resource revisions", () => {

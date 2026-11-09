@@ -9,7 +9,7 @@ import { usePreviewTabLifecycle } from "@/hooks/use-preview-tab-lifecycle";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setPendingRunId } from "@/lib/redux/slices/workspaceSlice";
 import { mcpAppConversationPath } from "../lib/mcp-app-panel";
-import { mcpAppCompatibility } from "@/lib/mcp-app-extensions";
+import { mcpAppCompatibility, mcpAppLaunchIssue } from "@/lib/mcp-app-extensions";
 import { McpAppWorkspace } from "./mcp-app-workspace";
 import { createTabResourceLifecycle } from "../../../../shared/tab-resource-lifecycle";
 
@@ -85,7 +85,7 @@ function AppContent() {
 
   if (!panel?.document) return null;
   const app = panel.document.app;
-  const interfaceUnsupported = !!mcpAppCompatibility(app).notice;
+  const interfaceUnsupported = !!(mcpAppCompatibility(app).notice || mcpAppLaunchIssue(app));
 
 
   return <div data-mcp-app-panel="" data-mcp-app-panel-visible={panel.isOpen ? "" : undefined}
