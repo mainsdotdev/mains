@@ -20,6 +20,7 @@ import {
 import {
   Bridge,
   Chat,
+  Close,
   Document,
   Download,
   Ellipsis,
@@ -649,7 +650,12 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           </AtlasMenu>
         </div>
       </div>
-      {params.get("tag") && <div className="shrink-0 px-6 pt-4 md:px-12 xl:px-16"><Button className="rounded-full bg-primary-100 px-3 py-1 text-xs text-primary-600 dark:bg-primary-800 dark:text-primary-300" onClick={() => setFilter("tag", "")}>Tag: {tags.find((tag) => tag.id === params.get("tag"))?.name ?? "Selected"} · Clear</Button></div>}
+      {params.get("tag") && <div className="shrink-0 px-6 pt-4 md:px-12 xl:px-16">
+        <Button aria-label="Clear tag filter" className="inline-flex max-w-full items-center gap-2 rounded-full glass-outline px-3 py-1 text-xs text-primary-600 focus-visible:ring-2 focus-visible:ring-accent/40 dark:text-primary-300" onClick={() => setFilter("tag", "")}>
+          <span className="min-w-0 truncate">Tag: {tags.find((tag) => tag.id === params.get("tag"))?.name ?? "Selected"}</span>
+          <Close aria-hidden="true" className="size-3 shrink-0" />
+        </Button>
+      </div>}
       <div className="scroll-bounce min-h-0 flex-1 overflow-y-auto noscrollbar px-6 pt-8 pb-16 md:px-12 xl:px-16 mask-[linear-gradient(to_bottom,transparent,black_1.75rem)]">
         {provider.supportsAtlas && type === "all" && scope === "all" && !params.get("tag") && !searchValue && page === 1 && (
           <section className="mb-10" aria-label="Start a page">
@@ -845,7 +851,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           </div>
         ) : (
           <table className="w-full table-fixed text-left text-s">
-            <thead className="text-xs font-normal text-primary-500">
+            {type !== "bookmark" && <thead className="text-xs font-normal text-primary-500">
               <tr className="border-b border-primary-200/50 dark:border-primary-900">
                 <th className="w-[56%] pb-3 pl-3 font-normal">Name</th>
                 <th className="hidden w-[24%] pb-3 font-normal sm:table-cell">
@@ -856,9 +862,16 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                   <span className="sr-only">Actions</span>
                 </th>
               </tr>
-            </thead>
+            </thead>}
             <tbody>
               {entries.map((entry) => {
+                if (entry.kind === "bookmark" && entry.saved) return (
+                  <tr key={entry.key}>
+                    <td colSpan={4}>
+                      <AtlasBookmarkCard item={entry.saved} layout="list" menu={itemMenu(entry)} onOpen={() => show(entry)} onTag={(id) => setFilter("tag", id)} />
+                    </td>
+                  </tr>
+                );
                 const runId = entry.generated?.runId ?? entry.saved?.sourceRunId;
                 return (
                   <tr
@@ -891,7 +904,6 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                         </span>
                         <span className="min-w-0 truncate text-primary-800 dark:text-primary-200">
                           {entry.title}
-                          {entry.kind === "bookmark" && !!entry.saved?.tags?.length && <span className="mt-0.5 block truncate text-xxs text-primary-500">{entry.saved.tags.map((tag) => tag.name).join(" · ")}</span>}
                         </span>
                         {entry.saved?.isFavorite && (
                           <Star
@@ -911,7 +923,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                           {deviceOf(entry) && ` · ${deviceOf(entry)}`}
                         </Button>
                       ) : (
-                        entry.kind === "bookmark" ? entry.saved?.metadata?.bookmark?.siteName ?? entry.saved?.url : "—"
+                        "—"
                       )}
                     </td>
                     <td

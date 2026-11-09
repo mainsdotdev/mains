@@ -150,6 +150,32 @@ describe("Atlas settings navigation", () => {
   });
 });
 
+describe("Atlas bookmark tags", () => {
+  it.each(["grid", "list"])("filters from tags in the %s layout without opening the bookmark", (layout) => {
+    mocks.items = [{ id: "bookmark", accountId: "account", kind: "bookmark", title: "Normal Tools",
+      url: "https://normaltools.com", metadata: null, collectionId: null, sourceRunId: null, sourceKey: null,
+      path: null, fileName: null, mimeType: null, byteSize: null, isFavorite: false, trashedAt: null,
+      version: 1, createdAt: "2026-10-07", updatedAt: "2026-10-07",
+      tags: ["calculators", "developer tools", "file converters", "online utilities", "text tools", "reference"].map((name, index) => ({ id: `tag-${index}`, name, source: "ai" })),
+    }];
+    setup(`/atlas?type=bookmark&layout=${layout}`);
+    expect(screen.queryByRole("button", { name: /more tags/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open Normal Tools" })).toBeTruthy();
+    expect(screen.getByText("normaltools.com")).toBeTruthy();
+    if (layout === "list") {
+      expect(screen.queryByRole("columnheader")).toBeNull();
+      expect(document.querySelector("time")?.dateTime).toBe("2026-10-07");
+    }
+    fireEvent.click(screen.getByRole("button", { name: "#reference" }));
+    expect(mocks.list).toHaveBeenLastCalledWith(expect.objectContaining({ type: "bookmark", tagId: "tag-5" }));
+    expect(screen.getByTestId("url").textContent).toContain("tag=tag-5");
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Clear tag filter" }));
+    expect(screen.getByTestId("url").textContent).not.toContain("tag=");
+    expect(mocks.list).toHaveBeenLastCalledWith(expect.objectContaining({ tagId: undefined }));
+  });
+});
+
 describe("Atlas library pagination", () => {
   function pages() {
     const entries = Array.from({ length: 51 }, (_, index) => savedEntry({
