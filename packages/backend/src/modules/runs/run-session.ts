@@ -6,7 +6,6 @@ import {
   toolWrites,
   type WorkRunEvent,
 } from "../providers/adapters";
-import type { WorkRunUsage } from "../../../shared/adapter.types";
 import type { RunExecutionContext } from "../../../shared/adapter.types";
 import { runsRepo } from "./runs.repo";
 import { providersService } from "../providers";
@@ -19,7 +18,8 @@ import {
   type DiffSnapshot,
   type WorktreeLocation,
 } from "../git";
-import { attributeTurnFiles, type TurnWrites } from "./turn-attribution";
+import { attributeTurnFiles } from "./turn-attribution";
+import { createRunTurnLifecycle, type ClosedRunTurn, type TurnBaseline } from "./run-turn-lifecycle";
 import {
   workspaceService,
   recordWorkspaceDiff,
@@ -82,15 +82,6 @@ export interface RunSessionContext {
   onTurnClosed?: (runId: string) => Promise<void>;
 }
 
-/** Where a turn began, for turn changes. */
-interface TurnBaseline {
-  /** Working-tree snapshot at the turn's start; null when none could be taken. */
-  tree: Promise<string | null>;
-  at: number;
-  /** What the turn's own tool calls wrote since. */
-  writes: TurnWrites;
-}
-
 export interface RunSession {
   readonly runId: string;
   /** Live ownership, independent of the persisted execution outcome. */
@@ -147,18 +138,10 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // can use it even when a near-instant run completes first.
   let baseRefCaptured: Promise<void> | null = null;
   let sleepBlockerId: number | null = null;
-  let activeTurnId: number | null = null;
-  // Where the active turn began — closing it diffs `tree` against a fresh
-  // snapshot — and what its own tool calls wrote since. See CONTEXT.md "turn
-  // changes".
-  let turnBaseline: TurnBaseline | null = null;
   const sessionStartedAt = Date.now();
   // The worktree this run shares with any parallel run; null without a
   // workspace or outside a git repo.
   const worktree: Promise<WorktreeLocation | null> = locateWorktree();
-  let initialTurnReady: Promise<void> | null = null;
-  let resolvedToolCallsReady: Promise<void> | null = null;
-  let turnCounter: number = ctx.seedTurnIndex ?? -1;
   const liveDiff = workspaceId ? createWorkspaceDiffScheduler(workspaceId, recomputeLiveDiff, LIVE_DIFF_DEBOUNCE_MS, execution.cwd) : null;
   const toolProjection = createToolCallProjection({ runId, accountId, providerId });
   // callKey → the files a running tool call named at start, claimed for the
@@ -170,6 +153,22 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   const artifactProjections = new Set<Promise<boolean>>();
   const eventProjections = new Set<Promise<void>>();
   let projectionTail = Promise.resolve();
+  const turns = createRunTurnLifecycle({
+    seedIndex: ctx.seedTurnIndex ?? -1,
+    captureTree: captureTurnTree,
+    open: (turnIndex, promptContent) => runsRepo.insertTurn({ runId, turnIndex, promptContent, startedAt: new Date() }),
+    async opened(id, initial) {
+      if (!initial) return;
+      if (ctx.initialModel) await runsRepo.updateTurn(id, { model: ctx.initialModel });
+      if (ctx.initialProviderTurnId || ctx.initialTurnMetadata) {
+        await runsRepo.patchTurnMetadata(id, {
+          ...ctx.initialTurnMetadata,
+          ...(ctx.initialProviderTurnId ? { providerTurnId: ctx.initialProviderTurnId } : {}),
+        });
+      }
+    },
+    close: persistClosedTurn,
+  });
 
   // ─── Broadcast helpers (channel names + payload shapes preserved exactly) ───
   function broadcastEventPersisted(): void {
@@ -252,14 +251,6 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     }
   }
 
-  function takeTurnBaseline(): TurnBaseline {
-    return {
-      at: Date.now(),
-      tree: captureTurnTree(),
-      writes: { paths: new Set(), unnamed: false },
-    };
-  }
-
   async function locateWorktree(): Promise<WorktreeLocation | null> {
     if (!workspaceId) return null;
     try {
@@ -291,7 +282,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       const repoPath = toWorktreePath(location, execution.cwd, toolPath);
       if (repoPath) paths.push(repoPath);
     }
-    if (writes.unnamed && turnBaseline) turnBaseline.writes.unnamed = true;
+    if (writes.unnamed && turns.baseline) turns.baseline.writes.unnamed = true;
     worktreeWrites.record(
       location.topLevel,
       runId,
@@ -354,51 +345,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   }
 
   // ─── Turn boundaries ───
-  async function startNextTurn(promptContent?: string): Promise<void> {
-    // Close any currently-active turn (no-op on the first call for a fresh run).
-    if (activeTurnId !== null) {
-      // One snapshot marks the boundary: the closing turn's end is the next
-      // turn's start, so no change between them goes unattributed.
-      const boundary = takeTurnBaseline();
-      await closeActiveTurn(undefined, boundary.tree);
-      turnBaseline = boundary;
-    }
-    // The first turn's baseline was taken at session start (see Initialize).
-    turnBaseline ??= takeTurnBaseline();
-    try {
-      const nextIndex = turnCounter + 1;
-      const initial = turnCounter === (ctx.seedTurnIndex ?? -1);
-      const id = await runsRepo.insertTurn({
-        runId,
-        turnIndex: nextIndex,
-        promptContent,
-        startedAt: new Date(),
-      });
-      activeTurnId = id;
-      turnCounter = nextIndex;
-      if (initial && ctx.initialModel) await runsRepo.updateTurn(id, { model: ctx.initialModel });
-      if (initial && (ctx.initialProviderTurnId || ctx.initialTurnMetadata)) {
-        await runsRepo.patchTurnMetadata(id, {
-          ...ctx.initialTurnMetadata,
-          ...(ctx.initialProviderTurnId ? { providerTurnId: ctx.initialProviderTurnId } : {}),
-        });
-      }
-    } catch (err) {
-      console.error(`[RunSession ${runId}] Failed to start turn:`, err);
-    }
-  }
-
-  async function closeActiveTurn(
-    usage?: WorkRunUsage,
-    endTree?: Promise<string | null>,
-    outcome?: RunSessionResult["status"],
-  ): Promise<void> {
-    if (activeTurnId === null) return;
-    const turnId = activeTurnId;
-    // Snapshot before the DB writes below, as close to the boundary as we get.
-    const turnEndTree = endTree ?? captureTurnTree();
-    const baseline = turnBaseline;
-    turnBaseline = null;
+  async function persistClosedTurn({ id: turnId, baseline, endTree: turnEndTree, usage, outcome }:
+    ClosedRunTurn): Promise<void> {
     try {
       const now = new Date();
       const turns = await runsRepo.findTurnsByRun(runId);
@@ -421,9 +369,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         modelUsage: usage?.modelUsage,
       });
       if (ctx.initialTurnMetadata && outcome) await runsRepo.patchTurnMetadata(turnId, { outcome });
-      activeTurnId = null;
     } catch (err) {
       console.error(`[RunSession ${runId}] Failed to close active turn:`, err);
+      throw err;
     }
     await persistTurnChanges(turnId, baseline, turnEndTree);
     try { await ctx.onTurnClosed?.(runId); }
@@ -565,8 +513,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   async function projectToolCall(
     event: Extract<WorkRunEvent, { type: "tool_call" }>,
   ): Promise<boolean> {
-    if (initialTurnReady) await initialTurnReady;
-    const result = await toolProjection.project(event, activeTurnId);
+    await turns.ready;
+    const result = await toolProjection.project(event, turns.id);
     const callKey = result.key;
     if (result.transition === "unchanged") return false;
     if (result.transition === "started") {
@@ -594,8 +542,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     if (callKey) pendingToolWrites.delete(callKey);
     const named = await noteToolWrites(event);
     const wrote = !event.error && (event.terminalStatus ?? "done") === "done";
-    if (wrote && turnBaseline) {
-      for (const repoPath of [...namedAtStart, ...named]) turnBaseline.writes.paths.add(repoPath);
+    if (wrote && turns.baseline) {
+      for (const repoPath of [...namedAtStart, ...named]) turns.baseline.writes.paths.add(repoPath);
     }
     return true;
   }
@@ -607,7 +555,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     if (event.ephemeral) {
       // A queued prompt boundary may still be preparing. Let ordered final
       // projection assign a new stream's turn instead of freezing the old one.
-      event = reports.stream(event, eventProjections.size ? null : activeTurnId);
+      event = reports.stream(event, eventProjections.size ? null : turns.id);
       broadcastEphemeralEvent({
         type: event.type,
         kind: event.kind,
@@ -618,26 +566,24 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       return false;
     }
 
-    if (initialTurnReady) await initialTurnReady;
+    await turns.ready;
     event = reports.prepare(event);
     if (reports.completed(event)) return false;
-    event = { ...event, metadata: { ...event.metadata, turnId: event.metadata?.turnId ?? activeTurnId } };
+    event = { ...event, metadata: { ...event.metadata, turnId: event.metadata?.turnId ?? turns.id } };
     // A Claude send that missed the previous native turn can already have
     // started a new one. Deduplicate it before opening its boundary, and stamp
     // the accepted prompt with the new turn rather than the one it just closed.
-    const startsQueuedTurn = event.kind === "user-prompt" && event.metadata?.delivery === "queue";
-    if (!await insertRunInputArtifact(runId, event, startsQueuedTurn ? async () => {
-      await startNextTurn(event.content);
-      event = { ...event, metadata: { ...event.metadata, turnId: activeTurnId } };
+    const artifactKind = event.metadata?.kind;
+    const startsTurn = event.metadata?.delivery !== "steer" &&
+      (event.kind === "user-prompt" && event.metadata?.delivery === "queue" || artifactKind === "user-prompt");
+    if (!await insertRunInputArtifact(runId, event, startsTurn ? async () => {
+      const inputId = event.metadata?.clientUserMessageId;
+      const turnId = await turns.start(event.content, typeof inputId === "string" ? inputId : undefined);
+      event = { ...event, metadata: { ...event.metadata, turnId } };
       return event;
     } : undefined)) return false;
     reports.commit(event);
 
-    // Turn boundary side-effects
-    const artifactKind = (event.metadata as Record<string, unknown> | undefined)?.kind;
-    if (artifactKind === "user-prompt" && event.metadata?.delivery !== "steer" && !startsQueuedTurn) {
-      await startNextTurn(event.content);
-    }
     if (event.kind === "user-prompt") {
       const resolvedModel =
         typeof event.metadata?.model === "string"
@@ -646,19 +592,18 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       if (resolvedModel) {
         // The core emits the prompt as soon as acquisition resolves, which can
         // race the fire-and-forget initial turn insert in this constructor.
-        if (activeTurnId === null && initialTurnReady) {
-          await initialTurnReady;
-        }
-        if (activeTurnId !== null) {
-          await runsRepo.updateTurn(activeTurnId, { model: resolvedModel });
+        await turns.ready;
+        const turnId = typeof event.metadata?.turnId === "number" ? event.metadata.turnId : turns.id;
+        if (turnId !== null) {
+          await runsRepo.updateTurn(turnId, { model: resolvedModel });
         }
       }
     }
-    if (artifactKind === "result" && event.content && activeTurnId !== null) {
+    if (artifactKind === "result" && event.content && turns.id !== null) {
       try {
-        await runsRepo.appendResponseContent(activeTurnId, event.content);
+        await runsRepo.appendResponseContent(turns.id, event.content);
       } catch (err) {
-        console.error(`[RunSession ${runId}] Failed to append response for turn ${activeTurnId}:`, err);
+        console.error(`[RunSession ${runId}] Failed to append response for turn ${turns.id}:`, err);
       }
     }
     return true;
@@ -679,16 +624,14 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   async function projectPlanUpdate(
     event: Extract<WorkRunEvent, { type: "plan_update" }>,
   ): Promise<boolean> {
-    if (activeTurnId === null && initialTurnReady) {
-      await initialTurnReady;
-    }
-    if (activeTurnId === null) {
+    await turns.ready;
+    if (turns.id === null) {
       console.warn(
         `[RunSession ${runId}] Dropping plan update without an active turn`,
       );
       return false;
     }
-    await runsRepo.patchTurnMetadata(activeTurnId, {
+    await runsRepo.patchTurnMetadata(turns.id, {
       codexPlan: {
         providerTurnId: event.providerTurnId,
         explanation: event.explanation,
@@ -847,9 +790,12 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         stopReason: result.stopReason ?? null,
       });
 
-      if (initialTurnReady) await initialTurnReady;
-      await closeActiveTurn(result.usage, undefined, result.status);
-      await toolProjection.settle(result.status);
+      try {
+        await turns.ready.catch(() => {});
+        await turns.finish(result.usage, result.status);
+      } finally {
+        await toolProjection.settle(result.status);
+      }
     } catch (cleanupErr) {
       console.error(`[RunSession ${runId}] Cleanup failed:`, cleanupErr);
     } finally {
@@ -869,6 +815,10 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   }
 
   // ─── Initialize ───
+  // Publish only after the turn barrier exists: event sinks can project back
+  // into this session synchronously while handling the running announcement.
+  void turns.initialize(toolProjection.ready, ctx.initialPromptContent)
+    .catch((error) => console.error(`[RunSession ${runId}] Initial projection failed:`, error));
   const session: RunSession = { runId, get phase() { return lifecycle.phase; }, project, abort, finalize, updateBaseRef };
   runSessionRegistry.register(runId, session);
   // Announce the live session, not just its terminal status. Clients that did
@@ -880,7 +830,6 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // Fire-and-forget initialization. Each helper handles its own errors.
   // The first turn's baseline goes first: it has to predate the agent's first
   // write, and the adapter starts as soon as this factory returns.
-  turnBaseline = takeTurnBaseline();
   // Live in the worktree from the moment the first baseline was taken, so a
   // parallel run's turn that overlaps this one knows to sort their files.
   void worktree.then((location) => {
@@ -889,17 +838,12 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // Keep the baseRef-capture promise so finalize can await it (see persistFinalDiff).
   baseRefCaptured = captureBaseRef();
   void acquireSleepBlocker();
-  resolvedToolCallsReady = toolProjection.ready;
-  initialTurnReady = resolvedToolCallsReady.then(() =>
-    startNextTurn(ctx.initialPromptContent),
-  );
-  void initialTurnReady.catch((error) => console.error(`[RunSession ${runId}] Initial projection failed:`, error));
   if (ctx.initialTurnMetadata) {
     // The renderer can show delegated work before the first message or tool.
     // The running notification above precedes this turn's asynchronous insert.
-    void initialTurnReady.then(() => {
-      if (activeTurnId !== null) broadcastEventPersisted();
-    });
+    void turns.ready.then(() => {
+      if (turns.id !== null) broadcastEventPersisted();
+    }).catch(() => {});
   }
 
   return session;

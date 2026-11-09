@@ -10,7 +10,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function liveRun() {
+function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoordinator>) => void) {
   const coordinator = createCodexRunCoordinator();
   let notify!: (method: string, params: unknown) => void;
   const ack = deferred<{ turnId: string }>();
@@ -25,6 +25,7 @@ function liveRun() {
   const finished = coordinator.executeTurn(server, {
     runId: "run", model: "model", timeout: 5000,
     startTurn: async () => {
+      beforeStart?.(coordinator);
       notify("turn/started", { threadId: "parent", turn: { id: "turn-parent", status: "inProgress" } });
     },
   }, async (event) => { events.push(event); }, new AbortController().signal);
@@ -32,6 +33,54 @@ function liveRun() {
 }
 
 describe("Codex active input delivery", () => {
+  it("binds initial input before queued echoes race synchronous turn completion", async () => {
+    let input!: ReturnType<ReturnType<typeof createCodexRunCoordinator>["trackInput"]>;
+    const project = vi.fn().mockResolvedValue(undefined);
+    const h = liveRun((coordinator) => { input = coordinator.trackInput("run", "initial", project); });
+    h.notify("item/started", { threadId: "parent", turnId: "turn-parent", item: { type: "userMessage", clientId: "initial" } });
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+    try {
+      await vi.waitFor(() => expect(project).toHaveBeenCalledExactlyOnceWith("turn-parent"));
+    } finally { input.finish(); await h.finished; h.coordinator.shutdown(); }
+  });
+
+  it("retains uncertainty instead of projecting an ACK for a different turn", async () => {
+    const h = liveRun();
+    const sending = h.coordinator.steerRun(h.server, { runId: "run", clientUserMessageId: "mismatch", message: "guidance" });
+    const refused = expect(sending).rejects.toThrow(/different turn|unknown/i);
+    try {
+      h.ack.resolve({ turnId: "replacement-turn" }); await refused;
+      expect(h.events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toHaveLength(0);
+      await expect(h.coordinator.steerRun(h.server, { runId: "run", clientUserMessageId: "mismatch", message: "guidance" })).rejects.toThrow("already");
+      expect(h.sendRequest.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(1);
+    } finally { h.coordinator.shutdown(); await h.finished; }
+  });
+
+  it("does not project a late steer ACK after its execution owner has shut down", async () => {
+    const h = liveRun();
+    const sending = h.coordinator.steerRun(h.server, { runId: "run", clientUserMessageId: "late", message: "guidance" });
+    const refused = expect(sending).rejects.toThrow(/closed|unknown/i);
+    h.coordinator.shutdown(); await h.finished;
+    h.ack.resolve({ turnId: "turn-parent" });
+    await refused;
+    expect(h.events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toHaveLength(0);
+  });
+
+  it("ignores a matching client id echoed by another parent turn", async () => {
+    const h = liveRun();
+    const sending = h.coordinator.steerRun(h.server, { runId: "run", clientUserMessageId: "client", message: "guidance" });
+    h.notify("item/started", { threadId: "parent", turnId: "older-turn",
+      item: { type: "userMessage", clientId: "client", content: [{ type: "text", text: "guidance" }] } });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(h.events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toHaveLength(0);
+    } finally {
+      h.ack.resolve({ turnId: "turn-parent" }); await sending;
+      h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+      await h.finished; h.coordinator.shutdown();
+    }
+  });
+
   it.each(["error", "turn/completed"])("returns actionable failure guidance from %s", async (method) => {
     const h = liveRun();
     const error = { message: "Native model failure", codexErrorInfo: "modelNotFound" };

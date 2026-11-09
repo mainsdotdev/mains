@@ -363,6 +363,74 @@ describe("RunSession", () => {
     await session.finalize({ status: "succeeded" });
   });
 
+  it("reuses an accepted input's turn when its artifact write is retried", async () => {
+    const session = makeSession();
+    await session.project({ type: "artifact", kind: "user-prompt", content: "initial" });
+    const input = { type: "artifact" as const, kind: "user-prompt", content: "Accepted follow-up",
+      metadata: { delivery: "queue", clientUserMessageId: "retry-input", providerTurnId: "native-next" } };
+    const insert = vi.spyOn(runsRepo, "insertArtifact").mockRejectedValueOnce(new Error("Disk temporarily unavailable"));
+    try {
+      await expect(session.project(input)).rejects.toThrow("Disk temporarily unavailable");
+      await session.project(input);
+      const turns = await runsRepo.findTurnsByRun("r1");
+      expect(turns).toHaveLength(2);
+      expect(turns.map((turn) => turn.turnIndex)).toEqual([0, 1]);
+      expect((await runsRepo.findArtifactsByRun("r1")).filter((artifact) => artifact.metadata?.clientUserMessageId === "retry-input"))
+        .toEqual([expect.objectContaining({ metadata: expect.objectContaining({ turnId: turns[1].id }) })]);
+    } finally { insert.mockRestore(); await session.finalize({ status: "succeeded" }); }
+  });
+
+  it("does not acknowledge queued input against the old turn when the new turn cannot be saved", async () => {
+    const session = makeSession();
+    await session.project({ type: "artifact", kind: "user-prompt", content: "initial" });
+    const insert = vi.spyOn(runsRepo, "insertTurn").mockRejectedValueOnce(new Error("Turn storage unavailable"));
+    const input = { type: "artifact" as const, kind: "user-prompt", content: "Follow-up",
+      metadata: { delivery: "queue", clientUserMessageId: "unsaved-turn" } };
+    try {
+      await expect(session.project(input)).rejects.toThrow("Turn storage unavailable");
+      expect(await runsRepo.findInputArtifact("r1", "unsaved-turn")).toBeNull();
+      await session.project(input);
+      const turns = await runsRepo.findTurnsByRun("r1");
+      expect(turns.map((turn) => turn.turnIndex)).toEqual([0, 1]);
+      expect((await runsRepo.findInputArtifact("r1", "unsaved-turn"))?.metadata?.turnId).toBe(turns[1].id);
+    } finally { insert.mockRestore(); await session.finalize({ status: "succeeded" }); }
+  });
+
+  it("retains the current turn when closing it fails before a queued boundary", async () => {
+    const session = makeSession();
+    await session.project({ type: "artifact", kind: "user-prompt", content: "initial" });
+    const update = vi.spyOn(runsRepo, "updateTurn").mockRejectedValueOnce(new Error("Cannot close turn"));
+    const input = { type: "artifact" as const, kind: "user-prompt", content: "Follow-up",
+      metadata: { delivery: "queue", clientUserMessageId: "blocked-boundary" } };
+    try {
+      await expect(session.project(input)).rejects.toThrow("Cannot close turn");
+      expect(await runsRepo.findTurnsByRun("r1")).toHaveLength(1);
+      expect(await runsRepo.findInputArtifact("r1", "blocked-boundary")).toBeNull();
+      await session.project(input);
+      const turns = await runsRepo.findTurnsByRun("r1");
+      expect(turns).toHaveLength(2);
+      expect(turns[0].status).toBe("completed");
+    } finally { update.mockRestore(); await session.finalize({ status: "succeeded" }); }
+  });
+
+  it("keeps a recovered input's model on its original turn after a later boundary", async () => {
+    const session = makeSession();
+    await session.project({ type: "artifact", kind: "user-prompt", content: "initial" });
+    const original = { type: "artifact" as const, kind: "user-prompt", content: "First follow-up",
+      metadata: { delivery: "queue", clientUserMessageId: "recover-old", model: "original-model" } };
+    const insert = vi.spyOn(runsRepo, "insertArtifact").mockRejectedValueOnce(new Error("Cannot save prompt"));
+    try {
+      await expect(session.project(original)).rejects.toThrow("Cannot save prompt");
+      await session.project({ ...original, content: "Next follow-up",
+        metadata: { delivery: "queue", clientUserMessageId: "newer", model: "next-model" } });
+      await session.project(original);
+      const turns = await runsRepo.findTurnsByRun("r1");
+      expect(turns).toHaveLength(3);
+      expect(turns[1].model).toBe("original-model");
+      expect(turns[2].model).toBe("next-model");
+    } finally { insert.mockRestore(); await session.finalize({ status: "succeeded" }); }
+  });
+
   it("persists steer input inside the current turn without a new Git boundary", async () => {
     const session = makeSession({ initialPromptContent: "original" });
     await flushBackground();
@@ -424,6 +492,48 @@ describe("RunSession", () => {
   });
 
   describe("construction", () => {
+    it("settles unfinished tools even when the final turn close fails", async () => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "Bash", input: { command: "work" },
+        metadata: { phase: "start", toolCallId: "unfinished-at-close" } });
+      const update = vi.spyOn(runsRepo, "updateTurn").mockRejectedValueOnce(new Error("Cannot close final turn"));
+      try {
+        await session.finalize({ status: "canceled" });
+        const [tool] = await runsRepo.findToolCallsByRun("r1");
+        expect(tool.status).toBe("error");
+        expect(session.phase).toBe("closed");
+      } finally { update.mockRestore(); }
+    });
+
+    it("prepares the initial turn barrier before publishing the live session", async () => {
+      let projection: Promise<void> | undefined;
+      const off = registerEventSink({ kind: "initial-turn-observer", send(channel, payload) {
+        if (channel === CHANNELS.runs.statusChanged && (payload as { status: string }).status === "running") {
+          projection = runSessionRegistry.get("r1")?.project({ type: "plan_update", providerTurnId: "native-first",
+            steps: [{ step: "Observe the initial turn", status: "in_progress" }] });
+        }
+      } });
+      const session = makeSession();
+      try {
+        expect(projection).toBeDefined(); await projection;
+        const turns = await runsRepo.findTurnsByRun("r1");
+        expect(turns).toHaveLength(1);
+        expect(turns[0].metadata?.codexPlan).toMatchObject({ providerTurnId: "native-first" });
+      } finally { off(); await session.finalize({ status: "succeeded" }); }
+    });
+
+    it("closes an acquired turn even when initial metadata persistence failed", async () => {
+      const metadata = vi.spyOn(runsRepo, "patchTurnMetadata").mockRejectedValueOnce(new Error("Cannot save native turn identity"));
+      const session = makeSession({ initialProviderTurnId: "native-initial" });
+      try {
+        await expect(session.project({ type: "artifact", kind: "user-prompt", content: "initial" })).rejects.toThrow("Cannot save native turn identity");
+        await session.finalize({ status: "failed" });
+        const turns = await runsRepo.findTurnsByRun("r1");
+        expect(turns).toHaveLength(1);
+        expect(turns[0]).toMatchObject({ status: "completed", endedAt: expect.any(Date) });
+      } finally { metadata.mockRestore(); await session.finalize({ status: "failed" }); }
+    });
+
     it("registers itself in the registry", () => {
       const session = makeSession();
       expect(runSessionRegistry.get("r1")).toBe(session);
@@ -1726,6 +1836,8 @@ describe("RunSession", () => {
       const turns = await runsRepo.findTurnsByRun("r1");
       const indexes = turns.map((t) => t.turnIndex).sort();
       expect(indexes).toEqual([0, 1]);
+      const prompt = (await runsRepo.findArtifactsByRun("r1")).find((artifact) => artifact.content === "follow-up question");
+      expect(prompt?.metadata?.turnId).toBe(turns[1].id);
     });
 
     it("stores the resolved model on the active turn", async () => {

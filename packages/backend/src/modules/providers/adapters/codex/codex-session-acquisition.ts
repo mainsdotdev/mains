@@ -592,7 +592,7 @@ export function createCodexSessionAcquisition(
         await tracked?.accept(result.turn.id);
       } catch (error) {
         if (!tracked?.accepted) throw error;
-        await tracked.accept(tracked.turnId!);
+        await tracked.accept(tracked.acceptance!);
       } finally {
         tracked?.finish();
       }
