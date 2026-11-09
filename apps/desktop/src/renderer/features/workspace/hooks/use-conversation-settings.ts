@@ -123,13 +123,14 @@ export function useConversationSettings({ backendId = null, providerId, ownerKey
       return false;
     }
   }, [ready, dispatch, ownerKey, runId, mirrorOnly, beginSettingsIntent, rememberSettings]);
-  const saveDraftSettingsToRun = useCallback(async (id: string, submitted: ConversationSettings) => {
+  const saveDraftSettingsToRun = useCallback(async (id: string, submitted: ConversationSettings, isCurrent: () => boolean = () => true) => {
+    if (!isCurrent()) return;
     const latest = store.getState().workspace.conversationSettingsByKey?.[ownerKey];
     if (!latest || latest === submitted || mirrorOnly) return;
     try {
       await persistConversationSettings(getTransport(), id, latest);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not save conversation settings");
+      if (isCurrent()) toast.error(error instanceof Error ? error.message : "Could not save conversation settings");
     }
   }, [ownerKey, mirrorOnly]);
   const changeConfig = useCallback((patch: RunSettingConfig, source?: SettingsChangeSource) => {

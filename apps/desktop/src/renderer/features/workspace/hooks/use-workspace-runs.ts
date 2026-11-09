@@ -40,9 +40,10 @@ export function useWorkspaceRuns(
   /** Workspaces the user can switch to next; their run lists are fetched ahead. */
   prefetchWorkspaceIds: readonly string[] = NO_WORKSPACE_IDS,
   /** Embedded app conversations own their selection without changing workspace tabs. */
-  options: { selection?: "workspace" | "local"; retainedRunIds?: readonly string[] } = {},
+  options: { selection?: "workspace" | "local"; retainedRunIds?: readonly string[]; operationIsCurrent?: (accountId?: string) => boolean } = {},
 ) {
   const publishSelection = options.selection !== "local";
+  const operationIsCurrent = options.operationIsCurrent;
   const [runs, setRuns] = useState<Run[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [cache] = useState(createRunCache);
@@ -146,7 +147,9 @@ export function useWorkspaceRuns(
 
   /** Select a newly created run and catch up even if its first push already fired. */
   const registerNewRun = useCallback(async (runId: string): Promise<string | null> => {
+    if (operationIsCurrent && !operationIsCurrent()) return null;
     const runResult = await appApi.runs.getById(runId);
+    if (operationIsCurrent && !operationIsCurrent(runResult.success ? runResult.data?.accountId : undefined)) return null;
     if (runResult.success && runResult.data) {
       const newId = runResult.data.id;
       setRuns((prev) => [runResult.data, ...prev.filter((run) => run.id !== newId)]);
@@ -159,7 +162,7 @@ export function useWorkspaceRuns(
       return newId;
     }
     return null;
-  }, [dispatch, cache, loadRunDetails]);
+  }, [dispatch, cache, loadRunDetails, operationIsCurrent]);
 
   const loadWorkspaceRuns = useCallback(
     async (wsId: string, isCurrent: () => boolean) => {
@@ -360,7 +363,7 @@ export function useWorkspaceRuns(
     forkRun,
     executeReview,
     checkCanResume,
-  } = useRunOperations({ registerNewRun, loadRunDetails, onRunUpdated });
+  } = useRunOperations({ registerNewRun, loadRunDetails, onRunUpdated, operationIsCurrent });
 
   const continueRun = useCallback(async (...args: Parameters<typeof continueRunOperation>) => {
     const succeeded = await continueRunOperation(...args);
