@@ -1,3 +1,4 @@
+import { createAsyncResourceLifecycle, type ResourceReadContext } from "../../../../runtime/async-resource-lifecycle";
 import { CopilotCanceledError, createCopilotLifecycle, type CopilotSessionOwner } from "./copilot-lifecycle";
 import { providerProcessPath } from "../../providers.utils";
 // ─────────────────────────────────────────────────────────────
@@ -241,19 +242,102 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
   // Slash-command listing cache (keyed by workspace path). Listing spins up a
   // throwaway session, so cache it for a short window.
   const COMMANDS_CACHE_TTL_MS = 60_000;
-  const commandsCache = new Map<string, { commands: CommandInfo[]; timestamp: number }>();
+  const commandsCache = createAsyncResourceLifecycle<CommandInfo[]>({
+    ttlMs: COMMANDS_CACHE_TTL_MS, load: (key, context) => loadCommands(key || undefined, context),
+  });
 
   // Model listing cache. The SDK client memoizes models for its entire lifetime
   // and only drops that cache on stop(), so a sign-in or plan change would never
   // reach the picker without an app restart. We read the uncached RPC instead and
   // expire our own copy, which keeps the renderer's refetch meaningful.
   const MODELS_CACHE_TTL_MS = 60_000;
-  let modelsCache: { models: ModelInfo[]; timestamp: number } | null = null;
-  let catalogGeneration = 0;
+  const modelsCache = createAsyncResourceLifecycle<ModelInfo[]>({
+    ttlMs: MODELS_CACHE_TTL_MS,
+  });
   function invalidateCatalogs(): void {
-    catalogGeneration++;
-    modelsCache = null;
-    commandsCache.clear();
+    modelsCache.invalidate();
+    commandsCache.invalidate();
+  }
+
+  async function loadModels(copilotClient: CopilotClientInterface, context: ResourceReadContext): Promise<ModelInfo[]> {
+    const raw = copilotClient.rpc?.models?.list
+      ? (await copilotClient.rpc.models.list({}))?.models
+      : await copilotClient.listModels();
+
+    context.assertCurrent();
+    if (!Array.isArray(raw)) throw new Error("Invalid models response");
+
+    // The runtime can list every model twice. Ids key the catalogue — a
+    // paired phone stores it under them — so keep the first of each.
+    const seen = new Set<string>();
+    const unique = raw.filter((model) => {
+      if (seen.has(model.id)) return false;
+      seen.add(model.id);
+      return true;
+    });
+
+    // "auto" is the CLI's own synthetic entry: available on every plan and
+    // never retired, so it is the stable fallback when the configured
+    // default has aged out of the catalogue.
+    const defaultId = resolveCatalogDefaultId(
+      unique.map((model) => model.id),
+      config.defaultModel,
+      ["auto"],
+    );
+
+    const models = unique.map(
+      (model): ModelInfo => ({
+        id: model.id,
+        displayName: model.name || model.id,
+        isDefault: model.id === defaultId,
+        capabilities: { vision: model.capabilities?.supports?.vision },
+        contextWindow: model.capabilities?.limits?.max_context_window_tokens,
+        supportsEffort: model.capabilities?.supports?.reasoningEffort ?? false,
+        supportsFastMode: model.id === "auto",
+        supportedEffortLevels: model.supportedReasoningEfforts,
+      }),
+    );
+
+    logInfo(
+      `Listed ${models.length} Copilot model(s): ${models.map((m) => m.id).join(", ") || "(none)"}`,
+    );
+    if (config.defaultModel && !models.some((m) => m.id === config.defaultModel)) {
+      logWarn(
+        `Configured default model "${config.defaultModel}" is not offered by the CLI; the picker will fall back to the first available model.`,
+      );
+    }
+    return models;
+  }
+
+  async function loadCommands(workspacePath: string | undefined, context: ResourceReadContext): Promise<CommandInfo[]> {
+    // Slash commands are session-scoped, so list them on a throwaway session
+    // (commands depend on cwd; set it on the session, not the shared client,
+    // to avoid tearing down an in-flight run's client).
+    let owner: CopilotSessionOwner | undefined;
+    try {
+      owner = await lifecycle.open(undefined, (client) => client.createSession({
+        ...(workspacePath ? { workingDirectory: workspacePath } : {}),
+        onPermissionRequest: approveAllPermissions,
+      }));
+      context.assertCurrent();
+      const session = owner.session;
+      const result = await owner.run(() => session.rpc.commands.list());
+      context.assertCurrent();
+      const raw = Array.isArray(result?.commands) ? result.commands : [];
+      const commands: CommandInfo[] = raw
+        .filter((c) => c && typeof c.name === "string" && c.name.length > 0)
+        .map((c) => ({
+          name: c.name,
+          description: typeof c.description === "string" ? c.description : undefined,
+          argumentHint: c.input?.hint,
+          userFacing: true,
+        }));
+
+      logInfo(`Listed ${commands.length} Copilot slash commands`);
+      return commands;
+    } finally {
+      await owner?.close();
+    }
   }
 
   // Per-run usage accumulator.
@@ -1546,6 +1630,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     invalidateCatalogs,
 
     async shutdown(): Promise<void> {
+      modelsCache.dispose(); commandsCache.dispose();
       await lifecycle.shutdown();
       toolCallIndex.clear(); usageAccumulator.clear(); onEventByRun.clear(); lastTodosByRun.clear();
       logInfo("Shutdown complete");
@@ -1649,43 +1734,11 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     },
 
     async listCommands(workspacePath?: string): Promise<CommandInfo[]> {
-      const generation = catalogGeneration;
-      const now = Date.now();
-      const cacheKey = workspacePath ?? "__global__";
-      const cached = commandsCache.get(cacheKey);
-      if (cached && now - cached.timestamp < COMMANDS_CACHE_TTL_MS) {
-        return cached.commands;
-      }
-
-      // Slash commands are session-scoped, so list them on a throwaway session
-      // (commands depend on cwd; set it on the session, not the shared client,
-      // to avoid tearing down an in-flight run's client).
-      let owner: CopilotSessionOwner | undefined;
       try {
-        owner = await lifecycle.open(undefined, (client) => client.createSession({
-          ...(workspacePath ? { workingDirectory: workspacePath } : {}),
-          onPermissionRequest: approveAllPermissions,
-        }));
-        const session = owner.session;
-        const result = await owner.run(() => session.rpc.commands.list());
-        const raw = Array.isArray(result?.commands) ? result.commands : [];
-        const commands: CommandInfo[] = raw
-          .filter((c) => c && typeof c.name === "string" && c.name.length > 0)
-          .map((c) => ({
-            name: c.name,
-            description: typeof c.description === "string" ? c.description : undefined,
-            argumentHint: c.input?.hint,
-            userFacing: true,
-          }));
-
-        if (generation === catalogGeneration) commandsCache.set(cacheKey, { commands, timestamp: now });
-        logInfo(`Listed ${commands.length} Copilot slash commands`);
-        return commands;
-      } catch (err) {
-        logError("Failed to list commands:", err);
+        return await lifecycle.read(async () => (await commandsCache.read(workspacePath ?? "")).value);
+      } catch (error) {
+        logError("Failed to list commands:", error);
         return [];
-      } finally {
-        await owner?.close();
       }
     },
 
@@ -1697,72 +1750,14 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     // (e.g. Copilot Free), not a truncated response. Logged below so it is
     // diagnosable from the app log rather than looking like a failed call.
     async listModels(): Promise<ModelInfo[]> {
-      const generation = catalogGeneration;
-      const now = Date.now();
-      if (modelsCache && now - modelsCache.timestamp < MODELS_CACHE_TTL_MS) {
-        return modelsCache.models;
-      }
-
       try {
-        const raw = await lifecycle.read(async (copilotClient) => copilotClient.rpc?.models?.list
-          ? (await copilotClient.rpc.models.list({}))?.models
-          : await copilotClient.listModels());
-
-        if (!Array.isArray(raw)) {
-          logWarn("Invalid models response");
-          return modelsCache?.models ?? [];
-        }
-
-        // The runtime can list every model twice. Ids key the catalogue — a
-        // paired phone stores it under them — so keep the first of each.
-        const seen = new Set<string>();
-        const unique = raw.filter((model) => {
-          if (seen.has(model.id)) return false;
-          seen.add(model.id);
-          return true;
-        });
-
-        // "auto" is the CLI's own synthetic entry: available on every plan and
-        // never retired, so it is the stable fallback when the configured
-        // default has aged out of the catalogue.
-        const defaultId = resolveCatalogDefaultId(
-          unique.map((model) => model.id),
-          config.defaultModel,
-          ["auto"],
-        );
-
-        const models = unique.map(
-          (model): ModelInfo => ({
-            id: model.id,
-            displayName: model.name || model.id,
-            isDefault: model.id === defaultId,
-            capabilities: { vision: model.capabilities?.supports?.vision },
-            contextWindow: model.capabilities?.limits?.max_context_window_tokens,
-            supportsEffort: model.capabilities?.supports?.reasoningEffort ?? false,
-            supportsFastMode: model.id === "auto",
-            supportedEffortLevels: model.supportedReasoningEfforts,
-          }),
-        );
-
-        if (generation === catalogGeneration) modelsCache = { models, timestamp: now };
-        logInfo(
-          `Listed ${models.length} Copilot model(s): ${models.map((m) => m.id).join(", ") || "(none)"}`,
-        );
-        if (config.defaultModel && !models.some((m) => m.id === config.defaultModel)) {
-          logWarn(
-            `Configured default model "${config.defaultModel}" is not offered by the CLI; the picker will fall back to the first available model.`,
-          );
-        }
-        return models;
+        return await lifecycle.read(async (client) =>
+          (await modelsCache.read("", { load: (context) => loadModels(client, context) })).value);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        if (/not authenticated|gh auth login/i.test(msg)) {
-          throw error;
-        }
+        if (/not authenticated|gh auth login/i.test(msg)) throw error;
         logError("Failed to list models:", error);
-        // Serve the last good list rather than blanking the picker on a transient
-        // RPC failure.
-        return modelsCache?.models ?? [];
+        return modelsCache.peek()?.value ?? [];
       }
     },
 

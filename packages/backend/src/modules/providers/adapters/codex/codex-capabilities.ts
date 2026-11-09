@@ -29,7 +29,7 @@ import {
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { CodexAppServerResult } from "./codex-app-server-protocol/rpc";
 import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
-import { awaitCatalogResult, createCatalogRead } from "../catalog-read";
+import { awaitResourceResult, createAsyncResourceLifecycle, type ResourceReadContext } from "../../../../runtime/async-resource-lifecycle";
 import type { McpServerStatus } from "./codex-app-server-protocol/generated/v2/McpServerStatus";
 import { discoverMcpAppEntrypoints, installedMcpAppEntrypoints, type McpAppPluginSource } from "./codex-mcp-apps";
 
@@ -660,49 +660,59 @@ export function createCodexCapabilities(
     string,
     RemotePluginReference
   >();
-  let pluginCatalogCache: {
-    value: PluginListResponse;
-    fetchedAt: number;
-  } | null = null;
-  const installedPluginsCache = new Map<string, {
-    value: PluginListResponse;
-    fetchedAt: number;
-  }>();
-  let rawCatalogInFlight: Promise<Record<string, unknown>> | null = null;
-  const catalogRead = createCatalogRead(async (signal) => {
-    const staleValue = pluginCatalogCache?.value;
-    const generation = pluginCacheGeneration;
-    try {
-      // plugin/list has no native cancellation RPC. Keep this request shared
-      // across navigation, but never map its response without a consumer.
-      if (!rawCatalogInFlight) {
-        const server = await awaitCatalogResult(options.ensureServer(), signal);
-        await awaitCatalogResult(assertPluginCapability(server), signal);
-        signal.throwIfAborted();
-        const request = server.sendRequest("plugin/list", {}, 30000) as unknown as Promise<Record<string, unknown>>;
-        rawCatalogInFlight = request;
-        void request.then(() => {}, () => {}).then(() => {
-          if (rawCatalogInFlight === request) rawCatalogInFlight = null;
-        });
-      }
-      const result = await awaitCatalogResult(rawCatalogInFlight, signal);
-      signal.throwIfAborted();
-      const value = await mapPluginCatalog(result, signal);
-      if (generation === pluginCacheGeneration) {
-        indexPluginReferences(result);
-        pluginCatalogCache = { value, fetchedAt: Date.now() };
-      }
-      return value;
-    } catch (error) {
-      signal.throwIfAborted();
-      return pluginListFailure(error, "plugin/list", staleValue);
-    }
+  const pluginFeature = createAsyncResourceLifecycle<void>({
+    ttlMs: Infinity,
+    async load(_key, context) {
+      const server = options.getRunningServer() ?? await options.ensureServer(); context.assertCurrent();
+      const cursors = new Set<string>(); let cursor: string | null = null;
+      do {
+        context.assertCurrent(); context.retainUntilSettled();
+        const result: CodexAppServerResult<"experimentalFeature/list"> = await server.sendRequest("experimentalFeature/list", { cursor, limit: 100 });
+        context.assertCurrent();
+        const feature = result.data.find(({ name }) => name === "plugins");
+        if (feature) {
+          if (!feature.enabled || feature.stage === "removed") throw new Error("Codex plugins feature is disabled or unavailable.");
+          return;
+        }
+        cursor = result.nextCursor;
+        if (cursor && cursors.has(cursor)) throw new Error("Codex returned a repeated feature cursor.");
+        if (cursor) cursors.add(cursor);
+      } while (cursor);
+      throw new Error("Codex plugins feature is disabled or unavailable.");
+    },
   });
-  const installedPluginsInFlight = new Map<string, Promise<PluginListResponse>>();
-  let pluginCapabilityPromise: Promise<void> | null = null;
-  let pluginCacheGeneration = 0;
-  const mcpAppPluginSources = new Map<string, Promise<Pick<McpAppPluginSource, "connectorIds" | "mcpServers">>>();
-  let mcpInventoryInFlight: Promise<McpServerStatus[]> | null = null;
+  const rawCatalog = createAsyncResourceLifecycle<Record<string, unknown>>({
+    async load(_key, context) {
+      const server = await awaitResourceResult(options.ensureServer(), context.signal); context.assertCurrent();
+      await pluginFeature.read("", { signal: context.signal }); context.assertCurrent();
+      // This RPC cannot be cancelled. Reuse its identity until it settles,
+      // while abandoned consumers never walk assets or publish a mapped cache.
+      context.retainUntilSettled();
+      return server.sendRequest("plugin/list", {}, 30000) as unknown as Promise<Record<string, unknown>>;
+    },
+  });
+  const pluginCatalog = createAsyncResourceLifecycle<{ response: PluginListResponse; raw: Record<string, unknown> }>({
+    ttlMs: PLUGIN_CATALOG_TTL_MS,
+    async load(_key, context) {
+      const { value: raw } = await rawCatalog.read("", { signal: context.signal }); context.assertCurrent();
+      const response = await mapPluginCatalog(raw, context.signal); context.assertCurrent();
+      return { response, raw };
+    },
+    publish(_key, snapshot) { indexPluginReferences(snapshot.value.raw); },
+  });
+  const installedPlugins = createAsyncResourceLifecycle<PluginListResponse>({
+    ttlMs: INSTALLED_PLUGINS_TTL_MS,
+    load: (workspacePath, context) => fetchPluginList("plugin/installed", workspacePath || undefined, context),
+  });
+  const mcpAppPluginSources = createAsyncResourceLifecycle<Pick<McpAppPluginSource, "connectorIds" | "mcpServers">>({
+    ttlMs: Infinity,
+    async load(key, context) {
+      const [name, marketplacePath] = JSON.parse(key) as [string, string];
+      const detail = await readPluginMetadata(name, marketplacePath, context); context.assertCurrent();
+      return { connectorIds: detail.apps.map((app) => app.id), mcpServers: detail.mcpServers };
+    },
+  });
+  const mcpInventory = createAsyncResourceLifecycle<McpServerStatus[]>({ load: loadMcpInventory });
 
   // ── Session install overlay ──────────────────────────────────
   // `plugin/installed` is answered from an install registry the app-server
@@ -720,7 +730,7 @@ export function createCodexCapabilities(
   const sessionUninstalls = new Set<string>();
 
   function findCatalogPlugin(pluginId: string): PluginInfo | undefined {
-    for (const marketplace of pluginCatalogCache?.value.marketplaces ?? []) {
+    for (const marketplace of pluginCatalog.peek()?.value.response.marketplaces ?? []) {
       const plugin = marketplace.plugins.find(
         (candidate) => candidate.id === pluginId,
       );
@@ -741,7 +751,7 @@ export function createCodexCapabilities(
     marketplaceName: string;
     plugin: PluginInfo;
   } {
-    for (const marketplace of pluginCatalogCache?.value.marketplaces ?? []) {
+    for (const marketplace of pluginCatalog.peek()?.value.response.marketplaces ?? []) {
       const plugin = marketplace.plugins.find(
         (candidate) => candidate.id === pluginId,
       );
@@ -843,57 +853,24 @@ export function createCodexCapabilities(
     }
   }
 
-  async function assertPluginCapability(
-    server: CodexAppServer,
-  ): Promise<void> {
-    pluginCapabilityPromise ??= (async () => {
-      let cursor: string | null = null;
-      do {
-        const result: {
-          data: Array<{
-            name: string;
-            enabled: boolean;
-            stage: string;
-          }>;
-          nextCursor: string | null;
-        } = await server.sendRequest("experimentalFeature/list", {
-          cursor,
-          limit: 100,
-        });
-        const feature = result.data.find(
-          ({ name }) => name === "plugins",
-        );
-        if (feature) {
-          if (!feature.enabled || feature.stage === "removed") {
-            throw new Error(
-              "Codex plugins feature is disabled or unavailable.",
-            );
-          }
-          return;
-        }
-        cursor = result.nextCursor;
-      } while (cursor);
-
-      throw new Error(
-        "Codex plugins feature is disabled or unavailable.",
-      );
-    })();
-    return pluginCapabilityPromise;
-  }
-
   async function fetchPluginList(
     method: "plugin/list" | "plugin/installed",
-    workspacePath?: string,
+    workspacePath: string | undefined,
+    context: ResourceReadContext,
   ): Promise<PluginListResponse> {
     const server = await options.ensureServer(workspacePath);
-    await assertPluginCapability(server);
+    context.assertCurrent();
+    await pluginFeature.read("", { signal: context.signal });
+    context.assertCurrent();
     const result = (await server.sendRequest(
       method,
       workspacePath ? { cwds: [workspacePath] } : {},
       30000,
     )) as unknown as Record<string, unknown>;
-    indexPluginReferences(result);
-    return mapPluginCatalog(result);
+    context.assertCurrent();
+    const value = await mapPluginCatalog(result, context.signal);
+    context.assertCurrent(); indexPluginReferences(result);
+    return value;
   }
 
   function pluginListFailure(
@@ -919,14 +896,8 @@ export function createCodexCapabilities(
   }
 
   function invalidatePluginCaches(): void {
-    pluginCacheGeneration += 1;
-    pluginCatalogCache = null;
-    installedPluginsCache.clear();
-    catalogRead.invalidate();
-    rawCatalogInFlight = null;
-    installedPluginsInFlight.clear();
-    mcpAppPluginSources.clear();
-    mcpInventoryInFlight = null;
+    pluginCatalog.invalidate(); rawCatalog.invalidate(); installedPlugins.invalidate();
+    mcpAppPluginSources.invalidate(); mcpInventory.invalidate();
   }
 
   async function listRealtimeVoices(): Promise<RealtimeVoiceCatalog> {
@@ -1192,53 +1163,16 @@ export function createCodexCapabilities(
 
   async function listPlugins(signal?: AbortSignal): Promise<PluginListResponse> {
     signal?.throwIfAborted();
-    if (
-      pluginCatalogCache &&
-      Date.now() - pluginCatalogCache.fetchedAt <
-        PLUGIN_CATALOG_TTL_MS
-    ) {
-      return pluginCatalogCache.value;
-    }
-    return catalogRead.read(signal);
+    const stale = pluginCatalog.peek()?.value.response;
+    try { return (await pluginCatalog.read("", { signal })).value.response; }
+    catch (error) { signal?.throwIfAborted(); return pluginListFailure(error, "plugin/list", stale); }
   }
 
   async function listInstalledPlugins(forceRefresh = false, workspacePath?: string): Promise<PluginListResponse> {
     const key = workspacePath ?? "";
-    const cached = installedPluginsCache.get(key);
-    if (
-      !forceRefresh &&
-      cached &&
-      Date.now() - cached.fetchedAt <
-        INSTALLED_PLUGINS_TTL_MS
-    ) {
-      return applySessionOverlay(cached.value);
-    }
-    const inFlight = installedPluginsInFlight.get(key);
-    if (inFlight) return inFlight;
-
-    const staleValue = cached?.value;
-    const generation = pluginCacheGeneration;
-    const request = fetchPluginList("plugin/installed", workspacePath)
-      .then((value) => {
-        if (generation === pluginCacheGeneration) {
-          installedPluginsCache.set(key, {
-            value,
-            fetchedAt: Date.now(),
-          });
-        }
-        return value;
-      })
-      .catch((error) =>
-        pluginListFailure(error, "plugin/installed", staleValue),
-      )
-      .then(applySessionOverlay)
-      .finally(() => {
-        if (installedPluginsInFlight.get(key) === request) {
-          installedPluginsInFlight.delete(key);
-        }
-      });
-    installedPluginsInFlight.set(key, request);
-    return request;
+    const stale = installedPlugins.peek(key)?.value;
+    try { return applySessionOverlay((await installedPlugins.read(key, { force: forceRefresh })).value); }
+    catch (error) { return applySessionOverlay(pluginListFailure(error, "plugin/installed", stale)); }
   }
 
   /**
@@ -1330,9 +1264,10 @@ export function createCodexCapabilities(
   async function readPluginMetadata(
     pluginName: string,
     marketplacePath: string,
+    context?: ResourceReadContext,
   ): Promise<PluginDetail> {
-    const server = await options.ensureServer();
-    await assertPluginCapability(server);
+    const server = await options.ensureServer(); context?.assertCurrent();
+    await pluginFeature.read("", { signal: context?.signal }); context?.assertCurrent();
     const remoteReference = !marketplacePath
       ? remotePluginRefCache.get(pluginName)
       : undefined;
@@ -1353,9 +1288,8 @@ export function createCodexCapabilities(
       params,
       30000,
     );
-    return mapPluginDetail(
-      result.plugin as unknown as Record<string, unknown>,
-    );
+    context?.assertCurrent();
+    return mapPluginDetail(result.plugin as unknown as Record<string, unknown>);
   }
 
   async function readPlugin(pluginName: string, marketplacePath: string): Promise<PluginDetail> {
@@ -1369,7 +1303,7 @@ export function createCodexCapabilities(
   ): Promise<void> {
     assertPluginCanInstall(pluginId);
     const server = await options.ensureServer();
-    await assertPluginCapability(server);
+    await pluginFeature.read();
     const separatorIndex = pluginId.lastIndexOf("@");
     const marketplaceName =
       separatorIndex !== -1
@@ -1427,7 +1361,7 @@ export function createCodexCapabilities(
 
   async function uninstallPlugin(pluginId: string): Promise<void> {
     const server = await options.ensureServer();
-    await assertPluginCapability(server);
+    await pluginFeature.read();
     const separatorIndex = pluginId.lastIndexOf("@");
     const marketplaceName =
       separatorIndex !== -1
@@ -1459,7 +1393,7 @@ export function createCodexCapabilities(
     enabled: boolean,
   ): Promise<void> {
     const server = await options.ensureServer();
-    await assertPluginCapability(server);
+    await pluginFeature.read();
     const separatorIndex = pluginId.lastIndexOf("@");
     const marketplaceName =
       separatorIndex !== -1
@@ -1658,27 +1592,23 @@ export function createCodexCapabilities(
   }
 
   function readMcpInventory(): Promise<McpServerStatus[]> {
-    if (mcpInventoryInFlight) return mcpInventoryInFlight;
-    const request = (async () => {
-      const server = await options.ensureServer();
-      const inventory: McpServerStatus[] = [];
-      let cursor: string | null = null;
-      do {
-        const page: CodexAppServerResult<"mcpServerStatus/list"> =
-          await server.sendRequest("mcpServerStatus/list", {
-            cursor, limit: 100, detail: "toolsAndAuthOnly",
-          }, MCP_DISCOVERY_TIMEOUT_MS);
-        inventory.push(...page.data);
-        cursor = page.nextCursor;
-      } while (cursor);
-      return inventory;
-    })();
-    mcpInventoryInFlight = request;
-    const clear = () => {
-      if (mcpInventoryInFlight === request) mcpInventoryInFlight = null;
-    };
-    void request.then(clear, clear);
-    return request;
+    return mcpInventory.read().then((snapshot) => snapshot.value);
+  }
+
+  async function loadMcpInventory(_key: string, context: ResourceReadContext): Promise<McpServerStatus[]> {
+    const server = await options.ensureServer(); context.assertCurrent();
+    const inventory: McpServerStatus[] = [];
+    const cursors = new Set<string>(); let cursor: string | null = null;
+    do {
+      context.assertCurrent();
+      const page: CodexAppServerResult<"mcpServerStatus/list"> = await server.sendRequest("mcpServerStatus/list", {
+        cursor, limit: 100, detail: "toolsAndAuthOnly",
+      }, MCP_DISCOVERY_TIMEOUT_MS);
+      context.assertCurrent(); inventory.push(...page.data); cursor = page.nextCursor;
+      if (cursor && cursors.has(cursor)) throw new Error("Codex returned a repeated MCP inventory cursor.");
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+    return inventory;
   }
 
   async function listMcpAppEntrypoints(inventory?: McpServerStatus[]) {
@@ -1693,17 +1623,9 @@ export function createCodexCapabilities(
     const sourceById = new Map(sources.map((source) => [source.plugin.id, source]));
     const readSources = async (candidates: typeof plugins) => {
       const results = await Promise.allSettled(candidates.map(async ({ plugin, marketplacePath }) => {
-        let request = mcpAppPluginSources.get(plugin.id);
-        if (!request) {
-          request = readPluginMetadata(marketplacePath ? plugin.name : plugin.id, marketplacePath).then((detail) => ({
-            connectorIds: detail.apps.map((app) => app.id), mcpServers: detail.mcpServers,
-          }));
-          mcpAppPluginSources.set(plugin.id, request);
-          void request.catch(() => {
-            if (mcpAppPluginSources.get(plugin.id) === request) mcpAppPluginSources.delete(plugin.id);
-          });
-        }
-        Object.assign(sourceById.get(plugin.id)!, await request);
+        const key = JSON.stringify([marketplacePath ? plugin.name : plugin.id, marketplacePath]);
+        const { value } = await mcpAppPluginSources.read(key);
+        Object.assign(sourceById.get(plugin.id)!, value);
       }));
       for (const result of results) {
         if (result.status === "rejected") logger.warn("Failed to discover plugin app ownership:", result.reason);
@@ -1745,12 +1667,12 @@ export function createCodexCapabilities(
     readMcpInventory,
     listMcpAppEntrypoints,
     onServerClosed(): void {
-      pluginCapabilityPromise = null;
+      pluginFeature.invalidate();
       invalidatePluginCaches();
     },
     shutdown(): void {
-      pluginCapabilityPromise = null;
-      invalidatePluginCaches();
+      pluginFeature.dispose(); pluginCatalog.dispose(); rawCatalog.dispose(); installedPlugins.dispose();
+      mcpAppPluginSources.dispose(); mcpInventory.dispose();
       marketplacePathCache.clear();
       remotePluginRefCache.clear();
     },

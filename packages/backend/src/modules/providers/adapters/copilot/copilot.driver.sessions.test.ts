@@ -109,6 +109,23 @@ describe("Copilot session settings and SDK callbacks", () => {
     fs.rmSync(fixture, { recursive: true, force: true });
   });
 
+  it("shares command discovery only within a workspace and releases each temporary session once", async () => {
+    let finish!: (value: { commands: Array<{ name: string }> }) => void;
+    sdk.backgroundGate = new Promise((resolve) => { finish = resolve; });
+    const current = driver();
+    const first = current.listCommands!(fixture), joined = current.listCommands!(fixture);
+    const other = current.listCommands!(path.join(fixture, "other"));
+    try {
+      await vi.waitFor(() => expect(sdk.sessions.length).toBeGreaterThan(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sdk.sessions).toHaveLength(2);
+    } finally { finish({ commands: [{ name: "shared" }] }); }
+    expect(await first).toEqual(await joined);
+    expect(await other).toEqual([expect.objectContaining({ name: "shared" })]);
+    expect(sdk.sessions.every((session) => session.disconnect.mock.calls.length === 1)).toBe(true);
+    expect(sdk.clients[0].stop).not.toHaveBeenCalled();
+  });
+
   it("shares initialization without exposing a client whose start is still pending", async () => {
     let release!: () => void;
     sdk.startGate = new Promise<void>((resolve) => { release = resolve; });

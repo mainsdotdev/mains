@@ -30,7 +30,7 @@ import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { spawnProvider as spawn, killProviderProcess } from "../provider-process";
-import { createCatalogRead } from "../catalog-read";
+import { createAsyncResourceLifecycle, type ResourceReadContext } from "../../../../runtime/async-resource-lifecycle";
 import type {
   AcquiredSession,
   AgentsConfig,
@@ -2900,36 +2900,98 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     | null = null;
 
   // Cross-run TTL caches
-  let cachedModels: ModelInfo[] | null = null;
-  let cachedModelsTimestamp = 0;
-  const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
+  const modelsCache = createAsyncResourceLifecycle<ModelInfo[]>({
+    ttlMs: 5 * 60 * 1000, load: (_key, context) => loadModels(context),
+  });
 
-  const commandsCache = new Map<
-    string,
-    { commands: CommandInfo[]; timestamp: number }
-  >();
-  const COMMANDS_CACHE_TTL_MS = 10 * 60 * 1000;
-
-  const skillsCache = new Map<string, { skills: SkillInfo[]; timestamp: number }>();
-  const SKILLS_CACHE_TTL_MS = 5 * 60 * 1000;
-
-  // Plugins are fetched via the `claude plugin` CLI subcommands; `--available`
-  // can trigger a remote marketplace sync, so cache the result.
-  let cachedPlugins: PluginListResponse | null = null;
-  let cachedPluginsTimestamp = 0;
-  const PLUGINS_CACHE_TTL_MS = 5 * 60 * 1000;
-  // Late reads may finish for their caller, but cannot rewarm a retired catalog.
-  let catalogGeneration = 0;
+  const commandsCache = createAsyncResourceLifecycle<CommandInfo[] | undefined>({
+    ttlMs: 10 * 60 * 1000, cacheIf: (commands) => commands !== undefined,
+    load: (key, context) => loadCommands(key || undefined, context),
+  });
+  const skillsCache = createAsyncResourceLifecycle<SkillInfo[]>({
+    ttlMs: 5 * 60 * 1000, load: (key, context) => loadDiskSkills(key || undefined, context),
+  });
 
   // A plugin change adds/removes commands, skills, and agents — so installing or
   // uninstalling one must invalidate those caches too, not just the plugin list.
   function invalidatePluginCaches(): void {
-    catalogGeneration++;
     pluginCatalogRead.invalidate();
-    cachedPlugins = null;
-    cachedPluginsTimestamp = 0;
-    commandsCache.clear();
-    skillsCache.clear();
+    commandsCache.invalidate();
+    skillsCache.invalidate();
+  }
+
+  async function loadModels(context: ResourceReadContext): Promise<ModelInfo[]> {
+    const sdkModels = await withControlQuery((query) => query.supportedModels());
+    context.assertCurrent();
+    if (!sdkModels || sdkModels.length === 0) throw new Error("SDK returned no models");
+
+    // Drop the SDK's synthetic "default" entry ("Use the default model
+    // (currently …)"). It's redundant with the concrete model it resolves
+    // to (Opus 4.8) and just duplicates a row in the picker. Guard against
+    // an account whose only offering is "default" so the list never empties.
+    const selectableSdkModels =
+      sdkModels.length > 1
+        ? sdkModels.filter((m) => m.value !== "default")
+        : sdkModels;
+
+    const defaultModelId = resolveClaudeDefaultModelId(
+      sdkModels,
+      config.defaultModel,
+    );
+
+    const models: ModelInfo[] = selectableSdkModels.map((sdkModel) => {
+      // SDK's .d.ts declares supportsFastMode but the runtime payload doesn't include it.
+      // Fast mode is currently meaningful only on opus; this fallback lights it up
+      // automatically when the SDK starts surfacing the field.
+      const id = sdkModel.value;
+      const fallbackFastMode = id === "opus[1m]";
+      return {
+        id,
+        displayName: sdkModel.displayName,
+        description: sdkModel.description,
+        isDefault: sdkModel.value === defaultModelId,
+        capabilities: {
+          streaming: true,
+          vision: true,
+          functionCalling: true,
+          reasoning: sdkModel.value.includes("opus"),
+        },
+        contextWindow: sdkModel.value.includes("haiku") ? 128000 : 200000,
+        supportsFastMode: sdkModel.supportsFastMode ?? fallbackFastMode,
+        supportsEffort: sdkModel.supportsEffort,
+        supportedEffortLevels: sdkModel.supportedEffortLevels,
+      };
+    });
+
+    return models;
+  }
+
+  async function loadCommands(workspacePath: string | undefined, context: ResourceReadContext): Promise<CommandInfo[] | undefined> {
+    const initResult = await withControlQuery(
+      (query) => query.initializationResult(),
+      workspacePath,
+    );
+    context.assertCurrent();
+    if (!initResult?.commands || initResult.commands.length === 0) {
+      return undefined;
+    }
+
+    // initializationResult().commands mixes built-in /commands with disk-backed skills.
+    // Exclude only skills we discover the same way as the $ menu.
+    const diskSkills = await fetchDiskSkills(workspacePath);
+    context.assertCurrent();
+    const diskSkillNames = new Set(diskSkills.map((s) => s.name));
+
+    const commands: CommandInfo[] = initResult.commands
+      .filter((cmd) => !diskSkillNames.has(cmd.name))
+      .map((cmd) => ({
+        name: cmd.name,
+        description: cmd.description,
+        argumentHint: cmd.argumentHint,
+        userFacing: true,
+      }));
+
+    return commands;
   }
 
   // Cross-run sessionId memo (resume lookup avoids hitting the DB every time)
@@ -3501,36 +3563,29 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // ─────────────────────────────────────────────────────────────
 
   async function fetchDiskSkills(workspacePath?: string): Promise<SkillInfo[]> {
-    const generation = catalogGeneration;
-    const cacheKey = workspacePath ?? "__global__";
-    const now = Date.now();
-    const cached = skillsCache.get(cacheKey);
-    if (cached && now - cached.timestamp < SKILLS_CACHE_TTL_MS) {
-      return cached.skills;
+    try { return (await skillsCache.read(workspacePath ?? "")).value; }
+    catch (error) { logError("Failed to discover skills:", error); return []; }
+  }
+
+  async function loadDiskSkills(workspacePath: string | undefined, context: ResourceReadContext): Promise<SkillInfo[]> {
+    const settingSources = config.settingSources ?? ["user", "project", "local"];
+    const skills: SkillInfo[] = [];
+
+    if (settingSources.includes("user")) {
+      const userSkillsDir = path.join(os.homedir(), ".claude", "skills");
+      const userSkills = await discoverSkillsFromDirectory(userSkillsDir, "user");
+      context.assertCurrent();
+      skills.push(...userSkills);
     }
 
-    try {
-      const settingSources = config.settingSources ?? ["user", "project", "local"];
-      const skills: SkillInfo[] = [];
-
-      if (settingSources.includes("user")) {
-        const userSkillsDir = path.join(os.homedir(), ".claude", "skills");
-        const userSkills = await discoverSkillsFromDirectory(userSkillsDir, "user");
-        skills.push(...userSkills);
-      }
-
-      if (settingSources.includes("project") && workspacePath) {
-        const projectSkillsDir = path.join(workspacePath, ".claude", "skills");
-        const projectSkills = await discoverSkillsFromDirectory(projectSkillsDir, "project");
-        skills.push(...projectSkills);
-      }
-
-      if (generation === catalogGeneration) skillsCache.set(cacheKey, { skills, timestamp: now });
-      return skills;
-    } catch (error) {
-      logError("Failed to discover skills:", error);
-      return [];
+    if (settingSources.includes("project") && workspacePath) {
+      const projectSkillsDir = path.join(workspacePath, ".claude", "skills");
+      const projectSkills = await discoverSkillsFromDirectory(projectSkillsDir, "project");
+      context.assertCurrent();
+      skills.push(...projectSkills);
     }
+
+    return skills;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -3733,85 +3788,77 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     });
   }
 
-  const pluginCatalogRead = createCatalogRead(async (signal): Promise<PluginListResponse> => {
-    const generation = catalogGeneration;
-    const now = Date.now();
-    if (cachedPlugins && now - cachedPluginsTimestamp < PLUGINS_CACHE_TTL_MS) {
-      return cachedPlugins;
-    }
+  // Only mapped catalog results become fresh; CLI error DTOs remain retryable.
+  const pluginCatalogRead = createAsyncResourceLifecycle<{ response: PluginListResponse; cacheable: boolean }>({
+    ttlMs: 5 * 60 * 1000, cacheIf: (value) => value.cacheable,
+    async load(_key, { signal }) {
 
-    const empty = (remoteSyncError: string | null): PluginListResponse => ({
-      marketplaces: [],
-      marketplaceLoadErrors: [],
-      remoteSyncError,
-      featuredPluginIds: [],
-    });
+      const empty = (remoteSyncError: string | null) => ({ cacheable: false, response: {
+        marketplaces: [], marketplaceLoadErrors: [], remoteSyncError, featuredPluginIds: [],
+      } as PluginListResponse });
 
-    try {
-      if (!resolveClaudeRuntime(config.binary)) return empty("Claude CLI not found");
+      try {
+        if (!resolveClaudeRuntime(config.binary)) return empty("Claude CLI not found");
 
-      // `--available` includes the marketplace catalog (and may sync remotely);
-      // marketplace list supplies the install locations / ordering.
-      const [listRes, mpRes] = await Promise.all([
-        runClaudeCli(["plugin", "list", "--json", "--available"], 30000, undefined, signal),
-        runClaudeCli(["plugin", "marketplace", "list", "--json"], 15000, undefined, signal),
-      ]);
-      signal.throwIfAborted();
+        // `--available` includes the marketplace catalog (and may sync remotely);
+        // marketplace list supplies the install locations / ordering.
+        const [listRes, mpRes] = await Promise.all([
+          runClaudeCli(["plugin", "list", "--json", "--available"], 30000, undefined, signal),
+          runClaudeCli(["plugin", "marketplace", "list", "--json"], 15000, undefined, signal),
+        ]);
+        signal.throwIfAborted();
 
-      const parse = <T>(stdout: string, label: string): T | null => {
-        const trimmed = stdout.trim();
-        if (!trimmed) return null;
-        try {
-          return JSON.parse(trimmed) as T;
-        } catch (err) {
-          logWarn(`Failed to parse ${label} JSON:`, err instanceof Error ? err.message : String(err));
-          return null;
+        const parse = <T>(stdout: string, label: string): T | null => {
+          const trimmed = stdout.trim();
+          if (!trimmed) return null;
+          try {
+            return JSON.parse(trimmed) as T;
+          } catch (err) {
+            logWarn(`Failed to parse ${label} JSON:`, err instanceof Error ? err.message : String(err));
+            return null;
+          }
+        };
+
+        const listJson = parse<{ installed?: unknown[]; available?: unknown[] }>(
+          listRes.stdout,
+          "plugin list",
+        );
+        const mpJson = parse<unknown[]>(mpRes.stdout, "marketplace list");
+
+        if (!listJson && !mpJson) {
+          const msg = (listRes.stderr || mpRes.stderr || "").trim();
+          return empty(msg || null);
         }
-      };
 
-      const listJson = parse<{ installed?: unknown[]; available?: unknown[] }>(
-        listRes.stdout,
-        "plugin list",
-      );
-      const mpJson = parse<unknown[]>(mpRes.stdout, "marketplace list");
-
-      if (!listJson && !mpJson) {
-        const msg = (listRes.stderr || mpRes.stderr || "").trim();
-        return empty(msg || null);
-      }
-
-      // Manifest fallback for plugins the catalog cache hasn't indexed yet.
-      const manifestsByMarketplace: Record<
-        string,
-        Record<string, Record<string, any>>
-      > = {};
-      for (const raw of mpJson ?? []) {
-        const mp = raw as Record<string, unknown>;
-        if (mp && typeof mp.name === "string" && typeof mp.installLocation === "string") {
-          manifestsByMarketplace[mp.name] = readMarketplaceManifestPlugins(
-            mp.installLocation,
-          );
+        // Manifest fallback for plugins the catalog cache hasn't indexed yet.
+        const manifestsByMarketplace: Record<
+          string,
+          Record<string, Record<string, any>>
+        > = {};
+        for (const raw of mpJson ?? []) {
+          const mp = raw as Record<string, unknown>;
+          if (mp && typeof mp.name === "string" && typeof mp.installLocation === "string") {
+            manifestsByMarketplace[mp.name] = readMarketplaceManifestPlugins(
+              mp.installLocation,
+            );
+          }
         }
-      }
 
-      const result = mapClaudePluginList(
-        listJson,
-        mpJson,
-        readPluginCatalogPlugins(),
-        readInstalledShaById(),
-        manifestsByMarketplace,
-      );
-      if (generation === catalogGeneration) {
-        cachedPlugins = result;
-        cachedPluginsTimestamp = now;
+        const result = mapClaudePluginList(
+          listJson,
+          mpJson,
+          readPluginCatalogPlugins(),
+          readInstalledShaById(),
+          manifestsByMarketplace,
+        );
+        return { response: result, cacheable: true };
+      } catch (error) {
+        signal.throwIfAborted();
+        const msg = error instanceof Error ? error.message : String(error);
+        logError("Failed to list plugins:", msg);
+        return empty(msg);
       }
-      return result;
-    } catch (error) {
-      signal.throwIfAborted();
-      const msg = error instanceof Error ? error.message : String(error);
-      logError("Failed to list plugins:", msg);
-      return empty(msg);
-    }
+    },
   });
 
   /** Read the installed Claude Code version (e.g. "2.1.159" from "2.1.159 (Claude Code)"). */
@@ -4540,21 +4587,18 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const binaryChanged = config.binary !== (next as ClaudeCodeAdapterConfig).binary;
       adoptConfig(config, next as ClaudeCodeAdapterConfig);
       if (binaryChanged) {
-        cachedModels = null;
-        cachedModelsTimestamp = 0;
+        modelsCache.invalidate();
         invalidatePluginCaches();
       }
     },
 
     invalidateCatalogs() {
-      cachedModels = null;
-      cachedModelsTimestamp = 0;
+      modelsCache.invalidate();
       invalidatePluginCaches();
     },
 
     async shutdown(): Promise<void> {
       const closing = queryLifecycle.shutdown();
-      catalogGeneration++;
       sessionIdMemo.clear();
       liveSessions.clear();
       runCwdMemo.clear();
@@ -4563,12 +4607,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       getSessionInfoFn = null;
       getSessionMessagesFn = null;
       deleteSdkSessionFn = null;
-      cachedModels = null;
-      cachedModelsTimestamp = 0;
-      cachedPlugins = null;
-      cachedPluginsTimestamp = 0;
-      commandsCache.clear();
-      skillsCache.clear();
+      modelsCache.invalidate();
+      pluginCatalogRead.invalidate();
+      commandsCache.invalidate();
+      skillsCache.invalidate();
       createSdkMcpServerFn = null;
       toolFn = null;
       await closing;
@@ -4576,62 +4618,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async listModels(): Promise<ModelInfo[]> {
-      const generation = catalogGeneration;
-      const now = Date.now();
-      if (cachedModels && now - cachedModelsTimestamp < MODELS_CACHE_TTL_MS) {
-        return cachedModels;
-      }
-
       try {
-        const sdkModels = await withControlQuery((query) => query.supportedModels());
-        if (!sdkModels || sdkModels.length === 0) {
-          logWarn("SDK returned no models, using fallback");
-          return getDefaultModels(config.defaultModel);
-        }
-
-        // Drop the SDK's synthetic "default" entry ("Use the default model
-        // (currently …)"). It's redundant with the concrete model it resolves
-        // to (Opus 4.8) and just duplicates a row in the picker. Guard against
-        // an account whose only offering is "default" so the list never empties.
-        const selectableSdkModels =
-          sdkModels.length > 1
-            ? sdkModels.filter((m) => m.value !== "default")
-            : sdkModels;
-
-        const defaultModelId = resolveClaudeDefaultModelId(
-          sdkModels,
-          config.defaultModel,
-        );
-
-        const models: ModelInfo[] = selectableSdkModels.map((sdkModel) => {
-          // SDK's .d.ts declares supportsFastMode but the runtime payload doesn't include it.
-          // Fast mode is currently meaningful only on opus; this fallback lights it up
-          // automatically when the SDK starts surfacing the field.
-          const id = sdkModel.value;
-          const fallbackFastMode = id === "opus[1m]";
-          return {
-            id,
-            displayName: sdkModel.displayName,
-            description: sdkModel.description,
-            isDefault: sdkModel.value === defaultModelId,
-            capabilities: {
-              streaming: true,
-              vision: true,
-              functionCalling: true,
-              reasoning: sdkModel.value.includes("opus"),
-            },
-            contextWindow: sdkModel.value.includes("haiku") ? 128000 : 200000,
-            supportsFastMode: sdkModel.supportsFastMode ?? fallbackFastMode,
-            supportsEffort: sdkModel.supportsEffort,
-            supportedEffortLevels: sdkModel.supportedEffortLevels,
-          };
-        });
-
-        if (generation === catalogGeneration) {
-          cachedModels = models;
-          cachedModelsTimestamp = now;
-        }
-        return models;
+        return (await modelsCache.read()).value;
       } catch (error) {
         logError("Failed to fetch models from SDK:", error);
         return getDefaultModels(config.defaultModel);
@@ -4639,39 +4627,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async listCommands(workspacePath?: string): Promise<CommandInfo[]> {
-      const generation = catalogGeneration;
-      const now = Date.now();
-      const cacheKey = workspacePath ?? "__global__";
-      const cachedEntry = commandsCache.get(cacheKey);
-      if (cachedEntry && now - cachedEntry.timestamp < COMMANDS_CACHE_TTL_MS) {
-        return cachedEntry.commands;
-      }
-
       try {
-        const initResult = await withControlQuery(
-          (query) => query.initializationResult(),
-          workspacePath,
-        );
-        if (!initResult?.commands || initResult.commands.length === 0) {
-          return [];
-        }
-
-        // initializationResult().commands mixes built-in /commands with disk-backed skills.
-        // Exclude only skills we discover the same way as the $ menu.
-        const diskSkills = await fetchDiskSkills(workspacePath);
-        const diskSkillNames = new Set(diskSkills.map((s) => s.name));
-
-        const commands: CommandInfo[] = initResult.commands
-          .filter((cmd) => !diskSkillNames.has(cmd.name))
-          .map((cmd) => ({
-            name: cmd.name,
-            description: cmd.description,
-            argumentHint: cmd.argumentHint,
-            userFacing: true,
-          }));
-
-        if (generation === catalogGeneration) commandsCache.set(cacheKey, { commands, timestamp: now });
-        return commands;
+        return (await commandsCache.read(workspacePath ?? "")).value ?? [];
       } catch (error) {
         logError("Failed to fetch commands from SDK:", error);
         return [];
@@ -4684,8 +4641,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     async listPlugins(signal?: AbortSignal): Promise<PluginListResponse> {
       signal?.throwIfAborted();
-      if (cachedPlugins && Date.now() - cachedPluginsTimestamp < PLUGINS_CACHE_TTL_MS) return cachedPlugins;
-      return pluginCatalogRead.read(signal);
+      return (await pluginCatalogRead.read("", { signal })).value.response;
     },
 
     async readPlugin(pluginName: string, marketplacePath: string): Promise<PluginDetail> {
@@ -4696,6 +4652,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       // from the cached list when available, else from installed_plugins.json.
       const catalogPlugins = readPluginCatalogPlugins();
       const installedEnabled: Record<string, boolean> = {};
+      const cachedPlugins = pluginCatalogRead.peek()?.value.response;
       if (cachedPlugins) {
         for (const mp of cachedPlugins.marketplaces) {
           for (const p of mp.plugins) {

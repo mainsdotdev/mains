@@ -145,7 +145,8 @@ esac
     expect(cliCalls()).toContain("auth status --json");
   });
 
-  it("shares plugin discovery and kills both CLI processes when its last reader leaves", async () => {
+  it.each(["last reader leaves", "driver shuts down"])("shares plugin discovery and kills both CLI processes when %s", async (reason) => {
+    vi.spyOn(os, "homedir").mockReturnValue(fixture);
     fs.writeFileSync(bundled, `#!${process.execPath}
 const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(callsFile)}, process.pid + "\\n");
@@ -165,7 +166,8 @@ setInterval(() => {}, 1000);
       first.abort();
       await rejectedA;
       expect(pids().every(running)).toBe(true);
-      second.abort();
+      if (reason === "driver shuts down") await driver.shutdown?.();
+      else second.abort();
       await rejectedB;
       await vi.waitFor(() => expect(pids().some(running)).toBe(false));
       fs.writeFileSync(bundled, `#!${process.execPath}
@@ -210,6 +212,38 @@ console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"avai
     sdk.supportedModels.mockResolvedValue([{ value: "new", displayName: "New" }]);
     expect(await driver.listModels!()).toEqual([expect.objectContaining({ id: "new" })]);
     expect(sdk.supportedModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares concurrent model discovery and closes the single control query", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    let finish!: (value: Array<{ value: string; displayName: string }>) => void;
+    sdk.supportedModels.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const first = driver.listModels!(), second = driver.listModels!();
+    try {
+      await vi.waitFor(() => expect(sdk.supportedModels).toHaveBeenCalled());
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sdk.supportedModels).toHaveBeenCalledOnce();
+    } finally { finish([{ value: "shared-model", displayName: "Shared" }]); }
+    expect(await first).toEqual(await second);
+    expect(sdk.close).toHaveBeenCalledOnce();
+    await driver.shutdown?.();
+  });
+
+  it("shares command discovery per workspace and keeps other workspaces independent", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    let finish!: (value: { commands: Array<{ name: string; description: string }> }) => void;
+    sdk.initializationResult.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const first = driver.listCommands!(fixture), joined = driver.listCommands!(fixture);
+    const other = driver.listCommands!(path.join(fixture, "other"));
+    try {
+      await vi.waitFor(() => expect(sdk.initializationResult.mock.calls.length).toBeGreaterThan(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sdk.initializationResult).toHaveBeenCalledTimes(2);
+    } finally { finish({ commands: [{ name: "shared", description: "Shared" }] }); }
+    expect(await first).toEqual(await joined);
+    expect(await other).toEqual([expect.objectContaining({ name: "shared" })]);
+    expect(sdk.close).toHaveBeenCalledTimes(2);
+    await driver.shutdown?.();
   });
 
   it("refreshes cached commands after invalidation without keeping the control process alive", async () => {

@@ -14,6 +14,7 @@ import { atlasService } from "./modules/atlas";
 import { atlasBookmarks } from "./modules/atlas/atlas.bookmarks";
 import { terminalService } from "./modules/terminal";
 import * as providers from "./modules/providers";
+import { readUsagePrices } from "./modules/stats/stats.pricing";
 
 let directory: string, restoreRuntime: () => void, restoreIpc: () => void;
 let server: BackendServer | undefined, retry: (() => Promise<void>) | undefined;
@@ -35,6 +36,23 @@ afterEach(async () => {
 });
 
 describe("backend host acquisition and shutdown", () => {
+  it("retires price refresh before releasing the host and ignores its late network response", async () => {
+    const entered = deferred(); let finish!: (response: Response) => void; let signal: AbortSignal | undefined;
+    const response = new Promise<Response>((resolve) => { finish = resolve; });
+    vi.stubGlobal("fetch", vi.fn((_url, init) => { signal = init?.signal ?? undefined; entered.resolve(); return response; }));
+    let reading: ReturnType<typeof readUsagePrices> | undefined;
+    try {
+      server = await start(); reading = readUsagePrices(); await entered.promise; await server.close();
+      expect(signal?.aborted).toBe(true);
+      expect((await readUsagePrices()).pricing.status).toBe("unavailable");
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      finish(new Response(JSON.stringify({ model: { input_cost_per_token: 1, output_cost_per_token: 1 } })));
+      await reading; await new Promise<void>((resolve) => setImmediate(resolve)); vi.unstubAllGlobals();
+    }
+    expect(fs.existsSync(path.join(directory, "usage", "model-prices.json"))).toBe(false);
+  });
+
   it("drains provider cleanup despite a failed terminal stop and retains database ownership for retry", async () => {
     server = await start();
     const entered = deferred(), gate = deferred();
