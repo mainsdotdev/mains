@@ -1,3 +1,5 @@
+import { runWebLoginExchange } from "../../../shared/remote-access-lifecycle";
+
 const LEGACY_STORAGE_KEY = "mains.token";
 
 /**
@@ -39,23 +41,20 @@ export function takeWebLoginCode(): string | undefined {
 export async function exchangeWebLogin(
   code: string | undefined,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!code) return;
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 8_000);
-  try {
+  await runWebLoginExchange(async (exchangeSignal) => {
     const response = await fetchImpl("/__mains/web-session", {
       method: "POST",
       headers: { Authorization: `Bearer ${code}` },
       credentials: "same-origin",
       cache: "no-store",
       redirect: "error",
-      signal: controller.signal,
+      signal: exchangeSignal,
     });
     if (!response.ok) {
       throw new Error(`Browser login failed (${response.status})`);
     }
-  } finally {
-    window.clearTimeout(timeout);
-  }
+  }, signal);
 }

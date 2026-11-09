@@ -1,8 +1,9 @@
-import { setTransport, WsTransport } from "@/lib/transport";
+import { getTransport, onTransportChange, setTransport, WsTransport } from "@/lib/transport";
 import { isWeb } from "./platform";
 import { installWebApi } from "./web-api-shim";
 import { exchangeWebLogin, takeWebLoginCode } from "./web-login";
 import { installWebCrypto } from "./web-crypto";
+import { createWebLoginHandoff } from "../../../shared/remote-access-lifecycle";
 
 /**
  * Web-mode bootstrap. Imported FIRST in main.tsx so it runs before any app
@@ -33,9 +34,18 @@ if (isWeb && typeof window !== "undefined") {
   setTransport(transport);
   // Invokes issued during the one-time exchange wait in the transport outbox.
   // Existing sessions have no code and connect immediately with their cookie.
-  void exchangeWebLogin(loginCode)
-    .catch(() => {
-      /* the transport's normal offline state communicates an expired link */
-    })
-    .finally(() => transport.connect());
+  const handoff = createWebLoginHandoff();
+  const retire = () => {
+    handoff.close();
+    off();
+    window.removeEventListener("beforeunload", retire);
+    transport.dispose();
+  };
+  const off = onTransportChange(retire);
+  window.addEventListener("beforeunload", retire);
+  void handoff.run(
+    (signal) => exchangeWebLogin(loginCode, fetch, signal),
+    () => transport.connect(),
+    () => getTransport() === transport,
+  ).catch((error) => console.error("Unable to connect the web client:", error));
 }

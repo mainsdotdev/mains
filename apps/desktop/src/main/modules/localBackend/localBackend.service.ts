@@ -22,7 +22,9 @@ import {
   type PairedDevice,
   type PairingCode,
 } from "@mains/backend/modules/backend";
-import { shouldKeepRemoteHostAwake } from "./localBackend.sleep";
+import { createRemoteAccessCleanup, createRemoteAccessCommands, createRemoteAwakeLease, shouldKeepRemoteHostAwake } from "../../../shared/remote-access-lifecycle";
+
+const accessCommands = createRemoteAccessCommands();
 
 /**
  * "This machine" exposure — turns the RUNNING desktop app into a backend other
@@ -79,12 +81,15 @@ export interface LocalBackendStatus {
 let wsHost: WsHost | null = null;
 let bindHost: string | null = null;
 let sessionToken: string | null = null;
+let hostToken: string | null = null;
+const hostCleanup = createRemoteAccessCleanup<WsHost>();
+const tailscaleCleanup = createRemoteAccessCleanup<{ httpsPort: number; magicDnsName: string | null }>();
 let port = DEFAULT_PORT;
 let remoteAccess = false;
 let lanAccess = false;
 let tailscale: { httpsPort: number; magicDnsName: string | null } | null = null;
 let keepAwakeForRemoteAccess = false;
-let remoteSleepBlockerId: number | null = null;
+const remoteSleepLease = createRemoteAwakeLease();
 let powerSourceListenersInstalled = false;
 let webRootCached: string | null | undefined;
 
@@ -104,37 +109,32 @@ function reconcileRemoteSleepBlocker(): void {
     remoteAccess,
     tailscale: tailscale !== null,
     onBatteryPower: onBatteryPower(),
+    hostReady: isHostReady(),
   });
 
-  if (shouldBlock) {
-    if (
-      remoteSleepBlockerId === null ||
-      !powerSaveBlocker.isStarted(remoteSleepBlockerId)
-    ) {
-      remoteSleepBlockerId = powerSaveBlocker.start("prevent-app-suspension");
-    }
-    return;
-  }
+  remoteSleepLease.reconcile(shouldBlock, {
+    isStarted: (id) => powerSaveBlocker.isStarted(id),
+    start: () => powerSaveBlocker.start("prevent-app-suspension"),
+    stop: (id) => powerSaveBlocker.stop(id),
+  });
+}
 
-  if (remoteSleepBlockerId !== null) {
-    if (powerSaveBlocker.isStarted(remoteSleepBlockerId)) {
-      powerSaveBlocker.stop(remoteSleepBlockerId);
-    }
-    remoteSleepBlockerId = null;
-  }
+function onPowerSourceChanged(): void {
+  try { reconcileRemoteSleepBlocker(); }
+  catch (error) { console.error("Unable to update remote-access sleep ownership:", error); }
 }
 
 function installPowerSourceListeners(): void {
   if (powerSourceListenersInstalled) return;
-  powerMonitor.on("on-ac", reconcileRemoteSleepBlocker);
-  powerMonitor.on("on-battery", reconcileRemoteSleepBlocker);
+  powerMonitor.on("on-ac", onPowerSourceChanged);
+  powerMonitor.on("on-battery", onPowerSourceChanged);
   powerSourceListenersInstalled = true;
 }
 
 function removePowerSourceListeners(): void {
   if (!powerSourceListenersInstalled) return;
-  powerMonitor.removeListener("on-ac", reconcileRemoteSleepBlocker);
-  powerMonitor.removeListener("on-battery", reconcileRemoteSleepBlocker);
+  powerMonitor.removeListener("on-ac", onPowerSourceChanged);
+  powerMonitor.removeListener("on-battery", onPowerSourceChanged);
   powerSourceListenersInstalled = false;
 }
 
@@ -159,7 +159,7 @@ function localIps(): { lan: string | null; tailscale: string | null } {
 }
 
 function buildAddresses(): BackendAddress[] {
-  if (!wsHost) return [];
+  if (!isHostReady()) return [];
   const mk = (label: string, host: string): BackendAddress => ({
     label,
     url: `http://${host}:${port}`,
@@ -167,21 +167,21 @@ function buildAddresses(): BackendAddress[] {
   });
   const list = [mk("This machine", "127.0.0.1")];
   const { lan, tailscale: tsIp } = localIps();
-  if (lanAccess && lan) list.push(mk("Local network", lan));
-  if (lanAccess && tsIp) list.push(mk("Tailscale IP", tsIp));
+  if (bindHost === "0.0.0.0" && lan) list.push(mk("Local network", lan));
+  if (bindHost === "0.0.0.0" && tsIp) list.push(mk("Tailscale IP", tsIp));
   return list;
 }
 
 function buildStatus(): LocalBackendStatus {
   const httpsUrl =
-    tailscale?.magicDnsName != null
+    tailscale?.magicDnsName != null && !tailscaleCleanup.owns(tailscale) && isHostReady()
       ? tailscaleService.resolveHttpsUrl(tailscale.magicDnsName, tailscale.httpsPort)
       : null;
   return {
     remoteAccess,
     lanAccess,
     port,
-    token: wsHost ? sessionToken : null,
+    token: isHostReady() ? hostToken : null,
     bindHost,
     addresses: buildAddresses(),
     tailscale: tailscale !== null,
@@ -205,8 +205,8 @@ function notifyPairedDevicesChanged(): void {
 }
 
 /** Persist the toggle state so it's restored on the next launch (best-effort). */
-function persist(): void {
-  void appSettingsService
+async function persist(): Promise<void> {
+  await appSettingsService
     .updateBackendAccess({
       backendRemoteAccess: remoteAccess,
       backendLanAccess: lanAccess,
@@ -216,27 +216,60 @@ function persist(): void {
     .catch(() => {});
 }
 
+function isHostReady(): boolean {
+  return accessCommands.active() && wsHost !== null && !hostCleanup.owns(wsHost) && hostToken === sessionToken &&
+    (remoteAccess || (tailscale !== null && tailscale.magicDnsName !== null && !tailscaleCleanup.owns(tailscale)));
+}
+
+async function stopTailscale(): Promise<void> {
+  const owned = tailscale;
+  if (!owned) return;
+  await tailscaleCleanup.release(owned, () => tailscaleService.stopServe(owned.httpsPort));
+  if (tailscale === owned) tailscale = null;
+}
+
+function runAccessCommand<T>(effect: (current: () => boolean) => Promise<T>): Promise<T> {
+  return accessCommands.run(async (current) => {
+    try { return await effect(current); }
+    catch (error) {
+      // A failed rebind/rotation must not retain sleep ownership for a host
+      // that no longer exists. Preserve the original command failure.
+      if (!isHostReady()) onPowerSourceChanged();
+      throw error;
+    }
+  });
+}
+
+function assertCurrent(current: () => boolean): void {
+  if (!current()) throw new Error("Remote access is shutting down");
+}
+
+async function closeHost(): Promise<void> {
+  const owned = wsHost;
+  if (!owned) return;
+  await hostCleanup.release(owned, () => owned.close());
+  if (wsHost === owned) { wsHost = null; bindHost = null; hostToken = null; }
+}
+
 /** Bring the in-process WS host to the bind the current toggles require. */
-async function reconcileHost(): Promise<void> {
+async function reconcileHost(current: () => boolean = () => true): Promise<void> {
+  if (!current()) { await closeHost(); assertCurrent(current); }
+  if (hostCleanup.owns(wsHost)) await closeHost();
   const wantHost = remoteAccess || tailscale !== null;
   // LAN access binds all interfaces; otherwise loopback only (SSH still works —
   // the tunnel forwards to 127.0.0.1 — but nothing is exposed on the network).
   const desiredBind = remoteAccess && lanAccess ? "0.0.0.0" : "127.0.0.1";
 
   if (!wantHost) {
-    if (wsHost) {
-      await wsHost.close().catch(() => {});
-      wsHost = null;
-      bindHost = null;
-    }
+    await closeHost();
     // No exposure left: forget the token so the next start mints a fresh one.
     // Turning access off is how a user expects to invalidate a leaked token.
     sessionToken = null;
     return;
   }
   if (wsHost && bindHost !== desiredBind) {
-    await wsHost.close().catch(() => {});
-    wsHost = null;
+    await closeHost();
+    assertCurrent(current);
   }
   if (!wsHost) {
     if (!sessionToken) sessionToken = generateToken();
@@ -263,7 +296,9 @@ async function reconcileHost(): Promise<void> {
       onDeviceConnectionChange: () => notifyPairedDevicesChanged(),
     });
     bindHost = desiredBind;
+    hostToken = sessionToken;
     port = wsHost.port;
+    if (!current()) { await closeHost(); assertCurrent(current); }
   }
 }
 
@@ -274,12 +309,12 @@ async function reconcileHost(): Promise<void> {
  */
 function pairingEndpoints(): string[] {
   const out: string[] = [];
-  if (tailscale?.magicDnsName) {
+  if (tailscale?.magicDnsName && !tailscaleCleanup.owns(tailscale)) {
     out.push(
       tailscaleService.resolveHttpsUrl(tailscale.magicDnsName, tailscale.httpsPort),
     );
   }
-  if (lanAccess) {
+  if (bindHost === "0.0.0.0") {
     const { lan, tailscale: tsIp } = localIps();
     if (lan) out.push(`http://${lan}:${port}`);
     if (tsIp) out.push(`http://${tsIp}:${port}`);
@@ -297,23 +332,38 @@ export const localBackendService = {
     enabled: boolean,
     desiredPort?: number,
   ): Promise<LocalBackendStatus> {
-    if (desiredPort && Number.isInteger(desiredPort) && !wsHost) {
-      port = desiredPort;
-    }
-    remoteAccess = enabled;
-    if (!enabled) lanAccess = false; // LAN access requires the base exposure
-    await reconcileHost();
-    reconcileRemoteSleepBlocker();
-    persist();
-    return buildStatus();
+    return runAccessCommand(async (current) => {
+      const previous = { remoteAccess, lanAccess, port };
+      try {
+        if (desiredPort && Number.isInteger(desiredPort) && !wsHost) port = desiredPort;
+        remoteAccess = enabled;
+        if (!enabled) lanAccess = false;
+        await reconcileHost(current);
+        assertCurrent(current);
+        reconcileRemoteSleepBlocker();
+        await persist();
+        return buildStatus();
+      } catch (error) {
+        if (current() && !isHostReady()) {
+          remoteAccess = previous.remoteAccess;
+          lanAccess = previous.lanAccess;
+          if (!wsHost) port = previous.port;
+          if (!wsHost && !tailscale) sessionToken = null;
+        }
+        throw error;
+      }
+    });
   },
 
   /** Toggle LAN access (binds 0.0.0.0 so LAN + Tailscale IPs reach it directly). */
   async setLanAccess(enabled: boolean): Promise<LocalBackendStatus> {
-    lanAccess = enabled && remoteAccess;
-    await reconcileHost();
-    persist();
-    return buildStatus();
+    return runAccessCommand(async (current) => {
+      lanAccess = enabled && remoteAccess;
+      await reconcileHost(current);
+      assertCurrent(current);
+      await persist();
+      return buildStatus();
+    });
   },
 
   /** Toggle Tailscale HTTPS (`tailscale serve` → MagicDNS). Throws on failure. */
@@ -321,54 +371,52 @@ export const localBackendService = {
     enabled: boolean,
     httpsPort = DEFAULT_HTTPS_PORT,
   ): Promise<LocalBackendStatus> {
-    if (enabled) {
-      tailscale = { httpsPort, magicDnsName: null };
-      try {
-        await reconcileHost(); // ensure the loopback host is up first
-        await tailscaleService.startServe(port, httpsPort);
-        const status = await tailscaleService.readStatus();
-        tailscale = { httpsPort, magicDnsName: status.magicDnsName };
-      } catch (error) {
-        // Roll back so getStatus reflects reality (toggle stays off) and persist()
-        // isn't reached, so the failed state is never saved. startServe may have
-        // ALREADY succeeded (e.g. readStatus then threw), so stop it too —
-        // otherwise the daemon keeps proxying to a port we're about to tear down.
-        try {
-          await tailscaleService.stopServe(httpsPort);
-        } catch {
-          /* ignore — best effort */
+    return runAccessCommand(async (current) => {
+      if (enabled) {
+        const ready = tailscale?.httpsPort === httpsPort && tailscale.magicDnsName !== null && !tailscaleCleanup.owns(tailscale);
+        if (!ready) {
+          await stopTailscale();
+          tailscale = { httpsPort, magicDnsName: null };
+          try {
+            await reconcileHost(current);
+            assertCurrent(current);
+            await tailscaleService.startServe(port, httpsPort);
+            assertCurrent(current);
+            const status = await tailscaleService.readStatus();
+            assertCurrent(current);
+            tailscale = { httpsPort, magicDnsName: status.magicDnsName };
+          } catch (error) {
+            // Serve may have started even if its request/status lookup failed.
+            // Keep its target host until that uncertain acquisition is released.
+            await stopTailscale();
+            await reconcileHost(current);
+            throw error;
+          }
+        } else {
+          await reconcileHost(current);
         }
-        tailscale = null;
-        await reconcileHost();
-        reconcileRemoteSleepBlocker();
-        throw error;
+      } else {
+        await stopTailscale();
+        await reconcileHost(current);
       }
-    } else {
-      const prev = tailscale;
-      tailscale = null;
-      if (prev) {
-        try {
-          await tailscaleService.stopServe(prev.httpsPort);
-        } catch {
-          /* ignore */
-        }
-      }
-      await reconcileHost();
-    }
-    reconcileRemoteSleepBlocker();
-    persist();
-    return buildStatus();
+      assertCurrent(current);
+      reconcileRemoteSleepBlocker();
+      await persist();
+      return buildStatus();
+    });
   },
 
   /** Keep an AC-powered remote host reachable between runs. */
   async setKeepAwakeForRemoteAccess(
     enabled: boolean,
   ): Promise<LocalBackendStatus> {
-    keepAwakeForRemoteAccess = enabled;
-    installPowerSourceListeners();
-    reconcileRemoteSleepBlocker();
-    persist();
-    return buildStatus();
+    return runAccessCommand(async () => {
+      keepAwakeForRemoteAccess = enabled;
+      installPowerSourceListeners();
+      reconcileRemoteSleepBlocker();
+      await persist();
+      return buildStatus();
+    });
   },
 
   /**
@@ -379,14 +427,14 @@ export const localBackendService = {
    * Tailscale Serve keeps proxying to the same port.
    */
   async rotateToken(): Promise<LocalBackendStatus> {
-    sessionToken = generateToken();
-    if (wsHost) {
-      await wsHost.close().catch(() => {});
-      wsHost = null;
-      bindHost = null;
-    }
-    await reconcileHost();
-    return buildStatus();
+    return runAccessCommand(async (current) => {
+      sessionToken = generateToken();
+      await closeHost();
+      assertCurrent(current);
+      await reconcileHost(current);
+      assertCurrent(current);
+      return buildStatus();
+    });
   },
 
   /**
@@ -395,7 +443,7 @@ export const localBackendService = {
    * the toggle the user should flip.
    */
   async createPairingCode(): Promise<PairingCode> {
-    if (!wsHost) {
+    if (!isHostReady()) {
       throw new Error("Turn on remote access before pairing a device");
     }
     return backendService.createPairingCode(pairingEndpoints());
@@ -403,7 +451,7 @@ export const localBackendService = {
 
   /** Mint a five-minute, one-use browser login for one advertised origin. */
   createWebLogin(baseUrl: string): WebLoginLink {
-    if (!wsHost) {
+    if (!isHostReady() || !wsHost) {
       throw new Error("Turn on remote access before creating a browser login");
     }
     let origin: string;
@@ -446,45 +494,47 @@ export const localBackendService = {
   },
 
   /**
-   * Re-apply the persisted exposure on startup. Remote/LAN access reconcile
-   * synchronously (fast, in-process); Tailscale Serve is re-applied off the
+   * Re-apply persisted exposure through the command queue on startup.
+   * Tailscale Serve is re-applied off the
    * critical path so cert provisioning never delays launch. Best-effort.
    */
   async restore(): Promise<void> {
+    const ticket = accessCommands.captureRestore();
+    if (!ticket) return;
     try {
       const row = await appSettingsService.getSettings();
-      if (!row) return;
-      remoteAccess = !!row.backendRemoteAccess;
-      lanAccess = !!row.backendLanAccess && remoteAccess;
-      keepAwakeForRemoteAccess = !!row.keepAwakeForRemoteAccess;
-      installPowerSourceListeners();
-      if (remoteAccess) await reconcileHost();
-      reconcileRemoteSleepBlocker();
-      if (row.backendTailscaleHttps) {
-        // setTailscaleHttps rolls back its own runtime state on failure; just
-        // swallow the rejection so a closed Tailscale app doesn't crash startup
-        // (the saved preference stays on for the next launch).
+      if (!row || !ticket()) return;
+      await accessCommands.restore(ticket, async (current) => {
+        remoteAccess = !!row.backendRemoteAccess;
+        lanAccess = !!row.backendLanAccess && remoteAccess;
+        keepAwakeForRemoteAccess = !!row.keepAwakeForRemoteAccess;
+        installPowerSourceListeners();
+        if (remoteAccess) await reconcileHost(current);
+        assertCurrent(current);
+        reconcileRemoteSleepBlocker();
+      });
+      // Startup is background work. A newer manual command or shutdown must
+      // also retire this continuation before Tailscale can be re-enabled.
+      if (row.backendTailscaleHttps && ticket()) {
         void this.setTailscaleHttps(true).catch(() => {});
       }
     } catch {
-      /* best-effort — exposure just stays off */
+      /* best-effort — explicit controls can retry a failed startup */
     }
   },
 
   /** Best-effort shutdown teardown (called from cleanupApp). */
   async shutdown(): Promise<void> {
-    if (tailscale) {
+    return accessCommands.shutdown(async () => {
+      remoteAccess = false;
+      lanAccess = false;
       try {
-        await tailscaleService.stopServe(tailscale.httpsPort);
-      } catch {
-        /* ignore */
+        await stopTailscale();
+        await reconcileHost();
+      } finally {
+        try { reconcileRemoteSleepBlocker(); }
+        finally { removePowerSourceListeners(); }
       }
-      tailscale = null;
-    }
-    remoteAccess = false;
-    lanAccess = false;
-    await reconcileHost();
-    reconcileRemoteSleepBlocker();
-    removePowerSourceListeners();
+    });
   },
 };
