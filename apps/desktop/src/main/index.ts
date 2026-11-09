@@ -1245,7 +1245,7 @@ function cleanupApp(): Promise<void> { return appLifecycle.close(); }
 async function cleanupAppResources() {
   try {
     console.log("Cleaning up application...");
-    await Promise.all([automationsService.stop(), pulseService.stop(), sshService.closeAllTunnels(), shutdownAtlasBookmarks()]);
+    await Promise.all([automationsService.stop(), pulseService.stop(), sshService.closeAllTunnels(), shutdownAtlasBookmarks(), appshotsService.stop(), keyboardShortcutsService.stop()]);
 
     // Destroy tray and the Dock menu's status feed
     hideTray();
@@ -1303,7 +1303,6 @@ async function cleanupAppResources() {
     try { browserService.destroy(); } catch { /* ignore */ }
     unregisterBrowserIpc();
     unregisterBrowserChatWindowIpc();
-    appshotsService.stop();
     unregisterAppshotsIpc();
     unregisterKeyboardShortcutsIpc();
     unregisterSshIpc();

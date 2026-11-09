@@ -59,6 +59,7 @@ Thumbs.db
 !/docs/design/remote-access-lifecycle.md
 !/docs/design/github-device-flow-lifecycle.md
 !/docs/design/update-lifecycle.md
+!/docs/design/lens-shortcut-lifecycle.md
 
 # Coverage
 coverage/

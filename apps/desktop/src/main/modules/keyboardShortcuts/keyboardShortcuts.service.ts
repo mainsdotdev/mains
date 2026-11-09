@@ -10,6 +10,7 @@ import {
   applyKeyboardShortcutUpdate,
   requireKeyboardShortcutUpdate,
 } from "./keyboardShortcuts.validation";
+import { createShortcutWriteQueue } from "../../../shared/capture-shortcut-lifecycle";
 
 export interface KeyboardShortcutsStatus {
   overrides: KeyboardShortcutOverrides;
@@ -17,6 +18,7 @@ export interface KeyboardShortcutsStatus {
 }
 
 let currentOverrides: KeyboardShortcutOverrides = {};
+const writes = createShortcutWriteQueue();
 
 function status(): KeyboardShortcutsStatus {
   return {
@@ -27,12 +29,13 @@ function status(): KeyboardShortcutsStatus {
 
 export const keyboardShortcutsService = {
   async start(): Promise<KeyboardShortcutsStatus> {
-    const settings = await appSettingsService.getSettings();
-    currentOverrides = parseKeyboardShortcutOverrides(
-      settings.keyboardShortcutOverrides,
-    );
+    await writes.restore(() => appSettingsService.getSettings(), (settings) => {
+      currentOverrides = parseKeyboardShortcutOverrides(settings.keyboardShortcutOverrides);
+    });
     return status();
   },
+
+  stop(): Promise<void> { return writes.stop(); },
 
   getStatus(): KeyboardShortcutsStatus {
     return status();
@@ -43,18 +46,22 @@ export const keyboardShortcutsService = {
   },
 
   async update(input: unknown): Promise<KeyboardShortcutsStatus> {
-    const update = requireKeyboardShortcutUpdate(input, currentOverrides);
-    const next = applyKeyboardShortcutUpdate(currentOverrides, update);
-    await appSettingsService.updateKeyboardShortcutOverrides(
-      JSON.stringify(next),
-    );
-    currentOverrides = next;
-    return status();
+    return writes.run(async () => {
+      const update = requireKeyboardShortcutUpdate(input, currentOverrides);
+      const next = applyKeyboardShortcutUpdate(currentOverrides, update);
+      await appSettingsService.updateKeyboardShortcutOverrides(
+        JSON.stringify(next),
+      );
+      currentOverrides = next;
+      return status();
+    });
   },
 
   async resetAll(): Promise<KeyboardShortcutsStatus> {
-    await appSettingsService.updateKeyboardShortcutOverrides("{}");
-    currentOverrides = {};
-    return status();
+    return writes.run(async () => {
+      await appSettingsService.updateKeyboardShortcutOverrides("{}");
+      currentOverrides = {};
+      return status();
+    });
   },
 };

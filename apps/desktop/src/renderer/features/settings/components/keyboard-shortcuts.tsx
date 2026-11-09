@@ -1,12 +1,9 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button, Caption, Input, Text, toast } from "@/components/ui";
 import { Edit, Search, Trash, Undo } from "@/components/ui/icons";
 import { useKeyboardShortcuts } from "@/providers/keyboard-shortcuts-provider";
 import {
-  findKeyboardShortcutConflict,
   formatKeyboardShortcut,
-  isReservedKeyboardShortcut,
-  keyboardShortcutFromInput,
   KEYBOARD_SHORTCUTS,
   resolveKeyboardShortcut,
   type KeyboardShortcutCategory,
@@ -18,6 +15,8 @@ import {
   SettingsPageShell,
   SettingsSection,
 } from "./settings-layout";
+
+import { createShortcutRecorder, idleShortcutRecorder } from "../../../../shared/capture-shortcut-lifecycle";
 
 const CATEGORY_ORDER: readonly KeyboardShortcutCategory[] = [
   "General",
@@ -164,9 +163,19 @@ export default function KeyboardShortcutsSettings() {
   const { bindings, overrides, isLoading, error, update, resetAll } =
     useKeyboardShortcuts();
   const [query, setQuery] = useState("");
-  const [recordingId, setRecordingId] = useState<KeyboardShortcutId | null>(null);
-  const [recordingError, setRecordingError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [recorderState, setRecorderState] = useState(idleShortcutRecorder);
+  const recorder = useRef<ReturnType<typeof createShortcutRecorder> | null>(null);
+  const overridesRef = useRef(overrides);
+  useLayoutEffect(() => { overridesRef.current = overrides; }, [overrides]);
+  useLayoutEffect(() => {
+    const owner = createShortcutRecorder({ update, resetAll, overrides: () => overridesRef.current,
+      change: setRecorderState, error: (message) => toast.error(message), reset: () => toast.success("Keyboard shortcuts reset") });
+    recorder.current = owner;
+    return () => { owner.close(); if (recorder.current === owner) recorder.current = null; };
+  }, [update, resetAll]);
+  const recordingId = recorderState.recordingId;
+  const recordingError = recorderState.error;
+  const busy = recorderState.phase === "saving";
 
   const visible = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -178,58 +187,10 @@ export default function KeyboardShortcutsSettings() {
     );
   }, [query]);
 
-  const commit = async (id: KeyboardShortcutId, binding: string | null) => {
-    setBusy(true);
-    try {
-      await update(id, binding);
-      setRecordingId(null);
-      setRecordingError(null);
-    } catch (updateError) {
-      const message =
-        updateError instanceof Error ? updateError.message : String(updateError);
-      setRecordingError(message);
-      toast.error(message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleRecord = (
-    id: KeyboardShortcutId,
-    event: React.KeyboardEvent<HTMLButtonElement>,
-  ) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.key === "Escape") {
-      setRecordingId(null);
-      setRecordingError(null);
-      return;
-    }
-    if (
-      (event.key === "Backspace" || event.key === "Delete") &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.shiftKey
-    ) {
-      void commit(id, null);
-      return;
-    }
-    const binding = keyboardShortcutFromInput(event.nativeEvent);
-    if (!binding) {
-      setRecordingError("Include a primary modifier in the shortcut");
-      return;
-    }
-    if (isReservedKeyboardShortcut(binding)) {
-      setRecordingError("This shortcut is reserved by the operating system");
-      return;
-    }
-    const conflict = findKeyboardShortcutConflict(id, binding, overrides);
-    if (conflict) {
-      setRecordingError(`Already used by ${conflict.title}`);
-      return;
-    }
-    void commit(id, binding);
+  const commit = (id: KeyboardShortcutId, binding: string | null) => recorder.current?.commit(id, binding);
+  const handleRecord = (id: KeyboardShortcutId, event: React.KeyboardEvent<HTMLButtonElement>) => {
+    event.preventDefault(); event.stopPropagation();
+    recorder.current?.record(id, event.nativeEvent);
   };
 
   const hasOverrides = Object.keys(overrides).length > 0;
@@ -237,21 +198,7 @@ export default function KeyboardShortcutsSettings() {
     <Button
       variant="ghost"
       disabled={busy}
-      onClick={() => {
-        setBusy(true);
-        void resetAll()
-          .then(() => {
-            setRecordingId(null);
-            setRecordingError(null);
-            toast.success("Keyboard shortcuts reset");
-          })
-          .catch((resetError: unknown) =>
-            toast.error(
-              resetError instanceof Error ? resetError.message : String(resetError),
-            ),
-          )
-          .finally(() => setBusy(false));
-      }}
+      onClick={() => { void recorder.current?.resetAll(); }}
     >
       Reset all
     </Button>
@@ -301,13 +248,11 @@ export default function KeyboardShortcutsSettings() {
                   busy={busy}
                   error={recordingError}
                   onStartRecording={() => {
-                    setRecordingId(shortcut.id);
-                    setRecordingError(null);
+                    recorder.current?.start(shortcut.id);
                   }}
                   onRecord={(event) => handleRecord(shortcut.id, event)}
                   onCancel={() => {
-                    setRecordingId(null);
-                    setRecordingError(null);
+                    recorder.current?.cancel();
                   }}
                   onClear={() => void commit(shortcut.id, null)}
                   onReset={() => void commit(shortcut.id, resolveKeyboardShortcut(shortcut.id, {}))}
