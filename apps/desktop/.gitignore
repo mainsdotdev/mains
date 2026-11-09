@@ -54,6 +54,7 @@ Thumbs.db
 !/docs/design/bridge-blob-lifecycle.md
 !/docs/design/mcp-app-lifecycle.md
 !/docs/design/conversation-ui-lifecycle.md
+!/docs/design/window-lifecycle.md
 
 # Coverage
 coverage/

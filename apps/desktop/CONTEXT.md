@@ -716,6 +716,12 @@ _Avoid_: adding a panel to `components/layout/` because that's where panels used
 
 DOCX document previews preserve paper dimensions and columns while fitting the widest page to the current panel at 100% zoom. Panel resizing and restoring a hidden preview recompute that fit; manual zoom scales the fitted page and its scrollable layout together.
 
+## Window recovery and startup
+
+`src/shared/window-lifecycle.ts` owns desktop recovery, window-intent delivery and onboarding handoff transitions (inventory 84, 85 and 96; [rules and retry behavior](docs/design/window-lifecycle.md)). Recovery prompts have exact window-owned tickets; responsive/close/quit retire late responses, crash-loop prompts coalesce, and intentional renderer kills are consumed once. Main parks immutable window intents before reopening or pinging, cancels only matching failed acquisitions and permits only the current main renderer to collect through IPC. The mounted collector serializes reads/delivery, coalesces pings and retains the latest navigation callbacks without reopening its subscription. Onboarding claims save admission synchronously through the deferred shell commit; unmount or transport replacement retires old saves/handoffs without undoing accepted writes. Startup prioritizes mounted readiness over late boot hints and dismisses its splash once after native presentation. Native presentation serializes geometry effects, preserves the original workspace snapshot through failures and permits retrying incomplete entry/restoration; temporary bounds are never persisted. Electron effects stay in `main/windows`, and React/settings effects stay in the onboarding and window-request hooks.
+
+_Avoid_: applying a stale dialog or save reply to a new owner; parking a request after native window acquisition; letting another renderer consume the main window's intent; freeing the onboarding save latch before its shell commit; treating a failed native entry as completed; replacing workspace bounds with temporary onboarding geometry.
+
 ## Shell header
 
 **shell header**:

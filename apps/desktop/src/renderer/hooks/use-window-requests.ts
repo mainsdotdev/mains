@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useCapabilities } from "@/lib/platform";
@@ -6,6 +6,7 @@ import { useCommandNavigation } from "@/features/command-menu/use-command-naviga
 import { useJumpToRun } from "@/features/workspace/hooks/use-jump-to-run";
 import type { WindowRequest } from "../../shared/window-request";
 import type { ServiceResponse } from "../../shared/ipc-kit/service-response";
+import { createWindowRequestDelivery } from "../../shared/window-lifecycle";
 
 /**
  * Carries out what a desktop notification, the menu bar or the Dock menu asked
@@ -20,21 +21,16 @@ export function useWindowRequests(): void {
   const navigate = useNavigate();
   const jumpToRun = useJumpToRun();
   const { newChat, openWorkspace } = useCommandNavigation();
-
-  useEffect(() => {
-    // Requests come from this Mac's notifications, menu bar icon and Dock.
-    if (!caps.windowChrome || !isLoaded) return;
-
-    const carryOut = (request: WindowRequest) => {
+  const carryOut = useRef<(request: WindowRequest) => void | Promise<unknown>>(() => {});
+  useLayoutEffect(() => {
+    carryOut.current = (request) => {
       switch (request.kind) {
         case "openRun": {
           const { runId, ...run } = request.run;
-          void jumpToRun({ id: runId, ...run });
-          return;
+          return jumpToRun({ id: runId, ...run });
         }
         case "openWorkspace":
-          void openWorkspace(request.workspaceId);
-          return;
+          return openWorkspace(request.workspaceId);
         case "newChat":
           newChat();
           return;
@@ -43,22 +39,27 @@ export function useWindowRequests(): void {
           return;
       }
     };
+  }, [jumpToRun, newChat, openWorkspace, navigate]);
+
+  useEffect(() => {
+    if (!caps.windowChrome || !isLoaded) return;
+    const delivery = createWindowRequestDelivery<WindowRequest>();
+    const app = window.api.app;
 
     const collect = () => {
-      void window.api.app.consumeWindowRequest().then(
-        (response: ServiceResponse<WindowRequest | null>) => {
-          if (response.success && response.data) carryOut(response.data);
-        },
-        () => {
-          // The renderer can mount while the app is shutting down.
-        },
-      );
+      void delivery.collect(async () => {
+        const response: ServiceResponse<WindowRequest | null> = await app.consumeWindowRequest();
+        return response.success ? response.data : null;
+      }, (request) => carryOut.current(request)).catch((error) => {
+        console.error("Unable to deliver window request:", error);
+      });
     };
 
-    const unsubscribe = window.api.app.onWindowRequest(collect);
+    const unsubscribe = app.onWindowRequest(collect);
     collect();
     return () => {
+      delivery.close();
       unsubscribe();
     };
-  }, [caps.windowChrome, isLoaded, jumpToRun, newChat, openWorkspace, navigate]);
+  }, [caps.windowChrome, isLoaded]);
 }
