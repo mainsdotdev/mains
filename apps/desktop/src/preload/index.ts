@@ -28,7 +28,7 @@ import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type { ServiceResponse } from "@mains/contracts/service-response";
 import type { CancelWorkspaceClonePayload } from "@mains/contracts/workspace-intake";
-import type { TerminalCreateOptions, TerminalDataEvent, TerminalExitEvent, TerminalSession, TerminalSnapshot } from "@mains/contracts/terminal";
+import type { TerminalCreateOptions, TerminalDataEvent, TerminalExitEvent, TerminalSession, TerminalSnapshot, TerminalWriteOptions } from "@mains/contracts/terminal";
 import type { CreatePrPayload, CreatePrResult, PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 import type { BrowserAnnotationTheme } from "../shared/browser-annotation";
 import type {
@@ -1113,11 +1113,11 @@ const api = {
       ipcRenderer.invoke(CHANNELS.terminal.create, payload),
     attach: (id: string): Promise<ServiceResponse<TerminalSnapshot>> => ipcRenderer.invoke(CHANNELS.terminal.attach, id),
     list: (): Promise<ServiceResponse<TerminalSession[]>> => ipcRenderer.invoke(CHANNELS.terminal.list),
-    write: (id: string, data: string) =>
-      ipcRenderer.invoke(CHANNELS.terminal.write, id, data),
-    resize: (id: string, cols: number, rows: number) =>
-      ipcRenderer.invoke(CHANNELS.terminal.resize, id, cols, rows),
-    destroy: (id: string) => ipcRenderer.invoke(CHANNELS.terminal.destroy, id),
+    write: (id: string, data: string, options?: TerminalWriteOptions) =>
+      ipcRenderer.invoke(CHANNELS.terminal.write, id, data, options),
+    resize: (id: string, cols: number, rows: number, instanceId?: string) =>
+      ipcRenderer.invoke(CHANNELS.terminal.resize, id, cols, rows, instanceId),
+    destroy: (id: string, instanceId?: string) => ipcRenderer.invoke(CHANNELS.terminal.destroy, id, instanceId),
     destroyIdle: (workspaceId: string): Promise<ServiceResponse<string[]>> =>
       ipcRenderer.invoke(CHANNELS.terminal.destroyIdle, workspaceId),
     onData: (callback: (data: TerminalDataEvent) => void) => {

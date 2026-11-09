@@ -50,7 +50,7 @@ export function useTranscriptScroll(
     } finally {
       lease.finish();
     }
-  }, [container, eventRevision, history, intent, paging, runId]);
+  }, [container, eventRevision, history, paging, runId]);
 
   useLayoutEffect(() => {
     const element = container.current;

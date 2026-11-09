@@ -1252,7 +1252,8 @@ async function cleanupAppResources() {
     stopDockMenu();
 
     // Destroy all terminal PTY instances
-    destroyAllTerminals();
+    try { destroyAllTerminals(); }
+    catch (error) { console.error("Could not stop all terminals:", error); }
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
     stopBridgeNotifications?.();

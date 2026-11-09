@@ -12,6 +12,8 @@ import { withWorkspaceIntake } from "./modules/workspace/workspace-intake-lifecy
 import { recordKey, transitionRecord } from "./runtime/record-lifecycle";
 import { atlasService } from "./modules/atlas";
 import { atlasBookmarks } from "./modules/atlas/atlas.bookmarks";
+import { terminalService } from "./modules/terminal";
+import * as providers from "./modules/providers";
 
 let directory: string, restoreRuntime: () => void, restoreIpc: () => void;
 let server: BackendServer | undefined, retry: (() => Promise<void>) | undefined;
@@ -33,6 +35,23 @@ afterEach(async () => {
 });
 
 describe("backend host acquisition and shutdown", () => {
+  it("drains provider cleanup despite a failed terminal stop and retains database ownership for retry", async () => {
+    server = await start();
+    const entered = deferred(), gate = deferred();
+    const terminal = vi.spyOn(terminalService, "destroyAll").mockImplementationOnce(() => { throw new Error("Native stop failed"); });
+    const adapters = vi.spyOn(providers, "shutdownAllWorkAdapters").mockImplementationOnce(async () => { entered.resolve(); await gate.promise; });
+    const closing = server.close().catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      expect(DatabaseClient.getInstance().isReady()).toBe(true);
+      gate.resolve();
+      expect(await closing).toBeInstanceOf(Error);
+      expect(DatabaseClient.getInstance().isReady()).toBe(true);
+      expect(fs.existsSync(databaseOwnershipPath(path.join(directory, "mains.db")))).toBe(true);
+    } finally { gate.resolve(); await closing; terminal.mockRestore(); adapters.mockRestore(); }
+    await server.close();
+    expect(DatabaseClient.getInstance().isReady()).toBe(false);
+  });
   it("drains Atlas preparations before closing SQLite and prevents a late bookmark write", async () => {
     server = await start();
     const gate = deferred(), entered = deferred();

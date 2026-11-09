@@ -1019,7 +1019,7 @@ function InteractiveWorkspaceProviderPage({
 
       {activeAuthTerminal ? (
         <TerminalSection
-          id={`auth-${providerId}`}
+          id={`auth-${activeAuthTerminal.id}`}
           isOpen
           title={`Sign in to ${providerLabel}`}
           pendingCommand={activeAuthTerminal.pendingCommand}

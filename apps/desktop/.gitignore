@@ -48,6 +48,7 @@ Thumbs.db
 !/docs/design/document-attachment-lifecycle.md
 !/docs/design/pairing-auth-lifecycle.md
 !/docs/design/transcript-history-lifecycle.md
+!/docs/design/terminal-auth-lifecycle.md
 
 # Coverage
 coverage/

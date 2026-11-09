@@ -18,6 +18,21 @@ beforeEach(() => { terminalService.destroyAll(); vi.clearAllMocks(); registerTer
 afterEach(() => { unregisterTerminalIpc(); terminalService.destroyAll(); });
 
 describe("terminal IPC lifecycle", () => {
+  it("correlates one-shot input and stale cleanup at the transport boundary", async () => {
+    const result = await invokeHandler(CHANNELS.terminal.create, [{ id: "auth" }]);
+    const instanceId = (result as { success: true; data: { session: { instanceId: string } } }).data.session.instanceId;
+    const args = ["auth", "codex login\r", { instanceId, commandId: "login" }];
+    expect(await invokeHandler(CHANNELS.terminal.write, args)).toEqual({ success: true, data: undefined });
+    expect(await invokeHandler(CHANNELS.terminal.write, args)).toEqual({ success: true, data: undefined });
+    expect(mocks.pty.write).toHaveBeenCalledOnce();
+    await invokeHandler(CHANNELS.terminal.destroy, ["auth", instanceId]);
+    const replacement = await invokeHandler(CHANNELS.terminal.create, [{ id: "auth" }]);
+    const next = (replacement as { success: true; data: { session: { instanceId: string } } }).data.session.instanceId;
+    expect(next).not.toBe(instanceId);
+    expect(await invokeHandler(CHANNELS.terminal.write, args)).toMatchObject({ success: false, error: expect.stringContaining("changed") });
+    await invokeHandler(CHANNELS.terminal.destroy, ["auth", instanceId]);
+    expect(terminalService.attach("auth", () => {}).session.instanceId).toBe(next);
+  });
   it("reattaches a remote client without killing the shell and scopes its resumed stream", async () => {
     const created = await invokeHandler(CHANNELS.terminal.create, [{ id: "t", cwd: os.tmpdir(), workspaceId: "w", workspaceName: "Website" }], { clientId: "first" });
     expect(created).toMatchObject({ success: true, data: { session: { id: "t", workspaceId: "w" }, sequence: 0 } });

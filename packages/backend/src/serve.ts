@@ -205,8 +205,11 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
     scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync(), shutdownUserDecisions(), shutdownAtlasBookmarks()]); });
     scope.defer(async () => {
       runSessionRegistry.shutdownAll("Standalone server stopped during run");
-      destroyAllTerminals();
-      await shutdownAllWorkAdapters();
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() => destroyAllTerminals()), shutdownAllWorkAdapters(),
+      ]);
+      const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected").map((result) => result.reason);
+      if (errors.length) throw Object.assign(new Error("Could not finish native runtime cleanup"), { errors });
     });
     for (const registration of BACKEND_REGISTRATIONS) {
       // A registration may fail after installing some of its handlers.

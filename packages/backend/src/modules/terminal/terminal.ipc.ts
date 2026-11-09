@@ -4,7 +4,7 @@ import { emit } from "../../ipc-kit";
 import { terminalService } from "./terminal.service";
 import { CHANNELS } from "@mains/contracts/channels";
 import { handle } from "../../ipc-kit/handle";
-import type { TerminalCreateOptions } from "@mains/contracts/terminal";
+import type { TerminalCreateOptions, TerminalWriteOptions } from "@mains/contracts/terminal";
 let stopServerWatch: (() => void) | undefined;
 
 function terminalCallbacks(ctx: { clientId?: string }) {
@@ -50,19 +50,19 @@ export function registerTerminalIpc(): void {
   });
   ipcMain.handle(CHANNELS.terminal.list, handle(() => terminalService.list()));
 
-  ipcMain.handle(CHANNELS.terminal.write, handle((id: string, data: string) => {
-    terminalService.write(id, data);
+  ipcMain.handle(CHANNELS.terminal.write, handle((id: string, data: string, options?: TerminalWriteOptions) => {
+    terminalService.write(id, data, options);
   }));
 
   ipcMain.handle(
     CHANNELS.terminal.resize,
-    handle((id: string, cols: number, rows: number) => {
-      terminalService.resize(id, cols, rows);
+    handle((id: string, cols: number, rows: number, instanceId?: string) => {
+      terminalService.resize(id, cols, rows, instanceId);
     }),
   );
 
-  ipcMain.handle(CHANNELS.terminal.destroy, handle((id: string) => {
-    terminalService.destroy(id);
+  ipcMain.handle(CHANNELS.terminal.destroy, handle((id: string, instanceId?: string) => {
+    terminalService.destroy(id, instanceId);
     emit(CHANNELS.terminal.changed, {});
   }));
   ipcMain.handle(CHANNELS.terminal.destroyIdle, handle(async (workspaceId: string) => {

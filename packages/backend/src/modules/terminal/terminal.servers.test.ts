@@ -27,6 +27,41 @@ beforeEach(() => {
 afterEach(() => { stopWatch?.(); stopWatch = undefined; terminalService.destroyAll(); vi.useRealTimers(); });
 
 describe("terminal server monitor", () => {
+  it("keeps a failed acquisition owned for Stop without polling an unusable shell", () => {
+    const kill = vi.fn().mockImplementationOnce(() => { throw new Error("Stop failed"); });
+    mocks.spawn.mockImplementationOnce(() => ({ pid: 500, kill,
+      onData: () => ({ dispose() {} }), onExit: () => { throw new Error("Listener setup failed"); },
+    }));
+    expect(() => create("broken")).toThrow(/initialization and cleanup/);
+    expect(terminalService.list().map((session) => session.id)).toEqual(["broken"]);
+    expect(() => terminalService.attach("broken", () => {})).toThrow(/initialization failed/);
+    stopWatch = terminalService.watchServers(changed);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mocks.scan).not.toHaveBeenCalled();
+  });
+  it("retires an old watcher scan without blocking or clearing its replacement", async () => {
+    create("a");
+    const previousChanged = vi.fn(), currentChanged = vi.fn();
+    stopWatch = terminalService.watchServers(previousChanged);
+    let finishOld!: (result: Map<string, typeof server[]>) => void;
+    let finishNew!: (result: Map<string, typeof server[]>) => void;
+    mocks.scan.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishNew = resolve; }));
+    const old = terminalService.refreshServers();
+    await Promise.resolve();
+    stopWatch(); stopWatch = terminalService.watchServers(currentChanged);
+    const fresh = terminalService.refreshServers();
+    try {
+      expect(fresh).not.toBe(old);
+      await Promise.resolve();
+      finishOld(new Map([["a", [server]]])); await old;
+      expect(terminalService.list()[0].servers).toBeNull();
+      expect(terminalService.refreshServers()).toBe(fresh);
+      finishNew(new Map([["a", [{ ...server, port: 4000 }]]])); await fresh;
+      expect(terminalService.list()[0].servers?.[0].port).toBe(4000);
+      expect(previousChanged).not.toHaveBeenCalled(); expect(currentChanged).toHaveBeenCalledOnce();
+    } finally { finishOld?.(new Map()); finishNew?.(new Map()); await Promise.allSettled([old, fresh]); }
+  });
   it("batches workspace shells and never scans provider sign-in terminals", async () => {
     create("a"); create("b");
     terminalService.create("auth", os.tmpdir(), () => {});
@@ -42,6 +77,7 @@ describe("terminal server monitor", () => {
     mocks.scan.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     const first = terminalService.refreshServers();
     expect(terminalService.refreshServers()).toBe(first);
+    await Promise.resolve();
     terminalService.destroy("a");
     create("a");
     finish(new Map([["a", [server]], ["b", [server]]]));

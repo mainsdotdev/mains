@@ -13,6 +13,8 @@ export interface TerminalServer {
 
 export interface TerminalSession {
   id: string;
+  /** Native process incarnation; an id may be reused after explicit removal. */
+  instanceId?: string;
   cwd: string;
   workspaceId: string | null;
   workspaceName: string | null;
@@ -22,6 +24,12 @@ export interface TerminalSession {
   createdAt: number;
   /** Verified TCP listeners owned by this shell's process tree; null means unchecked/unavailable. */
   servers: TerminalServer[] | null;
+}
+
+export interface TerminalWriteOptions {
+  instanceId?: string;
+  /** One-shot command receipt, scoped to this native process. */
+  commandId?: string;
 }
 
 /** A bounded output replay; subsequent stream events have larger sequences. */
