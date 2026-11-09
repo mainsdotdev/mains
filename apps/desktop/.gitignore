@@ -37,33 +37,7 @@ Thumbs.db
 /docs/*
 !/docs/design/
 /docs/design/*
-!/docs/design/windows-x64-beta.md
-!/docs/design/git-actions-lifecycle.md
-!/docs/design/workspace-edit-lifecycle.md
-!/docs/design/connection-sync-lifecycle.md
-!/docs/design/user-decisions-lifecycle.md
-!/docs/design/run-projection-lifecycle.md
-!/docs/design/backend-switch-lifecycle.md
-!/docs/design/atlas-bookmark-lifecycle.md
-!/docs/design/document-attachment-lifecycle.md
-!/docs/design/pairing-auth-lifecycle.md
-!/docs/design/transcript-history-lifecycle.md
-!/docs/design/terminal-auth-lifecycle.md
-!/docs/design/turn-input-lifecycle.md
-!/docs/design/bridge-connection-lifecycle.md
-!/docs/design/bridge-blob-lifecycle.md
-!/docs/design/mcp-app-lifecycle.md
-!/docs/design/conversation-ui-lifecycle.md
-!/docs/design/window-lifecycle.md
-!/docs/design/browser-interaction-lifecycle.md
-!/docs/design/remote-access-lifecycle.md
-!/docs/design/github-device-flow-lifecycle.md
-!/docs/design/update-lifecycle.md
-!/docs/design/lens-shortcut-lifecycle.md
-!/docs/design/speech-preview-lifecycle.md
-!/docs/design/pr-detail-lifecycle.md
-!/docs/design/voice-task-lifecycle.md
-!/docs/design/overlay-feedback-lifecycle.md
+!/docs/design/*.md
 
 # Coverage
 coverage/
