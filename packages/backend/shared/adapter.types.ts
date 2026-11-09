@@ -1957,6 +1957,8 @@ export interface HookMatcher {
   hooks: HookCallback[];
   /** Timeout in seconds (default: 60). Increase for hooks that make external API calls */
   timeout?: number;
+  /** Block the guarded action if a callback throws or returns invalid output. */
+  onFailure?: "continue" | "block";
 }
 
 /**

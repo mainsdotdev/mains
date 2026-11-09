@@ -111,6 +111,7 @@ interface SDKHookMatcher {
     ) => Promise<Record<string, unknown>>
   >;
   timeout?: number;
+  onFailure?: "continue" | "block";
 }
 
 type SDKHooksConfig = {
@@ -507,9 +508,21 @@ interface SDKResultError extends SDKResultBase {
     | "error_max_budget_usd"
     | "error_max_structured_output_retries";
   errors: string[];
+  startup_failure_reason?: string;
 }
 
 type SDKResultMessage = SDKResultSuccess | SDKResultError;
+
+function describeClaudeResultError(result: SDKResultError): string {
+  const reasons: Record<string, string> = {
+    config_file_invalid: "Claude could not start because a configuration file contains invalid JSON. Fix the file named below and try again.",
+    initialize_not_first: "Claude could not initialize its session. Restart the Claude runtime and try again.",
+    sandbox_required_unavailable: "Claude could not start because its required sandbox is unavailable.",
+  };
+  const reason = result.startup_failure_reason;
+  return [reason ? reasons[reason] ?? `Claude could not start (${reason}).` : undefined,
+    ...result.errors].filter(Boolean).join(" ") || "Claude could not complete this request.";
+}
 
 interface ClaudeTurnModelMessage {
   type?: unknown;
@@ -600,6 +613,7 @@ export interface SDKSystemMessage {
     | "model_refusal_no_fallback"
     | "permission_denied"
     | "informational"
+    | "session_writes_lost"
     | "notification";
   uuid: string;
   session_id: string;
@@ -684,6 +698,10 @@ export interface SDKSystemMessage {
   // subtype: "notification"
   text?: string;
   priority?: "low" | "medium" | "high" | "immediate";
+  // subtype: "session_writes_lost"
+  error_code?: string;
+  lost?: string[];
+  transcript_session_ids?: string[];
 }
 
 interface SDKBackgroundTask {
@@ -781,6 +799,7 @@ interface SDKSlashCommand {
 }
 
 interface SDKInitializationResult {
+  capabilities?: string[];
   commands: SDKSlashCommand[];
   output_style: string;
   available_output_styles: string[];
@@ -905,6 +924,7 @@ interface ClaudeSession {
     lastAssistantMessage?: { id: string; hasText: boolean; hasTools: boolean };
     lastFastModeState?: FastModeState;
     lastAssistantError?: string;
+    lastResultError?: string;
     sawRateLimitNotice?: boolean;
     /** `system/init`'s protocol capabilities, for features checked mid-turn. */
     capabilities?: string[];
@@ -1897,6 +1917,7 @@ export function buildMcpAppCallRequest(
     tool: mcpToolWireName(server, tool),
     ...(args !== undefined ? { arguments: args } : {}),
     result_not_for_model: true,
+    check_permissions: true,
   };
 }
 
@@ -1950,8 +1971,8 @@ export function toMcpCallToolResult(raw: unknown, fallbackContent?: unknown): Mc
 
 /**
  * Refuse an app's tool call the MCP Apps rules do not allow. The app is
- * untrusted page content and `mcp_call` skips permission checks, so the tool
- * must be one its own server reports, and not one it keeps for the model
+ * untrusted page content, so the tool must be one its own server reports,
+ * and not one it keeps for the model
  * (`visibility` without "app"). An unconnected server fails closed.
  */
 export function assertMcpToolCallableFromApp(
@@ -2570,6 +2591,18 @@ export function mapSDKMessage(
             reason,
           },
         });
+      } else if (systemMsg.subtype === "session_writes_lost") {
+        const transcriptLost = systemMsg.lost?.includes("transcript");
+        const cause = systemMsg.error_code === "EDQUOT" ? "the disk quota is exhausted" : "the disk is full";
+        events.push({
+          type: "log",
+          message: transcriptLost
+            ? `Claude could not save part of this conversation because ${cause}. Resuming it may miss messages. Free disk space before continuing.`
+            : `Claude could not save its settings because ${cause}. Free disk space before continuing.`,
+          level: "warn", ts,
+          metadata: { source: "session_writes_lost", errorCode: systemMsg.error_code,
+            lost: systemMsg.lost, transcriptSessionIds: systemMsg.transcript_session_ids },
+        });
       } else if (systemMsg.subtype === "informational" && systemMsg.content) {
         events.push({
           type: "log",
@@ -2667,11 +2700,15 @@ export function mapSDKMessage(
       }
 
       if (resultMsg.subtype !== "success" && resultMsg.is_error) {
+        cs.state.lastResultError = describeClaudeResultError(resultMsg);
         events.push({
           type: "log",
-          message: `[error] ${resultMsg.errors.join(", ")}`,
+          message: `[error] ${cs.state.lastResultError}`,
           level: "error",
           ts,
+          ...(resultMsg.startup_failure_reason ? { metadata: {
+            source: "startup_failure", reason: resultMsg.startup_failure_reason,
+          } } : {}),
         });
       }
 
@@ -3002,11 +3039,40 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   const liveSessions = new Map<string, ClaudeSession>();
   /** runId → the cwd its session ran in, for an MCP host that serves it later. */
   const runCwdMemo = new Map<string, string>();
+  const mcpPolicies = new Map<string, { options: SDKOptions; permissionMode: ClaudePermissionModeRef }>();
+
+  async function mcpPolicyFor(runId: string) {
+    const known = mcpPolicies.get(runId);
+    if (known) return known;
+    const assert = queryLifecycle.checkpoint();
+    // The run service already composed the mode harness into these snapshots.
+    const { runsService } = await import("../../../runs");
+    const run = await runsService.getRunById(runId);
+    assert();
+    if (!run || run.providerId !== "claude_code") throw new Error("Claude conversation not found");
+    const toolPolicy = run.toolPolicySnapshot as WorkRunToolPolicy | null;
+    const permissionMode = createClaudePermissionModeRef(isSDKPermissionMode(run.configSnapshot?.permissionMode)
+      ? run.configSnapshot.permissionMode : config.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE);
+    const bridge = createClaudePermissionBridge({ runId, permissionMode,
+      allowedTools: new Set(resolveEffectiveAllowedTools(toolPolicy)), restrictedToolset: !!toolPolicy?.allowedTools });
+    const hooks = config.hooks ? convertHooksConfig(config.hooks) : {};
+    const guard = await guardsService.buildClaudeGuardHook();
+    assert();
+    if (guard) hooks.PreToolUse = [...(hooks.PreToolUse ?? []), guard];
+    return { permissionMode, options: {
+      ...buildClaudePermissionModeOptions(permissionMode.current, bridge.canUseTool, toolPolicy),
+      hooks, onElicitation: createClaudeElicitationHandler({ runId }),
+      additionalDirectories: run.configSnapshot?.additionalDirectories as string[] | undefined,
+    } };
+  }
+
   const mcpHosts = createClaudeQueryPool<SDKQuery>({
     open: (hooks) => queryLifecycle.open(hooks),
     capacity: 3, idleMs: 2 * 60 * 1000,
-    acquire: async (cwd, owner) => {
+    acquire: async (runId, owner) => {
       await owner.run(ensureSDK);
+      const cwd = await owner.run(() => resolveRunCwd(runId));
+      const policy = await owner.run(() => mcpPolicyFor(runId));
       const idle = new Promise<void>((resolve) => {
         if (owner.signal.aborted) resolve();
         else owner.signal.addEventListener("abort", () => resolve(), { once: true });
@@ -3014,8 +3080,19 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const noPrompt: AsyncIterable<never> = {
         [Symbol.asyncIterator]: () => ({ next: () => idle.then(() => ({ done: true as const, value: undefined })) }),
       };
-      const options = buildProcessOptions();
-      options.cwd = cwd;
+      const options: SDKOptions = { ...buildProcessOptions(), ...policy.options,
+        cwd, permissionMode: policy.permissionMode.current };
+      const canUseTool = options.canUseTool!;
+      options.canUseTool = async (tool, input, context) => {
+        const signal = AbortSignal.any([context.signal, owner.signal]);
+        if (signal.aborted) return { behavior: "deny", message: "Claude MCP host closed" };
+        const result = await canUseTool(tool, input, { ...context, signal });
+        return signal.aborted ? { behavior: "deny", message: "Claude MCP host closed" } : result;
+      };
+      const onElicitation = options.onElicitation!;
+      options.onElicitation = (request, context) => onElicitation(request, {
+        signal: AbortSignal.any([context.signal, owner.signal]),
+      });
       const mcpServers = readMcpServersFromSettings(options.settingSources!, cwd);
       if (Object.keys(mcpServers).length > 0) options.mcpServers = mcpServers;
       return owner.acquire(() => queryFn!({ prompt: noPrompt, options }));
@@ -3180,11 +3257,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
                 return result as Record<string, unknown>;
               } catch (error) {
                 logError(`Hook error in ${eventName}:`, error);
+                if (matcher.onFailure) throw error;
                 return {};
               }
             },
         ),
         timeout: matcher.timeout,
+        onFailure: matcher.onFailure,
       }));
     }
     return sdkHooks;
@@ -3239,6 +3318,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       ...process.env,
       // Advertise the host's MCP Apps support when the CLI connects to servers.
       CLAUDE_CODE_MCP_APPS_HOST: "1",
+      CLAUDE_CODE_STARTUP_FAILURE_RESULTS: "1",
     };
     delete cleanEnv.ANTHROPIC_API_KEY;
     delete cleanEnv.ANTHROPIC_AUTH_TOKEN;
@@ -3635,6 +3715,15 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       partialTextBuffers: new Map(),
       partialThinkingBuffers: new Map(),
     };
+    // Keep only the permission context, never the turn's temporary settings
+    // file, session id or model prompt. Idle app calls belong to this run.
+    mcpPolicies.set(runId, { permissionMode, options: {
+      ...buildClaudePermissionModeOptions(permissionMode.current, options.canUseTool, {
+        allowedTools: options.allowedTools ?? null, disallowedTools: options.disallowedTools ?? [],
+      }),
+      hooks: options.hooks, onElicitation: options.onElicitation,
+      additionalDirectories: options.additionalDirectories,
+    } });
     return session;
   }
 
@@ -3731,7 +3820,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   }
 
   /** A closed live turn can fall back to its cwd host; shutdown cannot. */
-  async function withMcpQuery<T>(runId: string, fn: (query: SDKQuery, owner: ClaudeQueryScope) => Promise<T>): Promise<T> {
+  async function withMcpQuery<T>(runId: string, fn: (query: SDKQuery, owner: ClaudeQueryScope) => Promise<T>, retryClosed = true): Promise<T> {
     const assert = queryLifecycle.checkpoint();
     const live = liveSessions.get(runId);
     if (live?.query && live.owner.active) {
@@ -3739,12 +3828,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         return await live.owner.run(() => fn(live.query!, live.owner));
       } catch (error) {
         assert();
-        if (!/closed/i.test(error instanceof Error ? error.message : String(error))) throw error;
+        if (!retryClosed || live.owner.active || !/closed/i.test(error instanceof Error ? error.message : String(error))) throw error;
       }
     }
-    const cwd = await resolveRunCwd(runId);
     assert();
-    return mcpHosts.use(cwd, fn);
+    return mcpHosts.use(runId, fn);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -3954,6 +4042,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   return {
     async createSession(request: WorkRunRequest): Promise<AcquiredSession> {
       const assert = queryLifecycle.checkpoint();
+      await mcpHosts.close(request.runId);
       await ensureSDK();
       assert();
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
@@ -3995,6 +4084,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     async resumeSession(request: WorkRunContinueRequest): Promise<AcquiredSession> {
       const assert = queryLifecycle.checkpoint();
+      await mcpHosts.close(request.runId);
       await ensureSDK();
       assert();
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
@@ -4110,6 +4200,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     async forkSession(request: WorkRunForkRequest): Promise<AcquiredSession> {
       const assert = queryLifecycle.checkpoint();
+      await mcpHosts.close(request.runId);
       await ensureSDK();
       assert();
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
@@ -4455,11 +4546,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           terminalToolNonExecutionKind: cs.state.terminalToolNonExecutionKind,
           aborted: signal.aborted || cs.abortController.signal.aborted,
           timedOut: false,
-          errorMessage: undefined,
+          errorMessage: cs.state.lastResultError,
           timeoutMs: timeout,
         });
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = cs.state.lastResultError ?? (error instanceof Error ? error.message : String(error));
 
         // Emit interrupted events for any pending tool calls
         const ts = Date.now();
@@ -4529,11 +4620,15 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         if (typeof query.request !== "function") {
           throw new Error("This Claude Code version cannot call MCP App tools");
         }
+        const init = await owner.run(() => query.initializationResult());
+        if (!init.capabilities?.includes("mcp_call_check_permissions_v1")) {
+          throw new Error("This Claude Code version cannot check MCP App permissions. Update Claude Code or use the Claude runtime bundled with Mains.");
+        }
         const statuses = await waitForClaudeMcpServer(() => { owner.assertActive(); return query.mcpServerStatus(); }, request.server);
         owner.assertActive();
         assertMcpToolCallableFromApp(statuses, request.server, request.tool);
         return query.request(buildMcpAppCallRequest(request.server, request.tool, request.arguments));
-      });
+      }, false);
       // The control reply wraps the tool result in `response`.
       const result = toMcpCallToolResult((raw as { response?: unknown } | null)?.response ?? raw);
       if (!result) throw new Error("MCP App tool call returned no result");
@@ -4552,6 +4647,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async deleteSession(runId: string): Promise<void> {
+      await mcpHosts.close(runId);
       // Resolve before clearing the memo — lookupSessionId reads it.
       const sessionId = await lookupSessionId(runId);
 
@@ -4564,9 +4660,14 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           if (deleteSdkSessionFn) {
             await deleteSdkSessionFn(sessionId);
           } else {
-            logWarn("SDK has no deleteSession(); transcript left on disk");
+            throw new Error("This Claude SDK cannot delete saved sessions. Update Mains and try again.");
           }
         } catch (err) {
+          if ((err as NodeJS.ErrnoException)?.code === "ENOTEMPTY") {
+            throw Object.assign(new Error(`Claude session was only partly deleted. Some files remain on disk; clean them up before retrying. ${err instanceof Error ? err.message : String(err)}`), { cause: err });
+          }
+          if ((err as NodeJS.ErrnoException)?.code !== "ENOENT" &&
+            !(err instanceof Error && err.message.includes(`Session ${sessionId} not found`))) throw err;
           // A missing session throws — that is the already-deleted case, and it
           // must not block clearing our own reference to it.
           logWarn(
@@ -4576,11 +4677,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         }
       }
 
+      await runsRepo.updateRun(runId, { sessionId: null });
       sessionIdMemo.delete(runId);
       runCwdMemo.delete(runId);
-      runsRepo
-        .updateRun(runId, { sessionId: null })
-        .catch((err) => logError("Failed to clear session ID in DB:", err));
+      mcpPolicies.delete(runId);
     },
 
     updateConfig(next) {
@@ -4602,6 +4702,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       sessionIdMemo.clear();
       liveSessions.clear();
       runCwdMemo.clear();
+      mcpPolicies.clear();
       sdkLoaded = false;
       queryFn = null;
       getSessionInfoFn = null;

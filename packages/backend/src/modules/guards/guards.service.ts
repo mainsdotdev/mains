@@ -152,6 +152,7 @@ export const guardsService = {
       context: { signal: AbortSignal },
     ) => Promise<Record<string, unknown>>>;
     timeout?: number;
+    onFailure?: "continue" | "block";
   } | null> {
     const guardInfo = getActiveGuardInfo();
     if (!guardInfo) return null;
@@ -159,6 +160,7 @@ export const guardsService = {
     return {
       matcher: "Bash",
       timeout: 30,
+      onFailure: "block",
       hooks: [
         async (
           input: Record<string, unknown>,
@@ -175,7 +177,7 @@ export const guardsService = {
 
           try {
             const adapter = await getActiveGuard();
-            if (!adapter) return {};
+            if (!adapter) throw new Error("The configured package guard is no longer connected");
 
             const results = await adapter.checkPackages(parsed.packages);
             const blocked = results.filter((r) => !r.allowed);
@@ -212,13 +214,7 @@ export const guardsService = {
             };
           } catch (error: any) {
             console.error("[Guards] Hook check failed:", error);
-            // On error, allow the command but warn
-            return {
-              hookSpecificOutput: {
-                hookEventName: "PreToolUse",
-                additionalContext: `[Guard: ${guardInfo.displayName}] Warning: security check failed (${error?.message}). Proceeding without check.`,
-              },
-            };
+            throw Object.assign(new Error(`[Guard: ${guardInfo.displayName}] Package safety check failed; installation was blocked. ${error?.message ?? "Try again when the guard is available."}`), { cause: error });
           }
         },
       ],

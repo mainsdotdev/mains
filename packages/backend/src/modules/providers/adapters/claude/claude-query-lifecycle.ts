@@ -125,7 +125,7 @@ export function createClaudeQueryLifecycle<SDK>() {
   };
 }
 
-/** Directory-keyed idle queries. Pending opens share ownership; active readers
+/** Keyed idle queries. Pending opens share ownership; active readers
  * pin the query against both idle expiry and capacity eviction. */
 export function createClaudeQueryPool<Q extends ClaudeQueryHandle>(options: {
   open: (hooks: { retire: () => void; release: () => void }) => ClaudeQueryScope;
@@ -171,6 +171,9 @@ export function createClaudeQueryPool<Q extends ClaudeQueryHandle>(options: {
     return entry;
   }
   return {
+    async close(key: string): Promise<void> {
+      await entries.get(key)?.owner.close();
+    },
     async use<T>(key: string, work: (query: Q, owner: ClaudeQueryScope) => Promise<T>): Promise<T> {
       const entry = get(key);
       clearTimeout(entry.timer);

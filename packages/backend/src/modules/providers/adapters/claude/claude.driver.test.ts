@@ -3191,6 +3191,7 @@ describe("claude.driver / MCP Apps", () => {
       tool: "mcp__weather__refresh",
       arguments: { city: "Istanbul" },
       result_not_for_model: true,
+      check_permissions: true,
     });
     expect(buildMcpAppCallRequest("weather", "refresh")).not.toHaveProperty("arguments");
   });

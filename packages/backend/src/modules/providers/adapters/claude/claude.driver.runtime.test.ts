@@ -13,6 +13,8 @@ import { createClaudeDriver, mapSDKMessage } from "./claude.driver";
 import { runsRepo } from "../../../runs/runs.repo";
 import { bridgeService } from "../../../bridge";
 import { guardsService } from "../../../guards/guards.service";
+import { appSettingsService } from "../../../appSettings";
+import { clearAllPendingRequests, handleToolApprovalResponse, listPendingApprovals } from "../../../runs/user-input-broker";
 import type { WorkRunEvent } from "../../../../../shared/adapter.types";
 
 const sdk = vi.hoisted(() => ({
@@ -23,14 +25,16 @@ const sdk = vi.hoisted(() => ({
   usage: vi.fn(),
   close: vi.fn(),
   getSessionMessages: vi.fn(),
+  deleteSession: vi.fn(),
+  getSessionInfo: undefined as ReturnType<typeof vi.fn> | undefined,
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: sdk.query,
   createSdkMcpServer: undefined,
   tool: undefined,
-  getSessionInfo: undefined,
-  deleteSession: undefined,
+  get getSessionInfo() { return sdk.getSessionInfo; },
+  deleteSession: sdk.deleteSession,
   getSessionMessages: sdk.getSessionMessages,
 }));
 vi.mock("../../../guards/guards.service", () => ({
@@ -52,6 +56,8 @@ describe("Claude runtime without a system CLI", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sdk.deleteSession.mockReset().mockResolvedValue(undefined);
+    sdk.getSessionInfo = undefined;
     vi.spyOn(runsRepo, "findClaudeTaskAnchorsByRun").mockResolvedValue([]);
     clearClaudeCliCache();
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), "mains-claude-runtime-"));
@@ -95,6 +101,7 @@ esac
       { value: "sonnet", displayName: "Claude Sonnet", description: "Claude Sonnet 5 · Live catalogue" },
     ]);
     sdk.initializationResult.mockResolvedValue({
+      capabilities: ["mcp_call_check_permissions_v1"],
       commands: [{ name: "help", description: "Live command", argumentHint: "" }],
     });
     sdk.accountInfo.mockResolvedValue({ email: "legacy@example.test", subscriptionType: "Pro" });
@@ -113,11 +120,247 @@ esac
   });
 
   afterEach(() => {
+    clearAllPendingRequests();
     restoreRuntime();
     clearClaudeCliCache();
     vi.unstubAllEnvs();
     fs.rmSync(fixture, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  async function finishEmptyTurn(driver: ReturnType<typeof createClaudeDriver>, runId: string,
+    configSnapshot?: Record<string, unknown>) {
+    const prepared = await driver.createSession({ runId, accountId: "account-1", goal: "Start",
+      execution: { workspaceId: null, cwd: fixture }, configSnapshot });
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close, async *[Symbol.asyncIterator]() {} }));
+    await driver.executePrompt(prepared.session, prepared.prompt, () => {}, new AbortController().signal);
+    return prepared;
+  }
+
+  it.each([undefined, "continue", "block"] as const)("preserves the hook failure policy %s", async (onFailure) => {
+    const failure = new Error("hook failed");
+    const driver = createClaudeDriver({ settingSources: [], hooks: {
+      PreToolUse: [{ onFailure, hooks: [async () => { throw failure; }] }],
+    } });
+    const prepared = await driver.createSession({ runId: "hook-policy", accountId: "account-1", goal: "Start",
+      execution: { workspaceId: null, cwd: fixture } });
+    const matcher = (prepared.session as any).options.hooks.PreToolUse[0];
+    expect(matcher.onFailure).toBe(onFailure);
+    const answer = matcher.hooks[0]({}, "call", { signal: new AbortController().signal });
+    if (onFailure) await expect(answer).rejects.toBe(failure);
+    else await expect(answer).resolves.toEqual({});
+    await driver.shutdown?.();
+  });
+
+  it.each(["config_file_invalid", "initialize_not_first", "future_startup_failure"])(
+    "reports %s as a failed turn even when the SDK iterator exits normally", async (reason) => {
+      sdk.query.mockImplementation(({ options }) => ({ close: sdk.close, async *[Symbol.asyncIterator]() {
+        yield { type: "result", subtype: "error_during_execution", is_error: true,
+          startup_failure_reason: reason, errors: ["Configuration: broken.json"], session_id: options.sessionId };
+      } }));
+      const driver = createClaudeDriver({ settingSources: [] });
+      const prepared = await driver.createSession({ runId: reason, accountId: "account-1", goal: "Start",
+        execution: { workspaceId: null, cwd: fixture } });
+      const events: WorkRunEvent[] = [];
+      const result = await driver.executePrompt(prepared.session, prepared.prompt, (event) => { events.push(event); }, new AbortController().signal);
+      expect(result).toMatchObject({ status: "failed", summary: expect.stringContaining("broken.json") });
+      expect(events).toContainEqual(expect.objectContaining({ type: "log", level: "error",
+        metadata: { source: "startup_failure", reason } }));
+      if (reason === "config_file_invalid") expect(result.summary).toContain("invalid JSON");
+      expect(sdk.query.mock.calls[0][0].options.env.CLAUDE_CODE_STARTUP_FAILURE_RESULTS).toBe("1");
+      await driver.shutdown?.();
+    });
+
+  it.each(["ENOSPC", "EDQUOT"])("keeps the final answer and warns about %s after the last result", async (code) => {
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close, async *[Symbol.asyncIterator]() {
+      yield { type: "result", subtype: "success", is_error: false, result: "Completed answer",
+        modelUsage: {}, session_id: options.sessionId };
+      yield { type: "system", subtype: "session_writes_lost", error_code: code,
+        lost: ["transcript", "global_config"], transcript_session_ids: ["earlier-session"], session_id: options.sessionId };
+    } }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await driver.createSession({ runId: code, accountId: "account-1", goal: "Start",
+      execution: { workspaceId: null, cwd: fixture } });
+    const events: WorkRunEvent[] = [];
+    await expect(driver.executePrompt(prepared.session, prepared.prompt, (event) => { events.push(event); }, new AbortController().signal))
+      .resolves.toMatchObject({ status: "succeeded" });
+    expect(events).toContainEqual(expect.objectContaining({ type: "artifact", content: "Completed answer" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "log", level: "warn",
+      message: expect.stringContaining("Resuming it may miss messages"), metadata: {
+        source: "session_writes_lost", errorCode: code, lost: ["transcript", "global_config"], transcriptSessionIds: ["earlier-session"],
+      } }));
+    await driver.shutdown?.();
+  });
+
+  it.each(["ENOTEMPTY", "EACCES"])("retains the session reference when native deletion fails with %s", async (code) => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await finishEmptyTurn(driver, "partial-delete");
+    const update = vi.spyOn(runsRepo, "updateRun").mockResolvedValue(null);
+    sdk.deleteSession.mockRejectedValueOnce(Object.assign(new Error("Files remain"), { code }));
+    await expect(driver.deleteSession!("partial-delete")).rejects.toThrow(code === "ENOTEMPTY" ? "only partly deleted" : "Files remain");
+    expect(update).not.toHaveBeenCalled();
+    await driver.deleteSession!("partial-delete");
+    expect(sdk.deleteSession).toHaveBeenNthCalledWith(2, prepared.sessionId);
+    expect(update).toHaveBeenCalledExactlyOnceWith("partial-delete", { sessionId: null });
+    await driver.shutdown?.();
+  });
+
+  it("clears an already missing native session", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await finishEmptyTurn(driver, "missing-delete");
+    const update = vi.spyOn(runsRepo, "updateRun").mockResolvedValue(null);
+    sdk.deleteSession.mockRejectedValueOnce(new Error(`Session ${prepared.sessionId} not found in any project directory`));
+    await expect(driver.deleteSession!("missing-delete")).resolves.toBeUndefined();
+    expect(update).toHaveBeenCalledWith("missing-delete", { sessionId: null });
+    await driver.shutdown?.();
+  });
+
+  it("forks a native session with its own id and the inherited permission restrictions", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const source = await finishEmptyTurn(driver, "fork-source");
+    const fork = await driver.forkSession!({ runId: "fork-target", sourceRunId: "fork-source", accountId: "account-1",
+      message: "Continue separately", execution: { workspaceId: null, cwd: fixture },
+      configSnapshot: { permissionMode: "default" }, toolPolicy: { allowedTools: ["Read"], disallowedTools: ["Write"] } });
+    expect(fork.sessionId).not.toBe(source.sessionId);
+    await expect(driver.executePrompt(fork.session, fork.prompt, () => {}, new AbortController().signal))
+      .resolves.toMatchObject({ status: "succeeded" });
+    expect(sdk.query.mock.calls.at(-1)![0].options).toMatchObject({ resume: source.sessionId, forkSession: true,
+      sessionId: fork.sessionId, permissionMode: "default", allowedTools: ["Read"], disallowedTools: ["Write"] });
+    await driver.shutdown?.();
+  });
+
+  it.each([
+    { phase: "live", approved: true }, { phase: "live", approved: false },
+    { phase: "idle", approved: true }, { phase: "idle", approved: false },
+  ])("routes a $phase MCP permission decision to its conversation (approved: $approved)", async ({ phase, approved }) => {
+    vi.spyOn(appSettingsService, "getSettings").mockResolvedValue({ notifyOnToolApproval: false } as any);
+    const executed = vi.fn();
+    const request = vi.fn();
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() { await finished; yield* []; },
+      initializationResult: sdk.initializationResult,
+      mcpServerStatus: vi.fn().mockResolvedValue([{ name: "fixture", status: "connected", tools: [{ name: "update" }] }]),
+      request: request.mockImplementation(async (raw) => {
+        expect(raw.check_permissions).toBe(true);
+        const answer = await options.canUseTool("mcp__fixture__update", {}, {
+          signal: new AbortController().signal, requestId: "widget-approval", toolUseID: "widget-call",
+          matchedAskRule: { source: "user", toolName: "mcp__fixture__update" },
+        });
+        if (answer.behavior !== "allow") throw new Error("The tool did not run: permission denied");
+        executed();
+        return { response: { content: [{ type: "text", text: "Updated" }] } };
+      }),
+    }));
+    const driver = createClaudeDriver({ settingSources: [], permissionMode: "bypassPermissions" });
+    let turn: Promise<unknown> | undefined;
+    if (phase === "idle") await finishEmptyTurn(driver, "widget-run");
+    else {
+      const prepared = await driver.createSession({ runId: "widget-run", accountId: "account-1", goal: "Start",
+        execution: { workspaceId: null, cwd: fixture } });
+      turn = driver.executePrompt(prepared.session, prepared.prompt, () => {}, new AbortController().signal);
+      await vi.waitFor(() => expect(sdk.query).toHaveBeenCalledTimes(1));
+    }
+    const pending = driver.callMcpAppTool!({ runId: "widget-run", server: "fixture", tool: "update" });
+    const settled = Promise.allSettled([pending]);
+    try {
+      await vi.waitFor(() => expect(listPendingApprovals("widget-run")).toHaveLength(1));
+      const approval = listPendingApprovals("widget-run")[0];
+      expect(executed).not.toHaveBeenCalled();
+      handleToolApprovalResponse({ requestId: approval.requestId, approvalToken: approval.approvalToken, approved });
+      const [result] = await settled;
+      expect(result.status).toBe(approved ? "fulfilled" : "rejected");
+      expect(executed).toHaveBeenCalledTimes(approved ? 1 : 0);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(listPendingApprovals("widget-run")).toEqual([]);
+    } finally { finish(); await turn; await driver.shutdown?.(); }
+  });
+
+  it("cancels a pending idle MCP approval when its host shuts down", async () => {
+    vi.spyOn(appSettingsService, "getSettings").mockResolvedValue({ notifyOnToolApproval: false } as any);
+    let decision: unknown;
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close, initializationResult: sdk.initializationResult,
+      mcpServerStatus: vi.fn().mockResolvedValue([{ name: "fixture", status: "connected", tools: [{ name: "update" }] }]),
+      request: async () => {
+        decision = await options.canUseTool("mcp__fixture__update", {}, {
+          signal: new AbortController().signal, requestId: "closing-widget", toolUseID: "widget-call", defaultToNo: true,
+        });
+        throw new Error("The tool did not run");
+      },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    await finishEmptyTurn(driver, "closing-widget-run");
+    const call = driver.callMcpAppTool!({ runId: "closing-widget-run", server: "fixture", tool: "update" });
+    const settled = Promise.allSettled([call]);
+    await vi.waitFor(() => expect(listPendingApprovals("closing-widget-run")).toHaveLength(1));
+    await driver.shutdown?.();
+    expect((await settled)[0].status).toBe("rejected");
+    await vi.waitFor(() => expect(decision).toMatchObject({ behavior: "deny" }));
+    expect(listPendingApprovals("closing-widget-run")).toEqual([]);
+  });
+
+  it("never replays an MCP App call after the live control channel closes", async () => {
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    const request = vi.fn().mockRejectedValue(new Error("Query closed before response"));
+    sdk.query.mockImplementation(() => ({ close: sdk.close, initializationResult: sdk.initializationResult,
+      mcpServerStatus: vi.fn().mockResolvedValue([{ name: "fixture", status: "connected", tools: [{ name: "update" }] }]), request,
+      async *[Symbol.asyncIterator]() { await finished; yield* []; },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await driver.createSession({ runId: "closed-widget", accountId: "account-1", goal: "Start",
+      execution: { workspaceId: null, cwd: fixture } });
+    const turn = driver.executePrompt(prepared.session, prepared.prompt, () => {}, new AbortController().signal);
+    await vi.waitFor(() => expect(sdk.query).toHaveBeenCalledTimes(1));
+    try {
+      await expect(driver.callMcpAppTool!({ runId: "closed-widget", server: "fixture", tool: "update" })).rejects.toThrow("Query closed");
+      expect(sdk.query).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally { finish(); await turn; await driver.shutdown?.(); }
+  });
+
+  it("refuses an MCP App call when the CLI cannot enforce permissions", async () => {
+    const request = vi.fn();
+    sdk.initializationResult.mockResolvedValueOnce({ capabilities: [] });
+    sdk.query.mockImplementation(() => ({ close: sdk.close, initializationResult: sdk.initializationResult, request }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    await finishEmptyTurn(driver, "old-widget");
+    await expect(driver.callMcpAppTool!({ runId: "old-widget", server: "fixture", tool: "update" }))
+      .rejects.toThrow("cannot check MCP App permissions");
+    expect(request).not.toHaveBeenCalled();
+    await driver.shutdown?.();
+  });
+
+  it("keeps idle MCP permission modes separate for conversations in the same directory", async () => {
+    const resource = vi.fn().mockResolvedValue({ contents: [] });
+    sdk.query.mockImplementation(() => ({ close: sdk.close,
+      mcpServerStatus: vi.fn().mockResolvedValue([]), readMcpResource: resource,
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    await finishEmptyTurn(driver, "plan-widget", { permissionMode: "plan" });
+    await finishEmptyTurn(driver, "edit-widget", { permissionMode: "acceptEdits" });
+    sdk.query.mockClear();
+    await Promise.all(["plan-widget", "edit-widget"].map((runId) =>
+      driver.readMcpAppResource!({ runId, server: "fixture", uri: "ui://fixture/app" })));
+    expect(sdk.query).toHaveBeenCalledTimes(2);
+    expect(sdk.query.mock.calls.map(([{ options }]) => options.permissionMode)).toEqual(["plan", "acceptEdits"]);
+    for (const [{ options }] of sdk.query.mock.calls) expect(options.canUseTool).toBeTypeOf("function");
+    await driver.shutdown?.();
+  });
+
+  it("restores the saved tool restrictions for an MCP host after restart", async () => {
+    sdk.getSessionInfo = vi.fn().mockResolvedValue({ cwd: fixture });
+    vi.spyOn(runsRepo, "findRunById").mockResolvedValue({ providerId: "claude_code", sessionId: "saved-native-session",
+      configSnapshot: { permissionMode: "default" }, toolPolicySnapshot: { allowedTools: ["Read"], disallowedTools: ["Write"] } } as any);
+    sdk.query.mockImplementation(() => ({ close: sdk.close,
+      mcpServerStatus: vi.fn().mockResolvedValue([]), readMcpResource: vi.fn().mockResolvedValue({ contents: [] }),
+    }));
+    const driver = createClaudeDriver({ settingSources: [], permissionMode: "bypassPermissions" });
+    await driver.readMcpAppResource!({ runId: "restored-widget", server: "fixture", uri: "ui://fixture/app" });
+    expect(sdk.query.mock.calls[0][0].options).toMatchObject({ permissionMode: "default",
+      allowedTools: ["Read"], disallowedTools: ["Write"], settings: { permissions: { allow: ["Read"], deny: ["Write"] } } });
+    await driver.shutdown?.();
   });
 
   it("uses the bundled executable for runs, the live catalogue, commands and account probes", async () => {
@@ -365,7 +608,7 @@ console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"avai
     expect(sdk.query.mock.calls.length).toBe(0);
   });
 
-  it("shares the idle MCP control query between concurrent requests for one directory", async () => {
+  it("shares the idle MCP control query between concurrent requests for one conversation", async () => {
     const resource = vi.fn().mockResolvedValue({ contents: [] });
     sdk.query.mockImplementation(() => ({ close: sdk.close,
       mcpServerStatus: vi.fn().mockResolvedValue([]), readMcpResource: resource,
