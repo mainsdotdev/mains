@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -7,8 +7,7 @@ import rehypeSanitize from "rehype-sanitize";
 import { markdownComponents } from "@/components/markdown-components";
 import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
 import {
-  useGetPrDetailQuery, useGetPrAvailabilityQuery, useMergePrMutation,
-  useMarkPrReadyMutation, useAddPrCommentMutation, useResolvePrThreadMutation,
+  useGetPrDetailQuery, useGetPrAvailabilityQuery,
   pullRequestsApi, pullRequestDetailTag,
   type PrComment, type PrMergeMethod, type PrRefInput, type PullRequestSummary,
 } from "@/lib/redux/api/pullRequestsApi";
@@ -17,15 +16,16 @@ import {
   SegmentedTabs, SendButton, Text, Textarea, toast,
 } from "@/components/ui";
 import { Branch, ArrowUp, Check, External, Link, PullRequest, Refresh } from "@/components/ui/icons";
-import { extractErrorMessage } from "@/lib/extract-error-message";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { formatDate } from "@/lib/format-date";
 import { warmDiffHighlighter } from "@/lib/diff-highlighter";
 import { useAppDispatch } from "@/lib/redux/hooks";
+import { onTransportChange } from "@/lib/transport";
 import { canonicalPrRef, githubPullRequestUrl, pullRequestKey } from "../lib/pull-request-link";
 import { PrDiffView } from "./pr-diff-view";
+import { PullRequestActionsContext, usePrDraft, usePullRequestActions } from "../hooks/use-pull-request-actions";
 
 const MERGE_METHODS: { value: PrMergeMethod; label: string }[] = [
   { value: "merge", label: "Merge" },
@@ -107,7 +107,9 @@ export interface PullRequestViewProps {
 }
 
 export function PullRequestView(props: PullRequestViewProps) {
-  return <PullRequestContent key={pullRequestKey(props.prRef)} {...props} />;
+  const [backendGeneration, setBackendGeneration] = useState(0);
+  useLayoutEffect(() => onTransportChange(() => setBackendGeneration((generation) => generation + 1)), []);
+  return <PullRequestContent key={JSON.stringify([pullRequestKey(props.prRef), backendGeneration])} {...props} />;
 }
 
 function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true }: PullRequestViewProps) {
@@ -135,56 +137,37 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
   const [mergeMethod, setMergeMethod] = useState<PrMergeMethod>("merge");
   const [mergeMenuOpen, setMergeMenuOpen] = useState(false);
   const mergeMenuRef = useRef<HTMLDivElement>(null);
-  const [commentText, setCommentText] = useState("");
+  const comment = usePrDraft();
+  const commentText = comment.text;
   const { copy, isCopied } = useCopyToClipboard({
     onError: () => toast.error("Unable to copy the pull request link"),
   });
   useClickOutside(mergeMenuRef, () => setMergeMenuOpen(false));
   useEffect(() => { if (active) void warmDiffHighlighter(); }, [active]);
 
-  const [mergePr, { isLoading: isMerging }] = useMergePrMutation();
-  const [markReady, { isLoading: isMarkingReady }] = useMarkPrReadyMutation();
-  const [addComment, { isLoading: isCommenting }] = useAddPrCommentMutation();
-  const [resolveThread] = useResolvePrThreadMutation();
+  const actions = usePullRequestActions({ prRef: ref, detail, active, isError, isFetching });
+  const isMerging = actions.pending?.kind === "merge";
+  const isMarkingReady = actions.pending?.kind === "ready";
+  const isCommenting = actions.pending?.kind === "comment";
 
   const refresh = () => {
     dispatch(pullRequestsApi.util.invalidateTags([pullRequestDetailTag(ref)]));
   };
 
-  const handleMerge = async () => {
-    if (!canMerge || isMerging) return;
-    try {
-      await mergePr({ ...ref, method: mergeMethod }).unwrap();
-      toast.success("Merged #" + ref.number);
-    } catch (err) { toast.error(extractErrorMessage(err, "Failed to merge pull request")); }
+  const handleMerge = () => actions.run({ kind: "merge", method: mergeMethod });
+  const handleMarkReady = () => actions.run({ kind: "ready" });
+  const handleComment = () => {
+    const sent = comment.capture();
+    return actions.run({ kind: "comment", body: sent.body }, () => { sent.acknowledge(); });
   };
-  const handleMarkReady = async () => {
-    if (!detail?.viewerCanUpdate || isMarkingReady || isError) return;
-    try {
-      await markReady({ ...ref, nodeId: detail.nodeId }).unwrap();
-      toast.success("Marked as ready for review");
-    } catch (err) { toast.error(extractErrorMessage(err, "Failed to mark as ready")); }
-  };
-  const handleComment = async () => {
-    const body = commentText.trim();
-    if (!body || !detail || isCommenting || isError) return;
-    try {
-      await addComment({ ...ref, body }).unwrap();
-      setCommentText("");
-      toast.success("Comment posted");
-    } catch (err) { toast.error(extractErrorMessage(err, "Failed to post comment")); }
-  };
-  const handleResolveThread = async (threadId: string, resolved: boolean) => {
-    try { await resolveThread({ ...ref, threadId, resolved }).unwrap(); }
-    catch (err) { toast.error(extractErrorMessage(err, "Failed to update review thread")); }
-  };
+  const handleResolveThread = (threadId: string, resolved: boolean) => actions.run({ kind: "resolve", threadId, resolved });
 
   const isDraft = current?.isDraft && current.state === "open";
   const stateLabel = isDraft ? "Draft" : current?.state;
   const stateTone = isDraft ? "text-primary-500" : current?.state === "open" ? "text-success"
     : current?.state === "closed" ? "text-danger" : "text-accent";
   const hasConflicts = detail?.mergeable === "CONFLICTING";
-  const canMerge = !!detail && detail.state === "open" && !detail.isDraft && !hasConflicts && !isError;
+  const canMerge = actions.can({ kind: "merge", method: mergeMethod });
   const checkCounts = { passing: 0, failing: 0, pending: 0 };
   for (const check of detail?.checks ?? []) {
     if (check.status === "passing") checkCounts.passing++;
@@ -200,6 +183,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
   const comments = [...(detail?.comments ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
   return (
+    <PullRequestActionsContext.Provider value={actions}>
     <div className="flex h-full min-h-0 flex-col @container">
       <header className="shrink-0 border-b border-primary-200/60 dark:border-primary-800/60 px-5 @min-[560px]:px-8 pt-5 pb-3">
         <div className="flex items-center gap-2 text-xs">
@@ -241,7 +225,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
               <External className="size-3.5" />
             </Button>
             {current?.state === "open" && (isDraft ? (
-              <Button variant="secondary" disabled={!detail?.viewerCanUpdate || isMarkingReady || isError}
+              <Button variant="secondary" disabled={!actions.can({ kind: "ready" })}
                 onClick={handleMarkReady} className="ml-2">
                 {isMarkingReady ? "Working…" : "Ready for review"}
               </Button>
@@ -352,6 +336,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
                           : thread.viewerCanResolve) && (
                           <Button
                             variant="subtle"
+                            disabled={!actions.can({ kind: "resolve", threadId: thread.id, resolved: !thread.isResolved })}
                             onClick={() =>
                               handleResolveThread(thread.id, !thread.isResolved)
                             }
@@ -411,19 +396,20 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
       {tab === "summary" && detail && (
         <div className="shrink-0 border-t border-primary-200/60 dark:border-primary-800/60 px-5 @min-[560px]:px-8 py-3">
           <div className="relative">
-            <Textarea aria-label="Leave a comment" value={commentText} disabled={isCommenting}
-              onChange={(event) => setCommentText(event.target.value)}
+            <Textarea aria-label="Leave a comment" value={commentText}
+              onChange={(event) => comment.edit(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void handleComment(); }
               }}
               placeholder="Leave a comment" rows={2}
               className="w-full resize-none rounded-2xl bg-primary-50/60 dark:bg-primary/3 glass-outline px-3 py-3 pr-12 text-s text-primary-900 dark:text-primary-100 placeholder:text-primary-500 outline-none focus-visible:ring-1 focus-visible:ring-accent" />
             <div className="absolute bottom-3 right-2">
-              <SendButton loading={isCommenting} onSubmit={handleComment} disabled={!commentText.trim() || isError} />
+              <SendButton loading={isCommenting} onSubmit={handleComment} disabled={!actions.can({ kind: "comment", body: commentText })} />
             </div>
           </div>
         </div>
       )}
     </div>
+    </PullRequestActionsContext.Provider>
   );
 }

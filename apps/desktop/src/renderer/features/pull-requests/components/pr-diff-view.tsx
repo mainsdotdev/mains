@@ -4,9 +4,6 @@ import { processFile } from "@pierre/diffs";
 import {
   useGetPrDetailQuery,
   useGetPrDiffQuery,
-  useAddPrReviewCommentMutation,
-  useReplyToPrThreadMutation,
-  useResolvePrThreadMutation,
   type PrComment,
   type PrRefInput,
   type PrReviewThread,
@@ -19,14 +16,13 @@ import {
   SendButton,
   Text,
   Textarea,
-  toast,
   type DiffFileHeaderStatus,
 } from "@/components/ui";
-import { extractErrorMessage } from "@/lib/extract-error-message";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { formatDate } from "@/lib/format-date";
 import { DIFF_TYPOGRAPHY_STYLE, patchDiffOptions } from "@/lib/diff-style";
 import { useDiffHighlighterReady } from "@/lib/diff-highlighter";
+import { usePrActions, usePrDraft } from "../hooks/use-pull-request-actions";
 
 interface FileDiff {
   path: string;
@@ -89,34 +85,23 @@ function Avatar({ author }: { author: PrComment["author"] }) {
 
 function InlineThreadCard({
   thread,
-  prRef,
 }: {
   thread: PrReviewThread;
-  prRef: PrRefInput;
 }) {
   const [replyOpen, setReplyOpen] = useState(false);
-  const [replyText, setReplyText] = useState("");
-  const [resolveThread, { isLoading: isResolving }] = useResolvePrThreadMutation();
-  const [replyToThread, { isLoading: isReplying }] = useReplyToPrThreadMutation();
+  const reply = usePrDraft();
+  const replyText = reply.text;
+  const actions = usePrActions();
+  const isResolving = actions.pending?.kind === "resolve" && actions.pending.threadId === thread.id;
+  const isReplying = actions.pending?.kind === "reply" && actions.pending.threadId === thread.id;
+  const handleResolve = () => actions.run({ kind: "resolve", threadId: thread.id, resolved: true });
+  const closeReply = () => { reply.invalidate(); setReplyOpen(false); };
 
-  const handleResolve = async () => {
-    try {
-      await resolveThread({ ...prRef, threadId: thread.id, resolved: true }).unwrap();
-    } catch (err) {
-      toast.error(extractErrorMessage(err, "Failed to resolve review thread"));
-    }
-  };
-
-  const handleReply = async () => {
-    const body = replyText.trim();
-    if (!body) return;
-    try {
-      await replyToThread({ ...prRef, threadId: thread.id, body }).unwrap();
-      setReplyText("");
-      setReplyOpen(false);
-    } catch (err) {
-      toast.error(extractErrorMessage(err, "Failed to post reply"));
-    }
+  const handleReply = () => {
+    const sent = reply.capture();
+    return actions.run({ kind: "reply", threadId: thread.id, body: sent.body }, () => {
+      if (sent.acknowledge()) setReplyOpen(false);
+    });
   };
 
   return (
@@ -158,13 +143,13 @@ function InlineThreadCard({
             <Textarea
               autoFocus
               value={replyText}
-              onChange={(e) => setReplyText(e.target.value)}
+              onChange={(e) => reply.edit(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
                   handleReply();
                 } else if (e.key === "Escape") {
-                  setReplyOpen(false);
+                  closeReply();
                 }
               }}
               placeholder="Reply"
@@ -175,12 +160,12 @@ function InlineThreadCard({
               <SendButton
                 loading={isReplying}
                 onSubmit={handleReply}
-                disabled={!replyText.trim()}
+                disabled={!actions.can({ kind: "reply", threadId: thread.id, body: replyText })}
               />
             </div>
           </div>
           <Button
-            onClick={() => setReplyOpen(false)}
+            onClick={closeReply}
             className="text-xxs px-2 py-0.5 rounded-lg hover:bg-primary/20 dark:hover:bg-primary/10 text-primary-600 dark:text-primary-400"
           >
             Cancel
@@ -198,7 +183,7 @@ function InlineThreadCard({
           {thread.viewerCanResolve && (
             <Button
             variant="subtle"
-              disabled={isResolving}
+              disabled={!actions.can({ kind: "resolve", threadId: thread.id, resolved: true })}
               onClick={handleResolve}
               className="text-xxs px-2 py-0.5 rounded-lg hover:bg-primary/20 dark:hover:bg-primary/10 text-primary-700 dark:text-primary-300"
             >
@@ -214,35 +199,23 @@ function InlineThreadCard({
 // ── New inline comment composer ───────────────────────────
 
 function InlineCommentComposer({
-  prRef,
   path,
   target,
   onClose,
 }: {
-  prRef: PrRefInput;
   path: string;
   target: ComposerTarget;
   onClose: () => void;
 }) {
-  const [text, setText] = useState("");
-  const [addReviewComment, { isLoading }] = useAddPrReviewCommentMutation();
-
-  const handleSubmit = async () => {
-    const body = text.trim();
-    if (!body) return;
-    try {
-      await addReviewComment({
-        ...prRef,
-        path,
-        line: target.line,
-        side: target.side,
-        body,
-      }).unwrap();
-      toast.success("Comment posted");
-      onClose();
-    } catch (err) {
-      toast.error(extractErrorMessage(err, "Failed to post comment"));
-    }
+  const draft = usePrDraft();
+  const text = draft.text;
+  const actions = usePrActions();
+  const action = { kind: "review" as const, path, line: target.line, side: target.side, body: text };
+  const isLoading = actions.pending?.kind === "review" && actions.pending.path === path &&
+    actions.pending.line === target.line && actions.pending.side === target.side;
+  const handleSubmit = () => {
+    const sent = draft.capture();
+    return actions.run({ ...action, body: sent.body }, () => { if (sent.acknowledge()) onClose(); });
   };
 
   return (
@@ -251,7 +224,7 @@ function InlineCommentComposer({
         <Textarea
           autoFocus
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => draft.edit(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
@@ -268,7 +241,7 @@ function InlineCommentComposer({
           <SendButton
             loading={isLoading}
             onSubmit={handleSubmit}
-            disabled={!text.trim()}
+            disabled={!actions.can(action)}
           />
         </div>
       </div>
@@ -286,11 +259,9 @@ function InlineCommentComposer({
 
 function FileSection({
   file,
-  prRef,
   threads,
 }: {
   file: FileDiff;
-  prRef: PrRefInput;
   threads: PrReviewThread[];
 }) {
   const isDarkMode = useIsDarkMode();
@@ -343,11 +314,11 @@ function FileSection({
       return (
         <div className="px-2 py-1.5 space-y-1.5">
           {lineThreads.map((thread) => (
-            <InlineThreadCard key={thread.id} thread={thread} prRef={prRef} />
+            <InlineThreadCard key={thread.id} thread={thread} />
           ))}
           {showComposer && (
             <InlineCommentComposer
-              prRef={prRef}
+              key={JSON.stringify([file.path, annotation.lineNumber, annotation.side])}
               path={file.path}
               target={{
                 line: annotation.lineNumber,
@@ -359,7 +330,7 @@ function FileSection({
         </div>
       );
     },
-    [prRef, file.path, closeComposer],
+    [file.path, closeComposer],
   );
 
   return (
@@ -503,7 +474,6 @@ export function PrDiffView({ prRef }: { prRef: PrRefInput }) {
         <FileSection
           key={file.path}
           file={file}
-          prRef={prRef}
           threads={threadsByPath.get(file.path) ?? []}
         />
       ))}
