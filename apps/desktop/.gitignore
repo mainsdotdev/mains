@@ -52,6 +52,7 @@ Thumbs.db
 !/docs/design/turn-input-lifecycle.md
 !/docs/design/bridge-connection-lifecycle.md
 !/docs/design/bridge-blob-lifecycle.md
+!/docs/design/mcp-app-lifecycle.md
 
 # Coverage
 coverage/

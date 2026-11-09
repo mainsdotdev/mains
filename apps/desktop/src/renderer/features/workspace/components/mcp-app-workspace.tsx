@@ -14,6 +14,7 @@ export function McpAppWorkspace({ registerBeforeSuspend }: { registerBeforeSuspe
     sessionId={document.sessionId}
     resourceRunId={document.resourceRunId}
     runId={panel.runId}
+    conversationKey={panel.ownerKey ?? undefined}
     presentation="page"
     panelDisplayMode={panel.isExpanded ? "fullscreen" : "inline"}
     onDisplayModeChange={(mode) => {

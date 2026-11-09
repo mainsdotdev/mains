@@ -20,12 +20,14 @@ import type {
 import { sanitizeMcpAppResourceCsp } from "./mcpApps.document";
 import type { McpAppEntrypoint, OpenMcpAppExtensionPayload, OpenMcpAppExtensionResponse } from "@mains/contracts/mcp-apps";
 import type { McpAppReadResourceResult } from "@mains/backend/shared/adapter.types";
+import { createMcpAppSessions } from "../../../shared/mcp-app-lifecycle";
 
 const MAX_RESOURCE_BYTES = 4 * 1024 * 1024;
 const MAX_TOOL_PAYLOAD_BYTES = 1024 * 1024;
 const MAX_MESSAGE_CHARS = 32_000;
-const extensionSessions = new Map<string, {
+const extensionSessions = createMcpAppSessions<{
   providerId: string;
+  adapter: ReturnType<typeof createWorkAdapter>;
   app: McpAppEntrypoint;
   resource: ReadMcpAppResourceResponse;
 }>();
@@ -146,17 +148,17 @@ async function adapterForRun(runId: string) {
   return { run, adapter: createWorkAdapter(provider) };
 }
 
-async function adapterForProvider(providerId: string) {
+async function enabledProvider(providerId: string) {
   const provider = await providersService.getById(providerId);
   if (!provider?.isEnabled) throw new Error("This provider is not enabled");
-  return createWorkAdapter(provider);
+  return provider;
 }
+async function adapterForProvider(providerId: string) { return createWorkAdapter(await enabledProvider(providerId)); }
 
 function extensionSession(id: unknown) {
   const sessionId = requiredString(id, "sessionId");
   const session = extensionSessions.get(sessionId);
-  if (!session) throw new Error("App session expired; reopen the app");
-  return { sessionId, ...session };
+  return { sessionId, ...session, current: () => extensionSessions.current(sessionId, session) };
 }
 
 function registerResource(result: McpAppReadResourceResult, resourceUri: string): ReadMcpAppResourceResponse {
@@ -210,31 +212,33 @@ export const mcpAppsService = {
   async openExtension(raw: OpenMcpAppExtensionPayload): Promise<OpenMcpAppExtensionResponse> {
     const providerId = requiredString(raw?.providerId, "providerId");
     const entrypointId = requiredString(raw?.entrypointId, "entrypointId", 8_192);
-    const adapter = await adapterForProvider(providerId);
-    if (!adapter.openMcpAppSession) throw new Error("This provider does not support app extensions");
-    const session = await adapter.openMcpAppSession(entrypointId);
-    try {
-      const resource = registerResource(session.resource, session.app.resourceUri);
-      extensionSessions.set(session.id, { providerId, app: session.app, resource });
-      return { sessionId: session.id, app: session.app, output: session.output };
-    } catch (error) {
-      await adapter.closeMcpAppSession?.(session.id).catch(() => {});
-      throw error;
-    }
+    return extensionSessions.open(async (current) => {
+      const adapter = await adapterForProvider(providerId);
+      if (!current()) throw new Error("App session closed while opening");
+      if (!adapter.openMcpAppSession) throw new Error("This provider does not support app extensions");
+      const session = await adapter.openMcpAppSession(entrypointId);
+      let resource: ReadMcpAppResourceResponse | undefined;
+      try {
+        if (!current()) throw new Error("App session closed while opening");
+        const hosted = resource = registerResource(session.resource, session.app.resourceUri);
+        extensionSessions.add(session.id, { providerId, adapter, app: session.app, resource: hosted },
+          () => adapter.closeMcpAppSession?.(session.id), () => mcpAppsRegistry.remove(hosted.url));
+        return { sessionId: session.id, app: session.app, output: session.output };
+      } catch (error) {
+        await extensionSessions.retire(() => adapter.closeMcpAppSession?.(session.id),
+          () => { if (resource) mcpAppsRegistry.remove(resource.url); }).catch(() => {});
+        throw error;
+      }
+    });
   },
 
   async closeExtension(raw: { sessionId: string }): Promise<void> {
     const sessionId = requiredString(raw?.sessionId, "sessionId");
-    const session = extensionSessions.get(sessionId);
-    if (!session) return;
-    extensionSessions.delete(sessionId);
-    mcpAppsRegistry.remove(session.resource.url);
-    const adapter = await adapterForProvider(session.providerId);
-    await adapter.closeMcpAppSession?.(sessionId);
+    await extensionSessions.close(sessionId);
   },
 
   async closeAllExtensions(): Promise<void> {
-    await Promise.allSettled([...extensionSessions.keys()].map((sessionId) => this.closeExtension({ sessionId })));
+    await extensionSessions.closeAll();
   },
 
   async readResource(raw: ReadMcpAppResourcePayload): Promise<ReadMcpAppResourceResponse> {
@@ -273,7 +277,9 @@ export const mcpAppsService = {
     if (raw?.sessionId !== undefined) {
       const session = extensionSession(raw.sessionId);
       if (raw.server !== session.app.server) throw new Error("This server does not belong to this app");
-      const adapter = await adapterForProvider(session.providerId);
+      await enabledProvider(session.providerId);
+      if (!session.current()) throw new Error("App session expired; reopen the app");
+      const adapter = session.adapter;
       if (!adapter.callMcpAppSessionTool) throw new Error("This provider does not support app extensions");
       return adapter.callMcpAppSessionTool(
         session.sessionId, requiredString(raw.tool, "tool"),

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 
 const mocks = vi.hoisted(() => ({
+  connect: vi.fn(),
   readResource: vi.fn(),
   callTool: vi.fn(),
   sendMessage: vi.fn(),
@@ -64,7 +65,7 @@ vi.mock(
       oninitialized?: () => void;
       getAppCapabilities = vi.fn();
       setHostContext = vi.fn();
-      connect = vi.fn().mockResolvedValue(undefined);
+      connect = vi.fn(() => mocks.connect());
       close = vi.fn().mockResolvedValue(undefined);
       sendToolInput = vi.fn().mockResolvedValue(undefined);
       sendToolResult = vi.fn().mockResolvedValue(undefined);
@@ -140,6 +141,7 @@ function renderApp(
 }
 
 beforeEach(() => {
+  mocks.connect.mockReset().mockResolvedValue(undefined);
   vi.stubGlobal("__APP_VERSION__", "0.12.0");
   vi.stubGlobal("matchMedia", () => ({ matches: false }));
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -373,6 +375,53 @@ describe("MCP App tool synchronization", () => {
       );
     });
   }
+
+  it("ignores a retired bridge's late initialization after its resource is replaced", async () => {
+    const { view, bridge } = await renderFlights();
+    view.rerender(createElement(McpAppDisplay, { ...props, app: { ...app, resourceUri: "ui://maps/replacement.html" } }));
+    await waitFor(() => expect(mocks.bridges).toHaveLength(2));
+    act(() => bridge.oninitialized?.());
+    expect(bridge.sendToolInput).not.toHaveBeenCalled();
+    expect(bridge.sendToolResult).not.toHaveBeenCalled();
+    expect(mocks.bridges[1].sendToolInput).not.toHaveBeenCalled();
+    act(() => mocks.bridges[1].oninitialized?.());
+    expect(mocks.bridges[1].sendToolInput).toHaveBeenCalledOnce();
+    await expect(bridge.oncalltool?.({ name: "do-not-run" })).rejects.toThrow("closed");
+    expect(mocks.callTool).not.toHaveBeenCalled();
+  });
+
+  it.each(["resolve", "reject"] as const)("ignores a retired connection's late %s without navigating or failing its replacement", async (receipt) => {
+    let resolve!: () => void, reject!: (error: Error) => void;
+    mocks.connect.mockImplementationOnce(() => new Promise<void>((yes, no) => { resolve = yes; reject = no; }));
+    const resource = (id: string) => ({ success: true, data: { url: `mains-mcp-app://resource/${id}`, meta: { availableDisplayModes: ["fullscreen"] } } });
+    mocks.readResource.mockResolvedValueOnce(resource("first")).mockResolvedValueOnce(resource("next"));
+    const view = render(createElement(McpAppDisplay, props));
+    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+    view.rerender(createElement(McpAppDisplay, { ...props, app: { ...app, resourceUri: "ui://maps/next" } }));
+    await waitFor(() => expect(mocks.bridges).toHaveLength(2));
+    const frame = screen.getByTitle("Flights interactive app");
+    await waitFor(() => expect(frame.getAttribute("src")).toBe("mains-mcp-app://resource/next"));
+    await act(async () => { if (receipt === "resolve") resolve(); else reject(new Error("Retired connection failed")); });
+    expect(frame.getAttribute("src")).toBe("mains-mcp-app://resource/next");
+    expect(screen.queryByText("Retired connection failed")).toBeNull();
+    expect(mocks.bridges[1].close).not.toHaveBeenCalled();
+  });
+
+  it.each(["resolve", "reject"] as const)("ignores an obsolete resource lookup's late %s", async (receipt) => {
+    const resource = (id: string) => ({ success: true, data: { url: `mains-mcp-app://resource/${id}`, meta: { availableDisplayModes: ["fullscreen"] } } });
+    let resolve!: (value: ReturnType<typeof resource>) => void, reject!: (error: Error) => void;
+    mocks.readResource.mockImplementationOnce(() => new Promise((yes, no) => { resolve = yes; reject = no; }))
+      .mockResolvedValueOnce(resource("next"));
+    const view = render(createElement(McpAppDisplay, props));
+    view.rerender(createElement(McpAppDisplay, { ...props, app: { ...app, resourceUri: "ui://maps/next" } }));
+    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+    const frame = screen.getByTitle("Flights interactive app");
+    await waitFor(() => expect(frame.getAttribute("src")).toBe("mains-mcp-app://resource/next"));
+    await act(async () => { if (receipt === "resolve") resolve(resource("first")); else reject(new Error("Obsolete resource failed")); });
+    expect(frame.getAttribute("src")).toBe("mains-mcp-app://resource/next");
+    expect(screen.queryByText("Obsolete resource failed")).toBeNull();
+    expect(mocks.bridges).toHaveLength(1);
+  });
 
   it.each([
     [{ type: "text", text: "2026-10-12T14:59:37.924Z" }],
@@ -1009,6 +1058,69 @@ describe("MCP App display modes", () => {
     page.unmount();
     expect(await sent).toEqual({ isError: true });
     expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending review when a retained app switches conversations", async () => {
+    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
+    const firstSend = vi.fn(), nextSend = vi.fn();
+    const props = { sessionId: "app-session", runId: "first-run", presentation: "page" as const, app, input: {}, title: "Canvas" };
+    const page = render(createElement(McpAppDisplay, { ...props, onMessage: firstSend }));
+    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+    let sent!: Promise<unknown>;
+    act(() => { sent = mocks.bridges[0].onmessage!({ content: [{ type: "text", text: "Only for the first conversation" }] }); });
+    await screen.findByRole("textbox", { name: "App prompt" });
+    page.rerender(createElement(McpAppDisplay, { ...props, runId: "next-run", onMessage: nextSend }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await sent).toEqual({ isError: true });
+    expect(firstSend).not.toHaveBeenCalled(); expect(nextSend).not.toHaveBeenCalled();
+    expect(mocks.bridges).toHaveLength(1);
+    expect(mocks.bridges[0].close).not.toHaveBeenCalled();
+  });
+
+  it("refuses new message reviews while the retained app is hidden", async () => {
+    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
+    const onMessage = vi.fn();
+    render(createElement(McpAppDisplay, { sessionId: "hidden-session", presentation: "page", isActive: false, app, input: {}, title: "Hidden canvas", onMessage }));
+    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+    let sent!: Promise<unknown>;
+    act(() => { sent = mocks.bridges[0].onmessage!({ content: [{ type: "text", text: "Do not interrupt another app" }] }); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await sent).toEqual({ isError: true });
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not retarget an approved message when its conversation changes before dispatch", async () => {
+    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
+    const firstSend = vi.fn(), nextSend = vi.fn();
+    const props = { sessionId: "app-session", runId: "first-run", presentation: "page" as const, app, input: {}, title: "Canvas" };
+    const page = render(createElement(McpAppDisplay, { ...props, onMessage: firstSend }));
+    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+    let sent!: Promise<unknown>;
+    act(() => { sent = mocks.bridges[0].onmessage!({ content: [{ type: "text", text: "Keep the original owner" }] }); });
+    await screen.findByRole("textbox", { name: "App prompt" });
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      page.rerender(createElement(McpAppDisplay, { ...props, runId: "next-run", onMessage: nextSend }));
+    });
+    expect(await sent).toEqual({ isError: true });
+    expect(firstSend).not.toHaveBeenCalled(); expect(nextSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps a late context receipt from overwriting the replacement conversation's context", async () => {
+    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
+    const oldContext = { updateId: "old-context", structuredContent: { selected: "old" } };
+    const nextContext = { updateId: "next-context", structuredContent: { selected: "next" } };
+    let finish!: (value: typeof oldContext) => void;
+    const update = vi.fn(() => new Promise<typeof oldContext>((resolve) => { finish = resolve; }));
+    const props = { sessionId: "app-session", runId: "first-run", presentation: "page" as const, app, input: {}, title: "Canvas", onModelContextChange: update };
+    const page = render(createElement(McpAppDisplay, props));
+    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+    const bridge = mocks.bridges[0]; act(() => bridge.oninitialized?.());
+    const updating = bridge.onupdatemodelcontext!({ structuredContent: { selected: "old" } });
+    page.rerender(createElement(McpAppDisplay, { ...props, runId: "next-run", modelContext: nextContext }));
+    await act(async () => { finish(oldContext); await updating; });
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(expect.objectContaining({ "openai/modelContext": nextContext }));
+    expect(mocks.bridges).toHaveLength(1);
   });
 
   it("reviews legacy app messages through the same editable dialog", async () => {

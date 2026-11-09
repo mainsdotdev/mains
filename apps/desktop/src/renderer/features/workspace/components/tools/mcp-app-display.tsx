@@ -9,6 +9,7 @@ import {
 } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { ErrorCode, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createMcpAppConnection, createMcpAppLaunch } from "../../../../../shared/mcp-app-lifecycle";
 import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
@@ -84,6 +85,7 @@ interface LoadedMcpAppResource {
 
 interface McpAppDisplayProps {
   runId?: string;
+  conversationKey?: string;
   /** The source tool's thread remains the UI resource owner across new chats. */
   resourceRunId?: string;
   sessionId?: string;
@@ -245,6 +247,7 @@ export function McpAppDisplay(props: McpAppDisplayProps) {
 
 function McpAppRuntime({
   runId,
+  conversationKey,
   resourceRunId: sourceRunId,
   sessionId,
   presentation: pagePresentation,
@@ -266,7 +269,8 @@ function McpAppRuntime({
   const resourceOwner = sessionId ?? sourceRunId ?? runId;
   const resourceRunId = sessionId ? undefined : (sourceRunId ?? runId);
   const resourceKey = `${resourceOwner}:${app.server}:${app.resourceUri}:${app.originCallId ?? ""}`;
-  const messagePreview = useMcpAppMessagePreview(resourceKey);
+  const messageOwnerKey = JSON.stringify([resourceKey, conversationKey ?? runId ?? null]);
+  const messagePreview = useMcpAppMessagePreview(messageOwnerKey);
   const { review: reviewMessage, cancel: cancelMessage } = messagePreview;
   const hasConversationHost = Boolean(onMessage);
   const hasContextHost = Boolean(onModelContextChange);
@@ -282,13 +286,11 @@ function McpAppRuntime({
   const collapsedButtonRef = useRef<HTMLButtonElement>(null);
   const bridgeRef = useRef<AppBridge | null>(null);
   const bridgeHostContextRef = useRef<McpUiHostContext>({});
-  const initializedRef = useRef(false);
-  // The window.openai shim can be ready without a standard MCP handshake.
-  const compatibilityReadyRef = useRef(false);
+  const connectionRef = useRef<ReturnType<typeof createMcpAppConnection> | null>(null);
   useEffect(
     () =>
       registerBeforeSuspend?.(async () => {
-        if (!initializedRef.current || !bridgeRef.current) return;
+        if (!connectionRef.current?.initialized || !bridgeRef.current) return;
         const bridge = bridgeRef.current;
         try {
           await bridge.teardownResource({}, { timeout: 1_500 });
@@ -307,6 +309,8 @@ function McpAppRuntime({
   } | null>(null);
   const conversationRef = useRef({
     runId,
+    messageOwnerKey,
+    isActive,
     onMessage,
     onModelContextChange,
     modelContext,
@@ -317,6 +321,8 @@ function McpAppRuntime({
   useLayoutEffect(() => {
     conversationRef.current = {
       runId,
+      messageOwnerKey,
+      isActive,
       onMessage,
       onModelContextChange,
       modelContext,
@@ -327,6 +333,8 @@ function McpAppRuntime({
     displayModeChangeRef.current = onDisplayModeChange;
   }, [
     runId,
+    messageOwnerKey,
+    isActive,
     onMessage,
     onModelContextChange,
     modelContext,
@@ -432,7 +440,7 @@ function McpAppRuntime({
   }, [input, toolResult, hasResult]);
 
   useEffect(() => {
-    let cancelled = false;
+    const loading = createMcpAppLaunch(resourceKey, ""), request = loading.begin();
     void window.api.mcpApps
       .readResource({
         runId: resourceRunId,
@@ -444,12 +452,12 @@ function McpAppRuntime({
         ...(app.linkId !== undefined ? { linkId: app.linkId } : {}),
       })
       .then((response: ServiceResponse<LoadedMcpAppResource>) => {
-        if (cancelled) return;
+        if (!request.current()) return;
         if (!response.success) throw new Error(response.error);
         setLoadState({ key: resourceKey, resource: response.data });
       })
       .catch((reason: unknown) => {
-        if (!cancelled) {
+        if (request.current()) {
           setLoadState({
             key: resourceKey,
             error: reason instanceof Error ? reason.message : String(reason),
@@ -457,7 +465,7 @@ function McpAppRuntime({
         }
       });
     return () => {
-      cancelled = true;
+      loading.release();
     };
   }, [
     resourceKey,
@@ -474,14 +482,9 @@ function McpAppRuntime({
     const iframe = iframeRef.current;
     if (!resource || isCollapsed || !iframe) return;
 
-    let disposed = false;
-    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
-    let frameReadyTimer: ReturnType<typeof setTimeout> | null = null;
-    let connectionStarted = false;
+    const lifecycle = createMcpAppConnection();
+    connectionRef.current = lifecycle;
     let toolCallSequence = 0;
-    const frameReadyDeadline = Date.now() + 10_000;
-    initializedRef.current = false;
-    compatibilityReadyRef.current = false;
     if (!hasContextHost) latestContextRef.current = null;
     lastSentResultRef.current = null;
     lastSentInputRef.current = null;
@@ -493,6 +496,7 @@ function McpAppRuntime({
       args?: Record<string, unknown>,
       meta?: Record<string, unknown>,
     ): Promise<CallToolResult> => {
+      lifecycle.assertActive();
       const unsupportedTools = conversationRef.current.unsupportedTools;
       const unsupported =
         unsupportedTools?.[tool] ??
@@ -512,7 +516,7 @@ function McpAppRuntime({
         meta,
       })) as ServiceResponse<unknown>;
       if (!response.success) throw new Error(response.error);
-      if (!disposed && sequence === toolCallSequence) {
+      if (lifecycle.active && sequence === toolCallSequence) {
         setOmittedCall(
           mcpStructuredContentOmitted(response.data)
             ? { key: resourceKey, output: response.data }
@@ -527,6 +531,8 @@ function McpAppRuntime({
       meta?: unknown,
       signal?: AbortSignal,
     ) => {
+      if (!lifecycle.active || !conversationRef.current.isActive) return { isError: true };
+      const messageOwner = conversationRef.current.messageOwnerKey;
       const options = mcpAppMessageOptions(meta);
       const text = mcpAppMessageText(content);
       if (!conversationRef.current.onMessage) {
@@ -541,8 +547,9 @@ function McpAppRuntime({
         text,
         options.target === "new",
         signal,
+        lifecycle.signal,
       );
-      if (approvedText === null || disposed || signal?.aborted)
+      if (approvedText === null || !lifecycle.active || !conversationRef.current.isActive || signal?.aborted || messageOwner !== conversationRef.current.messageOwnerKey)
         return { isError: true };
       const approvedContent = [{ type: "text" as const, text: approvedText }];
       const { runId, onMessage } = conversationRef.current;
@@ -560,9 +567,12 @@ function McpAppRuntime({
     };
 
     const updateModelContext = async (context: unknown) => {
+      lifecycle.assertActive();
+      const owner = conversationRef.current.messageOwnerKey;
       const update = conversationRef.current.onModelContextChange;
       if (update) {
         const attached = await update(context);
+        if (!lifecycle.active || owner !== conversationRef.current.messageOwnerKey) return {};
         latestContextRef.current = attached;
         publishHostContext(bridgeRef.current, bridgeHostContextRef, {
           "openai/modelContext": attached,
@@ -580,6 +590,7 @@ function McpAppRuntime({
     };
 
     const openLink = async (rawUrl: unknown) => {
+      lifecycle.assertActive();
       const url = externalHttpUrl(rawUrl);
       if (!url) return { isError: true };
       if (isPage) await window.api.shell.openExternal(url);
@@ -644,6 +655,7 @@ function McpAppRuntime({
     bridge.setMessageHandler(sendMessage);
     bridge.onupdatemodelcontext = updateModelContext;
     const requestDisplayMode = (requested: unknown): McpAppDisplayMode => {
+      if (!lifecycle.active) return displayModeRef.current;
       if (
         displayModeChangeRef.current &&
         (requested === "inline" || requested === "fullscreen")
@@ -671,12 +683,12 @@ function McpAppRuntime({
       mode: requestDisplayMode(mode),
     });
     bridge.onsizechange = ({ height: nextHeight }) => {
-      if (typeof nextHeight === "number" && Number.isFinite(nextHeight)) {
+      if (lifecycle.active && typeof nextHeight === "number" && Number.isFinite(nextHeight)) {
         setHeight(Math.min(1_200, Math.max(120, Math.ceil(nextHeight))));
       }
     };
     bridge.oninitialized = () => {
-      initializedRef.current = true;
+      if (!lifecycle.initialize()) return;
       const declaredModes = supportedAppModes(
         bridge.getAppCapabilities()?.availableDisplayModes,
       );
@@ -753,7 +765,7 @@ function McpAppRuntime({
       result?: unknown,
       responseError?: unknown,
     ) => {
-      if (id === undefined) return;
+      if (id === undefined || !lifecycle.active) return;
       iframe.contentWindow?.postMessage(
         {
           type: "mains:mcp-app-response",
@@ -772,11 +784,11 @@ function McpAppRuntime({
     };
 
     const onCompatibilityMessage = (event: MessageEvent) => {
-      if (event.source !== iframe.contentWindow) return;
+      if (!lifecycle.active || event.source !== iframe.contentWindow) return;
       const message = objectRecord(event.data) as CompatibilityMessage | null;
       if (!message) return;
       if (message.type === "mains:mcp-app-ready") {
-        compatibilityReadyRef.current = true;
+        lifecycle.markCompatibilityReady();
         postGlobals();
         return;
       }
@@ -836,36 +848,19 @@ function McpAppRuntime({
     };
 
     const connectFrame = () => {
-      if (disposed || connectionStarted) return;
-      if (frameReadyTimer) {
-        clearTimeout(frameReadyTimer);
-        frameReadyTimer = null;
-      }
       const target = iframe.contentWindow;
-      if (!target) {
-        if (Date.now() >= frameReadyDeadline) {
-          setLoadState({
-            key: resourceKey,
-            error:
-              "The app frame could not start. Reload the app to try again.",
-          });
-          return;
-        }
-        frameReadyTimer = setTimeout(connectFrame, 50);
+      const action = lifecycle.frame(!!target);
+      if (action === "skip") return;
+      if (action === "wait") { lifecycle.waitForFrame(connectFrame); return; }
+      if (action === "timeout") {
+        setLoadState({ key: resourceKey, error: "The app frame could not start. Reload the app to try again." });
         return;
       }
-      connectionStarted = true;
-      const transport = new PostMessageTransport(target, target);
+      const transport = new PostMessageTransport(target!, target!);
       void bridge.connect(transport).then(
-        () => {
-          if (!disposed) iframe.src = resource.url;
-        },
+        () => { if (lifecycle.connected()) iframe.src = resource.url; },
         (reason: unknown) => {
-          if (!disposed)
-            setLoadState({
-              key: resourceKey,
-              error: reason instanceof Error ? reason.message : String(reason),
-            });
+          if (lifecycle.fail()) setLoadState({ key: resourceKey, error: reason instanceof Error ? reason.message : String(reason) });
         },
       );
     };
@@ -875,9 +870,7 @@ function McpAppRuntime({
       // Ignore the placeholder document's load; only bootstrap the actual app.
       if (iframe.getAttribute("src") !== resource.url) return;
       postGlobals();
-      if (fallbackTimer) clearTimeout(fallbackTimer);
-      fallbackTimer = setTimeout(() => {
-        if (disposed || initializedRef.current) return;
+      lifecycle.fallback(() => {
         const target = iframe.contentWindow;
         target?.postMessage(
           {
@@ -897,7 +890,7 @@ function McpAppRuntime({
             "*",
           );
         }
-      }, 750);
+      });
     };
 
     window.addEventListener("message", onCompatibilityMessage);
@@ -905,15 +898,11 @@ function McpAppRuntime({
     connectFrame();
 
     return () => {
-      disposed = true;
-      cancelMessage();
-      if (fallbackTimer) clearTimeout(fallbackTimer);
-      if (frameReadyTimer) clearTimeout(frameReadyTimer);
+      lifecycle.dispose();
       window.removeEventListener("message", onCompatibilityMessage);
       iframe.removeEventListener("load", onLoad);
-      bridgeRef.current = null;
-      initializedRef.current = false;
-      compatibilityReadyRef.current = false;
+      if (bridgeRef.current === bridge) bridgeRef.current = null;
+      if (connectionRef.current === lifecycle) connectionRef.current = null;
       void bridge.close();
     };
   }, [
@@ -935,7 +924,7 @@ function McpAppRuntime({
   ]);
 
   useEffect(() => {
-    if (hasContextHost && initializedRef.current) {
+    if (hasContextHost && connectionRef.current?.initialized) {
       publishHostContext(bridgeRef.current, bridgeHostContextRef, {
         "openai/modelContext": modelContext ?? null,
       });
@@ -945,12 +934,12 @@ function McpAppRuntime({
   useEffect(() => {
     const args = input ?? {};
     const signature = JSON.stringify(args);
-    if (initializedRef.current && signature !== lastSentInputRef.current) {
+    if (connectionRef.current?.initialized && signature !== lastSentInputRef.current) {
       lastSentInputRef.current = signature;
       void bridgeRef.current?.sendToolInput({ arguments: args });
     }
     if (
-      !compatibilityReadyRef.current ||
+      !connectionRef.current?.compatibilityReady ||
       signature === lastCompatibilityInputRef.current
     )
       return;
@@ -968,14 +957,14 @@ function McpAppRuntime({
     const signature = resultSignature(result);
     if (
       bridge &&
-      initializedRef.current &&
+      connectionRef.current?.initialized &&
       signature !== lastSentResultRef.current
     ) {
       lastSentResultRef.current = signature;
       void bridge.sendToolResult(result);
     }
     if (
-      !compatibilityReadyRef.current ||
+      !connectionRef.current?.compatibilityReady ||
       signature === lastCompatibilityResultRef.current
     )
       return;
@@ -995,7 +984,7 @@ function McpAppRuntime({
   useEffect(() => {
     latestIsDarkRef.current = isDark;
     const updateHostContext = () => {
-      if (initializedRef.current) {
+      if (connectionRef.current?.initialized) {
         const rect = iframeRef.current?.getBoundingClientRect();
         publishHostContext(bridgeRef.current, bridgeHostContextRef, {
           ...hostContext(isDark, displayMode, isPage && !onDisplayModeChange),
@@ -1179,7 +1168,7 @@ function McpAppRuntime({
           key={messagePreview.preview.id}
           appName={app.appName ?? title}
           preview={messagePreview.preview}
-          onCancel={cancelMessage}
+          onCancel={messagePreview.dismiss}
           onSend={messagePreview.confirm}
         />
       )}

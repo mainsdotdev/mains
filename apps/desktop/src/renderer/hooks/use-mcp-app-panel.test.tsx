@@ -322,6 +322,31 @@ describe("shared MCP App panel", () => {
     expect(h.result.current.opening).toBeNull();
     expect(mocks.closeExtension).toHaveBeenCalledWith({ sessionId: "abandoned-session" });
   });
+  it("does not revive an abandoned launch after navigating away and back before it resolves", async () => {
+    const h = harness("/apps/magicpath"); let finish!: (result: unknown) => void;
+    mocks.openExtension.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    let opening!: Promise<void>; act(() => { opening = h.result.current.openGlobal(app); });
+    act(() => h.navigate("/plugins"));
+    act(() => h.navigate("/apps/magicpath"));
+    await act(async () => { finish({ success: true, data: { sessionId: "abandoned-return-session", app, output: { content: [] } } }); await opening; });
+    expect(h.result.current.document).toBeNull();
+    expect(h.pathname).toBe("/apps/magicpath");
+    expect(mocks.closeExtension).toHaveBeenCalledExactlyOnceWith({ sessionId: "abandoned-return-session" });
+  });
+  it("abandons a pending Work launch when its selected collection changes on the same route", async () => {
+    mocks.mode = "work";
+    const h = harness("/work");
+    act(() => h.state.dispatch(setSelectedCollectionId("first-collection")));
+    let finish!: (result: unknown) => void;
+    mocks.openExtension.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    let opening!: Promise<void>; act(() => { opening = h.result.current.openGlobal(app); });
+    act(() => h.state.dispatch(setSelectedCollectionId("next-collection")));
+    h.rerender();
+    await act(async () => { finish({ success: true, data: { sessionId: "old-collection-session", app, output: { content: [] } } }); await opening; });
+    expect(h.result.current.document).toBeNull();
+    expect(h.state.getState().workspace.selectedCollectionId).toBe("next-collection");
+    expect(mocks.closeExtension).toHaveBeenCalledExactlyOnceWith({ sessionId: "old-collection-session" });
+  });
   it("replaces the loading route so Back does not reopen the app", async () => {
     const h = harness("/apps/magicpath", "/plugins");
     await act(async () => h.result.current.openGlobal(app));

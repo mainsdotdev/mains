@@ -12,6 +12,7 @@ const harness = vi.hoisted(() => ({
   openSession: vi.fn(),
   closeSession: vi.fn(),
   callSessionTool: vi.fn(),
+  createAdapter: vi.fn(),
 }));
 
 vi.mock("@mains/backend/modules/runs", () => ({
@@ -22,13 +23,7 @@ vi.mock("@mains/backend/modules/runs", () => ({
 }));
 vi.mock("@mains/backend/modules/providers", () => ({
   providersService: { getById: harness.getProviderById },
-  createWorkAdapter: () => ({
-    readMcpAppResource: harness.readResource,
-    callMcpAppTool: harness.callTool,
-    openMcpAppSession: harness.openSession,
-    closeMcpAppSession: harness.closeSession,
-    callMcpAppSessionTool: harness.callSessionTool,
-  }),
+  createWorkAdapter: harness.createAdapter,
 }));
 vi.mock("./mcpApps.registry", () => ({
   mcpAppsRegistry: { register: harness.registerDocument, remove: harness.removeDocument },
@@ -39,6 +34,8 @@ import { mcpAppsService } from "./mcpApps.service";
 describe("mcpAppsService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    harness.createAdapter.mockReturnValue({ readMcpAppResource: harness.readResource, callMcpAppTool: harness.callTool,
+      openMcpAppSession: harness.openSession, closeMcpAppSession: harness.closeSession, callMcpAppSessionTool: harness.callSessionTool });
     harness.closeSession.mockResolvedValue(undefined);
     harness.findRunById.mockResolvedValue({
       id: "run-1",
@@ -219,5 +216,112 @@ describe("mcpAppsService", () => {
     await expect(mcpAppsService.openExtension({ providerId: "codex", entrypointId: "bad-app" }))
       .rejects.toThrow("Unsupported MCP App resource type");
     expect(harness.closeSession).toHaveBeenCalledWith("bad-session");
+  });
+
+  it("closes a session through its original adapter after the provider is disabled", async () => {
+    const app = { id: "bound-app", name: "Canvas", server: "apps", tool: "canvas", resourceUri: "ui://canvas", entrypoints: ["global"] };
+    harness.openSession.mockResolvedValue({ id: "bound-session", app, output: {},
+      resource: { contents: [{ uri: app.resourceUri, text: "<main>Canvas</main>", mimeType: "text/html" }] } });
+    await mcpAppsService.openExtension({ providerId: "codex", entrypointId: app.id });
+    harness.getProviderById.mockResolvedValue({ id: "codex", isEnabled: false });
+    await expect(mcpAppsService.callTool({ sessionId: "bound-session", server: app.server, tool: "canvas" })).rejects.toThrow("not enabled");
+    expect(harness.callSessionTool).not.toHaveBeenCalled();
+    await expect(mcpAppsService.closeExtension({ sessionId: "bound-session" })).resolves.toBeUndefined();
+    expect(harness.closeSession).toHaveBeenCalledExactlyOnceWith("bound-session");
+  });
+
+  it("retains a failed native close for retry while refusing resource and tool admission", async () => {
+    const app = { id: "retry-app", name: "Canvas", server: "apps", tool: "canvas", resourceUri: "ui://canvas", entrypoints: ["global"] };
+    harness.openSession.mockResolvedValue({ id: "retry-session", app, output: {},
+      resource: { contents: [{ uri: app.resourceUri, text: "<main>Canvas</main>", mimeType: "text/html" }] } });
+    await mcpAppsService.openExtension({ providerId: "codex", entrypointId: app.id });
+    harness.closeSession.mockRejectedValueOnce(new Error("Native close interrupted"));
+    await expect(mcpAppsService.closeExtension({ sessionId: "retry-session" })).rejects.toThrow("interrupted");
+    await expect(mcpAppsService.readResource({ sessionId: "retry-session", server: app.server, resourceUri: app.resourceUri })).rejects.toThrow("expired");
+    await expect(mcpAppsService.callTool({ sessionId: "retry-session", server: app.server, tool: "canvas" })).rejects.toThrow("expired");
+    await mcpAppsService.closeExtension({ sessionId: "retry-session" });
+    expect(harness.closeSession).toHaveBeenCalledTimes(2);
+    expect(harness.removeDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains a pending open and releases its late session when all extensions close", async () => {
+    let finish!: (session: unknown) => void;
+    harness.openSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const opening = mcpAppsService.openExtension({ providerId: "codex", entrypointId: "late-app" });
+    const result = opening.then(() => "opened", () => "retired");
+    await vi.waitFor(() => expect(harness.openSession).toHaveBeenCalledOnce());
+    let drained = false;
+    const closing = mcpAppsService.closeAllExtensions().then(() => { drained = true; });
+    const app = { id: "late-app", name: "Canvas", server: "apps", tool: "canvas", resourceUri: "ui://canvas", entrypoints: ["global"] };
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve)); expect(drained).toBe(false);
+      await expect(mcpAppsService.openExtension({ providerId: "codex", entrypointId: "do-not-open" })).rejects.toThrow("closing");
+      expect(harness.openSession).toHaveBeenCalledOnce();
+    } finally {
+      finish({ id: "late-session", app, output: {}, resource: { contents: [{ uri: app.resourceUri, text: "<main>Canvas</main>", mimeType: "text/html" }] } });
+      await result; await closing;
+      await mcpAppsService.closeAllExtensions();
+    }
+    expect(await result).toBe("retired");
+    expect(harness.registerDocument).not.toHaveBeenCalled();
+    expect(harness.closeSession).toHaveBeenCalledExactlyOnceWith("late-session");
+  });
+
+  it("keeps tool calls on the acquiring adapter when provider configuration changes", async () => {
+    const app = { id: "tools-app", name: "Canvas", server: "apps", tool: "canvas", resourceUri: "ui://canvas", entrypoints: ["global"] };
+    harness.openSession.mockResolvedValue({ id: "tools-session", app, output: {},
+      resource: { contents: [{ uri: app.resourceUri, text: "<main>Canvas</main>", mimeType: "text/html" }] } });
+    await mcpAppsService.openExtension({ providerId: "codex", entrypointId: app.id });
+    const replacementTool = vi.fn();
+    harness.createAdapter.mockReturnValue({ callMcpAppSessionTool: replacementTool });
+    try {
+      await mcpAppsService.callTool({ sessionId: "tools-session", server: app.server, tool: "canvas" });
+      expect(harness.callSessionTool).toHaveBeenCalledExactlyOnceWith("tools-session", "canvas", undefined, undefined);
+      expect(replacementTool).not.toHaveBeenCalled();
+    } finally { await mcpAppsService.closeExtension({ sessionId: "tools-session" }); }
+  });
+
+  it("refuses a tool call whose session closes during the provider availability check", async () => {
+    const app = { id: "checked-app", name: "Canvas", server: "apps", tool: "canvas", resourceUri: "ui://canvas", entrypoints: ["global"] };
+    harness.openSession.mockResolvedValue({ id: "checked-session", app, output: {},
+      resource: { contents: [{ uri: app.resourceUri, text: "<main>Canvas</main>", mimeType: "text/html" }] } });
+    await mcpAppsService.openExtension({ providerId: "codex", entrypointId: app.id });
+    let finish!: (provider: unknown) => void;
+    harness.getProviderById.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const calling = mcpAppsService.callTool({ sessionId: "checked-session", server: app.server, tool: "canvas" });
+    const refused = expect(calling).rejects.toThrow("expired");
+    await mcpAppsService.closeExtension({ sessionId: "checked-session" });
+    finish({ id: "codex", isEnabled: true });
+    await refused;
+    expect(harness.callSessionTool).not.toHaveBeenCalled();
+  });
+
+  it("retries failed cleanup of an acquired session whose resource could not be hosted", async () => {
+    harness.openSession.mockResolvedValue({ id: "unhosted-session", app: { resourceUri: "ui://bad" },
+      resource: { contents: [{ uri: "ui://bad", text: "Not HTML", mimeType: "text/plain" }] } });
+    harness.closeSession.mockRejectedValueOnce(new Error("Native close interrupted"));
+    await expect(mcpAppsService.openExtension({ providerId: "codex", entrypointId: "bad" })).rejects.toThrow("Unsupported MCP App resource type");
+    await mcpAppsService.closeAllExtensions();
+    expect(harness.closeSession).toHaveBeenCalledTimes(2);
+    expect(harness.closeSession).toHaveBeenLastCalledWith("unhosted-session");
+  });
+
+  it("shares native cleanup between concurrent close and close-all requests", async () => {
+    const app = { id: "closing-app", name: "Canvas", server: "apps", tool: "canvas", resourceUri: "ui://canvas", entrypoints: ["global"] };
+    harness.openSession.mockResolvedValue({ id: "closing-session", app, output: {},
+      resource: { contents: [{ uri: app.resourceUri, text: "<main>Canvas</main>", mimeType: "text/html" }] } });
+    await mcpAppsService.openExtension({ providerId: "codex", entrypointId: app.id });
+    let finish!: () => void;
+    harness.closeSession.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const first = mcpAppsService.closeExtension({ sessionId: "closing-session" });
+    const second = mcpAppsService.closeExtension({ sessionId: "closing-session" });
+    const all = mcpAppsService.closeAllExtensions();
+    try {
+      await vi.waitFor(() => expect(harness.closeSession).toHaveBeenCalledOnce());
+      await expect(mcpAppsService.readResource({ sessionId: "closing-session", server: app.server, resourceUri: app.resourceUri })).rejects.toThrow("expired");
+    } finally { finish(); await Promise.all([first, second, all]); }
+    await mcpAppsService.closeExtension({ sessionId: "closing-session" });
+    expect(harness.closeSession).toHaveBeenCalledOnce();
+    expect(harness.removeDocument).toHaveBeenCalledOnce();
   });
 });
