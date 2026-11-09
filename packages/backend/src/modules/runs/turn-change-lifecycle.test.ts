@@ -33,11 +33,24 @@ beforeEach(async () => {
   turnId = createRunTurn(db, { runId: "run", status: "completed" }).id;
   const snapshot = await gitService.captureDiffSnapshot(root, git("rev-parse", "HEAD"));
   await runsRepo.insertTurnChanges({ runId: "run", turnId, diffText: snapshot.diffText,
-    files: snapshot.files.map((file) => ({ path: file, status: "modified" as const, additions: 1, deletions: 1, binary: false })), additions: 1, deletions: 1, truncated: false });
+    files: snapshot.files.map((file) => ({ path: file, status: "modified" as const, additions: 1, deletions: 1, binary: false, shared: false })), additions: 1, deletions: 1, truncated: false });
 });
 afterEach(async () => { for (const session of [...runSessionRegistry.active()]) runSessionRegistry.unregister(session.runId); await shutdownGitFlow(); openGitFlow(); vi.restoreAllMocks(); restore(); cleanup(); fs.rmSync(root, { recursive: true, force: true }); });
 
 describe("turn Undo ownership", () => {
+  it("refuses legacy changes without verified ownership before touching Git", async () => {
+    const stored = (await runsService.getTurnChangesDiff("run", turnId))!;
+    const legacyTurnId = createRunTurn(db, { runId: "run", status: "completed", turnIndex: 1 }).id;
+    await runsRepo.insertTurnChanges({ runId: "run", turnId: legacyTurnId, diffText: stored.diffText,
+      files: stored.files.map((file) => ({ ...file, shared: undefined })), additions: stored.additions,
+      deletions: stored.deletions, truncated: false });
+    const apply = vi.spyOn(gitService, "applyPatch");
+    await expect(runsService.undoTurnChanges("run", legacyTurnId)).rejects.toThrow(/cannot be safely attributed/);
+    expect(apply).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(root, "file.txt"), "utf8")).toBe("after\n");
+    expect((await runsService.getTurnChangesDiff("run", legacyTurnId))?.undoneAt).toBeNull();
+  });
+
   it("joins duplicate Undo requests before a second reverse patch can start", async () => {
     const gate = deferred(), entered = deferred(), apply = gitService.applyPatch.bind(gitService);
     const native = vi.spyOn(gitService, "applyPatch").mockImplementation(async (...args) => { entered.resolve(); await gate.promise; return apply(...args); });

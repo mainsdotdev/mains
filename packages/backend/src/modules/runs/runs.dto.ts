@@ -308,6 +308,7 @@ export interface TurnFileChange extends TreeDiffFile {
   /**
    * A parallel run in the same worktree may have written this file during the
    * turn too, so its patch can hold their hunks — the turn can't be undone.
+   * Stored false confirms the ownership check; omission is unverified legacy data.
    */
   shared?: boolean;
 }

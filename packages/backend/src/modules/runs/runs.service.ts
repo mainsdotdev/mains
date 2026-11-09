@@ -22,6 +22,7 @@ import { assertRunCanContinue, canSteerRun, claimRunResponse, isRunResponseStart
 import { answerAsyncQuestions, assertAsyncQuestionCanReply, assertAsyncQuestionDecisionCurrent, dismissAsyncQuestions } from "./run-async-questions";
 import type { AnswerAsyncQuestionsPayload, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import { providerTurnLineageMetadata } from "../../../shared/provider-turn-lineage";
+import { turnUndoOwnershipError } from "../../../shared/turn-change-ownership";
 import {
   createVoiceTaskCoordinator,
   VOICE_COORDINATOR_INSTRUCTIONS,
@@ -3138,12 +3139,9 @@ export const runsService = {
           "This turn's changes were too large to store in full, so they can't be undone.",
         );
       }
-      // Reverse-applying would take the parallel run's edits to these files too.
-      if (changes.files.some((f) => f.shared)) {
-        throw new Error(
-          "A parallel run changed some of these files too, so this turn can't be undone automatically.",
-        );
-      }
+      // Legacy records can contain an unmarked peer shell's edits too.
+      const ownershipError = turnUndoOwnershipError(changes.files);
+      if (ownershipError) throw new Error(ownershipError);
       const workspace = run.workspaceId
         ? await workspaceService.get(run.workspaceId)
         : null;

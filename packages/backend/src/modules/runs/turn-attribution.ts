@@ -27,7 +27,7 @@ export function attributeTurnFiles(
     const ownNamed = paths.some((p) => own.paths.has(p));
     const peerNamed = paths.some((p) => peers.paths.has(p));
     if (ownNamed) {
-      kept.push(peerNamed ? { ...file, shared: true } : file);
+      kept.push(peerNamed || peers.unnamed ? { ...file, shared: true } : file);
     } else if (!peerNamed && own.unnamed) {
       kept.push(peers.unnamed ? { ...file, shared: true } : file);
     }

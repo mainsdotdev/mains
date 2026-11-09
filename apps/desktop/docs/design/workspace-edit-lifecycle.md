@@ -21,6 +21,21 @@ metadata and content, detecting a changed file whose old mtime was restored.
 Older mtime-only clients remain supported. A native write may still race an
 out-of-process writer; no cross-process filesystem transaction is claimed.
 
+Turn attribution treats an unnamed peer write as potentially shared even when
+this run named the file explicitly, including a rename's original path. A failed
+shell command may already have written and retains that uncertainty. Named tool
+completions that omit input reuse their known start paths rather than becoming
+opaque writes. The final stored files explicitly carry `shared: false` when the
+current attribution check found no sharing and `shared: true` otherwise.
+
+`shared/turn-change-ownership.ts` is the common Undo eligibility check used by the
+backend and transcript card. A shared file or an omitted ownership flag blocks
+the whole reverse patch before native Git mutation. Older records have no proof
+that the attribution check excluded a peer shell's edits, so they remain
+reviewable but cannot be undone automatically. No historical flags are guessed
+or backfilled. New verified exclusive turns retain Undo. This uses the existing
+JSON field without a schema or wire-shape change.
+
 Undo checkpoints live in the existing backend-generation journal. They do not
 make patch application and SQLite atomic across a process crash. Failed marker
 recovery is automatic within that generation; after a restart an uncertain Undo

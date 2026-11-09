@@ -308,7 +308,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       if (!baseline || !start || !end || start === end) return;
       let diff = await gitService.diffTrees(execution.cwd, start, end);
       if (diff.files.length === 0) return;
-      let files: TurnFileChange[] = diff.files;
+      let files: TurnFileChange[] = diff.files.map((file) => ({ ...file, shared: false }));
 
       const location = await worktree;
       const peers = location
@@ -326,7 +326,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
           );
         }
         const shared = new Set(kept.filter((f) => f.shared).map((f) => f.path));
-        files = diff.files.map((f) => (shared.has(f.path) ? { ...f, shared: true } : f));
+        files = diff.files.map((file) => ({ ...file, shared: shared.has(file.path) }));
         if (files.length === 0) return;
       }
 
@@ -540,7 +540,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     if (!event.error && couldModifyFiles(event.toolName)) scheduleLiveDiff();
     const namedAtStart = (callKey && pendingToolWrites.get(callKey)) || [];
     if (callKey) pendingToolWrites.delete(callKey);
-    const named = await noteToolWrites(event);
+    // A completion without input adds no uncertainty to a known named write.
+    // Shells and calls that never named a file still record opaque writes.
+    const named = event.input === undefined && namedAtStart.length > 0 ? [] : await noteToolWrites(event);
     const wrote = !event.error && (event.terminalStatus ?? "done") === "done";
     if (wrote && turns.baseline) {
       for (const repoPath of [...namedAtStart, ...named]) turns.baseline.writes.paths.add(repoPath);
