@@ -393,13 +393,13 @@ describe.skipIf(!networkMode)("Bridge background replication for desktop/server 
     await flushBackground(() => !n.sqlite.prepare("SELECT 1 FROM bridge_outbox WHERE stream='account'").get());
     expect(replicator.getStatus()).toMatchObject({ error: null, pendingRecords: 1 });
   });
-  it("leaves inactive changes queued without repeated uploads or quota queries and resumes after the renewal refresh", async () => {
+  it.each(["expired", "revoked", "scheduled", "none", "unavailable"] as const)("leaves %s inactive changes queued without repeated uploads or quota queries and resumes after the renewal refresh", async (inactive) => {
     const original = globalThis.fetch, now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
     let active = false;
     const fetches = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
       const response = await original(url, options);
       if (new URL(String(url)).pathname !== "/v1/quota") return response;
-      return Response.json({ ...await response.json(), subscription: { status: active ? "active" : "expired", canUpload: active, planId: "standard", billingInterval: "monthly",
+      return Response.json({ ...await response.json(), subscription: { status: active ? "active" : inactive, canUpload: active, planId: "standard", billingInterval: "monthly",
         startsAt: new Date(now - 60_000).toISOString(), expiresAt: new Date(active ? now + 120_000 : now - 1).toISOString() } });
     });
     const quotaRequests = () => fetches.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/v1/quota").length;

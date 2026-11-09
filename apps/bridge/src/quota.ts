@@ -59,9 +59,17 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
     put: lifecycle.put,
     async status(accountId: string): Promise<BridgeQuota> {
       await lifecycle.reconcile(accountId);
-      const subscription = await subscriptions.status(accountId);
-      const policy = await limits.get(accountId, subscription.subscription.planId ?? undefined), bytes = usage(), records = recordBytes();
-      return { ...policy, ...bytes, recordBytes: records, usedBytes: records + bytes.blobBytes + bytes.reservedBytes, fileLimitBytes: BRIDGE_BLOB_MAX_BYTES, ...subscription };
+      let subscription = await subscriptions.status(accountId);
+      for (;;) {
+        const plan = subscription.subscription.planId;
+        const policy = await limits.get(accountId, plan ?? undefined);
+        // Policy I/O may span expiry or a committed grant change. Reacquire
+        // entitlement after it, and keep policy tied to the current plan.
+        subscription = await subscriptions.status(accountId);
+        if (subscription.subscription.planId !== plan) continue;
+        const bytes = usage(), records = recordBytes();
+        return { ...policy, ...bytes, recordBytes: records, usedBytes: records + bytes.blobBytes + bytes.reservedBytes, fileLimitBytes: BRIDGE_BLOB_MAX_BYTES, ...subscription };
+      }
     },
     async reserve(identity: BridgeIdentity, entries: BlobReservation[], expiresAt: number) {
       if (!await identityIsActive(identity, env)) throw new BridgeQuotaError(403, "Backend access revoked");

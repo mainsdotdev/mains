@@ -602,7 +602,14 @@ session, derives the account from authentication, and returns no credentials.
 
 The account DO caches one indexed D1 query over subscription and beta grants for 60 seconds and coalesces concurrent
 requests. It checks cached period expiry on every use, so the cache never extends
-the end of a subscription. Direct operator grants/revocations take up to 60 seconds
+the end of a subscription. An invalidated or over-age in-flight D1 receipt is
+discarded before permission is returned; its callers join the replacement read.
+Quota reads reacquire entitlement after asynchronous policy lookup, so expiry or
+revocation during that lookup cannot carry its earlier permission into publication.
+The transition rules and atomic operator/activation statements live in
+`src/entitlement-lifecycle.ts`; see [Entitlement lifecycle](ENTITLEMENT-LIFECYCLE.md)
+for the state graph, ownership and regression coverage.
+Direct operator grants/revocations take up to 60 seconds
 to appear at the hub; client refresh does not bypass that server cache. An idle
 client updates its displayed status on the next upload attempt or manual refresh;
 pending inactive clients check for renewal in the background. A future trusted
