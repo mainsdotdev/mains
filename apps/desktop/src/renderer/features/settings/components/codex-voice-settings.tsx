@@ -59,8 +59,9 @@ export function CodexVoiceSettings({ config, catalog, loading, error, updating, 
           placeholder={loading ? "Loading voices…" : voice && !supported ? `${voiceLabel(voice)} (unavailable)` : "Voices unavailable"}
           disabled={updating || loading || !catalog?.voices.length || !!error}
           onChange={(realtimeVoice) => {
-            preview.play(realtimeVoice);
-            void onUpdate({ realtimeVoice }).then((saved) => { if (!saved) preview.stop(); });
+            const stopPreview = preview.play(realtimeVoice);
+            try { void onUpdate({ realtimeVoice }).then((saved) => { if (!saved) stopPreview(); }, stopPreview); }
+            catch { stopPreview(); }
           }}
         />
       </SettingsRow>

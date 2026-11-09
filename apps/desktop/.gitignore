@@ -60,6 +60,7 @@ Thumbs.db
 !/docs/design/github-device-flow-lifecycle.md
 !/docs/design/update-lifecycle.md
 !/docs/design/lens-shortcut-lifecycle.md
+!/docs/design/speech-preview-lifecycle.md
 
 # Coverage
 coverage/
