@@ -1097,6 +1097,12 @@ rescan the log. Empty passes read only; stream counters and permanent tombstones
 are retained. Existing blob-reference triggers release only removed log roots,
 with the same reservation/read protection and GC grace rules.
 
+Inventory 71 + 72 shares its transition rules in `src/hub-maintenance-lifecycle.ts`;
+see [Maintenance and snapshot consistency](MAINTENANCE-LIFECYCLE.md). Job progress
+and effects commit together, while the read-only export fence observes both SQL
+row changes and the current application schema. Compaction therefore invalidates
+a paginated capture even when it leaves stream sequence numbers unchanged.
+
 Records use XChaCha20-Poly1305 with fresh 24-byte nonces. HKDF-SHA256 derives
 separate body, record-id and blob-id keys from the account key. A fixed-order
 encoding of the complete routing header is AEAD associated data; the receiver
