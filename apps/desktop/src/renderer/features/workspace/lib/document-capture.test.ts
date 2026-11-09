@@ -14,6 +14,18 @@ beforeEach(() => {
 afterEach(() => { document.body.replaceChildren(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("shared document capture", () => {
+  it("freezes the selected page before waiting for fonts or document replacement", async () => {
+    let ready!: () => void;
+    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: new Promise<void>((resolve) => { ready = resolve; }) } });
+    const page = document.createElement("div"); page.style.width = "800px"; page.style.height = "600px";
+    page.innerHTML = "<p>Original selected passage</p>"; document.body.append(page);
+    const capturing = captureDocumentPage(page, [element], "pptx");
+    page.innerHTML = "<p>Replacement document</p>"; page.remove();
+    ready(); await capturing;
+    const svg = decodeURIComponent(sources[0].split(",").slice(1).join(","));
+    expect(svg).toContain("Original selected passage");
+    expect(svg).not.toContain("Replacement document");
+  });
   it("uses DOCX paper dimensions in CSS pixels and retains generated list styles", async () => {
     const host = document.createElement("div"); document.body.append(host); const shadow = host.attachShadow({ mode: "open" });
     const style = document.createElement("style"); style.textContent = '.docx p::before { content: "•"; }'; shadow.append(style);

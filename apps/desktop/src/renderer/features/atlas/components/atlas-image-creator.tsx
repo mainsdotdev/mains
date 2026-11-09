@@ -43,6 +43,7 @@ import {
   useTransientUploads,
 } from "@/features/workspace/hooks/use-transient-uploads";
 import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
+import { createUploadSubmission } from "@/features/workspace/lib/document-lifecycle";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import { atlasError } from "../hooks/use-save-to-atlas";
@@ -332,7 +333,8 @@ function ImageComposer({
     const transport = getTransport();
     const settings = conversation.settings;
     const intent = conversation.beginSettingsIntent();
-    const submittedFiles = files;
+    const uploadSubmission = createUploadSubmission(files);
+    const submittedFiles = uploadSubmission.files;
     const submittedContext = [
       ...contextItems.filter(
         (item) => item.kind !== "skill" || item.name !== skillContext.name,
@@ -377,9 +379,7 @@ function ImageComposer({
         setDraft(runId ? imagePrompt("", readySkill) : "");
       setTransientUploadsForOwner(
         composerKey,
-        getTransientUploadsForOwner(composerKey).filter(
-          (file) => !submittedFiles.includes(file),
-        ),
+        uploadSubmission.accept(getTransientUploadsForOwner(composerKey)),
       );
       const current = store.getState().workspace;
       const latestContext =
@@ -408,6 +408,7 @@ function ImageComposer({
     } catch (error) {
       if (getTransport() === transport) toast.error(atlasError(error));
     } finally {
+      uploadSubmission.close();
       pending.current = false;
       if (mounted.current) setPreparing(false);
     }

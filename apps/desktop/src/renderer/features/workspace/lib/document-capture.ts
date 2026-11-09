@@ -22,10 +22,10 @@ export async function captureDocumentPage(page: HTMLElement, elements: DocumentA
   const width = page.offsetWidth || Number.parseFloat(page.style.width);
   const height = page.offsetHeight || Number.parseFloat(page.style.height);
   if (!(width > 0 && height > 0)) throw new Error("The selected page is not visible");
-  await document.fonts.ready;
   const clone = page.cloneNode(true) as HTMLElement;
   const originals = [page, ...Array.from(page.querySelectorAll("*"))];
   const copies = [clone, ...Array.from(clone.querySelectorAll("*"))];
+  const images: HTMLImageElement[] = [];
   for (const [index, original] of originals.entries()) {
     const copy = copies[index] as HTMLElement | SVGElement;
     const computed = getComputedStyle(original);
@@ -36,10 +36,10 @@ export async function captureDocumentPage(page: HTMLElement, elements: DocumentA
       image.style.cssText = copy.style.cssText;
       copy.replaceWith(image);
     } else if (original instanceof HTMLImageElement) {
-      await original.decode();
       // Office media are embedded data URLs. Preserve the decoded resource instead of responsive sources.
       copy.setAttribute("src", original.currentSrc || original.src);
       copy.removeAttribute("srcset");
+      images.push(copy as HTMLImageElement);
     }
   }
   Object.assign(clone.style, { margin: "0", border: "0", boxShadow: "none", position: "relative",
@@ -68,6 +68,8 @@ export async function captureDocumentPage(page: HTMLElement, elements: DocumentA
   }
   const image = new Image();
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
+  await document.fonts.ready;
+  await Promise.all(images.map((copy) => copy.decode()));
   await image.decode();
   const scale = Math.min(1, 1440 / width, 1440 / height);
   const canvas = document.createElement("canvas");

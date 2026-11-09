@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
   workspaceId: undefined as string | undefined,
   voiceState: { phase: "idle", runId: null as string | null, connectionId: null, startedAt: null },
   files: [] as UploadedFile[],
+  setFiles: vi.fn(),
   serializeAttachments: vi.fn(),
 }));
 
@@ -103,7 +104,7 @@ vi.mock("./use-composer-context", () => ({
   useComposerContext: () => ({ items: useSelector((state: { workspace: { contextItems: unknown[] } }) => state.workspace.contextItems), clear: vi.fn() }),
 }));
 vi.mock("./use-transient-uploads", () => ({
-  useTransientUploads: () => [mocks.files, vi.fn()],
+  useTransientUploads: () => [mocks.files, mocks.setFiles],
   getTransientUploadsForOwner: () => mocks.files,
   moveTransientUploadsToOwner: mocks.moveUploads,
 }));
@@ -171,6 +172,7 @@ beforeEach(() => {
   mocks.voiceState = { phase: "idle", runId: null, connectionId: null, startedAt: null };
   mocks.panel = false;
   mocks.files = [];
+  mocks.setFiles.mockImplementation((files: UploadedFile[]) => { mocks.files = files; });
   mocks.serializeAttachments.mockResolvedValue([]);
   mocks.appContext.mockReturnValue([]);
   mocks.executeRun.mockResolvedValue(null);
@@ -533,6 +535,41 @@ describe("submitted prompt feedback", () => {
     await act(async () => { finish(created.id); await sending; });
     expect(page.result.current.activeTab).toBe(created.id);
     expect(page.result.current.currentEvents.filter((event) => event.content === "Start a fresh session")).toHaveLength(1);
+  });
+
+  it("keeps unsent files when an automatic text-only start finishes", async () => {
+    const existing = { file: new File(["old"], "old.txt"), type: "document" as const };
+    const later = { file: new File(["new"], "new.txt"), type: "document" as const };
+    mocks.files = [existing];
+    let finish!: (id: string) => void;
+    mocks.executeRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.showNewRunTab).toBe(true));
+    act(() => { page.result.current.setGoal("Automatic instruction"); page.result.current.setAutoExecute(true); });
+    await waitFor(() => expect(mocks.executeRun).toHaveBeenCalledOnce());
+    mocks.files = [existing, later]; page.rerender();
+    await act(async () => { finish(run.id); });
+    await waitFor(() => expect(page.result.current.goal).toBe(""));
+    page.rerender();
+    expect(page.result.current.uploadedFiles).toEqual([existing, later]);
+  });
+
+  it("consumes accepted attachments while preserving files added during the send", async () => {
+    const submitted = { file: new File(["old"], "old.txt"), type: "document" as const };
+    const later = { file: new File(["new"], "new.txt"), type: "document" as const };
+    mocks.files = [submitted];
+    let finish!: (id: string) => void;
+    mocks.executeRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.showNewRunTab).toBe(true));
+    act(() => page.result.current.setGoal("Read my attachment"));
+    let sending!: Promise<string | null>;
+    act(() => { sending = page.result.current.handleExecute(); });
+    await waitFor(() => expect(mocks.executeRun).toHaveBeenCalledOnce());
+    mocks.files = [submitted, later]; page.rerender();
+    await act(async () => { finish(run.id); await sending; });
+    page.rerender();
+    expect(page.result.current.uploadedFiles).toEqual([later]);
   });
 
   it("shows file attachments before serialization completes and preserves them when serialization fails", async () => {

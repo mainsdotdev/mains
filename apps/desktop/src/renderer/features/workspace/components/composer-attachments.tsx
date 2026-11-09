@@ -18,14 +18,8 @@ import { ImagePreviewModal } from "./image-preview-modal";
 import { ComposerReviewComments } from "./review-comments-attachment";
 import { ComposerBrowserAnnotations } from "./composer-browser-annotations";
 import { ComposerDocumentAnnotations } from "./document-annotations-attachment";
+import { transientDocumentFiles } from "../lib/document-lifecycle";
 
-/**
- * A draft attachment has no file on disk yet, so the viewer reads it through a
- * blob URL (one per file). Held outside the component so a remount of the
- * composer can't revoke a URL the viewer is still reading — it is revoked only
- * once its file leaves the composer.
- */
-const draftDocumentUrls = new Map<File, string>();
 
 function fileExtension(name: string): string | undefined {
   const dot = name.lastIndexOf(".");
@@ -143,22 +137,16 @@ export function ComposerAttachments({
     files.length > 0 || browserSelections.length > 0 || appshots.length > 0 || reviewComments.length > 0 || documentAnnotations.length > 0;
 
   useEffect(() => {
-    const present = new Set(files.map((f) => f.file));
-    for (const [file, url] of draftDocumentUrls) {
-      if (present.has(file)) continue;
-      URL.revokeObjectURL(url);
-      draftDocumentUrls.delete(file);
-    }
+    const release = transientDocumentFiles.hold(files);
+    // Let the next committed view acquire its leases before releasing this
+    // one, including Strict Mode replay and a draft-to-viewer handoff.
+    return () => queueMicrotask(release);
   }, [files]);
 
   const openDraftDocument = (file: File) => {
     const docType = classifyDocType(file.name);
     if (!docType) return;
-    let url = draftDocumentUrls.get(file);
-    if (!url) {
-      url = URL.createObjectURL(file);
-      draftDocumentUrls.set(file, url);
-    }
+    const url = transientDocumentFiles.documentUrl(file);
     openDocument({ path: url, fileName: file.name, docType });
   };
 

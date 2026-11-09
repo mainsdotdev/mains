@@ -45,6 +45,7 @@ Thumbs.db
 !/docs/design/run-projection-lifecycle.md
 !/docs/design/backend-switch-lifecycle.md
 !/docs/design/atlas-bookmark-lifecycle.md
+!/docs/design/document-attachment-lifecycle.md
 
 # Coverage
 coverage/

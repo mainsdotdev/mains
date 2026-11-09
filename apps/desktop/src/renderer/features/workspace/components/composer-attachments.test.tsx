@@ -2,7 +2,7 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
 import { MemoryRouter } from "react-router-dom";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ readFileText: vi.fn() }));
@@ -21,7 +21,7 @@ vi.mock("./document-viewer/pdf-document", () => ({ PdfDocument: () => null }));
 
 import appSettings from "@/lib/redux/slices/appSettingsSlice";
 import workspace from "@/lib/redux/slices/workspaceSlice";
-import preview from "@/lib/redux/slices/previewSlice";
+import preview, { closePreviewTab, openPreviewTab } from "@/lib/redux/slices/previewSlice";
 import { DocumentViewerProvider } from "@/hooks/use-document-viewer";
 import { ComposerAttachments } from "./composer-attachments";
 import { DocumentViewerPanel } from "./document-viewer-panel";
@@ -37,6 +37,36 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("composer document previews", () => {
+  it("loads only the current backend's document tabs through its file API", async () => {
+    mocks.readFileText.mockImplementation(async ({ filePath }: { filePath: string }) => ({ success: true, data: {
+      isBinary: false, content: filePath === "/local/readme.md" ? "Local content" : "Foreign content",
+    } }));
+    const state = configureStore({ reducer: { appSettings, workspace, preview, backends: () => ({ activeBackendId: null }) } });
+    for (const backend of ["remote", "local"]) state.dispatch(openPreviewTab({ ownerKey: JSON.stringify([backend, "atlas-preview"]), tab: {
+      kind: "document", id: backend, doc: { path: `/${backend}/readme.md`, fileName: "readme.md", docType: "md" },
+    } }));
+    render(<Provider store={state}><MemoryRouter initialEntries={["/atlas"]}><DocumentViewerProvider>
+      <DocumentViewerPanel />
+    </DocumentViewerProvider></MemoryRouter></Provider>);
+    await screen.findByText("Local content");
+    expect(mocks.readFileText).toHaveBeenCalledExactlyOnceWith({ filePath: "/local/readme.md" });
+  });
+  it("retains an open draft document after its attachment is removed and releases it on tab close", async () => {
+    const file = new File(["Document"], "draft.txt", { type: "text/plain" });
+    const state = configureStore({ reducer: { appSettings, workspace, preview, backends: () => ({ activeBackendId: null }) } });
+    const fixture = (present: boolean) => <Provider store={state}><MemoryRouter initialEntries={["/atlas"]}><DocumentViewerProvider>
+      <ComposerAttachments files={present ? [{ file, type: "document" }] : []} onRemove={vi.fn()} />
+      <DocumentViewerPanel />
+    </DocumentViewerProvider></MemoryRouter></Provider>;
+    const view = render(fixture(true));
+    fireEvent.click(screen.getByRole("button", { name: "Open draft.txt" }));
+    await screen.findByText("Özgeçmiş içeriği");
+    view.rerender(fixture(false));
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    const [ownerKey, group] = Object.entries(state.getState().preview.byOwner)[0];
+    act(() => state.dispatch(closePreviewTab({ ownerKey, id: group.tabs[0].id })));
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:draft-document"));
+  });
   it.each(["txt", "md"])("opens an unsent %s attachment in the preview panel", async (extension) => {
     const file = new File(["Özgeçmiş içeriği"], `Özgeçmiş.${extension}`, { type: "text/plain" });
     const state = configureStore({ reducer: { appSettings, workspace, preview, backends: () => ({ activeBackendId: null }) } });

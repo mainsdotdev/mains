@@ -25,6 +25,7 @@ import { isRunTab, isNewRunTab, isReviewTab } from "@/features/workspace/lib/rep
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { useComposerContext } from "./use-composer-context";
 import { useTransientUploads, getTransientUploadsForOwner, moveTransientUploadsToOwner } from "./use-transient-uploads";
+import { createUploadSubmission } from "../lib/document-lifecycle";
 import { composerOwnerKey, workspaceViewKey, type NewConversationContext } from "../lib/ui-context";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
 import { useActiveSpace } from "@/hooks/use-active-space";
@@ -454,9 +455,9 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composeTargetRunId, composeTargetRun?.status, composerVoicePhase, checkCanResume]);
 
-  const clearInputState = useCallback(() => {
+  const clearAutomaticInput = useCallback(() => {
     setGoal("");
-    setUploadedFiles([]);
+    // Automatic instructions submit no files. Keep every unsent attachment.
     clearContext();
     if (!composeTargetRunId) {
       setDirectoryDrafts((current) => {
@@ -465,7 +466,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
         return next;
       });
     }
-  }, [setGoal, setUploadedFiles, clearContext, composeTargetRunId, ownerKey]);
+  }, [setGoal, clearContext, composeTargetRunId, ownerKey]);
 
   const handleCreateVoiceConversation = useCallback(async () => {
     if (!conversation.ready || sendingRef.current) return null;
@@ -545,6 +546,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     }
     sendingRef.current = true;
     const submitted = [...items];
+    const uploadSubmission = createUploadSubmission(files);
     let clientPromptId: string | undefined;
     let accepted = false;
     try {
@@ -553,7 +555,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       const continuing = !!targetRunId && canResume && !!targetRun;
       clientPromptId = beginPrompt(text, runContext, files, continuing ? targetRunId : null);
       if (continuing && (history.historical || !history.following)) void history.loadLatest();
-      const attachments = files.length > 0 ? await serializeAttachments(files) : undefined;
+      const attachments = uploadSubmission.files.length > 0 ? await serializeAttachments(uploadSubmission.files) : undefined;
       let nextRunId: string | null;
       if (continuing) {
         const success = await continueRun(targetRunId!, text, selectedModel, attachments, runContext, runAdditionalDirectories, conversationSettings, clientPromptId);
@@ -587,7 +589,8 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       } else if (!continuing) {
         dispatch(setRunConversationSettings({ key: nextOwnerKey, settings: newRunSettings }));
       }
-      if (getTransientUploadsForOwner(ownerKey) === files) setUploadedFiles([]);
+      setUploadedFiles(uploadSubmission.accept(getTransientUploadsForOwner(ownerKey)));
+      if (!composeTargetRunId) moveTransientUploadsToOwner(ownerKey, nextOwnerKey, { merge: true });
       attachAppRun?.(ownerKey, nextRunId, contextParts);
       const visible = store.getState().workspace;
       if (visible.workspaceViewKey !== viewKey ||
@@ -602,6 +605,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       if (mode !== "developer") navigate(`/code/runs/${nextRunId}`);
       return nextRunId;
     } finally {
+      uploadSubmission.close();
       if (!accepted && clientPromptId) rejectPrompt(clientPromptId);
       sendingRef.current = false;
     }
@@ -635,7 +639,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
           )) ?? false;
           if (success) {
             rememberSettings(conversationSettings, revision);
-            clearInputState();
+            clearAutomaticInput();
           }
         } else {
           const newRunId = await executeRun(
@@ -663,7 +667,8 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
               previewOwnerKey(contextParts, ownerKey),
               previewOwnerKey(contextParts, nextOwnerKey),
             );
-            clearInputState();
+            clearAutomaticInput();
+            if (!composeTargetRunId) moveTransientUploadsToOwner(ownerKey, nextOwnerKey, { merge: true });
             dispatch(setActiveTab(newRunId));
             if (mode !== "developer") navigate(`/code/runs/${newRunId}`);
           }
@@ -671,7 +676,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       };
       run();
     }
-  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, conversationSettings, newRunSettings, conversation.ready, beginSettingsIntent, rememberSettings, saveDraftSettingsToRun, selectedCollectionId, runAdditionalDirectories, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts, composeTargetRunId]);
+  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, conversationSettings, newRunSettings, conversation.ready, beginSettingsIntent, rememberSettings, saveDraftSettingsToRun, selectedCollectionId, runAdditionalDirectories, navigate, dispatch, activeRunId, canResume, activeRun, clearAutomaticInput, ownerKey, contextParts, composeTargetRunId]);
 
   const runLabel = (r: { title?: string; goal: string }) =>
     r.title?.trim() ? r.title : r.goal;

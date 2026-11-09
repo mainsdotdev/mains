@@ -9,6 +9,7 @@ import type { PptxRenderController } from "./renderers/render-pptx";
 import type { DocxRenderController } from "./renderers/render-docx";
 import { DocumentAnnotations } from "./document-annotations";
 import type { DocumentAnnotationSurface } from "../../lib/document-selection";
+import { createDocumentTask, documentIdentity } from "../../lib/document-lifecycle";
 
 type Status = "loading" | "ready" | "error";
 
@@ -201,6 +202,9 @@ export function DocumentRenderHost({
   const docxCtlRef = useRef<DocxRenderController | null>(null);
 
   const [status, setStatus] = useState<Status>("loading");
+  const identity = documentIdentity(doc, revision);
+  const [loadedIdentity, setLoadedIdentity] = useState(identity);
+  if (loadedIdentity !== identity) { setLoadedIdentity(identity); setStatus("loading"); }
   const [annotationSurface, setAnnotationSurface] = useState<DocumentAnnotationSurface | null>(null);
   const [failure, setFailure] = useState<string | undefined>();
   const [sheetNames, setSheetNames] = useState<string[]>([]);
@@ -226,18 +230,13 @@ export function DocumentRenderHost({
       return;
     }
 
-    let cancelled = false;
-    const controller = new AbortController();
+    const task = createDocumentTask();
     setStatus("loading");
     setAnnotationSurface(null);
     setFailure(undefined);
     setSheetNames([]);
     setActiveSheet(null);
     sheetCtlRef.current = null;
-    pptxCtlRef.current?.destroy();
-    pptxCtlRef.current = null;
-    docxCtlRef.current?.destroy();
-    docxCtlRef.current = null;
 
     void (async () => {
       // Reset shadow content and rebuild the zoom wrapper.
@@ -255,82 +254,77 @@ export function DocumentRenderHost({
       }
       root.appendChild(wrapper);
       wrapperRef.current = wrapper;
+      task.own(() => { wrapper.remove(); if (wrapperRef.current === wrapper) wrapperRef.current = null; });
 
       let buf: ArrayBuffer;
       try {
-        const res = await fetchLocalDocument(doc.path, { signal: controller.signal });
+        const res = await fetchLocalDocument(doc.path, { signal: task.signal });
         if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
         buf = await res.arrayBuffer();
       } catch (err) {
-        if (controller.signal.aborted) return;
-        if (!cancelled) {
+        task.fail(() => {
           console.error(`[document-viewer] failed to fetch ${doc.path}`, err);
           setFailure(err instanceof Error ? err.message : undefined);
           setStatus("error");
-        }
+        });
         return;
       }
-      if (cancelled) return;
+      if (!task.current()) return;
 
       try {
         const key = pickRenderer(doc.docType);
         if (key === "docx") {
           const { renderDocx } = await import("./renderers/render-docx");
+          if (!task.current()) return;
           const ctl = await renderDocx(buf, wrapper, {
             viewport,
             zoom: zoomRef.current,
           });
-          if (cancelled) {
-            ctl.destroy();
-            return;
-          }
+          task.own(() => { if (docxCtlRef.current === ctl) docxCtlRef.current = null; ctl.destroy(); });
+          if (!task.current()) return;
           docxCtlRef.current = ctl;
           setAnnotationSurface(ctl.annotationSurface);
           ctl.setZoom(zoomRef.current);
         } else if (key === "xlsx") {
           const { renderXlsx } = await import("./renderers/render-xlsx");
+          if (!task.current()) return;
           const ctl = await renderXlsx(buf, wrapper);
-          if (cancelled) return;
+          task.own(() => { if (sheetCtlRef.current === ctl) sheetCtlRef.current = null; });
+          if (!task.current()) return;
           sheetCtlRef.current = ctl;
           setSheetNames(ctl.sheetNames);
           setActiveSheet(ctl.sheetNames[0] ?? null);
         } else {
           const { renderPptx } = await import("./renderers/render-pptx");
+          if (!task.current()) return;
           const width = hostRef.current?.clientWidth || 960;
           const ctl = await renderPptx(buf, wrapper, {
             width,
             zoom: zoomRef.current,
           });
-          if (cancelled) {
-            ctl.destroy();
-            return;
-          }
+          task.own(() => { if (pptxCtlRef.current === ctl) pptxCtlRef.current = null; ctl.destroy(); });
+          if (!task.current()) return;
           pptxCtlRef.current = ctl;
           setAnnotationSurface(ctl.annotationSurface);
         }
-        if (cancelled) return;
+        if (!task.current()) return;
         // Treat an empty render as a failure (pure-JS PPTX can silently produce
         // nothing) so the fallback "Open with…" path kicks in.
         if (wrapper.childNodes.length === 0) throw new Error("empty render");
-        setStatus("ready");
+        task.ready(() => setStatus("ready"));
       } catch (err) {
-        if (!cancelled) {
+        task.fail(() => {
           console.error(
             `[document-viewer] failed to render ${doc.docType} ${doc.path}`,
             err,
           );
           setStatus("error");
-        }
+        });
       }
     })();
 
     return () => {
-      cancelled = true;
-      controller.abort();
-      pptxCtlRef.current?.destroy();
-      pptxCtlRef.current = null;
-      docxCtlRef.current?.destroy();
-      docxCtlRef.current = null;
+      task.close();
     };
   }, [revision, doc.path, doc.docType]);
 

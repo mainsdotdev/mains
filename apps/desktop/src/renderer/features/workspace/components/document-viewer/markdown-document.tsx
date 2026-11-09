@@ -1,16 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Text } from "@/components/ui";
 import { appApi } from "@/lib/transport";
-import { fetchLocalDocument } from "@/lib/local-document-url";
+import { fetchLocalDocument, localDocumentUrlRevision, subscribeLocalDocumentUrls } from "@/lib/local-document-url";
 import { TEXT_PREVIEW_MAX_BYTES } from "@mains/contracts/output-files";
 import { markdownComponents } from "@/components/markdown-components";
 import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
 import { isAbsoluteFilePath, markdownFileUrlTransform, resolveDocumentImagePath } from "@/lib/file-path";
 import { splitMarkdownFrontmatter } from "../../lib/markdown-frontmatter";
+import { createDocumentTask, documentIdentity } from "../../lib/document-lifecycle";
 
 /** Resolve README image references against the file, then use the signed image renderer. */
 function documentImageUrl(url: string, path: string): string {
@@ -54,59 +55,60 @@ const documentSanitizeSchema = {
  * regular-file, size and binary guards. Unsent attachments use their local
  * blob URL with the same preview size limit and null-byte check.
  *
- * Keyed by path at the call site: a new document is a new component, so its
- * state starts empty and the panel never paints one file's body under
- * another's name.
+ * Source and transport revisions retire the previous read and immediately
+ * hide its body, including when a preview tab keeps the same component.
  */
 export function MarkdownDocument({ path, docType = "md" }: { path: string; docType?: "md" | "txt" }) {
+  const revision = useSyncExternalStore(subscribeLocalDocumentUrls, localDocumentUrlRevision);
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const identity = documentIdentity({ path, docType }, revision);
+  const [loadedIdentity, setLoadedIdentity] = useState(identity);
+  if (identity !== loadedIdentity) { setLoadedIdentity(identity); setContent(null); setError(null); }
   const document = useMemo(() => content === null ? null : splitMarkdownFrontmatter(content), [content]);
 
   useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
+    const task = createDocumentTask();
 
     void (async () => {
       try {
         if (path.startsWith("blob:")) {
-          const response = await fetchLocalDocument(path, { signal: controller.signal });
+          const response = await fetchLocalDocument(path, { signal: task.signal });
           const blob = await response.blob();
-          if (cancelled) return;
+          if (!task.current()) return;
           if (blob.size > TEXT_PREVIEW_MAX_BYTES) {
-            setError(`This text document exceeds the ${TEXT_PREVIEW_MAX_BYTES / (1024 * 1024)} MiB inline preview limit.`);
+            task.fail(() => setError(`This text document exceeds the ${TEXT_PREVIEW_MAX_BYTES / (1024 * 1024)} MiB inline preview limit.`));
             return;
           }
           const bytes = new Uint8Array(await blob.arrayBuffer());
-          if (cancelled) return;
+          if (!task.current()) return;
           if (bytes.subarray(0, 8192).includes(0)) {
-            setError("This file isn't text");
+            task.fail(() => setError("This file isn't text"));
             return;
           }
-          setContent(new TextDecoder().decode(bytes));
+          task.ready(() => setContent(new TextDecoder().decode(bytes)));
           return;
         }
         const res = await appApi.fileExplorer.readFileText({ filePath: path });
-        if (cancelled) return;
+        if (!task.current()) return;
         if (!res.success) {
-          setError(res.error ?? "Failed to read file");
+          task.fail(() => setError(res.error ?? "Failed to read file"));
           return;
         }
         if (res.data.isBinary) {
-          setError("This file isn't text");
+          task.fail(() => setError("This file isn't text"));
           return;
         }
-        setContent(res.data.content);
+        task.ready(() => setContent(res.data.content));
       } catch {
-        if (!cancelled) setError("Failed to read file");
+        task.fail(() => setError("Failed to read file"));
       }
     })();
 
     return () => {
-      cancelled = true;
-      controller.abort();
+      task.close();
     };
-  }, [path]);
+  }, [path, docType, revision]);
 
   if (error) {
     return (

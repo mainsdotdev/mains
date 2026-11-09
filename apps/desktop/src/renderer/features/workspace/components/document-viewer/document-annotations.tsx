@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button, SegmentedTabs, Textarea, toast } from "@/components/ui";
 import { Close } from "@/components/ui/icons";
 import type { AnnotatableDocumentType } from "@mains/contracts/document-annotations";
@@ -8,6 +8,8 @@ import { addContextItemForKey } from "@/lib/redux/slices/workspaceSlice";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { describeDocumentTarget, documentTargetRects, observeDocumentSelection, type DocumentAnnotationSurface, type DocumentSelectionMode, type DocumentTarget } from "../../lib/document-selection";
 import { captureDocumentPage } from "../../lib/document-capture";
+import { annotationViewIdentity, createAnnotationCapture, documentIdentity } from "../../lib/document-lifecycle";
+import { localDocumentUrlRevision, subscribeLocalDocumentUrls } from "@/lib/local-document-url";
 
 interface Outline { x: number; y: number; width: number; height: number; label: string; selected: boolean }
 interface Props { surface: DocumentAnnotationSurface; doc: DocumentViewerDoc; onExit: () => void }
@@ -16,7 +18,10 @@ interface Props { surface: DocumentAnnotationSurface; doc: DocumentViewerDoc; on
 export function DocumentAnnotations(props: Props) {
   const ownerKey = useAppSelector((state) => state.workspace.composerContextKey);
   const ready = useAppSelector((state) => state.workspace.composerContextReady);
-  return <DocumentAnnotationEditor key={ownerKey} {...props} ownerKey={ownerKey} ready={ready} />;
+  const revision = useSyncExternalStore(subscribeLocalDocumentUrls, localDocumentUrlRevision);
+  const source = documentIdentity(props.doc, revision);
+  const key = annotationViewIdentity(ownerKey, source, props.surface);
+  return <DocumentAnnotationEditor key={key} {...props} ownerKey={ownerKey} ready={ready} />;
 }
 function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Props & { ownerKey: string; ready: boolean }) {
   const dispatch = useAppDispatch();
@@ -27,6 +32,8 @@ function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Pro
   const [hovered, setHovered] = useState<DocumentTarget | null>(null);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
+  const [capture] = useState(createAnnotationCapture);
+  useEffect(() => capture.attach(), [capture]);
   const [outlines, setOutlines] = useState<Outline[]>([]);
   const [card, setCard] = useState({ x: 12, y: 12, width: 320 });
   const [hintBottom, setHintBottom] = useState(12);
@@ -103,20 +110,24 @@ function DocumentAnnotationEditor({ surface, doc, onExit, ownerKey, ready }: Pro
   useEffect(() => { if (selected.length) input.current?.focus({ preventScroll: true }); }, [selected.length]);
 
   const add = async () => {
-    if (!selected.length || busy || !ready) return;
+    const attempt = capture.begin(ready, selected.length);
+    if (!attempt) return;
     setBusy(true);
-    const targets = [...selected]; const elements = targets.map(describeDocumentTarget);
+    const targets = [...selected];
     const text = comment.trim(); const key = ownerKey;
     try {
+      const elements = targets.map(describeDocumentTarget);
       const screenshotData = await captureDocumentPage(targets[0].page, elements, documentType);
       dispatch(addContextItemForKey({ key, item: {
         kind: "document", id: crypto.randomUUID(), filePath: doc.path, fileName: doc.fileName, documentType,
         pageNumber: targets[0].pageNumber, elements, comment: text, screenshotData,
       } }));
-      setSelected([]); setComment(""); setHovered(null);
-      toast.success("Added document annotation to chat");
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Could not capture this page"); }
-    finally { setBusy(false); }
+      if (attempt.visible()) {
+        setSelected([]); setComment(""); setHovered(null);
+        toast.success("Added document annotation to chat");
+      }
+    } catch (error) { if (attempt.visible()) toast.error(error instanceof Error ? error.message : "Could not capture this page"); }
+    finally { attempt.finish(); if (attempt.visible()) setBusy(false); }
   };
   return <div ref={layer} data-document-annotations="" className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
     <div className="pointer-events-auto absolute right-3 top-3 rounded-full bg-primary-50 shadow-lg dark:bg-primary-900">

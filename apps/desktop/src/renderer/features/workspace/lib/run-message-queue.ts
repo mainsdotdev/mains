@@ -3,6 +3,7 @@ import { getTransport } from "@/lib/transport";
 import { clearTransientUploads, getTransientUploadsForOwner } from "../hooks/use-transient-uploads";
 import { serializeAttachments } from "./run-helpers";
 import { createRunQueueController } from "./run-queue-controller";
+import { transientDocumentFiles } from "./document-lifecycle";
 
 export const runMessageQueue = createRunQueueController({
   getState: store.getState,
@@ -10,7 +11,9 @@ export const runMessageQueue = createRunQueueController({
   getTransport,
   serializeUploads: async (ownerKey) => {
     const files = getTransientUploadsForOwner(ownerKey);
-    return files.length ? serializeAttachments(files) : undefined;
+    const release = transientDocumentFiles.hold(files);
+    try { return files.length ? await serializeAttachments(files) : undefined; }
+    finally { release(); }
   },
   clearUploads: clearTransientUploads,
 });

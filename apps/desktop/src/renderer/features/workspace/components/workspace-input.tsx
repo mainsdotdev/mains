@@ -813,8 +813,6 @@ export function WorkspaceInput({
 
   const handleRemoveUploadedFile = useCallback(
     (index: number) => {
-      const removed = uploadedFiles[index];
-      if (removed?.preview) URL.revokeObjectURL(removed.preview);
       onUploadedFilesChange?.(uploadedFiles.filter((_, i) => i !== index));
     },
     [uploadedFiles, onUploadedFilesChange],

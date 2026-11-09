@@ -11,14 +11,16 @@ import { PdfDocument } from "./document-viewer/pdf-document";
 import { DocumentViewerToolbar } from "./document-viewer/document-viewer-toolbar";
 import { DocumentFallback } from "./document-viewer/document-fallback";
 import { documentPreviewLimit } from "@mains/contracts/output-files";
+import { documentOwnerMatchesBackend } from "../lib/document-lifecycle";
 
 /** Each file owns its zoom, scroll containers and renderer for its open lifetime. */
 export function DocumentViewerPanel() {
   const preview = usePreviewPanel();
   const groups = useAppSelector((state) => state.preview.byOwner);
-  return <>{Object.entries(groups).flatMap(([ownerKey, group]) => group.tabs.flatMap((tab) => tab.kind === "document"
+  const backendId = useAppSelector((state) => state.backends.activeBackendId);
+  return <>{Object.entries(groups).flatMap(([ownerKey, group]) => documentOwnerMatchesBackend(ownerKey, backendId) ? group.tabs.flatMap((tab) => tab.kind === "document"
     ? [<DocumentPreview key={tab.id} currentDoc={tab.doc}
-        active={preview.isOpen && preview.ownerKey === ownerKey && preview.activeTab?.id === tab.id} />] : []))}</>;
+        active={preview.isOpen && preview.ownerKey === ownerKey && preview.activeTab?.id === tab.id} />] : []) : [])}</>;
 }
 
 function DocumentPreview({ currentDoc, active }: { currentDoc: DocumentViewerDoc; active: boolean }) {

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
-import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
+import type { PDFDocumentProxy } from "pdfjs-dist";
 import { Text } from "@/components/ui";
 import { fetchLocalDocument, localDocumentUrlRevision, subscribeLocalDocumentUrls } from "@/lib/local-document-url";
 import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 import { DocumentFallback } from "./document-fallback";
 import { DocumentAnnotations } from "./document-annotations";
 import type { DocumentAnnotationSurface } from "../../lib/document-selection";
+import { createDocumentTask, documentIdentity } from "../../lib/document-lifecycle";
 import "./pdf-text-layer.css";
 
 type Status = "loading" | "ready" | "error";
@@ -54,16 +55,16 @@ export function PdfDocument({ doc, zoom, annotating = false, onExitAnnotation }:
   const scrollRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [failure, setFailure] = useState<string | undefined>();
-  const [loadedRevision, setLoadedRevision] = useState(revision);
-  if (loadedRevision !== revision) {
-    setLoadedRevision(revision);
-    setStatus("loading");
-    setFailure(undefined);
-  }
+  const identity = documentIdentity(doc, revision);
+  const [loadedIdentity, setLoadedIdentity] = useState(identity);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [firstPageSize, setFirstPageSize] = useState<PageSize | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const [annotationSurface, setAnnotationSurface] = useState<DocumentAnnotationSurface | null>(null);
+  if (loadedIdentity !== identity) {
+    setLoadedIdentity(identity); setStatus("loading"); setFailure(undefined);
+    setPdf(null); setFirstPageSize(null);
+  }
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -79,37 +80,39 @@ export function PdfDocument({ doc, zoom, annotating = false, onExitAnnotation }:
 
   // Reads are scoped to the current document and backend.
   useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    let loadingTask: PDFDocumentLoadingTask | null = null;
+    const task = createDocumentTask();
 
     void (async () => {
       try {
-        const res = await fetchLocalDocument(doc.path, { signal: controller.signal });
+        const res = await fetchLocalDocument(doc.path, { signal: task.signal });
         if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
         const data = new Uint8Array(await res.arrayBuffer());
+        if (!task.current()) return;
         const pdfjs = await loadPdfjs();
-        if (cancelled) return;
-        loadingTask = pdfjs.getDocument({ data });
+        if (!task.current()) return;
+        const loadingTask = pdfjs.getDocument({ data });
+        task.own(() => loadingTask.destroy());
         const loaded = await loadingTask.promise;
+        if (!task.current()) return;
         const firstPage = await loaded.getPage(1);
-        if (cancelled) return;
+        if (!task.current()) return;
         const viewport = firstPage.getViewport({ scale: 1 });
-        setPdf(loaded);
-        setFirstPageSize({ width: viewport.width, height: viewport.height });
-        setStatus("ready");
+        task.ready(() => {
+          setPdf(loaded);
+          setFirstPageSize({ width: viewport.width, height: viewport.height });
+          setStatus("ready");
+        });
       } catch (err) {
-        if (cancelled) return;
-        console.error(`[document-viewer] failed to render pdf ${doc.path}`, err);
-        setFailure(err instanceof Error ? err.message : undefined);
-        setStatus("error");
+        task.fail(() => {
+          console.error(`[document-viewer] failed to render pdf ${doc.path}`, err);
+          setFailure(err instanceof Error ? err.message : undefined);
+          setStatus("error");
+        });
       }
     })();
 
     return () => {
-      cancelled = true;
-      controller.abort();
-      void loadingTask?.destroy();
+      task.close();
     };
   }, [revision, doc.path]);
 
@@ -192,14 +195,12 @@ function PdfPage({
       return;
     }
 
-    let cancelled = false;
-    let task: RenderTask | null = null;
-    let textTask: InstanceType<PdfJs["TextLayer"]> | null = null;
+    const task = createDocumentTask();
 
     void (async () => {
       try {
         const page = await pdf.getPage(pageNumber);
-        if (cancelled) return;
+        if (!task.current()) return;
         const base = page.getViewport({ scale: 1 });
         setSize((prev) =>
           prev && prev.width === base.width && prev.height === base.height
@@ -223,35 +224,36 @@ function PdfPage({
         canvas.style.height = "100%";
 
         const pdfjs = await loadPdfjs();
-        if (cancelled) return;
-        task = page.render({
+        if (!task.current()) return;
+        const renderTask = page.render({
           canvas,
           viewport,
           transform:
             outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined,
         });
+        task.own(() => renderTask.cancel());
         const textLayer = document.createElement("div");
         textLayer.className = "document-text-layer";
         textLayer.style.setProperty("--total-scale-factor", String(viewport.scale * viewport.userUnit));
-        textTask = new pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: textLayer, viewport });
+        const textTask = new pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: textLayer, viewport });
+        task.own(() => textTask.cancel());
         const textReady = textTask.render().catch((error: unknown) => {
-          if (!cancelled) console.warn(`[document-viewer] PDF text unavailable on page ${pageNumber}`, error);
+          if (task.current()) console.warn(`[document-viewer] PDF text unavailable on page ${pageNumber}`, error);
         });
-        await Promise.all([task.promise, textReady]);
-        if (!cancelled) {
+        await Promise.all([renderTask.promise, textReady]);
+        task.ready(() => {
           textTask.textDivs.forEach((node, index) => node.setAttribute("data-document-text", `page-${pageNumber}-text-${index}`));
           pageEl.replaceChildren(canvas, textLayer);
-        }
+        });
       } catch (err) {
-        if (cancelled || (err as Error)?.name === "RenderingCancelledException") return;
-        console.error(`[document-viewer] failed to render pdf page ${pageNumber}`, err);
+        task.fail(() => {
+          if ((err as Error)?.name !== "RenderingCancelledException") console.error(`[document-viewer] failed to render pdf page ${pageNumber}`, err);
+        });
       }
     })();
 
     return () => {
-      cancelled = true;
-      task?.cancel();
-      textTask?.cancel();
+      task.close();
     };
   }, [pdf, pageNumber, scale, isNearViewport]);
 
