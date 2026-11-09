@@ -724,6 +724,10 @@ DOCX document previews preserve paper dimensions and columns while fitting the w
 
 _Avoid_: applying a stale dialog or save reply to a new owner; parking a request after native window acquisition; letting another renderer consume the main window's intent; freeing the onboarding save latch before its shell commit; treating a failed native entry as completed; replacing workspace bounds with temporary onboarding geometry.
 
+## Application updates
+
+`src/shared/update-lifecycle.ts` owns native update phases, binding retirement, check/install admission and renderer read receipts (inventory 83; [transition rules](docs/design/update-lifecycle.md)). Only packaged stable macOS builds use the automatic updater; Windows, development and prerelease builds retain manual upgrades. The Electron adapter owns its feed, startup readiness, one hourly timer and event subscriptions, so automatic and explicit checks share admission. A confirmed downloaded package survives delayed check/error events and remains explicitly installable; install claims precede native effects, and failures preserve the package for retry. Unregistering update IPC permanently closes admission, removes the timer/readiness/projection listeners and leaves only a temporary error drain until process exit for uncancelable native work. Local-shell pushes invalidate pending renderer reads; unmount retires their receipts, and rejected IPC promises are consumed. Update channels and DTO shapes remain unchanged, and local update controls stay local while another backend is selected.
+
 ## Shell header
 
 **shell header**:

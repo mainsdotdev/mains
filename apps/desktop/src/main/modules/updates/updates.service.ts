@@ -1,120 +1,87 @@
 import { app, autoUpdater } from "electron";
-import { updateElectronApp, UpdateSourceType } from "update-electron-app";
 import { emit } from "@mains/backend/ipc-kit";
+import { CHANNELS } from "@mains/contracts/channels";
+import { createUpdateLifecycle } from "../../../shared/update-lifecycle";
 import type { UpdateState } from "./updates.dto";
 
 function supportsAutomaticUpdates(): boolean {
   return app.isPackaged && process.platform === "darwin" && !app.getVersion().includes("-");
 }
+const lifecycle = createUpdateLifecycle((state) => emit(CHANNELS.updates.status, state));
+let initialized = false;
+let ready: (() => void) | null = null;
+let interval: ReturnType<typeof setInterval> | null = null;
+const listeners: Array<() => void> = [];
 
-// ─────────────────────────────────────────────────────────────
-// Service - Auto-update business logic using update-electron-app
-// ─────────────────────────────────────────────────────────────
+function listen(event: string, callback: (...args: any[]) => void) {
+  const events = autoUpdater as NodeJS.EventEmitter;
+  events.on(event, callback);
+  listeners.push(() => events.removeListener(event, callback));
+}
+function detach() { for (const off of listeners.splice(0)) off(); }
+function start() {
+  ready = null;
+  if (!lifecycle.active()) return;
+  const scope = lifecycle.bind();
+  listen("checking-for-update", () => scope.receive({ type: "checking" }));
+  listen("update-available", () => scope.receive({ type: "available" }));
+  listen("update-not-available", () => scope.receive({ type: "not-available" }));
+  listen("update-downloaded", (_event, _notes, version) => scope.receive({ type: "downloaded", info: { version: version || "new version" } }));
+  listen("error", (error: Error) => {
+    scope.receive({ type: "error", error: error.message || "Update failed" });
+  });
+  try {
+    // Own the feed and timer together so scheduled and explicit checks use the
+    // same admission rule. update-electron-app schedules independent checks.
+    autoUpdater.setFeedURL({
+      url: `https://update.electronjs.org/mainsdotdev/mains/darwin-${process.arch}/${app.getVersion()}`,
+      headers: { "User-Agent": `Mains/${app.getVersion()} (darwin: ${process.arch})` },
+      serverType: "default",
+    });
+  } catch (error) {
+    scope.close(); detach(); initialized = false;
+    lifecycle.receive({ type: "error", error: error instanceof Error ? error.message : "Could not initialize updates" });
+    return;
+  }
+  lifecycle.check(() => autoUpdater.checkForUpdates());
+  if (lifecycle.active()) interval = setInterval(() => lifecycle.check(() => autoUpdater.checkForUpdates()), 3600000);
+}
+
 export const updatesService = {
-  _state: {
-    status: "idle",
-    info: null,
-    progress: null,
-    error: null,
-  } as UpdateState,
-
-  _initialized: false,
-
   initialize() {
-    if (this._initialized) return;
-    this._initialized = true;
-
-    if (!supportsAutomaticUpdates()) {
-      console.log("Updates: this build uses manual installer upgrades");
-      return;
-    }
-
-    // Register event listeners to push state to renderer
-    autoUpdater.on("checking-for-update", () => {
-      this._updateState({ status: "checking", info: null, progress: null, error: null });
-    });
-
-    autoUpdater.on("update-available", () => {
-      this._updateState({ status: "available", info: null, progress: null, error: null });
-    });
-
-    autoUpdater.on("update-not-available", () => {
-      this._updateState({ status: "not-available", info: null, progress: null, error: null });
-    });
-
-    autoUpdater.on("update-downloaded", (_event: any, _releaseNotes: string, releaseName: string) => {
-      this._updateState({
-        status: "downloaded",
-        info: { version: releaseName || "new version" },
-        progress: null,
-        error: null,
-      });
-    });
-
-    autoUpdater.on("error", (err: Error) => {
-      // "command is disabled" means updater is already busy — not a real error
-      if (err.message?.includes("command is disabled")) return;
-
-      this._updateState({
-        status: "error",
-        info: this._state.info,
-        progress: null,
-        error: err.message,
-      });
-    });
-
-    updateElectronApp({
-      updateSource: {
-        type: UpdateSourceType.ElectronPublicUpdateService,
-        repo: "mainsdotdev/mains",
-      },
-      updateInterval: "1 hour",
-      notifyUser: false,
-    });
+    if (initialized || !lifecycle.active()) return;
+    initialized = true;
+    if (!supportsAutomaticUpdates()) return;
+    if (app.isReady()) start();
+    else { ready = start; app.once("ready", ready); }
   },
-
   async checkForUpdates(): Promise<UpdateState> {
-    if (!supportsAutomaticUpdates()) {
-      this._state = { status: "not-available", info: null, progress: null, error: null };
-      return this._state;
-    }
-
-    try {
-      autoUpdater.checkForUpdates();
-      return this._state;
-    } catch (err: any) {
-      // Update failures surface via state, not as a thrown error — the UI
-      // renders `status: "error"` rather than a failed request.
-      this._updateState({
-        status: "error",
-        info: null,
-        progress: null,
-        error: err.message || "Failed to check for updates",
-      });
-      return this._state;
-    }
+    if (!lifecycle.active()) return lifecycle.snapshot();
+    if (!supportsAutomaticUpdates()) { lifecycle.unavailable(); return lifecycle.snapshot(); }
+    if (!initialized) { this.initialize(); return lifecycle.snapshot(); }
+    if (ready) return lifecycle.snapshot();
+    return lifecycle.check(() => autoUpdater.checkForUpdates());
   },
-
-  async downloadUpdate(): Promise<UpdateState> {
-    return this._state;
-  },
-
+  async downloadUpdate(): Promise<UpdateState> { return lifecycle.snapshot(); },
   quitAndInstall(): null {
     if (!app.isPackaged) throw new Error("Cannot install updates in development mode");
-    if (!supportsAutomaticUpdates()) {
-      throw new Error("Install the latest release to upgrade this build");
-    }
-
-    autoUpdater.quitAndInstall();
+    if (!supportsAutomaticUpdates()) throw new Error("Install the latest release to upgrade this build");
+    lifecycle.install(() => autoUpdater.quitAndInstall());
     return null;
   },
-
-  getStatus(): UpdateState {
-    return { ...this._state };
-  },
-
-  _updateState(newState: UpdateState) {
-    this._state = newState;
-    emit("updates:status", newState);
+  getStatus(): UpdateState { return lifecycle.snapshot(); },
+  shutdown() {
+    if (!lifecycle.active()) return;
+    lifecycle.close();
+    if (ready) { app.removeListener("ready", ready); ready = null; }
+    if (interval !== null) { clearInterval(interval); interval = null; }
+    if (listeners.length) {
+      // Native work cannot be canceled. Absorb its late EventEmitter errors
+      // until process exit without retaining any projection callbacks.
+      const absorb = () => {};
+      autoUpdater.on("error", absorb);
+      app.once("will-quit", () => autoUpdater.removeListener("error", absorb));
+    }
+    detach();
   },
 };
