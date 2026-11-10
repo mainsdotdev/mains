@@ -15,6 +15,7 @@ struct PairingView: View {
     @State private var review: PairingLink?
     @State private var cameraReady = false
     @State private var cameraIssue: String?
+    @State private var demoError: String?
     @State private var pairingTask: Task<Void, Never>?
     @FocusState private var editingLink: Bool
 
@@ -47,6 +48,19 @@ struct PairingView: View {
                         .font(.body.weight(.semibold)).foregroundStyle(AppBrand.accent)
                         .frame(minHeight: 44).padding(.top, 8)
                         .accessibilityIdentifier("switchPairingEntry")
+                    }
+                    if session.pairing == nil {
+                        VStack(spacing: 12) {
+                            Text("No computer to pair? Explore Mains with sample data.")
+                                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            Button("Try Demo Mode") {
+                                do { try session.startDemo(); dismiss() }
+                                catch { demoError = error.localizedDescription }
+                            }
+                            .font(.body.weight(.semibold)).foregroundStyle(AppBrand.accent).frame(minHeight: 44)
+                            .disabled(session.pairingInProgress).accessibilityIdentifier("startDemoFromPairing")
+                            if let demoError { Text(demoError).font(.footnote).foregroundStyle(.red) }
+                        }.padding(.top, 28)
                     }
                 }
                 .padding(.horizontal, 16).padding(.bottom, 32)

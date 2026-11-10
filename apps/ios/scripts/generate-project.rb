@@ -19,6 +19,8 @@ source_group = project.main_group.new_group('Sources', 'Sources')
 end
 resources = project.main_group.new_group('Resources', 'Resources')
 app.resources_build_phase.add_file_reference(resources.new_file('Assets.xcassets'))
+demo = project.main_group.new_file('Sources/MainsCore/Resources/DemoSnapshot.json')
+app.resources_build_phase.add_file_reference(demo)
 project.main_group.new_file('Info.plist')
 project.main_group.new_file('Info.Debug.plist')
 test_group = project.main_group.new_group('UITests', 'UITests')

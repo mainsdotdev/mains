@@ -8,7 +8,7 @@ This is the independent SwiftUI iPhone app. Do not modify `apps/mobile` to imple
 - The credential belongs only in this app's Keychain service. Disposable cache files never contain tokens or live stream previews.
 - Retain a mutation's original command ID, payload, computer and total deadline during reconnection. Only connection loss automatically retries. Unknown receipt outcomes block fresh sends and retain the original identity for an explicit delivery check.
 - Fence asynchronous writers by pairing ownership, transport generation and viewed conversation. History is one bounded `profile: mobile` page; do not append entire histories or tool outputs.
-- Native iOS supports the sidebar, shared home/conversation composer, durable conversation model/permission settings, bounded file/photo attachments, grouped tool calls with bounded output/diff previews, inline conversation images, document cards and native file/PDF previews up to 25 MB. Approval replies, plugins and full Markdown/math rendering remain later work. Surface these limits accurately.
+- Native iOS supports the sidebar, shared home/conversation composer, durable conversation model/permission settings, bounded file/photo attachments, grouped tool calls with bounded output/diff previews, inline conversation images, document cards native file/PDF previews up to 25 MB, and fully on-device Demo Mode. Demo keeps mutations and imported files in memory, uses a separate launch flag, and never changes real pairing credentials, cache or provider consents. Approval replies, plugins and full Markdown/math rendering remain later work. Surface these limits accurately.
 
 Run from `apps/ios`:
 

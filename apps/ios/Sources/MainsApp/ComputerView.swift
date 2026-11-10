@@ -24,8 +24,11 @@ struct ComputerView: View {
 
     var body: some View {
         List {
-            SettingsSection("Connected computer") {
-                if let pairing = session.pairing {
+            SettingsSection(session.isDemo ? "Demo Mode" : "Connected computer") {
+                if session.isDemo {
+                    SettingsRow(title: "Demo Mac", subtitle: "Runs on this iPhone. No AI service is contacted. Demo changes reset when the app restarts.", value: "Demo")
+                    Button { pair = true } label: { SettingsRow(title: "Pair a computer", subtitle: "Connect to Mains with a pairing code", symbol: "chevron.right") }
+                } else if let pairing = session.pairing {
                     computerSummary
                     SettingsRow(title: "Address", subtitle: fallbackAddresses, value: endpoint.map(Self.host) ?? "—")
                     SettingsRow(title: "Mains version", value: descriptor?.appVersion ?? "—")
@@ -41,7 +44,7 @@ struct ComputerView: View {
                     Button { Task { await session.refresh() } } label: {
                         HStack {
                             SettingsRow(title: session.refreshing ? "Syncing…" : "Sync now",
-                                        subtitle: session.isConnected ? "Pull the latest runs, workspaces and settings" : "Available once Mains is reachable")
+                                        subtitle: session.isDemo ? "Refresh the on-device sample conversations" : session.isConnected ? "Pull the latest runs, workspaces and settings" : "Available once Mains is reachable")
                             if session.refreshing { ProgressView().controlSize(.small) }
                         }
                     }
@@ -83,7 +86,7 @@ struct ComputerView: View {
             }
             SettingsSection("This phone") {
                 SettingsRow(title: "Name", value: UIDevice.current.name)
-                if let pairing = session.pairing {
+                if let pairing = session.pairing, !session.isDemo {
                     SettingsRow(title: "Device ID", subtitle: "As listed by Mains on your computer", value: String(pairing.deviceId.prefix(8)))
                 }
                 SettingsRow(title: "Version", value: Self.appVersion)
@@ -92,7 +95,7 @@ struct ComputerView: View {
             }
             SettingsSection("Legal & Support") {
                 NavigationLink { AIDataSharingSettingsView(session: session) } label: {
-                    SettingsRow(title: "AI Data Sharing", subtitle: "Review or reset provider permissions")
+                    SettingsRow(title: "AI Data Sharing", subtitle: session.isDemo ? "Demo choices are separate from real provider permissions" : "Review or reset provider permissions")
                 }
                 .accessibilityIdentifier("aiDataSharing")
                 externalRow("Privacy Policy", subtitle: "How Mains handles your data", url: "https://mains.dev/privacy")
@@ -102,8 +105,13 @@ struct ComputerView: View {
             }
             if session.pairing != nil {
                 SettingsSection {
-                    Button(role: .destructive) { forget = true } label: { SettingsRow(title: "Forget this computer", destructive: true) }
-                        .accessibilityIdentifier("forgetComputer")
+                    if session.isDemo {
+                        Button(role: .destructive) { session.exitDemo(); dismiss() } label: { SettingsRow(title: "Exit Demo Mode", destructive: true) }
+                            .accessibilityIdentifier("exitDemo")
+                    } else {
+                        Button(role: .destructive) { forget = true } label: { SettingsRow(title: "Forget this computer", destructive: true) }
+                            .accessibilityIdentifier("forgetComputer")
+                    }
                 }
             }
         }
@@ -228,10 +236,10 @@ private struct AIDataSharingSettingsView: View {
     var body: some View {
         List {
             Section {
-                Text("Before Mains on your computer sends a request to a third-party AI service, Mains asks for permission for that computer and provider. Switching providers asks again. These choices are stored only on this phone.")
+                Text(session.isDemo ? "Demo Mode stays on this iPhone. These demo choices never grant permission to share data with a real AI service. Mains asks separately after pairing a computer." : "Before Mains on your computer sends a request to a third-party AI service, Mains asks for permission for that computer and provider. Switching providers asks again. These choices are stored only on this phone.")
                     .font(.subheadline).foregroundStyle(.secondary).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
             }
-            SettingsSection("This computer") {
+            SettingsSection(session.isDemo ? "Demo providers" : "This computer") {
                 ForEach(providers, id: \.self) { id in
                     let allowed = session.hasConsent(providerID: id)
                     if allowed {
@@ -239,11 +247,11 @@ private struct AIDataSharingSettingsView: View {
                             revokeBackendID = session.pairing?.descriptor.backendId
                             revokeProvider = id
                         } label: {
-                            SettingsRow(title: Provider.name(id), subtitle: Provider.recipient(id) + " · Tap to revoke", value: "Allowed")
+                            SettingsRow(title: Provider.name(id), subtitle: session.isDemo ? "Demo only · Tap to reset" : Provider.recipient(id) + " · Tap to revoke", value: session.isDemo ? "Demo" : "Allowed")
                         }
                         .accessibilityIdentifier("consent-" + id)
                     } else {
-                        SettingsRow(title: Provider.name(id), subtitle: Provider.recipient(id), value: "Ask before sending")
+                        SettingsRow(title: Provider.name(id), subtitle: session.isDemo ? "On-device sample data" : Provider.recipient(id), value: session.isDemo ? "Not tried yet" : "Ask before sending")
                             .accessibilityIdentifier("consent-" + id)
                     }
                 }
@@ -261,21 +269,21 @@ private struct AIDataSharingSettingsView: View {
         .modifier(SettingsListStyle())
         .navigationTitle("AI Data Sharing").navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .confirmationDialog("Revoke \(revokeProvider.map(Provider.name) ?? "AI") permission?", isPresented: Binding(
+        .confirmationDialog(session.isDemo ? "Reset the \(revokeProvider.map(Provider.name) ?? "AI") demo disclosure?" : "Revoke \(revokeProvider.map(Provider.name) ?? "AI") permission?", isPresented: Binding(
             get: { revokeProvider != nil }, set: { if !$0 { revokeProvider = nil } }), titleVisibility: .visible, presenting: revokeProvider) { provider in
                 let backend = revokeBackendID
-                Button("Revoke", role: .destructive) {
+                Button(session.isDemo ? "Reset" : "Revoke", role: .destructive) {
                     if let backend { session.revokeConsent(providerID: provider, backendID: backend) }
                     revokeProvider = nil
                 }
                 Button("Cancel", role: .cancel) { revokeProvider = nil }
-            } message: { provider in Text("Mains will ask again before this computer sends data to \(Provider.name(provider)).") }
-        .confirmationDialog("Reset all AI permissions?", isPresented: $reset, titleVisibility: .visible) {
+            } message: { provider in Text(session.isDemo ? "The demo disclosure will appear again. Real provider permissions stay separate." : "Mains will ask again before this computer sends data to \(Provider.name(provider)).") }
+        .confirmationDialog(session.isDemo ? "Reset all demo choices?" : "Reset all AI permissions?", isPresented: $reset, titleVisibility: .visible) {
             Button("Reset", role: .destructive) {
                 if let backend = revokeBackendID { session.revokeAllConsents(backendID: backend) }
             }
             Button("Cancel", role: .cancel) {}
-        } message: { Text("Mains will ask again before this computer sends data to any AI provider.") }
+        } message: { Text(session.isDemo ? "Show the demo disclosures again. Real provider permissions stay separate." : "Mains will ask again before this computer sends data to any AI provider.") }
     }
 }
 

@@ -38,11 +38,19 @@ struct ConversationView: View {
         .toolbarRole(.editor)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
+            if session.isDemo {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text(run?.displayTitle ?? "Conversation").font(.headline).lineLimit(1)
+                        Text("Demo · On this iPhone").font(.caption2).foregroundStyle(.secondary)
+                    }.accessibilityIdentifier("conversationDemoStatus")
+                }
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button("Outputs", systemImage: "doc.on.doc") { outputs = true }.accessibilityIdentifier("conversationOutputs")
                 Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
                 Menu {
-                    Label(session.connection.label, systemImage: session.isConnected ? "checkmark.circle" : "wifi.slash")
+                    Label(session.isDemo ? "Demo Mode · On this iPhone" : session.connection.label, systemImage: session.isConnected ? "checkmark.circle" : "wifi.slash")
                     Button("Sync now", systemImage: "arrow.clockwise") {
                         Task { await session.refresh(); if session.viewingRunID == runID { await session.loadHistory(direction: "refresh") } }
                     }.disabled(!session.isConnected)
@@ -116,7 +124,7 @@ struct ConversationView: View {
 
     private func prepareSend() {
         guard let run, owner == session.ownership, let backendID = session.pairing?.descriptor.backendId, !draft.isSending else { return }
-        if !session.hasConsent(providerID: run.providerId) { consent = ConsentContext(backendID: backendID, providerID: run.providerId) }
+        if !session.hasConsent(providerID: run.providerId) { consent = ConsentContext(backendID: backendID, providerID: run.providerId, isDemo: session.isDemo) }
         else { Task { await send() } }
     }
 

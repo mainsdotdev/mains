@@ -3,6 +3,60 @@ import XCTest
 /// Run alongside scripts/mock-backend.mjs. No AI provider or real workspace is contacted.
 @MainActor
 final class MainsUITests: XCTestCase {
+    /// Runs entirely on-device; no mock server or external service is required.
+    func testDemoModeEntryReplayMediaAndExit() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        prepareUnpaired(app)
+        app.buttons["scanPairingCode"].tap()
+        let demo = app.buttons["startDemoFromPairing"]
+        XCTAssertTrue(demo.waitForExistence(timeout: 5)); demo.tap()
+        let status = app.buttons["connectionPill"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10)); XCTAssertTrue(status.label.contains("Demo"))
+        XCTAssertTrue(app.buttons["chooseTarget"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["chooseTarget"].label.contains("mains"))
+
+        app.terminate(); app.launch()
+        XCTAssertTrue(status.waitForExistence(timeout: 10)); XCTAssertTrue(status.label.contains("Demo"))
+        openSidebar(app); app.buttons["Search"].tap()
+        let search = app.textFields["globalSearchInput"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("Explore Mains")
+        let tour = app.buttons["search-run-demo-native-tour"]
+        XCTAssertTrue(tour.waitForExistence(timeout: 10)); tour.tap()
+        let pdf = app.buttons["transcriptMedia-output:-9001"]
+        XCTAssertTrue(pdf.waitForExistence(timeout: 10))
+        pdf.tap()
+        XCTAssertTrue(app.otherElements["outputPreview"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["shareOutput"].exists)
+        app.buttons["Close preview"].tap()
+        let image = app.buttons["transcriptImage-output:9000003"]
+        XCTAssertTrue(image.waitForExistence(timeout: 5)); image.tap()
+        XCTAssertTrue(app.otherElements["outputPreview"].waitForExistence(timeout: 10))
+        app.buttons["Close preview"].tap()
+
+        let input = app.textFields["messageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap(); input.typeText("Review this demo workspace")
+        app.buttons["sendMessage"].tap()
+        let allow = app.buttons["allowDataSharing"]
+        XCTAssertTrue(allow.waitForExistence(timeout: 5)); XCTAssertEqual(allow.label, "Continue Demo"); allow.tap()
+        XCTAssertTrue(app.staticTexts["Demo result"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["stopReply"].waitForNonExistence(timeout: 15))
+        app.buttons["newConversation"].tap()
+        XCTAssertTrue(app.buttons["demoSuggestedPrompt"].waitForExistence(timeout: 10))
+        openSidebar(app); app.buttons["openSettings"].tap()
+        let exit = app.buttons["exitDemo"]
+        scrollTo(exit, in: app); exit.tap()
+        XCTAssertTrue(app.buttons["scanPairingCode"].waitForExistence(timeout: 5))
+        XCTAssertFalse(status.exists)
+        app.buttons["startDemo"].tap() // Also available directly on the unpaired home.
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        openSidebar(app); app.buttons["openSettings"].tap()
+        scrollTo(exit, in: app); exit.tap()
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["scanPairingCode"].waitForExistence(timeout: 5))
+        XCTAssertFalse(status.exists)
+    }
+
     func testUnpairedHomeAndInlinePairing() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -942,6 +996,12 @@ final class MainsUITests: XCTestCase {
         if !app.buttons["scanPairingCode"].waitForExistence(timeout: 2) {
             openSidebar(app)
             app.buttons["openSettings"].tap()
+            if app.staticTexts["Demo Mac"].exists {
+                let exit = app.buttons["exitDemo"]
+                scrollTo(exit, in: app); exit.tap()
+                XCTAssertTrue(app.buttons["scanPairingCode"].waitForExistence(timeout: 5))
+                return
+            }
             guard app.staticTexts["Test Mac"].exists else {
                 XCTFail("Use the dedicated QA simulator; only the Test Mac pairing may be reset.")
                 return

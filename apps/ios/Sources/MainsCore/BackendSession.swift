@@ -18,6 +18,8 @@ public struct CachedSnapshot: Codable, Sendable {
 
 @MainActor
 public protocol SessionStorage: AnyObject {
+    var demoEnabled: Bool { get }
+    func setDemoEnabled(_ enabled: Bool)
     func loadPairing() throws -> PairedBackend?
     func savePairing(_ pairing: PairedBackend) throws
     func removePairing() throws
@@ -28,6 +30,11 @@ public protocol SessionStorage: AnyObject {
     func grantConsent(backendID: String, providerID: String)
     func revokeConsent(backendID: String, providerID: String)
     func revokeAllConsents(backendID: String)
+}
+
+extension SessionStorage {
+    public var demoEnabled: Bool { false }
+    public func setDemoEnabled(_ enabled: Bool) {}
 }
 
 public enum ConnectionState: String, Sendable {
@@ -68,6 +75,7 @@ public struct PendingMessage: Sendable {
 /// One paired computer. All async writers are fenced by connection and pairing ownership.
 @MainActor @Observable
 public final class BackendSession {
+    public private(set) var isDemo = false
     public private(set) var pairing: PairedBackend?
     public private(set) var activeEndpoint: URL?
     public private(set) var connectedDescriptor: BackendDescriptor?
@@ -102,7 +110,9 @@ public final class BackendSession {
     private var consentRevision = 0
 
     @ObservationIgnored private let storage: any SessionStorage
-    @ObservationIgnored private var transport: WebSocketTransport?
+    @ObservationIgnored private var transport: (any BackendTransport)?
+    @ObservationIgnored private var demoBackend: DemoBackend?
+    @ObservationIgnored private var demoConsents: Set<String> = []
     @ObservationIgnored private var connectionTask: Task<Void, Never>?
     @ObservationIgnored private var eventRefresh: Task<Void, Never>?
     @ObservationIgnored private var listRefresh: Task<Void, Never>?
@@ -364,6 +374,8 @@ public final class BackendSession {
         restored = true
         do {
             pairing = try storage.loadPairing()
+            if pairing == nil, storage.demoEnabled { try startDemo(); return }
+            if pairing != nil { storage.setDemoEnabled(false) }
             if let cached = storage.loadSnapshot(), cached.backendID == pairing?.descriptor.backendId {
                 conversations = cached.conversations.map(safeConversation); spaces = cached.spaces; workspaces = cached.workspaces
                 histories = cached.histories; historyOrder = Array(histories.keys)
@@ -382,9 +394,36 @@ public final class BackendSession {
     }
     public func setOnline(_ value: Bool) {
         guard online != value else { return }; online = value
-        restart()
+        if !isDemo { restart() }
     }
     public func retry() { restart() }
+
+    /// Demo identity is only in memory; the stored flag restores a fresh sample
+    /// session. A saved real pairing always wins and is never overwritten here.
+    public func startDemo() throws {
+        guard !isDemo else { return }
+        guard pairing == nil, !pairingInProgress, try storage.loadPairing() == nil else {
+            throw MainsError.server("Demo Mode is available before pairing a computer.")
+        }
+        let backend = try DemoBackend()
+        restored = true
+        pairingOwner += 1; resetProjection()
+        demoBackend = backend; isDemo = true; demoConsents = []
+        pairing = backend.pairing; blocked = nil; endpointIndex = 0; connection = .idle
+        selectedSpaceID = "codex"
+        homeTargets["codex"] = HomeTarget(workspaceID: backend.defaultWorkspaceID)
+        storage.setDemoEnabled(true)
+        restart()
+    }
+
+    public func exitDemo() {
+        guard isDemo else { return }
+        pairingOwner += 1; pairing = nil; blocked = nil
+        storage.setDemoEnabled(false)
+        restart()
+        demoBackend?.shutdown(); demoBackend = nil; isDemo = false; demoConsents = []
+        resetProjection()
+    }
 
     public func pair(_ link: PairingLink, deviceName: String) async throws {
         guard !pairingInProgress else { return }
@@ -396,6 +435,8 @@ public final class BackendSession {
         guard owner == pairingOwner else { throw MainsError.changedBackend }
         // Credentials must be durable before the new computer becomes observable.
         try storage.savePairing(result)
+        storage.setDemoEnabled(false)
+        demoBackend?.shutdown(); demoBackend = nil; isDemo = false; demoConsents = []
         pairingOwner += 1
         resetProjection()
         storage.removeSnapshot()
@@ -408,6 +449,7 @@ public final class BackendSession {
     }
 
     public func forget() throws {
+        if isDemo { exitDemo(); return }
         try storage.removePairing()
         pairingOwner += 1
         pairing = nil
@@ -444,7 +486,7 @@ public final class BackendSession {
         guard let pairing else { connection = .idle; return }
         if let blocked { connection = blocked; return }
         guard active else { connection = .suspended; return }
-        guard online else { connection = .offline; return }
+        guard online || isDemo else { connection = .offline; return }
         if connection == .unauthorized || connection == .incompatible { return }
         let current = generation
         connection = conversations.isEmpty ? .connecting : .reconnecting
@@ -454,8 +496,10 @@ public final class BackendSession {
     private func connect(_ pairing: PairedBackend, generation current: Int) async {
         var recoveryEnd = ContinuousClock.now + .seconds(30)
         var quiet = false
-        while !Task.isCancelled && generation == current && active && online {
-            let candidate = WebSocketTransport()
+        while !Task.isCancelled && generation == current && active && (online || isDemo) {
+            let candidate: any BackendTransport
+            if let demoBackend { candidate = DemoTransport(backend: demoBackend) }
+            else { candidate = WebSocketTransport() }
             let remaining = ContinuousClock.now.duration(to: recoveryEnd).components
             let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
             let attemptLimit = quiet ? 20 : max(0.1, min(20, seconds))
@@ -519,7 +563,7 @@ public final class BackendSession {
         return try value[key].decode([T].self)
     }
 
-    private func syncSnapshot(_ candidate: WebSocketTransport, generation current: Int) async throws {
+    private func syncSnapshot(_ candidate: any BackendTransport, generation current: Int) async throws {
         let settingsReadVersion = settingsRevision
         async let runResult = candidate.invoke("runs:getAll", args: [.number(100)])
         async let spaceResult = candidate.invoke("space:getAll")
@@ -709,22 +753,26 @@ public final class BackendSession {
 
     public func hasConsent(providerID: String) -> Bool {
         _ = consentRevision
+        if isDemo { return demoConsents.contains(providerID) }
         guard let id = pairing?.descriptor.backendId else { return false }
         return storage.hasConsent(backendID: id, providerID: providerID)
     }
     public func grantConsent(providerID: String, backendID: String) {
         guard pairing?.descriptor.backendId == backendID else { return }
-        storage.grantConsent(backendID: backendID, providerID: providerID)
+        if isDemo { demoConsents.insert(providerID) }
+        else { storage.grantConsent(backendID: backendID, providerID: providerID) }
         consentRevision += 1
     }
     public func revokeConsent(providerID: String, backendID: String) {
         guard pairing?.descriptor.backendId == backendID else { return }
-        storage.revokeConsent(backendID: backendID, providerID: providerID)
+        if isDemo { demoConsents.remove(providerID) }
+        else { storage.revokeConsent(backendID: backendID, providerID: providerID) }
         consentRevision += 1
     }
     public func revokeAllConsents(backendID: String) {
         guard pairing?.descriptor.backendId == backendID else { return }
-        storage.revokeAllConsents(backendID: backendID)
+        if isDemo { demoConsents = [] }
+        else { storage.revokeAllConsents(backendID: backendID) }
         consentRevision += 1
     }
 
@@ -766,7 +814,9 @@ public final class BackendSession {
             }
         }
         if !attachments.isEmpty { payload["attachments"] = try .encode(attachments) }
-        guard hasConsent(providerID: providerID) else { throw MainsError.server("Allow data sharing with \(Provider.recipient(providerID)) before sending.") }
+        guard hasConsent(providerID: providerID) else {
+            throw MainsError.server(isDemo ? "Continue the on-device demo disclosure before sending." : "Allow data sharing with \(Provider.recipient(providerID)) before sending.")
+        }
         let attempt = PendingMessage(runID: runID, text: message, date: Date(), status: .sending,
                                      commandID: UUID().uuidString, channel: channel, payload: .object(payload),
                                      backendID: pairing.descriptor.backendId, owner: pairingOwner,
@@ -863,7 +913,7 @@ public final class BackendSession {
     }
 
     private func saveCache() {
-        guard let pairing else { return }
+        guard !isDemo, let pairing else { return }
         storage.saveSnapshot(CachedSnapshot(backendID: pairing.descriptor.backendId, conversations: conversations,
                                            spaces: spaces, workspaces: workspaces, histories: histories,
                                            collections: collections, projects: projects, gitStates: gitStates,

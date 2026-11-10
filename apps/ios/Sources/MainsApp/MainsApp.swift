@@ -53,7 +53,7 @@ struct ConnectionPill: View {
     let session: BackendSession
     let action: () -> Void
     private var name: String { session.pairing?.descriptor.name ?? "Computer" }
-    private var status: String { session.connection.label.replacingOccurrences(of: "…", with: "") }
+    private var status: String { session.isDemo ? "Demo" : session.connection.label.replacingOccurrences(of: "…", with: "") }
     private var tone: Color {
         [.unauthorized, .incompatible, .unreachable].contains(session.connection) ? .orange : Color(.secondaryLabel)
     }

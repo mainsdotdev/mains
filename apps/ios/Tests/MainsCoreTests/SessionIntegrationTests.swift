@@ -4,6 +4,8 @@ import Testing
 
 @MainActor
 final class MemoryStorage: SessionStorage {
+    var demoEnabled = false
+    func setDemoEnabled(_ enabled: Bool) { demoEnabled = enabled }
     var pairing: PairedBackend?
     var snapshot: CachedSnapshot?
     var consents: Set<String> = []

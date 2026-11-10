@@ -36,7 +36,21 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   the composer. Scan opens a dismissible pairing sheet with a square QR preview
   or manual/paste entry. Detected computer details, retry and explicit pairing
   confirmation stay inline. Credentials remain in Keychain; Forget uses a centered
-  Cancel/Forget alert. Demo Mode remains separate future work.
+  Cancel/Forget alert.
+- Offline Demo Mode is available on the unpaired home and pairing screen. A Swift
+  backend supplies the same session channels, seeded conversations, five providers,
+  mutable mode/model/permission choices, replayed streaming messages and tool calls,
+  and native image/PDF/Markdown previews. It never opens a socket, starts a provider
+  or executes a tool. Live-to-durable messages retain their stream identity.
+  The Demo Mac identity, imported attachments, command receipts and new conversations
+  stay in memory; explicit file previews use the normal protected temporary files.
+  Only a separate demo-enabled flag survives app termination. A new
+  launch restores fresh sample data. Demo does not write the real pairing, snapshot
+  or provider consents. A saved real pairing always takes priority. Replay pauses
+  in the background and resumes on foreground, including without network access.
+  Settings offers Exit Demo Mode or pairing a real computer. Demo disclosures use
+  Continue Demo and never authorize real sharing. Plugin and approval flows are
+  intentionally absent until native iOS supports them.
 - A sliding sidebar with provider/space discs, Code workspaces and branch
   information, and Work/Chat project groups and recent conversations.
 - Code / Work / Chat tabs sit under the Mains title in the sidebar. Selection
@@ -215,6 +229,19 @@ Use a dedicated simulator
 (for example **Mains Native QA**) so test pairing cannot replace a real computer.
 
 ## Source layout
+
+The native demo resource is generated from the sanitized Expo fixture, with the
+native model/provider catalogue applied. Regenerate or verify it from apps/ios:
+
+```sh
+node scripts/sync-demo.mjs
+node scripts/sync-demo.mjs --check
+```
+
+Demo unit/session tests run without a fixture server. The UI case
+`testDemoModeEntryReplayMediaAndExit` also works without a server; it exercises
+both entry buttons, relaunch, search, real file previews, the demo disclosure,
+simulated messaging and exit. Use the dedicated QA simulator as for other UI tests.
 
 `Sources/MainsCore` is the portable Foundation/Observation layer, compiled by both
 the app and `Package.swift`. `Sources/MainsApp` contains SwiftUI screens and iOS

@@ -1,8 +1,26 @@
 import Foundation
 
+/// Both connections deliver the same commands/events to the session. Demo never
+/// creates a URLSession or opens a socket; the live transport keeps its wire codec.
+@MainActor
+protocol BackendTransport: AnyObject, Sendable {
+    var onEvent: ((String, JSONValue) -> Void)? { get set }
+    var onDisconnect: ((MainsError) -> Void)? { get set }
+    func open(endpoint: URL, token: String) throws
+    func perform(_ channel: String, args: [JSONValue], commandId: String?, timeout: TimeInterval) async throws -> JSONValue
+    func close()
+}
+
+extension BackendTransport {
+    func invoke(_ channel: String, args: [JSONValue] = [], commandId: String? = nil,
+                timeout: TimeInterval = 10) async throws -> JSONValue {
+        try await perform(channel, args: args, commandId: commandId, timeout: timeout)
+    }
+}
+
 /// A single socket owns all of its requests. Replacing it retires every waiter.
 @MainActor
-public final class WebSocketTransport {
+public final class WebSocketTransport: BackendTransport {
     public var onEvent: ((String, JSONValue) -> Void)?
     public var onDisconnect: ((MainsError) -> Void)?
     private let session: URLSession
@@ -69,6 +87,10 @@ public final class WebSocketTransport {
 
     public func invoke(_ channel: String, args: [JSONValue] = [], commandId: String? = nil,
                        timeout: TimeInterval = 10) async throws -> JSONValue {
+        try await perform(channel, args: args, commandId: commandId, timeout: timeout)
+    }
+
+    func perform(_ channel: String, args: [JSONValue], commandId: String?, timeout: TimeInterval) async throws -> JSONValue {
         try Task.checkCancellation()
         guard let socket else { throw MainsError.disconnected }
         sequence += 1

@@ -84,7 +84,7 @@ struct AppShell: View {
                             .buttonStyle(.plain).accessibilityLabel("Close sidebar").accessibilityIdentifier("closeSidebar")
                     }
                 }
-                .clipShape(.rect(cornerRadius: pageCorner))
+                .clipShape(MainPaneClip(cornerRadius: pageCorner, safeAreaInsets: geometry.safeAreaInsets))
                 .offset(x: pageOffset)
                 .simultaneousGesture(drawerGesture(width: width), isEnabled: drawerOpen && !searchMounted)
                 if !drawerOpen && !searchMounted {
@@ -190,5 +190,24 @@ struct AppShell: View {
                     drawerOpen = projected > width / 2
                 }
             }
+    }
+}
+
+private struct MainPaneClip: Shape {
+    var cornerRadius: CGFloat
+    let safeAreaInsets: EdgeInsets
+    var animatableData: CGFloat {
+        get { cornerRadius }
+        set { cornerRadius = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        guard cornerRadius > 0 else {
+            // Native navigation controls expand into the safe area when pressed.
+            // Keep that feedback visible without changing the page's layout.
+            return Path(rect.inset(by: UIEdgeInsets(top: -safeAreaInsets.top, left: -safeAreaInsets.leading,
+                                                  bottom: -safeAreaInsets.bottom, right: -safeAreaInsets.trailing)))
+        }
+        return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).path(in: rect)
     }
 }

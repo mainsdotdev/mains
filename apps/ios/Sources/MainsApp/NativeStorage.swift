@@ -6,6 +6,8 @@ final class NativeStorage: SessionStorage {
     private let service = (Bundle.main.bundleIdentifier ?? "dev.mains.ios") + ".pairing"
     private let account = "paired-backend"
     private let defaults = UserDefaults.standard
+    var demoEnabled: Bool { defaults.bool(forKey: "native-demo-enabled-v1") }
+    func setDemoEnabled(_ enabled: Bool) { defaults.set(enabled, forKey: "native-demo-enabled-v1") }
     private var cacheURL: URL {
         URL.cachesDirectory.appendingPathComponent("mains-native-snapshot.json")
     }

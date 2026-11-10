@@ -18,7 +18,7 @@ struct HomeView: View {
             HStack(spacing: 12) {
                 SidebarControl(action: openSidebar)
                 ZStack {
-                    if session.pairing != nil && !session.isConnected {
+                    if session.isDemo || session.pairing != nil && !session.isConnected {
                         ConnectionPill(session: session, action: openComputer)
                             .transition(.opacity)
                     }
@@ -41,7 +41,7 @@ struct HomeView: View {
                                  optionsSheet: $optionsSheet, consent: $consent, onCreated: onCreated)
                     .id(space.id)
             } else if session.pairing == nil {
-                UnpairedHomeArea(pair: openPairing)
+                UnpairedHomeArea(session: session, pair: openPairing)
             }
         }
         .sheet(isPresented: $targetSheet) { if let space { TargetSheet(session: session, space: space) } }
@@ -55,6 +55,7 @@ struct HomeView: View {
 }
 
 private struct UnpairedHomeArea: View {
+    let session: BackendSession
     let pair: () -> Void
     var body: some View {
         VStack(spacing: 12) {
@@ -64,6 +65,10 @@ private struct UnpairedHomeArea: View {
                     .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button("Scan pairing code", action: pair)
                     .buttonStyle(PairingActionStyle()).accessibilityIdentifier("scanPairingCode")
+                Button("Try Demo Mode on this phone") {
+                    do { try session.startDemo() } catch { session.actionError = error.localizedDescription }
+                }
+                .buttonStyle(PairingActionStyle(prominent: false)).accessibilityIdentifier("startDemo")
             }
             .padding(16).frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18))
@@ -115,6 +120,16 @@ private struct HomeComposerArea: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if session.isDemo, draft.text.isEmpty {
+                Button {
+                    draft.text = "Review this workspace and suggest the next steps"
+                } label: {
+                    Label("Try a sample request", systemImage: "sparkles").font(.footnote.weight(.medium))
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
+                .accessibilityIdentifier("demoSuggestedPrompt")
+            }
             if uncertain, let pending = session.pendingMessage {
                 ChatNotice(title: "Delivery unconfirmed", message: "“\(pending.text.prefix(160))”\nCheck this message before starting another conversation.", symbol: "exclamationmark.circle", warning: true) {
                     Button(session.sending ? "Checking…" : "Check delivery") {
@@ -164,7 +179,7 @@ private struct HomeComposerArea: View {
     }
     private func prepareSend() {
         guard ready, targetReady, let backendID = session.pairing?.descriptor.backendId else { return }
-        if !session.hasConsent(providerID: space.providerId) { consent = ConsentContext(backendID: backendID, providerID: space.providerId) }
+        if !session.hasConsent(providerID: space.providerId) { consent = ConsentContext(backendID: backendID, providerID: space.providerId, isDemo: session.isDemo) }
         else { Task { await send() } }
     }
     private func send() async {
