@@ -2134,7 +2134,10 @@ export const browserService = {
   async closeTab(tabId: string): Promise<BrowserState> {
     this._loadPersistedTabs();
     const record = this.tabs.get(tabId);
-    if (!record || record.ownerKey !== this.activeOwnerKey) throw new Error("Browser tab not found");
+    // A second close can arrive after the tab is already gone: the page
+    // shortcut and the preview strip both close it, or the first close won.
+    if (!record) return this.getState();
+    if (record.ownerKey !== this.activeOwnerKey) throw new Error("Browser tab not found");
     if (record.closeLifecycle.phase === "released") return this.getState();
     await record.closeLifecycle.prepare(record, async (current) => {
       const orderedIds = Array.from(this.tabs.values())
@@ -2194,7 +2197,10 @@ export const browserService = {
   async activateTab(tabId: string): Promise<BrowserState> {
     this._loadPersistedTabs();
     const next = this.tabs.get(tabId);
-    if (!next || next.ownerKey !== this.activeOwnerKey) throw new Error("Browser tab not found");
+    // Closing a tab, or leaving its conversation, can deliver the preview
+    // strip's follow-up activation after the record is gone. That request is
+    // stale; reporting it makes "Browser tab not found" appear on close.
+    if (!next || next.ownerKey !== this.activeOwnerKey) return this.getState();
 
     const ownerKey = this.activeOwnerKey;
     const request = this.presentationLifecycle.begin("activation", () =>

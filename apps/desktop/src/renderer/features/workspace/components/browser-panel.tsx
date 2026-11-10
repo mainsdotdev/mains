@@ -327,9 +327,14 @@ export function BrowserPanel({
 
   useEffect(() => {
     if (!isOpen || !selectedPreviewId || !api || selectedPreviewId === activeTabIdRef.current) return;
-    void api.activateTab(selectedPreviewId).then((response: any) => {
+    const requestedId = selectedPreviewId;
+    let current = true;
+    void api.activateTab(requestedId).then((response: any) => {
+      // Close or a newer selection can retire this request before it returns.
+      if (!current || requestedId === activeTabIdRef.current) return;
       applyResponseState(response, "Failed to activate browser tab");
     });
+    return () => { current = false; };
   }, [api, isOpen, selectedPreviewId, applyResponseState]);
 
   const applyDownloads = useCallback(

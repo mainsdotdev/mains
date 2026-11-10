@@ -108,6 +108,27 @@ describe("browserService — tabs by chat", () => {
     expect(browserService.getState().activeTabId).toBe(first);
   });
 
+  it("does not report activation of a tab that has already closed or moved to another conversation", async () => {
+    await browserService.createTab("https://example.com/keep");
+    const keep = browserService.activeTabId!;
+    await browserService.createTab("https://example.com/closing");
+    const closingId = browserService.activeTabId!;
+    await browserService.closeTab(closingId);
+    await expect(browserService.activateTab(closingId)).resolves.toMatchObject({ activeTabId: keep });
+    await expect(browserService.closeTab(closingId)).resolves.toMatchObject({ activeTabId: keep, tabs: [{ tabId: keep }] });
+
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/a");
+    const leftBehind = browserService.activeTabId!;
+    await browserService.setContext("chat-b");
+    await browserService.createTab("https://example.com/b");
+    const current = browserService.activeTabId!;
+    await expect(browserService.activateTab(leftBehind)).resolves.toMatchObject({
+      activeTabId: current,
+      ownerKey: "chat-b",
+    });
+  });
+
   it("does not let a closing target retire another valid pending activation", async () => {
     await browserService.createTab("https://example.com/current");
     const current = browserService.activeTabId!;
