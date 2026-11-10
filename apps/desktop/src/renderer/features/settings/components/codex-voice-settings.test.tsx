@@ -178,11 +178,19 @@ describe("Codex voice preview", () => {
     expect(screen.getByRole("button", { name: "Preview Cove voice" })).toBeTruthy();
   });
 
-  it("still saves new server voices when no bundled preview exists", async () => {
+  it("prioritizes voices with previews and still saves voices without them", async () => {
     const options = props();
-    options.catalog!.voices.push("future");
+    options.catalog!.voices = ["future", "cove", "aube", "maple", "juniper"];
     const view = render(<CodexVoiceSettings {...options} />);
-    await chooseVoice("Future");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Voice" })); });
+    expect(screen.getAllByRole("option")).toEqual([
+      screen.getByRole("option", { name: "Cove" }),
+      screen.getByRole("option", { name: "Maple" }),
+      screen.getByRole("option", { name: "Juniper" }),
+      screen.getByRole("option", { name: /^Future\s*No preview$/ }),
+      screen.getByRole("option", { name: /^Aube\s*No preview$/ }),
+    ]);
+    await act(async () => { fireEvent.click(screen.getByRole("option", { name: /^Future\s*No preview$/ })); });
     expect(options.onUpdate).toHaveBeenCalledWith({ realtimeVoice: "future" });
     expect(audio).toHaveLength(0);
     view.rerender(<CodexVoiceSettings {...options} config={{ realtimeVoice: "future" }} />);

@@ -44,7 +44,6 @@ import { resolveRunSpaceTarget } from "@/features/workspace/lib/background-runs"
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
 import { SIDEBAR_PROJECT_CHILD_ROW_CLASS } from "@/lib/sidebar-layout";
-import { iconColorClass, splitStoredIcon } from "@/lib/icon-registry";
 import { useChatActions } from "@/features/workspace/hooks/use-chat-actions";
 import { SidebarGroupSection } from "./sidebar-group-section";
 import { ChatItem, chatLabel } from "./chat-item";
@@ -319,9 +318,8 @@ export function SidebarChatList({
         <SidebarGroupSection
           groupKey="pinned"
           label="Pinned"
-          // Quieter than a project title: this header names a shelf, not
-          // something the user made and gave a colour to.
-          labelTint="text-primary-800 dark:text-primary-200"
+          labelWeight="medium"
+          labelTint="text-primary-700 dark:text-primary-300"
           count={pinnedRuns.length}
         >
           <div className="flex flex-col space-y-0.5 mt">
@@ -366,12 +364,7 @@ export function SidebarChatList({
                     <SidebarGroupSection
                       groupKey={`collection-${collection.id}`}
                       label={collection.name}
-                      // The title wears the icon's tint: an emoji or an
-                      // untinted icon resolves to "", which leaves the neutral
-                      // tone.
-                      labelTint={iconColorClass(
-                        splitStoredIcon(collection.icon).color,
-                      )}
+                      labelWeight="medium"
                       icon={(expanded) => (
                         <ProjectIcon
                           icon={collection.icon}
@@ -399,7 +392,7 @@ export function SidebarChatList({
                           collectionRuns.map((run) => renderChat(run))
                         ) : (
                           <div className={`flex items-center ${SIDEBAR_PROJECT_CHILD_ROW_CLASS}`}>
-                            <Text as="span" size="s" tone="faint" className="opacity-60">
+                            <Text as="span" size="xxs" tone="muted">
                               No chats
                             </Text>
                           </div>
@@ -418,6 +411,8 @@ export function SidebarChatList({
         <SidebarGroupSection
           groupKey="recents"
           label="Recents"
+          labelWeight="medium"
+          labelTint="text-primary-700 dark:text-primary-300"
           // What the section actually lists: the tail past RECENTS_LIMIT is not
           // reachable from here, so counting it would promise rows that never
           // arrive.

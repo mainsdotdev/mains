@@ -1686,7 +1686,7 @@ export function BrowserPanel({
               tooltipShortcut="Esc"
               tooltipPosition="top-left"
               onClick={() => void toggleSelect()}
-              className={`glass-card ${selectMode ? "text-accent" : ""}`}
+              className={`glass-card ${selectMode ? "text-accent dark:text-accent" : ""}`}
               aria-label={selectMode ? "Exit annotation mode" : "Annotate browser"}
               aria-pressed={selectMode}
             >

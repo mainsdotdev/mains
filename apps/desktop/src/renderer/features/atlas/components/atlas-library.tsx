@@ -111,7 +111,7 @@ function ImageTile({ entry, onOpen, fill = false, device }: { entry: Entry; onOp
       <Button
         onClick={onOpen}
         aria-label={`Open ${entry.title}`}
-        className={`block w-full overflow-hidden bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent/60 dark:bg-primary-900 ${fill ? "relative aspect-square h-full focus-visible:ring-inset" : "rounded-xl"}`}
+        className={`block w-full overflow-hidden bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent/60 dark:bg-primary-900 ${fill ? "relative aspect-square h-full focus-visible:ring-inset" : "rounded-t-xl"}`}
       >
         {src && src !== failedSrc ? (
           <img

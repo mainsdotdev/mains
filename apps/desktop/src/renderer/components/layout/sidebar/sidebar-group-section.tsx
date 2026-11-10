@@ -29,11 +29,8 @@ export function SidebarGroupSection({
   groupKey: string;
   label: string;
   /**
-   * Text colour class for the label. Two callers want one: a section whose
-   * icon carries a user tint the title should share, so the pair reads as one
-   * mark rather than a coloured glyph beside unrelated white text; and a
-   * section that names a shelf rather than a thing, which wants a quieter
-   * title than the default. Absent or empty keeps the `contrast` tone.
+   * Optional text colour class for a quieter section heading.
+   * Absent or empty keeps the neutral `contrast` tone, independent of its icon.
    */
   labelTint?: string;
   labelWeight?: "normal" | "medium";
@@ -60,6 +57,7 @@ export function SidebarGroupSection({
     label: string;
     onClick: (event: MouseEvent<HTMLElement>) => void;
     icon: ReactNode;
+    menuOpen?: boolean;
   };
   /**
    * Makes the header the handle of a `SortableItem`: dragging it, or Alt+Arrow
@@ -132,35 +130,35 @@ export function SidebarGroupSection({
           >
             {count}
           </Text> */}
+          {secondaryAction && (
+            <Button
+              tooltip={secondaryAction.label}
+              onClick={(e) => {
+                e.stopPropagation();
+                secondaryAction.onClick(e);
+              }}
+              className={`${secondaryAction.menuOpen ? "flex" : "hidden group-hover/section:flex group-focus-within/section:flex"} items-center p-0.5 cursor-pointer rounded-md`}
+              aria-label={secondaryAction.label}
+              aria-haspopup={secondaryAction.menuOpen !== undefined ? "menu" : undefined}
+              aria-expanded={secondaryAction.menuOpen}
+            >
+              {secondaryAction.icon}
+            </Button>
+          )}
           {action && (
-            <>
-              {secondaryAction && (
-                <Button
-                  tooltip={secondaryAction.label}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    secondaryAction.onClick(e);
-                  }}
-                  className="hidden group-hover/section:flex items-center p-0.5 cursor-pointer rounded-md"
-                  aria-label={secondaryAction.label}
-                >
-                  {secondaryAction.icon}
-                </Button>
-              )}
-              <Button
-                tooltip={action.label}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  action.onClick(e);
-                }}
-                className={`${action.menuOpen ? "flex" : "hidden group-hover/section:flex"} items-center p-0.5 cursor-pointer rounded-md`}
-                aria-label={action.label}
-                aria-haspopup={action.menuOpen !== undefined ? "menu" : undefined}
-                aria-expanded={action.menuOpen}
-              >
-                {action.icon ?? <New className={SIDEBAR_ACTION_ICON} />}
-              </Button>
-            </>
+            <Button
+              tooltip={action.label}
+              onClick={(e) => {
+                e.stopPropagation();
+                action.onClick(e);
+              }}
+              className={`${action.menuOpen ? "flex" : "hidden group-hover/section:flex group-focus-within/section:flex"} items-center p-0.5 cursor-pointer rounded-md`}
+              aria-label={action.label}
+              aria-haspopup={action.menuOpen !== undefined ? "menu" : undefined}
+              aria-expanded={action.menuOpen}
+            >
+              {action.icon ?? <New className={SIDEBAR_ACTION_ICON} />}
+            </Button>
           )}
           <ArrowUp
             className={`w-3 h-3 -mr-1 text-primary-800 dark:text-primary-200 transition-transform duration-200 hidden group-hover/section:block ${

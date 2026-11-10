@@ -25,7 +25,13 @@ export function CodexVoiceSettings({ config, catalog, loading, error, updating, 
   const orbStyle = resolveVoiceOrbStyle(config.voiceOrbStyle);
   const voice = config.realtimeVoice || catalog?.defaultVoice || "";
   const supported = !!catalog?.voices.includes(voice);
-  const choices = catalog?.voices.map((id) => ({ value: id, label: voiceLabel(id) })) ?? [];
+  const choices = catalog?.voices
+    .map((id) => ({
+      value: id,
+      label: voiceLabel(id),
+      description: voicePreviewUrl(id) ? undefined : "No preview",
+    }))
+    .sort((a, b) => Number(!!voicePreviewUrl(b.value)) - Number(!!voicePreviewUrl(a.value))) ?? [];
   const preview = useVoicePreview();
 
   return (
