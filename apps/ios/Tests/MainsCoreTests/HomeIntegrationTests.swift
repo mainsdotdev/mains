@@ -5,6 +5,37 @@ import Testing
 // Uses the contract-backed fixture, including real command envelopes and receipts.
 // Run sequentially with the other integration tests, which reset the same computer.
 extension SessionIntegrationTests {
+    @Test @MainActor func attachmentOnlyMessagesUseExecuteAndContinueWirePayloads() async throws {
+        let session = BackendSession(storage: MemoryStorage())
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
+        let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")
+        try await eventually { session.isConnected }
+        session.grantConsent(providerID: "codex", backendID: "ios-fixture")
+        let photo = PromptAttachment(name: "photo.png", type: "image", mimeType: "image/png", bytes: Data([1, 2, 3]))
+        let pdf = PromptAttachment(name: "document.pdf", type: "document", mimeType: "application/pdf", bytes: Data("%PDF-fixture".utf8))
+        let id = try await session.send("", spaceID: "fixture-space", attachments: [photo])
+        await session.selectConversation(id)
+        try await eventually { session.pendingMessage == nil && session.conversations.first { $0.id == id }?.isActive == false }
+        _ = try await session.send(" \n\t", runID: id, attachments: [pdf])
+        try await eventually { session.pendingMessage == nil && session.conversations.first { $0.id == id }?.isActive == false }
+        await #expect(throws: MainsError.self) { try await session.send(" \n\t", runID: id) }
+        await #expect(throws: MainsError.self) { try await session.send("", spaceID: "fixture-space") }
+
+        let (data, _) = try await URLSession.shared.data(from: URL(string: endpoint + "/observations")!)
+        let calls = try JSONDecoder().decode([JSONValue].self, from: data)
+        let sends = calls.filter { ["runs:execute", "runs:continue"].contains($0["channel"].string ?? "") }
+        #expect(sends.count == 2)
+        for (channel, key, file) in [("runs:execute", "goal", photo), ("runs:continue", "message", pdf)] {
+            let call = try #require(sends.first { $0["channel"].string == channel })
+            #expect(call["commandId"].string?.isEmpty == false)
+            #expect(call["args"].array[0][key] == .string(""))
+            #expect(call["args"].array[0]["attachments"].array == [try .encode(file)])
+        }
+    }
+
     @Test @MainActor func homeSelectionsPersistAndExecuteTheDisplayedSettings() async throws {
         let storage = MemoryStorage()
         let session = BackendSession(storage: storage)

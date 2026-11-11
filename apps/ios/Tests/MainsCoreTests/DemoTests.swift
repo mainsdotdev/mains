@@ -4,6 +4,38 @@ import Testing
 
 @Suite(.serialized)
 struct DemoTests {
+    @Test @MainActor func attachmentOnlyDemoMessagesKeepOnePromptAndDownloadableFiles() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+        await session.selectConversation(DemoBackend.tourID)
+        let sampleImage = try #require(session.transcript.rows.flatMap(\.media).first { $0.image })
+        let image = try await session.readImage(sampleImage)
+        let imageBytes = try #require(image.data)
+        let photo = PromptAttachment(name: "photo.png", type: "image", mimeType: image.mime, bytes: imageBytes)
+        let pdf = PromptAttachment(name: "document.pdf", type: "document", mimeType: "application/pdf", bytes: DemoFile.pdf.bytes)
+
+        let id = try await session.send("", spaceID: "codex", workspaceID: session.homeTargets["codex"]?.workspaceID, attachments: [photo])
+        await session.selectConversation(id)
+        try await eventually { session.pendingMessage == nil && session.conversations.first { $0.id == id }?.isActive == false }
+        let first = try #require(session.transcript.rows.first { $0.kind == .prompt })
+        #expect(first.text.isEmpty && first.media.map(\.name) == [photo.name])
+        #expect(try await session.readImage(try #require(first.media.first)).data == imageBytes)
+
+        _ = try await session.send(" \n\t", runID: id, attachments: [pdf])
+        try await eventually { session.pendingMessage == nil && session.conversations.first { $0.id == id }?.isActive == false }
+        let prompts = session.transcript.rows.filter { $0.kind == .prompt }
+        #expect(prompts.count == 2 && prompts.allSatisfy { $0.text.isEmpty && $0.pendingAttachments.isEmpty })
+        #expect(prompts.flatMap(\.media).map(\.name) == [photo.name, pdf.name])
+        let file = try await session.describeAttachment(try #require(prompts.last?.media.first))
+        #expect(try await session.downloadAttachment(file) == DemoFile.pdf.bytes)
+        await #expect(throws: MainsError.self) { try await session.send(" \n\t", runID: id) }
+        await #expect(throws: MainsError.self) { try await session.send("", spaceID: "codex", workspaceID: session.homeTargets["codex"]?.workspaceID) }
+    }
+
     @Test @MainActor func subagentReplayUsesRealHistoryAndTransitionsWithoutLeakingChildMessages() async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let transport = DemoTransport(backend: backend)

@@ -151,7 +151,8 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
 - Code messages without an available local workspace show a Workspace required
   notice with a chooser shortcut and keep the draft intact.
 - Photos, Files and device Camera attachments in both composers (up to five,
-  2 MB total). Attachment bytes stay in memory while composing and sending.
+  2 MB total), including messages with attachments only. Attachment bytes stay in
+  memory while composing and sending.
 - The + menu grows from its composer button and preserves the editor's keyboard
   and caret. A child overlay in the current window blocks background touches
   without disabling the editor; dismissing the menu keeps typing active.

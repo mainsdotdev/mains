@@ -886,7 +886,7 @@ public final class BackendSession {
               let pairing, let accountID else { throw MainsError.disconnected }
         let attached = ContextMentions.attached(in: text, skills: contextSkills)
         let message = ContextMentions.goal(text, skills: attached)
-        guard !message.isEmpty else { throw MainsError.server("Write a message first.") }
+        guard !message.isEmpty || !attachments.isEmpty else { throw MainsError.server("Write a message or attach a file first.") }
         let providerID: String
         let channel: String
         let actualWorkspaceID: String?

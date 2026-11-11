@@ -100,7 +100,7 @@ struct MessageComposer: View {
                             .background(Provider.accent(context.providerId), in: .circle).padding(2)
                     }
                     .buttonStyle(ChatPressStyle())
-                    .disabled(!canSend || context.saving(session) || draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!canSend || context.saving(session) || !draft.hasContent)
                     .accessibilityLabel(draft.isSending ? "Sending message" : "Send message").accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
                 }
             }

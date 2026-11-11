@@ -54,6 +54,45 @@ import Testing
     #expect(draft.unsentText == "An unrelated next thought")
 }
 
+@Test @MainActor func emptyDraftsCannotSendAfterTheLastAttachmentIsRemoved() {
+    let draft = ConversationDraft()
+    for text in ["", " \n\t"] {
+        draft.text = text
+        #expect(!draft.hasContent && draft.begin() == nil)
+    }
+    draft.attachments = [PromptAttachment(name: "note.pdf", type: "document", mimeType: "application/pdf", bytes: Data("PDF".utf8))]
+    #expect(draft.hasContent)
+    draft.attachments.removeAll()
+    #expect(!draft.hasContent && draft.begin() == nil)
+}
+
+@Test(arguments: ["image", "document"]) @MainActor
+func attachmentOnlyDraftsPreserveFilesAcrossRefusalRecoveryAndUncertainDelivery(type: String) throws {
+    let draft = ConversationDraft()
+    let first = PromptAttachment(name: "first", type: type, mimeType: "application/octet-stream", bytes: Data([1]))
+    let next = PromptAttachment(name: "next", type: type, mimeType: "application/octet-stream", bytes: Data([2]))
+    draft.attachments = [first]
+    let sent = try #require(draft.begin())
+    #expect(sent.text.isEmpty && sent.attachments == [first])
+    #expect(draft.attachments.isEmpty && draft.isSending && draft.begin() == nil)
+    draft.reject(sent, message: "Refused", uncertain: false)
+    #expect(draft.text.isEmpty && draft.attachments == [first])
+
+    draft.text = " \n\t"
+    let retry = try #require(draft.begin())
+    draft.attachments = [next]
+    draft.reject(retry, message: "Refused", uncertain: false)
+    #expect(draft.attachments == [next] && draft.unsentAttachments == [first])
+    draft.restoreUnsent()
+    #expect(draft.text == retry.text && draft.attachments == [first])
+    draft.restoreUnsent()
+    #expect(draft.text.isEmpty && draft.attachments == [next], "Restoring the failed files must also preserve a newer attachment-only draft.")
+
+    let uncertain = try #require(draft.begin())
+    draft.reject(uncertain, message: "Unknown outcome", uncertain: true)
+    #expect(!draft.hasContent && draft.unsentText == nil && draft.unsentAttachments.isEmpty)
+}
+
 @Test func contentGrowthAndKeyboardChangesNeverBecomeUserIntent() {
     var viewport = TranscriptViewport()
     viewport.update(.init(offset: 500, content: 1000, frame: 500), hasNewer: false)

@@ -23,10 +23,11 @@ public final class ConversationDraft {
     public private(set) var unsentText: String?
     public private(set) var unsentAttachments: [PromptAttachment] = []
     public var isSending: Bool { submission != nil }
+    public var hasContent: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty }
     public init() {}
 
     public func begin() -> Submission? {
-        guard submission == nil, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard submission == nil, hasContent else { return nil }
         let next = Submission(text: text, attachments: attachments, contextSkills: ContextMentions.attached(in: text, skills: contextSkills), contextScope: contextScope)
         text = ""
         attachments = []; contextSkills = []
@@ -57,7 +58,7 @@ public final class ConversationDraft {
         let currentText = text, currentAttachments = attachments, currentSkills = contextSkills, currentScope = contextScope
         text = unsentText; attachments = unsentAttachments; contextSkills = unsentSkills
         if currentScope != unsentScope { clearContext() }
-        self.unsentText = currentText.isEmpty ? nil : currentText; unsentAttachments = currentAttachments; unsentSkills = currentSkills; unsentScope = currentScope
+        self.unsentText = currentText.isEmpty && currentAttachments.isEmpty ? nil : currentText; unsentAttachments = currentAttachments; unsentSkills = currentSkills; unsentScope = currentScope
     }
     public func synchronizeContext(_ scope: ContextScope) {
         if let contextScope, contextScope != scope { clearContext() }

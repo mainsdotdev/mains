@@ -267,8 +267,8 @@ final class DemoBackend {
     }
 
     private func start(_ runID: String, prompt: String, files: [JSONValue], promptMetadata: [String: JSONValue] = [:]) throws {
-        guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, prompt.count <= 32_000 else {
-            throw MainsError.server("Write a demo message under 32,000 characters.")
+        guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !files.isEmpty, prompt.count <= 32_000 else {
+            throw MainsError.server("Write a demo message under 32,000 characters or attach a file.")
         }
         guard (artifacts[runID]?.count ?? 0) < 200, files.count <= 5 else { throw MainsError.server("Start a new demo conversation to continue.") }
         let uploaded = try files.map { file -> DemoFile in
