@@ -10,7 +10,7 @@ import {
   Glob,
   Grep,
   Infinite,
-  Mains,
+  MainsStroke,
   Picture,
   Plus,
   Question,
@@ -163,7 +163,7 @@ export const VENDORS: VendorInfo[] = [
     label: "Mains",
     category: "Review",
     prefixes: ["mcp__mains__"],
-    icon: <Mains className="size-4" />,
+    icon: <MainsStroke className="size-4" />,
     // These have specialized renderers in tool-call-item.tsx — keep their
     // displayNames stable so the dispatch keeps matching.
     specialTools: {
@@ -454,28 +454,28 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     displayName: "CheckPackage",
     groupKey: "checkpackage",
     category: "Code",
-    icon: <Mains className="size-4" />,
+    icon: <MainsStroke className="size-4" />,
     aliases: ["checkpackage"],
   },
   {
     displayName: "SaveReview",
     groupKey: "savereview",
     category: "Code",
-    icon: <Mains className="size-4" />,
+    icon: <MainsStroke className="size-4" />,
     aliases: ["savereview"],
   },
   {
     displayName: "SaveFinding",
     groupKey: "savefinding",
     category: "Code",
-    icon: <Mains className="size-4" />,
+    icon: <MainsStroke className="size-4" />,
     aliases: ["savefinding"],
   },
   {
     displayName: "SaveFindings",
     groupKey: "savefindings",
     category: "Code",
-    icon: <Mains className="size-4" />,
+    icon: <MainsStroke className="size-4" />,
     aliases: ["savefindings"],
   },
 ];
