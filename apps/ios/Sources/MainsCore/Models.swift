@@ -102,7 +102,7 @@ public struct Workspace: Codable, Equatable, Identifiable, Sendable {
     public var updatedAt: Date? = nil
 }
 
-public struct HistoryCursor: Codable, Equatable, Sendable {
+public struct HistoryCursor: Codable, Hashable, Sendable {
     public let timestamp: Double
     public let source: String
     public var id: Int

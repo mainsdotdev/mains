@@ -117,60 +117,128 @@ struct SearchView: View {
             workspace.name.localizedCaseInsensitiveContains(needle) || session.gitStates.first { $0.workspaceId == workspace.id }?.branch?.localizedCaseInsensitiveContains(needle) == true
         }
     }
+    @State private var hits: [ConversationSearchHit] = []
+    @State private var nextCursor: ConversationSearchCursor?
+    @State private var loading = false
+    @State private var searchError: String?
+    @State private var resultQuery = ""
+    @State private var requestID = UUID()
+    private struct SearchIdentity: Hashable { let query: String; let owner: Int; let connected: Bool; let active: Bool }
+    private var searchIdentity: SearchIdentity { SearchIdentity(query: needle, owner: session.ownership, connected: session.isConnected, active: focusRequested) }
+    private var visibleHits: [ConversationSearchHit] { resultQuery == needle ? hits : [] }
+    private var visibleError: String? { resultQuery == needle ? searchError : nil }
+    private var savedOnly: Bool { !session.isConnected || visibleError != nil }
+
     var body: some View {
         Group {
-            if needle.isEmpty || conversations.isEmpty && workspaces.isEmpty {
+            if needle.isEmpty {
                 VStack(spacing: 20) {
                     Image(systemName: "magnifyingglass").font(.system(size: 36, weight: .regular)).accessibilityHidden(true)
-                    Text(needle.isEmpty ? "Search chats and workspaces" : "No results found")
-                        .font(.subheadline).foregroundStyle(Color(.secondaryLabel))
+                    Text("Search chats, messages and workspaces").font(.subheadline).foregroundStyle(Color(.secondaryLabel))
                 }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     TimelineView(.periodic(from: .now, by: 60)) { clock in
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            if !conversations.isEmpty {
-                                sectionTitle("Chats")
+                            if savedOnly {
+                                Text(visibleError ?? "Reconnect to search all conversations and messages. Showing saved chats.")
+                                    .font(.footnote).foregroundStyle(.secondary).padding(.vertical, 12)
+                                if visibleError != nil { Button("Try again") { Task { await search() } }.disabled(!session.isConnected || loading) }
+                                if !conversations.isEmpty { sectionTitle("Saved chats") }
                                 ForEach(conversations) { run in
                                     Button { openResult(.conversation(run.id)) } label: {
-                                        HStack(spacing: 16) {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text(run.displayTitle).font(.body).foregroundStyle(.primary).lineLimit(1)
-                                                Text(place(of: run)).font(.footnote).foregroundStyle(Color(.secondaryLabel)).lineLimit(1)
-                                            }.frame(maxWidth: .infinity, alignment: .leading)
-                                            Text(run.isActive && run.isReplica != true ? (run.status == "queued" ? "Queued" : "Running") : conversationAge(run.updatedAt, now: clock.date))
-                                                .font(.caption).monospacedDigit().foregroundStyle(Color(.secondaryLabel))
-                                                .fixedSize(horizontal: true, vertical: false)
-                                        }.padding(.vertical, 10).contentShape(.rect)
+                                        resultRow(title: run.displayTitle, context: place(of: run), snippet: nil, date: run.updatedAt, now: clock.date)
                                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-run-\(run.id)")
+                                }
+                            } else {
+                                if loading && visibleHits.isEmpty || resultQuery != needle {
+                                    HStack(spacing: 10) { ProgressView().controlSize(.small); Text("Searching conversations and messages…").font(.footnote).foregroundStyle(.secondary) }.padding(.vertical, 12)
+                                }
+                                if !visibleHits.isEmpty { sectionTitle("Chats and messages") }
+                                ForEach(visibleHits) { hit in
+                                    Button {
+                                        if let cursor = hit.messageCursor { openResult(.searchMessage(hit.runId, cursor)) }
+                                        else { openResult(.conversation(hit.runId)) }
+                                    } label: {
+                                        resultRow(title: hit.title, context: [hit.context, Experience.label(hit.mode)].compactMap { $0 }.joined(separator: " · "),
+                                                  snippet: hit.snippet, date: Date(timeIntervalSince1970: hit.updatedAt / 1000), now: clock.date)
+                                    }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-run-\(hit.runId)")
+                                }
+                                if nextCursor != nil && resultQuery == needle {
+                                    Button(loading ? "Loading…" : "More results") { Task { await loadMore() } }
+                                        .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44).disabled(loading)
+                                        .accessibilityIdentifier("loadMoreSearchResults")
                                 }
                             }
                             if !workspaces.isEmpty {
-                                sectionTitle("Workspaces").padding(.top, conversations.isEmpty ? 0 : 16)
+                                sectionTitle("Workspaces").padding(.top, 16)
                                 ForEach(workspaces) { workspace in
-                                    Button { openResult(.workspace(workspace.id)) } label: {
-                                        WorkspaceLabel(session: session, workspace: workspace).padding(.vertical, 10)
-                                    }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-workspace-\(workspace.id)")
+                                    Button { openResult(.workspace(workspace.id)) } label: { WorkspaceLabel(session: session, workspace: workspace).padding(.vertical, 10) }
+                                        .buttonStyle(ChatPressStyle()).accessibilityIdentifier("search-workspace-\(workspace.id)")
                                 }
+                            }
+                            if !loading && resultQuery == needle && visibleHits.isEmpty && workspaces.isEmpty && (!savedOnly || conversations.isEmpty) && visibleError == nil {
+                                Text("No results found").font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 32)
                             }
                         }.padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 24)
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .refreshable { await session.refresh() }
+                .refreshable { await session.refresh(); await search() }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            searchBar.onGeometryChange(for: CGFloat.self) { geometry in
-                geometry.frame(in: .named(Self.layoutSpace)).maxY
-            } action: { layoutChanged($0) }
+            searchBar.onGeometryChange(for: CGFloat.self) { geometry in geometry.frame(in: .named(Self.layoutSpace)).maxY } action: { layoutChanged($0) }
         }
         .coordinateSpace(name: Self.layoutSpace)
         .task(id: focusRequested) { searching = focusRequested }
+        .task(id: searchIdentity) { await search(debounce: true) }
+        .onDisappear { requestID = UUID() }
         .accessibilityAction(.escape, close)
+    }
+    private func resultRow(title: String, context: String, snippet: String?, date: Date, now: Date) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.body).foregroundStyle(.primary).lineLimit(1)
+                Text(context).font(.footnote).foregroundStyle(Color(.secondaryLabel)).lineLimit(1)
+                if let snippet, !snippet.isEmpty { Text(snippet).font(.footnote).foregroundStyle(.secondary).lineLimit(2) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Text(conversationAge(date, now: now)).font(.caption).monospacedDigit().foregroundStyle(Color(.secondaryLabel)).fixedSize(horizontal: true, vertical: false)
+        }.padding(.vertical, 10).contentShape(.rect)
+    }
+    private func search(debounce: Bool = false) async {
+        let ticket = UUID(), query = needle, owner = session.ownership
+        requestID = ticket; resultQuery = query; hits = []; nextCursor = nil; searchError = nil; loading = false
+        guard !query.isEmpty, session.isConnected, focusRequested else { return }
+        loading = true
+        defer { if requestID == ticket { loading = false } }
+        do {
+            if debounce { try await Task.sleep(for: .milliseconds(300)) }
+            let page = try await session.searchConversations(query)
+            try Task.checkCancellation()
+            guard requestID == ticket, needle == query, owner == session.ownership else { return }
+            hits = page.items; nextCursor = page.nextCursor
+        } catch {
+            if !Task.isCancelled, requestID == ticket, owner == session.ownership {
+                searchError = "Couldn’t search the computer. Reconnect or update Mains on your computer, then try again."
+            }
+        }
+    }
+    private func loadMore() async {
+        guard !loading, resultQuery == needle, let cursor = nextCursor else { return }
+        let ticket = requestID, query = needle, owner = session.ownership
+        loading = true
+        defer { if requestID == ticket { loading = false } }
+        do {
+            let page = try await session.searchConversations(query, cursor: cursor)
+            try Task.checkCancellation()
+            guard requestID == ticket, needle == query, owner == session.ownership else { return }
+            let existing = Set(hits.map(\.runId))
+            hits.append(contentsOf: page.items.filter { !existing.contains($0.runId) }); nextCursor = page.nextCursor
+        } catch { if !Task.isCancelled, requestID == ticket, owner == session.ownership { searchError = "More results couldn’t load. Try the search again." } }
     }
     private var searchBar: some View {
         HStack(spacing: 12) {

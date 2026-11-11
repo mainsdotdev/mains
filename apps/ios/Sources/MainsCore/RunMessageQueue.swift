@@ -110,6 +110,7 @@ final class RunQueueController {
         let draft = session.draft(for: runID)
         guard !draft.isSending else { return }
         queue.backup = draft.snapshot(); queue.editingID = id
+        draft.persistencePaused = true
         queue.messages[index].status = .editing; queue.editingSettings = queue.messages[index].settings
         draft.restore(queue.messages[index].input)
     }
@@ -121,6 +122,7 @@ final class RunQueueController {
     private func finishEdit(_ queue: ConversationQueue, draft: ConversationDraft) {
         if let backup = queue.backup { draft.restore(backup) }
         queue.backup = nil; queue.editingID = nil; queue.editingSettings = nil
+        draft.resumePersistence()
     }
     func remove(_ runID: String, id: String) {
         guard let queue = queues[runID] else { return }

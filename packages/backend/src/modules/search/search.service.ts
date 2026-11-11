@@ -2,6 +2,8 @@ import path from "node:path";
 import type {
   GlobalSearchQuery,
   GlobalSearchResult,
+  ConversationSearchQuery,
+  ConversationSearchPage,
 } from "@mains/contracts/search";
 import { isModeId } from "@mains/contracts/modes";
 import { isProviderId } from "@mains/contracts/provider-ids";
@@ -126,6 +128,24 @@ function mapDocument(
 }
 
 export const searchService = {
+  async conversations(input: ConversationSearchQuery): Promise<ConversationSearchPage> {
+    if (!input || typeof input.query !== "string" || typeof input.accountId !== "string" || !input.accountId.trim() || input.accountId.length > 200) throw new Error("Choose an account and search query");
+    const query = input.query.trim().normalize("NFKC").slice(0, MAX_QUERY_LENGTH);
+    if (!query) return { items: [], nextCursor: null };
+    const cursor = input.cursor;
+    if (cursor && (!Number.isSafeInteger(cursor.rank) || cursor.rank < 0 || cursor.rank > 4 ||
+      !Number.isSafeInteger(cursor.createdAt) || cursor.createdAt < 0 || typeof cursor.runId !== "string" || !cursor.runId || cursor.runId.length > 200)) throw new Error("Invalid search cursor");
+    const limit = Math.max(1, Math.min(MAX_LIMIT, Number.isFinite(input.limit) ? Math.floor(input.limit!) : MAX_LIMIT));
+    const rows = searchRepo.findConversations({ accountId: input.accountId.trim(), query, cursor, limit: limit + 1 });
+    const page = rows.slice(0, limit), last = page.at(-1);
+    return {
+      items: page.map(row => ({ runId: row.id, title: row.title?.trim() || firstMeaningfulLine(row.goal, "Untitled chat"),
+        providerId: row.providerId, mode: row.mode, context: row.context, updatedAt: row.updatedAt,
+        snippet: row.matchSnippet ? compact(row.matchSnippet) : searchSnippet(row.goal, query),
+        messageCursor: row.artifactId != null && row.messageTime != null ? { timestamp: row.messageTime, source: "artifact" as const, id: row.artifactId } : null })),
+      nextCursor: rows.length > limit && last ? { rank: last.rank, createdAt: last.createdAt, runId: last.id } : null,
+    };
+  },
   async query(input: GlobalSearchQuery): Promise<GlobalSearchResult[]> {
     const query = input.query.trim().slice(0, MAX_QUERY_LENGTH);
     if (!query) return [];

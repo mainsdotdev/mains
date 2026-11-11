@@ -117,8 +117,13 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   information and legal/support links. Pairing and last successful sync timestamps
   are local metadata; existing pairings without a saved date show a dash.
   AI Data Sharing lets you revoke one provider or reset permissions for this computer.
-- Search across synced spaces and workspaces, workspace conversations, pull to refresh and
-  read-only replicas. Conversation descriptors remain bounded to 100 entries.
+- Search conversation titles/goals and visible message text across the computer's
+  account, including conversations outside the recent 100. Results arrive in pages
+  of 25 with message excerpts; opening a message loads its bounded history window
+  and highlights the match. Workspace/branch search remains local. Offline or older
+  computers fall back to explicitly labelled saved chats. Full search requires an
+  updated computer backend exposing `search:conversations`; global `search:query`
+  remains unavailable to paired phones. Pull to refresh and read-only replicas remain supported.
 - Search slides in through the main pane as the sidebar slides left in one coordinated
   transition. Closing reverses the movement and leaves the sidebar open. The keyboard
   opens with the transition, above the floating bottom search/close bar.
@@ -231,8 +236,9 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   automatically start a new command. Unconfirmed delivery retains the original
   identity for **Check delivery**; this is not permission to resend after the
   backend's seven-day receipt retention.
-- Up to 100 conversation descriptors and four bounded history pages in a
-  disposable cache. Live text is memory-only. Losing the cache simply refetches.
+- Up to 100 recent conversation descriptors, plus the currently viewed older
+  conversation, and four bounded history pages in a disposable cache. Live text is
+  memory-only. Losing the cache simply refetches.
 - System typography, Dynamic Type, native navigation/sheets, selectable inline
   Markdown, headings, ordered/nested/task lists, quotes, horizontally scrollable GFM tables
   and fenced code, interactive keyboard dismissal
@@ -261,8 +267,14 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   message/code copy actions and explicit sending/stopping/error states.
 - Sending clears the composer immediately. Acknowledgements preserve anything typed
   next; definite failures restore the original input or keep it available to copy.
-  Conversation drafts survive navigation in memory, scoped to the paired computer;
-  they are not persisted across an app termination.
+  Unsent text survives navigation and app termination, independently per conversation
+  or home space and paired computer/device. Atomic, protected Application Support
+  files hold only text (up to 512 KB per draft, 128 drafts/8 MB per pairing; oldest
+  abandoned drafts are pruned). Forgetting/replacing a pairing removes its drafts.
+  Files, selected context, queues, editing backups and delivery receipts stay in
+  memory; queued edits never overwrite the saved normal draft. Sending removes the
+  submitted text from storage, definite refusal restores it, and new input typed
+  during delivery remains separate. Demo never reads or writes real saved drafts.
 - Touch and momentum pause following. Only an upward departure leaves live-follow
   mode; content growth and keyboard resizing do not. Reading freezes history refresh
   bounds, and Latest starts following only after its requested page is confirmed.
@@ -345,7 +357,8 @@ flash, front/back switching and the first-use permission prompts need a real iPh
 The integration tests cover home selection persistence, account-scoped projects,
 Code/Work target routing, model/effort/permission and attachment payloads,
 managed Codex policies, pairing, consent, stream settlement/acknowledgement,
-conversation-scoped settings and original-id recovery, stale snapshot fencing,
+conversation-scoped settings and original-id recovery, persistent text isolation,
+140-conversation paginated search and anchored historical matches, stale search/snapshot fencing,
 Markdown structure, collapsed turn boundaries and chunked output reads,
 late deltas, reconnect with the original command identity, foreground/network
 recovery, cache restore, forgetting, timeouts, refusal and cancellation. The UI

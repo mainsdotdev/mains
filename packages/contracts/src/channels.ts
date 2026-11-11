@@ -415,6 +415,7 @@ export const CHANNELS = {
   },
   search: {
     query: "search:query",
+    conversations: "search:conversations",
   },
   runs: {
     abort: "runs:abort",

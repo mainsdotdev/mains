@@ -63,4 +63,35 @@ describe("searchRepo full-text chat search", () => {
     );
     expect(buildFtsQuery("🛰️")).toBeNull();
   });
+
+  it("searches old titles and visible messages with stable pagination beyond the recent 100 runs", () => {
+    const insert = sqlite.prepare("INSERT INTO runs(id, account_id, provider_id, title, created_at, is_archived, owner_backend_id) VALUES (?, 'account-1', 'codex', ?, ?, 0, 'test-backend')");
+    for (let index = 0; index < 130; index++) insert.run(`old-${String(index).padStart(3, "0")}`, `Historical telescope ${index}`, index + 1);
+    const message = sqlite.prepare("INSERT INTO run_artifacts(run_id, kind, content, metadata) VALUES (?, 'report', 'A rare telescope measurement', '{}')");
+    message.run("run-1"); message.run("run-1");
+    let cursor: { rank: number; createdAt: number; runId: string } | undefined;
+    const found: string[] = [];
+    do {
+      const page = searchRepo.findConversations({ accountId: "account-1", query: "telescope", limit: 17, cursor });
+      found.push(...page.map(row => row.id));
+      const last = page.at(-1);
+      cursor = page.length === 17 && last ? { rank: last.rank, createdAt: last.createdAt, runId: last.id } : undefined;
+    } while (cursor);
+    expect(found).toHaveLength(131);
+    expect(new Set(found).size).toBe(131);
+    expect(found).toContain("old-000");
+    expect(found.filter(id => id === "run-1")).toHaveLength(1);
+  });
+
+  it("keeps messages account scoped, excludes archives and logs, and returns a bounded matching cursor/snippet", () => {
+    const insert = sqlite.prepare("INSERT INTO run_artifacts(run_id, kind, content, metadata) VALUES ('run-1', 'report', 'Hidden search marker', ?)");
+    for (const metadata of [{ kind: "thinking" }, { source: "agent_thinking_streaming" }, { source: "assistant.reasoning_delta" }, { agentId: "child" }, { isFromSubagent: true }, { voice: true }, { parentToolCallId: 5 }]) insert.run(JSON.stringify(metadata));
+    const rows = searchRepo.findConversations({ accountId: "account-1", query: "precess", limit: 26 });
+    expect(new Set(rows.map(row => row.id))).toEqual(new Set(["run-1", "run-2"]));
+    expect(rows.every(row => row.artifactId != null && row.messageTime != null && row.matchSnippet!.length <= 400)).toBe(true);
+    expect(searchRepo.findConversations({ accountId: "account-1", query: "Diagnostic", limit: 26 })).toEqual([]);
+    expect(searchRepo.findConversations({ accountId: "account-1", query: "Private", limit: 26 })).toEqual([]);
+    expect(searchRepo.findConversations({ accountId: "account-1", query: "Hidden search marker", limit: 26 })).toEqual([]);
+    expect(searchRepo.findConversations({ accountId: "account-1", query: '" OR )*', limit: 26 })).toEqual([]);
+  });
 });

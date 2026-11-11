@@ -29,6 +29,7 @@ import type {
 export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.backend.describe,
   CHANNELS.account.get,
+  CHANNELS.search.conversations,
   CHANNELS.runs.getAll,
   CHANNELS.runs.listActive,
   CHANNELS.runs.listRecent,

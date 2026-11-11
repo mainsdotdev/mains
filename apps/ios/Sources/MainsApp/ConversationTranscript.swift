@@ -8,6 +8,7 @@ struct ConversationTranscript: View {
     let openFile: (RunTurn, TurnFileChange) -> Void
     let openSubagents: () -> Void
     let fork: () -> Void
+    var searchCursor: HistoryCursor? = nil
     let readContent: (Int) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var scrollPosition = ScrollPosition(idType: String.self)
@@ -17,6 +18,11 @@ struct ConversationTranscript: View {
     @State private var landing: TranscriptLanding?
     @State private var toolFrames: [Int: CGRect] = [:]
     @State private var transcriptFrame = CGRect.zero
+    @State private var searchLanded = false
+    private var searchRowID: String? {
+        guard let cursor = searchCursor, let artifact = page?.artifacts.first(where: { $0.id == cursor.id }) else { return nil }
+        return session.transcript.rowID(for: artifact)
+    }
     private var page: HistoryPage? { session.viewingRunID == runID ? session.transcript.page : nil }
     private var rows: [TranscriptRow] { session.viewingRunID == runID ? session.transcript.rows(pending: pending, runID: runID) : [] }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
@@ -64,7 +70,7 @@ struct ConversationTranscript: View {
                         ChatTurnView(session: session, section: section, providerID: providerID,
                                      live: run?.isActive == true && section.id == sections.last?.id && !session.transcript.isHistorical,
                                      readContent: readContent, openSubagents: openSubagents,
-                                     forkRowID: forkRowID, forkRunID: runID, fork: fork)
+                                     forkRowID: forkRowID, forkRunID: runID, fork: fork, searchRowID: searchRowID)
                         ForEach(footers[section.id] ?? [], id: \.id) { turn in
                             TurnChangesCard(turn: turn) { openFile(turn, $0) }
                         }
@@ -101,7 +107,10 @@ struct ConversationTranscript: View {
         .onPreferenceChange(TranscriptFramesKey.self) { frames in
             let previous = sectionFrames
             sectionFrames = frames
-            if let landing, let frame = frames[landing.anchor.id], frame.revision == landing.id {
+            if !searchLanded, let searchRowID, let section = sections.first(where: { $0.rows.contains { $0.id == searchRowID } }), frames[section.id] != nil {
+                searchLanded = true
+                scrollPosition.scrollTo(id: section.id, anchor: .top)
+            } else if let landing, let frame = frames[landing.anchor.id], frame.revision == landing.id {
                 // Both coordinates come from the content, independent of scroll/keyboard insets.
                 scrollPosition.scrollTo(y: max(-viewport.geometry.topInset, frame.rect.minY - landing.anchor.top))
                 self.landing = nil
@@ -250,6 +259,7 @@ private struct ChatTurnView: View {
     let forkRowID: String?
     let forkRunID: String
     let fork: () -> Void
+    let searchRowID: String?
     @State private var disclosure = TranscriptDisclosure()
     private var expanded: Bool { disclosure.isExpanded(active: live) }
     var body: some View {
@@ -269,6 +279,7 @@ private struct ChatTurnView: View {
             messages(section.displayedRows(expanded: expanded))
         }
         .onChange(of: live, initial: true) { _, active in disclosure.observe(active: active) }
+        .onChange(of: searchRowID, initial: true) { _, id in if let id, section.rows.contains(where: { $0.id == id }) { disclosure.expand() } }
     }
     private func messages(_ rows: [TranscriptRow]) -> some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -281,6 +292,7 @@ private struct ChatTurnView: View {
                     ChatMessage(session: session, row: row, providerID: providerID, readContent: readContent, openSubagents: openSubagents,
                                 copyText: row.id == copyRowID ? section.responseText : nil, copyIsPreview: section.responseIsPreview,
                                 forkRunID: row.id == forkRowID ? forkRunID : nil, fork: fork)
+                        .background(row.id == searchRowID ? Color.accentColor.opacity(0.08) : .clear, in: .rect(cornerRadius: 8))
                 }
             }
         }

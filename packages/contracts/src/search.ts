@@ -1,5 +1,26 @@
 import type { ModeId } from "./modes";
 import type { ProviderId } from "./provider-ids";
+import type { RunHistoryCursor } from "./runs";
+
+/** Paired-device search excludes document bodies, paths and provider settings. */
+export interface ConversationSearchCursor { rank: number; createdAt: number; runId: string }
+export interface ConversationSearchQuery {
+  accountId: string;
+  query: string;
+  cursor?: ConversationSearchCursor;
+  limit?: number;
+}
+export interface ConversationSearchHit {
+  runId: string;
+  title: string;
+  providerId: string;
+  mode: string;
+  context: string | null;
+  updatedAt: number;
+  snippet: string | null;
+  messageCursor: RunHistoryCursor | null;
+}
+export interface ConversationSearchPage { items: ConversationSearchHit[]; nextCursor: ConversationSearchCursor | null }
 
 /** The durable Mains records exposed by the global command menu. */
 export type GlobalSearchResultKind = "workspace" | "run" | "document";

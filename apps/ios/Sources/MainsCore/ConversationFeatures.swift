@@ -90,5 +90,6 @@ public struct TranscriptDisclosure: Sendable {
     public init() {}
     public func isExpanded(active: Bool) -> Bool { selection ?? (active || observedActive) }
     public mutating func observe(active: Bool) { observedActive = observedActive || active }
+    public mutating func expand() { selection = true }
     public mutating func toggle(active: Bool) { selection = !isExpanded(active: active) }
 }

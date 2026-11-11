@@ -175,6 +175,10 @@ public struct Transcript: Sendable {
         else if frozenEnd == nil { frozenEnd = page?.end ?? page?.last?.exclusiveEnd }
     }
 
+    public func rowID(for artifact: Artifact) -> String {
+        promptIdentities[artifact.id]?.id ?? artifact.metadata?["streamId"].string.map { "stream:" + $0 } ?? "artifact:\(artifact.id)"
+    }
+
     public var rows: [TranscriptRow] {
         var rows = (page?.artifacts ?? []).compactMap { artifact -> TranscriptRow? in
             let metadata = artifact.metadata ?? .null
@@ -199,7 +203,7 @@ public struct Transcript: Sendable {
             guard !text.isEmpty || !media.isEmpty else { return nil }
             let streamID = metadata["streamId"].string
             let identity = promptIdentities[artifact.id]
-            let id = identity?.id ?? streamID.map { "stream:" + $0 } ?? "artifact:\(artifact.id)"
+            let id = rowID(for: artifact)
             let date = identity?.date ?? streamID.flatMap { streamDates[$0] } ?? artifact.createdAt
             return TranscriptRow(id: id, kind: kind, text: text, date: date, live: false,
                                  deferredArtifactID: metadata["mobileContentDeferred"].bool ? artifact.id : nil, media: media,

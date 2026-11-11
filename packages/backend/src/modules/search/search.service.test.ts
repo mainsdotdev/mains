@@ -5,6 +5,21 @@ import { searchService, searchSnippet } from "./search.service";
 describe("searchService", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("projects a bounded phone search page without paths, settings or full message bodies", async () => {
+    const row = { id: "old-run", title: "Old telescope", goal: "Telescope notes", providerId: "codex", mode: "work", context: "Science",
+      updatedAt: 1700000000000, createdAt: 1600000000000, rank: 4, artifactId: 42, messageTime: 1600000001000, matchSnippet: "A telescope observation" };
+    const read = vi.spyOn(searchRepo, "findConversations").mockReturnValue([row, { ...row, id: "next-run" }]);
+    const page = await searchService.conversations({ accountId: " account-1 ", query: " telescope ", limit: 1 });
+    expect(read).toHaveBeenCalledWith({ accountId: "account-1", query: "telescope", limit: 2, cursor: undefined });
+    expect(page.items).toEqual([{ runId: "old-run", title: "Old telescope", providerId: "codex", mode: "work", context: "Science", updatedAt: row.updatedAt,
+      snippet: "A telescope observation", messageCursor: { timestamp: row.messageTime, source: "artifact", id: 42 } }]);
+    expect(page.nextCursor).toEqual({ rank: 4, createdAt: row.createdAt, runId: row.id });
+    await expect(searchService.conversations({ accountId: "account-1", query: "x", cursor: { rank: 9, createdAt: 1, runId: "r" } })).rejects.toThrow("Invalid search cursor");
+    read.mockClear();
+    expect(await searchService.conversations({ accountId: "account-1", query: "  " })).toEqual({ items: [], nextCursor: null });
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("does not touch storage for an empty query", async () => {
     const workspaceSpy = vi.spyOn(searchRepo, "findWorkspaces");
 

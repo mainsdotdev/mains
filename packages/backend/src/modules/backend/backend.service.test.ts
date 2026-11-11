@@ -147,6 +147,8 @@ describe("backendService", () => {
         );
       }
       expect(PAIRED_DEVICE_CHANNELS.has("backend:describe")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("search:conversations")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("search:query")).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:getAll")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:getQueue")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:publishQueue")).toBe(false);

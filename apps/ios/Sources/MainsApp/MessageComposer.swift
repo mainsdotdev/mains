@@ -49,6 +49,7 @@ struct MessageComposer: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if let error = draft.storageError { Text(error).font(.caption).foregroundStyle(.orange).padding(.horizontal, 12).padding(.top, 8).accessibilityIdentifier("draftStorageError") }
             if !draft.attachments.isEmpty {
                 ComposerAttachmentStrip(attachments: draft.attachments) { id in
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { draft.attachments.removeAll { $0.id == id } }

@@ -178,6 +178,7 @@ final class DemoBackend {
             return .array(runs.sorted { time($0, "updatedAt") > time($1, "updatedAt") }.prefix(100).map(JSONValue.object))
         case "runs:getById": return runs.first { $0["id"]?.string == runID }.map(JSONValue.object) ?? .null
         case "runs:getQueue": return .object(["queues": .array([])])
+        case "search:conversations": return searchConversations(first)
         case "runs:readTextFile":
             try requireRun(runID)
             guard runs.first(where: { $0["id"]?.string == runID })?["mode"]?.string != "developer",
@@ -265,6 +266,37 @@ final class DemoBackend {
             return image
         default: throw MainsError.server("This action is not available in Demo Mode.")
         }
+    }
+
+    private func searchConversations(_ payload: JSONValue) -> JSONValue {
+        let query = (payload["query"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return .object(["items": .array([]), "nextCursor": .null]) }
+        let cursor = payload["cursor"]
+        let rows = runs.compactMap { run -> (Int, Double, String, JSONValue)? in
+            guard run["isArchived"] != .bool(true), run["accountId"] == payload["accountId"], let id = run["id"]?.string else { return nil }
+            let title = run["title"]?.string ?? "Untitled chat"
+            let message = artifacts[id]?.first { row in
+                ["user-prompt", "report", "result"].contains(row["kind"]?.string ?? "") &&
+                AgentActivity.foreground(row["metadata"] ?? .null) && !AgentActivity.thinking(kind: row["kind"]?.string ?? "", metadata: row["metadata"] ?? .null) &&
+                row["content"]?.string?.localizedCaseInsensitiveContains(query) == true
+            }
+            let titleMatches = title.localizedCaseInsensitiveContains(query)
+            guard titleMatches || message != nil else { return nil }
+            let rank = titleMatches ? 2 : 4, created = time(run).rounded(.down)
+            if let previousRank = cursor["rank"].number, let previousTime = cursor["createdAt"].number, let previousID = cursor["runId"].string {
+                guard Double(rank) > previousRank || Double(rank) == previousRank && (created < previousTime || created == previousTime && id > previousID) else { return nil }
+            }
+            let workspace = seed["workspaces"].array.first { $0["id"] == run["workspaceId"] }
+            let collection = seed["collections"].array.first { $0["id"] == run["collectionId"] }
+            let anchor = message.map { JSONValue.object(["timestamp": .number(time($0).rounded(.down)), "source": .string("artifact"), "id": $0["id"] ?? .number(0)]) } ?? .null
+            let hit: JSONValue = .object(["runId": .string(id), "title": .string(title), "providerId": run["providerId"] ?? .string("codex"),
+                "mode": run["mode"] ?? .string("chat"), "context": workspace?["name"] ?? collection?["name"] ?? .null,
+                "updatedAt": .number(time(run, "updatedAt").rounded(.down)), "snippet": message?["content"]?.string.map { .string(String($0.prefix(400))) } ?? .null, "messageCursor": anchor])
+            return (rank, created, id, hit)
+        }.sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 != $1.1 ? $0.1 > $1.1 : $0.2 < $1.2 }
+        let page = Array(rows.prefix(25)), last = page.last
+        let next: JSONValue = rows.count > 25 && last != nil ? .object(["rank": .number(Double(last!.0)), "createdAt": .number(last!.1), "runId": .string(last!.2)]) : .null
+        return .object(["items": .array(page.map { $0.3 }), "nextCursor": next])
     }
 
     private func execute(_ payload: JSONValue) throws -> JSONValue {

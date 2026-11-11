@@ -198,6 +198,20 @@ const server = http.createServer(async (request, response) => {
   const parts = []; for await (const part of request) parts.push(part);
   response.setHeader('Content-Type', 'application/json');
   if (request.url === '/observations') { response.end(JSON.stringify(observations)); return; }
+  if (request.method === 'POST' && request.url === '/test/search-data') {
+    const original = runs[0];
+    for (let index = 0; index < 140; index++) {
+      const id = `old-search-${String(index).padStart(3, '0')}`, at = new Date(1577836800000 + index * 1000);
+      runs.push({ ...original, id, title: `Telescope notes ${index}`, createdAt: at, updatedAt: at });
+      const history = [];
+      for (let turn = 0; turn < (index === 0 ? 150 : 1); turn++) {
+        history.push({ id: 10000 + index * 1000 + turn * 2, runId: id, kind: 'user-prompt', content: `Question ${turn}`, metadata: {}, createdAt: new Date(at.getTime() + turn * 2) },
+          { id: 10001 + index * 1000 + turn * 2, runId: id, kind: 'report', content: index === 0 && turn === 0 ? 'Deepneedle observation from the oldest message.' : `Telescope answer ${turn}`, metadata: {}, createdAt: new Date(at.getTime() + turn * 2 + 1) });
+      }
+      artifacts.set(id, history);
+    }
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/files') {
     const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
     fileDeliveryFixture = true;
@@ -296,6 +310,22 @@ wss.on('connection', socket => {
     try {
       if (receipts.has(commandId)) { send(socket, { kind: 'response', id, result: receipts.get(commandId) }); return; }
       switch (channel) {
+        case CHANNELS.search.conversations: {
+          const input = args[0], query = input.query.trim().toLowerCase();
+          if (input.accountId !== 'fixture-account') throw new Error('Invalid search account');
+          const matches = runs.filter(run => !run.isArchived).flatMap(run => {
+            const message = artifacts.get(run.id)?.find(row => ['user-prompt', 'report', 'result'].includes(row.kind) && row.content?.toLowerCase().includes(query));
+            const titleMatch = run.title?.toLowerCase().includes(query);
+            if (!titleMatch && !message) return [];
+            const rank = titleMatch ? 2 : 4, createdAt = run.createdAt.getTime(), cursor = input.cursor;
+            if (cursor && !(rank > cursor.rank || rank === cursor.rank && (createdAt < cursor.createdAt || createdAt === cursor.createdAt && run.id > cursor.runId))) return [];
+            return [{ rank, createdAt, hit: { runId: run.id, title: run.title, providerId: run.providerId, mode: run.mode, context: null,
+              updatedAt: run.updatedAt.getTime(), snippet: message?.content.slice(0, 400) ?? null,
+              messageCursor: message ? { timestamp: message.createdAt.getTime(), source: 'artifact', id: message.id } : null } }];
+          }).sort((a, b) => a.rank - b.rank || b.createdAt - a.createdAt || a.hit.runId.localeCompare(b.hit.runId));
+          const page = matches.slice(0, 25), last = page.at(-1);
+          result = { items: page.map(row => row.hit), nextCursor: matches.length > page.length && last ? { rank: last.rank, createdAt: last.createdAt, runId: last.hit.runId } : null }; break;
+        }
         case CHANNELS.runs.readTextFile: {
           const input = args[0], run = runs.find(run => run.id === input.runId);
           if (!fileDeliveryFixture || !run || run.mode === 'developer' || input.filePath !== 'docs/notes.md') throw new Error('Markdown file unavailable');
@@ -309,7 +339,7 @@ wss.on('connection', socket => {
             const captured = encodeWsMessage({ kind: 'response', id, result: { success: true, data: runs } });
             later(delay, () => { if (socket.readyState === WebSocket.OPEN) socket.send(captured); }); return;
           }
-          result = runs; break;
+          result = [...runs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, args[0] ?? 100); break;
         case CHANNELS.space.getAll: result = { spaces }; break;
         case CHANNELS.space.update: {
           if (!commandId) throw new Error('Missing command identity');
@@ -482,13 +512,16 @@ wss.on('connection', socket => {
               hasOlder: start > 0, hasNewer: !!upper && all.some(row => compare(key(row), upper) >= 0) };
             break;
           }
-          const lower = args[0].direction === 'refresh' ? args[0].cursor : null;
+          const lower = ['refresh', 'newer'].includes(args[0].direction) ? args[0].cursor : null;
           const upper = args[0].direction === 'refresh' ? args[0].end : null;
           const compare = (item, cursor) => item.createdAt.getTime() - cursor.timestamp || item.id - cursor.id;
-          const items = all.filter(item => (!lower || compare(item, lower) >= 0) && (!upper || compare(item, upper) < 0)).slice(-200);
+          const eligible = all.filter(item => (!lower || compare(item, lower) >= 0) && (!upper || compare(item, upper) < 0));
+          const items = args[0].direction === 'newer' ? eligible.slice(0, 200) : eligible.slice(-200);
+          const ending = args[0].direction === 'newer' && items.length && items.at(-1).id !== all.at(-1)?.id
+            ? { timestamp: items.at(-1).createdAt.getTime(), source: 'artifact', id: items.at(-1).id + 1 } : upper ?? null;
           result = { artifacts: items, toolCalls: tools.get(args[0].runId) ?? [], turns: storedTurns.get(args[0].runId) ?? [], start: items.length ? { timestamp: items[0].createdAt.getTime(), source: 'artifact', id: items[0].id } : null,
-            end: upper ?? null, last: items.length ? { timestamp: items.at(-1).createdAt.getTime(), source: 'artifact', id: items.at(-1).id } : null,
-            hasOlder: items.length > 0 && items[0].id !== all[0]?.id, hasNewer: !!upper && all.some(item => compare(item, upper) >= 0) };
+            end: ending, last: all.length ? { timestamp: all.at(-1).createdAt.getTime(), source: 'artifact', id: all.at(-1).id } : null,
+            hasOlder: items.length > 0 && items[0].id !== all[0]?.id, hasNewer: !!ending && all.some(item => compare(item, ending) >= 0) };
           break;
         }
         case CHANNELS.runs.inputStatus: {

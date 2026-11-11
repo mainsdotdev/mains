@@ -12,7 +12,16 @@ public final class ConversationDraft {
         public let contextScope: ContextScope?
         public let retainsContent: Bool
     }
-    public var text = ""
+    public var text = "" { didSet { if text != oldValue { persistVisibleText() } } }
+    public internal(set) var storageError: String?
+    @ObservationIgnored var textChanged: ((String) -> Void)?
+    @ObservationIgnored var persistencePaused = false
+    func resumePersistence() { persistencePaused = false; persistVisibleText() }
+    private func persistVisibleText() {
+        guard !persistencePaused else { return }
+        let inFlight = submission.map { $0.retainsContent && stillContains($0) } ?? false
+        textChanged?(inFlight ? "" : text)
+    }
     public var attachments: [PromptAttachment] = []
     public var contextSkills: [ContextSkill] = []
     public private(set) var contextScope: ContextScope?
@@ -42,15 +51,18 @@ public final class ConversationDraft {
         if !retainingContent { clearContent() }
         failure = nil; unsentText = nil; unsentAttachments = []; unsentSkills = []; unsentScope = nil
         submission = next
+        persistVisibleText()
         return next
     }
     public func accept(_ sent: Submission) {
         guard submission?.id == sent.id else { return }
+        defer { persistVisibleText() }
         if sent.retainsContent && stillContains(sent) { clearContent() }
         submission = nil
     }
     public func reject(_ sent: Submission, message: String, uncertain: Bool) {
         guard submission?.id == sent.id else { return }
+        defer { persistVisibleText() }
         submission = nil
         failure = message
         failureTitle = "Couldn't send"

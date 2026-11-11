@@ -9,6 +9,10 @@ final class MemoryStorage: SessionStorage {
     var pairing: PairedBackend?
     var snapshot: CachedSnapshot?
     var consents: Set<String> = []
+    var draftTexts: [TextDraftKey: String] = [:]
+    func loadDraftText(_ key: TextDraftKey) throws -> String? { draftTexts[key] }
+    func saveDraftText(_ text: String, for key: TextDraftKey) throws { draftTexts[key] = text.isEmpty ? nil : text }
+    func removeDraftTexts(backendID: String, deviceID: String) throws { draftTexts = draftTexts.filter { $0.key.backendID != backendID || $0.key.deviceID != deviceID } }
     func loadPairing() throws -> PairedBackend? { pairing }
     func savePairing(_ pairing: PairedBackend) throws { self.pairing = pairing }
     func removePairing() throws { pairing = nil; consents = [] }

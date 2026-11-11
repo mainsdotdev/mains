@@ -26,6 +26,9 @@ public protocol SessionStorage: AnyObject {
     func loadSnapshot() -> CachedSnapshot?
     func saveSnapshot(_ snapshot: CachedSnapshot)
     func removeSnapshot()
+    func loadDraftText(_ key: TextDraftKey) throws -> String?
+    func saveDraftText(_ text: String, for key: TextDraftKey) throws
+    func removeDraftTexts(backendID: String, deviceID: String) throws
     func hasConsent(backendID: String, providerID: String) -> Bool
     func grantConsent(backendID: String, providerID: String)
     func revokeConsent(backendID: String, providerID: String)
@@ -35,6 +38,9 @@ public protocol SessionStorage: AnyObject {
 extension SessionStorage {
     public var demoEnabled: Bool { false }
     public func setDemoEnabled(_ enabled: Bool) {}
+    public func loadDraftText(_ key: TextDraftKey) throws -> String? { nil }
+    public func saveDraftText(_ text: String, for key: TextDraftKey) throws {}
+    public func removeDraftTexts(backendID: String, deviceID: String) throws {}
 }
 
 public enum ConnectionState: String, Sendable {
@@ -137,6 +143,7 @@ public final class BackendSession {
     @ObservationIgnored private var listRefresh: Task<Void, Never>?
     @ObservationIgnored private var historyTask: Task<Bool, Never>?
     @ObservationIgnored private var historySequence = 0
+    @ObservationIgnored private var initialHistoryCursor: HistoryCursor?
     @ObservationIgnored private var historyRefreshNeeded = false
     @ObservationIgnored private var snapshotRefreshNeeded = false
     @ObservationIgnored private var generation = 0
@@ -177,16 +184,51 @@ public final class BackendSession {
     public var ownership: Int { pairingOwner }
     public var selectedSpace: Space? { spaces.first { $0.id == selectedSpaceID } }
 
+    public func searchConversations(_ query: String, cursor: ConversationSearchCursor? = nil) async throws -> ConversationSearchPage {
+        guard let transport, isConnected, let accountID else { throw MainsError.disconnected }
+        let owner = pairingOwner, current = generation
+        let trimmed = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+        guard !trimmed.isEmpty else { return ConversationSearchPage(items: [], nextCursor: nil) }
+        var payload: [String: JSONValue] = ["accountId": .string(accountID), "query": .string(trimmed), "limit": .number(25)]
+        if let cursor { payload["cursor"] = try .encode(cursor) }
+        let value = try await transport.invoke("search:conversations", args: [.object(payload)])
+        try Task.checkCancellation()
+        guard owner == pairingOwner, current == generation, self.transport === transport else { throw MainsError.changedBackend }
+        let page = try value.decode(ConversationSearchPage.self)
+        func validTimestamp(_ value: Double) -> Bool { value.isFinite && value.rounded() == value && (0...253402300799000).contains(value) }
+        guard page.items.count <= 25, Set(page.items.map(\.runId)).count == page.items.count,
+              page.items.allSatisfy({ !$0.runId.isEmpty && $0.title.utf8.count <= 2048 && ($0.snippet?.utf8.count ?? 0) <= 4096 && validTimestamp($0.updatedAt) &&
+                  ($0.messageCursor.map { $0.source == "artifact" && $0.id > 0 && $0.id < Int.max && validTimestamp($0.timestamp) } ?? true) }),
+              page.nextCursor.map({ (0...4).contains($0.rank) && validTimestamp($0.createdAt) && !$0.runId.isEmpty && $0.runId.utf8.count <= 800 }) ?? true,
+              page.nextCursor == nil || page.nextCursor != cursor else { throw MainsError.invalidReply }
+        return page
+    }
+
     public func draft(for runID: String) -> ConversationDraft {
         if let draft = drafts[runID] { return draft }
-        let draft = ConversationDraft()
+        let draft = makeDraft(owner: .conversation, id: runID)
         drafts[runID] = draft
         return draft
     }
 
     public func homeDraft(for spaceID: String) -> ConversationDraft {
         if let draft = homeDrafts[spaceID] { return draft }
-        let draft = ConversationDraft(); homeDrafts[spaceID] = draft; return draft
+        let draft = makeDraft(owner: .home, id: spaceID); homeDrafts[spaceID] = draft; return draft
+    }
+
+    private func makeDraft(owner: TextDraftKey.Owner, id: String) -> ConversationDraft {
+        let draft = ConversationDraft()
+        guard !isDemo, let pairing else { return draft }
+        let key = TextDraftKey(backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId, owner: owner, ownerID: id)
+        do { draft.text = try storage.loadDraftText(key) ?? "" }
+        catch { draft.storageError = "The saved draft could not be read on this iPhone." }
+        let currentOwner = pairingOwner
+        draft.textChanged = { [weak self, weak draft] text in
+            guard let self, let draft, self.pairingOwner == currentOwner, !self.isDemo else { return }
+            do { try self.storage.saveDraftText(text, for: key); draft.storageError = nil }
+            catch { draft.storageError = "Draft not saved: " + error.localizedDescription }
+        }
+        return draft
     }
 
     public func messageQueue(for id: String) -> ConversationQueue { runQueues.queue(id) }
@@ -563,6 +605,9 @@ public final class BackendSession {
         guard owner == pairingOwner else { throw MainsError.changedBackend }
         // Credentials must be durable before the new computer becomes observable.
         try storage.savePairing(result)
+        if !isDemo, let old = pairing, old.descriptor.backendId != result.descriptor.backendId || old.deviceId != result.deviceId {
+            try? storage.removeDraftTexts(backendID: old.descriptor.backendId, deviceID: old.deviceId)
+        }
         storage.setDemoEnabled(false)
         demoBackend?.shutdown(); demoBackend = nil; isDemo = false; demoConsents = []
         pairingOwner += 1
@@ -579,6 +624,7 @@ public final class BackendSession {
     public func forget() throws {
         if isDemo { exitDemo(); return }
         try storage.removePairing()
+        if let pairing { try? storage.removeDraftTexts(backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId) }
         pairingOwner += 1
         pairing = nil
         blocked = nil
@@ -590,6 +636,7 @@ public final class BackendSession {
     private func resetProjection() {
         stopRemoteQueueWatch()
         runQueues.clear()
+        initialHistoryCursor = nil
         activeEndpoint = nil; connectedDescriptor = nil; lastSyncedAt = nil
         consentRevision += 1
         conversations = []; spaces = []; workspaces = []; histories = [:]; historyOrder = []
@@ -761,7 +808,9 @@ public final class BackendSession {
         let providers = try list(providerValue, key: "providers", as: ProviderSummary.self)
         guard generation == current, transport === candidate else { return }
         accountID = id
+        let viewed = conversations.first { $0.id == viewingRunID && !$0.isArchived }
         conversations = runs.map { safeConversation(keepingSettings($0, readVersion: settingsReadVersion)) }.filter { !$0.isArchived }.sorted { $0.updatedAt > $1.updatedAt }
+        if let viewed, !conversations.contains(where: { $0.id == viewed.id }) { conversations.append(viewed) }
         spaces = newSpaces.filter { $0.isArchived != true }.sorted { ($0.sortOrder ?? 0) < ($1.sortOrder ?? 0) }
         workspaces = newWorkspaces.filter { !$0.isArchived }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
         collections = newCollections.filter { !$0.isArchived }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -788,21 +837,24 @@ public final class BackendSession {
         catch { if current == generation { actionError = error.localizedDescription } }
     }
 
-    public func selectConversation(_ id: String) async {
+    public func selectConversation(_ id: String, around cursor: HistoryCursor? = nil) async {
         historyTask?.cancel()
         historyRefreshNeeded = false
         viewingRunID = id
+        initialHistoryCursor = cursor
         startRemoteQueueWatch(id)
         transcript = Transcript()
         historyError = nil
         pendingApprovals = []; approvalExpiryTask?.cancel(); approvalExpiryTask = nil
-        if let page = histories[id] { transcript.replace(page) }
-        await loadHistory(direction: "latest")
+        if cursor == nil, let page = histories[id] { transcript.replace(page) }
+        if cursor != nil { transcript.setFollowing(false) }
+        await loadHistory(direction: cursor == nil ? "latest" : "newer", initialCursor: cursor)
     }
 
     public func leaveConversation(_ id: String) {
         guard viewingRunID == id else { return }
         viewingRunID = nil
+        initialHistoryCursor = nil
         stopRemoteQueueWatch()
         pendingApprovals = []; approvalExpiryTask?.cancel(); approvalExpiryTask = nil
         historyTask?.cancel(); eventRefresh?.cancel(); historyLoading = false
@@ -810,10 +862,11 @@ public final class BackendSession {
         transcript = Transcript()
     }
 
-    @discardableResult public func loadHistory(direction: String) async -> Bool {
+    @discardableResult public func loadHistory(direction: String, initialCursor: HistoryCursor? = nil) async -> Bool {
         guard let runID = viewingRunID, let transport, isConnected else { return false }
         if direction == "refresh", historyTask != nil { historyRefreshNeeded = true; return false }
         let previous = historyTask
+        let initialCursor = initialCursor ?? (transcript.page == nil ? initialHistoryCursor : nil)
         let current = generation
         historySequence += 1
         let sequence = historySequence
@@ -823,7 +876,10 @@ public final class BackendSession {
             self.historyLoading = true; self.historyError = nil
             defer { if self.generation == current, self.viewingRunID == runID { self.historyLoading = false } }
             do {
-                let request = try self.transcript.request(runID: runID, direction: self.transcript.page == nil ? "latest" : direction)
+                let request: JSONValue
+                if let initialCursor {
+                    request = .object(["runId": .string(runID), "direction": .string("newer"), "cursor": try .encode(initialCursor), "profile": .string("mobile")])
+                } else { request = try self.transcript.request(runID: runID, direction: self.transcript.page == nil ? "latest" : direction) }
                 let settingsReadVersion = self.settingsRevision
                 let decisionReadVersion = self.decisionRevision
                 async let pageValue = transport.invoke("runs:getHistory", args: [request])
@@ -841,6 +897,7 @@ public final class BackendSession {
                 let run = try runJSON.decode(Conversation.self)
                 self.upsert(self.keepingSettings(run, readVersion: settingsReadVersion))
                 self.transcript.replace(page, direction: direction, pending: self.pendingMessage)
+                self.initialHistoryCursor = nil
                 let approvals = try approvalJSON.decode([PendingApproval].self)
                 if self.decisionRevision == decisionReadVersion {
                     self.pendingApprovals = run.isReplica == true ? [] : approvals.filter { $0.runId == runID && $0.expiresAt > Date() }.map {
@@ -898,7 +955,11 @@ public final class BackendSession {
         conversations.removeAll { $0.id == run.id }
         if !run.isArchived { conversations.append(run) }
         conversations.sort { $0.updatedAt > $1.updatedAt }
-        if conversations.count > 100 { conversations.removeLast(conversations.count - 100) }
+        if conversations.count > 100 {
+            let viewed = conversations.first { $0.id == viewingRunID }
+            conversations = Array(conversations.prefix(100))
+            if let viewed, !conversations.contains(where: { $0.id == viewed.id }) { conversations.append(viewed) }
+        }
     }
 
     private func event(_ channel: String, _ payload: JSONValue) {

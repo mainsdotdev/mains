@@ -6,6 +6,7 @@ struct ConversationView: View {
     let runID: String
     let onNew: () -> Void
     let onFork: (String) -> Void
+    let initialCursor: HistoryCursor?
     @Bindable private var draft: ConversationDraft
     @Bindable private var queue: ConversationQueue
     @State private var owner: Int?
@@ -64,10 +65,11 @@ struct ConversationView: View {
                     artifacts: session.transcript.page?.artifacts.filter { ["document", "file", "image", "visualization"].contains($0.kind) }.map(\.id) ?? [])
     }
 
-    init(session: BackendSession, runID: String, onNew: @escaping () -> Void, onFork: @escaping (String) -> Void) {
+    init(session: BackendSession, runID: String, onNew: @escaping () -> Void, onFork: @escaping (String) -> Void, initialCursor: HistoryCursor? = nil) {
         self.session = session; self.runID = runID
         self.onNew = onNew
         self.onFork = onFork
+        self.initialCursor = initialCursor
         draft = session.draft(for: runID)
         queue = session.messageQueue(for: runID)
     }
@@ -77,7 +79,7 @@ struct ConversationView: View {
             ConnectionNotice(session: session)
             ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", viewport: $viewport, openFile: { turn, file in
                 selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
-            }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork) {
+            }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor) {
                 content = ContentReference(id: $0)
             }
         }
@@ -121,7 +123,11 @@ struct ConversationView: View {
         }
         .task(id: runID) {
             owner = session.ownership
-            if session.viewingRunID != runID { await session.selectConversation(runID) }
+            if initialCursor != nil {
+                viewport.beginPage()
+                await session.selectConversation(runID, around: initialCursor)
+                viewport.finishPage(latestConfirmed: false)
+            } else if session.viewingRunID != runID { await session.selectConversation(runID) }
         }
         .task(id: outputCheck) {
             let check = outputCheck

@@ -6,6 +6,10 @@ final class NativeStorage: SessionStorage {
     private let service = (Bundle.main.bundleIdentifier ?? "dev.mains.ios") + ".pairing"
     private let account = "paired-backend"
     private let defaults = UserDefaults.standard
+    private let draftStore = TextDraftFileStore(root: URL.applicationSupportDirectory.appendingPathComponent("MainsDrafts-v1", isDirectory: true))
+    func loadDraftText(_ key: TextDraftKey) throws -> String? { try draftStore.load(key) }
+    func saveDraftText(_ text: String, for key: TextDraftKey) throws { try draftStore.save(text, for: key) }
+    func removeDraftTexts(backendID: String, deviceID: String) throws { try draftStore.remove(backendID: backendID, deviceID: deviceID) }
     var demoEnabled: Bool { defaults.bool(forKey: "native-demo-enabled-v1") }
     func setDemoEnabled(_ enabled: Bool) { defaults.set(enabled, forKey: "native-demo-enabled-v1") }
     private var cacheURL: URL {

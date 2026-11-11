@@ -322,6 +322,7 @@ func attachmentOnlyDraftsPreserveFilesAcrossRefusalRecoveryAndUncertainDelivery(
     let page = try samplePage(artifacts: #"[{"id":1,"runId":"run","kind":"user-prompt","content":"Hi","metadata":{},"createdAt":{"$date":"1970-01-01T00:00:02Z"}},{"id":2,"runId":"run","kind":"report","content":"A response already streaming","metadata":{"streamId":"answer-1"},"createdAt":{"$date":"1970-01-01T00:00:03Z"}}]"#)
     transcript.replace(page, pending: pending)
     let confirmed = transcript.rows(pending: nil, runID: "run")
+    #expect(page.artifacts.map { transcript.rowID(for: $0) } == confirmed.map(\.id), "Artifact navigation uses the same pending/stream aliases as the displayed messages.")
     #expect(confirmed.map(\.id) == before.map(\.id))
     #expect(confirmed.map(\.date) == before.map(\.date))
     #expect(confirmed.first?.delivery == .accepted)
