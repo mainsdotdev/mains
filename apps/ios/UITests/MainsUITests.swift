@@ -174,6 +174,31 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(table.staticTexts["Google Play"].exists)
     }
 
+    func testDemoAgentsOverlayDoesNotMoveTranscriptAndDetailsReturnToConversation() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        prepareUnpaired(app); app.buttons["startDemo"].tap()
+        openSidebar(app); app.buttons["Search"].tap()
+        let search = app.textFields["globalSearchInput"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("Explore Mains")
+        let tour = app.buttons["search-run-demo-native-tour"]
+        XCTAssertTrue(tour.waitForExistence(timeout: 10)); tour.tap()
+        let dock = app.buttons["subagentDock"]
+        XCTAssertTrue(dock.waitForExistence(timeout: 10))
+        let before = dock.frame.minY
+        dock.tap()
+        XCTAssertTrue(app.staticTexts["Completed"].waitForExistence(timeout: 5))
+        XCTAssertEqual(dock.frame.minY, before, accuracy: 1)
+        let security = app.buttons["subagent-9100000"]
+        XCTAssertTrue(security.waitForExistence(timeout: 5)); security.tap()
+        XCTAssertTrue(app.buttons["closeSubagent"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Security review"].waitForExistence(timeout: 5))
+        app.buttons["closeSubagent"].tap()
+        XCTAssertTrue(dock.waitForExistence(timeout: 5))
+        XCTAssertEqual(dock.frame.minY, before, accuracy: 1)
+        XCTAssertTrue(app.buttons["sendMessage"].exists)
+    }
+
     func testDemoChangedFilesDiffPagingAndReturn() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

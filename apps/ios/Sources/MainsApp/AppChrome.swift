@@ -10,6 +10,19 @@ enum AppBrand {
     }
 }
 
+/// A hit target behind the page content, never a gesture on the composer or
+/// its controls. Ending editing also updates ContextTextEditor's focus binding.
+struct KeyboardDismissBackground: View {
+    var color: Color = .clear
+    var body: some View {
+        color.contentShape(Rectangle())
+            .onTapGesture {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+            .accessibilityHidden(true)
+    }
+}
+
 extension Provider {
     static func accent(_ id: String?) -> Color {
         switch id {

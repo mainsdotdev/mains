@@ -30,7 +30,7 @@ public struct AgentActivity: Equatable, Sendable {
         return String(rendered.prefix(240)) + (rendered.count > 240 ? "…" : "")
     }
     static func foreground(_ metadata: JSONValue) -> Bool {
-        !metadata["isFromSubagent"].bool && !metadata["voice"].bool &&
+        !metadata["isFromSubagent"].bool && metadata["agentId"].string == nil && !metadata["voice"].bool &&
         ["parentToolCallId", "parentToolUseId"].allSatisfy { metadata[$0].string == nil && metadata[$0].number == nil }
     }
     static func thinking(kind: String, metadata: JSONValue) -> Bool {

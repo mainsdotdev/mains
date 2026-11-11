@@ -137,9 +137,10 @@ public struct ToolCall: Codable, Equatable, Identifiable, Sendable {
     public var startedAt: Date? = nil
     public var endedAt: Date? = nil
     public var parentToolCallId: String? = nil
+    public var toolId: String? = nil
     public var metadata: JSONValue? = nil
 
-    private enum CodingKeys: String, CodingKey { case id, toolName, status, createdAt, input, output, error, startedAt, endedAt, parentToolCallId, metadata }
+    private enum CodingKeys: String, CodingKey { case id, toolName, status, createdAt, input, output, error, startedAt, endedAt, parentToolCallId, toolId, metadata }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id); toolName = try c.decode(String.self, forKey: .toolName)
@@ -148,6 +149,7 @@ public struct ToolCall: Codable, Equatable, Identifiable, Sendable {
         error = try c.decodeWireIfPresent(String.self, forKey: .error)
         startedAt = try c.decodeWireIfPresent(Date.self, forKey: .startedAt); endedAt = try c.decodeWireIfPresent(Date.self, forKey: .endedAt)
         parentToolCallId = try c.decodeWireIfPresent(String.self, forKey: .parentToolCallId)
+        toolId = try c.decodeWireIfPresent(String.self, forKey: .toolId)
         metadata = try c.decodeIfPresent(JSONValue.self, forKey: .metadata)
     }
 }

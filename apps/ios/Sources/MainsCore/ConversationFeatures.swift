@@ -64,8 +64,8 @@ public struct TranscriptSection: Identifiable, Equatable, Sendable {
             let responses = turn.indices.filter { turn[$0].kind == .response }
             if responses.count > 1, let cut = responses.last {
                 let earlier = Array(turn[..<cut])
-                result.append(Self(id: first.id, rows: turn, previous: earlier.filter { $0.kind != .notice && $0.kind != .media },
-                                   breakout: earlier.filter { $0.kind == .notice || $0.kind == .media }, last: Array(turn[cut...])))
+                result.append(Self(id: first.id, rows: turn, previous: earlier.filter { $0.kind != .notice && $0.kind != .media && $0.kind != .subagents },
+                                   breakout: earlier.filter { $0.kind == .notice || $0.kind == .media || $0.kind == .subagents }, last: Array(turn[cut...])))
             } else { result.append(Self(id: first.id, rows: turn, previous: [], breakout: [], last: turn)) }
             turn = []
         }

@@ -16,6 +16,9 @@ struct ConversationView: View {
     @State private var outputs = false
     @State private var outputPresence: (owner: Int, runID: String, available: Bool)?
     @State private var selectedFile: TurnFileSelection?
+    @State private var agentsExpanded = false
+    @State private var selectedAgent: SubagentSelection?
+    private var agents: [SessionSubagent] { session.viewingRunID == runID ? session.transcript.subagents : [] }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
     private var composerContext: ComposerContext? {
@@ -55,7 +58,7 @@ struct ConversationView: View {
             ConnectionNotice(session: session)
             ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", viewport: $viewport, openFile: { turn, file in
                 selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
-            }) {
+            }, openSubagents: { agentsExpanded.toggle() }) {
                 content = ContentReference(id: $0)
             }
         }
@@ -126,11 +129,21 @@ struct ConversationView: View {
         .effortOverlay(isPresented: $modelSheet, session: session, context: run.map { ComposerContext(run: $0) })
         .sheet(isPresented: $optionsSheet) { if let run { RunOptionsSheet(session: session, context: ComposerContext(run: run)) } }
         .sheet(isPresented: $outputs) { OutputsView(session: session, runID: runID) }
+        .sheet(item: $selectedAgent) { SubagentDetailSheet(session: session, selection: $0) }
+        .onChange(of: agents.isEmpty) { _, empty in if empty { agentsExpanded = false } }
         .sensoryFeedback(.impact(weight: .light), trigger: acceptedCount)
     }
 
     private var composerArea: some View {
         VStack(spacing: 8) {
+            if !agents.isEmpty {
+                SubagentDock(agents: agents, partial: session.transcript.page?.hasOlder == true || session.transcript.page?.hasNewer == true,
+                             expanded: $agentsExpanded) { agent in
+                    guard owner == session.ownership, session.viewingRunID == runID else { return }
+                    agentsExpanded = false
+                    selectedAgent = SubagentSelection(runID: runID, agentID: agent.id, owner: session.ownership)
+                }.zIndex(1)
+            }
             SettingsRecoveryNotice(session: session, runID: runID)
             if uncertain, let pending = session.pendingMessage {
                 ChatNotice(title: "Delivery unconfirmed", message: "“\(pending.text.prefix(160))”\nCheck this message before sending another." + (draft.failure.map { "\n" + $0 } ?? ""), symbol: "exclamationmark.circle", warning: true) {

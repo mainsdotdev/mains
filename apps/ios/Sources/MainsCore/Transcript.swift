@@ -1,7 +1,7 @@
 import Foundation
 
 public struct TranscriptRow: Identifiable, Equatable, Sendable {
-    public enum Kind: String, Sendable { case prompt, response, tool, notice, media }
+    public enum Kind: String, Sendable { case prompt, response, tool, notice, media, subagents }
     public let id: String
     public let kind: Kind
     public let text: String
@@ -14,12 +14,14 @@ public struct TranscriptRow: Identifiable, Equatable, Sendable {
     public var contextSkills: [ContextSkill] = []
     public var delivery: PendingMessage.Status? = nil
     public var pendingAttachments: [PromptAttachment] = []
+    public var subagents: [SessionSubagent] = []
 }
 
 /// One bounded backend page plus ephemeral previews. Acknowledgements outlive page replacement.
 public struct Transcript: Sendable {
     public private(set) var page: HistoryPage?
     private var streams: [String: TranscriptRow] = [:]
+    private var childStreams: [String: SubagentMessagePreview] = [:]
     private var acknowledged: Set<String> = []
     private var settled: Set<String> = []
     private var following = true
@@ -60,7 +62,9 @@ public struct Transcript: Sendable {
             if let id = artifact.metadata?["streamId"].string {
                 acknowledged.insert(id)
                 if let preview = streams[id] { streamDates[id] = preview.date }
+                if let preview = childStreams[id] { streamDates[id] = preview.row.date }
                 streams.removeValue(forKey: id)
+                childStreams.removeValue(forKey: id)
                 thoughts.removeValue(forKey: id)
             }
         }
@@ -70,8 +74,23 @@ public struct Transcript: Sendable {
 
     public mutating func receive(_ payload: JSONValue) {
         let event = payload["event"], metadata = event["metadata"]
-        guard event["type"].string == "artifact", AgentActivity.foreground(metadata), let id = event["streamId"].string,
+        guard event["type"].string == "artifact", let id = event["streamId"].string,
               !acknowledged.contains(id), !settled.contains(id) else { return }
+        if !AgentActivity.foreground(metadata) {
+            guard ["report", "result", "command_result"].contains(event["kind"].string ?? ""),
+                  !AgentActivity.thinking(kind: event["kind"].string ?? "", metadata: metadata),
+                  let parent = metadata["parentToolUseId"].string ?? metadata["parentToolCallId"].string ?? metadata["agentId"].string,
+                  let text = event["content"].string, !text.isEmpty else { return }
+            let row = TranscriptRow(id: "stream:" + id, kind: .response, text: String(text.prefix(8192)),
+                date: childStreams[id]?.row.date ?? Date(timeIntervalSince1970: (payload["ts"].number ?? 0) / 1000),
+                live: metadata["streaming"] != .bool(false), deferredArtifactID: nil)
+            childStreams[id] = SubagentMessagePreview(streamID: id, parentID: parent, row: row)
+            if !row.live { settled.insert(id) }
+            if childStreams.count > 4, let oldest = childStreams.filter({ $0.key != id }).min(by: { $0.value.row.date < $1.value.row.date })?.key {
+                childStreams.removeValue(forKey: oldest)
+            }
+            return
+        }
         if AgentActivity.thinking(kind: event["kind"].string ?? "", metadata: metadata) {
             let text = String((event["content"].string ?? "").suffix(4096))
             guard !AgentActivity.preview(text).isEmpty, metadata["streaming"] != .bool(false) else {
@@ -100,10 +119,23 @@ public struct Transcript: Sendable {
     }
     public mutating func settleTurn() {
         for id in Array(streams.keys) { settle(id) }
+        for id in Array(childStreams.keys) {
+            if let preview = childStreams[id] {
+                let row = preview.row
+                childStreams[id]?.row = TranscriptRow(id: row.id, kind: row.kind, text: row.text, date: row.date, live: false, deferredArtifactID: nil)
+                settled.insert(id)
+            }
+        }
         clearThoughts(); suppressStoredThoughts = true
     }
     private mutating func clearThoughts() { settled.formUnion(thoughts.keys); thoughts.removeAll() }
-    public mutating func clearStreams() { streams.removeAll(); clearThoughts(); suppressStoredThoughts = true }
+    public mutating func clearStreams() { streams.removeAll(); childStreams.removeAll(); clearThoughts(); suppressStoredThoughts = true }
+
+    public var subagents: [SessionSubagent] { SubagentProjection(calls: page?.toolCalls ?? []).agents }
+    public func subagentFlow(for agent: SessionSubagent) -> SubagentFlow? {
+        guard let page else { return nil }
+        return SubagentProjection.flow(for: agent, page: page, previews: isHistorical ? [] : Array(childStreams.values), dates: streamDates)
+    }
 
     public var activity: AgentActivity? {
         guard !isHistorical else { return nil }
@@ -116,6 +148,7 @@ public struct Transcript: Sendable {
         }
         if let tool = page?.toolCalls.last(where: {
             ["running", "queued"].contains($0.status) && $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) &&
+            !SubagentProjection.isAgent($0) &&
             current($0.createdAt, Self.turnID($0.metadata ?? .null))
         }) { return AgentActivity(tool: tool) }
         if streams.values.contains(where: { $0.live && current($0.date, $0.turnID) }) { return nil }
@@ -173,9 +206,15 @@ public struct Transcript: Sendable {
                                  turnID: Self.turnID(metadata), contextSkills: (try? metadata["skills"].decode([ContextSkill].self)) ?? [],
                                  delivery: identity == nil ? nil : .accepted)
         }
-        rows += (page?.toolCalls ?? []).filter { $0.parentToolCallId == nil && $0.metadata?["isFromSubagent"].bool != true }.map {
+        let projection = SubagentProjection(calls: page?.toolCalls ?? [])
+        rows += (page?.toolCalls ?? []).filter { $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) && !projection.rootCallIDs.contains($0.id) }.map {
             TranscriptRow(id: "tool:\($0.id)", kind: .tool, text: "\($0.toolName) · \($0.status)", date: $0.createdAt,
                           live: ["queued", "running"].contains($0.status), deferredArtifactID: nil, tool: $0, turnID: Self.turnID($0.metadata ?? .null))
+        }
+        if let first = projection.firstCall, !projection.agents.isEmpty {
+            rows.append(TranscriptRow(id: "subagents:\(first.id)", kind: .subagents,
+                text: "Spawned \(projection.agents.count) \(projection.agents.count == 1 ? "agent" : "agents")", date: first.createdAt,
+                live: false, deferredArtifactID: nil, turnID: Self.turnID(first.metadata ?? .null), subagents: projection.agents))
         }
         // Historical pages never pull live output into an older reading position.
         if !isHistorical { rows += streams.values }

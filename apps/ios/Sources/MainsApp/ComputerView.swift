@@ -237,7 +237,11 @@ private struct AIDataSharingSettingsView: View {
         List {
             Section {
                 Text(session.isDemo ? "Demo Mode stays on this iPhone. These demo choices never grant permission to share data with a real AI service. Mains asks separately after pairing a computer." : "Before Mains on your computer sends a request to a third-party AI service, Mains asks for permission for that computer and provider. Switching providers asks again. These choices are stored only on this phone.")
-                    .font(.subheadline).foregroundStyle(.secondary).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                    .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .listRowBackground(Color.clear)
+                    // Inset-grouped rows clip their corners even with a clear
+                    // background. Keep the prose inside that rounded boundary.
+                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
             }
             SettingsSection(session.isDemo ? "Demo providers" : "This computer") {
                 ForEach(providers, id: \.self) { id in

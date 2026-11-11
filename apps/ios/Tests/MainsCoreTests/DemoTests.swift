@@ -4,6 +4,37 @@ import Testing
 
 @Suite(.serialized)
 struct DemoTests {
+    @Test @MainActor func subagentReplayUsesRealHistoryAndTransitionsWithoutLeakingChildMessages() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let transport = DemoTransport(backend: backend)
+        try transport.open(endpoint: DemoBackend.endpoint, token: "")
+        defer { transport.close(); backend.shutdown() }
+        var transcript = Transcript(), runID = "", states: [[SubagentState]] = [], errors: [String] = []
+        transport.onEvent = { channel, payload in
+            guard payload["runId"].string == runID else { return }
+            if channel == "runs:ephemeralEvent" { transcript.receive(payload) }
+            if channel == "runs:eventPersisted" {
+                do {
+                    let page = try backend.invoke("runs:getHistory", args: [self.historyRequest(runID)]).decode(HistoryPage.self)
+                    transcript.replace(page)
+                    if !transcript.subagents.isEmpty { states.append(transcript.subagents.map(\.state)) }
+                } catch { errors.append(error.localizedDescription) }
+            }
+        }
+        let result = try await transport.invoke("runs:execute", args: [try startPayload(backend, text: DemoBackend.subagentsPrompt)], commandId: "agents-demo")
+        runID = try #require(result["runId"].string)
+        try await eventually { (try? backend.invoke("runs:getById", args: [.string(runID)]))?["status"].string == "succeeded" }
+        #expect(errors.isEmpty && states.contains { $0 == [.running, .running] })
+        #expect(states.contains { $0.contains(.done) && $0.contains(.running) })
+        #expect(transcript.subagents.count == 2 && transcript.subagents.allSatisfy { $0.state == .done })
+        #expect(transcript.rows.filter { $0.kind == .subagents }.count == 1)
+        #expect(transcript.rows.allSatisfy { !$0.text.contains("## Security review") && !$0.text.contains("## Test review") })
+        for agent in transcript.subagents {
+            let flow = try #require(transcript.subagentFlow(for: agent))
+            #expect(flow.rows.contains { $0.kind == .tool } && flow.rows.contains { $0.kind == .response })
+        }
+    }
+
     @Test @MainActor func offlineDemoUsesNormalSessionCataloguesAndIsolatedStorage() async throws {
         let storage = MemoryStorage()
         storage.snapshot = CachedSnapshot(backendID: "keep-real-cache", conversations: [], spaces: [], workspaces: [], histories: [:])

@@ -93,6 +93,17 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   returning preserves the transcript position. Demo's **Try file changes** replays
   a prepared patch; **Explore Mains** also includes modified, paged added,
   renamed and binary samples. No real files are changed.
+- Subagents use a centered **N agents** glass capsule above the composer. Tapping
+  opens a floating Active/Completed list without changing the transcript's height;
+  failed/stopped agents appear under Needs attention. Selecting an agent opens an
+  expandable partial-height sheet with its task, child tools/messages and report.
+  Native identity merges continuations, provider lifecycle wins over detached launch
+  acknowledgements, and known children follow their parent. This is read-only and
+  limited to the current bounded mobile history window, explicitly labelled when
+  more messages exist. No full-history or host-file reads are introduced. Up to four
+  child message previews (8,192 characters each) stay in memory; they never enter
+  the cache or main transcript. **Try subagents** replays working/completed Security
+  and Tests agents; **Explore Mains** includes their prepared completed reports.
 - A sliding sidebar with provider/space discs, Code workspaces and branch
   information, and Work/Chat project groups and recent conversations.
 - Code / Work / Chat tabs sit under the Mains title in the sidebar. Selection
@@ -141,7 +152,10 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   notice with a chooser shortcut and keep the draft intact.
 - Photos, Files and device Camera attachments in both composers (up to five,
   2 MB total). Attachment bytes stay in memory while composing and sending.
-- The + menu grows from its composer button. Camera and Photos grow out of that
+- The + menu grows from its composer button and preserves the editor's keyboard
+  and caret. A child overlay in the current window blocks background touches
+  without disabling the editor; dismissing the menu keeps typing active.
+  Camera and Photos grow out of that
   menu into matching partial-height panels; Back reverses to the menu, while Close,
   backdrop taps and a completed import shrink back along the same path before
   removing the overlay. Reduce Motion uses a short fade. Camera has shutter,

@@ -9,6 +9,7 @@ struct ChatMessage: View {
     let row: TranscriptRow
     let providerID: String
     let readContent: (Int) -> Void
+    var openSubagents: () -> Void = {}
     var body: some View {
         VStack(alignment: row.kind == .prompt ? .trailing : .leading, spacing: 10) {
             switch row.kind {
@@ -29,6 +30,7 @@ struct ChatMessage: View {
                 Label(row.text, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
             case .media: ChatMediaGallery(session: session, media: row.media)
             case .tool: EmptyView()
+            case .subagents: SubagentSummaryRow(text: row.text, open: openSubagents)
             }
             if let id = row.deferredArtifactID {
                 Button("Read full message", systemImage: "text.alignleft") { readContent(id) }

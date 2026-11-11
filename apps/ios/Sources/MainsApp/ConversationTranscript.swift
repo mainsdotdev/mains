@@ -6,6 +6,7 @@ struct ConversationTranscript: View {
     let providerID: String
     @Binding var viewport: TranscriptViewport
     let openFile: (RunTurn, TurnFileChange) -> Void
+    let openSubagents: () -> Void
     let readContent: (Int) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var scrollPosition = ScrollPosition(idType: String.self)
@@ -21,6 +22,12 @@ struct ConversationTranscript: View {
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
 
     var body: some View {
+        GeometryReader { container in
+            transcript(minimumHeight: max(0, container.size.height - container.safeAreaInsets.top - container.safeAreaInsets.bottom))
+        }
+    }
+
+    private func transcript(minimumHeight: CGFloat) -> some View {
         ScrollView {
             // The backend already caps this page at 200 rows / 1 MB. Eager
             // measurement avoids lazy height estimates shifting a live tail.
@@ -49,7 +56,7 @@ struct ConversationTranscript: View {
                     VStack(alignment: .leading, spacing: 12) {
                         ChatTurnView(session: session, section: section, providerID: providerID,
                                      live: run?.isActive == true && section.id == sections.last?.id && !session.transcript.isHistorical,
-                                     readContent: readContent)
+                                     readContent: readContent, openSubagents: openSubagents)
                         ForEach(footers[section.id] ?? [], id: \.id) { turn in
                             TurnChangesCard(turn: turn) { openFile(turn, $0) }
                         }
@@ -74,6 +81,10 @@ struct ConversationTranscript: View {
             }
             .scrollTargetLayout()
             .padding(.horizontal, 16).padding(.top, 24).padding(.bottom, 12)
+            // Short conversations still need a tappable blank area below the
+            // messages. Keep the content top-aligned and leave controls above it.
+            .frame(minHeight: minimumHeight, alignment: .top)
+            .background { KeyboardDismissBackground() }
             .coordinateSpace(name: "transcript-content")
             .animation(nil, value: rows)
         }
@@ -227,6 +238,7 @@ private struct ChatTurnView: View {
     let providerID: String
     let live: Bool
     let readContent: (Int) -> Void
+    let openSubagents: () -> Void
     @State private var disclosure = TranscriptDisclosure()
     private var expanded: Bool { disclosure.isExpanded(active: live) }
     var body: some View {
@@ -252,7 +264,7 @@ private struct ChatTurnView: View {
             ForEach(TranscriptGroup.build(rows)) { group in
                 if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: live) }
                 else if group.rows.first?.kind == .media { ChatMediaGallery(session: session, media: group.rows.flatMap(\.media)) }
-                else if let row = group.rows.first { ChatMessage(session: session, row: row, providerID: providerID, readContent: readContent) }
+                else if let row = group.rows.first { ChatMessage(session: session, row: row, providerID: providerID, readContent: readContent, openSubagents: openSubagents) }
             }
         }
     }

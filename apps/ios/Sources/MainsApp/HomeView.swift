@@ -33,7 +33,7 @@ struct HomeView: View {
             Spacer(minLength: 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background { KeyboardDismissBackground(color: Color(.systemBackground)) }
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let space {
@@ -137,6 +137,12 @@ private struct HomeComposerArea: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
                 .accessibilityIdentifier("demoDecisionsPrompt")
+                Button { draft.text = DemoBackend.subagentsPrompt } label: {
+                    Label("Try subagents", systemImage: "person.crop.rectangle.stack").font(.footnote.weight(.medium))
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
+                .accessibilityIdentifier("demoSubagentsPrompt")
                 if space.mode != "chat" {
                     Button {
                         draft.text = DemoBackend.changesPrompt

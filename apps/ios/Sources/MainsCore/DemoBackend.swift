@@ -10,6 +10,7 @@ final class DemoBackend {
     static let tourID = "demo-native-tour"
     static let decisionPrompt = "Walk me through approvals and questions"
     static let changesPrompt = "Show sample file changes and diffs"
+    static let subagentsPrompt = "Review the sample workspace with subagents"
     static let pdfAttachmentID = String(repeating: "d", count: 64)
     static let imageAttachmentID = String(repeating: "e", count: 64)
 
@@ -32,7 +33,7 @@ final class DemoBackend {
     private var owner: UUID?
     private var emit: ((String, JSONValue) -> Void)?
     private var tasks: [String: Task<Void, Never>] = [:]
-    private enum Step { case text(String), thinking(String), tool(String, JSONValue, JSONValue), approval(JSONValue), questions, changes, finish }
+    private enum Step { case text(String), thinking(String), tool(String, JSONValue, JSONValue), approval(JSONValue), questions, changes, subagents(Int), finish }
     private struct Replay {
         let steps: [Step]
         var index = 0
@@ -40,6 +41,8 @@ final class DemoBackend {
         var streamID = UUID().uuidString
         var waiting = false
         var activeToolID: Int?
+        var agentBaseID: Int?
+        var agentsStartedAt: Double?
     }
     private var replays: [String: Replay] = [:]
     private struct Receipt {
@@ -305,6 +308,11 @@ final class DemoBackend {
     }
 
     private func scenario(_ prompt: String, hasAttachments: Bool, mode: String) -> [Step] {
+        if prompt.localizedCaseInsensitiveContains("subagent") || prompt.localizedCaseInsensitiveContains("alt ajan") {
+            return [.text("I’ll review the bundled sample with two simulated agents: Security and Tests. Open the agents button above the composer to inspect their activity."),
+                .subagents(0), .subagents(1), .subagents(2),
+                .text("## Sample reviews complete\n\n**Security:** check credential ownership and memory-only previews.\n\n**Tests:** cover reconnection, receipt deduplication and bounded history.\n\nBoth prepared reports are available in **2 agents**. No provider or external service was contacted."), .finish]
+        }
         if prompt.localizedCaseInsensitiveContains("Markdown formatting") {
             return [.text("""
             ## Markdown formatting
@@ -422,6 +430,18 @@ final class DemoBackend {
         case .changes:
             if let turnID = turns[runID]?.last?["id"]?.number { installChanges(runID, turnID: Int(turnID)) }
             replay.index += 1
+        case .subagents(let stage):
+            if replay.count == 0 {
+                if replay.agentBaseID == nil {
+                    replay.agentBaseID = takeID(); for _ in 0..<5 { _ = takeID() }
+                    replay.agentsStartedAt = Date().timeIntervalSince1970 * 1000
+                }
+                if let base = replay.agentBaseID, let at = replay.agentsStartedAt {
+                    installSubagents(runID, baseID: base, at: at, stage: stage)
+                }
+            }
+            replay.count += 1
+            if replay.count >= 4 { replay.count = 0; replay.index += 1 }
         case .finish: finish(runID, status: "succeeded"); return
         }
         replays[runID] = replay
@@ -613,6 +633,27 @@ final class DemoBackend {
         turns[Self.tourID] = [["id": .number(9_000_001), "status": .string("completed"), "model": .string("gpt-6.1-sol"), "turnIndex": .number(0),
                               "startedAt": .number(at), "createdAt": .number(at), "endedAt": .number(at + 300)]]
         installChanges(Self.tourID, turnID: 9_000_001)
+        installSubagents(Self.tourID, baseID: 9_100_000, at: at + 50, stage: 2)
+    }
+
+    private func installSubagents(_ runID: String, baseID: Int, at: Double, stage: Int) {
+        guard let turn = turns[runID]?.last?["id"]?.number else { return }
+        let snapshot = DemoSubagents.snapshot(runID: runID, baseID: baseID, at: at, stage: stage, turnID: Int(turn))
+        let callIDs = Set(snapshot.calls.compactMap { $0["id"].number })
+        tools[runID, default: []].removeAll { callIDs.contains($0["id"]?.number ?? 0) }
+        tools[runID, default: []].append(contentsOf: snapshot.calls.map(\.objectValue))
+        let existing = Set((artifacts[runID] ?? []).compactMap { $0["id"]?.number })
+        artifacts[runID, default: []].append(contentsOf: snapshot.artifacts.filter { !existing.contains($0["id"].number ?? 0) }.map(\.objectValue))
+        if stage < 2 {
+            // Exercise the child preview path before the durable report arrives.
+            let anchor = "demo-agent-\(baseID + stage)"
+            push("runs:ephemeralEvent", ["runId": .string(runID), "event": .object([
+                "type": .string("artifact"), "kind": .string("report"), "streamId": .string(anchor + "-report"),
+                "content": .string(stage == 0 ? "Reviewing credential storage and backend ownership…" : "Reviewing reconnection and receipt tests…"),
+                "metadata": .object(["parentToolUseId": .string(anchor), "isFromSubagent": .bool(true), "streaming": .bool(true)]),
+            ])])
+        }
+        push("runs:eventPersisted", ["runId": .string(runID)])
     }
 
     private func installChanges(_ runID: String, turnID: Int) {
