@@ -182,7 +182,7 @@ final class RunQueueController {
         }
     }
     private func send(_ queue: ConversationQueue, id: String, delivery: MessageDelivery) async {
-        guard let session, session.isConnected, !session.sending, session.pendingMessage == nil,
+        guard let session, session.isConnected, !session.sending, session.pendingMessage == nil, session.pendingFork == nil,
               !queue.retired, !queue.busy, !locks.contains(queue.runID),
               delivery == .steer || queue.pauseReason == nil,
               delivery == .steer || (queue.deferredUntil.map { ContinuousClock.now >= $0 } ?? true),
@@ -206,7 +206,7 @@ final class RunQueueController {
                 guard let head = queue.messages.first, head.status == .queued, queue.pauseReason == nil else { return }
                 admittedID = head.id
             }
-            guard owner == session.ownership, !queue.retired, queue.revision == revision, session.isConnected, !session.sending, session.pendingMessage == nil,
+            guard owner == session.ownership, !queue.retired, queue.revision == revision, session.isConnected, !session.sending, session.pendingMessage == nil, session.pendingFork == nil,
                   let index = queue.messages.firstIndex(where: { $0.id == admittedID }), queue.messages[index].status == .queued else { return }
             let message = queue.messages[index]
             queue.messages[index].status = .sending; queue.messages[index].delivery = delivery; queue.messages[index].error = nil

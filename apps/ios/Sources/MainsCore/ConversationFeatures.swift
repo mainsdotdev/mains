@@ -9,7 +9,7 @@ public struct RunOutput: Decodable, Identifiable, Sendable {
     public let byteSize: Int
     public let version: String
     public let previewType: String
-    public var previewLimit: Int { ["text", "markdown"].contains(previewType) ? 2 * 1024 * 1024 : 25 * 1024 * 1024 }
+    public var downloadLimit: Int { RunFilePolicy.maxBytes }
 }
 public struct RunOutputsPage: Decodable, Sendable {
     public let items: [RunOutput]
@@ -46,6 +46,10 @@ public struct TranscriptSection: Identifiable, Equatable, Sendable {
     public let breakout: [TranscriptRow]
     public let last: [TranscriptRow]
     public var folded: Bool { !previous.isEmpty }
+    /// Copy all visible-window assistant prose in the turn, including folded work.
+    /// Tool output, prompts and notices do not belong on the clipboard.
+    public var responseText: String { rows.filter { $0.kind == .response }.map(\.text).joined(separator: "\n\n") }
+    public var responseIsPreview: Bool { rows.contains { $0.kind == .response && $0.deferredArtifactID != nil } }
     public func displayedRows(expanded: Bool) -> [TranscriptRow] {
         guard folded && !expanded else { return rows }
         let hidden = Set(previous.map(\.id))

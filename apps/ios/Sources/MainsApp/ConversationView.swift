@@ -5,6 +5,7 @@ struct ConversationView: View {
     let session: BackendSession
     let runID: String
     let onNew: () -> Void
+    let onFork: (String) -> Void
     @Bindable private var draft: ConversationDraft
     @Bindable private var queue: ConversationQueue
     @State private var owner: Int?
@@ -12,6 +13,7 @@ struct ConversationView: View {
     @State private var consent: ConsentContext?
     @State private var consentQueuesMessage = false
     @State private var consentResumesQueue = false
+    @State private var consentForksConversation = false
     @State private var content: ContentReference?
     @State private var acceptedCount = 0
     @State private var modelSheet = false
@@ -32,6 +34,10 @@ struct ConversationView: View {
         return nil
     }
     private var uncertain: Bool { session.pendingMessage?.status == .uncertain }
+    private var forkTitle: String {
+        guard let pending = session.pendingFork, pending.sourceRunID == runID else { return "Fork conversation" }
+        return pending.status == .sending ? "Forking…" : "Fork unconfirmed"
+    }
     private var usesQueue: Bool {
         run?.supportsSteering == true && (run?.isActive == true || !queue.messages.isEmpty || queue.editingID != nil)
     }
@@ -58,9 +64,10 @@ struct ConversationView: View {
                     artifacts: session.transcript.page?.artifacts.filter { ["document", "file", "image", "visualization"].contains($0.kind) }.map(\.id) ?? [])
     }
 
-    init(session: BackendSession, runID: String, onNew: @escaping () -> Void) {
+    init(session: BackendSession, runID: String, onNew: @escaping () -> Void, onFork: @escaping (String) -> Void) {
         self.session = session; self.runID = runID
         self.onNew = onNew
+        self.onFork = onFork
         draft = session.draft(for: runID)
         queue = session.messageQueue(for: runID)
     }
@@ -70,7 +77,7 @@ struct ConversationView: View {
             ConnectionNotice(session: session)
             ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", viewport: $viewport, openFile: { turn, file in
                 selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
-            }, openSubagents: { agentsExpanded.toggle() }) {
+            }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork) {
                 content = ContentReference(id: $0)
             }
         }
@@ -96,6 +103,11 @@ struct ConversationView: View {
                 Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
                 Menu {
                     Label(session.isDemo ? "Demo Mode · On this iPhone" : session.connection.label, systemImage: session.isConnected ? "checkmark.circle" : "wifi.slash")
+                    if run?.isReplica != true {
+                        Button(action: prepareFork) {
+                            Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
+                        }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
+                    }
                     Button("Sync now", systemImage: "arrow.clockwise") {
                         Task { await session.refresh(); if session.viewingRunID == runID { await session.loadHistory(direction: "refresh") } }
                     }.disabled(!session.isConnected)
@@ -132,7 +144,8 @@ struct ConversationView: View {
             ConsentView(context: context) {
                 guard owner == session.ownership else { return }
                 session.grantConsent(providerID: context.providerID, backendID: context.backendID)
-                if consentResumesQueue { Task { await session.resumeMessageQueue(runID) } }
+                if consentForksConversation { Task { await fork() } }
+                else if consentResumesQueue { Task { await session.resumeMessageQueue(runID) } }
                 else { Task { await send(queued: consentQueuesMessage) } }
             }
         }
@@ -145,6 +158,7 @@ struct ConversationView: View {
         .sheet(item: $selectedAgent) { SubagentDetailSheet(session: session, selection: $0) }
         .onChange(of: agents.isEmpty) { _, empty in if empty { agentsExpanded = false } }
         .sensoryFeedback(.impact(weight: .light), trigger: acceptedCount)
+        .runFileLinks(session: session, runID: runID)
     }
 
     private var composerArea: some View {
@@ -195,7 +209,7 @@ struct ConversationView: View {
                     .accessibilityIdentifier("archivedConversationNotice")
             } else if let context = composerContext {
                 MessageComposer(session: session, context: context, draft: draft,
-                    canSend: run != nil && session.stoppingRunID != runID && (usesQueue ||
+                    canSend: run != nil && session.pendingFork == nil && session.stoppingRunID != runID && (usesQueue ||
                         session.isConnected && !uncertain && !session.sending && pending?.status != .accepted && !viewport.paging && run?.isActive != true),
                     active: run?.isActive == true, canSendDuringRun: run?.supportsSteering == true, sendLabel: sendLabel,
                     stopping: session.stoppingRunID == runID, stop: { Task { await stop() } },
@@ -211,7 +225,7 @@ struct ConversationView: View {
               let backendID = session.pairing?.descriptor.backendId, !draft.isSending else { return }
         let queued = usesQueue
         if !session.hasConsent(providerID: run.providerId) {
-            consentQueuesMessage = queued; consentResumesQueue = false
+            consentQueuesMessage = queued; consentResumesQueue = false; consentForksConversation = false
             consent = ConsentContext(backendID: backendID, providerID: run.providerId, isDemo: session.isDemo)
         } else { Task { await send(queued: queued) } }
     }
@@ -219,7 +233,7 @@ struct ConversationView: View {
     private func prepareQueueResume() {
         guard let run, let backendID = session.pairing?.descriptor.backendId, owner == session.ownership else { return }
         if !session.hasConsent(providerID: run.providerId) {
-            consentResumesQueue = true
+            consentResumesQueue = true; consentForksConversation = false
             consent = ConsentContext(backendID: backendID, providerID: run.providerId, isDemo: session.isDemo)
         } else { Task { await session.resumeMessageQueue(runID) } }
     }
@@ -253,6 +267,24 @@ struct ConversationView: View {
             if viewport.paging { viewport.finishPage(latestConfirmed: false) }
             draft.reject(submission, message: error.localizedDescription, uncertain: uncertain)
         }
+    }
+
+    private func prepareFork() {
+        guard session.canForkConversation(runID), let run, owner == session.ownership,
+              let backendID = session.pairing?.descriptor.backendId else { return }
+        if !session.hasConsent(providerID: run.providerId) {
+            consentForksConversation = true; consentResumesQueue = false
+            consent = ConsentContext(backendID: backendID, providerID: run.providerId, isDemo: session.isDemo)
+        } else { Task { await fork() } }
+    }
+
+    private func fork() async {
+        guard owner == session.ownership, session.viewingRunID == runID else { return }
+        do {
+            let id = try await session.forkConversation(runID)
+            guard owner == session.ownership, session.viewingRunID == runID else { return }
+            onFork(id)
+        } catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
     }
 
     private func stop() async {

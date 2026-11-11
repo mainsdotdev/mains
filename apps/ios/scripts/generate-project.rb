@@ -26,6 +26,9 @@ source_group = project.main_group.new_group('Sources', 'Sources')
 end
 resources = project.main_group.new_group('Resources', 'Resources')
 app.resources_build_phase.add_file_reference(resources.new_file('Assets.xcassets'))
+math = resources.new_file('Math')
+math.last_known_file_type = 'folder'
+app.resources_build_phase.add_file_reference(math)
 demo = project.main_group.new_file('Sources/MainsCore/Resources/DemoSnapshot.json')
 app.resources_build_phase.add_file_reference(demo)
 project.main_group.new_file('Info.plist')

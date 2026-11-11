@@ -109,6 +109,7 @@ public final class BackendSession {
     public private(set) var transcript = Transcript()
     public private(set) var viewingRunID: String?
     public private(set) var pendingMessage: PendingMessage?
+    public private(set) var pendingFork: PendingFork?
     public private(set) var remoteQueues: [RemoteRunQueue] = []
     public private(set) var historyLoading = false
     public private(set) var historyError: String?
@@ -363,8 +364,44 @@ public final class BackendSession {
     }
 
     public func downloadOutput(_ output: RunOutput, progress: (Double) -> Void = { _ in }) async throws -> Data {
-        try await downloadFile(byteSize: output.byteSize, limit: output.previewLimit, version: output.version,
+        try await downloadFile(byteSize: output.byteSize, version: output.version,
                                read: { try await self.readOutput(output, offset: $0) }, progress: progress)
+    }
+
+    public func downloadOutput(_ output: RunOutput, to url: URL, progress: (Double) -> Void = { _ in }) async throws {
+        try await RunFileTransfer.save(to: url) { write in
+            try await self.receiveFile(byteSize: output.byteSize, version: output.version, read: { try await self.readOutput(output, offset: $0) }, write: write, progress: progress)
+        }
+    }
+
+    public func resolveFileReference(_ href: String, runID: String, relativeTo base: String? = nil) async throws -> ResolvedRunFile {
+        guard let reference = RunFileReference(href, relativeTo: base), isConnected,
+              let transport, let run = conversations.first(where: { $0.id == runID }) else { throw MainsError.server("This file link is not available.") }
+        let owner = pairingOwner, current = generation
+        var offset = 0, matches: [RunOutput] = []
+        for _ in 0..<128 {
+            let page = try await listOutputs(runID, offset: offset)
+            try Task.checkCancellation()
+            guard owner == pairingOwner, current == generation, self.transport === transport,
+                  page.items.count <= 100, page.items.allSatisfy({ $0.runId == runID }) else { throw MainsError.changedBackend }
+            matches += page.items.filter { $0.name == reference.name }
+            guard matches.count <= 1 else { throw MainsError.server("More than one output has this name. Choose the file in Outputs.") }
+            guard let next = page.nextOffset else {
+                if let output = matches.first { return .output(output) }
+                guard run.mode != "developer", reference.isMarkdown else { throw MainsError.server("This file is not a downloadable output of this conversation.") }
+                let value = try await transport.invoke("runs:readTextFile", args: [.object(["runId": .string(runID), "filePath": .string(reference.path)])])
+                try Task.checkCancellation()
+                guard owner == pairingOwner, current == generation, self.transport === transport else { throw MainsError.changedBackend }
+                let document = try value.decode(RunLinkedMarkdown.self)
+                guard document.content.utf8.count <= 2 * 1024 * 1024,
+                      let relative = RunFileReference(document.relativePath), !relative.path.hasPrefix("/"),
+                      relative.path.range(of: #"^[a-zA-Z]:/"#, options: .regularExpression) == nil else { throw MainsError.invalidReply }
+                return .markdown(document)
+            }
+            guard next > offset else { throw MainsError.invalidReply }
+            offset = next
+        }
+        throw MainsError.server("Open Outputs to find this file.")
     }
 
     public func readImage(_ media: TranscriptMedia, maxSide: Int = 512) async throws -> ArtifactImage {
@@ -397,39 +434,37 @@ public final class BackendSession {
 
     public func downloadAttachment(_ file: RunAttachmentFile, progress: (Double) -> Void = { _ in }) async throws -> Data {
         guard TranscriptMedia.validAttachmentID(file.attachmentId) else { throw MainsError.invalidReply }
-        return try await downloadFile(byteSize: file.byteSize, limit: file.previewLimit, version: file.version, read: { offset in
-            guard let transport = self.transport, self.isConnected else { throw MainsError.disconnected }
-            let value = try await transport.invoke("runArtifacts:readAttachmentChunk", args: [.object([
-                "runId": .string(file.runId), "attachmentId": .string(file.attachmentId), "version": .string(file.version), "offset": .number(Double(offset)),
-            ])])
-            return try value.decode(RunOutputChunk.self)
-        }, progress: progress)
+        return try await downloadFile(byteSize: file.byteSize, version: file.version, read: { try await self.readAttachmentChunk(file, offset: $0) }, progress: progress)
     }
 
-    private func downloadFile(byteSize: Int, limit: Int, version: String,
+    public func downloadAttachment(_ file: RunAttachmentFile, to url: URL, progress: (Double) -> Void = { _ in }) async throws {
+        guard TranscriptMedia.validAttachmentID(file.attachmentId) else { throw MainsError.invalidReply }
+        try await RunFileTransfer.save(to: url) { write in
+            try await self.receiveFile(byteSize: file.byteSize, version: file.version, read: { try await self.readAttachmentChunk(file, offset: $0) }, write: write, progress: progress)
+        }
+    }
+
+    private func readAttachmentChunk(_ file: RunAttachmentFile, offset: Int) async throws -> RunOutputChunk {
+        guard let transport, isConnected else { throw MainsError.disconnected }
+        let value = try await transport.invoke("runArtifacts:readAttachmentChunk", args: [.object([
+            "runId": .string(file.runId), "attachmentId": .string(file.attachmentId), "version": .string(file.version), "offset": .number(Double(offset)),
+        ])])
+        return try value.decode(RunOutputChunk.self)
+    }
+
+    private func downloadFile(byteSize: Int, version: String,
                               read: (Int) async throws -> RunOutputChunk, progress: (Double) -> Void) async throws -> Data {
-        guard (0...min(limit, 25 * 1024 * 1024)).contains(byteSize) else { throw MainsError.server("This file exceeds the phone preview limit.") }
-        let owner = pairingOwner
-        let current = generation
-        var bytes = Data(), offset = 0
-        repeat {
-            try Task.checkCancellation()
-            let chunk = try await read(offset)
-            guard owner == pairingOwner, current == generation else { throw MainsError.changedBackend }
-            guard chunk.version == version, chunk.offset == offset,
-                  chunk.byteSize == byteSize, chunk.base64.utf8.count <= 174_764,
-                  let part = Data(base64Encoded: chunk.base64), part.count <= 128 * 1024,
-                  bytes.count + part.count <= byteSize else { throw MainsError.invalidReply }
-            bytes.append(part)
-            progress(Double(bytes.count) / Double(max(1, byteSize)))
-            if let next = chunk.nextOffset {
-                guard next == bytes.count, next > offset, next < byteSize else { throw MainsError.invalidReply }
-                offset = next
-            } else {
-                guard bytes.count == byteSize else { throw MainsError.invalidReply }
-                return bytes
-            }
-        } while true
+        var bytes = Data()
+        try await receiveFile(byteSize: byteSize, version: version, read: read, write: { bytes.append($0) }, progress: progress)
+        return bytes
+    }
+
+    private func receiveFile(byteSize: Int, version: String, read: (Int) async throws -> RunOutputChunk,
+                             write: (Data) throws -> Void, progress: (Double) -> Void) async throws {
+        let owner = pairingOwner, current = generation
+        try await RunFileTransfer.receive(byteSize: byteSize, version: version, validate: {
+            guard owner == self.pairingOwner, current == self.generation else { throw MainsError.changedBackend }
+        }, read: read, write: write, progress: progress)
     }
 
     public func loadModels(_ providerID: String, force: Bool = false) async {
@@ -558,7 +593,7 @@ public final class BackendSession {
         activeEndpoint = nil; connectedDescriptor = nil; lastSyncedAt = nil
         consentRevision += 1
         conversations = []; spaces = []; workspaces = []; histories = [:]; historyOrder = []
-        transcript = Transcript(); viewingRunID = nil; pendingMessage = nil; accountID = nil
+        transcript = Transcript(); viewingRunID = nil; pendingMessage = nil; pendingFork = nil; accountID = nil
         sending = false; stoppingRunID = nil; drafts = [:]
         homeDrafts = [:]; collections = []; projects = []; gitStates = []
         selectedSpaceID = nil; homeTargets = [:]; composerSettings = [:]; providerConfigs = [:]
@@ -993,6 +1028,7 @@ public final class BackendSession {
     public func send(_ text: String, runID: String? = nil, spaceID: String? = nil, workspaceID: String? = nil,
                      collectionID: String? = nil, settings: ComposerSettings? = nil, attachments: [PromptAttachment] = [],
                      contextSkills: [ContextSkill] = [], contextScope: ContextScope? = nil, steering: Bool = false, queuedInputID: String? = nil) async throws -> String {
+        guard pendingFork == nil else { throw MainsError.server("Wait for the fork, or check its delivery before sending.") }
         guard pendingMessage?.status != .uncertain else { throw MainsError.server("Check the unconfirmed message before sending another.") }
         if let runID, decisionDeliveries.contains(where: { $0.value.attempt?.runID == runID && [.sending, .uncertain].contains($0.value.phase) }) {
             throw MainsError.server("Wait for the pending answer, or check its delivery before sending another message.")
@@ -1063,6 +1099,60 @@ public final class BackendSession {
     public func checkDelivery() async throws -> String {
         guard let pending = pendingMessage, pending.status == .uncertain, !sending else { throw MainsError.invalidReply }
         return try await deliver(pending) // The ORIGINAL identity and payload, never a new command.
+    }
+
+    public func canForkConversation(_ id: String) -> Bool {
+        isConnected && pendingFork == nil && !sending && pendingMessage == nil && stoppingRunID == nil &&
+        settingsChanges[id] == nil && conversations.first(where: { $0.id == id })?.canFork == true &&
+        !decisionDeliveries.contains { $0.value.attempt?.runID == id && [.sending, .uncertain].contains($0.value.phase) }
+    }
+
+    public func forkConversation(_ id: String) async throws -> String {
+        guard canForkConversation(id), pairing != nil, let accountID,
+              let run = conversations.first(where: { $0.id == id }) else {
+            throw MainsError.server("Fork a finished, local conversation while connected. Resolve any pending delivery first.")
+        }
+        guard hasConsent(providerID: run.providerId) else { throw MainsError.server("Allow data sharing with \(Provider.recipient(run.providerId)) before forking.") }
+        let attempt = PendingFork(sourceRunID: id, status: .sending, commandID: UUID().uuidString,
+                                  payload: .object(["sourceRunId": .string(id), "accountId": .string(accountID),
+                                                    "message": .string("Continue from where this session left off.")]), owner: pairingOwner)
+        return try await deliverFork(attempt)
+    }
+
+    public func checkForkDelivery() async throws -> String {
+        guard let attempt = pendingFork, attempt.status == .uncertain, isConnected else { throw MainsError.disconnected }
+        return try await deliverFork(attempt)
+    }
+
+    private func deliverFork(_ input: PendingFork) async throws -> String {
+        var attempt = input; attempt.status = .sending; pendingFork = attempt
+        do {
+            let result = try await command("runs:fork", args: [attempt.payload], commandID: attempt.commandID, owner: attempt.owner)
+            guard attempt.owner == pairingOwner else { throw MainsError.changedBackend }
+            guard let id = result["runId"].string, !id.isEmpty, id != attempt.sourceRunID,
+                  result["sourceRunId"].string == attempt.sourceRunID else { throw MainsError.invalidReply }
+            pendingFork = nil; runQueues.kick()
+            // Receipt acknowledgement completes the action; metadata loading may
+            // finish later and must never turn an accepted fork into a new send.
+            let current = generation
+            Task { [weak self] in
+                guard let self, self.pairingOwner == attempt.owner, self.generation == current else { return }
+                _ = try? await self.readQueuedRun(id)
+                guard self.pairingOwner == attempt.owner, self.generation == current else { return }
+                await self.refresh()
+            }
+            return id
+        } catch {
+            if attempt.owner == pairingOwner {
+                let failure = error as? MainsError
+                let refused: Bool
+                if case .server = failure { refused = failure?.isUnconfirmedCommand == false }
+                else { refused = failure == .unauthorized || failure == .incompatible }
+                if refused { pendingFork = nil; runQueues.kick() }
+                else { attempt.status = .uncertain; pendingFork = attempt }
+            }
+            throw error
+        }
     }
 
     private func deliver(_ attempt: PendingMessage) async throws -> String {

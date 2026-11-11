@@ -26,13 +26,13 @@ struct OutputsView: View {
                             Image(systemName: output.previewType == "image" ? "photo" : "doc.text").foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(output.name).foregroundStyle(.primary)
-                                Text(output.byteSize > output.previewLimit ? "Larger than the phone preview limit" : ByteCountFormatter.string(fromByteCount: Int64(output.byteSize), countStyle: .file))
+                                Text(output.byteSize > output.downloadLimit ? "Larger than the 100 MB download limit" : ByteCountFormatter.string(fromByteCount: Int64(output.byteSize), countStyle: .file))
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
                         }.padding(.vertical, 5)
-                    }.disabled(output.byteSize > output.previewLimit || !session.isConnected)
+                    }.disabled(output.byteSize > output.downloadLimit || !session.isConnected)
                         .accessibilityIdentifier("output-\(output.id)")
                 }
                 if !previous.isEmpty || page?.nextOffset != nil {
@@ -61,34 +61,42 @@ struct OutputPreviewView: View {
     let session: BackendSession
     private let output: RunOutput?
     private let media: TranscriptMedia?
-    init(session: BackendSession, output: RunOutput) { self.session = session; self.output = output; media = nil }
-    init(session: BackendSession, media: TranscriptMedia) { self.session = session; self.media = media; output = nil }
-    private var name: String { output?.name ?? media?.name ?? "Attachment" }
+    private let linkedFile: RunLinkedFileSelection?
+    init(session: BackendSession, output: RunOutput) { self.session = session; self.output = output; media = nil; linkedFile = nil }
+    init(session: BackendSession, media: TranscriptMedia) { self.session = session; self.media = media; output = nil; linkedFile = nil }
+    init(session: BackendSession, linkedFile: RunLinkedFileSelection) { self.session = session; self.linkedFile = linkedFile; output = nil; media = nil }
+    private var runID: String { output?.runId ?? media?.runID ?? linkedFile?.runID ?? "" }
+    private var name: String { downloadedName ?? output?.name ?? media?.name ?? linkedFile.flatMap { RunFileReference($0.href)?.name } ?? "File" }
     @Environment(\.dismiss) private var dismiss
     @State private var url: URL?
     @State private var folder: URL?
     @State private var error: String?
-    @State private var text: String?
-    @State private var markdown = false
+    @State private var previewType = "unsupported"
+    @State private var downloadedName: String?
+    @State private var relativePath: String?
     @State private var progress = 0.0
     @State private var retry = 0
+    @State private var loadID = UUID()
     var body: some View {
         NavigationStack {
             Group {
-                if let text {
-                    ScrollView {
-                        Group {
-                            if markdown { ChatMessageBody(text: text) }
-                            else { Text(text).font(.system(.body, design: .monospaced)).textSelection(.enabled) }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
-                    }.accessibilityIdentifier("outputTextPreview")
-                } else if let url { OutputQuickLook(url: url).accessibilityIdentifier("outputPreview") }
-                else if let error {
-                    ContentUnavailableView {
-                        Label("Couldn’t open output", systemImage: "doc.badge.ellipsis")
-                    } description: { Text(error) } actions: {
-                        Button("Try again") { retry += 1 }
+                if let url {
+                    if ["text", "markdown"].contains(previewType) { LocalTextFilePreview(url: url, markdown: previewType == "markdown") }
+                    else if previewType != "unsupported", QLPreviewController.canPreview(url as NSURL) { OutputQuickLook(url: url).accessibilityIdentifier("outputPreview") }
+                    else {
+                        ContentUnavailableView {
+                            Label("File ready", systemImage: "doc.zipper")
+                        } description: {
+                            Text("A preview isn’t available for this file. Share it or save it to Files.")
+                        } actions: {
+                            ShareLink(item: url) { Label("Share or Save to Files", systemImage: "square.and.arrow.up") }
+                                .accessibilityIdentifier("exportDownloadedFile")
+                        }
                     }
+                } else if let error {
+                    ContentUnavailableView {
+                        Label("Couldn’t open file", systemImage: "doc.badge.ellipsis")
+                    } description: { Text(error) } actions: { Button("Try again") { retry += 1 } }
                 } else { VStack(spacing: 16) { ProgressView(value: progress).frame(maxWidth: 180); Text("Opening \(name)…").font(.footnote).foregroundStyle(.secondary) } }
             }
             .navigationTitle(name).navigationBarTitleDisplayMode(.inline)
@@ -99,60 +107,71 @@ struct OutputPreviewView: View {
                 }
             }
         }
+        .runFileLinks(session: session, runID: runID, relativeTo: relativePath)
         .task(id: retry) { await download() }
-        .onDisappear { cleanup() }
-        .onChange(of: session.ownership) { _, _ in cleanup(); dismiss() }
+        .onDisappear { loadID = UUID(); cleanup() }
+        .onChange(of: session.ownership) { _, _ in loadID = UUID(); cleanup(); dismiss() }
     }
-    private func cleanup() { if let folder { try? FileManager.default.removeItem(at: folder) }; folder = nil; url = nil; text = nil }
+    private func cleanup() { if let folder { try? FileManager.default.removeItem(at: folder) }; folder = nil; url = nil }
     private func download() async {
+        let ticket = UUID(); loadID = ticket
         cleanup(); error = nil; progress = 0
+        var destination: URL?
         do {
-            let bytes: Data
-            var fileName = name
-            var previewType = "native"
-            if let media, media.image {
-                let image = try await session.readImage(media, maxSide: 1600)
-                guard let data = image.data else { throw MainsError.invalidReply }
-                bytes = data
-                let ext = UTType(mimeType: image.mime)?.preferredFilenameExtension ?? "jpg"
-                fileName = (TranscriptMedia.fileName(name) as NSString).deletingPathExtension + "." + ext
-            } else if let media, case .attachment = media.source {
-                let file = try await session.describeAttachment(media)
-                guard file.previewType != "unsupported" else { throw MainsError.server("Open this file in Mains on your computer.") }
-                bytes = try await session.downloadAttachment(file) { progress = $0 }
-                fileName = file.name; previewType = file.previewType
-            } else {
-                let selected: RunOutput
-                if let output, retry == 0 { selected = output }
-                else {
-                    let runID = output?.runId ?? media?.runID ?? ""
-                    let artifactID: Int
-                    if let output { artifactID = output.artifactId }
-                    else if let media, case .artifact(let id) = media.source { artifactID = id }
-                    else { throw MainsError.server("This older attachment has no downloadable preview.") }
-                    guard let current = try await session.listOutputs(runID, artifactID: artifactID).items.first,
-                          current.runId == runID, current.artifactId == artifactID else { throw MainsError.server("This output is no longer available.") }
-                    selected = current
+            if let linkedFile { guard linkedFile.owner == session.ownership else { throw MainsError.changedBackend } }
+            var selected = output
+            var linkedMarkdown: RunLinkedMarkdown?
+            if let linkedFile {
+                switch try await session.resolveFileReference(linkedFile.href, runID: runID, relativeTo: linkedFile.base) {
+                case .output(let file): selected = file
+                case .markdown(let document): linkedMarkdown = document
                 }
-                guard selected.previewType != "unsupported" else { throw MainsError.server("Open this file in Mains on your computer.") }
-                bytes = try await session.downloadOutput(selected) { progress = $0 }
-                fileName = selected.name; previewType = selected.previewType
+            }
+            var attachment: RunAttachmentFile?
+            var imagePreview: ArtifactImage?
+            if let media {
+                if case .attachment = media.source { attachment = try await session.describeAttachment(media) }
+                else if case .artifact(let id) = media.source {
+                    selected = try await session.listOutputs(runID, artifactID: id).items.first
+                    if selected?.artifactId != id || selected?.runId != runID {
+                        selected = nil
+                        if media.image { imagePreview = try await session.readImage(media, maxSide: 1600) }
+                        else { throw MainsError.server("This output is no longer available.") }
+                    }
+                } else { throw MainsError.server("This older attachment has no downloadable file.") }
+            } else if let file = selected, retry > 0 {
+                selected = try await session.listOutputs(runID, artifactID: file.artifactId).items.first
+                guard selected?.artifactId == file.artifactId, selected?.runId == runID else { throw MainsError.server("This output is no longer available.") }
             }
             try Task.checkCancellation()
-            let destination = FileManager.default.temporaryDirectory.appendingPathComponent("mains-output-" + UUID().uuidString, isDirectory: true)
-            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true, attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
-            folder = destination
-            let name = TranscriptMedia.fileName(fileName)
-            let file = destination.appendingPathComponent(name.isEmpty || [".", ".."].contains(name) ? "Output" : name)
-            try bytes.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            markdown = previewType == "markdown"
-            if ["text", "markdown"].contains(previewType) {
-                text = String(data: bytes, encoding: .utf8)
-            }
-            url = file
+            guard ticket == loadID else { throw CancellationError() }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mains-output-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+            destination = directory; folder = directory
+            let fileName = imagePreview.map { (TranscriptMedia.fileName(name) as NSString).deletingPathExtension + "." + (UTType(mimeType: $0.mime)?.preferredFilenameExtension ?? "jpg") }
+                ?? TranscriptMedia.fileName(linkedMarkdown?.fileName ?? attachment?.name ?? selected?.name ?? name)
+            let fileURL = directory.appendingPathComponent(fileName)
+            if let imagePreview, let bytes = imagePreview.data {
+                try bytes.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                previewType = "image"; relativePath = nil
+            } else if let linkedMarkdown {
+                try Data(linkedMarkdown.content.utf8).write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                previewType = "markdown"; relativePath = linkedMarkdown.relativePath
+            } else if let attachment {
+                try await session.downloadAttachment(attachment, to: fileURL) { if ticket == loadID { progress = $0 } }
+                previewType = attachment.previewType; relativePath = attachment.name
+            } else if let selected {
+                try await session.downloadOutput(selected, to: fileURL) { if ticket == loadID { progress = $0 } }
+                previewType = selected.previewType
+                relativePath = linkedFile.flatMap { RunFileReference($0.href, relativeTo: $0.base)?.path } ?? selected.name
+            } else { throw MainsError.invalidReply }
+            try Task.checkCancellation()
+            guard ticket == loadID else { throw CancellationError() }
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: fileURL.path)
+            downloadedName = fileName; url = fileURL
         } catch {
-            cleanup()
-            if !Task.isCancelled { self.error = error.localizedDescription }
+            if let destination { try? FileManager.default.removeItem(at: destination) }
+            if ticket == loadID { cleanup(); if !Task.isCancelled { self.error = error.localizedDescription } }
         }
     }
 }

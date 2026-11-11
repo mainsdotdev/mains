@@ -7,6 +7,7 @@ struct ConversationTranscript: View {
     @Binding var viewport: TranscriptViewport
     let openFile: (RunTurn, TurnFileChange) -> Void
     let openSubagents: () -> Void
+    let fork: () -> Void
     let readContent: (Int) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var scrollPosition = ScrollPosition(idType: String.self)
@@ -20,6 +21,12 @@ struct ConversationTranscript: View {
     private var rows: [TranscriptRow] { session.viewingRunID == runID ? session.transcript.rows(pending: pending, runID: runID) : [] }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
+    private var forkRowID: String? {
+        guard run?.isReplica != true else { return nil }
+        return TranscriptForkAnchor.rowID(in: rows, atLatest: page?.hasNewer != true,
+                                         active: run?.isActive == true,
+                                         hasLocalContinuation: pending != nil && pending?.isSteering != true)
+    }
 
     var body: some View {
         GeometryReader { container in
@@ -56,7 +63,8 @@ struct ConversationTranscript: View {
                     VStack(alignment: .leading, spacing: 12) {
                         ChatTurnView(session: session, section: section, providerID: providerID,
                                      live: run?.isActive == true && section.id == sections.last?.id && !session.transcript.isHistorical,
-                                     readContent: readContent, openSubagents: openSubagents)
+                                     readContent: readContent, openSubagents: openSubagents,
+                                     forkRowID: forkRowID, forkRunID: runID, fork: fork)
                         ForEach(footers[section.id] ?? [], id: \.id) { turn in
                             TurnChangesCard(turn: turn) { openFile(turn, $0) }
                         }
@@ -239,6 +247,9 @@ private struct ChatTurnView: View {
     let live: Bool
     let readContent: (Int) -> Void
     let openSubagents: () -> Void
+    let forkRowID: String?
+    let forkRunID: String
+    let fork: () -> Void
     @State private var disclosure = TranscriptDisclosure()
     private var expanded: Bool { disclosure.isExpanded(active: live) }
     var body: some View {
@@ -261,10 +272,16 @@ private struct ChatTurnView: View {
     }
     private func messages(_ rows: [TranscriptRow]) -> some View {
         VStack(alignment: .leading, spacing: 20) {
+            let lastResponse = section.rows.last(where: { $0.kind == .response })
+            let copyRowID = live || lastResponse?.live == true ? nil : lastResponse?.id
             ForEach(TranscriptGroup.build(rows)) { group in
                 if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: live) }
                 else if group.rows.first?.kind == .media { ChatMediaGallery(session: session, media: group.rows.flatMap(\.media)) }
-                else if let row = group.rows.first { ChatMessage(session: session, row: row, providerID: providerID, readContent: readContent, openSubagents: openSubagents) }
+                else if let row = group.rows.first {
+                    ChatMessage(session: session, row: row, providerID: providerID, readContent: readContent, openSubagents: openSubagents,
+                                copyText: row.id == copyRowID ? section.responseText : nil, copyIsPreview: section.responseIsPreview,
+                                forkRunID: row.id == forkRowID ? forkRunID : nil, fork: fork)
+                }
             }
         }
     }

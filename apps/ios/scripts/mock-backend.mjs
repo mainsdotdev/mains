@@ -24,6 +24,8 @@ const storedTurns = new Map(), storedDiffs = new Map();
 let acceptsConnections = true;
 let holdSnapshot = 0;
 let contextDelayMs = 0, contextInvalidRows = false;
+let forkBehavior = null;
+let fileDeliveryFixture = false;
 let pagedHistory = false;
 let disjointHistory = false;
 let artifacts, runs, nextID, spaces, tools;
@@ -31,6 +33,8 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   for (const timer of timers) clearTimeout(timer);
   timers.clear(); replies.clear(); acceptsConnections = true;
   holdSnapshot = 0; contextDelayMs = 0; contextInvalidRows = false;
+  forkBehavior = null;
+  fileDeliveryFixture = false;
   pagedHistory = paging;
   disjointHistory = disjoint;
   receipts.clear(); pendingDecisions.clear(); storedTurns.clear(); storedDiffs.clear(); observations.length = 0; nextID = 10;
@@ -138,6 +142,20 @@ function fixturePDF() {
   return Buffer.from(source + '% harmless fixture padding\n'.repeat(6000));
 }
 const pdfBytes = fixturePDF();
+function fixtureFile(id) {
+  const file = { 701: ['archive.zip', 'application/zip', 'unsupported', 100 * 1024 * 1024],
+    702: ['large.txt', 'text/plain', 'text', 3 * 1024 * 1024], 703: ['report.pdf', 'application/pdf', 'native', pdfBytes.length] }[id];
+  if (!file) throw new Error('Unknown fixture output');
+  return { artifactId: id, runId: 'fixture-run', name: file[0], mimeType: file[1], previewType: file[2], byteSize: file[3], version: outputVersion, modifiedAt: 0 };
+}
+function fixtureChunk(id, input) {
+  const file = fixtureFile(id), start = input.offset;
+  if (input.runId !== file.runId || input.version !== file.version || !Number.isSafeInteger(start) || start < 0 || start >= file.byteSize) throw new Error('Invalid fixture chunk');
+  const end = Math.min(file.byteSize, start + 128 * 1024);
+  const bytes = id === 703 ? pdfBytes.subarray(start, end) : Buffer.alloc(end - start, id === 701 ? 0 : 120);
+  if (id === 701 && start === 0) bytes.set([80, 75, 3, 4]);
+  return { base64: bytes.toString('base64'), offset: start, nextOffset: end < file.byteSize ? end : null, byteSize: file.byteSize, version: file.version };
+}
 function send(socket, message) { if (socket.readyState === WebSocket.OPEN) socket.send(encodeWsMessage(message)); }
 function broadcast(channel, payload) { for (const socket of connections) send(socket, { kind: 'event', channel, payload }); }
 function event(channel, runId, extra = {}) { broadcast(channel, { runId, ts: Date.now(), ...extra }); }
@@ -180,6 +198,17 @@ const server = http.createServer(async (request, response) => {
   const parts = []; for await (const part of request) parts.push(part);
   response.setHeader('Content-Type', 'application/json');
   if (request.url === '/observations') { response.end(JSON.stringify(observations)); return; }
+  if (request.method === 'POST' && request.url === '/test/files') {
+    const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    fileDeliveryFixture = true;
+    runs.find(run => run.id === 'fixture-run').mode = body.mode === 'developer' ? 'developer' : 'chat';
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/fork') {
+    const body = JSON.parse(Buffer.concat(parts).toString());
+    forkBehavior = ['disconnect', 'unknown', 'refuse'].includes(body.behavior) ? body.behavior : null;
+    response.end('{}'); return;
+  }
   // Simulate the desktop owner publishing through IPC; paired phones may only read this projection.
   if (request.method === 'POST' && request.url === '/test/queue') {
     const body = JSON.parse(Buffer.concat(parts).toString());
@@ -267,6 +296,11 @@ wss.on('connection', socket => {
     try {
       if (receipts.has(commandId)) { send(socket, { kind: 'response', id, result: receipts.get(commandId) }); return; }
       switch (channel) {
+        case CHANNELS.runs.readTextFile: {
+          const input = args[0], run = runs.find(run => run.id === input.runId);
+          if (!fileDeliveryFixture || !run || run.mode === 'developer' || input.filePath !== 'docs/notes.md') throw new Error('Markdown file unavailable');
+          result = { fileName: 'notes.md', relativePath: 'docs/notes.md', content: '# Notes\n\nA run-local file with $x^2$ and [a PDF](report.pdf).' }; break;
+        }
         case CHANNELS.backend.describe: result = descriptor; break;
         case CHANNELS.account.get: result = { id: 'fixture-account', displayName: 'Fixture' }; break;
         case CHANNELS.runs.getAll:
@@ -330,6 +364,12 @@ wss.on('connection', socket => {
           break;
         }
         case CHANNELS.runs.listOutputs: {
+          if (fileDeliveryFixture) {
+            if (args[0].runId !== 'fixture-run') throw new Error('Invalid file run');
+            const ids = args[0].artifactId ? [args[0].artifactId] : [701, 702, 703];
+            result = !args[0].artifactId && args[0].offset === 0 ? { items: [], nextOffset: 100 } : { items: ids.map(fixtureFile), nextOffset: null };
+            break;
+          }
           if (!runs.some(r => r.id === args[0].runId)) throw new Error('Conversation not found');
           const pdf = args[0].artifactId === 505 || artifacts.get(args[0].runId)?.some(item => item.id === 505);
           const item = pdf ? { artifactId: 505, runId: args[0].runId, name: 'report.pdf', mimeType: 'application/pdf', byteSize: pdfBytes.length, version: outputVersion, previewType: 'native' }
@@ -338,6 +378,7 @@ wss.on('connection', socket => {
         }
         case CHANNELS.runs.readOutputFile: {
           const input = args[0];
+          if (fileDeliveryFixture) { result = fixtureChunk(input.artifactId, input); break; }
           const bytes = input.artifactId === 505 ? pdfBytes : outputBytes;
           if (!runs.some(r => r.id === input.runId) || ![503, 505].includes(input.artifactId) || input.version !== outputVersion || input.offset < 0 || input.offset >= bytes.length) throw new Error('Invalid output selection');
           const end = Math.min(bytes.length, input.offset + 128 * 1024);
@@ -351,11 +392,15 @@ wss.on('connection', socket => {
         }
         case CHANNELS.runArtifacts.describeAttachmentFile: {
           const input = args[0];
+          if (fileDeliveryFixture && input.runId === 'fixture-run' && input.attachmentId === 'a'.repeat(64)) {
+            result = { ...fixtureFile(701), attachmentId: input.attachmentId }; delete result.artifactId; break;
+          }
           if (input.runId !== 'fixture-run' || input.attachmentId !== 'c'.repeat(64)) throw new Error('Invalid attachment reference');
           result = { runId: input.runId, attachmentId: input.attachmentId, name: 'report.pdf', mimeType: 'application/pdf', byteSize: pdfBytes.length, modifiedAt: 0, version: outputVersion, previewType: 'native' }; break;
         }
         case CHANNELS.runArtifacts.readAttachmentChunk: {
           const input = args[0];
+          if (fileDeliveryFixture && input.runId === 'fixture-run' && input.attachmentId === 'a'.repeat(64)) { result = fixtureChunk(701, input); break; }
           if (input.runId !== 'fixture-run' || input.attachmentId !== 'c'.repeat(64) || input.version !== outputVersion || input.offset < 0 || input.offset >= pdfBytes.length) throw new Error('Invalid attachment selection');
           const end = Math.min(pdfBytes.length, input.offset + 128 * 1024);
           result = { base64: pdfBytes.subarray(input.offset, end).toString('base64'), offset: input.offset, nextOffset: end < pdfBytes.length ? end : null, byteSize: pdfBytes.length, version: outputVersion }; break;
@@ -470,6 +515,24 @@ wss.on('connection', socket => {
           if (input.message === 'Reconnect steer once') { socket.terminate(); return; }
           if (input.message === 'Unconfirmed accepted steer') {
             send(socket, { kind: 'response', id, result: { success: false, error: 'Command outcome is unknown because its result was not recorded. Check the conversation before sending another command.' } }); return;
+          }
+          break;
+        }
+        case CHANNELS.runs.fork: {
+          const input = args[0], behavior = forkBehavior; forkBehavior = null;
+          const source = runs.find(run => run.id === input.sourceRunId);
+          if (!commandId || !source || input.accountId !== source.accountId) throw new Error('Missing fork identity or account');
+          if (behavior === 'refuse') throw new Error('Provider does not support session forking');
+          if (source.isReplica || source.isArchived || ['running', 'queued'].includes(source.status)) throw new Error('Fork a finished local conversation');
+          const runId = `fixture-run-${nextID++}`;
+          runs.push({ ...source, id: runId, title: 'Fork of ' + source.title, status: 'succeeded', createdAt: new Date(), updatedAt: new Date() });
+          artifacts.set(runId, []);
+          result = { runId, sourceRunId: source.id };
+          receipts.set(commandId, { success: true, data: result });
+          startReply(runId, input.message, commandId, input);
+          if (behavior === 'disconnect') { socket.terminate(); return; }
+          if (behavior === 'unknown') {
+            send(socket, { kind: 'response', id, result: { success: false, error: 'Command outcome is unknown. Check the original fork.' } }); return;
           }
           break;
         }

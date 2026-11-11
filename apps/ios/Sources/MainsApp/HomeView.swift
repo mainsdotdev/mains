@@ -111,7 +111,7 @@ private struct HomeComposerArea: View {
     private var workspaceIcon: String? { session.projects.first { $0.id == workspace?.projectId }?.icon }
     private var collection: ProjectCollection? { session.collections.first { $0.id == target.collectionID } }
     private var uncertain: Bool { session.pendingMessage?.status == .uncertain }
-    private var ready: Bool { session.isConnected && !session.changingMode && !session.sending && !uncertain }
+    private var ready: Bool { session.isConnected && !session.changingMode && !session.sending && !uncertain && session.pendingFork == nil }
     private var targetReady: Bool { space.mode != "developer" || workspace != nil && session.gitStates.first(where: { $0.workspaceId == workspace?.id })?.pathExists != false }
     init(session: BackendSession, space: Space, targetSheet: Binding<Bool>, modelSheet: Binding<Bool>, optionsSheet: Binding<Bool>,
          consent: Binding<ConsentContext?>, onCreated: @escaping (String) -> Void) {

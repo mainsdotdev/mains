@@ -58,5 +58,5 @@ public struct RunAttachmentFile: Decodable, Sendable {
     public let byteSize: Int
     public let version: String
     public let previewType: String
-    public var previewLimit: Int { ["text", "markdown"].contains(previewType) ? 2 * 1024 * 1024 : 25 * 1024 * 1024 }
+    public var downloadLimit: Int { RunFilePolicy.maxBytes }
 }

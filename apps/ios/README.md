@@ -3,7 +3,8 @@
 An independent SwiftUI client for the existing Mains backend. Requires iOS 26+
 and Xcode 26+ with Swift 6. Controls and the composer use native Liquid Glass;
 the system Reduce Transparency preference retains an opaque accessible surface.
-No third-party iOS runtime dependencies.
+No third-party Swift package dependencies. Math messages use the bundled KaTeX
+0.18.7 assets already used by the Expo app, inside an offline WebKit surface.
 `apps/mobile` remains the separate Expo/React Native app for iOS and Android.
 
 ## Run
@@ -170,6 +171,23 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   attachment budget; file imports retain their data. The composer shows fixed
   104-point square image previews in one horizontal strip and documents separately.
 - Text continuation, stop, cumulative live replies and durable stream acknowledgement.
+- Completed answers expose Copy beside Fork, using the desktop's sideways fork
+  glyph. Copy works offline, takes the loaded turn's raw Markdown (including folded
+  assistant prose), and acknowledges with a checkmark for two seconds. Tool output
+  is excluded; truncated answers are labeled as previews. Long-press message and
+  code-block copy remain available.
+- Fork a completed local conversation from the last settled response or the
+  conversation menu. The computer branches its provider session and inherits the
+  source's workspace, space, mode, model and policy; the new conversation opens
+  with the same continuation message as desktop. The original draft, files,
+  reading position and queued messages stay with their source. Historical pages
+  do not label an old response as a fork point. Running/replica/offline conversations
+  cannot fork. Provider support and session expiry are checked by the computer.
+  Forks use the normal provider-sharing disclosure. An unconfirmed fork blocks
+  fresh sends and exposes an app-wide **Check fork** action that reuses its
+  original command identity, including after reconnection. Pending fork receipts
+  stay in memory until resolved, pairing replacement or app termination. Demo
+  forks inherit the sample's settings and remain entirely on-device.
 - Codex and Claude queue new messages during a running turn: messages keep their
   files, context and selected settings, and send FIFO after a successful turn.
   The queue is visible only while it contains messages; there is no delivery-mode
@@ -221,10 +239,24 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   and a latest-message control.
 - Folded intermediate assistant/tool work, with the final answer always visible;
   active turns stay expanded and errors stay outside the fold.
-- Native output listing, Markdown/text previews (2 MB) and Quick Look document/image
-  previews/sharing (25 MB), read in
-  version-checked 128 KB chunks only when opened. Temporary previews are private
-  and removed when closed. The output list keeps one page of up to 100 descriptors.
+- Native output listing and downloads up to 100 MB, streamed to a protected
+  temporary file in version-checked 128 KB chunks. Markdown/text files open in
+  64 KB UTF-8 pages; documents/images use Quick Look. ZIP and other unsupported
+  formats still download and expose Share / Save to Files. Partial files are
+  removed on failure/cancellation and temporary files are removed on close.
+  The output list keeps one page of up to 100 descriptors.
+- Local Markdown links resolve selected outputs by name in their conversation;
+  duplicate names direct the user to Outputs. Work/Chat Markdown references also
+  use the backend's contained `runs:readTextFile` reader, including relative links
+  inside an opened document. Code repository paths never become arbitrary file
+  reads. HTTP(S)/mail links keep the normal system action.
+- Inline `$…$` / `\\(…\\)` and display `$$…$$` / `\\[…\\]` math use local KaTeX
+  scripts, CSS and fonts, with native Markdown retained for other messages.
+  Code/currency remain literal, raw HTML is escaped, and links use the same file
+  routing. MathML supplies accessibility. The isolated WebKit surface has no
+  network access, limits macro expansion/size, and disables trusted TeX commands.
+  Unfinished/invalid TeX stays readable; messages above the 128 KB math-rendering
+  budget fall back to the native Markdown reader.
 - A floating material composer, expandable tool activity,
   message/code copy actions and explicit sending/stopping/error states.
 - Sending clears the composer immediately. Acknowledgements preserve anything typed
@@ -243,13 +275,14 @@ up to 40 output lines; deferred input/output opens a separate bounded reader.
 Conversation images load small previews on demand, preserve their aspect ratio
 and open larger native previews. Prompt documents and selected agent outputs use
 file cards; PDFs open in the native viewer with sharing. Downloads use run-scoped
-attachment/output descriptors and version-checked 128 KB chunks, up to 25 MB
-(2 MB for text). No host path is used as a download URL. Temporary preview files
+attachment/output descriptors and version-checked 128 KB chunks, up to 100 MB.
+Text previews are paged instead of loading a whole large document into memory.
+No host path is used as a download URL. Temporary preview files
 are protected and removed when the viewer closes. Older attachments without a
 durable reference remain visible with an unavailable-preview label.
 
 Other providers and queued turns require waiting or stopping before sending.
-Mathematical typesetting and raw HTML remain on the computer or Expo app.
+Raw HTML is shown as text rather than executed.
 In Demo Mode, send “Show Markdown formatting” to explore the native formatting sample.
 
 ## Validate
@@ -258,6 +291,13 @@ Portable protocol/transcript tests run without Xcode simulators or a backend:
 
 ```sh
 swift test
+```
+
+The offline math engine also has a nonvisual macOS WebKit check (no window or
+screenshots):
+
+```sh
+swift scripts/check-math-webkit.swift Resources/Math
 ```
 
 The integration/UI fixture imports the actual TypeScript WebSocket codec and

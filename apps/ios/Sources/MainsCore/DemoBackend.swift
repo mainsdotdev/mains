@@ -51,7 +51,7 @@ final class DemoBackend {
         let result: Result<JSONValue, MainsError>
     }
     private var receipts: [String: Receipt] = [:]
-    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings",
+    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:fork", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings",
         "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions"]
 
     var pairing: PairedBackend {
@@ -178,6 +178,11 @@ final class DemoBackend {
             return .array(runs.sorted { time($0, "updatedAt") > time($1, "updatedAt") }.prefix(100).map(JSONValue.object))
         case "runs:getById": return runs.first { $0["id"]?.string == runID }.map(JSONValue.object) ?? .null
         case "runs:getQueue": return .object(["queues": .array([])])
+        case "runs:readTextFile":
+            try requireRun(runID)
+            guard runs.first(where: { $0["id"]?.string == runID })?["mode"]?.string != "developer",
+                  let reference = RunFileReference(first["filePath"].string ?? ""), reference.name == DemoFile.notes.name else { throw MainsError.server("Demo Markdown file not found.") }
+            return .object(["fileName": .string(DemoFile.notes.name), "relativePath": .string(DemoFile.notes.name), "content": .string(String(decoding: DemoFile.notes.bytes, as: UTF8.self))])
         case "runs:listPendingApprovals":
             expireApprovals()
             return .array(approvals.values.filter { runID.isEmpty || $0["runId"].string == runID }.sorted { ($0["timestamp"].number ?? 0) < ($1["timestamp"].number ?? 0) })
@@ -207,6 +212,7 @@ final class DemoBackend {
             push("runs:updated", ["runId": .string(runID)])
             return try .encode(settings)
         case "runs:execute": return try execute(first)
+        case "runs:fork": return try fork(first)
         case "runs:continue":
             try requireRun(runID)
             guard !isRunning(runID) else { throw MainsError.server("Wait for the demo reply, or stop it first.") }
@@ -282,6 +288,24 @@ final class DemoBackend {
         catch { runs.removeAll { $0["id"]?.string == id }; artifacts[id] = nil; tools[id] = nil; turns[id] = nil; throw error }
         trimRuns()
         return .object(["runId": .string(id)])
+    }
+
+    private func fork(_ payload: JSONValue) throws -> JSONValue {
+        guard let sourceID = payload["sourceRunId"].string,
+              var source = runs.first(where: { $0["id"]?.string == sourceID }), source["accountId"] == payload["accountId"],
+              source["isReplica"] != .bool(true), source["isArchived"] != .bool(true), !isRunning(sourceID) else {
+            throw MainsError.server("Fork a finished, local demo conversation.")
+        }
+        guard runs.filter({ $0["status"]?.string == "running" }).count < 8 else { throw MainsError.server("Finish a demo reply before starting another.") }
+        let id = "demo-run-" + UUID().uuidString.lowercased()
+        source["id"] = .string(id); source["status"] = .string("succeeded")
+        source["title"] = .string("Fork of " + (source["title"]?.string ?? "conversation"))
+        source["createdAt"] = Self.now; source["updatedAt"] = Self.now; source["endedAt"] = .null; source["lastError"] = .null
+        runs.append(source); artifacts[id] = []; tools[id] = []; turns[id] = []
+        do { try start(id, prompt: payload["message"].string ?? "", files: []) }
+        catch { runs.removeAll { $0["id"]?.string == id }; artifacts[id] = nil; tools[id] = nil; turns[id] = nil; throw error }
+        trimRuns()
+        return .object(["runId": .string(id), "sourceRunId": .string(sourceID)])
     }
 
     private func recordPrompt(_ runID: String, prompt: String, files: [JSONValue], promptMetadata: [String: JSONValue]) throws {

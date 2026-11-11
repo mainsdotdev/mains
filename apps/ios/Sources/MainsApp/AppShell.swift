@@ -39,7 +39,7 @@ struct AppShell: View {
                         NavigationStack(path: $path) {
                             Group {
                                 if let homeRunID {
-                                    ConversationView(session: session, runID: homeRunID, onNew: goHome)
+                                    ConversationView(session: session, runID: homeRunID, onNew: goHome, onFork: { path.append(.conversation($0)) })
                                         .id("\(session.ownership):\(homeRunID)")
                                         .toolbar {
                                             ToolbarItem(placement: .topBarLeading) { sidebarButton }
@@ -55,7 +55,7 @@ struct AppShell: View {
                             }
                             .navigationDestination(for: AppRoute.self) { route in
                                 switch route {
-                                case .conversation(let id): ConversationView(session: session, runID: id, onNew: goHome)
+                                case .conversation(let id): ConversationView(session: session, runID: id, onNew: goHome, onFork: { path.append(.conversation($0)) })
                                     .id("\(session.ownership):\(id)")
                                 case .workspace(let id): WorkspaceConversationsView(session: session, workspaceID: id,
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
@@ -107,6 +107,7 @@ struct AppShell: View {
                 .transition(.identity)
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) { ForkDeliveryNotice(session: session, open: { open(.conversation($0)) }) }
         .attachmentOverlayHost()
         .contextPickerOverlayHost(isEnabled: !drawerOpen && !searchMounted)
         .onChange(of: session.pairing?.deviceId) { _, _ in

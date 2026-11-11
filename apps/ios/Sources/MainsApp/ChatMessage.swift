@@ -10,8 +10,12 @@ struct ChatMessage: View {
     let providerID: String
     let readContent: (Int) -> Void
     var openSubagents: () -> Void = {}
+    var copyText: String? = nil
+    var copyIsPreview = false
+    var forkRunID: String? = nil
+    var fork: () -> Void = {}
     var body: some View {
-        VStack(alignment: row.kind == .prompt ? .trailing : .leading, spacing: 10) {
+        VStack(alignment: row.kind == .prompt ? .trailing : .leading, spacing: row.kind == .response ? 4 : 10) {
             switch row.kind {
             case .prompt:
                 if !row.pendingAttachments.isEmpty { PendingPromptAttachments(attachments: row.pendingAttachments) }
@@ -36,6 +40,9 @@ struct ChatMessage: View {
                 Button("Read full message", systemImage: "text.alignleft") { readContent(id) }
                     .font(.subheadline.weight(.medium))
             }
+            if row.kind == .response, !row.live, copyText != nil || forkRunID != nil {
+                ConversationMessageActions(session: session, copyText: copyText, copyIsPreview: copyIsPreview, forkRunID: forkRunID, fork: fork)
+            }
         }
         .frame(maxWidth: .infinity, alignment: row.kind == .prompt ? .trailing : .leading)
         .contextMenu {
@@ -57,11 +64,15 @@ private struct PromptBubble: View {
     }
 }
 
-/// Selectable native Markdown; raw HTML and mathematical typesetting remain outside this slice.
+/// Native Markdown uses an isolated, offline KaTeX surface only when it contains math.
 struct ChatMessageBody: View, Equatable {
     let text: String
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text }
     var body: some View {
+        if let document = MathMarkdown.prepare(text) { MathMarkdownView(document: document, source: text) }
+        else { nativeBody }
+    }
+    private var nativeBody: some View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(Array(MessageBlock.parse(text).enumerated()), id: \.offset) { _, block in
                 switch block {

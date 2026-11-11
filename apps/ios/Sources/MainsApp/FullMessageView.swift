@@ -12,7 +12,12 @@ struct FullMessageView: View {
     @State private var error: String?
     @State private var loading = false
     var body: some View {
-        ScrollView { Text(text).font(source == "artifact" ? .body : .system(.callout, design: .monospaced)).textSelection(.enabled).padding(20).frame(maxWidth: .infinity, alignment: .leading) }
+        ScrollView {
+            Group {
+                if source == "artifact" { ChatMessageBody(text: text) }
+                else { Text(text).font(.system(.callout, design: .monospaced)).textSelection(.enabled) }
+            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+        }
             .overlay { if loading { ProgressView() } }
             .safeAreaInset(edge: .bottom) {
                 VStack {
