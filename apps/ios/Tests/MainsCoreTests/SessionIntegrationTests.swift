@@ -39,6 +39,141 @@ func eventually(_ condition: () -> Bool, seconds: Int = 10) async throws {
 
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"] != nil))
 struct SessionIntegrationTests {
+    @Test @MainActor func desktopQueueAppearsAndRemovesWithoutBecomingPhoneOwnedWork() async throws {
+        let session = BackendSession(storage: MemoryStorage())
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
+        let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")
+        try await eventually { session.isConnected }
+        await session.selectConversation("fixture-run")
+        func publish(_ revision: Int, messages: [[String: Any]]) async throws {
+            var request = URLRequest(url: URL(string: endpoint + "/test/queue")!)
+            request.httpMethod = "POST"
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["runId": "fixture-run", "producerId": "desktop", "revision": revision, "messages": messages])
+            let (_, response) = try await URLSession.shared.data(for: request)
+            #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        }
+        let pending: [[String: Any]] = [["id": "desktop-message", "text": "Queued from my computer", "attachmentNames": ["notes.pdf"], "status": "queued"]]
+        try await publish(1, messages: pending)
+        try await eventually { session.remoteQueues.first?.messages.first?.text == "Queued from my computer" }
+        #expect(session.remoteQueues.first?.messages.first?.attachmentNames == ["notes.pdf"])
+        #expect(session.messageQueue(for: "fixture-run").messages.isEmpty)
+        #expect(!session.transcript.rows.contains { $0.text == "Queued from my computer" })
+        session.leaveConversation("fixture-run")
+        #expect(session.remoteQueues.isEmpty)
+        await session.selectConversation("fixture-run")
+        try await eventually { session.remoteQueues.first?.messages.count == 1 }
+        try await publish(2, messages: [])
+        try await eventually { session.remoteQueues.isEmpty }
+        try await publish(1, messages: pending) // A delayed desktop snapshot cannot resurrect a removed row.
+        let (data, _) = try await URLSession.shared.data(from: URL(string: endpoint + "/observations")!)
+        let calls = try JSONDecoder().decode([JSONValue].self, from: data)
+        #expect(!calls.contains { ["runs:continue", "runs:steer", "runs:publishQueue"].contains($0["channel"].string ?? "") })
+        #expect(session.remoteQueues.isEmpty)
+    }
+
+    @Test @MainActor func queueUsesFIFOContinuesAndChecksUnknownSteerOverTheDeviceProtocol() async throws {
+        let session = BackendSession(storage: MemoryStorage())
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
+        let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")
+        try await eventually { session.isConnected }
+        session.grantConsent(providerID: "codex", backendID: "ios-fixture")
+        await session.selectConversation("fixture-run")
+        _ = try await session.send("Begin queue test", runID: "fixture-run")
+        try await eventually { session.pendingMessage == nil }
+        let queue = session.messageQueue(for: "fixture-run"), draft = session.draft(for: "fixture-run")
+        draft.text = "First queued text"; try session.submitQueuedDraft("fixture-run")
+        let file = PromptAttachment(name: "only.pdf", type: "document", mimeType: "application/pdf", bytes: Data("%PDF-test".utf8))
+        draft.attachments = [file]; try session.submitQueuedDraft("fixture-run")
+        let ids = queue.messages.map(\.id)
+        queue.reorder(Array(ids.reversed()))
+        session.leaveConversation("fixture-run")
+        try await eventually { queue.messages.isEmpty }
+        await session.selectConversation("fixture-run")
+        try await eventually { session.conversations.first { $0.id == "fixture-run" }?.canSteer == true }
+        draft.text = "Unconfirmed accepted steer"; try session.submitQueuedDraft("fixture-run")
+        await session.steerQueuedMessage("fixture-run", id: try #require(queue.messages.last?.id))
+        try await eventually { queue.hasUnknown }
+        let unknownID = try #require(queue.messages.first?.id)
+        await session.resumeMessageQueue("fixture-run")
+        #expect(queue.messages.isEmpty && session.pendingMessage == nil)
+        let (data, _) = try await URLSession.shared.data(from: URL(string: endpoint + "/observations")!)
+        let calls = try JSONDecoder().decode([JSONValue].self, from: data)
+        let queued = calls.filter { $0["channel"].string == "runs:continue" && $0["args"].array[0]["clientUserMessageId"].string != nil }
+        #expect(queued.map { $0["args"].array[0]["clientUserMessageId"].string } == Array(ids.reversed()))
+        #expect(queued.first?["args"].array[0]["attachments"].array == [try .encode(file)])
+        let check = try #require(calls.last { $0["channel"].string == "runs:inputStatus" })
+        #expect(check["commandId"].string?.isEmpty == false && check["args"].array[0]["clientUserMessageId"].string == unknownID)
+        #expect(calls.filter { $0["channel"].string == "runs:steer" }.count == 1)
+    }
+
+    @Test @MainActor func steerUsesOriginalReceiptsAndKeepsAnEndedTurnMessageForManualContinuation() async throws {
+        let session = BackendSession(storage: MemoryStorage())
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
+        let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")
+        try await eventually { session.isConnected }
+        session.grantConsent(providerID: "codex", backendID: "ios-fixture")
+        await session.selectConversation("fixture-run")
+        _ = try await session.send("Take your time", runID: "fixture-run")
+        try await eventually { session.pendingMessage == nil && session.conversations.first?.canSteer == true }
+        session.revokeConsent(providerID: "codex", backendID: "ios-fixture")
+        await #expect(throws: MainsError.self) { try await session.send("No consent", runID: "fixture-run", steering: true) }
+        session.grantConsent(providerID: "codex", backendID: "ios-fixture")
+        let scope = session.contextScope(providerID: "codex")
+        let skill = ContextSkill(name: "fixture-review", displayName: "Fixture review")
+        let file = PromptAttachment(name: "context.txt", type: "document", mimeType: "text/plain", bytes: Data("Context".utf8))
+        _ = try await session.send("Use " + ContextMentions.mention(skill), runID: "fixture-run", attachments: [file], contextSkills: [skill], contextScope: scope, steering: true)
+        try await eventually { session.pendingMessage == nil }
+
+        await #expect(throws: MainsError.self) { try await session.send("Unconfirmed accepted steer", runID: "fixture-run", steering: true) }
+        let original = try #require(session.pendingMessage)
+        #expect(original.status == .uncertain && original.isSteering)
+        await session.loadHistory(direction: "refresh")
+        #expect(session.pendingMessage?.id == original.id && session.pendingMessage?.status == .uncertain)
+        await #expect(throws: MainsError.self) { try await session.send("Must not resend", runID: "fixture-run", steering: true) }
+        #expect(try await session.checkDelivery() == "fixture-run")
+        try await eventually { session.pendingMessage == nil }
+        _ = try await session.send("Reconnect steer once", runID: "fixture-run", steering: true)
+        try await eventually { session.isConnected && session.pendingMessage == nil }
+        let draft = session.draft(for: "fixture-run")
+        draft.text = "Finish before steer"
+        let submission = try #require(draft.begin(retainingContent: true))
+        do {
+            _ = try await session.send(submission.text, runID: "fixture-run", steering: true)
+            Issue.record("An ended turn must reject steering.")
+        } catch {
+            #expect(error as? MainsError == .steerTurnEnded)
+            draft.reject(submission, message: error.localizedDescription, uncertain: session.pendingMessage?.status == .uncertain)
+        }
+        #expect(draft.text == "Finish before steer" && session.pendingMessage == nil)
+        await session.loadHistory(direction: "latest")
+
+        let (data, _) = try await URLSession.shared.data(from: URL(string: endpoint + "/observations")!)
+        let calls = try JSONDecoder().decode([JSONValue].self, from: data)
+        let steers = calls.filter { $0["channel"].string == "runs:steer" }
+        let context = try #require(steers.first { $0["args"].array[0]["message"].string == "Use $fixture-review" })
+        #expect(context["args"].array[0]["attachments"].array == [try .encode(file)])
+        #expect(context["args"].array[0]["contextSkills"].array == [skill.wire])
+        #expect(steers.allSatisfy { $0["args"].array[0]["conversationSettings"] == .null && $0["args"].array[0]["clientUserMessageId"].string?.isEmpty == false })
+        for message in ["Unconfirmed accepted steer", "Reconnect steer once"] {
+            let attempts = steers.filter { $0["args"].array[0]["message"].string == message }
+            #expect(attempts.count == 2)
+            #expect(Set(attempts.compactMap { $0["commandId"].string }).count == 1)
+            #expect(attempts.allSatisfy { $0["args"] == attempts.first?["args"] })
+            #expect(session.transcript.rows.filter { $0.kind == .prompt && $0.text == message }.count == 1)
+        }
+        #expect(!calls.contains { $0["args"].array.first?["message"].string == "No consent" || $0["args"].array.first?["message"].string == "Must not resend" })
+        #expect(calls.filter { $0["channel"].string == "runs:continue" }.count == 1, "Only the explicitly started first message may continue a turn.")
+    }
+
     @Test @MainActor func draftOwnershipAndStopFollowTheConversation() async throws {
         let session = BackendSession(storage: MemoryStorage())
         session.restore(); session.setActive(true)

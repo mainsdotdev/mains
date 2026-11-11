@@ -6,6 +6,9 @@ import { ok } from "@mains/contracts/service-response";
 import type { IpcInvokeContext } from "../../ipc-kit/handler-registry";
 import { runsService } from "./runs.service";
 import { runForPairedDevice } from "./runs.device-projection";
+import { runQueueProjections } from "./run-queue-projection";
+import type { PublishRunQueuePayload } from "@mains/contracts/run-queue-projection";
+import { emit } from "../../ipc-kit/event-bus";
 import type {
   CreateRunPayload,
   UpdateRunPayload,
@@ -49,6 +52,16 @@ import type {
 // IPC Handlers
 // ─────────────────────────────────────────────────────────────
 export function registerRunsIpc(): void {
+  runQueueProjections.clear();
+  ipcMain.handle(CHANNELS.runs.publishQueue, handle(async (payload: PublishRunQueuePayload) => {
+    if (!await runsService.getRunById(payload?.runId)) throw new Error("Run not found");
+    if (runQueueProjections.publish(payload)) emit(CHANNELS.runs.queueChanged, { runId: payload.runId }, { runId: payload.runId });
+    return null;
+  }));
+  ipcMain.handle(CHANNELS.runs.getQueue, handle(async (runId: string) => {
+    if (!await runsService.getRunById(runId)) return { queues: [] };
+    return { queues: runQueueProjections.read(runId) };
+  }));
   openUserDecisions();
   const getHistory = handle((payload: ReadRunHistoryPayload) => runsService.getHistoryPage(payload));
   ipcMain.handle(CHANNELS.runs.getHistory, (ctx: IpcInvokeContext, payload: ReadRunHistoryPayload) =>
@@ -324,6 +337,9 @@ export function registerRunsIpc(): void {
 }
 
 export function unregisterRunsIpc(): void {
+  runQueueProjections.clear();
+  ipcMain.removeHandler(CHANNELS.runs.publishQueue);
+  ipcMain.removeHandler(CHANNELS.runs.getQueue);
   ipcMain.removeHandler(CHANNELS.runs.steer);
   ipcMain.removeHandler(CHANNELS.runs.inputStatus);
   ipcMain.removeHandler(CHANNELS.runs.decidePlan);

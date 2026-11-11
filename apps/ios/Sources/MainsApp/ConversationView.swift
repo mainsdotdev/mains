@@ -6,9 +6,12 @@ struct ConversationView: View {
     let runID: String
     let onNew: () -> Void
     @Bindable private var draft: ConversationDraft
+    @Bindable private var queue: ConversationQueue
     @State private var owner: Int?
     @State private var viewport = TranscriptViewport()
     @State private var consent: ConsentContext?
+    @State private var consentQueuesMessage = false
+    @State private var consentResumesQueue = false
     @State private var content: ContentReference?
     @State private var acceptedCount = 0
     @State private var modelSheet = false
@@ -29,6 +32,14 @@ struct ConversationView: View {
         return nil
     }
     private var uncertain: Bool { session.pendingMessage?.status == .uncertain }
+    private var usesQueue: Bool {
+        run?.supportsSteering == true && (run?.isActive == true || !queue.messages.isEmpty || queue.editingID != nil)
+    }
+    private var sendLabel: String {
+        if queue.editingID != nil { return "Save queued message" }
+        if usesQueue, run?.isActive == true { return "Queue message" }
+        return "Send message"
+    }
     private var hasOutputs: Bool {
         outputPresence?.owner == session.ownership && outputPresence?.runID == runID && outputPresence?.available == true
     }
@@ -51,6 +62,7 @@ struct ConversationView: View {
         self.session = session; self.runID = runID
         self.onNew = onNew
         draft = session.draft(for: runID)
+        queue = session.messageQueue(for: runID)
     }
 
     var body: some View {
@@ -120,7 +132,8 @@ struct ConversationView: View {
             ConsentView(context: context) {
                 guard owner == session.ownership else { return }
                 session.grantConsent(providerID: context.providerID, backendID: context.backendID)
-                Task { await send() }
+                if consentResumesQueue { Task { await session.resumeMessageQueue(runID) } }
+                else { Task { await send(queued: consentQueuesMessage) } }
             }
         }
         .sheet(item: $content) { reference in
@@ -145,11 +158,20 @@ struct ConversationView: View {
                 }.zIndex(1)
             }
             SettingsRecoveryNotice(session: session, runID: runID)
-            if uncertain, let pending = session.pendingMessage {
+            RemoteConversationQueueView(queues: session.viewingRunID == runID ? session.remoteQueues : [])
+            if run?.supportsSteering == true, run?.isReplica != true {
+                ConversationQueueView(session: session, queue: queue, canSteer: run?.canSteer == true, resume: prepareQueueResume)
+            }
+            if uncertain, let pending = session.pendingMessage,
+               !pending.isQueueOwned || pending.runID != runID || !queue.messages.contains(where: { $0.id == pending.queueInputID }) {
                 ChatNotice(title: "Delivery unconfirmed", message: "“\(pending.text.prefix(160))”\nCheck this message before sending another." + (draft.failure.map { "\n" + $0 } ?? ""), symbol: "exclamationmark.circle", warning: true) {
                     Button(session.sending ? "Checking…" : "Check delivery") {
                         Task {
-                            do { _ = try await session.checkDelivery(); draft.dismissFailure() }
+                            do {
+                                if let id = pending.queueInputID { _ = try await session.checkQueuedInput(id) }
+                                else { _ = try await session.checkDelivery() }
+                                draft.dismissFailure()
+                            }
                             catch { draft.showFailure(error.localizedDescription) }
                         }
                     }
@@ -173,8 +195,10 @@ struct ConversationView: View {
                     .accessibilityIdentifier("archivedConversationNotice")
             } else if let context = composerContext {
                 MessageComposer(session: session, context: context, draft: draft,
-                    canSend: run != nil && session.isConnected && !uncertain && !session.sending && pending?.status != .accepted && !viewport.paging,
-                    active: run?.isActive == true, stopping: session.stoppingRunID == runID, stop: { Task { await stop() } },
+                    canSend: run != nil && session.stoppingRunID != runID && (usesQueue ||
+                        session.isConnected && !uncertain && !session.sending && pending?.status != .accepted && !viewport.paging && run?.isActive != true),
+                    active: run?.isActive == true, canSendDuringRun: run?.supportsSteering == true, sendLabel: sendLabel,
+                    stopping: session.stoppingRunID == runID, stop: { Task { await stop() } },
                     model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend)
                     .disabled(run == nil)
             }
@@ -185,12 +209,29 @@ struct ConversationView: View {
     private func prepareSend() {
         guard let run, run.archivedReplyError == nil, owner == session.ownership,
               let backendID = session.pairing?.descriptor.backendId, !draft.isSending else { return }
-        if !session.hasConsent(providerID: run.providerId) { consent = ConsentContext(backendID: backendID, providerID: run.providerId, isDemo: session.isDemo) }
-        else { Task { await send() } }
+        let queued = usesQueue
+        if !session.hasConsent(providerID: run.providerId) {
+            consentQueuesMessage = queued; consentResumesQueue = false
+            consent = ConsentContext(backendID: backendID, providerID: run.providerId, isDemo: session.isDemo)
+        } else { Task { await send(queued: queued) } }
     }
 
-    private func send() async {
-        guard owner == session.ownership, let submission = draft.begin() else { return }
+    private func prepareQueueResume() {
+        guard let run, let backendID = session.pairing?.descriptor.backendId, owner == session.ownership else { return }
+        if !session.hasConsent(providerID: run.providerId) {
+            consentResumesQueue = true
+            consent = ConsentContext(backendID: backendID, providerID: run.providerId, isDemo: session.isDemo)
+        } else { Task { await session.resumeMessageQueue(runID) } }
+    }
+
+    private func send(queued: Bool) async {
+        guard owner == session.ownership else { return }
+        if queued {
+            do { try session.submitQueuedDraft(runID); acceptedCount += 1 }
+            catch { draft.showFailure(error.localizedDescription) }
+            return
+        }
+        guard let submission = draft.begin() else { return }
         do {
             if session.transcript.page?.hasNewer == true {
                 viewport.beginPage()
@@ -201,8 +242,8 @@ struct ConversationView: View {
                 }
                 viewport.finishPage(latestConfirmed: true)
             } else { viewport.follow() }
-            guard owner == session.ownership else { throw MainsError.changedBackend }
             session.setHistoryFollowing(true)
+            guard owner == session.ownership else { throw MainsError.changedBackend }
             _ = try await session.send(submission.text, runID: runID, attachments: submission.attachments, contextSkills: submission.contextSkills, contextScope: submission.contextScope)
             guard owner == session.ownership else { return }
             draft.accept(submission)

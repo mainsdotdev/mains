@@ -70,10 +70,15 @@ public struct PendingMessage: Sendable {
     let previousArtifactID: Int
     public var attachments: [PromptAttachment] = []
     public var contextSkills: [ContextSkill] = []
+    public var queueInputID: String? = nil
     public var id: String { commandID }
+    public var isSteering: Bool { channel == "runs:steer" }
+    public var isQueueOwned: Bool { queueInputID != nil }
     func matches(_ artifact: Artifact) -> Bool {
         guard let runID else { return false }
-        return artifact.runId == runID && artifact.kind == "user-prompt" && artifact.id > previousArtifactID && artifact.content == text
+        guard artifact.runId == runID, artifact.kind == "user-prompt" else { return false }
+        if isSteering { return artifact.metadata?["clientUserMessageId"].string == payload["clientUserMessageId"].string }
+        return artifact.id > previousArtifactID && artifact.content == text
     }
 }
 
@@ -104,6 +109,7 @@ public final class BackendSession {
     public private(set) var transcript = Transcript()
     public private(set) var viewingRunID: String?
     public private(set) var pendingMessage: PendingMessage?
+    public private(set) var remoteQueues: [RemoteRunQueue] = []
     public private(set) var historyLoading = false
     public private(set) var historyError: String?
     public private(set) var historyRetryDirection = "latest"
@@ -144,6 +150,11 @@ public final class BackendSession {
     @ObservationIgnored private var blocked: ConnectionState?
     @ObservationIgnored private var drafts: [String: ConversationDraft] = [:]
     @ObservationIgnored private var homeDrafts: [String: ConversationDraft] = [:]
+    @ObservationIgnored private lazy var runQueues = RunQueueController(session: self)
+    @ObservationIgnored private var remoteQueueRead: Task<Void, Never>?
+    @ObservationIgnored private var remoteQueuePoll: Task<Void, Never>?
+    @ObservationIgnored private var remoteQueueReadID: UUID?
+    @ObservationIgnored private var remoteQueueReadAgain = false
     @ObservationIgnored private var providerConfigs: [String: [String: JSONValue]] = [:]
     private struct SettingsChange { let id: String; let settings: ComposerSettings; let owner: Int }
     @ObservationIgnored private var settingsChanges: [String: SettingsChange] = [:]
@@ -175,6 +186,55 @@ public final class BackendSession {
     public func homeDraft(for spaceID: String) -> ConversationDraft {
         if let draft = homeDrafts[spaceID] { return draft }
         let draft = ConversationDraft(); homeDrafts[spaceID] = draft; return draft
+    }
+
+    public func messageQueue(for id: String) -> ConversationQueue { runQueues.queue(id) }
+    public func existingMessageQueue(for id: String) -> ConversationQueue? { runQueues.existing(id) }
+    public func submitQueuedDraft(_ id: String) throws { try runQueues.submit(id, draft: draft(for: id)) }
+    public func editQueuedMessage(_ runID: String, id: String) { runQueues.edit(runID, id: id) }
+    public func cancelQueuedEdit(_ runID: String) { runQueues.cancelEdit(runID) }
+    public func removeQueuedMessage(_ runID: String, id: String) { runQueues.remove(runID, id: id) }
+    public func steerQueuedMessage(_ runID: String, id: String) async { await runQueues.steer(runID, id: id) }
+    public func resumeMessageQueue(_ id: String) async { await runQueues.resume(id) }
+
+    func readQueuedRun(_ id: String) async throws -> Conversation? {
+        guard let transport, isConnected else { throw MainsError.disconnected }
+        let owner = pairingOwner, current = generation
+        let settingsReadVersion = settingsRevision
+        let value = try await transport.invoke("runs:getById", args: [.string(id)])
+        guard owner == pairingOwner, current == generation else { throw MainsError.changedBackend }
+        guard value != .null else { return nil }
+        let run = keepingSettings(try value.decode(Conversation.self), readVersion: settingsReadVersion)
+        guard run.id == id else { throw MainsError.invalidReply }
+        upsert(run)
+        return run
+    }
+
+    public func checkQueuedInput(_ id: String) async throws -> Bool {
+        guard let pending = pendingMessage, pending.queueInputID == id, pending.status == .uncertain,
+              let transport, isConnected, !sending else { return false }
+        let owner = pairingOwner, current = generation
+        var input = pending.payload.objectValue
+        input["runId"] = nil; input["accountId"] = nil; input["clientUserMessageId"] = nil
+        do {
+            let value = try await command("runs:inputStatus", args: [.object([
+                "runId": pending.payload["runId"], "accountId": pending.payload["accountId"],
+                "clientUserMessageId": .string(id), "input": .object(input),
+                "delivery": .string(pending.isSteering ? "steer" : "queue"),
+            ])], owner: owner)
+            guard owner == pairingOwner, current == generation, self.transport === transport else { throw MainsError.changedBackend }
+            if value["accepted"].bool {
+                pendingMessage = nil; runQueues.kick()
+                if pending.runID == viewingRunID { scheduleHistoryRefresh() }
+                return true
+            }
+        } catch {
+            guard owner == pairingOwner else { throw error }
+            // Older computers can still check the original command receipt.
+        }
+        guard owner == pairingOwner, pendingMessage?.id == pending.id else { return false }
+        _ = try await checkDelivery()
+        return pendingMessage?.id != pending.id
     }
 
     public func selectSpace(_ id: String) {
@@ -493,6 +553,8 @@ public final class BackendSession {
     }
 
     private func resetProjection() {
+        stopRemoteQueueWatch()
+        runQueues.clear()
         activeEndpoint = nil; connectedDescriptor = nil; lastSyncedAt = nil
         consentRevision += 1
         conversations = []; spaces = []; workspaces = []; histories = [:]; historyOrder = []
@@ -510,6 +572,8 @@ public final class BackendSession {
     }
 
     private func restart() {
+        stopRemoteQueueWatch()
+        runQueues.pauseAll("Backend disconnected. Queued messages are paused.")
         generation += 1
         connectionTask?.cancel(); eventRefresh?.cancel(); listRefresh?.cancel(); historyTask?.cancel()
         approvalExpiryTask?.cancel(); approvalExpiryTask = nil
@@ -569,6 +633,8 @@ public final class BackendSession {
                 guard generation == current, !Task.isCancelled else { return }
                 attemptTimer.cancel()
                 connection = .connected
+                runQueues.kick()
+                if let runID = viewingRunID { startRemoteQueueWatch(runID) }
                 if viewingRunID != nil { await loadHistory(direction: "refresh") }
                 return
             } catch {
@@ -669,6 +735,7 @@ public final class BackendSession {
         if !spaces.contains(where: { $0.id == selectedSpaceID }) { selectedSpaceID = spaces.first?.id }
         lastSyncedAt = Date()
         saveCache()
+        runQueues.kick()
     }
 
     public func refresh() async {
@@ -690,6 +757,7 @@ public final class BackendSession {
         historyTask?.cancel()
         historyRefreshNeeded = false
         viewingRunID = id
+        startRemoteQueueWatch(id)
         transcript = Transcript()
         historyError = nil
         pendingApprovals = []; approvalExpiryTask?.cancel(); approvalExpiryTask = nil
@@ -700,6 +768,7 @@ public final class BackendSession {
     public func leaveConversation(_ id: String) {
         guard viewingRunID == id else { return }
         viewingRunID = nil
+        stopRemoteQueueWatch()
         pendingApprovals = []; approvalExpiryTask?.cancel(); approvalExpiryTask = nil
         historyTask?.cancel(); eventRefresh?.cancel(); historyLoading = false
         eventRefresh = nil; historyRefreshNeeded = false
@@ -799,6 +868,8 @@ public final class BackendSession {
 
     private func event(_ channel: String, _ payload: JSONValue) {
         let runID = payload["runId"].string
+        if channel == "runs:queueChanged", runID == viewingRunID { scheduleRemoteQueueRead() }
+        if channel == "runs:statusChanged", let runID, let status = payload["status"].string { runQueues.observe(runID, status: status) }
         if channel == "runs:toolApprovalResolved", let requestID = payload["requestId"].string {
             decisionRevision += 1
             pendingApprovals.removeAll {
@@ -836,6 +907,50 @@ public final class BackendSession {
             guard let self, self.generation == current else { return }
             self.eventRefresh = nil
             await self.loadHistory(direction: "refresh")
+        }
+    }
+
+    private func stopRemoteQueueWatch() {
+        remoteQueueRead?.cancel(); remoteQueuePoll?.cancel()
+        remoteQueueRead = nil; remoteQueuePoll = nil; remoteQueueReadID = nil; remoteQueueReadAgain = false; remoteQueues = []
+    }
+    private func startRemoteQueueWatch(_ runID: String) {
+        stopRemoteQueueWatch()
+        guard isConnected, viewingRunID == runID else { return }
+        let owner = pairingOwner, current = generation
+        remoteQueuePoll = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.pairingOwner == owner, self.generation == current, self.viewingRunID == runID, self.isConnected else { return }
+                self.scheduleRemoteQueueRead()
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            }
+        }
+    }
+    private func scheduleRemoteQueueRead() {
+        guard let runID = viewingRunID, let transport, isConnected else { return }
+        guard remoteQueueRead == nil else { remoteQueueReadAgain = true; return }
+        let ticket = UUID(), owner = pairingOwner, current = generation
+        remoteQueueReadID = ticket
+        remoteQueueRead = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.remoteQueueReadID == ticket {
+                    self.remoteQueueRead = nil; self.remoteQueueReadID = nil
+                    if self.remoteQueueReadAgain { self.remoteQueueReadAgain = false; self.scheduleRemoteQueueRead() }
+                }
+            }
+            do {
+                let value = try await transport.invoke("runs:getQueue", args: [.string(runID)])
+                let page = try value.decode(RemoteRunQueues.self)
+                try Task.checkCancellation()
+                guard owner == self.pairingOwner, current == self.generation, self.viewingRunID == runID else { return }
+                guard page.queues.count <= 4, page.queues.allSatisfy({ $0.runId == runID && $0.messages.count <= 32 }) else { throw MainsError.invalidReply }
+                self.remoteQueues = page.queues.filter(\.isCurrent)
+            } catch {
+                if !Task.isCancelled, owner == self.pairingOwner, current == self.generation, self.viewingRunID == runID {
+                    self.remoteQueues = self.remoteQueues.filter(\.isCurrent)
+                }
+            }
         }
     }
 
@@ -877,7 +992,7 @@ public final class BackendSession {
 
     public func send(_ text: String, runID: String? = nil, spaceID: String? = nil, workspaceID: String? = nil,
                      collectionID: String? = nil, settings: ComposerSettings? = nil, attachments: [PromptAttachment] = [],
-                     contextSkills: [ContextSkill] = [], contextScope: ContextScope? = nil) async throws -> String {
+                     contextSkills: [ContextSkill] = [], contextScope: ContextScope? = nil, steering: Bool = false, queuedInputID: String? = nil) async throws -> String {
         guard pendingMessage?.status != .uncertain else { throw MainsError.server("Check the unconfirmed message before sending another.") }
         if let runID, decisionDeliveries.contains(where: { $0.value.attempt?.runID == runID && [.sending, .uncertain].contains($0.value.phase) }) {
             throw MainsError.server("Wait for the pending answer, or check its delivery before sending another message.")
@@ -898,11 +1013,19 @@ public final class BackendSession {
             }
             guard let run = conversations.first(where: { $0.id == runID }), run.isReplica != true else { throw MainsError.server("This conversation is read-only.") }
             if let message = run.archivedReplyError { throw MainsError.server(message) }
-            guard !run.isActive else { throw MainsError.server("Wait for this reply to finish, or stop it before sending.") }
-            providerID = run.providerId; channel = "runs:continue"; actualWorkspaceID = run.workspaceId
+            if steering {
+                guard run.supportsSteering else { throw MainsError.server("This provider does not support steering.") }
+                guard run.canSteer else { throw MainsError.steerTurnEnded }
+                payload["clientUserMessageId"] = .string(queuedInputID ?? UUID().uuidString)
+            } else {
+                guard !run.isActive else { throw MainsError.server("Wait for this reply to finish, or stop it before sending.") }
+            }
+            providerID = run.providerId; channel = steering ? "runs:steer" : "runs:continue"; actualWorkspaceID = run.workspaceId
             payload["runId"] = .string(runID); payload["message"] = .string(message)
-            if let saved = self.settings(forRunID: runID) { payload["conversationSettings"] = try .encode(saved) }
+            if !steering, let saved = settings ?? self.settings(forRunID: runID) { payload["conversationSettings"] = try .encode(saved) }
+            if let queuedInputID { payload["clientUserMessageId"] = .string(queuedInputID) }
         } else {
+            guard !steering else { throw MainsError.steerTurnEnded }
             guard let space = spaces.first(where: { $0.id == spaceID }) else { throw MainsError.server("Choose a space first.") }
             providerID = space.providerId; channel = "runs:execute"; actualWorkspaceID = space.mode == "developer" ? workspaceID : nil
             payload["spaceId"] = .string(space.id); payload["providerId"] = .string(space.providerId); payload["goal"] = .string(message)
@@ -932,7 +1055,7 @@ public final class BackendSession {
         let attempt = PendingMessage(runID: runID, text: message, date: Date(), status: .sending,
                                      commandID: UUID().uuidString, channel: channel, payload: .object(payload),
                                      backendID: pairing.descriptor.backendId, owner: pairingOwner,
-                                     previousArtifactID: transcript.page?.artifacts.map(\.id).max() ?? 0, attachments: attachments, contextSkills: attached)
+                                     previousArtifactID: transcript.page?.artifacts.map(\.id).max() ?? 0, attachments: attachments, contextSkills: attached, queueInputID: queuedInputID)
         pendingMessage = attempt
         return try await deliver(attempt)
     }
@@ -948,8 +1071,12 @@ public final class BackendSession {
         do {
             let result = try await command(attempt.channel, args: [attempt.payload], commandID: attempt.commandID, owner: attempt.owner)
             guard attempt.owner == pairingOwner, let runID = result["runId"].string else { throw MainsError.changedBackend }
+            guard attempt.runID == nil || attempt.runID == runID,
+                  !attempt.isSteering || result["turnId"].string?.isEmpty == false else { throw MainsError.invalidReply }
             var accepted = attempt; accepted.runID = runID; accepted.status = .accepted
-            pendingMessage = accepted
+            // Steers have no optimistic row to hand off. The confirmed receipt
+            // releases admission even while the reader stays on an older page.
+            pendingMessage = attempt.isSteering || attempt.isQueueOwned ? nil : accepted
             // The acknowledgement owns send completion; projection refresh is independent.
             let current = generation
             Task { [weak self] in
@@ -969,6 +1096,7 @@ public final class BackendSession {
                 if definiteRefusal { pendingMessage = nil }
                 else { var uncertain = attempt; uncertain.status = .uncertain; pendingMessage = uncertain }
             }
+            if attempt.isSteering, let failure = error as? MainsError, failure.isEndedSteer { throw MainsError.steerTurnEnded }
             throw error
         }
     }
@@ -1002,6 +1130,7 @@ public final class BackendSession {
               let run = conversations.first(where: { $0.id == runID }), run.isReplica != true, run.isActive else { return }
         let owner = pairingOwner
         stoppingRunID = runID
+        if let queue = runQueues.existing(runID), !queue.messages.isEmpty { queue.pause("Run stopped. Queued messages are paused.") }
         defer { if pairingOwner == owner { stoppingRunID = nil } }
         _ = try await command("runs:abort", args: [.string(runID)], owner: owner)
         if viewingRunID == runID { await loadHistory(direction: "refresh") }
@@ -1010,8 +1139,10 @@ public final class BackendSession {
 
     private func reconcilePending(_ page: HistoryPage, runID: String) {
         guard let pending = pendingMessage, pending.runID == runID,
+              !pending.isSteering, !pending.isQueueOwned,
               page.artifacts.contains(where: pending.matches) else { return }
         pendingMessage = nil
+        runQueues.kick()
     }
 
     public func readContent(artifactID: Int, offset: Int = 0, source: String = "artifact") async throws -> JSONValue {

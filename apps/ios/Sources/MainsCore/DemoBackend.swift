@@ -51,7 +51,7 @@ final class DemoBackend {
         let result: Result<JSONValue, MainsError>
     }
     private var receipts: [String: Receipt] = [:]
-    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:abort", "space:update", "runs:updateConversationSettings",
+    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings",
         "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions"]
 
     var pairing: PairedBackend {
@@ -177,6 +177,7 @@ final class DemoBackend {
         case "runs:getAll":
             return .array(runs.sorted { time($0, "updatedAt") > time($1, "updatedAt") }.prefix(100).map(JSONValue.object))
         case "runs:getById": return runs.first { $0["id"]?.string == runID }.map(JSONValue.object) ?? .null
+        case "runs:getQueue": return .object(["queues": .array([])])
         case "runs:listPendingApprovals":
             expireApprovals()
             return .array(approvals.values.filter { runID.isEmpty || $0["runId"].string == runID }.sorted { ($0["timestamp"].number ?? 0) < ($1["timestamp"].number ?? 0) })
@@ -209,8 +210,25 @@ final class DemoBackend {
         case "runs:continue":
             try requireRun(runID)
             guard !isRunning(runID) else { throw MainsError.server("Wait for the demo reply, or stop it first.") }
-            try start(runID, prompt: first["message"].string ?? "", files: first["attachments"].array, promptMetadata: ["skills": first["contextSkills"]])
+            try start(runID, prompt: first["message"].string ?? "", files: first["attachments"].array,
+                      promptMetadata: ["skills": first["contextSkills"], "clientUserMessageId": first["clientUserMessageId"], "delivery": .string("queue")])
             return .object(["runId": .string(runID), "resumed": .bool(true)])
+        case "runs:inputStatus":
+            try requireRun(runID)
+            guard let messageID = first["clientUserMessageId"].string, !messageID.isEmpty else { throw MainsError.invalidReply }
+            return .object(["accepted": .bool(artifacts[runID]?.contains { $0["metadata"]?["clientUserMessageId"].string == messageID } == true)])
+        case "runs:steer":
+            try requireRun(runID)
+            guard ["codex", "claude_code"].contains(runs.first { $0["id"]?.string == runID }?["providerId"]?.string ?? "") else {
+                throw MainsError.server("This provider does not support steering.")
+            }
+            guard isRunning(runID), let turnID = turns[runID]?.last?["id"],
+                  let messageID = first["clientUserMessageId"].string, !messageID.isEmpty else {
+                throw MainsError.server("There is no active turn to steer. The message stays queued.")
+            }
+            try recordPrompt(runID, prompt: first["message"].string ?? "", files: first["attachments"].array,
+                             promptMetadata: ["skills": first["contextSkills"], "clientUserMessageId": .string(messageID), "delivery": .string("steer"), "turnId": turnID])
+            return .object(["runId": .string(runID), "turnId": .string("demo-turn-\(Int(turnID.number ?? 0))")])
         case "runs:abort":
             try requireRun(runID); finish(runID, status: "canceled")
             return .null
@@ -266,7 +284,7 @@ final class DemoBackend {
         return .object(["runId": .string(id)])
     }
 
-    private func start(_ runID: String, prompt: String, files: [JSONValue], promptMetadata: [String: JSONValue] = [:]) throws {
+    private func recordPrompt(_ runID: String, prompt: String, files: [JSONValue], promptMetadata: [String: JSONValue]) throws {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !files.isEmpty, prompt.count <= 32_000 else {
             throw MainsError.server("Write a demo message under 32,000 characters or attach a file.")
         }
@@ -290,6 +308,10 @@ final class DemoBackend {
         }
         attachmentBytes += bytes
         append(runID, kind: "user-prompt", text: prompt, metadata: promptMetadata.merging(["source": .string("user"), "attachments": .array(references)]) { existing, _ in existing })
+    }
+
+    private func start(_ runID: String, prompt: String, files: [JSONValue], promptMetadata: [String: JSONValue] = [:]) throws {
+        try recordPrompt(runID, prompt: prompt, files: files, promptMetadata: promptMetadata)
         if let index = runs.firstIndex(where: { $0["id"]?.string == runID }) {
             runs[index]["status"] = .string("running"); runs[index]["updatedAt"] = Self.now; runs[index]["endedAt"] = .null
             let count = turns[runID]?.count ?? 0
@@ -301,7 +323,7 @@ final class DemoBackend {
         if !contextNames.isEmpty || prompt.hasPrefix("/review") {
             steps = [.text("## Demo context received\n\n" + (contextNames.isEmpty ? "The /review command is included in your message." : "Selected context: **" + contextNames.joined(separator: ", ") + "**.") + "\n\nThe composer sent the canonical skill names and their metadata with this request. This is a prepared on-device demonstration; no plugin, command or AI service was executed."), .finish]
         } else {
-            steps = scenario(prompt, hasAttachments: !uploaded.isEmpty, mode: runs.first { $0["id"]?.string == runID }?["mode"]?.string ?? "chat")
+            steps = scenario(prompt, hasAttachments: !files.isEmpty, mode: runs.first { $0["id"]?.string == runID }?["mode"]?.string ?? "chat")
         }
         replays[runID] = Replay(steps: steps)
         push("runs:statusChanged", ["runId": .string(runID), "status": .string("running")]); resume(runID)

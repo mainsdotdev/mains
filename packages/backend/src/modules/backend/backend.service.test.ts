@@ -148,6 +148,8 @@ describe("backendService", () => {
       }
       expect(PAIRED_DEVICE_CHANNELS.has("backend:describe")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:getAll")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("runs:getQueue")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("runs:publishQueue")).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:readTextFile")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runArtifacts:readAttachmentFile")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runArtifacts:describeAttachmentFile")).toBe(true);
@@ -165,6 +167,7 @@ describe("backendService", () => {
         "runs:dismissAsyncQuestions",
         "runs:execute",
         "runs:fork",
+        "runs:inputStatus",
         "runs:steer",
         "runs:toolApprovalResponse",
         "runs:updateConversationSettings",
@@ -174,6 +177,7 @@ describe("backendService", () => {
         expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(false);
       }
       expect(PAIRED_DEVICE_COMMANDS.has("runs:update")).toBe(false);
+      expect(PAIRED_DEVICE_COMMANDS.has("runs:publishQueue")).toBe(false);
     });
 
     it("counts toward a paired device's capabilities", async () => {
@@ -460,6 +464,7 @@ describe("PAIRED_DEVICE_EVENTS", () => {
       "runs:diffUpdated",
       "runs:ephemeralEvent",
       "runs:eventPersisted",
+      "runs:queueChanged",
       "runs:statusChanged",
       "runs:toolApprovalRequest",
       "runs:toolApprovalResolved",

@@ -162,11 +162,35 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   removing the overlay. Reduce Motion uses a short fade. Camera has shutter,
   flash and front/back controls; Photos has a three-column paged recents grid,
   ordered multi-selection and an All Photos system picker. Limited or denied
-  library access still allows explicit selections through All Photos. Selected
-  photos are downsampled without cropping and encoded as JPEGs within the shared
+  library access still allows explicit selections through All Photos.
+  Photo authorization survives the permission dialog's temporary inactive phase;
+  cancelled loads always retire their spinner. Loading, fallback text and controls
+  share the full media panel bounds.
+  Selected photos are downsampled without cropping and encoded as JPEGs within the shared
   attachment budget; file imports retain their data. The composer shows fixed
   104-point square image previews in one horizontal strip and documents separately.
 - Text continuation, stop, cumulative live replies and durable stream acknowledgement.
+- Codex and Claude queue new messages during a running turn: messages keep their
+  files, context and selected settings, and send FIFO after a successful turn.
+  The queue is visible only while it contains messages; there is no delivery-mode
+  selector or empty Queue bar. Use Steer on one waiting row to send it immediately.
+  Rows support edit/save/cancel with draft backup,
+  remove, drag reorder and accessible Move up/down actions. Editing settings stays
+  local until that queued message sends. Failure, Stop, backgrounding and connection
+  changes pause the queue until Resume; Check delivery uses the original input
+  identity and frozen payload, never a new send. Older computers fall back to the
+  original command receipt. The session owns the consumer across navigation, keeps
+  reading position unchanged, and limits memory to 32 pending messages/32 MiB.
+  Queues, draft backups and files are memory-only and clear with pairing ownership
+  or app termination. Native queues do not add optimistic transcript turns.
+- Desktop-owned pending messages appear as **Queued on computer**, with their
+  current order, attachment names and delivery/pause status. The desktop publishes
+  a bounded, memory-only projection over `runs:publishQueue`; iOS reads it through
+  `runs:getQueue` and `runs:queueChanged`, with a periodic refresh for reconnects.
+  Projections expire after 60 seconds without a desktop heartbeat. The desktop
+  retains delivery ownership and its original files/settings; the phone never
+  imports these rows into its own queue or sends them again. This requires an
+  updated desktop/backend as well as the native app.
 - Running status follows the foreground tool or the provider’s current thinking preview,
   with a provider-coloured square loader and text shimmer. Streaming assistant prose
   and visible running tool rows suppress duplicate footer indicators. Live thinking
@@ -224,8 +248,8 @@ attachment/output descriptors and version-checked 128 KB chunks, up to 25 MB
 are protected and removed when the viewer closes. Older attachments without a
 durable reference remain visible with an unavailable-preview label.
 
-Messages to active turns currently require waiting or stopping; mid-turn steer
-is not implemented. Mathematical typesetting and raw HTML remain on the computer or Expo app.
+Other providers and queued turns require waiting or stopping before sending.
+Mathematical typesetting and raw HTML remain on the computer or Expo app.
 In Demo Mode, send “Show Markdown formatting” to explore the native formatting sample.
 
 ## Validate

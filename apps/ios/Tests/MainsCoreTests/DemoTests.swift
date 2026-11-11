@@ -4,6 +4,39 @@ import Testing
 
 @Suite(.serialized)
 struct DemoTests {
+    @Test(arguments: ["codex", "claude_code"]) @MainActor
+    func steerAddsFilesAndContextToTheCurrentDemoTurnWithoutRestartingIt(providerID: String) async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(100), streamDelay: .milliseconds(5))
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        session.grantConsent(providerID: providerID, backendID: DemoBackend.backendID)
+        let space = try #require(session.spaces.first { $0.providerId == providerID })
+        let id = try await session.send("Review the sample workspace", spaceID: space.id, workspaceID: backend.defaultWorkspaceID)
+        await session.selectConversation(id)
+        try await eventually { session.pendingMessage == nil && session.conversations.first { $0.id == id }?.canSteer == true }
+        let turn = try #require(session.transcript.page?.turns.last)
+        session.setHistoryFollowing(false)
+        let scope = session.contextScope(providerID: providerID, workspaceID: session.conversations.first { $0.id == id }?.workspaceId)
+        let skill = ContextSkill(name: "review", displayName: "Review")
+        let file = PromptAttachment(name: "note.pdf", type: "document", mimeType: "application/pdf", bytes: DemoFile.pdf.bytes)
+        _ = try await session.send("Focus on " + ContextMentions.mention(skill), runID: id, attachments: [file], contextSkills: [skill], contextScope: scope, steering: true)
+        try await eventually { session.pendingMessage == nil }
+        #expect(!session.transcript.isFollowing)
+        #expect(session.transcript.page?.turns.map(\.id) == [turn.id])
+        await session.loadHistory(direction: "latest")
+        let steer = try #require(session.transcript.rows.last { $0.kind == .prompt })
+        #expect(steer.text == "Focus on $review" && steer.contextSkills == [skill] && steer.media.map(\.name) == [file.name])
+        let descriptor = try await session.describeAttachment(try #require(steer.media.first))
+        #expect(try await session.downloadAttachment(descriptor) == DemoFile.pdf.bytes)
+        try await session.stop(id)
+        try await eventually { session.conversations.first { $0.id == id }?.isActive == false }
+        await #expect(throws: MainsError.steerTurnEnded) { try await session.send("Keep this draft", runID: id, steering: true) }
+        await session.loadHistory(direction: "refresh")
+        #expect(session.transcript.rows.filter { $0.kind == .prompt }.count == 2)
+    }
+
     @Test @MainActor func attachmentOnlyDemoMessagesKeepOnePromptAndDownloadableFiles() async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })

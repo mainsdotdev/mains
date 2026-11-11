@@ -17,6 +17,7 @@ struct ComposerContext {
         spaceID = nil; runID = run.id; workspaceID = run.workspaceId
     }
     @MainActor func settings(_ session: BackendSession) -> ComposerSettings {
+        if let runID, let editing = session.existingMessageQueue(for: runID)?.editingSettings { return editing }
         if let runID, let settings = session.settings(forRunID: runID) { return settings }
         if let space = session.spaces.first(where: { $0.id == spaceID }) { return session.settings(for: space) }
         return ComposerSettings()
@@ -30,9 +31,11 @@ struct ComposerContext {
             session.isConnected && session.models[providerId] == nil && session.modelErrors[providerId] == nil
     }
     @MainActor func saving(_ session: BackendSession) -> Bool {
-        runID.map { session.savingConversationSettings.contains($0) || session.uncertainConversationSettings.contains($0) } ?? false
+        if let runID, session.existingMessageQueue(for: runID)?.editingID != nil { return false }
+        return runID.map { session.savingConversationSettings.contains($0) || session.uncertainConversationSettings.contains($0) } ?? false
     }
     @MainActor func save(_ settings: ComposerSettings, session: BackendSession) {
+        if let runID, let queue = session.existingMessageQueue(for: runID), queue.editingID != nil { queue.editingSettings = settings; return }
         if let runID {
             let owner = session.ownership
             Task {
@@ -43,6 +46,7 @@ struct ComposerContext {
         } else if let spaceID { session.setSettings(settings, spaceID: spaceID) }
     }
     @MainActor func commit(_ settings: ComposerSettings, session: BackendSession) async throws {
+        if let runID, let queue = session.existingMessageQueue(for: runID), queue.editingID != nil { queue.editingSettings = settings; return }
         if let runID { try await session.updateConversationSettings(settings, runID: runID) }
         else if let spaceID { session.setSettings(settings, spaceID: spaceID) }
     }

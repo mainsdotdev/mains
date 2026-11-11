@@ -48,7 +48,7 @@ public struct Transcript: Sendable {
         self.page = page
         let artifactIDs = Set(page.artifacts.map(\.id))
         promptIdentities = promptIdentities.filter { artifactIDs.contains($0.key) }
-        if let pending, let artifact = page.artifacts.first(where: pending.matches) {
+        if let pending, !pending.isSteering, !pending.isQueueOwned, let artifact = page.artifacts.first(where: pending.matches) {
             promptIdentities[artifact.id] = PromptIdentity(id: "pending:" + pending.id, date: pending.date)
         }
         if previousPrompt != page.artifacts.last(where: { $0.kind == "user-prompt" })?.id { suppressStoredThoughts = false }
@@ -225,7 +225,7 @@ public struct Transcript: Sendable {
     /// then the durable artifact takes over that same identity without a second row.
     public func rows(pending: PendingMessage?, runID: String) -> [TranscriptRow] {
         var result = rows
-        guard !isHistorical, let pending, pending.runID == runID, page?.artifacts.contains(where: pending.matches) != true else { return result }
+        guard !isHistorical, let pending, !pending.isSteering, !pending.isQueueOwned, pending.runID == runID, page?.artifacts.contains(where: pending.matches) != true else { return result }
         result.append(TranscriptRow(id: "pending:" + pending.id, kind: .prompt, text: pending.text, date: pending.date,
                                     live: false, deferredArtifactID: nil, contextSkills: pending.contextSkills,
                                     delivery: pending.status, pendingAttachments: pending.attachments))

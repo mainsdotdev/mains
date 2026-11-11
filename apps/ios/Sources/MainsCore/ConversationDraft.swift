@@ -10,6 +10,7 @@ public final class ConversationDraft {
         public let attachments: [PromptAttachment]
         public let contextSkills: [ContextSkill]
         public let contextScope: ContextScope?
+        public let retainsContent: Bool
     }
     public var text = ""
     public var attachments: [PromptAttachment] = []
@@ -26,17 +27,26 @@ public final class ConversationDraft {
     public var hasContent: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty }
     public init() {}
 
-    public func begin() -> Submission? {
+    public func snapshot() -> Submission {
+        Submission(text: text, attachments: attachments, contextSkills: ContextMentions.attached(in: text, skills: contextSkills), contextScope: contextScope, retainsContent: false)
+    }
+    public func restore(_ snapshot: Submission) {
+        text = snapshot.text; attachments = snapshot.attachments; contextSkills = snapshot.contextSkills
+        if let contextScope, contextScope != snapshot.contextScope { clearContext() }
+        else { contextScope = snapshot.contextScope }
+    }
+
+    public func begin(retainingContent: Bool = false) -> Submission? {
         guard submission == nil, hasContent else { return nil }
-        let next = Submission(text: text, attachments: attachments, contextSkills: ContextMentions.attached(in: text, skills: contextSkills), contextScope: contextScope)
-        text = ""
-        attachments = []; contextSkills = []
+        let next = Submission(text: text, attachments: attachments, contextSkills: ContextMentions.attached(in: text, skills: contextSkills), contextScope: contextScope, retainsContent: retainingContent)
+        if !retainingContent { clearContent() }
         failure = nil; unsentText = nil; unsentAttachments = []; unsentSkills = []; unsentScope = nil
         submission = next
         return next
     }
     public func accept(_ sent: Submission) {
         guard submission?.id == sent.id else { return }
+        if sent.retainsContent && stillContains(sent) { clearContent() }
         submission = nil
     }
     public func reject(_ sent: Submission, message: String, uncertain: Bool) {
@@ -45,7 +55,11 @@ public final class ConversationDraft {
         failure = message
         failureTitle = "Couldn't send"
         // An unconfirmed prompt belongs to the receipt UI, never back in a fresh send.
-        guard !uncertain else { return }
+        if uncertain {
+            if sent.retainsContent && stillContains(sent) { clearContent() }
+            return
+        }
+        if sent.retainsContent && stillContains(sent) { return }
         if text.isEmpty && attachments.isEmpty {
             text = sent.text; attachments = sent.attachments; contextSkills = sent.contextSkills
             if let scope = contextScope { synchronizeContext(scope) } else { contextScope = sent.contextScope }
@@ -64,6 +78,11 @@ public final class ConversationDraft {
         if let contextScope, contextScope != scope { clearContext() }
         contextScope = scope
     }
+    private func stillContains(_ sent: Submission) -> Bool {
+        text == sent.text && attachments == sent.attachments && contextScope == sent.contextScope &&
+            ContextMentions.attached(in: text, skills: contextSkills) == sent.contextSkills
+    }
+    private func clearContent() { text = ""; attachments = []; contextSkills = [] }
     public func reconcileContext() { contextSkills = ContextMentions.attached(in: text, skills: contextSkills) }
     public func insert(_ skill: ContextSkill, scope: ContextScope) {
         synchronizeContext(scope)

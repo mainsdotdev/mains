@@ -1,9 +1,15 @@
 // Deterministic protocol fixture. Uses the REAL TypeScript codec and channels;
 // never starts an AI provider, opens a real database, or edits a workspace.
 import http from 'node:http';
-import { createRequire } from 'node:module';
+import { createRequire, stripTypeScriptTypes } from 'node:module';
+import { readFile } from 'node:fs/promises';
 import { encodeWsMessage, decodeWsMessage, WS_PROTOCOL_VERSION } from '../../../packages/contracts/src/ws-protocol.ts';
 import { CHANNELS } from '../../../packages/contracts/src/channels.ts';
+
+// Backend sources live in an explicit CommonJS package. Load this dependency-free
+// helper as stripped ESM so the fixture exercises the production projection store.
+const queueStoreSource = await readFile(new URL('../../../packages/backend/src/modules/runs/run-queue-projection.ts', import.meta.url), 'utf8');
+const { createRunQueueProjectionStore } = await import('data:text/javascript,' + encodeURIComponent(stripTypeScriptTypes(queueStoreSource)));
 
 const require = createRequire(new URL('../../server/package.json', import.meta.url));
 const { WebSocketServer, WebSocket } = require('ws');
@@ -13,6 +19,7 @@ const descriptor = { backendId: 'ios-fixture', name: 'Test Mac', appVersion: '0.
 const connections = new Set(), receipts = new Map(), observations = [];
 const timers = new Set(), replies = new Map();
 const pendingDecisions = new Map();
+const queueProjections = createRunQueueProjectionStore();
 const storedTurns = new Map(), storedDiffs = new Map();
 let acceptsConnections = true;
 let holdSnapshot = 0;
@@ -27,6 +34,7 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   pagedHistory = paging;
   disjointHistory = disjoint;
   receipts.clear(); pendingDecisions.clear(); storedTurns.clear(); storedDiffs.clear(); observations.length = 0; nextID = 10;
+  queueProjections.clear();
   tools = new Map();
   spaces = [{ id: 'fixture-space', name: 'Codex', providerId: 'codex', icon: 'icon:codex', mode: 'chat', model: null, isArchived: false },
     { id: 'fixture-code', name: 'Code', providerId: 'codex', icon: 'icon:codex', mode: 'developer', model: null, isArchived: false }];
@@ -137,12 +145,14 @@ function later(delay, callback) {
   const timer = setTimeout(() => { timers.delete(timer); callback(); }, delay);
   timers.add(timer);
 }
-function startReply(runId, message, commandId) {
+function startReply(runId, message, commandId, input = {}) {
   const date = new Date();
   const streamId = `reply-${commandId}`;
   const reply = { streamId, content: '', stopped: false };
   replies.set(runId, reply);
-  artifacts.get(runId).push({ id: nextID++, runId, kind: 'user-prompt', content: message, metadata: { source: 'user' }, createdAt: date });
+  artifacts.get(runId).push({ id: nextID++, runId, kind: 'user-prompt', content: message,
+    metadata: { source: 'user', clientUserMessageId: input.clientUserMessageId, skills: input.contextSkills,
+      attachments: input.attachments?.map(({ name, type, mimeType }) => ({ name, type, mimeType })) }, createdAt: date });
   const run = runs.find(run => run.id === runId);
   run.status = 'running'; run.updatedAt = date;
   event(CHANNELS.runs.statusChanged, runId, { status: 'running' });
@@ -170,6 +180,12 @@ const server = http.createServer(async (request, response) => {
   const parts = []; for await (const part of request) parts.push(part);
   response.setHeader('Content-Type', 'application/json');
   if (request.url === '/observations') { response.end(JSON.stringify(observations)); return; }
+  // Simulate the desktop owner publishing through IPC; paired phones may only read this projection.
+  if (request.method === 'POST' && request.url === '/test/queue') {
+    const body = JSON.parse(Buffer.concat(parts).toString());
+    if (queueProjections.publish(body)) event(CHANNELS.runs.queueChanged, body.runId);
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/append-history') {
     const at = new Date();
     artifacts.get('fixture-run').push(
@@ -357,6 +373,7 @@ wss.on('connection', socket => {
         }
         case CHANNELS.providers.getCodexPermissions: result = { profilesSupported: true, profiles: [{ id: 'review', description: 'Managed review profile', allowed: true }], allowedSandboxModes: ['read-only', 'workspace-write'], allowedApprovalPolicies: null, requiresNamedProfile: false }; break;
         case CHANNELS.runs.getById: result = runs.find(run => run.id === args[0]) ?? null; break;
+        case CHANNELS.runs.getQueue: result = { queues: queueProjections.read(args[0]) }; break;
         case CHANNELS.runs.listPendingApprovals: result = [...pendingDecisions.values()].filter(value => !args[0] || value.runId === args[0]); break;
         case CHANNELS.runs.toolApprovalResponse: {
           const input = args[0], pending = pendingDecisions.get(input.requestId);
@@ -429,6 +446,33 @@ wss.on('connection', socket => {
             hasOlder: items.length > 0 && items[0].id !== all[0]?.id, hasNewer: !!upper && all.some(item => compare(item, upper) >= 0) };
           break;
         }
+        case CHANNELS.runs.inputStatus: {
+          const input = args[0];
+          if (!commandId || input.accountId !== 'fixture-account' || !input.clientUserMessageId) throw new Error('Invalid input check');
+          result = { accepted: artifacts.get(input.runId)?.some(row => row.metadata?.clientUserMessageId === input.clientUserMessageId) ?? false };
+          receipts.set(commandId, { success: true, data: result }); break;
+        }
+        case CHANNELS.runs.steer: {
+          const input = args[0], run = runs.find(r => r.id === input.runId), reply = replies.get(input.runId);
+          if (!commandId || input.accountId !== 'fixture-account' || !input.clientUserMessageId || typeof input.message !== 'string') throw new Error('Invalid steer identity or input');
+          if (!['codex', 'claude_code'].includes(run?.providerId)) throw new Error('This provider does not support steering.');
+          if (input.message === 'Finish before steer' && reply) {
+            reply.stopped = true; run.status = 'succeeded';
+            event(CHANNELS.runs.statusChanged, run.id, { status: run.status });
+          }
+          if (run.status !== 'running' || !reply || reply.stopped) throw new Error('There is no active turn to steer. The message stays queued.');
+          artifacts.get(run.id).push({ id: nextID++, runId: run.id, kind: 'user-prompt', content: input.message,
+            metadata: { source: 'user', clientUserMessageId: input.clientUserMessageId, delivery: 'steer', skills: input.contextSkills,
+              attachments: input.attachments?.map(({ name, type, mimeType }) => ({ name, type, mimeType })) }, createdAt: new Date() });
+          result = { runId: run.id, turnId: reply.streamId };
+          receipts.set(commandId, { success: true, data: result });
+          event(CHANNELS.runs.eventPersisted, run.id);
+          if (input.message === 'Reconnect steer once') { socket.terminate(); return; }
+          if (input.message === 'Unconfirmed accepted steer') {
+            send(socket, { kind: 'response', id, result: { success: false, error: 'Command outcome is unknown because its result was not recorded. Check the conversation before sending another command.' } }); return;
+          }
+          break;
+        }
         case CHANNELS.runs.execute:
         case CHANNELS.runs.continue: {
           const input = args[0];
@@ -440,6 +484,7 @@ wss.on('connection', socket => {
             send(socket, { kind: 'response', id, result: failure }); return;
           }
           if (channel === CHANNELS.runs.execute && !spaces.some(space => space.id === input.spaceId)) throw new Error('Invalid space');
+          if (channel === CHANNELS.runs.continue && input.clientUserMessageId && runs.find(run => run.id === input.runId)?.status === 'running') throw new Error('This conversation already has an active response.');
           const runId = input.runId ?? `new-${nextID++}`;
           if (!artifacts.has(runId)) {
             artifacts.set(runId, []);
@@ -451,7 +496,7 @@ wss.on('connection', socket => {
           }
           result = { runId, resumed: true };
           receipts.set(commandId, { success: true, data: result });
-          startReply(runId, input.message ?? input.goal, commandId);
+          startReply(runId, input.message ?? input.goal, commandId, input);
           if (input.message === 'Reconnect once') { socket.terminate(); return; }
           break;
         }

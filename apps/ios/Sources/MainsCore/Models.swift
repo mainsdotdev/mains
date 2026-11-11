@@ -68,6 +68,8 @@ public struct Conversation: Codable, Equatable, Identifiable, Sendable {
     public let updatedAt: Date
     public var displayTitle: String { title?.isEmpty == false ? title! : "New conversation" }
     public var isActive: Bool { status == "queued" || status == "running" }
+    public var supportsSteering: Bool { ["codex", "claude_code"].contains(providerId) }
+    public var canSteer: Bool { status == "running" && supportsSteering && isReplica != true }
     public var archivedReplyError: String? {
         // A provider-archived chat is distinct from Mains' isArchived flag.
         // The backend currently exposes this state through its normalized error.

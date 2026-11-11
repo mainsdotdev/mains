@@ -13,6 +13,7 @@
 		18A636AB0AAA64BAC8D072DD22663B00 /* DemoTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F70A7F83838E51FA93C6A6865005C23 /* DemoTransport.swift */; };
 		1D0B396518766C2DFB828A859DDF61F4 /* AttachmentCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9A46AD7309EA1DDF09317A2251BAA0C /* AttachmentCamera.swift */; };
 		1D24E1623304F7399F707540F612C5E6 /* ComposerContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF3F43CBAEBB67DC3684999D2C0E1F8C /* ComposerContext.swift */; };
+		1E59B10625964E03E83C588A /* RemoteRunQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 625DE58EA15C5C7C3F007382 /* RemoteRunQueue.swift */; };
 		1ED9E57B21616813848BF84F023B625D /* FullMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EBA4DB408590C3EBF1C7F40B007440 /* FullMessageView.swift */; };
 		1F7DB6423148F74A15CEA4D5EA5D9EB8 /* RunDecisionCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BAD21B4E41688A1ACC7FD230E64E325 /* RunDecisionCards.swift */; };
 		21763373FACBCA9A06EF2EC1523CE04D /* TurnChanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17DCA08EF78ABC58DEA956BED6F292F /* TurnChanges.swift */; };
@@ -28,9 +29,11 @@
 		3D5741C434B0F5AB6AEF2B168EB94E30 /* DemoTurnChanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EE52ECBF853F9F6E046D2FE1C5BEB4 /* DemoTurnChanges.swift */; };
 		3E543BAF46F9E3905EDA4CC0B519896C /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3002D6F51A28EBD5CBD743DB9ACB85FD /* Foundation.framework */; };
 		4373816D5F44251336D9DA13207C815A /* MessageComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8864874F6AFC6BE12C4E653342D08D6 /* MessageComposer.swift */; };
+		4605F4D99ABA8BC2BA5E6755 /* RunMessageQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = E75024895C8CF954BC856D99 /* RunMessageQueue.swift */; };
 		4B8B51CB2D87D3FD7E57E8D5D0791898 /* OutputsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FF41D86452ECC79249896E14523A041 /* OutputsView.swift */; };
 		4BEDE45455BD26EAB13AF200CB095764 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0649CAD9796CADAA128ADCCD806B55C /* Assets.xcassets */; };
 		4F4DCC9D6A19B8BC54152DB52920B5A8 /* ChatMedia.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BEB8CFBC86BBA32EAA410B347CCC399 /* ChatMedia.swift */; };
+		5247A6B5D295B43DA07FC839 /* AttachmentPhotoLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41F09FDF0CA68EB47D68A9D8 /* AttachmentPhotoLibrary.swift */; };
 		55AE83931752BF65629A5209FE4E6A52 /* AppChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83E60B2E7CE73F80C9A5E01D12323C74 /* AppChrome.swift */; };
 		5649FE5C4054BC80506BC894C778BE36 /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00E54D146508EFCD2978990AF29E011 /* ConversationView.swift */; };
 		5672AC0635E9E2FD1EDD5980B1635163 /* ContextSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = D225581E96B3FCD5A76319DDD19289C0 /* ContextSources.swift */; };
@@ -47,6 +50,7 @@
 		928837B50C29BF07548119E5 /* DemoSubagents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ED923072C1D953D41A5BCCE /* DemoSubagents.swift */; };
 		9406220B172218C8914EEC4AD93B05ED /* ChatTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 642CBA404ADBCEEBCA6B1B217CE0682F /* ChatTools.swift */; };
 		97875A90DF41C5791AEAEA01915B6687 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39A1C207E4873E38D611B10575EA5838 /* Models.swift */; };
+		9BE30B8C81852B8ABE944A93 /* ConversationQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DC5D65D755428E4C4EC55EA /* ConversationQueueView.swift */; };
 		9BF93DBE7F2CEB26C452FD9A4641B5C7 /* ComposerSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5EA5A8BC570EF327248B2310812B26C /* ComposerSheets.swift */; };
 		9F7E9735DEC285EAC98A069096B86E41 /* AppShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 521CCDCC0F77C7908F2A46C7AE31FDB3 /* AppShell.swift */; };
 		A08AD896F6D14EB5BD5D9EBAF889951D /* ElicitationForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADD533BADBD9D9944403C21B77EFB634 /* ElicitationForm.swift */; };
@@ -106,7 +110,9 @@
 		3BAD21B4E41688A1ACC7FD230E64E325 /* RunDecisionCards.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RunDecisionCards.swift; sourceTree = "<group>"; };
 		3BEB8CFBC86BBA32EAA410B347CCC399 /* ChatMedia.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ChatMedia.swift; sourceTree = "<group>"; };
 		3C89294A9737E697C5B0EFB7CFDD9ADE /* TurnChangesView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TurnChangesView.swift; sourceTree = "<group>"; };
+		3DC5D65D755428E4C4EC55EA /* ConversationQueueView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationQueueView.swift; sourceTree = "<group>"; };
 		3F70A7F83838E51FA93C6A6865005C23 /* DemoTransport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DemoTransport.swift; sourceTree = "<group>"; };
+		41F09FDF0CA68EB47D68A9D8 /* AttachmentPhotoLibrary.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AttachmentPhotoLibrary.swift; sourceTree = "<group>"; };
 		425085D759048DC2BC4DE78A7E9F82FC /* AttachmentMedia.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AttachmentMedia.swift; sourceTree = "<group>"; };
 		45AA5B2CB29793575B5960D3E3A55F78 /* TranscriptMedia.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscriptMedia.swift; sourceTree = "<group>"; };
 		4CEB53D87E2CDD1B3932E968367584BF /* HomeView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
@@ -116,6 +122,7 @@
 		54B014D0DB8AB19C4F58626C9858AEF8 /* ConversationDraft.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationDraft.swift; sourceTree = "<group>"; };
 		582AB1A225D4A973C1E6265DB4687755 /* RunDecisions.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RunDecisions.swift; sourceTree = "<group>"; };
 		60C52B39D6602ADBCC4810174C4BE9B3 /* Mains Native.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Mains Native.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		625DE58EA15C5C7C3F007382 /* RemoteRunQueue.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemoteRunQueue.swift; sourceTree = "<group>"; };
 		62969BE41DAF2689E708B626A13610D9 /* BackendSession.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BackendSession.swift; sourceTree = "<group>"; };
 		642CBA404ADBCEEBCA6B1B217CE0682F /* ChatTools.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ChatTools.swift; sourceTree = "<group>"; };
 		644797AA5BA14674206D2212FA59E1F9 /* AttachmentOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AttachmentOverlay.swift; sourceTree = "<group>"; };
@@ -153,6 +160,7 @@
 		E0079CAB30C390FC9AC682010A4D0CBA /* MainsUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MainsUITests.swift; sourceTree = "<group>"; };
 		E00E54D146508EFCD2978990AF29E011 /* ConversationView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
 		E4321497DC733D2C2A57FBA6524E96B9 /* NativeStorage.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativeStorage.swift; sourceTree = "<group>"; };
+		E75024895C8CF954BC856D99 /* RunMessageQueue.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RunMessageQueue.swift; sourceTree = "<group>"; };
 		E7EE52ECBF853F9F6E046D2FE1C5BEB4 /* DemoTurnChanges.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DemoTurnChanges.swift; sourceTree = "<group>"; };
 		E80F90E76BE13F9F43941F7DD96357B0 /* ConsentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConsentView.swift; sourceTree = "<group>"; };
 		E9A46AD7309EA1DDF09317A2251BAA0C /* AttachmentCamera.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AttachmentCamera.swift; sourceTree = "<group>"; };
@@ -214,6 +222,9 @@
 				A5AACB15B873B3373892ECEA653E8DB7 /* Wire.swift */,
 				77EC13FB1143C299ABDB7F8A /* Subagents.swift */,
 				9ED923072C1D953D41A5BCCE /* DemoSubagents.swift */,
+				E75024895C8CF954BC856D99 /* RunMessageQueue.swift */,
+				41F09FDF0CA68EB47D68A9D8 /* AttachmentPhotoLibrary.swift */,
+				625DE58EA15C5C7C3F007382 /* RemoteRunQueue.swift */,
 			);
 			name = MainsCore;
 			path = MainsCore;
@@ -314,6 +325,7 @@
 				3C89294A9737E697C5B0EFB7CFDD9ADE /* TurnChangesView.swift */,
 				F4E236B5C1FBDE4527587F486D3CA524 /* WorkspaceConversationsView.swift */,
 				515F75FFB2C23F72F9153EC3 /* SubagentViews.swift */,
+				3DC5D65D755428E4C4EC55EA /* ConversationQueueView.swift */,
 			);
 			name = MainsApp;
 			path = MainsApp;
@@ -482,6 +494,10 @@
 				B9839F1FABBC7FC495BCF186 /* Subagents.swift in Sources */,
 				928837B50C29BF07548119E5 /* DemoSubagents.swift in Sources */,
 				EFAE9C7682D95CDDD7EDC39A /* SubagentViews.swift in Sources */,
+				4605F4D99ABA8BC2BA5E6755 /* RunMessageQueue.swift in Sources */,
+				9BE30B8C81852B8ABE944A93 /* ConversationQueueView.swift in Sources */,
+				5247A6B5D295B43DA07FC839 /* AttachmentPhotoLibrary.swift in Sources */,
+				1E59B10625964E03E83C588A /* RemoteRunQueue.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -7,6 +7,8 @@ struct MessageComposer: View {
     @Bindable var draft: ConversationDraft
     let canSend: Bool
     var active = false
+    var canSendDuringRun = false
+    var sendLabel: String? = nil
     var stopping = false
     var stop: (() -> Void)? = nil
     let model: () -> Void
@@ -82,7 +84,7 @@ struct MessageComposer: View {
                         }
                     }.font(.footnote).foregroundStyle(.secondary)
                 }.scrollIndicators(.hidden)
-                if active || stopping, let stop {
+                if stopping || active && (!canSendDuringRun || !draft.hasContent), let stop {
                     Button(action: stop) {
                         Group {
                             if stopping { ProgressView().tint(.white) }
@@ -100,8 +102,8 @@ struct MessageComposer: View {
                             .background(Provider.accent(context.providerId), in: .circle).padding(2)
                     }
                     .buttonStyle(ChatPressStyle())
-                    .disabled(!canSend || context.saving(session) || !draft.hasContent)
-                    .accessibilityLabel(draft.isSending ? "Sending message" : "Send message").accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
+                    .disabled(!canSend || draft.isSending || context.saving(session) || !draft.hasContent)
+                    .accessibilityLabel(draft.isSending ? "Sending message" : sendLabel ?? "Send message").accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
                 }
             }
             .buttonStyle(.plain)

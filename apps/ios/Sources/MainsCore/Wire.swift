@@ -93,6 +93,15 @@ public enum Wire {
 
 public enum MainsError: Error, LocalizedError, Equatable, Sendable {
     case invalidLink, disconnected, timeout, unauthorized, incompatible, server(String), invalidReply, changedBackend
+    public static let steerTurnEnded = Self.server("The agent finished before your message reached it. Send it again to continue.")
+    var isResponseBusy: Bool {
+        guard case .server(let message) = self else { return false }
+        return message.range(of: "already (?:has an active response|starting a response)", options: [.regularExpression, .caseInsensitive]) != nil
+    }
+    var isEndedSteer: Bool {
+        guard case .server(let message) = self else { return false }
+        return message.range(of: "no active (?:codex |claude )?turn to steer|active turn changed", options: .regularExpression.union(.caseInsensitive)) != nil
+    }
     public var isUnconfirmedCommand: Bool {
         guard case .server(let message) = self else { return false }
         // packages/backend/src/ipc-kit/command-delivery.ts returns these receipt failures.

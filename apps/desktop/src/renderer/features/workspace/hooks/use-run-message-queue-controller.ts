@@ -4,11 +4,13 @@ import { getTransport, onTransportChange } from "@/lib/transport";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { RunStatus } from "@/lib/redux/api/runsApi";
 import { runMessageQueue } from "../lib/run-message-queue";
+import { createRunQueuePublisher } from "../lib/run-queue-publisher";
 
 /** The app owns the consumer so queued messages survive route/tab unmounts. */
 export function useRunMessageQueueController(enabled = true) {
   useEffect(() => {
     if (!enabled) return;
+    const publisher = createRunQueuePublisher({ getState: store.getState, getTransport });
     let scheduled = false;
     let alive = true;
     let previousQueues = store.getState().runQueue;
@@ -18,7 +20,7 @@ export function useRunMessageQueueController(enabled = true) {
       scheduled = true;
       queueMicrotask(() => {
         scheduled = false;
-        if (alive) void runMessageQueue.pump();
+        if (alive) { publisher.sync(); void runMessageQueue.pump(); }
       });
     };
     let releaseTransport = () => {};
@@ -33,10 +35,10 @@ export function useRunMessageQueueController(enabled = true) {
       });
       const releaseConnection = transport.onStatusChange((status) => {
         if (status !== "connected") runMessageQueue.pauseBackend(backendId, "Backend disconnected. Queued messages are paused.");
-        else kick();
+        else { publisher.sync(true); kick(); }
       });
       releaseTransport = () => { releaseStatus(); releaseConnection(); };
-      kick();
+      publisher.sync(true); kick();
     };
     const unsubscribeStore = store.subscribe(() => {
       const state = store.getState();
@@ -54,9 +56,10 @@ export function useRunMessageQueueController(enabled = true) {
       bind();
     });
     bind();
-    const poll = window.setInterval(kick, 10_000);
+    const poll = window.setInterval(() => { publisher.sync(true); kick(); }, 10_000);
     return () => {
       alive = false;
+      publisher.dispose();
       window.clearInterval(poll);
       unsubscribeStore(); unsubscribeTransport(); releaseTransport();
     };

@@ -42,6 +42,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // managed directory. This deliberately does not expose fileExplorer:*.
   CHANNELS.runs.readTextFile,
   CHANNELS.runs.listOutputs,
+  CHANNELS.runs.getQueue,
   CHANNELS.runs.readOutputFile,
   CHANNELS.runs.listPendingApprovals,
   CHANNELS.runTurns.getByRun,
@@ -100,6 +101,9 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   // A message for the turn already running: the same payload and owner checks
   // as a continuation, delivered before the turn ends rather than after it.
   CHANNELS.runs.steer,
+  // Recover a previously accepted queue/steer input by its original identity.
+  // This can persist the provider's acceptance projection, so it is a command.
+  CHANNELS.runs.inputStatus,
   // Codex's end-of-turn questions. Answering one sends a formatted message
   // through that same steer/continue seam; dismissing only records that the
   // user chose not to answer.
@@ -122,6 +126,7 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
  * connections. Exactly the channels the phone subscribes to.
  */
 export const PAIRED_DEVICE_EVENTS: ReadonlySet<string> = new Set([
+  CHANNELS.runs.queueChanged,
   CHANNELS.runs.statusChanged,
   CHANNELS.runs.updated,
   CHANNELS.runs.ephemeralEvent,

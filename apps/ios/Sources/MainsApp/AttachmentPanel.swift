@@ -67,8 +67,10 @@ struct AttachmentPanel: View {
         .task(id: "\(mode.rawValue):\(scenePhase == .active)") {
             if mode == .camera && scenePhase == .active { await camera.start() }
             else { camera.stop() }
-            if mode == .photos && scenePhase == .active { await library.load() }
         }
+        // The permission sheet can temporarily inactivate the scene. It must
+        // not cancel and restart the same photo authorization request.
+        .task(id: mode) { if mode == .photos { await library.load() } }
         .task {
             visible = true
             guard !appeared else { return }
@@ -223,6 +225,7 @@ struct AttachmentPanel: View {
                     }.scrollIndicators(.hidden).accessibilityIdentifier("attachmentPhotoGrid")
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
             .overlay(alignment: .topTrailing) {
                 Button { systemPicker = true } label: {
                     Label("All Photos", systemImage: "photo.on.rectangle").font(.footnote)

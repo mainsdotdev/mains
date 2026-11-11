@@ -63,10 +63,11 @@ private struct AttachmentOverlayModifier: ViewModifier {
 
 private struct AttachmentOverlayHost: ViewModifier {
     @State private var presented: AttachmentOverlayRequest?
+    @Environment(\.scenePhase) private var scenePhase
     func body(content: Content) -> some View {
         content
             .onPreferenceChange(AttachmentOverlayRequestKey.self) { presented = $0 }
-            .background(AttachmentOverlayPresenter(request: presented))
+            .background(AttachmentOverlayPresenter(request: presented, scenePhase: scenePhase))
     }
 }
 
@@ -75,6 +76,7 @@ private struct AttachmentOverlayHost: ViewModifier {
 /// responder; the panel's backdrop intercepts touches and is modal to VoiceOver.
 private struct AttachmentOverlayPresenter: UIViewControllerRepresentable {
     let request: AttachmentOverlayRequest?
+    let scenePhase: ScenePhase
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIViewController(context: Context) -> UIViewController {
         let controller = UIViewController()
@@ -107,7 +109,7 @@ private struct AttachmentOverlayPresenter: UIViewControllerRepresentable {
             if let overlay {
                 // Keep the presentation identity while keyboard/source geometry
                 // changes, preserving the menu's reversible animation state.
-                overlay.rootView = AttachmentOverlayContent(request: request)
+                overlay.rootView = AttachmentOverlayContent(request: request, scenePhase: parent.scenePhase)
                 return
             }
             guard !scheduled else { return }
@@ -117,7 +119,7 @@ private struct AttachmentOverlayPresenter: UIViewControllerRepresentable {
                 self.scheduled = false
                 guard let request = self.parent.request, self.overlay == nil,
                       let container = controller.view.window?.rootViewController else { return }
-                let host = UIHostingController(rootView: AttachmentOverlayContent(request: request))
+                let host = UIHostingController(rootView: AttachmentOverlayContent(request: request, scenePhase: self.parent.scenePhase))
                 host.view.backgroundColor = .clear
                 host.view.accessibilityViewIsModal = true
                 self.overlay = host
@@ -140,9 +142,11 @@ private struct AttachmentOverlayPresenter: UIViewControllerRepresentable {
 
 private struct AttachmentOverlayContent: View {
     let request: AttachmentOverlayRequest
+    let scenePhase: ScenePhase
     var body: some View {
         AttachmentPanel(sourceFrame: request.sourceFrame, accent: request.accent,
             maxCount: request.maxCount, maxBytes: request.maxBytes, add: request.add, close: request.close)
             .id(request.id)
+            .environment(\.scenePhase, scenePhase)
     }
 }

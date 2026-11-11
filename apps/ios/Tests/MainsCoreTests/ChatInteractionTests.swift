@@ -14,6 +14,80 @@ import Testing
     #expect(!draft.isSending)
 }
 
+@Test @MainActor func steerDraftClearsOnlyItsUnchangedSourceAfterAcceptance() throws {
+    let draft = ConversationDraft()
+    draft.text = "Focus on the tests"
+    let first = try #require(draft.begin(retainingContent: true))
+    #expect(draft.text == first.text && draft.isSending)
+    #expect(draft.begin(retainingContent: true) == nil)
+    draft.accept(first)
+    #expect(!draft.hasContent && !draft.isSending)
+    draft.text = "Look at the server"
+    let next = try #require(draft.begin(retainingContent: true))
+    draft.text = "A newer thought"
+    draft.accept(first)
+    #expect(draft.isSending && draft.text == "A newer thought")
+    draft.accept(next)
+    #expect(!draft.isSending && draft.text == "A newer thought")
+}
+
+@Test @MainActor func refusedSteerPreservesItsFilesAndMentionsWhileUncertainSteerBelongsToItsReceipt() throws {
+    let draft = ConversationDraft()
+    let scope = ContextScope(providerID: "codex")
+    let skill = ContextSkill(name: "review", displayName: "Review")
+    let file = PromptAttachment(name: "notes.txt", type: "document", mimeType: "text/plain", bytes: Data("Context".utf8))
+    draft.insert(skill, scope: scope); draft.attachments = [file]
+    let refused = try #require(draft.begin(retainingContent: true))
+    draft.reject(refused, message: MainsError.steerTurnEnded.localizedDescription, uncertain: false)
+    #expect(draft.text == refused.text && draft.attachments == [file] && draft.contextSkills == [skill])
+    #expect(draft.unsentText == nil && !draft.isSending)
+    let uncertain = try #require(draft.begin(retainingContent: true))
+    draft.reject(uncertain, message: "Unknown outcome", uncertain: true)
+    #expect(!draft.hasContent && draft.contextSkills.isEmpty && draft.unsentText == nil)
+    draft.text = "Another request"
+    let edited = try #require(draft.begin(retainingContent: true))
+    draft.text = "Keep my edits"
+    draft.reject(edited, message: "Unknown outcome", uncertain: true)
+    #expect(draft.text == "Keep my edits")
+}
+
+@Test func steerSupportRequiresARunningLocalCodexOrClaudeConversation() {
+    for provider in ["codex", "claude_code", "copilot_cli", "cursor", "opencode"] {
+        for status in ["queued", "running", "succeeded", "canceled", "failed"] {
+            var run = Conversation(id: "run", accountId: "account", providerId: provider, mode: "developer", spaceId: nil,
+                                   title: nil, status: status, model: nil, isArchived: false, isReplica: false, lastError: nil,
+                                   createdAt: Date(), updatedAt: Date())
+            #expect(run.canSteer == (status == "running" && ["codex", "claude_code"].contains(provider)))
+            run = Conversation(id: "run", accountId: "account", providerId: provider, mode: "developer", spaceId: nil,
+                               title: nil, status: status, model: nil, isArchived: false, isReplica: true, lastError: nil,
+                               createdAt: Date(), updatedAt: Date())
+            #expect(!run.canSteer)
+        }
+    }
+}
+
+@Test func steerWaitsForItsDurableMessageIdentityWithoutAnOptimisticTurn() throws {
+    let at = Date()
+    var pending = PendingMessage(runID: "run", text: "Same message", date: at, status: .sending, commandID: "steer-command",
+                                 channel: "runs:steer", payload: .object(["clientUserMessageId": .string("steer-input")]),
+                                 backendID: "computer", owner: 1, previousArtifactID: 0)
+    func prompt(_ messageID: String) -> Artifact {
+        Artifact(id: 1, runId: "run", kind: "user-prompt", content: pending.text,
+                 metadata: .object(["clientUserMessageId": .string(messageID)]), createdAt: at)
+    }
+    var transcript = Transcript()
+    #expect(!pending.matches(prompt("another-input")))
+    #expect(pending.matches(prompt("steer-input")))
+    for status in [PendingMessage.Status.sending, .accepted, .uncertain] {
+        pending.status = status
+        #expect(transcript.rows(pending: pending, runID: "run").isEmpty)
+    }
+    transcript.replace(HistoryPage(artifacts: [prompt("steer-input")], toolCalls: [], turns: [], start: nil, end: nil, last: nil, hasOlder: false, hasNewer: false), pending: pending)
+    let row = try #require(transcript.rows(pending: pending, runID: "run").first)
+    #expect(row.id == "artifact:1" && row.delivery == nil)
+    #expect(transcript.rows(pending: pending, runID: "run").count == 1)
+}
+
 @Test @MainActor func aFailedSendRestoresTextWithoutOverwritingNewInput() {
     let draft = ConversationDraft()
     draft.text = "Original message"
