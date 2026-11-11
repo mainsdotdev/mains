@@ -109,7 +109,16 @@ export const bridgeService = {
         scope.signal.addEventListener("abort", retire, { once: true });
         scope.defer(() => scope.signal.removeEventListener("abort", retire));
         await client.start(); scope.assertCurrent();
-        if (logoutState()?.logout_pending) { await finishLogout(); return; }
+        if (logoutState()?.logout_pending) {
+          try { await finishLogout(); }
+          catch (error) {
+            scope.assertCurrent();
+            // Offline logout keeps its fenced identity so an explicit retry can
+            // finish cleanup without rolling back the whole service owner.
+            startupError = error instanceof Error ? error.message : "Sign-out cleanup failed; retry signing out";
+          }
+          return;
+        }
         if (client.status().state !== "signed-out") return;
         if (getSqlite().prepare("SELECT 1 FROM bridge_config WHERE id=1 AND dev_disabled=1").get()) return;
         const file = bridgeDevConfigPath(getBackendRuntime().getPath("userData"));

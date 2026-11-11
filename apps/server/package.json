@@ -26,7 +26,7 @@
     "build:web": "npm --prefix ../desktop run build:web",
     "package": "npm run build && npm run build:web && node scripts/package.mjs",
     "smoke:package": "node scripts/smoke-package.mjs",
-    "test": "npm rebuild better-sqlite3 && vitest run",
+    "test": "npm rebuild better-sqlite3 && node --test scripts/runtime-dependencies.test.mjs && vitest run",
     "test:watch": "npm rebuild better-sqlite3 && vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/ scripts/",

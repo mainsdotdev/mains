@@ -44,6 +44,17 @@ private func childEvent(_ id: String, text: String, ts: Double = 2000) -> JSONVa
     #expect(projection.rootCallIDs == [10, 20, 30])
 }
 
+@Test func continuationIdentityDoesNotPromoteUnrelatedMessagesOrBackgroundTasks() throws {
+    let continuation = try agentCall(1, name: "SendMessage", task: ["taskId": .string("worker"), "status": .string("running")])
+    let ordinary = try agentCall(2, name: "SendMessage", input: ["to": .string("someone"), "message": .string("Hello")])
+    let empty = try agentCall(3, name: "SendMessage", task: ["taskId": .string("")])
+    let shell = try agentCall(4, name: "SendMessage", task: ["taskId": .string("shell"), "taskType": .string("local_bash")])
+    let mcp = try agentCall(5, name: "SendMessage", task: ["taskId": .string("mcp"), "taskType": .string("mcp_task")])
+    let projection = SubagentProjection(calls: [ordinary, shell, continuation, mcp, empty])
+    #expect(projection.rootCallIDs == [1])
+    #expect(projection.agents.count == 1 && projection.agents.first?.agentID == "worker")
+}
+
 @Test func knownChildrenFollowParentsAndCyclesDoNotLoseAgents() throws {
     let parent = try agentCall(1, task: ["taskId": .string("parent")])
     let child = try agentCall(2, task: ["taskId": .string("child"), "parentTaskId": .string("parent")])

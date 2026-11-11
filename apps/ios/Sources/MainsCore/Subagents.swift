@@ -42,7 +42,8 @@ public struct SubagentProjection: Sendable {
         let metadata = call.metadata ?? .null, task = metadata["task"]
         if let type = task["taskType"].string, !type.isEmpty, type != "local_agent" { return false }
         return !metadata["subagent"].objectValue.isEmpty || task["subagentType"].string != nil ||
-            task["taskType"].string == "local_agent" || spawnNames.contains(call.toolName.lowercased())
+            task["taskType"].string == "local_agent" || spawnNames.contains(call.toolName.lowercased()) ||
+            (call.toolName.lowercased() == "sendmessage" && task["taskId"].string?.isEmpty == false)
     }
     private static func lifecycle(_ call: ToolCall) -> JSONValue {
         let metadata = call.metadata ?? .null
