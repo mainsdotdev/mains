@@ -54,6 +54,10 @@ export interface ReadRunHistoryPayload {
   deferToolOutput?: boolean;
   /** Bounded row/byte pages and deferred large bodies for phones. */
   profile?: "mobile";
+  /** Native conversation layout: complete prompt boundaries with bounded previews. */
+  conversationWindow?: boolean;
+  /** Bounded detail navigation within a previously returned activity window. */
+  range?: { start: RunHistoryCursor; end: RunHistoryCursor };
 }
 
 export interface ReadRunHistoryContentPayload {
@@ -91,6 +95,8 @@ export interface RunHistoryPage<A = RunArtifactResponse, C = ToolCallResponse, T
   last: RunHistoryCursor | null;
   hasOlder: boolean;
   hasNewer: boolean;
+  /** Omitted rows remain available through ordinary mobile pages in this range. */
+  activity?: { start: RunHistoryCursor; end: RunHistoryCursor; omittedCount: number };
 }
 
 /** Explicit input for an active turn. Settings stay owned by that turn. */

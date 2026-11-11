@@ -272,7 +272,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
               {needsConnection
                 ? <Button variant="secondary" onClick={() => { void navigate("/settings?section=connections"); }}>Connect GitHub</Button>
                 : <Button variant="secondary" onClick={refresh}>Try again</Button>}
-              <Button variant="subtle" onClick={() => { void window.api.shell.openExternal(url); }}>Open on GitHub</Button>
+              <Button variant="subtle" className="text-primary-700 dark:text-primary-300" onClick={() => { void window.api.shell.openExternal(url); }}>Open on GitHub</Button>
             </div>
           </div>
         ) : !detail ? (

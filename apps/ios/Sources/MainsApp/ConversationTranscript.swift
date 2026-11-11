@@ -19,6 +19,7 @@ struct ConversationTranscript: View {
     @State private var toolFrames: [Int: CGRect] = [:]
     @State private var transcriptFrame = CGRect.zero
     @State private var searchLanded = false
+    @State private var activitySelection: ConversationActivitySelection?
     private var searchRowID: String? {
         guard let cursor = searchCursor, let artifact = page?.artifacts.first(where: { $0.id == cursor.id }) else { return nil }
         return session.transcript.rowID(for: artifact)
@@ -78,6 +79,15 @@ struct ConversationTranscript: View {
                         Color.clear.preference(key: TranscriptFramesKey.self,
                             value: [section.id: TranscriptFrame(rect: geometry.frame(in: .named("transcript-content")), revision: landing?.id)])
                     })
+                }
+                if let activity = page?.activity {
+                    Button {
+                        activitySelection = ConversationActivitySelection(runID: runID, owner: session.ownership, range: activity)
+                    } label: {
+                        Label("More messages and activity", systemImage: "list.bullet.rectangle")
+                            .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 44)
+                    }.buttonStyle(ChatPressStyle()).disabled(!session.isConnected)
+                        .accessibilityIdentifier("moreConversationActivity")
                 }
                 if let error = session.historyError {
                     ChatNotice(title: "Messages couldn't load", message: error, symbol: "wifi.exclamationmark", warning: true) {
@@ -169,6 +179,9 @@ struct ConversationTranscript: View {
             navigationID = nil; loadingDirection = nil; landing = nil
             viewport.finishPage(latestConfirmed: false)
         }
+        .sheet(item: $activitySelection) { selection in
+            ConversationActivitySheet(session: session, selection: selection)
+        }
     }
 
     @ViewBuilder private var activity: some View {
@@ -240,6 +253,94 @@ struct ConversationTranscript: View {
 
     private var sections: [TranscriptSection] { TranscriptSection.build(rows) }
 }
+
+private struct ConversationActivitySelection: Identifiable {
+    let runID: String
+    let owner: Int
+    let range: HistoryActivityRange
+    var id: String { "\(owner):\(runID):\(range.id)" }
+}
+
+/// Detail pages remain separate from the message window and its scroll position.
+private struct ConversationActivitySheet: View {
+    let session: BackendSession
+    let selection: ConversationActivitySelection
+    @Environment(\.dismiss) private var dismiss
+    @State private var page: HistoryPage?
+    @State private var loading = false
+    @State private var error: String?
+    @State private var failedDirection = "refresh"
+    @State private var fullMessage: ActivityMessageReference?
+    private var valid: Bool { session.ownership == selection.owner && session.viewingRunID == selection.runID }
+    private var rows: [TranscriptRow] {
+        guard let page, valid else { return [] }
+        var transcript = Transcript(); transcript.replace(page)
+        var result = transcript.rows.filter { $0.kind != .tool && $0.kind != .subagents }
+        result += page.toolCalls.map { call in
+            TranscriptRow(id: "tool:\(call.id)", kind: .tool, text: "", date: call.createdAt, live: false,
+                deferredArtifactID: nil, tool: call)
+        }
+        result += page.artifacts.compactMap { artifact in
+            let metadata = artifact.metadata ?? .null
+            guard !AgentActivity.foreground(metadata), !metadata["voice"].bool,
+                  !AgentActivity.thinking(kind: artifact.kind, metadata: metadata),
+                  ["report", "result", "command_result"].contains(artifact.kind), let text = artifact.content, !text.isEmpty else { return nil }
+            return TranscriptRow(id: "child-artifact:\(artifact.id)", kind: .response, text: text, date: artifact.createdAt,
+                live: false, deferredArtifactID: metadata["mobileContentDeferred"].bool || metadata["mobileContentDeferred"]["chars"].number != nil ? artifact.id : nil)
+        }
+        return result.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+    }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    ForEach(TranscriptGroup.build(rows)) { group in
+                        if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows) }
+                        else if let row = group.rows.first {
+                            if row.id.hasPrefix("child-artifact:") { Text("Agent message").font(.caption).foregroundStyle(.secondary) }
+                            ChatMessage(session: session, row: row, providerID: "", readContent: { if valid { fullMessage = ActivityMessageReference(id: $0) } })
+                        }
+                    }
+                    if !loading && rows.isEmpty && error == nil { Text("No messages or tool activity in this part.").font(.footnote).foregroundStyle(.secondary) }
+                }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .id(page?.start).defaultScrollAnchor(.top)
+            .overlay { if loading { ProgressView() } }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 8) {
+                    if let error {
+                        Text(error).font(.caption).foregroundStyle(.secondary)
+                        Button("Retry") { Task { await load(failedDirection) } }.disabled(loading)
+                    }
+                    HStack {
+                        Button("Earlier") { Task { await load("older") } }.disabled(loading || page?.hasOlder != true)
+                        Spacer()
+                        Button("Later") { Task { await load("newer") } }.disabled(loading || page?.hasNewer != true)
+                    }
+                }.font(.subheadline).padding().background(.bar)
+            }
+            .navigationTitle("Messages and activity").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .task { await load("refresh") }
+            .sheet(item: $fullMessage) { item in if valid { NavigationStack { FullMessageView(session: session, artifactID: item.id) } } }
+        }
+        .onChange(of: valid, initial: true) { _, valid in if !valid { fullMessage = nil; dismiss() } }
+    }
+    private func load(_ direction: String) async {
+        guard valid, !loading else { return }
+        loading = true; error = nil
+        defer { loading = false }
+        do {
+            let cursor = direction == "older" ? page?.start : direction == "newer" ? page?.end : nil
+            let next = try await session.readHistoryActivity(runID: selection.runID, range: selection.range, direction: direction, cursor: cursor)
+            try Task.checkCancellation()
+            guard valid else { return }
+            page = next
+        } catch { if !Task.isCancelled, valid { failedDirection = direction; self.error = error.localizedDescription } }
+    }
+}
+
+private struct ActivityMessageReference: Identifiable { let id: Int }
 
 private struct TranscriptAnchor { let id: String; let top: CGFloat }
 private struct TranscriptLanding { let id: UUID; let anchor: TranscriptAnchor }

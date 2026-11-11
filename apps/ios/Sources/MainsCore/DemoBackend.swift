@@ -755,28 +755,43 @@ final class DemoBackend {
     private func history(_ request: JSONValue) throws -> JSONValue {
         let id = request["runId"].string ?? ""
         let rows = artifacts[id] ?? [], calls = tools[id] ?? []
-        let keys = (rows.map { Key($0, source: "artifact") } + calls.map { Key($0, source: "tool") }).sorted()
+        let allKeys = (rows.map { Key($0, source: "artifact") } + calls.map { Key($0, source: "tool") }).sorted()
+        let rangeStart = Key(request["range"]["start"]), rangeEnd = Key(request["range"]["end"])
+        let keys = allKeys.filter { key in (rangeStart.map { key >= $0 } ?? true) && (rangeEnd.map { key < $0 } ?? true) }
         var anchors = rows.filter { $0["kind"]?.string == "user-prompt" }.map { Key($0, source: "artifact") }.sorted()
         if let first = keys.first, anchors.first.map({ first < $0 }) ?? true { anchors.insert(first, at: 0) }
         let cursor = Key(request["cursor"])
         let direction = request["direction"].string ?? "latest"
+        let conversation = request["conversationWindow"].bool
+        let pageSize = conversation ? 20 : 3, windowSize = conversation ? 60 : 9
         var lower: Key?, upper: Key?
-        switch direction {
+        if rangeStart != nil {
+            let eligible = keys.filter { key in
+                if direction == "older", let cursor { return key < cursor }
+                if direction == "newer", let cursor { return key >= cursor }
+                return true
+            }
+            let selected = direction == "newer" ? Array(eligible.prefix(200)) : Array(eligible.suffix(200))
+            lower = selected.first
+            if let last = selected.last, keys.last.map({ last < $0 }) == true {
+                var end = last.json.objectValue; end["id"] = .number(Double(last.id + 1)); upper = Key(.object(end))
+            } else { upper = rangeEnd }
+        } else { switch direction {
         case "older":
             let seek = cursor.flatMap { cursor in anchors.firstIndex { $0 >= cursor } } ?? anchors.count
-            let start = max(0, seek - 3), end = min(anchors.count, start + 9)
+            let start = max(0, seek - pageSize), end = min(anchors.count, start + windowSize)
             lower = anchors.indices.contains(start) ? anchors[start] : nil
             upper = anchors.indices.contains(end) ? anchors[end] : nil
         case "newer":
             let seek = cursor.flatMap { cursor in anchors.firstIndex { $0 >= cursor } } ?? anchors.count
-            let end = min(anchors.count, seek + 3), start = max(0, end - 9)
+            let end = min(anchors.count, seek + pageSize), start = max(0, end - windowSize)
             lower = anchors.indices.contains(start) ? anchors[start] : nil
             upper = anchors.indices.contains(end) ? anchors[end] : nil
-        case "refresh": lower = cursor ?? anchors.suffix(3).first; upper = Key(request["end"])
-        default: lower = anchors.suffix(3).first
-        }
+        case "refresh": lower = cursor ?? anchors.suffix(pageSize).first; upper = Key(request["end"])
+        default: lower = anchors.suffix(pageSize).first
+        } }
         func contains(_ key: Key) -> Bool { (lower.map { key >= $0 } ?? false) && (upper.map { key < $0 } ?? true) }
-        let selectedRows = rows.filter { contains(Key($0, source: "artifact")) }.map { row -> JSONValue in
+        var selectedRows = rows.filter { contains(Key($0, source: "artifact")) }.map { row -> JSONValue in
             var item = row
             if let text = row["content"]?.string, text.count > 8000 {
                 item["content"] = .string(String(text.prefix(4000)))
@@ -784,7 +799,7 @@ final class DemoBackend {
             }
             return .object(item)
         }
-        let selectedCalls = calls.filter { contains(Key($0, source: "tool")) }.map { row -> JSONValue in
+        var selectedCalls = calls.filter { contains(Key($0, source: "tool")) }.map { row -> JSONValue in
             var item = row
             for (key, type) in [("input","mains/deferred-tool-input"),("output","mains/deferred-tool-output")] {
                 let text = Self.text(row[key] ?? .null)
@@ -798,11 +813,49 @@ final class DemoBackend {
             let at = time(turn, "startedAt")
             return ((lower.map { at >= $0.time } ?? false) || turn["id"] == preceding) && (upper.map { at <= $0.time } ?? true)
         }
-        return .object(["artifacts": .array(selectedRows), "toolCalls": .array(selectedCalls),
+        var activity: JSONValue = .null
+        if conversation {
+            let prompts = selectedRows.filter { $0["kind"].string == "user-prompt" }
+            var priority: [JSONValue] = []
+            if let cursor, let row = selectedRows.first(where: { Key($0.objectValue, source: "artifact").id == cursor.id && cursor.source == "artifact" }) { priority.append(row) }
+            for (index, prompt) in prompts.enumerated().reversed() {
+                priority.append(prompt)
+                let key = Key(prompt.objectValue, source: "artifact")
+                let next = index + 1 < prompts.count ? Key(prompts[index + 1].objectValue, source: "artifact") : nil
+                if let reply = selectedRows.last(where: {
+                    let candidate = Key($0.objectValue, source: "artifact")
+                    return ["report", "result"].contains($0["kind"].string ?? "") && AgentActivity.foreground($0["metadata"]) &&
+                        !AgentActivity.thinking(kind: $0["kind"].string ?? "", metadata: $0["metadata"]) && candidate >= key && (next.map { candidate < $0 } ?? true)
+                }) { priority.append(reply) }
+            }
+            priority += selectedRows.reversed()
+            let originalCount = selectedRows.count + selectedCalls.count
+            var retainedRows: [JSONValue] = [], retainedCalls: [JSONValue] = [], seen = Set<String>()
+            var bytes = try JSONEncoder().encode(selectedTurns.map(JSONValue.object)).count
+            for (source, values) in [("artifact", priority), ("tool", Array(selectedCalls.reversed()))] {
+                for row in values {
+                    let id = source + ":" + String(row["id"].number ?? 0)
+                    guard !seen.contains(id), seen.count < 200 else { continue }
+                    let count = try JSONEncoder().encode(row).count
+                    guard bytes + count < 1024 * 1024 - 16 * 1024 else { continue }
+                    seen.insert(id); bytes += count
+                    if source == "artifact" { retainedRows.append(row) } else { retainedCalls.append(row) }
+                }
+            }
+            selectedRows = retainedRows.sorted { Key($0.objectValue, source: "artifact") < Key($1.objectValue, source: "artifact") }
+            selectedCalls = retainedCalls.sorted { Key($0.objectValue, source: "tool") < Key($1.objectValue, source: "tool") }
+            if originalCount > seen.count, let lower, let last = keys.last {
+                var ending = last.json.objectValue; ending["id"] = .number(Double(last.id + 1))
+                activity = .object(["start": lower.json, "end": upper?.json ?? .object(ending), "omittedCount": .number(Double(originalCount - seen.count))])
+            }
+        }
+        var result: [String: JSONValue] = ["artifacts": .array(selectedRows), "toolCalls": .array(selectedCalls),
             "turns": .array(selectedTurns.map(JSONValue.object)),
             "start": lower?.json ?? .null, "end": upper?.json ?? .null, "last": keys.last?.json ?? .null,
             "hasOlder": .bool(keys.first.map { first in lower.map { first < $0 } ?? false } ?? false),
-            "hasNewer": .bool(keys.last.map { last in upper.map { last >= $0 } ?? false } ?? false)])
+            "hasNewer": .bool(keys.last.map { last in upper.map { last >= $0 } ?? false } ?? false)]
+        if activity != .null { result["activity"] = activity }
+        return .object(result)
     }
     private func content(_ request: JSONValue) throws -> JSONValue {
         let runID = request["runId"].string ?? "", source = request["source"].string ?? ""

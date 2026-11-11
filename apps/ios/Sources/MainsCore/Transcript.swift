@@ -206,7 +206,7 @@ public struct Transcript: Sendable {
             let id = rowID(for: artifact)
             let date = identity?.date ?? streamID.flatMap { streamDates[$0] } ?? artifact.createdAt
             return TranscriptRow(id: id, kind: kind, text: text, date: date, live: false,
-                                 deferredArtifactID: metadata["mobileContentDeferred"].bool ? artifact.id : nil, media: media,
+                                 deferredArtifactID: metadata["mobileContentDeferred"].bool || metadata["mobileContentDeferred"]["chars"].number != nil ? artifact.id : nil, media: media,
                                  turnID: Self.turnID(metadata), contextSkills: (try? metadata["skills"].decode([ContextSkill].self)) ?? [],
                                  delivery: identity == nil ? nil : .accepted)
         }
@@ -242,7 +242,7 @@ public struct Transcript: Sendable {
     }
 
     public func request(runID: String, direction: String) throws -> JSONValue {
-        var body: [String: JSONValue] = ["runId": .string(runID), "profile": .string("mobile"), "direction": .string(direction), "deferToolOutput": .bool(true)]
+        var body: [String: JSONValue] = ["runId": .string(runID), "profile": .string("mobile"), "conversationWindow": .bool(true), "direction": .string(direction), "deferToolOutput": .bool(true)]
         if direction == "older", let cursor = page?.start { body["cursor"] = try .encode(cursor) }
         if direction == "newer", let cursor = page?.end { body["cursor"] = try .encode(cursor) }
         if direction == "refresh" {

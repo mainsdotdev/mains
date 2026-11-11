@@ -408,3 +408,24 @@ func attachmentOnlyDraftsPreserveFilesAcrossRefusalRecoveryAndUncertainDelivery(
     let retired = await pending.value
     #expect(!retired && session.transcript.page == nil && !session.historyLoading)
 }
+
+@Test @MainActor func activityReadersCannotPublishIntoAnotherConversation() async throws {
+    let backend = try DemoBackend(), transport = HistoryReaderTransport(backend)
+    let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in transport })
+    session.restore(); session.setActive(true); try session.startDemo()
+    defer { session.exitDemo(); backend.shutdown() }
+    try await eventually { session.isConnected }
+    let id = try #require(session.conversations.first?.id)
+    await session.selectConversation(id)
+    let main = try #require(session.transcript.page)
+    let range = HistoryActivityRange(start: try #require(main.start), end: try #require(main.last).exclusiveEnd, omittedCount: 1)
+    let detail = try await session.readHistoryActivity(runID: id, range: range)
+    #expect(detail.artifacts.count + detail.toolCalls.count <= 200 && session.transcript.page == main)
+    transport.hold = true
+    let task = Task { try await session.readHistoryActivity(runID: id, range: range) }
+    try await eventually { transport.release != nil }
+    session.leaveConversation(id)
+    transport.release?.resume(); transport.release = nil
+    await #expect(throws: MainsError.changedBackend) { try await task.value }
+    #expect(session.transcript.page == nil)
+}

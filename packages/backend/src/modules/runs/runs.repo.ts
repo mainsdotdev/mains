@@ -929,7 +929,11 @@ function mobileMetadata(column: SQLWrapper): SQL<string | null> {
   return sql`CASE WHEN length(${column}) <= 16384 THEN ${column}
     WHEN json_valid(${column}) THEN json_object(
       'source', substr(json_extract(${column}, '$.source'), 1, 512),
+      'kind', substr(json_extract(${column}, '$.kind'), 1, 512),
+      'streamId', substr(json_extract(${column}, '$.streamId'), 1, 512),
+      'agentId', substr(json_extract(${column}, '$.agentId'), 1, 512),
       'isFromSubagent', json(CASE WHEN json_extract(${column}, '$.isFromSubagent') = 1 THEN 'true' ELSE 'false' END),
+      'parentToolCallId', substr(json_extract(${column}, '$.parentToolCallId'), 1, 512),
       'parentToolUseId', substr(json_extract(${column}, '$.parentToolUseId'), 1, 512),
       'turnId', CASE WHEN json_type(${column}, '$.turnId') = 'integer' THEN json_extract(${column}, '$.turnId') ELSE NULL END,
       'voice', json(CASE WHEN json_extract(${column}, '$.voice') = 1 THEN 'true' ELSE 'false' END),
@@ -940,24 +944,18 @@ function mobileMetadata(column: SQLWrapper): SQL<string | null> {
 
 /** A prompt can contain unbounded tools: phone navigation uses chronological rows. */
 function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHistoryPayload): RunHistoryPage {
-  const timeline = sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id FROM run_artifacts WHERE run_id = ${request.runId}
+  const allKeys = sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id FROM run_artifacts WHERE run_id = ${request.runId}
     UNION ALL SELECT created_at * 1000 AS timestamp, 'tool' AS source, id FROM tool_calls WHERE run_id = ${request.runId}`;
+  const timeline = request.range ? sql`SELECT * FROM (${allKeys}) WHERE ${mobileKeyCut(request.range.start, false)} AND ${mobileKeyCut(request.range.end, true)}` : allKeys;
   const first = db.get<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) ORDER BY timestamp, source, id LIMIT 1`);
   const last = db.get<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) ORDER BY timestamp DESC, source DESC, id DESC LIMIT 1`);
   const newer = request.direction === "newer";
   const lower = newer || request.direction === "refresh" ? request.cursor : undefined;
-  const upper = request.direction === "older" ? request.cursor : request.direction === "refresh" ? request.end : undefined;
-  const time = sql`timestamp`, id = sql`id`;
-  const keyCut = (cursor: RunHistoryCursor, before: boolean) => {
-    const rank = Number(cursor.source === "tool");
-    const currentRank = sql`CASE source WHEN 'tool' THEN 1 ELSE 0 END`;
-    return before
-      ? sql`(${time} < ${cursor.timestamp} OR (${time} = ${cursor.timestamp} AND (${currentRank} < ${rank} OR (${currentRank} = ${rank} AND ${id} < ${cursor.id}))))`
-      : sql`(${time} > ${cursor.timestamp} OR (${time} = ${cursor.timestamp} AND (${currentRank} > ${rank} OR (${currentRank} = ${rank} AND ${id} >= ${cursor.id}))))`;
-  };
+  const upper = request.direction === "older" ? request.cursor : request.direction === "refresh" || newer ? request.end : undefined;
   const order = newer ? sql`timestamp, source, id` : sql`timestamp DESC, source DESC, id DESC`;
-  const keys = db.all<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) WHERE ${and(
-    lower ? keyCut(lower, false) : undefined, upper ? keyCut(upper, true) : undefined,
+  const conversation = request.conversationWindow ? mobileConversationKeys(db, request, first, last) : undefined;
+  const keys = conversation?.keys ?? db.all<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) WHERE ${and(
+    lower ? mobileKeyCut(lower, false) : undefined, upper ? mobileKeyCut(upper, true) : undefined,
   ) ?? sql`1 = 1`} ORDER BY ${order} LIMIT ${MOBILE_HISTORY_ROWS}`);
   const artifactIds = keys.filter((key) => key.source === "artifact").map((key) => key.id);
   const toolIds = keys.filter((key) => key.source === "tool").map((key) => key.id);
@@ -992,26 +990,115 @@ function findMobileHistoryPage(db: ReturnType<typeof getDb>, request: ReadRunHis
   let bytes = latestTurn ? Buffer.byteLength(JSON.stringify(latestTurn)) : 0;
   const kept: RunHistoryCursor[] = [];
   for (const key of keys) {
-    const row = byKey.get(`${key.source}:${key.id}`)!;
+    const row = byKey.get(`${key.source}:${key.id}`);
+    if (!row) continue;
     const turn = historyEntryTurn(turns, key.timestamp,
       typeof row.metadata?.turnId === "number" ? row.metadata.turnId : undefined);
     const turnBytes = turn && !retainedTurns.has(turn.id) ? Buffer.byteLength(JSON.stringify(turn)) : 0;
     const size = Buffer.byteLength(JSON.stringify(row)) + turnBytes;
-    if (bytes + size > MOBILE_HISTORY_BYTES) break;
+    if (bytes + size > MOBILE_HISTORY_BYTES) { if (conversation) continue; break; }
     bytes += size;
     if (turn) retainedTurns.set(turn.id, turn);
     kept.push(key);
   }
-  if (newer) kept.sort(compareCursor);
+  if (newer || conversation) kept.sort(compareCursor);
   else kept.reverse();
   const keep = new Set(kept.map((key) => `${key.source}:${key.id}`));
-  const start = kept[0] ?? null;
-  const end = newer && kept.length && last && compareCursor(kept.at(-1)!, last) < 0
-    ? historyEndAfter(kept.at(-1)!) : upper ?? null;
-  return { artifacts: artifacts.filter((row) => keep.has(`artifact:${row.id}`)),
-    toolCalls: calls.filter((row) => keep.has(`tool:${row.id}`)), turns: [...retainedTurns.values()].sort((a, b) => a.turnIndex - b.turnIndex), start, end, last: last ?? null,
+  const keyByID = new Map(keys.map(key => [`${key.source}:${key.id}`, key]));
+  const chronological = (source: "artifact" | "tool") => (a: { id: number }, b: { id: number }) =>
+    compareCursor(keyByID.get(`${source}:${a.id}`)!, keyByID.get(`${source}:${b.id}`)!);
+  const retainedArtifacts = artifacts.filter(row => keep.has(`artifact:${row.id}`)).sort(chronological("artifact"));
+  const retainedCalls = calls.filter(row => keep.has(`tool:${row.id}`)).sort(chronological("tool"));
+  const omittedCount = conversation ? Math.max(0, conversation.total - retainedCalls.length - retainedArtifacts.filter(mobileActivityArtifact).length) : 0;
+  const start = conversation?.start ?? kept[0] ?? null;
+  const end = conversation ? conversation.end : newer && kept.length && last && compareCursor(kept.at(-1)!, last) < 0
+    ? historyEndAfter(kept.at(-1)!) : upper ?? request.range?.end ?? null;
+  return { artifacts: retainedArtifacts,
+    toolCalls: retainedCalls, turns: [...retainedTurns.values()].sort((a, b) => a.turnIndex - b.turnIndex), start, end, last: last ?? null,
     hasOlder: !!(first && start && compareCursor(first, start) < 0),
-    hasNewer: !!(last && end && compareCursor(last, end) >= 0) };
+    hasNewer: !!(last && end && compareCursor(last, end) >= 0),
+    ...(omittedCount > 0 && start && last ? { activity: {
+      start, end: end ?? historyEndAfter(last), omittedCount,
+    } } : {}),
+  };
+}
+
+function mobileKeyCut(cursor: RunHistoryCursor, before: boolean): SQL {
+  const rank = Number(cursor.source === "tool"), currentRank = sql`CASE source WHEN 'tool' THEN 1 ELSE 0 END`;
+  return before
+    ? sql`(timestamp < ${cursor.timestamp} OR (timestamp = ${cursor.timestamp} AND (${currentRank} < ${rank} OR (${currentRank} = ${rank} AND id < ${cursor.id}))))`
+    : sql`(timestamp > ${cursor.timestamp} OR (timestamp = ${cursor.timestamp} AND (${currentRank} > ${rank} OR (${currentRank} = ${rank} AND id >= ${cursor.id}))))`;
+}
+
+function mobileActivityArtifact(row: RunArtifactResponse): boolean {
+  const meta = row.metadata ?? {};
+  return meta.voice !== true && String(row.kind) !== "thinking" && meta.kind !== "thinking"
+    && !["agent_thinking_streaming", "assistant.reasoning_delta"].includes(String(meta.source))
+    && (["user-prompt", "report", "result", "command_result", "file", "document", "image", "visualization", "async_questions"].includes(row.kind)
+      || row.kind === "log" && meta.level === "error");
+}
+
+/** Select keys first: hidden child activity can never evict the conversation's prompts/replies. */
+function mobileConversationKeys(db: ReturnType<typeof getDb>, request: ReadRunHistoryPayload, first?: RunHistoryCursor, last?: RunHistoryCursor) {
+  const metadata = sql`CASE WHEN json_valid(${runArtifacts.metadata}) THEN ${runArtifacts.metadata} ELSE '{}' END`;
+  const foreground = sql`coalesce(json_extract(${metadata}, '$.isFromSubagent'), 0) <> 1
+    AND coalesce(json_extract(${metadata}, '$.voice'), 0) <> 1
+    AND json_extract(${metadata}, '$.agentId') IS NULL
+    AND json_extract(${metadata}, '$.parentToolCallId') IS NULL AND json_extract(${metadata}, '$.parentToolUseId') IS NULL`;
+  const detail = sql`coalesce(json_extract(${metadata}, '$.voice'), 0) <> 1 AND kind <> 'thinking'
+    AND coalesce(json_extract(${metadata}, '$.kind'), '') <> 'thinking'
+    AND coalesce(json_extract(${metadata}, '$.source'), '') NOT IN ('agent_thinking_streaming', 'assistant.reasoning_delta')
+    AND (kind IN ('user-prompt', 'report', 'result', 'command_result', 'file', 'document', 'image', 'visualization', 'async_questions')
+      OR (kind = 'log' AND json_extract(${metadata}, '$.level') = 'error'))`;
+  const visible = sql`${foreground} AND ${detail}`;
+  const anchors = db.all<RunHistoryCursor>(sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id
+    FROM run_artifacts WHERE run_id = ${request.runId} AND kind = 'user-prompt' AND ${foreground} ORDER BY timestamp, id`);
+  if (first && (!anchors[0] || compareCursor(first, anchors[0]) < 0)) anchors.unshift(first);
+  const range = historyWindow(anchors, request);
+  if (!range.start || !last) return { ...range, keys: [], total: 0 };
+  const start = range.start;
+  const artifactKeys = (from: RunHistoryCursor, to: RunHistoryCursor | null, extra: SQL, limit: number) => db.all<RunHistoryCursor>(sql`
+    SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id FROM run_artifacts
+    WHERE run_id = ${request.runId} AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, from, false)}
+      ${to ? sql`AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, to, true)}` : sql``} AND ${extra}
+    ORDER BY timestamp DESC, id DESC LIMIT ${limit}`);
+  const prompts = anchors.filter(key => key.source === "artifact" && compareCursor(key, start) >= 0 && (!range.end || compareCursor(key, range.end) < 0));
+  // One final visible reply per block has priority over intermediate commentary.
+  const replies = prompts.map((prompt, index) => artifactKeys(prompt, prompts[index + 1] ?? range.end,
+    sql`kind IN ('report', 'result', 'command_result') AND ${visible}`, 1)[0]);
+  const messages = artifactKeys(start, range.end, visible, MOBILE_HISTORY_ROWS);
+  const calls = db.all<RunHistoryCursor>(sql`SELECT created_at * 1000 AS timestamp, 'tool' AS source, id FROM tool_calls
+    WHERE run_id = ${request.runId} AND ${historyCut(sql`created_at * 1000`, "tool", toolCalls.id, start, false)}
+    ${range.end ? sql`AND ${historyCut(sql`created_at * 1000`, "tool", toolCalls.id, range.end, true)}` : sql``}
+    ORDER BY CASE WHEN parent_tool_call_id IS NULL THEN 0 ELSE 1 END, timestamp DESC, id DESC LIMIT ${MOBILE_HISTORY_ROWS}`);
+  const other = artifactKeys(start, range.end, sql`1 = 1`, 4);
+  const questions = artifactKeys(start, range.end, sql`${foreground} AND json_extract(${metadata}, '$.source') = 'codex_async_questions'`, 1);
+  const thinking = artifactKeys(start, range.end, sql`${foreground} AND (kind = 'thinking' OR json_extract(${metadata}, '$.kind') = 'thinking'
+    OR json_extract(${metadata}, '$.source') IN ('agent_thinking_streaming', 'assistant.reasoning_delta'))`, 1);
+  const cursor = request.cursor;
+  // A search result can be deleted before it opens; never inject a foreign or nonexistent row key.
+  const focus = cursor && compareCursor(cursor, start) >= 0 && (!range.end || compareCursor(cursor, range.end) < 0)
+    ? cursor.source === "artifact"
+      ? db.get<RunHistoryCursor>(sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id FROM run_artifacts
+          WHERE run_id = ${request.runId} AND id = ${cursor.id} AND ${artifactHistoryTime} = ${cursor.timestamp}`)
+      : db.get<RunHistoryCursor>(sql`SELECT created_at * 1000 AS timestamp, 'tool' AS source, id FROM tool_calls
+          WHERE run_id = ${request.runId} AND id = ${cursor.id} AND created_at * 1000 = ${cursor.timestamp}`)
+    : undefined;
+  const ordered: RunHistoryCursor[] = focus ? [focus] : [];
+  ordered.push(...questions);
+  for (let index = prompts.length - 1; index >= 0; index--) {
+    ordered.push(prompts[index]);
+    if (replies[index]) ordered.push(replies[index]);
+  }
+  ordered.push(...thinking, ...messages, ...calls, ...other);
+  const unique = new Map<string, RunHistoryCursor>();
+  for (const key of ordered) if (unique.size < MOBILE_HISTORY_ROWS) unique.set(`${key.source}:${key.id}`, key);
+  const counts = db.get<{ total: number }>(sql`SELECT (
+    SELECT count(*) FROM run_artifacts WHERE run_id = ${request.runId} AND ${detail} AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, start, false)}
+      ${range.end ? sql`AND ${historyCut(artifactHistoryTime, "artifact", runArtifacts.id, range.end, true)}` : sql``}) + (
+    SELECT count(*) FROM tool_calls WHERE run_id = ${request.runId} AND ${historyCut(sql`created_at * 1000`, "tool", toolCalls.id, start, false)}
+      ${range.end ? sql`AND ${historyCut(sql`created_at * 1000`, "tool", toolCalls.id, range.end, true)}` : sql``}) AS total`);
+  return { ...range, keys: [...unique.values()], total: counts?.total ?? 0 };
 }
 
 /** Only compact progress and file summaries enter a phone page; patches stay in SQLite. */

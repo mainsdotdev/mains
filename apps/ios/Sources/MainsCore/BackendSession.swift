@@ -204,6 +204,35 @@ public final class BackendSession {
         return page
     }
 
+    /// Activity paging has its own disposable page and never replaces the reader's transcript.
+    public func readHistoryActivity(runID: String, range: HistoryActivityRange, direction: String = "refresh", cursor: HistoryCursor? = nil) async throws -> HistoryPage {
+        guard let transport, isConnected, viewingRunID == runID else { throw MainsError.disconnected }
+        let owner = pairingOwner, current = generation
+        var payload: [String: JSONValue] = ["runId": .string(runID), "profile": .string("mobile"), "direction": .string(direction),
+            "range": .object(["start": try .encode(range.start), "end": try .encode(range.end)])]
+        payload["cursor"] = try .encode(cursor ?? range.start)
+        if direction != "older" { payload["end"] = try .encode(range.end) }
+        let value = try await transport.invoke("runs:getHistory", args: [.object(payload)])
+        try Task.checkCancellation()
+        guard owner == pairingOwner, current == generation, self.transport === transport, viewingRunID == runID else { throw MainsError.changedBackend }
+        let page = try value.decode(HistoryPage.self)
+        func compare(_ a: HistoryCursor, _ b: HistoryCursor) -> Double {
+            if a.timestamp != b.timestamp { return a.timestamp - b.timestamp }
+            if a.source != b.source { return a.source == "artifact" ? -1 : 1 }
+            return Double(a.id) - Double(b.id)
+        }
+        func contains(_ key: HistoryCursor) -> Bool { compare(key, range.start) >= 0 && compare(key, range.end) < 0 }
+        // Older computers may ignore the additive range option. Keep their replies within this sheet's frozen scope.
+        let artifacts = page.artifacts.filter { row in
+            let time = row.metadata?["voiceStartedAt"].number ?? row.createdAt.timeIntervalSince1970 * 1000
+            return row.runId == runID && contains(.init(timestamp: time, source: "artifact", id: row.id))
+        }
+        let calls = page.toolCalls.filter { contains(.init(timestamp: $0.createdAt.timeIntervalSince1970 * 1000, source: "tool", id: $0.id)) }
+        return HistoryPage(artifacts: artifacts, toolCalls: calls, turns: page.turns, start: page.start, end: page.end, last: page.last,
+            hasOlder: page.hasOlder && (page.start.map { compare($0, range.start) > 0 } ?? false),
+            hasNewer: page.hasNewer && (page.end.map { compare($0, range.end) < 0 } ?? false))
+    }
+
     public func draft(for runID: String) -> ConversationDraft {
         if let draft = drafts[runID] { return draft }
         let draft = makeDraft(owner: .conversation, id: runID)
@@ -878,7 +907,7 @@ public final class BackendSession {
             do {
                 let request: JSONValue
                 if let initialCursor {
-                    request = .object(["runId": .string(runID), "direction": .string("newer"), "cursor": try .encode(initialCursor), "profile": .string("mobile")])
+                    request = .object(["runId": .string(runID), "direction": .string("newer"), "cursor": try .encode(initialCursor), "profile": .string("mobile"), "conversationWindow": .bool(true)])
                 } else { request = try self.transcript.request(runID: runID, direction: self.transcript.page == nil ? "latest" : direction) }
                 let settingsReadVersion = self.settingsRevision
                 let decisionReadVersion = self.decisionRevision

@@ -185,6 +185,14 @@ public struct HistoryPage: Codable, Equatable, Sendable {
     public let last: HistoryCursor?
     public let hasOlder: Bool
     public let hasNewer: Bool
+    public var activity: HistoryActivityRange? = nil
+}
+
+public struct HistoryActivityRange: Codable, Equatable, Identifiable, Sendable {
+    public let start: HistoryCursor
+    public let end: HistoryCursor
+    public let omittedCount: Int
+    public var id: String { "\(start.timestamp):\(start.source):\(start.id):\(end.timestamp):\(end.source):\(end.id)" }
 }
 
 public enum Provider {

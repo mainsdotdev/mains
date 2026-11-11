@@ -26,7 +26,8 @@ extension SessionIntegrationTests {
         let hit = try #require(results.items.first), anchor = try #require(hit.messageCursor)
         #expect(hit.runId == "old-search-000" && hit.snippet?.contains("Deepneedle") == true)
         await session.selectConversation(hit.runId, around: anchor)
-        #expect(session.transcript.page?.artifacts.first?.id == anchor.id)
+        #expect(session.transcript.page?.artifacts.contains { $0.id == anchor.id } == true)
+        #expect(session.transcript.page?.artifacts.first?.kind == "user-prompt")
         #expect(session.transcript.page?.hasNewer == true && !session.transcript.isFollowing)
         #expect(session.transcript.rows.contains { $0.text.contains("Deepneedle") })
         await session.refresh()
@@ -36,6 +37,7 @@ extension SessionIntegrationTests {
         let read = try #require(calls.last { $0["channel"].string == "runs:getHistory" && $0["args"].array[0]["runId"].string == hit.runId })
         let encodedAnchor = try JSONValue.encode(anchor)
         #expect(read["args"].array[0]["profile"].string == "mobile" && read["args"].array[0]["cursor"] == encodedAnchor)
+        #expect(read["args"].array[0]["conversationWindow"] == .bool(true))
         #expect(!calls.contains { $0["channel"].string == "search:query" })
     }
 }

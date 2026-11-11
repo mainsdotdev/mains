@@ -5,6 +5,7 @@ import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { encodeWsMessage, decodeWsMessage, WS_PROTOCOL_VERSION } from '../../../packages/contracts/src/ws-protocol.ts';
 import { CHANNELS } from '../../../packages/contracts/src/channels.ts';
+import { historyWindow, compareHistoryCursors } from '../../../packages/contracts/src/run-history.ts';
 
 // Backend sources live in an explicit CommonJS package. Load this dependency-free
 // helper as stripped ESM so the fixture exercises the production projection store.
@@ -222,6 +223,21 @@ const server = http.createServer(async (request, response) => {
     const body = JSON.parse(Buffer.concat(parts).toString());
     forkBehavior = ['disconnect', 'unknown', 'refuse'].includes(body.behavior) ? body.behavior : null;
     response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/long-activity') {
+    const start = new Date('2026-10-01T00:00:00Z').getTime();
+    const rows = Array.from({ length: 45 }, (_, index) => [
+      { id: 20000 + index * 2, runId: 'fixture-run', kind: 'user-prompt', content: `Visible prompt ${index}`, metadata: {}, createdAt: new Date(start + index * 10000) },
+      { id: 20001 + index * 2, runId: 'fixture-run', kind: 'report', content: `Visible answer ${index}`, metadata: {}, createdAt: new Date(start + index * 10000 + 1000) },
+    ]).flat();
+    artifacts.set('fixture-run', rows);
+    tools.set('fixture-run', Array.from({ length: 451 }, (_, index) => ({
+      id: 30000 + index, toolName: index === 0 ? 'Agent' : 'Bash', status: 'done',
+      createdAt: new Date(start + 450000 + index), parentToolCallId: index === 0 ? null : '30000',
+      input: index === 0 ? { description: 'Tests', prompt: 'Verify the change' } : { command: `echo ${index}` },
+      output: { stdout: `Child output ${index}` }, metadata: {},
+    })));
+    response.writeHead(200); response.end('{}'); return;
   }
   // Simulate the desktop owner publishing through IPC; paired phones may only read this projection.
   if (request.method === 'POST' && request.url === '/test/queue') {
@@ -479,6 +495,38 @@ wss.on('connection', socket => {
         case CHANNELS.runs.getHistory: {
           if (args[0].profile !== 'mobile') throw new Error('Missing bounded mobile profile');
           const all = artifacts.get(args[0].runId) ?? [];
+          if (args[0].range || args[0].conversationWindow && !pagedHistory && !disjointHistory) {
+            const input = args[0], calls = tools.get(input.runId) ?? [];
+            const key = (row, source) => ({ timestamp: row.createdAt.getTime(), source, id: row.id });
+            const timeline = [...all.map(row => key(row, 'artifact')), ...calls.map(row => key(row, 'tool'))].sort(compareHistoryCursors);
+            let start, end, keys, total;
+            if (input.range) {
+              const scoped = timeline.filter(item => compareHistoryCursors(item, input.range.start) >= 0 && compareHistoryCursors(item, input.range.end) < 0);
+              const eligible = scoped.filter(item => input.direction === 'older' ? compareHistoryCursors(item, input.cursor) < 0
+                : input.direction === 'newer' ? compareHistoryCursors(item, input.cursor) >= 0 : true);
+              keys = input.direction === 'newer' ? eligible.slice(0, 200) : eligible.slice(-200);
+              start = keys[0] ?? null;
+              end = keys.length && compareHistoryCursors(keys.at(-1), scoped.at(-1)) < 0 ? { ...keys.at(-1), id: keys.at(-1).id + 1 } : input.range.end;
+              total = keys.length;
+            } else {
+              const anchors = all.filter(row => row.kind === 'user-prompt').map(row => key(row, 'artifact'));
+              if (timeline[0] && (!anchors[0] || compareHistoryCursors(timeline[0], anchors[0]) < 0)) anchors.unshift(timeline[0]);
+              ({ start, end } = historyWindow(anchors, input));
+              const scoped = timeline.filter(item => (!start || compareHistoryCursors(item, start) >= 0) && (!end || compareHistoryCursors(item, end) < 0));
+              const messages = scoped.filter(item => item.source === 'artifact');
+              const priority = [...(input.cursor ? [input.cursor] : []), ...messages, ...scoped.filter(item => item.source === 'tool')];
+              keys = [...new Map(priority.map(item => [item.source + ':' + item.id, item])).values()].slice(0, 200);
+              total = scoped.length;
+            }
+            const ids = new Set(keys.map(item => item.source + ':' + item.id));
+            const rangeFirst = input.range?.start ?? timeline[0], rangeLast = input.range?.end;
+            result = { artifacts: all.filter(row => ids.has('artifact:' + row.id)), toolCalls: calls.filter(row => ids.has('tool:' + row.id)),
+              turns: storedTurns.get(input.runId) ?? [], start, end, last: timeline.at(-1) ?? null,
+              hasOlder: !!start && !!rangeFirst && compareHistoryCursors(rangeFirst, start) < 0,
+              hasNewer: !!end && timeline.some(item => compareHistoryCursors(item, end) >= 0 && (!rangeLast || compareHistoryCursors(item, rangeLast) < 0)) };
+            if (!input.range && total > keys.length && start) result.activity = { start, end: end ?? { ...timeline.at(-1), id: timeline.at(-1).id + 1 }, omittedCount: total - keys.length };
+            break;
+          }
           if (disjointHistory) {
             // Mobile pages may split a long prompt at their row/byte cap and have no overlap.
             const key = row => ({ timestamp: row.createdAt.getTime(), source: 'artifact', id: row.id });
