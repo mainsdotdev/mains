@@ -39,7 +39,7 @@ struct AppShell: View {
                         NavigationStack(path: $path) {
                             Group {
                                 if let homeRunID {
-                                    ConversationView(session: session, runID: homeRunID, onNew: goHome, onFork: { path.append(.conversation($0)) })
+                                    ConversationView(session: session, runID: homeRunID, openComputer: showSettings, onNew: goHome, onFork: { path.append(.conversation($0)) })
                                         .id("\(session.ownership):\(homeRunID)")
                                         .toolbar {
                                             ToolbarItem(placement: .topBarLeading) { sidebarButton }
@@ -55,9 +55,9 @@ struct AppShell: View {
                             }
                             .navigationDestination(for: AppRoute.self) { route in
                                 switch route {
-                                case .conversation(let id): ConversationView(session: session, runID: id, onNew: goHome, onFork: { path.append(.conversation($0)) })
+                                case .conversation(let id): ConversationView(session: session, runID: id, openComputer: showSettings, onNew: goHome, onFork: { path.append(.conversation($0)) })
                                     .id("\(session.ownership):\(id)")
-                                case .searchMessage(let id, let cursor): ConversationView(session: session, runID: id, onNew: goHome, onFork: { path.append(.conversation($0)) }, initialCursor: cursor)
+                                case .searchMessage(let id, let cursor): ConversationView(session: session, runID: id, openComputer: showSettings, onNew: goHome, onFork: { path.append(.conversation($0)) }, initialCursor: cursor)
                                     .id("\(session.ownership):\(id):\(cursor.timestamp):\(cursor.id)")
                                 case .workspace(let id): WorkspaceConversationsView(session: session, workspaceID: id,
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)

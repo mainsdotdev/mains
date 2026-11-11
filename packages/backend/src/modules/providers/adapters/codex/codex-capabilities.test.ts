@@ -60,6 +60,76 @@ afterEach(async () => {
 });
 
 describe("Codex capabilities", () => {
+  it.each(["cancel", "server-close", "shutdown"] as const)("does not restart an invalidated catalog after %s", async (action) => {
+    let finish!: (value: unknown) => void;
+    const sendRequest = vi.fn((method: string) => method === "experimentalFeature/list"
+      ? Promise.resolve({ data: [{ name: "plugins", enabled: true }], nextCursor: null })
+      : new Promise((resolve) => { finish = resolve; }));
+    const server = { sendRequest } as unknown as CodexAppServer;
+    const capabilities = createCodexCapabilities({ ensureServer: async () => server, getRunningServer: () => server,
+      getCliHealth: vi.fn(), logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    const controller = new AbortController();
+    const pending = capabilities.listPlugins(controller.signal).then((value) => ({ value }), (error: unknown) => ({ error }));
+    try {
+      await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledWith("plugin/list", {}, 30000));
+      capabilities.invalidateCatalogs();
+      if (action === "cancel") controller.abort();
+      if (action === "server-close") capabilities.onServerClosed();
+      if (action === "shutdown") capabilities.shutdown();
+      const result = await pending;
+      if (action === "cancel") expect(result).toMatchObject({ error: { name: "AbortError" } });
+      else expect(result).toMatchObject({ value: { remoteSyncError: expect.any(String) } });
+      finish({ marketplaces: [] });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sendRequest.mock.calls.filter(([method]) => method === "plugin/list")).toHaveLength(1);
+    } finally { capabilities.shutdown(); }
+  });
+
+  it("preserves a real error from the replacement catalog without retrying it", async () => {
+    let finish!: (value: unknown) => void;
+    let calls = 0;
+    const sendRequest = vi.fn((method: string) => {
+      if (method === "experimentalFeature/list") return Promise.resolve({ data: [{ name: "plugins", enabled: true }], nextCursor: null });
+      if (++calls === 1) return new Promise((resolve) => { finish = resolve; });
+      return Promise.reject(new Error("catalog unavailable"));
+    });
+    const server = { sendRequest } as unknown as CodexAppServer;
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const capabilities = createCodexCapabilities({ ensureServer: async () => server, getRunningServer: () => server,
+      getCliHealth: vi.fn(), logger });
+    try {
+      const pending = capabilities.listPlugins();
+      await vi.waitFor(() => expect(calls).toBe(1));
+      capabilities.invalidateCatalogs();
+      expect(await pending).toMatchObject({ remoteSyncError: "catalog unavailable" });
+      expect(calls).toBe(2);
+      expect(logger.error).toHaveBeenCalledExactlyOnceWith("Failed to call plugin/list:", "catalog unavailable");
+      finish({ marketplaces: [] });
+    } finally { capabilities.shutdown(); }
+  });
+
+  it("does not serve the previous account's installed plugins when the replacement read fails", async () => {
+    let finish!: (value: unknown) => void;
+    let calls = 0;
+    const sendRequest = vi.fn((method: string) => {
+      if (method === "experimentalFeature/list") return Promise.resolve({ data: [{ name: "plugins", enabled: true }], nextCursor: null });
+      if (++calls === 1) return Promise.resolve({ marketplaces: [{ name: "previous-account", plugins: [] }] });
+      if (calls === 2) return new Promise((resolve) => { finish = resolve; });
+      return Promise.reject(new Error("new account offline"));
+    });
+    const server = { sendRequest } as unknown as CodexAppServer;
+    const capabilities = createCodexCapabilities({ ensureServer: async () => server, getRunningServer: () => server,
+      getCliHealth: vi.fn(), logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    try {
+      await capabilities.listInstalledPlugins();
+      const pending = capabilities.listInstalledPlugins(true);
+      await vi.waitFor(() => expect(calls).toBe(2));
+      capabilities.invalidateCatalogs();
+      expect(await pending).toMatchObject({ marketplaces: [], remoteSyncError: "new account offline" });
+      finish({ marketplaces: [] });
+    } finally { capabilities.shutdown(); }
+  });
+
   it("retries a failed feature probe instead of retaining its rejected promise", async () => {
     let probes = 0;
     const server = { sendRequest: vi.fn(async (method: string) => {

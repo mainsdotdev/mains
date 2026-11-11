@@ -1234,8 +1234,9 @@ final class MainsUITests: XCTestCase {
         var request = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/offline")!)
         request.httpMethod = "POST"; request.timeoutInterval = 5
         _ = try await URLSession.shared.data(for: request)
-        let reconnecting = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Reconnecting")).firstMatch
+        let reconnecting = app.buttons["connectionPill"]
         XCTAssertTrue(reconnecting.waitForExistence(timeout: 3))
+        XCTAssertTrue(reconnecting.label.contains("Test Mac: Reconnecting"))
         XCTAssertEqual(message.value as? String, "My next thought stays here")
         let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: app.buttons["sendMessage"])
         let enabledResult = await XCTWaiter.fulfillment(of: [enabled], timeout: 10)

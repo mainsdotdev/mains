@@ -110,8 +110,10 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
 - Code / Work / Chat tabs sit under the Mains title in the sidebar. Selection
   persists through `space:update` on the computer and updates the list while
   keeping the sidebar open. Unsupported experiences are hidden for code-only providers.
-- A centered home-header capsule shows the computer name and connection state
-  while disconnected or syncing, opens Settings, and hides once live.
+- Home and conversation headers share a centered capsule showing the computer
+  name and connection state while disconnected or syncing. It opens Settings and
+  hides once live; conversation headers then restore their title. Connection changes
+  never insert a separate status row above the transcript.
 - Settings opens as a native page with grouped cards for computer/connection details,
   manual sync and diagnostics, persistent System/Light/Dark appearance, phone/app
   information and legal/support links. Pairing and last successful sync timestamps

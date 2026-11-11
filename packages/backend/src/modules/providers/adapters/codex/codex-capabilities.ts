@@ -656,6 +656,27 @@ export function createCodexCapabilities(
 ) {
   const logger =
     options.logger ?? createLogger("[CodexCapabilities]");
+  let catalogRevision = 0;
+  let discoveryScope = new AbortController();
+
+  // Account/configuration changes retire cache entries, not their callers.
+  // Rejoin the current entry; caller cancellation and server retirement still win.
+  async function readCurrentDiscovery<T>(read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const scope = discoveryScope.signal;
+    for (;;) {
+      scope.throwIfAborted(); signal?.throwIfAborted();
+      const revision = catalogRevision;
+      try {
+        const value = await read();
+        scope.throwIfAborted(); signal?.throwIfAborted();
+        if (revision === catalogRevision) return value;
+      } catch (error) {
+        scope.throwIfAborted(); signal?.throwIfAborted();
+        if (revision === catalogRevision) throw error;
+      }
+    }
+  }
+
   const marketplacePathCache = new Map<string, string>();
   const remotePluginRefCache = new Map<
     string,
@@ -897,6 +918,7 @@ export function createCodexCapabilities(
   }
 
   function invalidatePluginCaches(): void {
+    catalogRevision++;
     pluginCatalog.invalidate(); rawCatalog.invalidate(); installedPlugins.invalidate();
     mcpAppPluginSources.invalidate(); mcpInventory.invalidate();
   }
@@ -1164,16 +1186,18 @@ export function createCodexCapabilities(
 
   async function listPlugins(signal?: AbortSignal): Promise<PluginListResponse> {
     signal?.throwIfAborted();
+    const revision = catalogRevision;
     const stale = pluginCatalog.peek()?.value.response;
-    try { return (await pluginCatalog.read("", { signal })).value.response; }
-    catch (error) { signal?.throwIfAborted(); return pluginListFailure(error, "plugin/list", stale); }
+    try { return (await readCurrentDiscovery(() => pluginCatalog.read("", { signal }), signal)).value.response; }
+    catch (error) { signal?.throwIfAborted(); return pluginListFailure(error, "plugin/list", revision === catalogRevision ? stale : undefined); }
   }
 
   async function listInstalledPlugins(forceRefresh = false, workspacePath?: string): Promise<PluginListResponse> {
     const key = workspacePath ?? "";
+    const revision = catalogRevision;
     const stale = installedPlugins.peek(key)?.value;
-    try { return applySessionOverlay((await installedPlugins.read(key, { force: forceRefresh })).value); }
-    catch (error) { return applySessionOverlay(pluginListFailure(error, "plugin/installed", stale)); }
+    try { return applySessionOverlay((await readCurrentDiscovery(() => installedPlugins.read(key, { force: forceRefresh }))).value); }
+    catch (error) { return applySessionOverlay(pluginListFailure(error, "plugin/installed", revision === catalogRevision ? stale : undefined)); }
   }
 
   /**
@@ -1593,7 +1617,7 @@ export function createCodexCapabilities(
   }
 
   function readMcpInventory(): Promise<McpServerStatus[]> {
-    return mcpInventory.read().then((snapshot) => snapshot.value);
+    return readCurrentDiscovery(() => mcpInventory.read()).then((snapshot) => snapshot.value);
   }
 
   async function loadMcpInventory(_key: string, context: ResourceReadContext): Promise<McpServerStatus[]> {
@@ -1613,6 +1637,10 @@ export function createCodexCapabilities(
   }
 
   async function listMcpAppEntrypoints(inventory?: McpServerStatus[]) {
+    return readCurrentDiscovery(() => loadMcpAppEntrypoints(inventory));
+  }
+
+  async function loadMcpAppEntrypoints(inventory?: McpServerStatus[]) {
     const entries = discoverMcpAppEntrypoints(inventory ?? await readMcpInventory());
     if (!entries.length) return [];
     const installed = await listInstalledPlugins(true);
@@ -1625,7 +1653,7 @@ export function createCodexCapabilities(
     const readSources = async (candidates: typeof plugins) => {
       const results = await Promise.allSettled(candidates.map(async ({ plugin, marketplacePath }) => {
         const key = JSON.stringify([marketplacePath ? plugin.name : plugin.id, marketplacePath]);
-        const { value } = await mcpAppPluginSources.read(key);
+        const { value } = await readCurrentDiscovery(() => mcpAppPluginSources.read(key));
         Object.assign(sourceById.get(plugin.id)!, value);
       }));
       for (const result of results) {
@@ -1669,10 +1697,13 @@ export function createCodexCapabilities(
     readMcpInventory,
     listMcpAppEntrypoints,
     onServerClosed(): void {
+      discoveryScope.abort(new DOMException("The Codex discovery server was retired.", "AbortError"));
+      discoveryScope = new AbortController();
       pluginFeature.invalidate();
       invalidatePluginCaches();
     },
     shutdown(): void {
+      discoveryScope.abort(new DOMException("Codex discovery was shut down.", "AbortError"));
       pluginFeature.dispose(); pluginCatalog.dispose(); rawCatalog.dispose(); installedPlugins.dispose();
       mcpAppPluginSources.dispose(); mcpInventory.dispose();
       marketplacePathCache.clear();

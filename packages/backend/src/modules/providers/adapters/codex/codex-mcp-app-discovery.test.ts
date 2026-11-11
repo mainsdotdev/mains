@@ -32,6 +32,31 @@ function fixture(marketplacePath: string | null = null, iconUrls: { composerIcon
 describe("installed MCP App discovery", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("restarts app discovery when plugin ownership is invalidated mid-read", async () => {
+    const { capabilities, sendRequest, setOwner } = fixture();
+    const original = sendRequest.getMockImplementation()!;
+    let finish!: (value: Awaited<ReturnType<typeof original>>) => void;
+    let reads = 0;
+    sendRequest.mockImplementation((method, params) => {
+      if (method === "plugin/read" && ++reads === 1) return new Promise((resolve) => { finish = resolve; });
+      return original(method, params);
+    });
+    try {
+      const pending = capabilities.listMcpAppEntrypoints();
+      await vi.waitFor(() => expect(reads).toBe(1));
+      capabilities.invalidateCatalogs();
+      expect(await pending).toMatchObject([{ pluginId: "canvas@remote", connectorId: "canvas-connector" }]);
+      expect(sendRequest.mock.calls.filter(([method]) => method === "mcpServerStatus/list")).toHaveLength(2);
+      expect(reads).toBe(2);
+      // A late response from the old account cannot replace current ownership.
+      setOwner("obsolete-connector");
+      finish(await original("plugin/read"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(await capabilities.listMcpAppEntrypoints()).toHaveLength(1);
+      expect(reads).toBe(2);
+    } finally { capabilities.shutdown(); }
+  });
+
   it("shares concurrent inventory requests and discards a failed request before retrying", async () => {
     const { capabilities, sendRequest } = fixture();
     const original = sendRequest.getMockImplementation()!;

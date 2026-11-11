@@ -112,11 +112,6 @@ struct SubagentDetailSheet: View {
             ScrollView {
                 if let agent, let flow = session.transcript.subagentFlow(for: agent) {
                     VStack(alignment: .leading, spacing: 20) {
-                        HStack(spacing: 8) {
-                            if agent.state == .running { ProgressView().controlSize(.mini) }
-                            Text(agent.state.label).font(.subheadline)
-                            if let duration = flow.duration { Text(Duration.seconds(max(0, duration)).formatted(.time(pattern: .minuteSecond))).font(.caption.monospacedDigit()) }
-                        }.foregroundStyle(.secondary)
                         if !agent.detail.isEmpty { Text(agent.detail).font(.footnote).foregroundStyle(.secondary) }
                         if let prompt = flow.prompt, !prompt.isEmpty {
                             DisclosureGroup("Task") { ChatMessageBody(text: prompt).padding(.top, 8) }.font(.subheadline)
@@ -154,10 +149,10 @@ struct SubagentDetailSheet: View {
                     Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly).accessibilityIdentifier("closeSubagent")
                 }
                 ToolbarItem(placement: .principal) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(spacing: 2) {
                         Text(agent?.title ?? "Subagent").font(.headline).lineLimit(1)
                         Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                    }.accessibilityElement(children: .combine)
+                    }.multilineTextAlignment(.center).accessibilityElement(children: .combine)
                 }
             }
             .sheet(item: $fullMessage) { reference in

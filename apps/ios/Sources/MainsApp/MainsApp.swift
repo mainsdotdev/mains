@@ -75,34 +75,3 @@ struct ConnectionPill: View {
         .accessibilityIdentifier("connectionPill")
     }
 }
-
-struct ConnectionLabel: View {
-    let session: BackendSession
-    var body: some View {
-        HStack(spacing: 8) {
-            if session.connection.isBusy { ProgressView().controlSize(.mini) }
-            else { Circle().fill(session.isConnected ? Color.green : Color.secondary).frame(width: 6, height: 6) }
-            Text(session.connection.label).font(.caption).foregroundStyle(.secondary)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("connectionStatus")
-    }
-}
-
-struct ConnectionNotice: View {
-    let session: BackendSession
-    var body: some View {
-        if !session.isConnected {
-            HStack {
-                ConnectionLabel(session: session)
-                Spacer()
-                if !session.connection.isBusy && session.connection != .suspended {
-                    Button("Try again") { session.retry() }.font(.caption.weight(.semibold))
-                        .disabled(session.connection == .unauthorized || session.connection == .incompatible)
-                }
-            }
-            .padding(.horizontal, 20).padding(.vertical, 10)
-            .background(.bar)
-        }
-    }
-}

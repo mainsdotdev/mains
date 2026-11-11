@@ -4,6 +4,7 @@ import SwiftUI
 struct ConversationView: View {
     let session: BackendSession
     let runID: String
+    let openComputer: () -> Void
     let onNew: () -> Void
     let onFork: (String) -> Void
     let initialCursor: HistoryCursor?
@@ -35,6 +36,7 @@ struct ConversationView: View {
         return nil
     }
     private var uncertain: Bool { session.pendingMessage?.status == .uncertain }
+    private var showsConnectionPill: Bool { session.pairing != nil && !session.isConnected }
     private var forkTitle: String {
         guard let pending = session.pendingFork, pending.sourceRunID == runID else { return "Fork conversation" }
         return pending.status == .sending ? "Forking…" : "Fork unconfirmed"
@@ -65,8 +67,9 @@ struct ConversationView: View {
                     artifacts: session.transcript.page?.artifacts.filter { ["document", "file", "image", "visualization"].contains($0.kind) }.map(\.id) ?? [])
     }
 
-    init(session: BackendSession, runID: String, onNew: @escaping () -> Void, onFork: @escaping (String) -> Void, initialCursor: HistoryCursor? = nil) {
+    init(session: BackendSession, runID: String, openComputer: @escaping () -> Void, onNew: @escaping () -> Void, onFork: @escaping (String) -> Void, initialCursor: HistoryCursor? = nil) {
         self.session = session; self.runID = runID
+        self.openComputer = openComputer
         self.onNew = onNew
         self.onFork = onFork
         self.initialCursor = initialCursor
@@ -76,7 +79,6 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ConnectionNotice(session: session)
             ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", viewport: $viewport, openFile: { turn, file in
                 selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
             }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor) {
@@ -86,11 +88,16 @@ struct ConversationView: View {
         .background(Color(.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(run?.displayTitle ?? "Conversation")
+        .navigationTitle(showsConnectionPill ? "" : run?.displayTitle ?? "Conversation")
         .toolbarRole(.editor)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
-            if session.isDemo {
+            if showsConnectionPill {
+                ToolbarItem(placement: .principal) {
+                    ConnectionPill(session: session, action: openComputer)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else if session.isDemo {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 1) {
                         Text(run?.displayTitle ?? "Conversation").font(.headline).lineLimit(1)
