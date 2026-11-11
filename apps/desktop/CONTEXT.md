@@ -748,6 +748,8 @@ Compact icon actions use `Button variant="icon"`: one neutral light/dark hover s
 **components/layout**:
 The app shell that hosts whatever route is active: `main/` (route table), `sidebar/`, `right-panel/`, `page-shell`, `resize-handle`. A shell exists to compose features, so importing from `features/` is the *correct* direction here and is deliberately not linted. What does not belong is feature UI that merely happens to be positioned by the shell — the session panel (environment, sources, deliverables) and the subagent panel both lived here and were only ever about the active workspace's run; they live under `features/workspace/components/` now, and the shell renders them from `App.tsx`.
 Plugins and MCP App route shells render immediately after rail navigation. The Plugins page loads its feature content within its own Suspense boundary, keeping the page heading visible while the code and data load.
+
+The Plugins catalog renders 24 ordinary cards per page and at most six Featured/Popular cards. Search and category filters cover the complete cached catalog before pagination; page changes replace mounted cards and return the results to view. Filters/provider changes reset the page, a smaller refreshed catalog clamps it, and returning from plugin detail preserves it. Native catalog fetching and cancellation keep their existing ownership.
 _Avoid_: adding a panel to `components/layout/` because that's where panels used to go — ask whether it renders anything outside its feature's state.
 
 DOCX document previews preserve paper dimensions and columns while fitting the widest page to the current panel at 100% zoom. Panel resizing and restoring a hidden preview recompute that fit; manual zoom scales the fitted page and its scrollable layout together.

@@ -456,6 +456,40 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
+    func testAttachmentMenuKeepsKeyboardAndDraftInHomeAndConversation() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        let conversation = pairFixture(app, code: "ios-test")
+        app.buttons["closeSidebar"].tap()
+        func checkMenu(inputID: String, text: String) {
+            let input = app.textViews[inputID]
+            XCTAssertTrue(input.waitForExistence(timeout: 5))
+            input.tap(); input.typeText(text)
+            assertKeyboardVisible(app)
+            let keyboardFrame = app.keyboards.firstMatch.frame
+            for _ in 0..<2 {
+                app.buttons["addAttachment"].tap()
+                let menu = app.descendants(matching: .any).matching(identifier: "attachmentMenu").firstMatch
+                let opened = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Open"), object: menu)
+                XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 5), .completed)
+                assertKeyboardVisible(app)
+                XCTAssertEqual(app.keyboards.firstMatch.frame.minY, keyboardFrame.minY, accuracy: 3)
+                XCTAssertTrue(app.buttons["Camera"].isHittable)
+                XCTAssertTrue(app.buttons["choosePlugins"].isHittable)
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.2)).tap()
+                XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
+                assertKeyboardVisible(app)
+                XCTAssertEqual(input.value as? String, text)
+            }
+            input.typeText(" and keep typing")
+            XCTAssertEqual(input.value as? String, text + " and keep typing")
+        }
+        checkMenu(inputID: "homeMessageInput", text: "Keep my home draft")
+        openSidebar(app); conversation.tap()
+        checkMenu(inputID: "messageInput", text: "Keep my conversation draft")
+        forgetFixture(app)
+    }
+
     func testAttachmentPhotosStayUniformAndSendFromTheDraft() async throws {
         // Seed only the dedicated QA simulator with scripts' temporary coloured photo fixtures.
         continueAfterFailure = false

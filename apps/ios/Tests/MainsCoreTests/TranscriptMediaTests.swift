@@ -79,6 +79,30 @@ import ImageIO
     #expect(unknown.body == "Issue details")
 }
 
+@Test func toolInputDetailsFollowDesktopDisplaysAndSkipEmptyArguments() throws {
+    func presentation(_ name: String, input: JSONValue, output: JSONValue = .null) throws -> ToolPresentation {
+        let call = try JSONValue.object(["id": .number(1), "toolName": .string(name), "status": .string("done"),
+                                         "createdAt": .number(1000), "input": input, "output": output]).decode(ToolCall.self)
+        return ToolPresentation(call)
+    }
+    let arguments: JSONValue = .object(["query": .string("example")])
+    for name in ["Read", "Bash", "Grep", "Glob", "Edit", "Write", "Skill", "WebFetch", "SQL", "mcp__linear__list_issues"] {
+        let view = try presentation(name, input: arguments)
+        #expect(!view.showsInput && !view.hasDetails)
+        let result = try presentation(name, input: arguments, output: .string("Result text"))
+        #expect(result.hasDetails && result.body == "Result text")
+    }
+    let fallback = try presentation("custom_operation", input: arguments)
+    #expect(fallback.showsInput && fallback.hasDetails && fallback.input.contains("example"))
+    for empty in [JSONValue.null, .object([:]), .array([]), .string("{}"), .string("  ")] {
+        let view = try presentation("custom_operation", input: empty)
+        #expect(view.input.isEmpty && !view.hasDetails)
+    }
+    let deferred: JSONValue = .object(["type": .string("mains/deferred-tool-output"), "preview": .string("Argument preview"), "chars": .number(40000)])
+    #expect(try !presentation("Read", input: deferred).hasDetails)
+    #expect(try presentation("custom_operation", input: deferred).hasDetails)
+}
+
 extension SessionIntegrationTests {
     @Test @MainActor func conversationMediaUsesScopedImageAndChunkedDocumentReaders() async throws {
         let session = BackendSession(storage: MemoryStorage())

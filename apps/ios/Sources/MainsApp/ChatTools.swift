@@ -65,8 +65,8 @@ private struct ChatToolRow: View {
     @State private var fullContent: ToolContentSelection?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var view: ToolPresentation { ToolPresentation(call) }
-    private var hasDetails: Bool { !view.body.isEmpty || !view.input.isEmpty || view.deferredInput || view.deferredOutput }
-    private var tint: Color { view.failed ? .red : view.running ? .primary : .secondary }
+    private var hasDetails: Bool { view.hasDetails }
+    private var tint: Color { view.running ? .primary : .secondary }
     private var providerID: String { session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? "" }
     private var animate: Bool { session.isConnected && session.conversations.first { $0.id == session.viewingRunID }?.isActive == true }
     var body: some View {
@@ -94,19 +94,24 @@ private struct ChatToolRow: View {
                 .background(GeometryReader { geometry in
                     Color.clear.preference(key: ActiveToolFramesKey.self, value: view.running ? [call.id: geometry.frame(in: .global)] : [:])
                 })
-            if let error = call.error, !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red).lineLimit(3).textSelection(.enabled) }
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
-                    if !view.body.isEmpty { ToolBody(text: view.body, diff: view.diff) }
+                    if !view.body.isEmpty {
+                        // Match desktop: no extra lifecycle-error banner. Its
+                        // generic fallback colours only the expanded error output.
+                        ToolBody(text: view.body, diff: view.diff, error: view.failed && view.showsInput)
+                    }
                     if view.deferredOutput {
                         Button("Read full output", systemImage: "text.alignleft") { fullContent = .init(id: "output", source: "tool-output") }
                             .accessibilityIdentifier("toolFullOutput-\(call.id)")
                     }
-                    if view.body.isEmpty && !view.input.isEmpty { ToolBody(text: view.input, diff: false) }
-                    if view.deferredInput {
-                        Button("Read full input", systemImage: "text.alignleft") { fullContent = .init(id: "input", source: "tool-input") }
-                    } else if !view.input.isEmpty && !view.body.isEmpty {
-                        DisclosureGroup("Input") { ToolBody(text: view.input, diff: false).padding(.top, 6) }.tint(.secondary)
+                    if view.showsInput {
+                        if view.body.isEmpty && !view.input.isEmpty { ToolBody(text: view.input, diff: false) }
+                        if view.deferredInput {
+                            Button("Read full input", systemImage: "text.alignleft") { fullContent = .init(id: "input", source: "tool-input") }
+                        } else if !view.input.isEmpty && !view.body.isEmpty {
+                            DisclosureGroup("Input") { ToolBody(text: view.input, diff: false).padding(.top, 6) }.tint(.secondary)
+                        }
                     }
                 }.font(.footnote)
             }
@@ -120,6 +125,7 @@ private struct ChatToolRow: View {
 private struct ToolBody: View {
     let text: String
     let diff: Bool
+    var error = false
     private var lines: [String] { text.components(separatedBy: "\n") }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -127,7 +133,7 @@ private struct ToolBody: View {
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(Array(lines.prefix(40).enumerated()), id: \.offset) { _, line in
                         Text(line.isEmpty ? " " : String(line.prefix(2000)))
-                            .foregroundStyle(diff && line.hasPrefix("+") ? Color.green : diff && line.hasPrefix("-") ? .red : .primary)
+                            .foregroundStyle(diff && line.hasPrefix("+") ? Color.green : diff && line.hasPrefix("-") || error ? .red : .primary)
                     }
                 }.font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: false).padding(12)

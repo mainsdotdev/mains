@@ -157,7 +157,8 @@ struct MessageComposer: View {
     }
     private func openAttachments() {
         pluginsOpen = false; panelScope = contextScope
-        focused = false; panelOwner = session.ownership; attachmentPresentationID = UUID(); attachmentsOpen = true
+        // The menu is an overlay, so the editor keeps its first responder and caret.
+        panelOwner = session.ownership; attachmentPresentationID = UUID(); attachmentsOpen = true
     }
     private func addFromPanel(_ attachments: [PromptAttachment]) throws {
         guard panelOwner == session.ownership, !draft.isSending else { throw MainsError.changedBackend }

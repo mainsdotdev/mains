@@ -10,6 +10,7 @@ public struct ToolPresentation: Sendable {
     public let detail: String
     public let body: String
     public let input: String
+    public let showsInput: Bool
     public let stat: String
     public let added: Int
     public let removed: Int
@@ -18,6 +19,7 @@ public struct ToolPresentation: Sendable {
     public let running: Bool
     public let failed: Bool
     public var diff: Bool { kind == .edit || kind == .write }
+    public var hasDetails: Bool { !body.isEmpty || deferredOutput || showsInput && (!input.isEmpty || deferredInput) }
 
     private struct Definition {
         let name: String, verb: String, active: String, symbol: String
@@ -58,6 +60,9 @@ public struct ToolPresentation: Sendable {
         deferredInput = params["type"].string == "mains/deferred-tool-output"
         deferredOutput = output["type"].string == "mains/deferred-tool-output"
         kind = builtin?.kind ?? .generic
+        // Desktop's dedicated and MCP displays render their result, not a raw
+        // argument disclosure. Only its unknown-tool fallback shows Input.
+        showsInput = builtin == nil && !lower.hasPrefix("mcp__")
         name = builtin?.name ?? Self.friendlyName(call.toolName)
         verb = running ? (builtin?.active ?? name) + "…" : builtin?.verb ?? name
         symbol = builtin?.symbol ?? (lower.hasPrefix("mcp__") ? "puzzlepiece.extension" : "wrench.and.screwdriver")
@@ -76,7 +81,7 @@ public struct ToolPresentation: Sendable {
         default: summary = Self.string(params, ["description", "summary", "skill", "name", "question", "query", "title", "message"])
         }
         detail = String((deferredInput ? params["preview"].string ?? summary : summary).replacingOccurrences(of: "\n", with: " ").prefix(300))
-        input = deferredInput ? params["preview"].string ?? "" : Self.text(params)
+        input = deferredInput ? params["preview"].string ?? "" : Self.hasInputContent(params) ? Self.text(params) : ""
         var outputText = deferredOutput ? output["preview"].string ?? "" : Self.text(output)
         if kind == .glob, !deferredOutput {
             let files = output["filenames"].array.isEmpty ? output["files"].array : output["filenames"].array
@@ -119,6 +124,15 @@ public struct ToolPresentation: Sendable {
     }
     private static func string(_ value: JSONValue, _ keys: [String]) -> String {
         keys.compactMap { value[$0].string }.first { !$0.isEmpty } ?? ""
+    }
+    private static func hasInputContent(_ value: JSONValue) -> Bool {
+        switch value {
+        case .null: return false
+        case .object(let fields): return !fields.isEmpty
+        case .array(let items): return !items.isEmpty
+        case .string(let text): return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        default: return true
+        }
     }
     public static func text(_ value: JSONValue) -> String {
         if let text = value.string { return text }

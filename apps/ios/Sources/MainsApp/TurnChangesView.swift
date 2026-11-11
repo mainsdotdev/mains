@@ -22,6 +22,7 @@ struct TurnChangesCard: View {
                         .accessibilityLabel("Turn \((turn.turnIndex ?? 0) + 1). \(changes.undoneAt != nil ? "Changes undone" : "Edited \(count) files")")
                     DiffCounts(additions: changes.additions, deletions: changes.deletions)
                 }.padding(14)
+                    .background { Rectangle().fill(Color(.tertiarySystemBackground)) }
                 Divider()
                 ForEach(Array((expanded ? changes.files : Array(changes.files.prefix(2))).enumerated()), id: \.offset) { _, file in
                     Button { open(file) } label: {
@@ -57,6 +58,7 @@ struct TurnChangesCard: View {
                 if changes.truncated { notice("Only part of this turn’s diff was stored.") }
             }
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
+            .clipShape(.rect(cornerRadius: 16))
         }
     }
     private func context(_ file: TurnFileChange) -> String {
@@ -95,7 +97,6 @@ struct TurnFileDiffView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Color.clear.frame(height: 1).id("diff-top")
-                    Text(selection.file.path).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                     if let old = selection.file.oldPath { Text("Renamed from \(old)").font(.caption).foregroundStyle(.secondary) }
                     if let page {
                         if page.binary { message("Binary file changes can be viewed on desktop.") }
@@ -177,7 +178,8 @@ private struct NumberedDiffBody: View {
                         .foregroundStyle(line.kind == .context ? .secondary : .primary)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 8)
                 }.font(.system(.caption, design: .monospaced)).fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 2).background(line.kind == .context ? .clear : hue.opacity(0.12))
+                    .padding(.vertical, 2)
+                    .background { Rectangle().fill(line.kind == .context ? Color.clear : hue.opacity(0.12)) }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("\(line.kind == .add ? "Added" : line.kind == .remove ? "Removed" : "Context"), line \(line.newNo ?? line.oldNo ?? 0): \(line.text)")
             }

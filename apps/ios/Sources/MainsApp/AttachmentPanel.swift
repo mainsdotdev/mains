@@ -144,6 +144,11 @@ struct AttachmentPanel: View {
         close(destination)
     }
     private func selectMode(_ next: Mode) {
+        // Only the larger media task replaces typing; opening the menu does not.
+        // Keep camera/gallery controls accessible below their preview.
+        if next != .menu {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
         withAnimation(reduceMotion ? nil : transition) { mode = next }
     }
     private var cameraPanel: some View {

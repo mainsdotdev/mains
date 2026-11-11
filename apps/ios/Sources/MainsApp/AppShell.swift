@@ -18,85 +18,93 @@ struct AppShell: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        GeometryReader { geometry in
-            let width = geometry.size.width * 0.82
-            let offset = min(width, max(0, (drawerOpen ? width : 0) + drag))
-            let progress = width > 0 ? offset / width : 0
-            let pageOffset = searchMounted ? (searchExpanded ? 0 : width) : offset
-            let pageCorner = searchMounted ? (searchExpanded ? 0.0 : 44.0) : 44 * progress
-            ZStack(alignment: .leading) {
-                Color(.systemBackground).ignoresSafeArea()
-                if offset > 0 || searchMounted {
-                    SidebarView(session: session, collapsed: $collapsedCollections, openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
-                                selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings)
-                        .frame(width: width)
-                        .offset(x: searchExpanded ? -width : 0)
-                        .allowsHitTesting(!searchExpanded)
-                        .accessibilityHidden(!drawerOpen || searchExpanded)
-                }
-                ZStack {
-                    NavigationStack(path: $path) {
-                        Group {
-                            if let homeRunID {
-                                ConversationView(session: session, runID: homeRunID, onNew: goHome)
-                                    .id("\(session.ownership):\(homeRunID)")
-                                    .toolbar {
-                                        ToolbarItem(placement: .topBarLeading) { sidebarButton }
-                                    }
-                            } else {
-                                HomeView(session: session, openSidebar: toggleDrawer, openComputer: showSettings, openPairing: openPairing,
-                                         onCreated: { id in
-                                             var transaction = Transaction(animation: nil)
-                                             transaction.disablesAnimations = true
-                                             withTransaction(transaction) { homeRunID = id }
-                                         })
+        ZStack(alignment: .topLeading) {
+            GeometryReader { geometry in
+                let width = geometry.size.width * 0.82
+                let offset = min(width, max(0, (drawerOpen ? width : 0) + drag))
+                let progress = width > 0 ? offset / width : 0
+                let pageOffset = searchMounted ? (searchExpanded ? 0 : width) : offset
+                let pageCorner = searchMounted ? (searchExpanded ? 0.0 : 44.0) : 44 * progress
+                ZStack(alignment: .leading) {
+                    Color(.systemBackground).ignoresSafeArea()
+                    if offset > 0 || searchMounted {
+                        SidebarView(session: session, collapsed: $collapsedCollections, openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
+                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings)
+                            .frame(width: width)
+                            .offset(x: searchExpanded ? -width : 0)
+                            .allowsHitTesting(!searchExpanded)
+                            .accessibilityHidden(!drawerOpen || searchExpanded)
+                    }
+                    ZStack {
+                        NavigationStack(path: $path) {
+                            Group {
+                                if let homeRunID {
+                                    ConversationView(session: session, runID: homeRunID, onNew: goHome)
+                                        .id("\(session.ownership):\(homeRunID)")
+                                        .toolbar {
+                                            ToolbarItem(placement: .topBarLeading) { sidebarButton }
+                                        }
+                                } else {
+                                    HomeView(session: session, openSidebar: toggleDrawer, openComputer: showSettings, openPairing: openPairing,
+                                             onCreated: { id in
+                                                 var transaction = Transaction(animation: nil)
+                                                 transaction.disablesAnimations = true
+                                                 withTransaction(transaction) { homeRunID = id }
+                                             })
+                                }
+                            }
+                            .navigationDestination(for: AppRoute.self) { route in
+                                switch route {
+                                case .conversation(let id): ConversationView(session: session, runID: id, onNew: goHome)
+                                    .id("\(session.ownership):\(id)")
+                                case .workspace(let id): WorkspaceConversationsView(session: session, workspaceID: id,
+                                    openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
+                                case .settings: ComputerView(session: session)
+                                }
                             }
                         }
-                        .navigationDestination(for: AppRoute.self) { route in
-                            switch route {
-                            case .conversation(let id): ConversationView(session: session, runID: id, onNew: goHome)
-                                .id("\(session.ownership):\(id)")
-                            case .workspace(let id): WorkspaceConversationsView(session: session, workspaceID: id,
-                                openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
-                            case .settings: ComputerView(session: session)
-                            }
+                        .allowsHitTesting(!searchMounted)
+                        .accessibilityHidden(drawerOpen || searchMounted)
+                    }
+                    .accessibilityHidden(drawerOpen && !searchMounted)
+                    .overlay { if progress > 0 && !searchMounted { Color.primary.opacity(0.08 * progress).allowsHitTesting(false) } }
+                    .overlay(alignment: .leading) {
+                        if drawerOpen && !searchMounted {
+                            Button(action: toggleDrawer) { Color.clear.contentShape(.rect) }
+                                .frame(width: max(0, geometry.size.width - offset))
+                                .buttonStyle(.plain).accessibilityLabel("Close sidebar").accessibilityIdentifier("closeSidebar")
                         }
                     }
-                    .allowsHitTesting(!searchMounted)
-                    .accessibilityHidden(drawerOpen || searchMounted)
-                    if searchMounted {
-                        SearchView(session: session, focusRequested: searchExpanded, layoutChanged: { height in
-                            if searchMounted, searchExitHeight == nil, height > 0 { searchPageHeight = height }
-                        }, open: openSearchResult, close: closeSearch)
-                            // Keep the departing page above the keyboard's old edge.
-                            // Its full-size background also covers the underlying composer.
-                            .frame(height: searchExitHeight, alignment: .top)
-                            .ignoresSafeArea(searchExitHeight == nil ? [] : .keyboard, edges: .bottom)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                            .background(Color(.systemBackground))
-                            // The sidebar leaves a main-pane preview visible. Search
-                            // exits the remaining distance before its view is removed.
-                            .offset(x: searchExpanded ? 0 : geometry.size.width - width)
-                            .allowsHitTesting(searchExpanded)
-                            .transition(.identity)
+                    .clipShape(MainPaneClip(cornerRadius: pageCorner, safeAreaInsets: geometry.safeAreaInsets))
+                    .offset(x: pageOffset)
+                    .simultaneousGesture(drawerGesture(width: width), isEnabled: drawerOpen && !searchMounted)
+                    if !drawerOpen && !searchMounted {
+                        Color.clear.frame(width: 24).contentShape(.rect).gesture(drawerGesture(width: width))
+                            .accessibilityHidden(true)
                     }
                 }
-                .accessibilityHidden(drawerOpen && !searchMounted)
-                .overlay { if progress > 0 && !searchMounted { Color.primary.opacity(0.08 * progress).allowsHitTesting(false) } }
-                .overlay(alignment: .leading) {
-                    if drawerOpen && !searchMounted {
-                        Button(action: toggleDrawer) { Color.clear.contentShape(.rect) }
-                            .frame(width: max(0, geometry.size.width - offset))
-                            .buttonStyle(.plain).accessibilityLabel("Close sidebar").accessibilityIdentifier("closeSidebar")
-                    }
+            }
+            // The inactive main pane and sidebar must not follow Search's keyboard.
+            // Keep this on their geometry root so clipping and composer insets share
+            // the same stable bounds, including after Search leaves the screen.
+            .ignoresSafeArea(drawerOpen || searchMounted ? .keyboard : [], edges: .bottom)
+            if searchMounted {
+                GeometryReader { geometry in
+                    SearchView(session: session, focusRequested: searchExpanded, layoutChanged: { height in
+                        if searchMounted, searchExitHeight == nil, height > 0 { searchPageHeight = height }
+                    }, open: openSearchResult, close: closeSearch)
+                        // Freeze only the departing Search layout at its keyboard edge.
+                        .frame(height: searchExitHeight, alignment: .top)
+                        .ignoresSafeArea(searchExitHeight == nil ? [] : .keyboard, edges: .bottom)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .background(Color(.systemBackground))
+                        .clipShape(MainPaneClip(cornerRadius: searchExpanded ? 0 : 44, safeAreaInsets: geometry.safeAreaInsets))
+                        // This independent layer travels the same full-screen distance
+                        // as the old shared pane, without resizing the page underneath.
+                        .offset(x: searchExpanded ? 0 : geometry.size.width)
+                        .allowsHitTesting(searchExpanded)
                 }
-                .clipShape(MainPaneClip(cornerRadius: pageCorner, safeAreaInsets: geometry.safeAreaInsets))
-                .offset(x: pageOffset)
-                .simultaneousGesture(drawerGesture(width: width), isEnabled: drawerOpen && !searchMounted)
-                if !drawerOpen && !searchMounted {
-                    Color.clear.frame(width: 24).contentShape(.rect).gesture(drawerGesture(width: width))
-                        .accessibilityHidden(true)
-                }
+                .transition(.identity)
             }
         }
         .attachmentOverlayHost()
@@ -142,7 +150,7 @@ struct AppShell: View {
         searchTransitionID += 1
         let transitionID = searchTransitionID
         searchExitHeight = nil
-        // Mount in the existing, shifted main pane before moving either surface.
+        // Mount Search above the retained main pane before sliding either surface.
         searchMounted = true
         DispatchQueue.main.async {
             guard searchMounted, transitionID == searchTransitionID else { return }

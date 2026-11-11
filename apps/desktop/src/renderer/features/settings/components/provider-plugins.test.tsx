@@ -21,16 +21,15 @@ vi.mock("@/lib/redux/api", () => ({
   useStartProviderConnectorOAuthMutation: () => [mocks.startOAuth, {}],
 }));
 vi.mock("../hooks/use-plugin-catalog", () => ({ usePluginCatalog: mocks.getPlugins }));
-vi.mock("@/components/ui", () => ({
+vi.mock("@/components/ui", async (original) => ({
+  ...await original<typeof import("@/components/ui")>(),
   Button: (props: ComponentProps<"button">) => <button {...props} />,
   Heading2: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
   Heading3: ({ children }: { children: ReactNode }) => <h3>{children}</h3>,
   Body: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   Muted: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  Text: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  Text: ({ children, role, "aria-live": ariaLive }: ComponentProps<"span">) => <span role={role} aria-live={ariaLive}>{children}</span>,
   HorizontalFadeScroller: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  Input: () => null,
-  SegmentedTabs: () => null,
   Select: () => null,
   CopyButton: () => null,
   AsciiSpinner: () => null,
@@ -56,6 +55,7 @@ function RouteControls() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   setTransport({
     kind: "fixture", invoke: vi.fn(), status: () => "connected", onStatusChange: () => () => {},
     subscribe(_channel, listener) {
@@ -70,7 +70,100 @@ beforeEach(() => {
     mutation.mockReturnValue({ unwrap: async () => {} });
   }
 });
-afterEach(() => { cleanup(); resetTransport(); mocks.listeners.clear(); });
+afterEach(() => { cleanup(); resetTransport(); mocks.listeners.clear(); vi.unstubAllGlobals(); });
+
+function catalog(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    ...plugin, id: `plugin-${index + 1}@market`, name: `plugin-${index + 1}`, installed: false,
+    interface: { ...plugin.interface, displayName: `Plugin ${index + 1}`, category: index < 40 ? "development" : "research" },
+  }));
+}
+
+function showCatalog(plugins = catalog(55), featuredPluginIds: string[] = []) {
+  mocks.getPlugins.mockReturnValue({ data: { ...pluginData, featuredPluginIds,
+    marketplaces: [{ ...pluginData.marketplaces[0], plugins }] }, isLoading: false });
+  return render(<MemoryRouter><ProviderPlugins providerId="codex" /></MemoryRouter>);
+}
+
+describe("plugin catalog rendering budget", () => {
+  it("mounts one page of cards and replaces them when paging", () => {
+    const { container } = showCatalog();
+    expect(container.querySelectorAll('[role="button"]').length).toBe(24);
+    expect(screen.getByText("Plugin 1")).toBeTruthy();
+    expect(screen.queryByText("Plugin 25")).toBeNull();
+    expect((screen.getByRole("button", { name: "Previous" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(container.querySelectorAll('[role="button"]').length).toBe(24);
+    expect(screen.queryByText("Plugin 1")).toBeNull();
+    expect(screen.getByText("Plugin 25")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(container.querySelectorAll('[role="button"]').length).toBe(7);
+    expect((screen.getByRole("button", { name: "Next" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(screen.getByText("Plugin 25")).toBeTruthy();
+  });
+
+  it("keeps a 12,000-plugin catalog bounded, including the featured rail", () => {
+    const plugins = catalog(12_000);
+    const { container } = showCatalog(plugins, plugins.map((item) => item.id));
+    expect(container.querySelectorAll('[role="button"]').length).toBe(30);
+    expect(screen.getByText("Plugin 1")).toBeTruthy();
+    expect(screen.getByText("Plugin 30")).toBeTruthy();
+    expect(screen.queryByText("Plugin 31")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("of 11994");
+  });
+
+  it("searches the full catalog and resets pagination when search is changed or cleared", () => {
+    showCatalog();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Search plugins" }), { target: { value: "Plugin 55" } });
+    expect(screen.getByText("Plugin 55")).toBeTruthy();
+    expect(screen.queryByText("Plugin 25")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Plugin pagination" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(screen.getByText("Plugin 1")).toBeTruthy();
+    expect(screen.queryByText("Plugin 25")).toBeNull();
+    expect((screen.getByRole("button", { name: "Previous" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("filters categories across the catalog instead of only the visible page", () => {
+    showCatalog();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Research" }));
+    expect(screen.getByText("Plugin 41")).toBeTruthy();
+    expect(screen.getByText("Plugin 55")).toBeTruthy();
+    expect(screen.queryByText("Plugin 25")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Plugin pagination" })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "All" }));
+    expect(screen.getByText("Plugin 1")).toBeTruthy();
+  });
+
+  it("returns from a plugin detail to the same catalog page", () => {
+    showCatalog();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByText("Plugin 25").closest('[role="button"]')!);
+    expect(screen.getByRole("heading", { name: "Plugin 25", level: 2 })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back to plugins" }));
+    expect(screen.getByText("Plugin 25")).toBeTruthy();
+    expect(screen.queryByText("Plugin 1")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Page 2 of 3");
+  });
+
+  it("clamps the page after catalog refresh and resets it for another provider", () => {
+    const plugins = catalog(55);
+    const view = showCatalog(plugins);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    mocks.getPlugins.mockReturnValue({ data: { ...pluginData,
+      marketplaces: [{ ...pluginData.marketplaces[0], plugins: plugins.slice(0, 30) }] }, isLoading: false });
+    view.rerender(<MemoryRouter><ProviderPlugins providerId="codex" /></MemoryRouter>);
+    expect(screen.getByText("Plugin 25")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("Page 2 of 2");
+    view.rerender(<MemoryRouter><ProviderPlugins providerId="claude_code" /></MemoryRouter>);
+    expect(screen.getByText("Plugin 1")).toBeTruthy();
+    expect(screen.queryByText("Plugin 25")).toBeNull();
+  });
+});
 
 describe("plugin detail navigation", () => {
   it("renders one shelf entry and card per plugin identity when marketplaces repeat entries", () => {

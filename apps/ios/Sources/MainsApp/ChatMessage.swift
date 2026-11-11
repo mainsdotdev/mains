@@ -138,10 +138,16 @@ private struct MarkdownTable: View {
 private struct CodeBlock: View {
     let language: String
     let code: String
+    private var title: String {
+        guard !language.isEmpty else { return "Code" }
+        return language.replacingOccurrences(of: "\\", with: "/").split(separator: "/").last.map(String.init) ?? language
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(language.isEmpty ? "Code" : language).font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text(title).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .accessibilityLabel(language.isEmpty ? "Code" : language)
                 Spacer()
                 Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = code }
                     .labelStyle(.iconOnly).font(.caption).frame(width: 44, height: 44)
