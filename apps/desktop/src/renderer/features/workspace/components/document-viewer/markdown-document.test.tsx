@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TEXT_PREVIEW_MAX_BYTES } from "@mains/contracts/output-files";
 
 const mocks = vi.hoisted(() => ({ readFileText: vi.fn(), signImage: vi.fn() }));
 vi.mock("@/lib/transport", () => ({ appApi: { fileExplorer: { readFileText: mocks.readFileText } } }));
@@ -17,12 +18,46 @@ beforeEach(() => {
     value: { imageProxy: { sign: mocks.signImage } },
   });
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 function show(content: string, { path = "/skills/apple-design/SKILL.md", docType = "md" }: { path?: string; docType?: "md" | "txt" } = {}) {
   mocks.readFileText.mockResolvedValue({ success: true, data: { content, isBinary: false } });
   return render(<MarkdownDocument path={path} docType={docType} />);
 }
+
+describe("draft text document reads", () => {
+  it("hides old content immediately when its source changes and fences the replacement read", async () => {
+    const view = show("Old document body");
+    await screen.findByText("Old document body");
+    let finish!: (value: unknown) => void;
+    mocks.readFileText.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    view.rerender(<MarkdownDocument path="/docs/other.md" />);
+    expect(screen.queryByText("Old document body")).toBeNull();
+    expect(screen.getByText("Loading…")).toBeTruthy();
+    await act(async () => { finish({ success: true, data: { isBinary: false, content: "Replacement body" } }); });
+    await screen.findByText("Replacement body");
+  });
+  it.each([
+    { body: "binary\0content", error: "This file isn't text" },
+    { body: "x".repeat(TEXT_PREVIEW_MAX_BYTES + 1), error: "This text document exceeds the 2 MiB inline preview limit." },
+  ])("rejects unsupported draft content: $error", async ({ body, error }) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body)));
+    render(<MarkdownDocument path="blob:draft-text" docType="txt" />);
+    expect(await screen.findByText(error)).toBeTruthy();
+    expect(mocks.readFileText).not.toHaveBeenCalled();
+  });
+
+  it("reports an unreadable draft and aborts its read when closed", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetch);
+    const view = render(<MarkdownDocument path="blob:missing-draft" docType="txt" />);
+    expect(await screen.findByText("Failed to read file")).toBeTruthy();
+    const signal = fetch.mock.calls[0][1].signal as AbortSignal;
+    view.unmount();
+    expect(signal.aborted).toBe(true);
+    expect(mocks.readFileText).not.toHaveBeenCalled();
+  });
+});
 
 describe("Markdown document metadata display", () => {
   it("resolves UNC document images through the signed path after the load action", async () => {

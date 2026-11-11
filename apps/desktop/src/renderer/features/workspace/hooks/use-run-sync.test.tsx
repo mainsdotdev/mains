@@ -22,7 +22,153 @@ vi.mock("@/components/ui", () => ({ toast: { error: vi.fn() } }));
 afterEach(() => {
   cleanup();
   resetTransport();
+  vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+function syncView(invoke: (channel: string, args?: unknown[]) => Promise<any>) {
+  const listeners = new Map<string, (payload: unknown) => void>();
+  const transport = { kind: "test", invoke, subscribe: (channel: string, callback: (payload: unknown) => void) => {
+    listeners.set(channel, callback); return () => { listeners.delete(channel); };
+  }, status: () => "connected" as const, onStatusChange: () => () => {} };
+  setTransport(transport);
+  const store = configureStore({ reducer: { [baseApi.reducerPath]: baseApi.reducer }, middleware: (defaults) => defaults().concat(baseApi.middleware) });
+  const cache = createRunCache(), onRunUpdated = vi.fn(), loadRunDetails = vi.fn().mockResolvedValue(undefined);
+  const current: Run = { id: "run", status: "running", goal: "Work", providerId: "codex" };
+  const view = renderHook(({ selected, scopeKey }) => useRunSync({ runs: [current, { ...current, id: "other" }], activeRunId: selected, scopeKey, cache, onRunUpdated, loadRunDetails, clearTurnStreams: vi.fn() }), {
+    initialProps: { selected: "run", scopeKey: "view" },
+    wrapper: ({ children }: { children: ReactNode }) => <Provider store={store}>{children}</Provider>,
+  });
+  return { ...view, cache, onRunUpdated, loadRunDetails, transport,
+    emit: (status: Run["status"], runId = "run") => listeners.get(CHANNELS.runs.statusChanged)?.({ runId, status }),
+    dispose() { view.unmount(); store.dispatch(baseApi.util.resetApiState()); },
+  };
+}
+
+it("does not let an older terminal response overwrite a newer running observation", async () => {
+  let finish!: (value: ReturnType<typeof ok>) => void;
+  const lookup = new Promise<ReturnType<typeof ok>>((resolve) => { finish = resolve; });
+  const running: Run = { id: "run", status: "running", goal: "New work", providerId: "codex" };
+  const invoke = vi.fn().mockImplementationOnce(() => lookup).mockResolvedValue(ok(running));
+  const h = syncView(invoke);
+  try {
+    act(() => { h.emit("failed"); });
+    act(() => { h.emit("running"); });
+    await waitFor(() => expect(h.onRunUpdated).toHaveBeenCalledWith(running));
+    await act(async () => { finish(ok({ ...running, status: "failed", lastError: "Obsolete failure" })); });
+    expect(h.onRunUpdated).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
+  } finally { h.dispose(); }
+});
+
+it("keeps one terminal notification when a duplicate push arrives during error diagnosis", async () => {
+  let finish!: (value: ReturnType<typeof ok>) => void;
+  const history = new Promise<ReturnType<typeof ok>>((resolve) => { finish = resolve; });
+  const failed: Run = { id: "run", status: "failed", goal: "Work", providerId: "codex", lastError: "Process exited with code 1" };
+  const invoke = vi.fn(async (channel: string) => channel === CHANNELS.runs.getHistory ? history : ok(failed));
+  const h = syncView(invoke);
+  try {
+    await act(async () => { h.emit("failed"); });
+    expect(invoke.mock.calls.filter(([channel]) => channel === CHANNELS.runs.getHistory)).toHaveLength(1);
+    await act(async () => { h.emit("failed"); });
+    await act(async () => { finish(ok({ artifacts: [{ content: "Please run /login" }] })); });
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith("Authentication expired — sign in from the session view", { duration: 8000 });
+  } finally { h.dispose(); }
+});
+
+it("retires a late error diagnosis when a new execution has already failed", async () => {
+  let finish!: (value: ReturnType<typeof ok>) => void;
+  const history = new Promise<ReturnType<typeof ok>>((resolve) => { finish = resolve; });
+  const run: Run = { id: "run", status: "running", goal: "Work", providerId: "codex" };
+  let current = { ...run, status: "failed" as Run["status"], lastError: "Process exited with code 1" };
+  const h = syncView(vi.fn(async (channel) => channel === CHANNELS.runs.getHistory ? history : ok(current)));
+  try {
+    await act(async () => { h.emit("failed"); });
+    current = { ...current, status: "running" };
+    await act(async () => { h.emit("running"); });
+    current = { ...current, status: "failed", lastError: "New failure" };
+    await act(async () => { h.emit("failed"); });
+    await act(async () => { finish(ok({ artifacts: [{ content: "Please run /login" }] })); });
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith("New failure", { duration: 5000 });
+  } finally { h.dispose(); }
+});
+
+it.each(["scope", "transport", "unmount"])("ignores a late terminal lookup after %s retirement", async (retirement) => {
+  let finish!: (value: ReturnType<typeof ok>) => void;
+  const lookup = new Promise<ReturnType<typeof ok>>((resolve) => { finish = resolve; });
+  const h = syncView(vi.fn(() => lookup));
+  try {
+    act(() => { h.emit("failed"); });
+    if (retirement === "scope") h.rerender({ selected: "run", scopeKey: "other-view" });
+    else if (retirement === "transport") act(() => { setTransport({ ...h.transport }); setTransport(h.transport); });
+    else h.unmount();
+    await act(async () => { finish(ok({ id: "run", status: "failed", lastError: "Stale failure" })); });
+    expect(h.onRunUpdated).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  } finally { h.dispose(); }
+});
+
+it.each(["scope", "transport", "cache reset"])("retires an already pending error diagnosis after %s", async (retirement) => {
+  let finish!: (value: ReturnType<typeof ok>) => void;
+  const history = new Promise<ReturnType<typeof ok>>((resolve) => { finish = resolve; });
+  const h = syncView(vi.fn(() => history));
+  try {
+    let finalizing!: Promise<void>;
+    act(() => { finalizing = h.result.current.finalizeRun({ id: "run", status: "failed", goal: "Work", providerId: "codex", lastError: "Process exited with code 1" }); });
+    if (retirement === "scope") h.rerender({ selected: "run", scopeKey: "other-view" });
+    else if (retirement === "transport") act(() => { setTransport({ ...h.transport }); setTransport(h.transport); });
+    else h.cache.clear();
+    await act(async () => { finish(ok({ artifacts: [{ content: "Please run /login" }] })); await finalizing; });
+    expect(toast.error).not.toHaveBeenCalled();
+  } finally { h.dispose(); }
+});
+
+it("reports the failure once even when optional error diagnosis rejects", async () => {
+  const failed: Run = { id: "run", status: "failed", goal: "Work", providerId: "codex", lastError: "Process exited with code 1" };
+  const h = syncView(vi.fn(async (channel) => {
+    if (channel === CHANNELS.runs.getHistory) throw new Error("History unavailable");
+    return ok(failed);
+  }));
+  try {
+    await act(async () => { h.emit("failed"); });
+    await act(async () => { h.emit("failed"); });
+    expect(toast.error).toHaveBeenCalledExactlyOnceWith(failed.lastError, { duration: 5000 });
+  } finally { h.dispose(); }
+});
+
+it("coalesces slow polls and lets a newer push supersede their response", async () => {
+  vi.useFakeTimers();
+  let finish!: (value: ReturnType<typeof ok>) => void;
+  const lookup = new Promise<ReturnType<typeof ok>>((resolve) => { finish = resolve; });
+  const running: Run = { id: "run", status: "running", goal: "Work", providerId: "codex" };
+  const invoke = vi.fn().mockImplementationOnce(() => lookup).mockResolvedValue(ok(running));
+  const h = syncView(invoke);
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await act(async () => { h.emit("running"); });
+    await act(async () => { finish(ok({ ...running, status: "failed", lastError: "Old poll" })); });
+    expect(h.onRunUpdated).toHaveBeenCalledExactlyOnceWith(running);
+    expect(toast.error).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(invoke).toHaveBeenCalledTimes(3);
+  } finally { h.dispose(); }
+});
+
+it("does not let the previous tab's terminal poll stop the selected tab's timer", async () => {
+  vi.useFakeTimers();
+  let finish!: (value: ReturnType<typeof ok>) => void;
+  const lookup = new Promise<ReturnType<typeof ok>>((resolve) => { finish = resolve; });
+  const invoke = vi.fn().mockImplementationOnce(() => lookup).mockResolvedValue(ok({ id: "other", status: "running" }));
+  const h = syncView(invoke);
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    h.rerender({ selected: "other", scopeKey: "view" });
+    await act(async () => { finish(ok({ id: "run", status: "succeeded" })); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(invoke).toHaveBeenLastCalledWith(CHANNELS.runs.getById, ["other"]);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  } finally { h.dispose(); }
 });
 
 describe("native voice transcript and work sync", () => {

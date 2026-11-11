@@ -8,6 +8,7 @@ import {
 } from "../../lib/subagent-identity";
 import { Bot, Clock, Document, Stop } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolOutputBody } from "./_shared";
+import { mcpOutputSegments } from "../../lib/mcp-output";
 
 /**
  * `metadata.task` — written by `run-session.ts` from the provider's task
@@ -74,6 +75,10 @@ const TONE_TEXT: Record<Tone, string> = {
 
 /** Subagent tasks read as delegation; bash tasks read as backgrounded work. */
 function labelFor(task: TaskMetadata, tone: Tone): string {
+  if (task.taskType === "mcp_task") {
+    return { running: "MCP task working", idle: "MCP task idle", error: "MCP task failed",
+      warn: "MCP task stopped", ok: "MCP task finished" }[tone];
+  }
   const isAgent = task.taskType === "local_agent" || !!task.subagentType;
   if (tone === "idle") return isAgent ? "Subagent idle" : "Background task idle";
   if (tone === "running") {
@@ -124,14 +129,18 @@ export function selectTaskPresentation(
   // it is just the description echoed back. Only treat it as a body when it
   // actually says something the header line doesn't.
   const summary = t.summary?.trim();
+  const description = t.taskType === "mcp_task" && (tone === "running" || tone === "idle")
+    ? summary || t.description : t.description;
   const report =
-    summary && summary !== t.description?.trim() ? summary : subagent?.result?.trim();
+    summary && summary !== description?.trim() ? summary : subagent?.result?.trim();
+  const detail = [t.error?.trim() || report, ...mcpOutputSegments({ resourceLinks: t.resourceLinks })]
+    .filter(Boolean).join("\n\n");
 
   return {
     tone,
     label: labelFor(t, tone),
-    description: t.description,
-    detail: t.error?.trim() || report || undefined,
+    description,
+    detail: detail || undefined,
     context: [t.lastToolName, formatUsage(t.usage)].filter(Boolean).join(" · "),
     outputFile: t.outputFile,
   };

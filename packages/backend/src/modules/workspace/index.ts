@@ -1,8 +1,11 @@
+export { captureWorkspaceDiff, createWorkspaceDiffScheduler, shutdownWorkspaceDiffs } from "./workspace-diff-lifecycle";
 export { registerWorkspaceIpc, unregisterWorkspaceIpc } from "./workspace.ipc";
+export { shutdownWorkspaceIntakes } from "./workspace-intake-lifecycle";
 export {
   workspaceService,
   workspacePathExists,
   assertWorkspacePathExists,
+  assertWorkspaceCanExecute,
   logWorkspaceActivity,
   emitFindingsChanged,
   recordWorkspaceDiff,

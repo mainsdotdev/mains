@@ -21,6 +21,7 @@ import {
   useAtlasRevisionsQuery,
   useCreateAtlasPageMutation,
   useRestoreAtlasPageMutation,
+  useResolveAtlasConflictMutation,
   useSaveAtlasPageMutation,
   useUpdateAtlasItemMutation,
   useUploadAtlasFileMutation,
@@ -35,6 +36,7 @@ import { atlasError } from "../hooks/use-save-to-atlas";
 import { AUTOSAVE_INTERVAL_MS, createPageSaveQueue, type PageDraft } from "../lib/page-save-queue";
 import { downloadAtlasText } from "../lib/download";
 import { pageFileData } from "../lib/page-upload";
+import { createAtlasPageLifecycle, type AtlasPageOperation } from "../lib/page-lifecycle";
 import type {
   AtlasPageAction,
   AtlasPendingPageAction,
@@ -102,7 +104,11 @@ export default function AtlasPageEditor({
   return (
     <PageEditor
       page={query.data}
-      reload={async () => (await query.refetch()).data}
+      reload={async () => {
+        const result = await query.refetch();
+        if (result.error) throw result.error;
+        return result.data;
+      }}
       handleRef={handleRef}
       onTitleChange={onTitleChange}
       requestedAction={requestedAction}
@@ -152,9 +158,7 @@ function PageEditor({
   });
   const applying = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isTrashed = useRef(!!page.item.trashedAt);
-  const trashPhase = useRef<"idle" | "saving" | "trashing">("idle");
-  const [trashing, setTrashing] = useState(false);
+  const [pageState, setPageState] = useState({ editable: !page.item.trashedAt, busy: false });
   const [initialVersion] = useState(page.item.version);
   const uploadFile = async (file: File) => {
     try {
@@ -223,24 +227,29 @@ function PageEditor({
       onState: setSaveState,
     }),
   );
+  const [lifecycle] = useState(() => createAtlasPageLifecycle({
+    isCurrent: () => getTransport() === mountedTransport,
+    save: () => queue.flush(),
+    trashed: !!page.item.trashedAt,
+    onState: setPageState,
+  }));
   useLayoutEffect(() => {
-    isTrashed.current = !!page.item.trashedAt;
-    if (isTrashed.current && timer.current) {
+    lifecycle.activate();
+    return () => { void lifecycle.flush(); lifecycle.deactivate(); };
+  }, [lifecycle]);
+  useLayoutEffect(() => {
+    lifecycle.setTrashed(!!page.item.trashedAt);
+    if (page.item.trashedAt && timer.current) {
       clearTimeout(timer.current);
       timer.current = null;
     }
-  }, [page.item.trashedAt]);
-  const flush = useCallback(() => {
-    // Trash can close the tab before its query refreshes. Cleanup and delayed
-    // callbacks must observe that transition rather than the old Page props.
-    if (trashPhase.current === "trashing" || isTrashed.current) return Promise.resolve(true);
-    return queue.flush();
-  }, [queue]);
+  }, [page.item.trashedAt, lifecycle]);
+  const flush = useCallback(() => lifecycle.flush(), [lifecycle]);
   useEffect(() => {
     onTitleChange(name || "Untitled page");
   }, [name, onTitleChange]);
   const schedule = (title: string = queue.draft.title) => {
-    if (applying.current || trashPhase.current !== "idle" || isTrashed.current) return;
+    if (applying.current || !lifecycle.canEdit) return;
     queue.edit({ title, blocks: editor.document });
     // Throttle, not debounce: later keystrokes keep the running timer, so
     // continuous typing still reaches the backend within one interval.
@@ -299,14 +308,19 @@ function PageEditor({
     { accountId, id },
     { skip: !history, refetchOnMountOrArgChange: true, pollingInterval: 5000 },
   );
-  const [restore, restoring] = useRestoreAtlasPageMutation();
+  const [restore] = useRestoreAtlasPageMutation();
+  const [resolveConflict] = useResolveAtlasConflictMutation();
   const { data: collections = [] } = useListCollectionsQuery({ accountId });
   const importRef = useRef<HTMLInputElement>(null);
   const performAction = useCallback(
     async (action: AtlasPageAction) => {
       if (getTransport() !== mountedTransport)
         throw new Error("Backend changed; reopen this page");
-      switch (action.type) {
+      const trash = action.type === "trash";
+      if (trash && timer.current) clearTimeout(timer.current);
+      if (trash) timer.current = null;
+      await lifecycle.run(async () => {
+        switch (action.type) {
         case "copy":
           await copy(
             `# ${name || "Untitled page"}\n\n${editor.blocksToMarkdownLossy()}`,
@@ -340,26 +354,11 @@ function PageEditor({
             }).unwrap();
           break;
         case "trash": {
-          if (isTrashed.current || trashPhase.current !== "idle") return;
-          trashPhase.current = "saving";
-          setTrashing(true);
-          if (timer.current) clearTimeout(timer.current);
-          timer.current = null;
-          let trashed = false;
-          try {
-            if (!(await queue.flush())) return;
-            trashPhase.current = "trashing";
-            await updateItem({ accountId, id, trashed: true }).unwrap();
-            trashed = true;
-          } finally {
-            if (!trashed) {
-              trashPhase.current = "idle";
-              setTrashing(false);
-            }
-          }
+          await updateItem({ accountId, id, trashed: true }).unwrap();
           break;
         }
-      }
+        }
+      }, trash ? "trash" : action.type === "move" || action.type === "import" ? "edit" : "read");
     },
     [
       mountedTransport,
@@ -370,7 +369,7 @@ function PageEditor({
       updateItem,
       accountId,
       id,
-      queue,
+      lifecycle,
     ],
   );
   useImperativeHandle(
@@ -382,50 +381,59 @@ function PageEditor({
     }),
     [flush, page.item.collectionId, performAction],
   );
-  const handledAction = useRef<string | null>(null);
   useEffect(() => {
-    if (!requestedAction || handledAction.current === requestedAction.token)
-      return;
-    handledAction.current = requestedAction.token;
-    onActionHandled?.(requestedAction.token);
-    void performAction(requestedAction.action).catch((error: unknown) =>
-      toast.error(atlasError(error)),
-    );
-  }, [requestedAction, onActionHandled, performAction]);
-  const reloadLatest = async () => {
+    if (!requestedAction) return;
+    let cancelled = false;
+    // Strict Mode may retire this effect before the surface is committed.
+    // Consume the one-shot request only in the surviving effect.
+    void Promise.resolve().then(async () => {
+      if (cancelled || !lifecycle.consume(requestedAction.token)) return;
+      onActionHandled?.(requestedAction.token);
+      await performAction(requestedAction.action);
+    }).catch((error: unknown) => toast.error(atlasError(error)));
+    return () => { cancelled = true; };
+  }, [requestedAction, onActionHandled, performAction, lifecycle]);
+  const applyLatest = async ({ current }: AtlasPageOperation) => {
     const next = await reload();
-    if (!next) return;
+    if (!current()) return;
+    if (!next) throw new Error("Page is no longer available");
     queue.reset(next);
     applying.current = true;
-    editor.replaceBlocks(
-      editor.document,
-      next.revision.blocks as PartialBlock[],
-    );
-    setName(next.item.title);
-    applying.current = false;
+    try {
+      editor.replaceBlocks(editor.document, next.revision.blocks as PartialBlock[]);
+      setName(next.item.title);
+    } finally { applying.current = false; }
   };
+  const reloadLatest = () => lifecycle.run(async (operation) => {
+    // A recovery reload may discard a draft, but never an accepted write that
+    // is still running. A blocked queue need not save successfully to reload.
+    await queue.flush();
+    if (operation.current()) await applyLatest(operation);
+  }, "recover");
   const duplicate = async () => {
     try {
-      const next = await createPage({
-        accountId,
-        title: `${name || "Untitled page"} (draft)`,
-        blocks: editor.document,
-        collectionId: page.item.collectionId,
-      }).unwrap();
-      localStorage.removeItem(draftKey);
-      navigate(`/atlas/${next.item.id}`);
+      await lifecycle.run(async ({ current }) => {
+        const next = await createPage({
+          accountId,
+          title: `${name || "Untitled page"} (draft)`,
+          blocks: editor.document,
+          collectionId: page.item.collectionId,
+        }).unwrap();
+        if (!current()) return;
+        localStorage.removeItem(draftKey);
+        navigate(`/atlas/${next.item.id}`);
+      }, "recover");
     } catch (error) {
       toast.error(atlasError(error));
     }
   };
   const beforeSend = useCallback(async () => {
-    if (trashPhase.current !== "idle" || isTrashed.current || saveState.error) return false;
-    return flush();
-  }, [saveState.error, flush]);
+    if (!lifecycle.canEdit || saveState.error) return false;
+    return lifecycle.run(() => {}, "send");
+  }, [saveState.error, lifecycle]);
   const backToPages = () => {
-    void flush().then((saved) => {
-      if (saved) navigate("/atlas?type=page");
-    });
+    void lifecycle.run(() => navigate("/atlas?type=page"))
+      .catch((error: unknown) => toast.error(atlasError(error)));
   };
 
   return (
@@ -466,15 +474,19 @@ function PageEditor({
       <div className="min-h-0 flex-1 overflow-y-auto noscrollbar pb-44">
         <AtlasPageHeader item={page.item}>
           {!!page.conflicts?.length && !page.item.trashedAt && <AtlasPageConflicts page={page}
-            beforeResolve={async () => (await queue.flush()) ? queue.version : null} onResolved={reloadLatest} />}
+            resolving={pageState.busy}
+            onResolve={(choice, revisionId) => lifecycle.run(async (operation) => {
+              await resolveConflict({ accountId, id, choice, revisionId, expectedVersion: queue.version }).unwrap();
+              if (operation.current()) await applyLatest(operation);
+            }, "revision")} />}
           {page.item.trashedAt && (
             <div className="mb-6 flex items-center gap-3">
               <Muted>This page is in Trash.</Muted>
               <Button
                 variant="primary"
                 onClick={() => {
-                  void updateItem({ accountId, id, trashed: false })
-                    .unwrap()
+                  void lifecycle.run(async () => { await updateItem({ accountId, id, trashed: false }).unwrap(); },
+                    "restore")
                     .catch((error: unknown) => toast.error(atlasError(error)));
                 }}
               >
@@ -499,7 +511,7 @@ function PageEditor({
                 <Button
                   variant="ghost"
                   disabled={saveState.saving}
-                  onClick={() => void reloadLatest()}
+                  onClick={() => void reloadLatest().catch((error: unknown) => toast.error(atlasError(error)))}
                 >
                   Reload latest
                 </Button>
@@ -518,7 +530,7 @@ function PageEditor({
             value={name}
             placeholder="Untitled page"
             maxLength={240}
-            disabled={trashing || !!page.item.trashedAt}
+            disabled={!pageState.editable || !!page.item.trashedAt}
             onChange={(event) => {
               const title = event.target.value.replace(/[\r\n]+/g, " ");
               setName(title);
@@ -536,7 +548,7 @@ function PageEditor({
             <BlockNoteView
               editor={editor}
               theme={useIsDarkMode() ? "dark" : "light"}
-              editable={!trashing && !page.item.trashedAt}
+              editable={pageState.editable && !page.item.trashedAt}
               onChange={() => schedule()}
             />
           </div>
@@ -551,7 +563,7 @@ function PageEditor({
           const file = event.target.files?.[0];
           event.target.value = "";
           if (!file) return;
-          void (async () => {
+          void lifecycle.run(async ({ current }) => {
             if (file.size > 2 * 1024 * 1024)
               throw new Error("Page import exceeds the 2 MB limit");
             const text = await file.text();
@@ -570,13 +582,14 @@ function PageEditor({
               } as PartialBlock;
             };
             // Import appends to the existing document so it preserves current work.
+            if (!current()) return;
             editor.insertBlocks(
               blocks.map(freshIds),
               editor.document[editor.document.length - 1],
               "after",
             );
             schedule();
-          })().catch((error: unknown) => toast.error(atlasError(error)));
+          }, "edit").catch((error: unknown) => toast.error(atlasError(error)));
         }}
       />
       <Modal
@@ -617,22 +630,15 @@ function PageEditor({
                 disabled={
                   row.id === page.revision.id ||
                   !!page.item.trashedAt ||
-                  restoring.isLoading
+                  pageState.busy
                 }
                 onClick={() => {
-                  void (async () => {
-                    if (!(await queue.flush())) return;
-                    await restore({
-                      accountId,
-                      id,
-                      revisionId: row.id,
-                      expectedVersion: queue.version,
-                    }).unwrap();
-                    await reloadLatest();
-                    setHistory(false);
-                  })().catch((error: unknown) =>
-                    toast.error(atlasError(error)),
-                  );
+                  void lifecycle.run(async (operation) => {
+                    await restore({ accountId, id, revisionId: row.id, expectedVersion: queue.version }).unwrap();
+                    if (!operation.current()) return;
+                    await applyLatest(operation);
+                    if (operation.current()) setHistory(false);
+                  }, "revision").catch((error: unknown) => toast.error(atlasError(error)));
                 }}
               >
                 Restore

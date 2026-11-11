@@ -1,5 +1,5 @@
 import * as Haptics from "expo-haptics";
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { Pressable, TextInput, View } from "react-native";
 
 import { backendSession, useSession } from "@/backend/backend-session";
@@ -43,6 +43,8 @@ export function AsyncQuestionCard({
   const { requestConsent } = useAiDataConsent();
   const provider = useProviderAccentPair(providerId);
   const { artifactId, questions } = pending;
+  const [owner] = useState(() => backendSession.captureDecisionOwner());
+  useLayoutEffect(() => { owner.attach(); return () => owner.detach(); }, [owner]);
   const [answers, setAnswers] = useState(() => questions.map(() => ""));
   const [index, setIndex] = useState(0);
   const [status, setStatus] = useState<Status>("editing");
@@ -67,23 +69,29 @@ export function AsyncQuestionCard({
   };
 
   const submit = async (checkOnly: boolean) => {
+    const lease = owner.begin();
+    if (!lease) return;
     setStatus("sending");
     setError(null);
     try {
       if (!checkOnly) {
-        if (!(await requestConsent(backendId, providerId))) {
+        const consent = await requestConsent(backendId, providerId);
+        lease.assertCurrent();
+        if (!consent) {
           setStatus("editing");
           return;
         }
         // The answer goes out under the conversation's saved settings.
         await waitForComposerSettings(backendId, providerId, runId);
       }
+      lease.assertCurrent();
       const result = await backendSession.answerAsyncQuestions(
         runId,
         artifactId,
         answers.map((answer) => answer.trim()),
         checkOnly,
       );
+      lease.assertCurrent();
       if (result.success && result.data.accepted) {
         setStatus("done");
         notify(Haptics.NotificationFeedbackType.Success);
@@ -98,25 +106,31 @@ export function AsyncQuestionCard({
       setError(result.error);
       notify(Haptics.NotificationFeedbackType.Error);
     } catch (caught) {
+      if (!lease.current()) return;
       const message = caught instanceof Error ? caught.message : "Could not send the answers";
       const uncertain = checkOnly || UNCERTAIN.test(message);
       setStatus(uncertain ? "unknown" : "editing");
       setError(uncertain ? "Delivery is unknown. Check delivery before sending again." : message);
       notify(Haptics.NotificationFeedbackType.Error);
-    }
+    } finally { lease.finish(); }
   };
 
   const dismiss = async () => {
+    const lease = owner.begin();
+    if (!lease) return;
     setDismissing(true);
     setError(null);
     try {
       const result = await backendSession.dismissAsyncQuestions(runId, artifactId);
+      lease.assertCurrent();
       if (result.success) setStatus("done");
       else setError(result.error);
     } catch (caught) {
+      if (!lease.current()) return;
       setError(caught instanceof Error ? caught.message : "Could not dismiss the questions");
     } finally {
-      setDismissing(false);
+      if (lease.current()) setDismissing(false);
+      lease.finish();
     }
   };
 

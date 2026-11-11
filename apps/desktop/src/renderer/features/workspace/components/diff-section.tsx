@@ -181,7 +181,7 @@ export function DiffSection({
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <Button type="button" onClick={() => dispatch(openReviewTab())}
-        className="glass-button mb-2 flex shrink-0 items-center justify-center gap-2 rounded-xl px-3 py-1.5 text-s text-primary-900 transition-colors hover:bg-primary-100 dark:text-primary-100 dark:hover:bg-primary/5">
+        className="glass-outline mb-2 flex shrink-0 items-center justify-center gap-2 rounded-xl px-3 py-2 text-s text-primary-900 transition-colors hover:bg-primary-100 dark:text-primary-100 dark:hover:bg-primary/5">
         <Review className="size-4" />Review mode
       </Button>
 
@@ -228,7 +228,7 @@ export function DiffSection({
                   setSelectedDiffFile(filePath);
                   onSelectDiffFile(filePath, segment || diff.diffText);
                 }}
-                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                className="flex min-w-0 flex-1 items-center gap-2 text-left text-primary-900 dark:text-primary-100"
               >
                 <FileIconComponent
                   fileName={fileName}

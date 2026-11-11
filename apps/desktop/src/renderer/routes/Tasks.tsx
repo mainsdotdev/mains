@@ -10,7 +10,7 @@ import type { IssueWithEntity, PullRequestSummary } from "@/lib/redux/api";
 import { IssuesPanel } from "@/features/tasks/components/issues-panel";
 import { PullRequestsPanel } from "@/features/tasks/components/pull-requests-panel";
 import { DetailDrawer } from "@/features/tasks/components/detail-drawer";
-import { PrDetail } from "@/features/tasks/components/pr-detail";
+import { PullRequestView } from "@/features/pull-requests/components/pull-request-view";
 import { IssueDetail } from "@/features/tasks/components/issue-detail";
 import { StatusMappingButton } from "@/features/tasks/components/status-mapping";
 import { useTasksScope } from "@/features/tasks/hooks/use-tasks-scope";
@@ -106,7 +106,15 @@ export default function TasksPage() {
 
       <DetailDrawer>
         {detail?.kind === "pr" ? (
-          <PrDetail key={detail.pr.nodeId} pr={detail.pr} />
+          <PullRequestView
+            prRef={{
+              provider: detail.pr.provider,
+              owner: detail.pr.repo.owner,
+              repo: detail.pr.repo.repo,
+              number: detail.pr.number,
+            }}
+            initialPr={detail.pr}
+          />
         ) : detail?.kind === "issue" ? (
           <IssueDetail
             key={detail.issue.issue.entityId}

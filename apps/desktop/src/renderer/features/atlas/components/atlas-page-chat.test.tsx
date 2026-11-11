@@ -74,7 +74,7 @@ vi.mock("@/lib/redux/api/providersApi", () => ({
   useGetProviderCommandsQuery: () => ({ data: mocks.empty }),
   useGetProviderSkillsQuery: () => ({ data: mocks.empty }),
 }));
-vi.mock("@/lib/transport", () => ({
+vi.mock("@/lib/transport", () => ({ onTransportChange: () => () => {},
   getTransport: () => "test-transport",
   appEvents: { providers: { onModelsUpdated: () => () => {} } },
 }));

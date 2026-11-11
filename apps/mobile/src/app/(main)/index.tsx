@@ -156,7 +156,7 @@ export default function NewRunScreen() {
   const openModel = (providerId: string) =>
     router.push({ pathname: "/model", params: { providerId } } as Href);
   const openRunOptions = (providerId: string) =>
-    router.push({ pathname: "/run-options", params: { providerId } } as Href);
+    router.push({ pathname: "/run-options", params: { providerId, ...(workspace?.rootPath ? { workspacePath: workspace.rootPath } : {}) } } as Href);
 
   const openSidebar = () => {
     // The drawer only dismisses the keyboard for the swipe gesture; the

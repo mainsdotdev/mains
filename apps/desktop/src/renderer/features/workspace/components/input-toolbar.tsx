@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useLayoutEffect, type RefObject } from "react";
 import { getProviderVariant } from "@/lib/provider-variants";
 import type { SkillInfo } from "@/lib/redux/api/providersApi";
+import { ComposerPermissionDropdown } from "./composer-permission-dropdown";
 import { PluginsButton } from "./plugins-button";
 import { useIsMobile } from "@/lib/platform";
 import { useModeConfig } from "@/hooks/use-mode-config";
@@ -12,7 +13,6 @@ import {
   FastModeButton,
   ServiceTierSelect,
   GoalButton,
-  PermissionModeDropdown,
   FILE_TYPES,
   type UploadedFile,
   Input,
@@ -42,6 +42,7 @@ interface InputToolbarProps {
   onModelChange: (displayName: string) => void;
   isLoadingModels: boolean;
   // Permission mode (Claude only)
+  workspacePath?: string;
   permissionMode: string;
   onPermissionModeChange: (mode: string) => void;
   // Plan mode (Codex only) — runs alongside the sandbox mode
@@ -91,6 +92,7 @@ export function InputToolbar({
   modelEffortLevelsByDisplayName,
   onModelChange,
   isLoadingModels,
+  workspacePath,
   permissionMode,
   onPermissionModeChange,
   planMode,
@@ -230,12 +232,12 @@ export function InputToolbar({
 
   if (layout === "floating") {
     return (
-      <div className="pointer-events-none absolute inset-x-2.5 bottom-1.5 flex items-center justify-between">
-        <div className="pointer-events-auto flex items-center">
+      <div className="contents">
+        <div className="col-start-1 row-start-1 flex h-8 items-center">
           {uploadButton}
           {uploadInput}
         </div>
-        <div className="pointer-events-auto flex items-center gap-0 *:shrink-0">
+        <div className="col-start-3 row-start-1 flex h-8 items-center gap-0 *:shrink-0">
           <ModelSelectDropdown
             model={selectedModelDisplayName}
             models={modelDisplayNames}
@@ -255,7 +257,7 @@ export function InputToolbar({
             iconOnly
           />
           {speedControl}
-          {modeConfig.showPermissionControls && <PermissionModeDropdown
+          {modeConfig.showPermissionControls && <ComposerPermissionDropdown workspacePath={workspacePath}
             permissionMode={permissionMode}
             onPermissionModeChange={onPermissionModeChange}
             isOpen={showPermissionDropdown}
@@ -268,7 +270,7 @@ export function InputToolbar({
             iconOnly
           />}
           {/* Balance the visible gap beside the filled circle with the icon buttons' inset. */}
-          <div className="ml-3 flex items-center gap-1">
+          <div className="ml-1 flex items-center gap-1">
             {actionButtons}
           </div>
         </div>
@@ -326,7 +328,7 @@ export function InputToolbar({
             </>
           )}
           {modeConfig.showPermissionControls && (
-            <PermissionModeDropdown
+            <ComposerPermissionDropdown workspacePath={workspacePath}
               permissionMode={permissionMode}
               onPermissionModeChange={onPermissionModeChange}
               isOpen={showPermissionDropdown}

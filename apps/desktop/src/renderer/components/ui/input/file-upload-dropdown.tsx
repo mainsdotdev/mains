@@ -44,7 +44,7 @@ export function FileUploadDropdown({
         tooltip="Upload image or document"
         tooltipPosition="top"
         onClick={onToggle}
-        className={`shrink-0 cursor-pointer rounded-full transition-colors hover:bg-primary-200/30 dark:hover:bg-primary-800 ${compact ? "flex size-9 items-center justify-center p-0" : "p-2"}`}
+        className={`shrink-0 cursor-pointer rounded-full transition-colors hover:bg-primary-200/30 dark:hover:bg-primary-800 ${compact ? "flex size-8 items-center justify-center p-0" : "p-2"}`}
         aria-label="Upload file"
         aria-haspopup="menu"
         aria-expanded={isOpen}

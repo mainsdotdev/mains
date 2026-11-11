@@ -108,6 +108,33 @@ export async function writeFile(id: string, name: string, bytes: Buffer) {
     return `${id}/${name}`;
   } finally { await fs.rm(temporary, { recursive: true, force: true }); }
 }
+/** Each attempt owns a unique preview name. Publication is synchronous with the
+ * row's ownership check; a rejected/failed checkpoint removes only this file. */
+export async function writeBookmarkPreview(id: string, name: string, bytes: Buffer, publish: (key: string) => boolean) {
+  const directory = itemDirectory(id);
+  if (!directory || !/^preview-[a-f0-9]+\.(png|jpg|webp|gif|avif)$/.test(name) || bytes.length > 5 * 1024 * 1024)
+    throw new Error("Invalid bookmark preview");
+  const temporary = path.join(directory, `.preview-${randomUUID()}`);
+  const target = path.join(directory, name);
+  let published = false, checkedDirectory = false, created = false;
+  try {
+    await fs.mkdir(directory, { recursive: true });
+    if ((await fs.lstat(directory)).isSymbolicLink()) throw new Error("Invalid bookmark preview directory");
+    checkedDirectory = true;
+    await fs.writeFile(temporary, bytes, { flag: "wx", mode: 0o444 });
+    await fs.rename(temporary, target);
+    created = true;
+    published = publish(`${id}/${name}`);
+  } finally {
+    if (checkedDirectory) await fs.rm(temporary, { force: true });
+    if (!published && checkedDirectory) {
+      if (created) await fs.rm(target, { force: true });
+      await fs.rmdir(directory).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+      });
+    }
+  }
+}
 /** Restore an immutable synced file from matching bundled bytes, without overwriting local files. */
 export async function restoreFile(key: string, bytes: Buffer, expectedHash: string | null) {
   const target = storagePath(key);

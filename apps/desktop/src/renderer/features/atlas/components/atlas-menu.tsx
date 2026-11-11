@@ -1,12 +1,13 @@
 import { useId, useState, type ReactNode } from "react";
-import { Button, DropdownMenu } from "@/components/ui";
+import { Button, DropdownMenu, type ButtonProps } from "@/components/ui";
 
 /** The same keyboard-accessible menu for library rows, tiles, Recents and the editor. */
-export function AtlasMenu({ label, trigger, children, className = "", menuClassName, scrollable = false, onOpen, disabled = false, side = "bottom" }: {
+export function AtlasMenu({ label, trigger, children, className = "", variant, menuClassName, scrollable = false, onOpen, disabled = false, side = "bottom" }: {
   label: string;
   trigger: ReactNode;
   children: (close: () => void) => ReactNode;
-  className?: string;
+  className?: string | ((open: boolean) => string);
+  variant?: ButtonProps["variant"];
   menuClassName?: string;
   scrollable?: boolean;
   onOpen?: () => void;
@@ -18,8 +19,8 @@ export function AtlasMenu({ label, trigger, children, className = "", menuClassN
   const [position, setPosition] = useState<{ x: number; y: number; anchorTop: number } | null>(null);
   const close = () => setPosition(null);
   return <>
-    <Button id={id} aria-label={label} aria-haspopup="menu" aria-expanded={!!position} disabled={disabled}
-      className={`inline-flex items-center justify-center focus-visible:ring-2 focus-visible:ring-accent/40 ${className}`}
+    <Button id={id} variant={variant} aria-label={label} aria-haspopup="menu" aria-expanded={!!position} disabled={disabled}
+      className={`inline-flex items-center justify-center focus-visible:ring-2 focus-visible:ring-accent/40 ${typeof className === "function" ? className(!!position) : className}`}
       onClick={(event) => {
         const rect = event.currentTarget.getBoundingClientRect();
         if (!position) onOpen?.();

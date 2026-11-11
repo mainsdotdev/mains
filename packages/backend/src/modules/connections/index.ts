@@ -1,5 +1,5 @@
 export { registerConnectionsHandlers, unregisterConnectionsHandlers } from "./connections.ipc";
-export { connectionsService, getConnectionWithSecrets } from "./connections.service";
+export { connectionsService, getConnectionWithSecrets, connectionSyncRevision } from "./connections.service";
 
 // Only safe-to-share helpers leak across the seam. Crypto / provider-secret
 // parsing stay private — cross-module callers should use the named helper
@@ -29,3 +29,5 @@ export type {
   CredentialsCheckResult,
   SaveCredentialsResult,
 } from "./connections.dto";
+
+export { shutdownConnectionLifecycle as shutdownConnections } from "./connection-lifecycle";

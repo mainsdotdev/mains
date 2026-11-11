@@ -8,6 +8,7 @@ This is a monorepo:
 
 - `apps/desktop` — the Mains desktop app (Electron). Its own `CLAUDE.md` / `AGENTS.md` / `CONTEXT.md` live there; read them before working on it.
 - `apps/mobile` — the Mains mobile app (Expo / React Native), the desktop's remote control. Its own `CLAUDE.md` / `AGENTS.md` live there.
+- `apps/ios` — the independent native iPhone app (SwiftUI). Its own `CLAUDE.md` / `AGENTS.md` and build instructions live there. The Expo mobile app remains separate.
 - `apps/server` — the standalone Node backend and browser UI package. It owns the headless composition root, CLI, packaging, and server release checks. Its own `CLAUDE.md` / `AGENTS.md` live there.
 - `apps/bridge` — the ciphertext-only Bridge hub (Cloudflare Worker and SQLite Durable Objects). Its own `CLAUDE.md` / `AGENTS.md` and local development instructions live there.
 - `packages/backend` — the Electron-free backend implementation shared by the desktop and standalone server: database, domain modules, provider runtimes, transport-neutral IPC/WebSocket plumbing, and lifecycle orchestration. Its own `CLAUDE.md` / `AGENTS.md` live there.

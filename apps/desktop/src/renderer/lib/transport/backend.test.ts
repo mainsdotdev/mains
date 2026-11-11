@@ -85,6 +85,26 @@ async function accept(
 }
 
 describe("remote backend activation", () => {
+  it("keeps the newer choice when an older handshake response was already queued", async () => {
+    const first = startConnection("ws://old");
+    const oldResult = first.promise.catch((error: Error) => error);
+    first.sockets[0].open(); first.sockets[0].respond({ success: true, data: descriptor });
+    const second = await accept(startConnection("ws://new"), { ...descriptor, backendId: "new" });
+    expect(await oldResult).toBeInstanceOf(Error);
+    expect(getTransport()).toBe(second.transport);
+    expect(first.sockets[0].closed).toBe(true);
+  });
+  it("does not reactivate a pending remote after the user returns to local", async () => {
+    const attempt = startConnection("ws://canceled");
+    const result = attempt.promise.catch((error: Error) => error);
+    disconnectRemoteBackend();
+    const socket = attempt.sockets[0];
+    socket.open();
+    if (socket.sent.length) socket.respond({ success: true, data: descriptor });
+    expect(await result).toBeInstanceOf(Error);
+    expect(getTransport().kind).toBe("ipc");
+    expect(socket.closed).toBe(true);
+  });
   afterEach(() => {
     vi.useRealTimers();
     disconnectRemoteBackend();

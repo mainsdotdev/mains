@@ -1,3 +1,4 @@
+export { shutdownFileWrites } from "../../runtime/file-write-lifecycle";
 export { registerFileExplorerIpc, unregisterFileExplorerIpc } from "./fileExplorer.ipc";
 export { fileExplorerService } from "./fileExplorer.service";
 export type {

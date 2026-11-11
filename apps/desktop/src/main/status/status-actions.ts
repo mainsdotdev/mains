@@ -21,14 +21,17 @@ function warnOnFailure(what: string) {
 }
 
 export const statusActions: TrayActions = {
-  answerApproval(requestId, actionIndex) {
+  answerApproval(requestId, actionIndex, approvalToken) {
     const request = listPendingApprovals().find((r) => r.requestId === requestId);
-    if (!request) return;
+    if (!request || approvalToken && request.approvalToken !== approvalToken) return;
     const response = responseFromNotification(request, {
       type: "action",
       index: actionIndex,
     });
-    if (response) handleToolApprovalResponse(response);
+    if (response) {
+      try { handleToolApprovalResponse(response); }
+      catch (error) { console.warn("[approvals] Menu decision was refused", error); }
+    }
   },
   openRun(runId) {
     void openRunInWindow(runId).catch(warnOnFailure("opening the run"));

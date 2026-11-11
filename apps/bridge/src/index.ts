@@ -13,6 +13,7 @@ import { signedInUser } from "./identity";
 import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
 import { observeBridgeRequest, reportBridgeFailure } from "./observability";
 import { createHubBackup } from "./hub-backup";
+import { hubMaintenanceDeadline } from "./hub-maintenance-lifecycle";
 import { createBridgeLimits } from "./limits";
 import { createSqlUsage, type SqlUsageEnv } from "./sql-usage";
 import { reportWriteBudget, subscriptionWriteBudgetPeriod, type WriteBudgetPeriod } from "./write-budget";
@@ -236,7 +237,7 @@ export class AccountHub extends DurableObject<Env> {
       // Also arms collection for inventories imported from pre-GC stores that
       // have no new writes (and therefore no existing maintenance alarm).
       const deadlines = [this.store.nextExpiry(), this.quota.nextExpiry()].filter((value): value is number => value !== null);
-      if (deadlines.length) await this.schedule(Math.min(...deadlines));
+      await this.schedule(hubMaintenanceDeadline(deadlines));
       return quota;
     }));
   }
@@ -391,14 +392,13 @@ export class AccountHub extends DurableObject<Env> {
       await this.quota.collect();
       const receipts = this.store.compactReceipts(this.membership.horizon());
       const deadlines = [this.store.nextExpiry(), this.quota.nextExpiry(), this.membership.nextHorizonAt()].filter((value): value is number => value !== null);
-      if (hasMore || receipts.hasMore) deadlines.push(Date.now() + 1000);
       if (!revoked) deadlines.push(Date.now() + REVOCATION_RETRY_MS);
-      if (deadlines.length) await this.schedule(Math.max(Date.now() + 1000, Math.min(...deadlines)));
+      await this.schedule(hubMaintenanceDeadline(deadlines, hasMore || receipts.hasMore));
     });
   }
   private async schedule(at: number | null) {
+    at = hubMaintenanceDeadline([at]);
     if (at === null) return;
-    at = Math.max(Date.now() + 1000, at);
     const alarm = await this.ctx.storage.getAlarm();
     if (alarm === null || alarm > at) await this.ctx.storage.setAlarm(at);
   }

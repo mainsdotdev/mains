@@ -88,3 +88,8 @@ test("one-call permissions survive projection without changing questions or URL 
   const url = approvalRow("mac", { ...request, elicitationMode: "url", url: "https://mains.dev/confirm" }, 2000);
   assert.equal(url.url, "https://mains.dev/confirm");
 });
+test("approval projections retain the broker incarnation without retaining an answer", () => {
+  const row = approvalRow("mac", { requestId: "permission", runId: "run", kind: "tool_approval", toolName: "Bash", timestamp: 1000, approvalToken: "incarnation-2" }, 2000);
+  assert.equal(row.approvalToken, "incarnation-2");
+  assert.equal("answer" in row, false);
+});

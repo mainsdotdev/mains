@@ -602,7 +602,14 @@ session, derives the account from authentication, and returns no credentials.
 
 The account DO caches one indexed D1 query over subscription and beta grants for 60 seconds and coalesces concurrent
 requests. It checks cached period expiry on every use, so the cache never extends
-the end of a subscription. Direct operator grants/revocations take up to 60 seconds
+the end of a subscription. An invalidated or over-age in-flight D1 receipt is
+discarded before permission is returned; its callers join the replacement read.
+Quota reads reacquire entitlement after asynchronous policy lookup, so expiry or
+revocation during that lookup cannot carry its earlier permission into publication.
+The transition rules and atomic operator/activation statements live in
+`src/entitlement-lifecycle.ts`; see [Entitlement lifecycle](ENTITLEMENT-LIFECYCLE.md)
+for the state graph, ownership and regression coverage.
+Direct operator grants/revocations take up to 60 seconds
 to appear at the hub; client refresh does not bypass that server cache. An idle
 client updates its displayed status on the next upload attempt or manual refresh;
 pending inactive clients check for renewal in the background. A future trusted
@@ -858,6 +865,13 @@ logging failure cannot change a quota or publication decision.
 
 ## R2 garbage collection
 
+`src/blob-lifecycle.ts` owns reservations, upload intents, immutable receipts,
+restart recovery, publication eligibility and deletion transitions. `quota.ts`
+applies account limits and authorization through that owner; `blob-gc.ts` installs
+the durable reference/inventory triggers. Normal and recovered receipts share
+one atomic commit, including GC grace renewal. No separate persisted phase or
+new storage schema is introduced.
+
 Every new upsert authenticates a sorted, deduplicated `header.blobs` list of
 `{ blobId, size }`, including an empty list for records with no blobs. The list
 must exactly match the decrypted manifests. The hub can correlate opaque records
@@ -901,6 +915,12 @@ finishes any pending deletion before reserving the same content again. Incomplet
 or collected blobs cannot acquire new record ACKs. Backends republish exact large
 values, captured/cache bytes or verified source files before retrying; unavailable
 bytes leave their changes queued.
+
+A failed blob does not stop independent deletions in the same bounded batch.
+Each blob is attempted at most once per pass; failed intents remain charged and
+fenced, and maintenance still reports the failure for alarm retry. A legacy
+upload recovered from R2 without an intent also renews the full publication
+grace period before it becomes collectible.
 
 Upgrade hub and backends together: earlier validators do not recognize the new
 authenticated header or `blobMissing` ACK. Backend migration `0038` runs a
@@ -1083,6 +1103,12 @@ hibernation. Completed discovery retains its marker, so a restart does not
 rescan the log. Empty passes read only; stream counters and permanent tombstones
 are retained. Existing blob-reference triggers release only removed log roots,
 with the same reservation/read protection and GC grace rules.
+
+Inventory 71 + 72 shares its transition rules in `src/hub-maintenance-lifecycle.ts`;
+see [Maintenance and snapshot consistency](MAINTENANCE-LIFECYCLE.md). Job progress
+and effects commit together, while the read-only export fence observes both SQL
+row changes and the current application schema. Compaction therefore invalidates
+a paginated capture even when it leaves stream sequence numbers unchanged.
 
 Records use XChaCha20-Poly1305 with fresh 24-byte nonces. HKDF-SHA256 derives
 separate body, record-id and blob-id keys from the account key. A fixed-order

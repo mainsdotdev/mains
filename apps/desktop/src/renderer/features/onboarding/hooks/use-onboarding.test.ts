@@ -15,7 +15,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import { fail, ok } from "../../../../shared/ipc-kit/service-response";
-import { setTransport, resetTransport } from "@/lib/transport";
+import { getTransport, setTransport, resetTransport } from "@/lib/transport";
 import { baseApi } from "@/lib/redux/api/baseApi";
 import {
   appSettingsApi,
@@ -207,6 +207,7 @@ function moveToLastStep(result: { current: ReturnType<typeof useOnboarding> }) {
 
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(document, "startViewTransition");
   vi.restoreAllMocks();
   stores
     .splice(0)
@@ -215,6 +216,76 @@ afterEach(() => {
 });
 
 describe("onboarding flow", () => {
+  it("retires a pending save across a transport swap away and back", async () => {
+    let release!: () => void;
+    const saveGate = new Promise<void>((resolve) => { release = resolve; });
+    const harness = createHarness({ saveGate });
+    const beforeComplete = vi.fn().mockResolvedValue(undefined);
+    const view = renderHook(() => useOnboarding(beforeComplete), { wrapper: harness.wrapper });
+    await waitFor(() => expect(view.result.current.selectedProvider).toBe("claude"));
+    moveToLastStep(view.result);
+    act(() => view.result.current.goNext());
+    await waitFor(() => expect(harness.invoke.mock.calls.filter(([channel]) => channel === CHANNELS.appSettings.update)).toHaveLength(1));
+    const original = getTransport();
+    act(() => { setTransport({ ...original }); setTransport(original); });
+    await act(async () => { release(); });
+    expect(beforeComplete).not.toHaveBeenCalled();
+    expect(harness.store.getState().appSettings.onboardingCompleted).toBe(false);
+  });
+
+  it.each(["unmount", "transport"])("retires a pending native handoff after %s", async (retirement) => {
+    let release!: () => void;
+    const beforeComplete = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const harness = createHarness();
+    const view = renderHook(() => useOnboarding(beforeComplete), { wrapper: harness.wrapper });
+    await waitFor(() => expect(view.result.current.selectedProvider).toBe("claude"));
+    moveToLastStep(view.result);
+    act(() => view.result.current.goNext());
+    await waitFor(() => expect(beforeComplete).toHaveBeenCalledOnce());
+    if (retirement === "unmount") view.unmount();
+    else {
+      const original = getTransport();
+      act(() => { setTransport({ ...original }); setTransport(original); });
+    }
+    await act(async () => { release(); });
+    expect(harness.store.getState().appSettings.onboardingCompleted).toBe(false);
+  });
+
+  it("keeps save admission closed until a deferred view transition commits", async () => {
+    let commit!: () => void, painted!: () => void;
+    const finished = new Promise<void>((resolve) => { painted = resolve; });
+    Object.defineProperty(document, "startViewTransition", { configurable: true, value: (update: () => void) => {
+      commit = update; return { finished };
+    } });
+    const harness = createHarness();
+    const view = renderHook(() => useOnboarding(), { wrapper: harness.wrapper });
+    await waitFor(() => expect(view.result.current.selectedProvider).toBe("claude"));
+    moveToLastStep(view.result);
+    const finish = view.result.current.goNext;
+    act(finish);
+    await waitFor(() => expect(commit).toBeTypeOf("function"));
+    act(() => { finish(); finish(); });
+    expect(harness.invoke.mock.calls.filter(([channel]) => channel === CHANNELS.appSettings.update)).toHaveLength(1);
+    expect(harness.store.getState().appSettings.onboardingCompleted).toBe(false);
+    act(() => { commit(); commit(); });
+    expect(harness.store.getState().appSettings.onboardingCompleted).toBe(true);
+    await act(async () => { painted(); });
+  });
+  it("does not complete setup from a save response received after its screen unmounted", async () => {
+    let release!: () => void;
+    const saveGate = new Promise<void>((resolve) => { release = resolve; });
+    const harness = createHarness({ saveGate });
+    const beforeComplete = vi.fn().mockResolvedValue(undefined);
+    const view = renderHook(() => useOnboarding(beforeComplete), { wrapper: harness.wrapper });
+    await waitFor(() => expect(view.result.current.selectedProvider).toBe("claude"));
+    moveToLastStep(view.result);
+    act(() => view.result.current.goNext());
+    await waitFor(() => expect(harness.invoke.mock.calls.filter(([channel]) => channel === CHANNELS.appSettings.update)).toHaveLength(1));
+    view.unmount();
+    await act(async () => { release(); });
+    expect(beforeComplete).not.toHaveBeenCalled();
+    expect(harness.store.getState().appSettings.onboardingCompleted).toBe(false);
+  });
   function bundledOptions(variant: "claude" | "copilot" = "claude") {
     const { providerId } = getProviderVariant(variant);
     return onboardingProviders(

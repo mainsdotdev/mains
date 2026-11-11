@@ -1,3 +1,4 @@
+import { openFileWrites } from "../../runtime/file-write-lifecycle";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { fileExplorerService } from "./fileExplorer.service";
@@ -17,6 +18,7 @@ import type {
 // IPC Handlers
 // ─────────────────────────────────────────────────────────────
 export function registerFileExplorerIpc(): void {
+  openFileWrites();
   ipcMain.handle(
     CHANNELS.fileExplorer.readDirectory,
     handle((options: ReadDirectoryOptions) => fileExplorerService.readDirectory(options)),

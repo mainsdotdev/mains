@@ -38,8 +38,10 @@ function statusLabel(status: string, isRunning: boolean): string {
       return "Budget reached";
     case "usageLimited":
       return "Usage limit reached";
-    default:
+    case "active":
       return isRunning ? "Pursuing goal" : "Goal active";
+    default:
+      return `Goal status: ${status}`;
   }
 }
 
@@ -52,8 +54,11 @@ function statusIconColor(status: string): string {
       return "text-warning";
     case "paused":
       return "text-primary-600 dark:text-primary-400";
-    default: // active + complete
+    case "active":
+    case "complete":
       return "text-success";
+    default:
+      return "text-primary-600 dark:text-primary-400";
   }
 }
 
@@ -76,11 +81,19 @@ function formatUsage(goal: GoalInfo): string | null {
  * controls. Returns null when there's no goal.
  */
 export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath }: GoalSummaryBarProps) {
-  const { goal, updateObjective, clear, pause, resume, isBusy } = useCodexGoal(providerId, runId, enabled);
+  const controls = useCodexGoal(providerId, runId, enabled);
+  if (!controls.goal) return null;
+  const goal = controls.goal;
+  return <GoalSummaryContent key={JSON.stringify([controls.scopeKey, goal.threadId, goal.createdAt, goal.objective, goal.status === "complete"])}
+    goal={goal} controls={controls} isRunning={isRunning} rootPath={rootPath} />;
+}
+
+function GoalSummaryContent({ goal, controls, isRunning, rootPath }: {
+  goal: GoalInfo; controls: ReturnType<typeof useCodexGoal>; isRunning: boolean; rootPath?: string;
+}) {
+  const { updateObjective, clear, pause, resume, isBusy } = controls;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-
-  if (!goal) return null;
 
   const isComplete = goal.status === "complete";
   const iconColor = statusIconColor(goal.status);
@@ -92,10 +105,10 @@ export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath
     setEditing(true);
   };
 
-  const commitEdit = () => {
+  const commitEdit = async () => {
     const next = draft.trim();
-    if (next && next !== goal.objective) updateObjective(next);
-    setEditing(false);
+    if (!next || isBusy) return;
+    if (next === shortObjective || await updateObjective(next)) setEditing(false);
   };
 
   return (
@@ -122,6 +135,7 @@ export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath
               <Button
                 variant="icon"
                 tooltip="Edit goal"
+                aria-label="Edit goal"
                 type="button"
                 onClick={startEdit}
                 disabled={isBusy}
@@ -133,6 +147,7 @@ export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath
               <Button
                 variant="icon"
                 tooltip="Pause goal (keep tracking, run continues)"
+                aria-label="Pause goal"
                 type="button"
                 onClick={() => pause()}
                 disabled={isBusy}
@@ -144,6 +159,7 @@ export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath
               <Button
                 variant="icon"
                 tooltip="Resume goal"
+                aria-label="Resume goal"
                 type="button"
                 onClick={() => resume()}
                 disabled={isBusy}
@@ -155,6 +171,7 @@ export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath
             <Button
               variant="icon"
               tooltip="Clear goal"
+              aria-label="Clear goal"
               type="button"
               onClick={() => clear()}
               disabled={isBusy}
@@ -171,6 +188,7 @@ export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath
               autoFocus
               rows={3}
               value={draft}
+              disabled={isBusy}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -187,9 +205,10 @@ export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath
             <Button
               variant="icon"
               tooltip="Save"
+              aria-label="Save"
               type="button"
               onClick={commitEdit}
-              disabled={isBusy}
+              disabled={isBusy || !draft.trim()}
               className="mt-0.5 text-success enabled:hover:text-success dark:enabled:hover:text-success"
             >
               <Check className="size-3.5" />
@@ -197,6 +216,7 @@ export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath
             <Button
               variant="icon"
               tooltip="Cancel"
+              aria-label="Cancel"
               type="button"
               onClick={() => setEditing(false)}
               className="mt-0.5"

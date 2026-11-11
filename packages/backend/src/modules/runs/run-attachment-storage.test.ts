@@ -11,7 +11,7 @@ import { runs, runArtifacts, runAttachments } from "../../db/schema";
 import { configureBackendRuntime, getBackendRuntime } from "../../runtime/backend-runtime";
 import { runsRepo } from "./runs.repo";
 import { startAttachmentMaintenance, stopAttachmentMaintenance } from "./run-attachment-maintenance";
-import { attachmentDescriptor, prepareRunAttachments, pruneAttachmentOrphans, pruneUnreferencedAttachments, resolveRunAttachment } from "./run-attachment-storage";
+import { attachmentDescriptor, listRunAttachmentRecords, prepareRunAttachments, pruneAttachmentOrphans, pruneUnreferencedAttachments, resolveRunAttachment } from "./run-attachment-storage";
 import { readAttachmentImage } from "./run-attachment-images";
 import { describeAttachmentFile, readAttachmentChunk } from "./run-attachment-download";
 import { OUTPUT_CHUNK_BYTES } from "@mains/contracts/run-outputs";
@@ -42,6 +42,29 @@ afterEach(async () => {
 });
 
 describe("durable prompt attachments", () => {
+  it.each(["pdf", "docx", "pptx"])("excludes linked %s feedback captures from the output library", async (documentType) => {
+    const run = createRun(db);
+    const [ordinary, capture] = (await prepareRunAttachments(run.id, [upload("page.png", "ordinary"), upload("page.png", "annotation")]))!;
+    createRunArtifact(db, { runId: run.id, kind: "user-prompt" as "file", metadata: JSON.stringify({ documentAnnotations: [{
+      id: "annotation-1", documentType, filePath: `/work/file.${documentType}`, fileName: `file.${documentType}`, pageNumber: 2, comment: "Rewrite it",
+      screenshotAttachmentId: capture.attachmentId, elements: [{ id: "region-1", type: "region", name: "Selected area", text: "", rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 } }],
+    }] }) });
+    const records = listRunAttachmentRecords(run.id);
+    expect(records.find((record) => record.attachment.id === capture.attachmentId)?.isBrowserAnnotation).toBe(true);
+    expect(records.find((record) => record.attachment.id === ordinary.attachmentId)?.isBrowserAnnotation).toBe(false);
+  });
+  it("marks only the linked presentation capture as annotation context", async () => {
+    const run = createRun(db);
+    const [ordinary, capture] = (await prepareRunAttachments(run.id, [upload("slide.png", "upload"), upload("slide.png", "annotation")]))!;
+    createRunArtifact(db, { runId: run.id, kind: "user-prompt" as "file", metadata: JSON.stringify({
+      presentationAnnotations: [{ id: "selection-1", filePath: "/work/deck.pptx", fileName: "deck.pptx", slideNumber: 1,
+        comment: "Change it", screenshotAttachmentId: capture.attachmentId,
+        elements: [{ id: "text-1", type: "text", name: "Title", text: "Hello", rect: { x: 0, y: 0, width: 0.5, height: 0.5 } }] }],
+    }) });
+    const records = listRunAttachmentRecords(run.id);
+    expect(records.find((record) => record.attachment.id === capture.attachmentId)?.isBrowserAnnotation).toBe(true);
+    expect(records.find((record) => record.attachment.id === ordinary.attachmentId)?.isBrowserAnnotation).toBe(false);
+  });
   it("rechecks attachment ownership between chunks even when a fork retains the same cached original", async () => {
     const run = createRun(db);
     const fork = createRun(db);

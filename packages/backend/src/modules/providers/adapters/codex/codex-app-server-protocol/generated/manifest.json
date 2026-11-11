@@ -1,5 +1,5 @@
 {
-  "cliVersion": "0.166.0",
+  "cliVersion": "0.167.0",
   "files": [
     {
       "path": "AbsolutePathBuf.ts",
@@ -31,11 +31,15 @@
     },
     {
       "path": "ContentItem.ts",
-      "sha256": "85966046f5abe7d74754cb5a8dc385a13f87de5daa3cc12fe2258efc5226e935"
+      "sha256": "b2edc531ffa54672edfdb4471b7d050466fb04db5ae6caae73c28950cfbe948b"
     },
     {
       "path": "ConversationTextRole.ts",
       "sha256": "d9ce254fc7b36d90a47c34c1e092fb7d67d1e8a9082998d9687dc0db936ff021"
+    },
+    {
+      "path": "ForcedLoginMethod.ts",
+      "sha256": "d31940427b6bb684eddcf7111e836741da092bab2679a6735ca4dc38b031f030"
     },
     {
       "path": "FunctionCallOutputBody.ts",
@@ -63,7 +67,7 @@
     },
     {
       "path": "InitializeCapabilities.ts",
-      "sha256": "dee58273861971585e0615804eaf50ba4690cd4846f02ed352ed211887a022a5"
+      "sha256": "744ccfe4b48827f351d00f4fcaf8b28596f1710f37036850ffeda1b4e4412408"
     },
     {
       "path": "InitializeParams.ts",
@@ -112,6 +116,10 @@
     {
       "path": "MultiAgentMode.ts",
       "sha256": "08d4263debb8fa07f316cff2edbfafe4c4e995e0d5b4d53e8ffacf4743c4bbc7"
+    },
+    {
+      "path": "PathUri.ts",
+      "sha256": "09025ff80c70c56847e4fc968e7840f873477b51926923fa3d3c7eb627508e23"
     },
     {
       "path": "Personality.ts",
@@ -202,6 +210,10 @@
       "sha256": "a1b284386beaf4c0c3e96aaee8f6e8dede09212b4f41977baf8fbccc637bf236"
     },
     {
+      "path": "WebSearchMode.ts",
+      "sha256": "15d2ceaf186c01ede537d8d98ead3c9bf803b1144416f070420898c66e98f62d"
+    },
+    {
       "path": "serde_json/JsonValue.ts",
       "sha256": "8697aaaa4cbe8f91492fe36dc545cc53a26e53143371c22c08385969d4e3cc61"
     },
@@ -226,8 +238,24 @@
       "sha256": "ea590d1f4fd2021082260a30baea62c8fcf55b97c3c8eac6a0e16bba5a1d2e58"
     },
     {
+      "path": "v2/AdditionalFileSystemPermissions.ts",
+      "sha256": "c26c68250553698af4f9affd0b991e64e5841384f07199940d6f211f0cef11be"
+    },
+    {
+      "path": "v2/AdditionalNetworkPermissions.ts",
+      "sha256": "7b1a37a73699dfea562f7b4cc1b71cffa8f42371b11248dc7ff7582c0f8e3f94"
+    },
+    {
+      "path": "v2/AdditionalPermissionProfile.ts",
+      "sha256": "fc0a2e090759c96073369e1bccad3ee5c0e88f508508cb9e406fda17ca4942a2"
+    },
+    {
       "path": "v2/AgentMessageDelivery.ts",
       "sha256": "2fa497987aab791b697c9dee5cdd634ec566bf0b82cd56b5a796f26241a95957"
+    },
+    {
+      "path": "v2/AllowDenyRequirement.ts",
+      "sha256": "1679d0a3a65f1da1e274a5540f31e0d6ccc0afea2c18cad9ca8db8fa2f3d2c01"
     },
     {
       "path": "v2/AppBranding.ts",
@@ -266,6 +294,18 @@
       "sha256": "d7a94bc5357bc37ae06cfeb6561517f71bb0df065b71a2658663e00b890f8c4a"
     },
     {
+      "path": "v2/ApplicationNetworkRequirements.ts",
+      "sha256": "e772cc7a75721ec22f65ac40a23c8b6dfc1032420a9c997c4930d8ebd88a04ec"
+    },
+    {
+      "path": "v2/ApplicationRequirements.ts",
+      "sha256": "34f1431ebcd7c3d388def81685ea7de5705a0cbb511004ba725c09c8d32a3c01"
+    },
+    {
+      "path": "v2/ApplicationStorageRequirements.ts",
+      "sha256": "5441265fdd0d079687b26cce781b0c8904be1270f90866d3f437c3ff210b8311"
+    },
+    {
       "path": "v2/ApprovalsReviewer.ts",
       "sha256": "0ba0d2403a6987128af58e825fb0d0e05d61891ce5a35e7ba1f94afe51a57630"
     },
@@ -302,12 +342,40 @@
       "sha256": "5487c76860dfb8aca91c318c1b7da4381dbd10423a4bcec8e8345c21b746bf95"
     },
     {
+      "path": "v2/AutoReviewDecisionSource.ts",
+      "sha256": "48c550df663534041f46a789478f539b06ffc66bab5ae19ebcada1a402283193"
+    },
+    {
+      "path": "v2/AutoReviewRequirements.ts",
+      "sha256": "06f524009ba3c67c54612c9b878dbf90a0e1176c79b10e51c17feaf1464d50dd"
+    },
+    {
+      "path": "v2/BrowserUseAccessApprovalLifetime.ts",
+      "sha256": "e875e8c91e97c70297d7a1f10bd7f28daf21724ae717c74720207d635d6c29b4"
+    },
+    {
+      "path": "v2/BrowserUseExtensionRequirements.ts",
+      "sha256": "829306dfba77e055c42fd1228d7e788aaa735ab199328275b6ea81f9c598d87f"
+    },
+    {
+      "path": "v2/BrowserUseOriginPolicy.ts",
+      "sha256": "8d1fed58578639b06bc28d535b517d1ad2f92281cd9fae29586d924ae3daed04"
+    },
+    {
+      "path": "v2/BrowserUseRequirements.ts",
+      "sha256": "7053f50b05b1f3f2244c9c5a7861fbf29b0de12fc998fa36f5d8cf247674a1f2"
+    },
+    {
       "path": "v2/ByteRange.ts",
       "sha256": "dd61c4b71554053feaecec39f41015a5db3869b28b19b7c9a85ee73f3502a4e4"
     },
     {
       "path": "v2/CapabilityRootLocation.ts",
       "sha256": "e878b98b335a089fbbb0de774ed6e0f3caf2e9a2a8c1a4aacebbf0c1f335b6a4"
+    },
+    {
+      "path": "v2/CliAuthCredentialsStoreMode.ts",
+      "sha256": "cbc7dd8d2014edb1ba032ecbd73851b1ea4f9ced19b076a75894554261a5caf9"
     },
     {
       "path": "v2/CodexErrorInfo.ts",
@@ -334,12 +402,44 @@
       "sha256": "df8e6909e1e46e352ada64e766c3d6c93552199ce2448b35b83912efb2fe8917"
     },
     {
+      "path": "v2/CommandExecutionApprovalDecision.ts",
+      "sha256": "9283d7206bc8df353c4fcc9a14682b5f69f7f288d666f975356762ed49d5bc6b"
+    },
+    {
+      "path": "v2/CommandExecutionApprovalKind.ts",
+      "sha256": "f76c84822bbe645eab3cae2976f9f41721c57e68624a5ab3be3e06c0d9dec694"
+    },
+    {
+      "path": "v2/CommandExecutionRequestApprovalParams.ts",
+      "sha256": "531eaecb38d8c93ed389ada2482f6e2d7d6fa5351adf423706bf6e6eeddf60dc"
+    },
+    {
+      "path": "v2/CommandExecutionRequestApprovalResponse.ts",
+      "sha256": "454ceee4decc66a9c070273d4344fa8a0187732cd884b8b60edda3a17766aa95"
+    },
+    {
       "path": "v2/CommandExecutionSource.ts",
       "sha256": "f915112d4ef81b80d65ab1c5c106fa7e46f24ee2d7969f752abda1c786e53327"
     },
     {
       "path": "v2/CommandExecutionStatus.ts",
       "sha256": "8e0e8aa0a3f4caeaa32f2ac2aa62d2e9737004f5ab33f5f37e2dfe114d4e3301"
+    },
+    {
+      "path": "v2/ComputerUseMacosRequirements.ts",
+      "sha256": "9df6f49694770d55fe4efcc699cadcdc0810d64aecb7cf8e0fbf7407f5fde831"
+    },
+    {
+      "path": "v2/ComputerUseRequirements.ts",
+      "sha256": "1968947d0babfa4ca4dd2ac0108507abdf48bc87582756cc2cdb72dabd1ad9f7"
+    },
+    {
+      "path": "v2/ComputerUseWindowsExeRequirement.ts",
+      "sha256": "543572fdb89928afc4a1b3108823d52f0cda7c62f30f3835fd256745b84b37e8"
+    },
+    {
+      "path": "v2/ComputerUseWindowsRequirements.ts",
+      "sha256": "028f12173094ef53bd0719aa7601401311b15a570b4dfbf0606eb3b3648b137e"
     },
     {
       "path": "v2/ConfigLayerMetadata.ts",
@@ -350,12 +450,28 @@
       "sha256": "e8f7cd6746f8bb9b8c347489978703c8b11499aecfab8f4f17b602b0083772e6"
     },
     {
+      "path": "v2/ConfigRequirements.ts",
+      "sha256": "90b084324a8ab762a9c9cbabca9c75ab35b8ec5336bc646f7c7cfdac3560ef4c"
+    },
+    {
+      "path": "v2/ConfigRequirementsReadResponse.ts",
+      "sha256": "24ac24461744f9e6970293b5d1c637ede29204eb0aa12e9f691d7ee8ee45d6d1"
+    },
+    {
       "path": "v2/ConfigValueWriteParams.ts",
       "sha256": "3149d1f1e7d3902d905920b00ff8d4598d2636543e23a0c3d38d49dcfbec5535"
     },
     {
       "path": "v2/ConfigWriteResponse.ts",
       "sha256": "62c3b082b9ecb53ca8abb9fd65c7e3216b0875cce72db7dec3b1ecfdbfda121c"
+    },
+    {
+      "path": "v2/ConfiguredHookHandler.ts",
+      "sha256": "b52a77fa08ea3695ad128f5d184c7b464bbf4dd66e93850434c0b8e3f02322e1"
+    },
+    {
+      "path": "v2/ConfiguredHookMatcherGroup.ts",
+      "sha256": "9e9dba35de714a0e39c2d4f0b4611475744903f97fe55a3f606b5783acdff501"
     },
     {
       "path": "v2/ConnectorMetadata.ts",
@@ -406,6 +522,10 @@
       "sha256": "bd4b06afea9395a426f8facc9d800f4b201fea44fab667f854710acff4c8f393"
     },
     {
+      "path": "v2/ExecPolicyAmendment.ts",
+      "sha256": "eae3c3f9c81a40ffffe5de29e274b322db8200591ba39306daa27794a2deffa0"
+    },
+    {
       "path": "v2/ExperimentalFeature.ts",
       "sha256": "2de02b9c1426f552df38b289f638a4f41bc0395477532fdffe36ea390be078fa"
     },
@@ -420,6 +540,42 @@
     {
       "path": "v2/ExperimentalFeatureStage.ts",
       "sha256": "70de16db64325f2201f5b10b6492b4a13d6acd1c02f65f8d8af1738d2fb751d8"
+    },
+    {
+      "path": "v2/FeedbackRequirements.ts",
+      "sha256": "b18c4d4c789febe44547d53d7716d94bbb4068f1d07653ea50b1ecb6248ca3ec"
+    },
+    {
+      "path": "v2/FileChangeApprovalDecision.ts",
+      "sha256": "8a5aa00ea5e9c7b0856da23daa6e799dc1c5f15d16553ce59390ec73b65c8430"
+    },
+    {
+      "path": "v2/FileChangePatchUpdatedNotification.ts",
+      "sha256": "c7a287dd5f82dbe8ae6018240d3b284999c5c9e578dc5c6d0772cf6e75103de1"
+    },
+    {
+      "path": "v2/FileChangeRequestApprovalParams.ts",
+      "sha256": "32ec2fef83e1e17db98ea0b9b86baaa5c8bf2e8979988f5ad8fef3a93ab15074"
+    },
+    {
+      "path": "v2/FileChangeRequestApprovalResponse.ts",
+      "sha256": "527a9af90f753e2b7f1852415523443fc9745376bb2c4b0b735f900c8da8fc71"
+    },
+    {
+      "path": "v2/FileSystemAccessMode.ts",
+      "sha256": "36689572cd7c9e23ec2fa01912b8ca2abd331608dfd89b691b87351b5e520389"
+    },
+    {
+      "path": "v2/FileSystemPath.ts",
+      "sha256": "e0279cd26713e84898352d23f02798912ca2ff69c796f58ff9606a6cd5f4d45f"
+    },
+    {
+      "path": "v2/FileSystemSandboxEntry.ts",
+      "sha256": "f27cc590b6aa56f41c8c9168c6012c0e562e952bc2657421e9fa48c108084151"
+    },
+    {
+      "path": "v2/FileSystemSpecialPath.ts",
+      "sha256": "b38fce284661d5495836cf6c0833547912845146cb06de542041ec776a4d9bfd"
     },
     {
       "path": "v2/FileUpdateChange.ts",
@@ -442,16 +598,92 @@
       "sha256": "ae05c1fdc69bba0d6aea22f2f7a8e2f7c5b494330d6827cfac9ec9a9cc290269"
     },
     {
+      "path": "v2/GuardianApprovalReview.ts",
+      "sha256": "b4f724935efcf6cd0a9f0e909ea1596e8dd8796b98cf37b6ab578cb7b9fa4f02"
+    },
+    {
+      "path": "v2/GuardianApprovalReviewAction.ts",
+      "sha256": "94ed8d354f4defbba03fe8ac820ebc6940784415ebf81464e42345e22285de8d"
+    },
+    {
+      "path": "v2/GuardianApprovalReviewStatus.ts",
+      "sha256": "ed176cb0601517ff3aa9225f43c5393ff451517dd26f7cc04548083afc535cb8"
+    },
+    {
+      "path": "v2/GuardianCommandSource.ts",
+      "sha256": "7529b5e63b8a8a210f457359a81a51e868005ca01d5eae4b5293c86f2dda43ea"
+    },
+    {
+      "path": "v2/GuardianRiskLevel.ts",
+      "sha256": "0da8ac0802b03984034228cb30e306b973eef94eeb9d8fab76d1d540c3747d91"
+    },
+    {
+      "path": "v2/GuardianUserAuthorization.ts",
+      "sha256": "fa796e3b1473b7ff56348b9f50b6aeb98dd292474edbc3840449e172372fc75a"
+    },
+    {
+      "path": "v2/HookCompletedNotification.ts",
+      "sha256": "fa6c0c44e380f38c0be9ce191d97a6c5b7d770627c971243ac3c94d856d458da"
+    },
+    {
       "path": "v2/HookEventName.ts",
       "sha256": "cce8e9bd86a770292ee6c7906f12b0075335ec4919ce40d8bfcc67459ed18291"
+    },
+    {
+      "path": "v2/HookExecutionMode.ts",
+      "sha256": "e8bcb5b57feed919b55542cf80efa7f0b78b3997cad57e44021b038f7346a230"
+    },
+    {
+      "path": "v2/HookHandlerType.ts",
+      "sha256": "4e4510716a8e20d046664be0f94ab0e1483553cae73ab4e38bf46e4e226ad0c7"
+    },
+    {
+      "path": "v2/HookOutputEntry.ts",
+      "sha256": "e4a991c8eb052e88110cb888aa81bd1fb72bec9bc15ffa8d7bee3f4d2bc47ecf"
+    },
+    {
+      "path": "v2/HookOutputEntryKind.ts",
+      "sha256": "8bc9293bf87538a9c2b47b74649d4f8bc9faaccac23aff7d1d15b09f0456d83d"
     },
     {
       "path": "v2/HookPromptFragment.ts",
       "sha256": "391260c67d7fbd0aaf3f641c3764892f655871047085df45048057066db1d0ea"
     },
     {
+      "path": "v2/HookRunStatus.ts",
+      "sha256": "026f4356b110a32c2b2a04d4807284099c9e2ebf42520bb414e2f16a1cbeeaeb"
+    },
+    {
+      "path": "v2/HookRunSummary.ts",
+      "sha256": "8bac935076e972bcd76736eeecd40131f6749a5b275a34e25917f2966cc1d915"
+    },
+    {
+      "path": "v2/HookScope.ts",
+      "sha256": "d9d65a4afcd428a6124ccc40b3ca1bfc95430be484030f717100482a78b46ce6"
+    },
+    {
+      "path": "v2/HookSource.ts",
+      "sha256": "c4e539bd5f7b0dd619cfd26008266e5e87be5834679ac438cc232f84d0d76d09"
+    },
+    {
+      "path": "v2/HookStartedNotification.ts",
+      "sha256": "ee85efdaba45fbd3987464847838cd080b6822bc1fd1a6f1700424d798338869"
+    },
+    {
+      "path": "v2/InAppBrowserRequirements.ts",
+      "sha256": "73d0005f4f7b95c5a47c11d1f1e873a6ab6fc59dd4a3ff99d6aa9f676c7eada9"
+    },
+    {
       "path": "v2/InstalledApp.ts",
       "sha256": "85049cd062a9f535f4573d57c5a0d92de3ea9d454078e0fd6f5b81402b73b9f6"
+    },
+    {
+      "path": "v2/ItemGuardianApprovalReviewCompletedNotification.ts",
+      "sha256": "2010fd12652c8b0ee44326e70e71e3a28c7a369048da8c3b6de2513e8b9a8264"
+    },
+    {
+      "path": "v2/ItemGuardianApprovalReviewStartedNotification.ts",
+      "sha256": "ce6d02408c0d0ebb01909d0edd7c19920b5220e4ceb58f1bc4bb4ac014237c8c"
     },
     {
       "path": "v2/ListMcpServerStatusParams.ts",
@@ -460,6 +692,10 @@
     {
       "path": "v2/ListMcpServerStatusResponse.ts",
       "sha256": "30a823dce1d1f7a8d94e03e4716c1a8bf7dab253d222286ee5316f2982c1df27"
+    },
+    {
+      "path": "v2/ManagedHooksRequirements.ts",
+      "sha256": "1e25efc77dd56689597758162faa48065ea97e4857ab0c3d3a45f36fca99c84b"
     },
     {
       "path": "v2/MarketplaceInterface.ts",
@@ -586,12 +822,28 @@
       "sha256": "5969afbe718e9a6270fe1e4f58315d7dbffe2e2275973b9c93e5abb2e8daa675"
     },
     {
+      "path": "v2/ModelSafetyBufferingUpdatedNotification.ts",
+      "sha256": "08a27ee8fb5e86a41cdac88583c112a49b5a356d1fe9d001a725e3441a0e4f90"
+    },
+    {
       "path": "v2/ModelServiceTier.ts",
       "sha256": "c926a88f721864aa8fedf5c46b118d76baf58384aa880221d422d00759bb35a2"
     },
     {
       "path": "v2/ModelUpgradeInfo.ts",
       "sha256": "0cd44f4b05d66c802b4f155afd7c3b976d6939913b57bd91635adf6e4511321a"
+    },
+    {
+      "path": "v2/ModelVerification.ts",
+      "sha256": "ad5aaf545bede542d3c69eda3232e9c5a197689d9e69aa5daa9311b6c61845e6"
+    },
+    {
+      "path": "v2/ModelVerificationNotification.ts",
+      "sha256": "e9ad43805e1e3112aff77615a4f6b63a7278ff682021d4b9d3deba85bbdf2eac"
+    },
+    {
+      "path": "v2/ModelsRequirements.ts",
+      "sha256": "e2e1a08ba2d6d4fa0959d462faa08940b38c6505101e84591a640863ea1d05ed"
     },
     {
       "path": "v2/MultiAgentVersion.ts",
@@ -602,8 +854,60 @@
       "sha256": "3622aa2cccf2a1835cd561d97187db75eba8cc379c03e56b5d1c91ab901da9dc"
     },
     {
+      "path": "v2/NetworkApprovalContext.ts",
+      "sha256": "f5fb2588e2a7caf33d4d25f8f98e03f6abd58e1cfc65d6ae6d918536d417c825"
+    },
+    {
+      "path": "v2/NetworkApprovalProtocol.ts",
+      "sha256": "50489d7ee01bb75b2ad453e2f976e8b92a3334a973637c0c36ccd1c547a0d894"
+    },
+    {
+      "path": "v2/NetworkDomainPermission.ts",
+      "sha256": "d05231ccfc807c968b53f2c2071a1931ab666ecca958240e10c31ff1ea3592d6"
+    },
+    {
+      "path": "v2/NetworkPolicyAmendment.ts",
+      "sha256": "2219666281d984a6edf51fcdbd93df7b88e4c51f4fe8a306989e68f430ffb2fe"
+    },
+    {
+      "path": "v2/NetworkPolicyRuleAction.ts",
+      "sha256": "8d6d5aa29ce47bdaec03eedc56543629344b9a424a293258116f44a212b507fc"
+    },
+    {
+      "path": "v2/NetworkRequirements.ts",
+      "sha256": "f69311c87d1e0c9bbe8fbae161d767f62582064a0b9da16c9ec5b9c42f7f5aae"
+    },
+    {
+      "path": "v2/NetworkUnixSocketPermission.ts",
+      "sha256": "f1c8c0d1c7b2846111db2e4b54cdb0d931394b1eba68a47e6d3f7aeaaef8a8d9"
+    },
+    {
+      "path": "v2/NewThreadModelDefaults.ts",
+      "sha256": "a37e23807eede7e17e8d45daf2029827a05a9384e30c19eb0172888f95c64a0b"
+    },
+    {
       "path": "v2/NonSteerableTurnKind.ts",
       "sha256": "94d47f993e7c00ca78c5c2b28d71fab767ce59ff8da60c4458bffff08755e863"
+    },
+    {
+      "path": "v2/OtelExporter.ts",
+      "sha256": "a696c57f2cea754b745772998ff2553379e89c35ab00772df3025ee0afda24c9"
+    },
+    {
+      "path": "v2/OtelHttpProtocol.ts",
+      "sha256": "bf5c0d73928555e847bd08341843a988cbdf4801bb89b163a0e7c6df8bb6d1d2"
+    },
+    {
+      "path": "v2/OtelRequirements.ts",
+      "sha256": "9d35e391a43ff5b9708160124181785c9e90cfcafa96c36e70cc382b52181ff8"
+    },
+    {
+      "path": "v2/OtelTlsConfig.ts",
+      "sha256": "6a15191c52f4e9f7b860e415494c43badd621b7551288698ea0074924dd690ff"
+    },
+    {
+      "path": "v2/OtelToolResultLogConfig.ts",
+      "sha256": "11d382f7569c880b5c9f72c5a3f0c9656d79bdc756f69bd5fdc0bf886919ec74"
     },
     {
       "path": "v2/OverriddenMetadata.ts",
@@ -616,6 +920,18 @@
     {
       "path": "v2/PatchChangeKind.ts",
       "sha256": "20e95907d698efbef2fa9d9ab00392b10caf127dfc5e0df1ba9878ad6f42531d"
+    },
+    {
+      "path": "v2/PermissionProfileListParams.ts",
+      "sha256": "cf28b4491d5288d3039c3e6b8eca84db14ed8c71a9efbda6f8145d8d34960921"
+    },
+    {
+      "path": "v2/PermissionProfileListResponse.ts",
+      "sha256": "5ff6a99f0a0cc3956de6e980ad45d50c48e5319a9d421f11a85c7c96d3d92644"
+    },
+    {
+      "path": "v2/PermissionProfileSummary.ts",
+      "sha256": "1202513133554ed4a96b916b5117ff2a0e5bbded9d326f44d39d622a418944c7"
     },
     {
       "path": "v2/PluginAuthPolicy.ts",
@@ -758,6 +1074,18 @@
       "sha256": "5d1f91ca1bff16730604514f5d6a6102c74e5912af7f5c8fa474d6fcf8c90dde"
     },
     {
+      "path": "v2/RequestHeader.ts",
+      "sha256": "b5586c34b9df257cc7c7b9cdb0251522967e32de984261aaff34414c7536bee0"
+    },
+    {
+      "path": "v2/RequestPermissionProfile.ts",
+      "sha256": "b79d118592a8d3281f00e3defa0eb4abc96da4b42387d6c4ccf0d8a5be60926e"
+    },
+    {
+      "path": "v2/ResidencyRequirement.ts",
+      "sha256": "e854e4f012b0411546853b97687871b3c7f1849f174f777abf7cf02df2abfc7d"
+    },
+    {
       "path": "v2/ReviewDelivery.ts",
       "sha256": "af8f6ac320f51a53a4f2515082a13bd86b96e958cd5677649d168ccb5c4ad73b"
     },
@@ -848,6 +1176,10 @@
     {
       "path": "v2/SpendControlLimitSnapshot.ts",
       "sha256": "c58ca129df392a50bd08ad077fc862a89f15981d91c059a1aeac33b8b318493f"
+    },
+    {
+      "path": "v2/StrictReviewRequiredNotification.ts",
+      "sha256": "dfaea356e9ed91ff3e5c11fe119d8423726158b1ba3f05574689abea904bb250"
     },
     {
       "path": "v2/SubAgentActivityKind.ts",
@@ -1167,11 +1499,15 @@
     },
     {
       "path": "v2/UserInput.ts",
-      "sha256": "c033ab3da70c17ceae32e8b4770a2557f8ef9f59c07c5419387a45c55193fc59"
+      "sha256": "a07ec6b0d7ff04a6ec92458f0ecb171f7daa54e6e3bde661b5ca94e5e9495b1e"
     },
     {
       "path": "v2/WebSearchAction.ts",
       "sha256": "f1dc1197e35b48fd16134a80353ebb606256126a634b4580406a5bffed1b0395"
+    },
+    {
+      "path": "v2/WindowsSandboxImplementation.ts",
+      "sha256": "e40b5d778bc10e30866d804dcc254f9852f2b48f90a621ff50649051f82c3ba2"
     },
     {
       "path": "v2/WorkspaceRouting.ts",

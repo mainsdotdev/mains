@@ -180,6 +180,22 @@ describe("R2 collection through the real local Worker/DO/R2 runtime", () => {
     await elapseGrace(account); await a.compact(); expect(await exists(retried.keys)).toEqual([true, true]);
   });
 
+  it("renews publication grace when recovering a physical upload without an intent receipt", async () => {
+    const account = randomUUID(), a = await client(account), ref = blob(100);
+    const signed = await presign(account, ref);
+    const cap = new URL(signed.chunks[0].url).searchParams.get("cap")!;
+    const key = JSON.parse(Buffer.from(cap.split(".")[1], "base64url").toString()).key;
+    // A pre-intent upload/recovery can have R2 bytes but no SQLite receipt.
+    await (await hub.bucket()).put(key, randomBytes(140));
+    await hub.quotaSql(account, "UPDATE quota_chunks SET expires_at=0; UPDATE blob_objects SET delete_after=0");
+    await hub.evict(account);
+    expect(await usage(account)).toMatchObject({ reservedBytes: 0, blobBytes: 140 });
+    await a.compact();
+    expect(await exists([key])).toEqual([true]);
+    expect(await a.push([record("recovered", [ref])])).toMatchObject({ results: [{ seq: 1 }] });
+    expect(await usage(account)).toMatchObject({ reservedBytes: 0, blobBytes: 140 });
+  });
+
   it("renews an in-flight upload's grace and keeps identical blob ids isolated between accounts", async () => {
     const first = randomUUID(), second = randomUUID(), a = await client(first), b = await client(second), ref = blob();
     const one = await upload(first, ref), two = await upload(second, ref);

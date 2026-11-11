@@ -46,6 +46,26 @@ export function mcpAppId(token: string | undefined): string | undefined {
   }
 }
 
+export type McpAppLaunchIssue =
+  | { kind: "unsupported"; message: string; webUrl: string }
+  | { kind: "connection"; message: string };
+
+/** Handle confirmed host restrictions and missing accounts before loading a UI. */
+export function mcpAppLaunchIssue(app: McpAppEntrypoint | undefined): McpAppLaunchIssue | undefined {
+  if (app?.server !== "codex_apps") return undefined;
+  if (app.tool.startsWith("notion.")) return {
+    kind: "unsupported",
+    message: "Notion's page viewer is not supported in Mains. Open Notion in your browser to view and edit pages. You can still use the plugin in chat.",
+    webUrl: "https://app.notion.com/",
+  };
+  if (app.tool.startsWith("canva.") &&
+    (app.linkId === null || app.linkId?.startsWith("synthetic_link::"))) return {
+    kind: "connection",
+    message: "Your Canva account isn't connected. Reconnect it in Plugins, then reopen the app.",
+  };
+  return undefined;
+}
+
 const UNSUPPORTED_APP_INTERFACE_NOTICE = "This app's interface is currently not supported in Mains. You can continue using the plugin in chat.";
 
 /** Known UI limitations do not disable plugin tools or app discovery. */

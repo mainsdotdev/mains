@@ -22,7 +22,9 @@ import { simpleGit, type SimpleGit } from "simple-git";
  * file as "not in HEAD" and deleted it instead of restoring it.
  */
 export function openGit(rootPath?: string, signal?: AbortSignal): SimpleGit {
-  return simpleGit(rootPath, { config: ["core.quotePath=false"], abort: signal });
+  return simpleGit(rootPath, { config: ["core.quotePath=false"], abort: signal,
+    ...(signal ? { completion: { onClose: true, onExit: false } } : {}),
+  });
 }
 
 const MAX_UNTRACKED_INLINE_BYTES = 256 * 1024;

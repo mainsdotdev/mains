@@ -178,11 +178,19 @@ describe("Codex voice preview", () => {
     expect(screen.getByRole("button", { name: "Preview Cove voice" })).toBeTruthy();
   });
 
-  it("still saves new server voices when no bundled preview exists", async () => {
+  it("prioritizes voices with previews and still saves voices without them", async () => {
     const options = props();
-    options.catalog!.voices.push("future");
+    options.catalog!.voices = ["future", "cove", "aube", "maple", "juniper"];
     const view = render(<CodexVoiceSettings {...options} />);
-    await chooseVoice("Future");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Voice" })); });
+    expect(screen.getAllByRole("option")).toEqual([
+      screen.getByRole("option", { name: "Cove" }),
+      screen.getByRole("option", { name: "Maple" }),
+      screen.getByRole("option", { name: "Juniper" }),
+      screen.getByRole("option", { name: /^Future\s*No preview$/ }),
+      screen.getByRole("option", { name: /^Aube\s*No preview$/ }),
+    ]);
+    await act(async () => { fireEvent.click(screen.getByRole("option", { name: /^Future\s*No preview$/ })); });
     expect(options.onUpdate).toHaveBeenCalledWith({ realtimeVoice: "future" });
     expect(audio).toHaveLength(0);
     view.rerender(<CodexVoiceSettings {...options} config={{ realtimeVoice: "future" }} />);
@@ -221,4 +229,29 @@ describe("Codex voice preview", () => {
     expect(source.disconnect).toHaveBeenCalledOnce();
     expect(analyser.disconnect).toHaveBeenCalledOnce();
   });
+});
+
+it("does not stop a replacement sample when an earlier voice-preference save fails late", async () => {
+  let complete!: (saved: boolean) => void;
+  const options = props();
+  options.onUpdate = vi.fn().mockReturnValueOnce(new Promise<boolean>((resolve) => { complete = resolve; })).mockResolvedValue(true);
+  render(<CodexVoiceSettings {...options} />);
+  await chooseVoice("Maple"); await chooseVoice("Juniper");
+  expect(audio[0].pause).toHaveBeenCalledOnce(); expect(audio[1].play).toHaveBeenCalledOnce();
+  await act(async () => { complete(false); });
+  expect(audio[1].pause).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Stop voice preview" })).toBeTruthy();
+});
+
+it("does not stop replay started after a pending voice preference was manually stopped", async () => {
+  let complete!: (saved: boolean) => void; const options = props();
+  options.onUpdate = vi.fn(() => new Promise<boolean>((resolve) => { complete = resolve; }));
+  render(<CodexVoiceSettings {...options} />); await chooseVoice("Maple");
+  fireEvent.click(screen.getByRole("button", { name: "Stop voice preview" })); fireEvent.click(screen.getByRole("button", { name: "Preview Cove voice" }));
+  await act(async () => { complete(false); }); expect(audio[1].pause).not.toHaveBeenCalled();
+});
+it.each(["rejected", "thrown"])("settles preview ownership when saving a voice is %s", async (failure) => {
+  const options = props(); options.onUpdate = vi.fn(() => { if (failure === "thrown") throw new Error("Save failed"); return Promise.reject(new Error("Save failed")); });
+  render(<CodexVoiceSettings {...options} />); await chooseVoice("Maple");
+  expect(audio[0].pause).toHaveBeenCalledOnce(); expect(screen.getByRole("button", { name: "Preview Cove voice" })).toBeTruthy();
 });

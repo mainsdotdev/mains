@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { TranscriptScroll, hasScrollMomentum } from "../src/features/runs/lib/transcript-scroll.ts";
+import { TranscriptScroll, createTranscriptPaging, hasScrollMomentum } from "../src/features/runs/lib/transcript-scroll.ts";
 import { historyLoaded, historyRequest, historyState, setHistoryFollowing, forgetHistory } from "../src/backend/run-history.ts";
 
 const geometry = (overrides = {}) => ({ frame: 800, content: 2200, offset: 1434, restOffset: -100, bottomInset: 34, ...overrides });
+
+test("jumping from history chases the live tail only after that page is confirmed", () => {
+  const intent = new TranscriptScroll(), paging = createTranscriptPaging(intent);
+  intent.pause();
+  const decision = intent.jump({ hasOlder: true, hasNewer: true });
+  assert.equal(decision.page, "latest");
+  const request = paging.begin(null, true);
+  assert.equal(intent.pinned, false, "growing historical content cannot move the reader while latest loads");
+  assert.equal(request.land(), true);
+  assert.equal(intent.pinned, true);
+  request.finish();
+});
 let serial = 0;
 function conversation(hasNewer = false) {
   const runId = `scroll-${serial++}`, backendId = "scroll-test";

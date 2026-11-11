@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { promises as fs } from "fs";
+import { promises as fs, lstatSync } from "fs";
 import { execFileSync } from "node:child_process";
 import * as path from "path";
 import * as os from "os";
@@ -419,6 +419,36 @@ describe("fileExplorerService", () => {
   });
 
   describe("writeFileText", () => {
+    it("rejects changed content even when another writer restores the old mtime", async () => {
+      const filePath = path.join(tmpDir, "versioned.txt");
+      await fs.writeFile(filePath, "v1"); await fs.utimes(filePath, new Date(1000), new Date(1000));
+      const baseline = await fileExplorerService.readFileText({ filePath });
+      await fs.writeFile(filePath, "v2"); await fs.utimes(filePath, new Date(1000), new Date(1000));
+      await expect(fileExplorerService.writeFileText({ filePath, content: "stale editor", expectedMtimeMs: baseline.mtimeMs, expectedVersion: baseline.version })).rejects.toThrow("File changed on disk");
+      expect(await fs.readFile(filePath, "utf8")).toBe("v2");
+    });
+
+    it("allows only one writer to accept a shared baseline, including a symlink alias", async () => {
+      const filePath = path.join(tmpDir, "concurrent.txt"), alias = path.join(tmpDir, "alias.txt");
+      await fs.writeFile(filePath, "original"); await fs.utimes(filePath, new Date(1000), new Date(1000));
+      await fs.symlink(filePath, alias);
+      const baseline = (await fs.stat(filePath)).mtimeMs;
+      const write = fs.writeFile.bind(fs);
+      let release!: () => void, enter!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; }), entered = new Promise<void>((resolve) => { enter = resolve; });
+      const canonicalFile = await fs.realpath(filePath);
+      const realpath = vi.spyOn(fs, "realpath").mockResolvedValue(canonicalFile);
+      const stat = vi.spyOn(fs, "lstat").mockImplementation(async (file) => lstatSync(file));
+      const native = vi.spyOn(fs, "writeFile").mockImplementationOnce(async (...args) => { enter(); await gate; return write(...args); });
+      const first = fileExplorerService.writeFileText({ filePath, content: "first", expectedMtimeMs: baseline }); await entered;
+      const second = fileExplorerService.writeFileText({ filePath: alias, content: "second", expectedMtimeMs: baseline });
+      let results!: PromiseSettledResult<unknown>[];
+      try { await new Promise<void>((resolve) => setImmediate(resolve)); }
+      finally { release(); results = await Promise.allSettled([first, second]); realpath.mockRestore(); stat.mockRestore(); native.mockRestore(); }
+      expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
+      expect(await fs.readFile(filePath, "utf8")).toBe("first");
+    });
+
     it("puts a save on the worktree's write ledger while a run is live", async () => {
       execFileSync("git", ["init", "-q", "-b", "main"], { cwd: tmpDir });
       await fs.mkdir(path.join(tmpDir, "src"));

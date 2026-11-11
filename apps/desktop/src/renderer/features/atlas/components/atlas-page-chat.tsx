@@ -45,6 +45,7 @@ import {
   setTransientUploadsForOwner,
 } from "@/features/workspace/hooks/use-transient-uploads";
 import { useWorkspaceRuns } from "@/features/workspace/hooks/use-workspace-runs";
+import { createUploadSubmission } from "@/features/workspace/lib/document-lifecycle";
 import { useToolApproval } from "@/features/workspace/hooks/use-tool-approval";
 import {
   composerAnnotationPrompt,
@@ -268,7 +269,8 @@ function AtlasWorkingChat({
     const transport = getTransport();
     const intent = conversation.beginSettingsIntent();
     const settings = conversation.settings;
-    const submittedFiles = files;
+    const uploadSubmission = createUploadSubmission(files);
+    const submittedFiles = uploadSubmission.files;
     const submittedContext = contextItems;
     try {
       const instruction =
@@ -321,9 +323,7 @@ function AtlasWorkingChat({
         update({ draft: "" });
       setTransientUploadsForOwner(
         composerKey,
-        getTransientUploadsForOwner(composerKey).filter(
-          (file) => !submittedFiles.includes(file),
-        ),
+        uploadSubmission.accept(getTransientUploadsForOwner(composerKey)),
       );
       const workspace = store.getState().workspace;
       const latestContext =
@@ -341,6 +341,7 @@ function AtlasWorkingChat({
     } catch (error) {
       toast.error(atlasError(error));
     } finally {
+      uploadSubmission.close();
       pending.current = false;
       setPreparing(false);
     }

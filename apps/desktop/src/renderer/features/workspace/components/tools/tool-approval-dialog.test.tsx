@@ -32,6 +32,25 @@ function request(requestedSchema: Record<string, unknown> = schema, requestId = 
 
 afterEach(cleanup);
 
+describe("Codex revised file approvals", () => {
+  it("shows the latest multi-file patches under the revised approval identity", async () => {
+    const onRespond = vi.fn();
+    const original: ToolApprovalRequest = { requestId: "patch", approvalToken: "old", runId: "run", kind: "tool_approval", toolName: "Edit", timestamp: 1,
+      toolInput: { file_path: "one.ts", diff: "@@ -1 +1 @@\n-old\n+original" } };
+    const view = render(<ToolApprovalDialog request={original} onRespond={onRespond} variant="codex" />);
+    expect(screen.getByTestId("approval-diff").textContent).toContain("original");
+    view.rerender(<ToolApprovalDialog request={{ ...original, approvalToken: "new", toolName: "FileChange", toolInput: { changes: [
+      { path: "one.ts", kind: "update", diff: "@@ -1 +1 @@\n-old\n+revised" },
+      { path: "two.ts", kind: "add", diff: "@@ -0,0 +1 @@\n+new file" },
+    ] } }} onRespond={onRespond} variant="codex" />);
+    expect(screen.getAllByTestId("approval-diff")).toHaveLength(2);
+    expect(screen.getAllByTestId("approval-diff").map((node) => node.textContent).join(" ")).toContain("revised");
+    expect(screen.queryByText(/original/)).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Allow" }));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith("patch", true, undefined);
+  });
+});
+
 describe("Copilot tool approval presentation", () => {
   function toolRequest(overrides: Partial<ToolApprovalRequest> = {}): ToolApprovalRequest {
     return { requestId: "tool-1", runId: "run-1", kind: "tool_approval", toolName: "Edit", timestamp: 1, ...overrides };
@@ -278,4 +297,14 @@ describe("MCP form approval dialog", () => {
     await user.click(screen.getByRole("button", { name: "Submit" }));
     expect(onRespond).toHaveBeenCalledExactlyOnceWith("form-2", true, JSON.stringify({ calendar: "work", seats: 2, notify: true, people: ["okan"] }));
   });
+});
+it("retains form values when the backend rejects an answer and permits retry", async () => {
+  const respond = vi.fn().mockRejectedValueOnce(new Error("Approval connection unavailable")).mockResolvedValue(undefined);
+  const user = userEvent.setup();
+  render(<ToolApprovalDialog request={request({ properties: { title: { type: "string", title: "Title" } }, required: ["title"] })} onRespond={respond} />);
+  await user.type(screen.getByRole("textbox", { name: "Title" }), "Keep this answer");
+  await user.click(screen.getByRole("button", { name: "Submit" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("unavailable");
+  expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("Keep this answer");
+  await user.click(screen.getByRole("button", { name: "Submit" })); expect(respond).toHaveBeenCalledTimes(2);
 });

@@ -1,8 +1,51 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { exchangeWebLogin, takeWebLoginCode } from "./web-login";
 
 describe("browser web login", () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  it("settles the login deadline even if a late fetch ignores abort", async () => {
+    vi.useFakeTimers();
+    let finish!: (value: Response) => void;
+    const fetchImpl = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    let failure: unknown;
+    const exchange = exchangeWebLogin("code", fetchImpl as typeof fetch).catch((error) => { failure = error; });
+    try {
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toMatch(/timed out/i);
+    } finally { finish(new Response(null, { status: 204 })); await exchange; }
+  });
+
+  it("settles caller cancellation without waiting for an abort-ignoring fetch", async () => {
+    let finish!: (value: Response) => void;
+    const fetchImpl = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    const controller = new AbortController();
+    const pending = exchangeWebLogin("code", fetchImpl as typeof fetch, controller.signal);
+    const refused = expect(pending).rejects.toThrow("canceled");
+    controller.abort(); await refused;
+    finish(new Response(null, { status: 204 }));
+  });
+
+  it("does not invoke fetch for an already retired caller", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn();
+    const controller = new AbortController(); controller.abort();
+    await expect(exchangeWebLogin("code", fetchImpl as typeof fetch, controller.signal)).rejects.toThrow("canceled");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["success", "HTTP failure", "fetch failure"])("releases its deadline after %s", async (outcome) => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(async () => {
+      if (outcome === "fetch failure") throw new Error("Network unavailable");
+      return new Response(null, { status: outcome === "success" ? 204 : 503 });
+    });
+    if (outcome === "success") await exchangeWebLogin("code", fetchImpl as typeof fetch);
+    else await expect(exchangeWebLogin("code", fetchImpl as typeof fetch)).rejects.toThrow();
+    expect(vi.getTimerCount()).toBe(0);
+  });
   beforeEach(() => {
     localStorage.clear();
     window.history.replaceState(null, "", "/");

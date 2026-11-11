@@ -12,6 +12,9 @@ import {
 import { createClaudeDriver, mapSDKMessage } from "./claude.driver";
 import { runsRepo } from "../../../runs/runs.repo";
 import { bridgeService } from "../../../bridge";
+import { guardsService } from "../../../guards/guards.service";
+import { appSettingsService } from "../../../appSettings";
+import { clearAllPendingRequests, handleToolApprovalResponse, listPendingApprovals } from "../../../runs/user-input-broker";
 import type { WorkRunEvent } from "../../../../../shared/adapter.types";
 
 const sdk = vi.hoisted(() => ({
@@ -22,14 +25,16 @@ const sdk = vi.hoisted(() => ({
   usage: vi.fn(),
   close: vi.fn(),
   getSessionMessages: vi.fn(),
+  deleteSession: vi.fn(),
+  getSessionInfo: undefined as ReturnType<typeof vi.fn> | undefined,
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: sdk.query,
   createSdkMcpServer: undefined,
   tool: undefined,
-  getSessionInfo: undefined,
-  deleteSession: undefined,
+  get getSessionInfo() { return sdk.getSessionInfo; },
+  deleteSession: sdk.deleteSession,
   getSessionMessages: sdk.getSessionMessages,
 }));
 vi.mock("../../../guards/guards.service", () => ({
@@ -51,6 +56,8 @@ describe("Claude runtime without a system CLI", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sdk.deleteSession.mockReset().mockResolvedValue(undefined);
+    sdk.getSessionInfo = undefined;
     vi.spyOn(runsRepo, "findClaudeTaskAnchorsByRun").mockResolvedValue([]);
     clearClaudeCliCache();
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), "mains-claude-runtime-"));
@@ -94,6 +101,7 @@ esac
       { value: "sonnet", displayName: "Claude Sonnet", description: "Claude Sonnet 5 · Live catalogue" },
     ]);
     sdk.initializationResult.mockResolvedValue({
+      capabilities: ["mcp_call_check_permissions_v1"],
       commands: [{ name: "help", description: "Live command", argumentHint: "" }],
     });
     sdk.accountInfo.mockResolvedValue({ email: "legacy@example.test", subscriptionType: "Pro" });
@@ -112,11 +120,329 @@ esac
   });
 
   afterEach(() => {
+    clearAllPendingRequests();
     restoreRuntime();
     clearClaudeCliCache();
     vi.unstubAllEnvs();
     fs.rmSync(fixture, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  async function finishEmptyTurn(driver: ReturnType<typeof createClaudeDriver>, runId: string,
+    configSnapshot?: Record<string, unknown>) {
+    const prepared = await driver.createSession({ runId, accountId: "account-1", goal: "Start",
+      execution: { workspaceId: null, cwd: fixture }, configSnapshot });
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close, async *[Symbol.asyncIterator]() {} }));
+    await driver.executePrompt(prepared.session, prepared.prompt, () => {}, new AbortController().signal);
+    return prepared;
+  }
+
+  it.each([undefined, "0"])("opts model runs into native MCP tasks while preserving override %s", async (override) => {
+    vi.stubEnv("CLAUDE_AUTO_BACKGROUND_TASKS", override);
+    const driver = createClaudeDriver({ settingSources: [] });
+    const request = { runId: "mcp-tasks", accountId: "account-1", goal: "Build report",
+      execution: { workspaceId: null, cwd: fixture } };
+    const first = await driver.createSession(request);
+    const resumed = await driver.resumeSession!({ ...request, message: "Continue" });
+    const forked = await driver.forkSession!({ ...request, runId: "mcp-fork", sourceRunId: request.runId, message: "Fork" });
+    try {
+      for (const prepared of [first, resumed, forked]) {
+        expect((prepared.session as any).options.env.CLAUDE_AUTO_BACKGROUND_TASKS).toBe(override ?? "1");
+        // With no separate task-stop UI, global Stop must still kill background work.
+        expect((prepared.session as any).options.perTaskStopAffordance).toBeUndefined();
+      }
+    } finally {
+      await driver.shutdown?.();
+    }
+  });
+
+  it("drains MCP notifications after the foreground result without turning a task failure into a run failure", async () => {
+    const events: WorkRunEvent[] = [];
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close, async *[Symbol.asyncIterator]() {
+      const base = { session_id: options.sessionId, uuid: "u", parent_tool_use_id: null };
+      yield { ...base, type: "assistant", message: { role: "assistant", content: [
+        { type: "tool_use", id: "export", name: "mcp__reports__export", input: {} },
+      ] } };
+      yield { ...base, type: "system", subtype: "task_started", task_id: "report", run_id: "001",
+        tool_use_id: "export", task_type: "mcp_task", description: "Export report" };
+      yield { ...base, type: "user", message: { role: "user", content: [
+        { type: "tool_result", tool_use_id: "export", content: "Running in background" },
+      ] } };
+      yield { ...base, type: "result", subtype: "success", stop_reason: "end_turn", result: "Export started",
+        is_error: false, total_cost_usd: 0, num_turns: 1, duration_ms: 1, modelUsage: {}, permission_denials: [] };
+      yield { ...base, type: "system", subtype: "task_progress", task_id: "report", run_id: "001", summary: "Writing rows" };
+      yield { ...base, type: "system", subtype: "task_notification", task_id: "report", run_id: "001",
+        status: "failed", summary: "Export service unavailable" };
+    } }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await driver.createSession({ runId: "mcp-late-result", accountId: "account-1", goal: "Export",
+      execution: { workspaceId: null, cwd: fixture } });
+    try {
+      const outcome = await driver.executePrompt(prepared.session, prepared.prompt, (event) => { events.push(event); }, new AbortController().signal);
+      expect(outcome.status).toBe("succeeded");
+      expect(events).toContainEqual(expect.objectContaining({ type: "task", toolCallId: "export", taskType: "mcp_task",
+        status: "running", summary: "Writing rows" }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "task", toolCallId: "export", taskType: "mcp_task",
+        status: "failed", error: "Export service unavailable" }));
+    } finally {
+      await driver.cleanup?.(prepared.session);
+    }
+  });
+
+  it("interrupts background MCP work on Stop and discards its late result", async () => {
+    const events: WorkRunEvent[] = [];
+    const request = vi.fn().mockResolvedValue({});
+    const abort = new AbortController();
+    let ready!: () => void;
+    const started = new Promise<void>((resolve) => { ready = resolve; });
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close, request, async *[Symbol.asyncIterator]() {
+      const base = { session_id: options.sessionId, uuid: "u", parent_tool_use_id: null };
+      yield { ...base, type: "system", subtype: "task_started", task_id: "report", run_id: "001",
+        tool_use_id: "export", task_type: "mcp_task", description: "Export report" };
+      ready();
+      await new Promise<void>((resolve) => options.abortController.signal.addEventListener("abort", () => resolve(), { once: true }));
+      yield { ...base, type: "system", subtype: "task_notification", task_id: "report", run_id: "001",
+        status: "completed", resource_links: [{ uri: "https://example.test/late.csv", name: "Late" }] };
+    } }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await driver.createSession({ runId: "mcp-stop", accountId: "account-1", goal: "Export",
+      execution: { workspaceId: null, cwd: fixture } });
+    const execution = driver.executePrompt(prepared.session, prepared.prompt, (event) => { events.push(event); }, abort.signal);
+    await started;
+    abort.abort();
+    await expect(execution).resolves.toMatchObject({ status: "canceled" });
+    expect(request).toHaveBeenCalledWith({ subtype: "interrupt", cancel_queued: true });
+    expect(sdk.close).toHaveBeenCalledOnce();
+    expect(events.filter((event) => event.type === "task")).toEqual([
+      expect.objectContaining({ phase: "started", taskType: "mcp_task" }),
+    ]);
+    await driver.cleanup?.(prepared.session);
+  });
+
+  it.each([undefined, "continue", "block"] as const)("preserves the hook failure policy %s", async (onFailure) => {
+    const failure = new Error("hook failed");
+    const driver = createClaudeDriver({ settingSources: [], hooks: {
+      PreToolUse: [{ onFailure, hooks: [async () => { throw failure; }] }],
+    } });
+    const prepared = await driver.createSession({ runId: "hook-policy", accountId: "account-1", goal: "Start",
+      execution: { workspaceId: null, cwd: fixture } });
+    const matcher = (prepared.session as any).options.hooks.PreToolUse[0];
+    expect(matcher.onFailure).toBe(onFailure);
+    const answer = matcher.hooks[0]({}, "call", { signal: new AbortController().signal });
+    if (onFailure) await expect(answer).rejects.toBe(failure);
+    else await expect(answer).resolves.toEqual({});
+    await driver.shutdown?.();
+  });
+
+  it.each(["config_file_invalid", "initialize_not_first", "future_startup_failure"])(
+    "reports %s as a failed turn even when the SDK iterator exits normally", async (reason) => {
+      sdk.query.mockImplementation(({ options }) => ({ close: sdk.close, async *[Symbol.asyncIterator]() {
+        yield { type: "result", subtype: "error_during_execution", is_error: true,
+          startup_failure_reason: reason, errors: ["Configuration: broken.json"], session_id: options.sessionId };
+      } }));
+      const driver = createClaudeDriver({ settingSources: [] });
+      const prepared = await driver.createSession({ runId: reason, accountId: "account-1", goal: "Start",
+        execution: { workspaceId: null, cwd: fixture } });
+      const events: WorkRunEvent[] = [];
+      const result = await driver.executePrompt(prepared.session, prepared.prompt, (event) => { events.push(event); }, new AbortController().signal);
+      expect(result).toMatchObject({ status: "failed", summary: expect.stringContaining("broken.json") });
+      expect(events).toContainEqual(expect.objectContaining({ type: "log", level: "error",
+        metadata: { source: "startup_failure", reason } }));
+      if (reason === "config_file_invalid") expect(result.summary).toContain("invalid JSON");
+      expect(sdk.query.mock.calls[0][0].options.env.CLAUDE_CODE_STARTUP_FAILURE_RESULTS).toBe("1");
+      await driver.shutdown?.();
+    });
+
+  it.each(["ENOSPC", "EDQUOT"])("keeps the final answer and warns about %s after the last result", async (code) => {
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close, async *[Symbol.asyncIterator]() {
+      yield { type: "result", subtype: "success", is_error: false, result: "Completed answer",
+        modelUsage: {}, session_id: options.sessionId };
+      yield { type: "system", subtype: "session_writes_lost", error_code: code,
+        lost: ["transcript", "global_config"], transcript_session_ids: ["earlier-session"], session_id: options.sessionId };
+    } }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await driver.createSession({ runId: code, accountId: "account-1", goal: "Start",
+      execution: { workspaceId: null, cwd: fixture } });
+    const events: WorkRunEvent[] = [];
+    await expect(driver.executePrompt(prepared.session, prepared.prompt, (event) => { events.push(event); }, new AbortController().signal))
+      .resolves.toMatchObject({ status: "succeeded" });
+    expect(events).toContainEqual(expect.objectContaining({ type: "artifact", content: "Completed answer" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "log", level: "warn",
+      message: expect.stringContaining("Resuming it may miss messages"), metadata: {
+        source: "session_writes_lost", errorCode: code, lost: ["transcript", "global_config"], transcriptSessionIds: ["earlier-session"],
+      } }));
+    await driver.shutdown?.();
+  });
+
+  it.each(["ENOTEMPTY", "EACCES"])("retains the session reference when native deletion fails with %s", async (code) => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await finishEmptyTurn(driver, "partial-delete");
+    const update = vi.spyOn(runsRepo, "updateRun").mockResolvedValue(null);
+    sdk.deleteSession.mockRejectedValueOnce(Object.assign(new Error("Files remain"), { code }));
+    await expect(driver.deleteSession!("partial-delete")).rejects.toThrow(code === "ENOTEMPTY" ? "only partly deleted" : "Files remain");
+    expect(update).not.toHaveBeenCalled();
+    await driver.deleteSession!("partial-delete");
+    expect(sdk.deleteSession).toHaveBeenNthCalledWith(2, prepared.sessionId);
+    expect(update).toHaveBeenCalledExactlyOnceWith("partial-delete", { sessionId: null });
+    await driver.shutdown?.();
+  });
+
+  it("clears an already missing native session", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await finishEmptyTurn(driver, "missing-delete");
+    const update = vi.spyOn(runsRepo, "updateRun").mockResolvedValue(null);
+    sdk.deleteSession.mockRejectedValueOnce(new Error(`Session ${prepared.sessionId} not found in any project directory`));
+    await expect(driver.deleteSession!("missing-delete")).resolves.toBeUndefined();
+    expect(update).toHaveBeenCalledWith("missing-delete", { sessionId: null });
+    await driver.shutdown?.();
+  });
+
+  it("forks a native session with its own id and the inherited permission restrictions", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const source = await finishEmptyTurn(driver, "fork-source");
+    const fork = await driver.forkSession!({ runId: "fork-target", sourceRunId: "fork-source", accountId: "account-1",
+      message: "Continue separately", execution: { workspaceId: null, cwd: fixture },
+      configSnapshot: { permissionMode: "default" }, toolPolicy: { allowedTools: ["Read"], disallowedTools: ["Write"] } });
+    expect(fork.sessionId).not.toBe(source.sessionId);
+    await expect(driver.executePrompt(fork.session, fork.prompt, () => {}, new AbortController().signal))
+      .resolves.toMatchObject({ status: "succeeded" });
+    expect(sdk.query.mock.calls.at(-1)![0].options).toMatchObject({ resume: source.sessionId, forkSession: true,
+      sessionId: fork.sessionId, permissionMode: "default", allowedTools: ["Read"], disallowedTools: ["Write"] });
+    await driver.shutdown?.();
+  });
+
+  it.each([
+    { phase: "live", approved: true }, { phase: "live", approved: false },
+    { phase: "idle", approved: true }, { phase: "idle", approved: false },
+  ])("routes a $phase MCP permission decision to its conversation (approved: $approved)", async ({ phase, approved }) => {
+    vi.spyOn(appSettingsService, "getSettings").mockResolvedValue({ notifyOnToolApproval: false } as any);
+    const executed = vi.fn();
+    const request = vi.fn();
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() { await finished; yield* []; },
+      initializationResult: sdk.initializationResult,
+      mcpServerStatus: vi.fn().mockResolvedValue([{ name: "fixture", status: "connected", tools: [{ name: "update" }] }]),
+      request: request.mockImplementation(async (raw) => {
+        expect(raw.check_permissions).toBe(true);
+        const answer = await options.canUseTool("mcp__fixture__update", {}, {
+          signal: new AbortController().signal, requestId: "widget-approval", toolUseID: "widget-call",
+          matchedAskRule: { source: "user", toolName: "mcp__fixture__update" },
+        });
+        if (answer.behavior !== "allow") throw new Error("The tool did not run: permission denied");
+        executed();
+        return { response: { content: [{ type: "text", text: "Updated" }] } };
+      }),
+    }));
+    const driver = createClaudeDriver({ settingSources: [], permissionMode: "bypassPermissions" });
+    let turn: Promise<unknown> | undefined;
+    if (phase === "idle") await finishEmptyTurn(driver, "widget-run");
+    else {
+      const prepared = await driver.createSession({ runId: "widget-run", accountId: "account-1", goal: "Start",
+        execution: { workspaceId: null, cwd: fixture } });
+      turn = driver.executePrompt(prepared.session, prepared.prompt, () => {}, new AbortController().signal);
+      await vi.waitFor(() => expect(sdk.query).toHaveBeenCalledTimes(1));
+    }
+    const pending = driver.callMcpAppTool!({ runId: "widget-run", server: "fixture", tool: "update" });
+    const settled = Promise.allSettled([pending]);
+    try {
+      await vi.waitFor(() => expect(listPendingApprovals("widget-run")).toHaveLength(1));
+      const approval = listPendingApprovals("widget-run")[0];
+      expect(executed).not.toHaveBeenCalled();
+      handleToolApprovalResponse({ requestId: approval.requestId, approvalToken: approval.approvalToken, approved });
+      const [result] = await settled;
+      expect(result.status).toBe(approved ? "fulfilled" : "rejected");
+      expect(executed).toHaveBeenCalledTimes(approved ? 1 : 0);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(listPendingApprovals("widget-run")).toEqual([]);
+    } finally { finish(); await turn; await driver.shutdown?.(); }
+  });
+
+  it("cancels a pending idle MCP approval when its host shuts down", async () => {
+    vi.spyOn(appSettingsService, "getSettings").mockResolvedValue({ notifyOnToolApproval: false } as any);
+    let decision: unknown;
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close, initializationResult: sdk.initializationResult,
+      mcpServerStatus: vi.fn().mockResolvedValue([{ name: "fixture", status: "connected", tools: [{ name: "update" }] }]),
+      request: async () => {
+        decision = await options.canUseTool("mcp__fixture__update", {}, {
+          signal: new AbortController().signal, requestId: "closing-widget", toolUseID: "widget-call", defaultToNo: true,
+        });
+        throw new Error("The tool did not run");
+      },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    await finishEmptyTurn(driver, "closing-widget-run");
+    const call = driver.callMcpAppTool!({ runId: "closing-widget-run", server: "fixture", tool: "update" });
+    const settled = Promise.allSettled([call]);
+    await vi.waitFor(() => expect(listPendingApprovals("closing-widget-run")).toHaveLength(1));
+    await driver.shutdown?.();
+    expect((await settled)[0].status).toBe("rejected");
+    await vi.waitFor(() => expect(decision).toMatchObject({ behavior: "deny" }));
+    expect(listPendingApprovals("closing-widget-run")).toEqual([]);
+  });
+
+  it("never replays an MCP App call after the live control channel closes", async () => {
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    const request = vi.fn().mockRejectedValue(new Error("Query closed before response"));
+    sdk.query.mockImplementation(() => ({ close: sdk.close, initializationResult: sdk.initializationResult,
+      mcpServerStatus: vi.fn().mockResolvedValue([{ name: "fixture", status: "connected", tools: [{ name: "update" }] }]), request,
+      async *[Symbol.asyncIterator]() { await finished; yield* []; },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await driver.createSession({ runId: "closed-widget", accountId: "account-1", goal: "Start",
+      execution: { workspaceId: null, cwd: fixture } });
+    const turn = driver.executePrompt(prepared.session, prepared.prompt, () => {}, new AbortController().signal);
+    await vi.waitFor(() => expect(sdk.query).toHaveBeenCalledTimes(1));
+    try {
+      await expect(driver.callMcpAppTool!({ runId: "closed-widget", server: "fixture", tool: "update" })).rejects.toThrow("Query closed");
+      expect(sdk.query).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally { finish(); await turn; await driver.shutdown?.(); }
+  });
+
+  it("refuses an MCP App call when the CLI cannot enforce permissions", async () => {
+    const request = vi.fn();
+    sdk.initializationResult.mockResolvedValueOnce({ capabilities: [] });
+    sdk.query.mockImplementation(() => ({ close: sdk.close, initializationResult: sdk.initializationResult, request }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    await finishEmptyTurn(driver, "old-widget");
+    await expect(driver.callMcpAppTool!({ runId: "old-widget", server: "fixture", tool: "update" }))
+      .rejects.toThrow("cannot check MCP App permissions");
+    expect(request).not.toHaveBeenCalled();
+    await driver.shutdown?.();
+  });
+
+  it("keeps idle MCP permission modes separate for conversations in the same directory", async () => {
+    const resource = vi.fn().mockResolvedValue({ contents: [] });
+    sdk.query.mockImplementation(() => ({ close: sdk.close,
+      mcpServerStatus: vi.fn().mockResolvedValue([]), readMcpResource: resource,
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    await finishEmptyTurn(driver, "plan-widget", { permissionMode: "plan" });
+    await finishEmptyTurn(driver, "edit-widget", { permissionMode: "acceptEdits" });
+    sdk.query.mockClear();
+    await Promise.all(["plan-widget", "edit-widget"].map((runId) =>
+      driver.readMcpAppResource!({ runId, server: "fixture", uri: "ui://fixture/app" })));
+    expect(sdk.query).toHaveBeenCalledTimes(2);
+    expect(sdk.query.mock.calls.map(([{ options }]) => options.permissionMode)).toEqual(["plan", "acceptEdits"]);
+    for (const [{ options }] of sdk.query.mock.calls) expect(options.canUseTool).toBeTypeOf("function");
+    await driver.shutdown?.();
+  });
+
+  it("restores the saved tool restrictions for an MCP host after restart", async () => {
+    sdk.getSessionInfo = vi.fn().mockResolvedValue({ cwd: fixture });
+    vi.spyOn(runsRepo, "findRunById").mockResolvedValue({ providerId: "claude_code", sessionId: "saved-native-session",
+      configSnapshot: { permissionMode: "default" }, toolPolicySnapshot: { allowedTools: ["Read"], disallowedTools: ["Write"] } } as any);
+    sdk.query.mockImplementation(() => ({ close: sdk.close,
+      mcpServerStatus: vi.fn().mockResolvedValue([]), readMcpResource: vi.fn().mockResolvedValue({ contents: [] }),
+    }));
+    const driver = createClaudeDriver({ settingSources: [], permissionMode: "bypassPermissions" });
+    await driver.readMcpAppResource!({ runId: "restored-widget", server: "fixture", uri: "ui://fixture/app" });
+    expect(sdk.query.mock.calls[0][0].options).toMatchObject({ permissionMode: "default",
+      allowedTools: ["Read"], disallowedTools: ["Write"], settings: { permissions: { allow: ["Read"], deny: ["Write"] } } });
+    await driver.shutdown?.();
   });
 
   it("uses the bundled executable for runs, the live catalogue, commands and account probes", async () => {
@@ -140,8 +466,44 @@ esac
       expect(options.env).not.toHaveProperty("ANTHROPIC_API_KEY");
       expect(options.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
     }
-    expect(sdk.close).toHaveBeenCalledTimes(2);
+    expect(sdk.close).toHaveBeenCalledTimes(3);
     expect(cliCalls()).toContain("auth status --json");
+  });
+
+  it.each(["last reader leaves", "driver shuts down"])("shares plugin discovery and kills both CLI processes when %s", async (reason) => {
+    vi.spyOn(os, "homedir").mockReturnValue(fixture);
+    fs.writeFileSync(bundled, `#!${process.execPath}
+const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(callsFile)}, process.pid + "\\n");
+setInterval(() => {}, 1000);
+`);
+    const driver = createClaudeDriver({ settingSources: [] });
+    const first = new AbortController();
+    const second = new AbortController();
+    const a = driver.listPlugins!(first.signal);
+    const b = driver.listPlugins!(second.signal);
+    const rejectedA = expect(a).rejects.toMatchObject({ name: "AbortError" });
+    const rejectedB = expect(b).rejects.toMatchObject({ name: "AbortError" });
+    const pids = () => cliCalls().trim().split("\n").filter(Boolean).map(Number);
+    const running = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    try {
+      await vi.waitFor(() => expect(pids()).toHaveLength(2));
+      first.abort();
+      await rejectedA;
+      expect(pids().every(running)).toBe(true);
+      if (reason === "driver shuts down") await driver.shutdown?.();
+      else second.abort();
+      await rejectedB;
+      await vi.waitFor(() => expect(pids().some(running)).toBe(false));
+      fs.writeFileSync(bundled, `#!${process.execPath}
+console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"available":[]}');
+`);
+      await expect(driver.listPlugins!()).resolves.toMatchObject({ marketplaces: [], remoteSyncError: null });
+    } finally {
+      first.abort(); second.abort();
+      for (const pid of pids()) if (running(pid)) process.kill(pid, "SIGKILL");
+      await driver.shutdown?.();
+    }
   });
 
   it("reads plan usage through a control query using the selected runtime and releases it", async () => {
@@ -177,6 +539,38 @@ esac
     expect(sdk.supportedModels).toHaveBeenCalledTimes(2);
   });
 
+  it("shares concurrent model discovery and closes the single control query", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    let finish!: (value: Array<{ value: string; displayName: string }>) => void;
+    sdk.supportedModels.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const first = driver.listModels!(), second = driver.listModels!();
+    try {
+      await vi.waitFor(() => expect(sdk.supportedModels).toHaveBeenCalled());
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sdk.supportedModels).toHaveBeenCalledOnce();
+    } finally { finish([{ value: "shared-model", displayName: "Shared" }]); }
+    expect(await first).toEqual(await second);
+    expect(sdk.close).toHaveBeenCalledOnce();
+    await driver.shutdown?.();
+  });
+
+  it("shares command discovery per workspace and keeps other workspaces independent", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    let finish!: (value: { commands: Array<{ name: string; description: string }> }) => void;
+    sdk.initializationResult.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const first = driver.listCommands!(fixture), joined = driver.listCommands!(fixture);
+    const other = driver.listCommands!(path.join(fixture, "other"));
+    try {
+      await vi.waitFor(() => expect(sdk.initializationResult.mock.calls.length).toBeGreaterThan(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sdk.initializationResult).toHaveBeenCalledTimes(2);
+    } finally { finish({ commands: [{ name: "shared", description: "Shared" }] }); }
+    expect(await first).toEqual(await joined);
+    expect(await other).toEqual([expect.objectContaining({ name: "shared" })]);
+    expect(sdk.close).toHaveBeenCalledTimes(2);
+    await driver.shutdown?.();
+  });
+
   it("refreshes cached commands after invalidation without keeping the control process alive", async () => {
     const driver = createClaudeDriver({ settingSources: [] });
     await driver.listCommands!(fixture);
@@ -198,6 +592,220 @@ esac
     expect(await createClaudeDriver({}).getRateLimits!()).toBeNull();
     expect(sdk.usage).not.toHaveBeenCalled();
     expect(sdk.close).toHaveBeenCalledOnce();
+  });
+
+  it("does not create a query for an already canceled run", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "already-canceled", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const abort = new AbortController(); abort.abort();
+    const onEvent = vi.fn();
+    await expect(driver.executePrompt(acquired.session, acquired.prompt, onEvent, abort.signal))
+      .resolves.toMatchObject({ status: "canceled" });
+    expect(sdk.query.mock.calls.length).toBe(0);
+    expect(onEvent).not.toHaveBeenCalled();
+    await driver.cleanup?.(acquired.session);
+  });
+
+  it("closes one-shot queries on successful and failed streams", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    await expect(driver.generateText!("hello")).resolves.toBe("ok");
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() { throw new Error("query crashed"); yield; },
+    }));
+    await expect(driver.generateText!("fail")).rejects.toThrow("query crashed");
+    expect(sdk.close).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes pending control queries on shutdown and ignores their late catalog response", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    let finish!: (models: Array<{ value: string; displayName: string }>) => void;
+    sdk.supportedModels.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const pending = driver.listModels!();
+    await vi.waitFor(() => expect(sdk.supportedModels.mock.calls.length).toBe(1));
+    await driver.shutdown?.();
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+    finish([{ value: "retired-model", displayName: "Retired" }]);
+    expect((await pending).some((model) => model.id === "retired-model")).toBe(false);
+    sdk.supportedModels.mockResolvedValueOnce([{ value: "new-model", displayName: "New" }]);
+    expect(await driver.listModels!()).toEqual([expect.objectContaining({ id: "new-model" })]);
+    expect(sdk.close).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels a one-shot stream on shutdown even when the SDK never finishes reading", async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() { await waiting; yield { type: "assistant", message: { content: [{ type: "text", text: "late text" }] } }; },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const pending = driver.generateText!("hello");
+    const settled = Promise.allSettled([pending]);
+    await vi.waitFor(() => expect(sdk.query.mock.calls.length).toBe(1));
+    await driver.shutdown?.();
+    release();
+    expect((await settled)[0].status).toBe("rejected");
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a live run on shutdown and ignores output from its retired query", async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() { await waiting; yield { type: "assistant", message: { content: [{ type: "text", text: "late output" }] } }; },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "shutdown-run", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const events: WorkRunEvent[] = [];
+    const pending = driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    await vi.waitFor(() => expect(sdk.query.mock.calls.length).toBe(1));
+    await driver.shutdown?.();
+    release();
+    await expect(pending).resolves.toMatchObject({ status: "canceled" });
+    expect(events).toEqual([]);
+    await Promise.all([driver.cleanup?.(acquired.session), driver.cleanup?.(acquired.session)]);
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not acquire a prepared session after shutdown retires its pending options", async () => {
+    let release!: () => void;
+    vi.mocked(guardsService.buildClaudeGuardHook).mockReturnValueOnce(new Promise((resolve) => { release = () => resolve(null); }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const pending = driver.createSession({ runId: "pending-options", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const rejected = expect(pending).rejects.toThrow(/shutdown/);
+    await vi.waitFor(() => expect(guardsService.buildClaudeGuardHook).toHaveBeenCalled());
+    await driver.shutdown?.();
+    release(); await rejected;
+    expect(sdk.query.mock.calls.length).toBe(0);
+  });
+
+  it("retires an acquired session on shutdown before its first query and removes its settings", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "prepared-session", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const settings = (acquired.session as { runtimeSettingsPath: string }).runtimeSettingsPath;
+    expect(fs.existsSync(settings)).toBe(true);
+    await driver.shutdown?.();
+    expect(fs.existsSync(settings)).toBe(false);
+    await expect(driver.executePrompt(acquired.session, acquired.prompt, vi.fn(), new AbortController().signal)).resolves.toMatchObject({ status: "canceled" });
+    expect(sdk.query.mock.calls.length).toBe(0);
+  });
+
+  it("shares the idle MCP control query between concurrent requests for one conversation", async () => {
+    const resource = vi.fn().mockResolvedValue({ contents: [] });
+    sdk.query.mockImplementation(() => ({ close: sdk.close,
+      mcpServerStatus: vi.fn().mockResolvedValue([]), readMcpResource: resource,
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const prepared = await driver.createSession({ runId: "mcp-host", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    // The first turn leaves a cwd memo for the widget after it completes.
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close, async *[Symbol.asyncIterator]() {} }));
+    await driver.executePrompt(prepared.session, prepared.prompt, () => {}, new AbortController().signal);
+    sdk.query.mockClear(); sdk.close.mockClear();
+    const input = { runId: "mcp-host", server: "fixture", uri: "ui://fixture/app" };
+    try {
+      await Promise.all([driver.readMcpAppResource!(input), driver.readMcpAppResource!(input)]);
+      expect(sdk.query.mock.calls.length).toBe(1);
+      expect(sdk.query.mock.calls[0][0].options.env.CLAUDE_AUTO_BACKGROUND_TASKS).toBeUndefined();
+      expect(resource).toHaveBeenCalledTimes(2);
+    } finally { await driver.shutdown?.(); }
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["abort", "timeout"] as const)("settles an unresponsive run on %s without waiting for the SDK iterator", async (ending) => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const request = vi.fn().mockResolvedValue({});
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close, request,
+      async *[Symbol.asyncIterator]() { await waiting; yield { type: "assistant", message: { content: [{ type: "text", text: "retired" }] } }; },
+    }));
+    const driver = createClaudeDriver({ settingSources: [], timeout: ending === "timeout" ? 30 : 10000 });
+    const acquired = await driver.createSession({ runId: ending, accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const abort = new AbortController(), events: WorkRunEvent[] = [];
+    let result: string | undefined;
+    const pending = driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, abort.signal);
+    void pending.then((outcome) => { result = outcome.status; });
+    try {
+      if (ending === "abort") abort.abort();
+      await vi.waitFor(() => expect(result).toBe(ending === "abort" ? "canceled" : "failed"));
+      expect(request).toHaveBeenCalledExactlyOnceWith({ subtype: "interrupt", cancel_queued: true });
+      expect(sdk.close).toHaveBeenCalledTimes(1);
+    } finally {
+      release(); await pending;
+      await driver.cleanup?.(acquired.session);
+    }
+    expect(events).toEqual([]);
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans up a synchronous query factory failure and can run a new session", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const input = { runId: "factory-failure", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } };
+    const acquired = await driver.createSession(input);
+    const abort = new AbortController();
+    const remove = vi.spyOn(abort.signal, "removeEventListener");
+    sdk.query.mockImplementationOnce(() => { throw new Error("query construction failed"); });
+    await expect(driver.executePrompt(acquired.session, acquired.prompt, () => {}, abort.signal)).resolves.toMatchObject({ status: "failed", summary: "query construction failed" });
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(sdk.close).toHaveBeenCalledTimes(0);
+    const next = await driver.createSession(input);
+    await expect(driver.executePrompt(next.session, next.prompt, () => {}, new AbortController().signal)).resolves.toMatchObject({ status: "succeeded" });
+    await driver.shutdown?.();
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a context-control reply that arrives after its query finished", async () => {
+    let finish!: (response: unknown) => void;
+    const usage = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    sdk.query.mockImplementationOnce(() => ({ close: sdk.close, getContextUsage: usage,
+      async *[Symbol.asyncIterator]() { yield { type: "assistant", parent_tool_use_id: null, message: { content: [] } }; },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "late-context", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const events: WorkRunEvent[] = [];
+    await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    expect(usage).toHaveBeenCalledTimes(1);
+    finish({ totalTokens: 100, maxTokens: 1000, percentage: 10, categories: [] });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(events.filter((event) => event.type === "context_usage")).toEqual([]);
+    await driver.shutdown?.();
+    expect(sdk.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains an accepted input receipt before Stop releases the query owner", async () => {
+    let ready!: () => void, writing!: () => void, finish!: () => void;
+    const initialized = new Promise<void>((resolve) => { ready = resolve; });
+    const entered = new Promise<void>((resolve) => { writing = resolve; });
+    const write = new Promise<void>((resolve) => { finish = resolve; });
+    sdk.query.mockImplementationOnce(({ prompt, options }) => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() {
+        const input = prompt[Symbol.asyncIterator](); const initial = (await input.next()).value;
+        const base = { session_id: options.sessionId, parent_tool_use_id: null };
+        yield { ...base, type: "command_lifecycle", command_uuid: initial.uuid, state: "started" };
+        yield { ...base, type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] };
+        ready();
+        const steer = (await input.next()).value;
+        yield { ...base, type: "command_lifecycle", command_uuid: steer.uuid, state: "started" };
+      },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "accepted-before-stop", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const abort = new AbortController(); let ended = false;
+    const pending = driver.executePrompt(acquired.session, acquired.prompt, async (event) => {
+      if (event.type === "artifact" && event.kind === "user-prompt") { writing(); await write; }
+    }, abort.signal);
+    void pending.then(() => { ended = true; });
+    await initialized;
+    const accepted = driver.steerRun!({ runId: "accepted-before-stop", clientUserMessageId: "accepted-id", message: "Keep this input" });
+    await entered;
+    abort.abort();
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(ended).toBe(false);
+    } finally {
+      finish(); await accepted; await pending;
+      await driver.shutdown?.();
+    }
+    expect(sdk.close).toHaveBeenCalledTimes(1);
   });
 
   it("steers the open parent query with native acceptance, preserving context and a single prompt artifact", async () => {

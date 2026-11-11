@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo } from "react";
 
 import { backendSession, useSession } from "@/backend/backend-session";
 import {
-  clearStreamingMessages,
+  settleStreamingMessages,
   reconcileStreamingMessages,
   useStreamingMessages,
 } from "@/backend/streaming-messages";
@@ -110,18 +110,18 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     [items, mode, outputQuery.data],
   );
   const streamingMessages = useStreamingMessages(runId);
-  const { persistedResponseContents, streamingItems } = useMemo(
+  const { persistedStreamIds, streamingItems } = useMemo(
     () => projectStreamingTranscript(items, streamingMessages),
     [items, streamingMessages],
   );
 
   useEffect(() => {
-    reconcileStreamingMessages(runId, persistedResponseContents);
-  }, [persistedResponseContents, runId]);
+    reconcileStreamingMessages(runId, persistedStreamIds);
+  }, [persistedStreamIds, runId]);
 
   const runIsLive = run?.status === "running" || run?.status === "queued";
   useEffect(() => {
-    if (run && !runIsLive) clearStreamingMessages(runId);
+    if (run && !runIsLive) settleStreamingMessages(runId, run.status !== "succeeded");
   }, [run, runId, runIsLive]);
 
   const promptCount = useMemo(

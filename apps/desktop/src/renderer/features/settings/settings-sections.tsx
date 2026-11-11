@@ -16,7 +16,7 @@ import {
   View,
 } from "@/components/ui/icons";
 import { capabilities } from "@/lib/platform";
-import { Claude } from "@/components/ui/icons/space";
+import { Claude, Globe } from "@/components/ui/icons/space";
 import GeneralSettings from "./components/general";
 import AppearanceSettings from "./components/appearance";
 import GitSettings from "./components/git";
@@ -43,6 +43,7 @@ const KeyboardShortcutsSettings = lazy(
 const NotificationsSettings = lazy(
   () => import("./components/notifications"),
 );
+const AtlasSettings = lazy(() => import("./components/atlas"));
 const ProjectsSettings = lazy(() => import("./components/projects"));
 const ArchiveSettings = lazy(() => import("./components/archive"));
 const BackendsSettings = lazy(() => import("@/features/relay/components/backends"));
@@ -56,6 +57,7 @@ const SecuritySettings = () => <PlaceholderSection title="Security" />;
 export type SettingsRouteId =
   | "general"
   | "appearance"
+  | "atlas"
   | "lens"
   | "shortcuts"
   | "notifications"
@@ -98,6 +100,7 @@ export type SettingsNavItem = {
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "general", label: "General", icon: Settings, showInNav: true, Component: GeneralSettings },
   { id: "appearance", label: "Appearance", icon: Sun, showInNav: true, Component: AppearanceSettings },
+  { id: "atlas", label: "Atlas", icon: Globe, showInNav: true, Component: AtlasSettings },
   { id: "notifications", label: "Notifications", icon: Bell, showInNav: capabilities.nativeNotifications, Component: NotificationsSettings },
   { id: "git", label: "Git", icon: FolderGit, showInNav: true, Component: GitSettings },
   { id: "lens", label: "Lens", icon: View, showInNav: capabilities.appshots, Component: LensSettings },

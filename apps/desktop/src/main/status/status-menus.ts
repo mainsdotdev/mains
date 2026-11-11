@@ -9,6 +9,7 @@ import type { MenuItemConstructorOptions } from "electron";
 /** A request waiting on the user, already described the way its notification is. */
 export interface TrayApproval {
   requestId: string;
+  approvalToken?: string;
   runId: string;
   /** e.g. "Allow Bash?" — the notification's title. */
   title: string;
@@ -68,7 +69,7 @@ export const EMPTY_TRAY_SNAPSHOT: TraySnapshot = {
 };
 
 export interface TrayActions {
-  answerApproval(requestId: string, actionIndex: number): void;
+  answerApproval(requestId: string, actionIndex: number, approvalToken?: string): void;
   openRun(runId: string): void;
   stopRun(runId: string): void;
   openWorkspace(workspaceId: string): void;
@@ -140,7 +141,7 @@ function approvalItem(
 ): MenuItemConstructorOptions {
   const answers: MenuItemConstructorOptions[] = approval.actions.map((text, index) => ({
     label: clip(text),
-    click: () => actions.answerApproval(approval.requestId, index),
+    click: () => approval.approvalToken ? actions.answerApproval(approval.requestId, index, approval.approvalToken) : actions.answerApproval(approval.requestId, index),
   }));
   return {
     label: clip(approval.title),

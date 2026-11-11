@@ -3,7 +3,7 @@ import { getTableName, is, Table } from "drizzle-orm";
 import * as schema from "../../db/schema";
 
 export type BridgeReferenceClass = "required" | "optional" | "seeded" | "local";
-export type BridgeNaturalKeyRule = "atlas-source" | "local-ordinal" | "content-hash" | "owner-scoped" | "immutable-identity" | "single-writer";
+export type BridgeNaturalKeyRule = "atlas-source" | "tag-name" | "local-ordinal" | "content-hash" | "owner-scoped" | "immutable-identity" | "single-writer";
 export interface BridgeTableDefinition {
   class: "local" | "account" | "append-only" | "backend-owned";
   primaryKey: readonly string[];
@@ -60,9 +60,19 @@ export const BRIDGE_TABLES: Readonly<Record<string, BridgeTableDefinition>> = {
   "atlas_items": {
     class: "account", primaryKey: ["id"], idKind: "text", stream: "account",
     ownerRoot: null, primaryRegister: "content",
-    registers: {"content": ["id", "account_id", "kind", "title", "current_revision_id", "source_run_id", "source_key", "storage_key", "file_name", "mime_type", "byte_size", "content_hash", "created_at"], "metadata": ["metadata", "is_favorite", "collection_id", "trashed_at"]},
-    localColumns: ["version", "updated_at"], references: {"current_revision_id": {"table": "atlas_page_revisions", "class": "optional"}, "account_id": {"table": "accounts", "class": "required"}, "collection_id": {"table": "collections", "class": "required"}, "source_run_id": {"table": "runs", "class": "optional"}},
+    registers: {"content": ["id", "account_id", "kind", "title", "current_revision_id", "source_run_id", "source_key", "storage_key", "file_name", "mime_type", "byte_size", "content_hash", "created_at"], "metadata": ["metadata", "is_favorite", "collection_id", "trashed_at"], "bookmark": ["url", "normalized_url", "description", "note"]},
+    localColumns: ["version", "updated_at", "bookmark_job"], references: {"current_revision_id": {"table": "atlas_page_revisions", "class": "optional"}, "account_id": {"table": "accounts", "class": "required"}, "collection_id": {"table": "collections", "class": "required"}, "source_run_id": {"table": "runs", "class": "optional"}},
     uniqueIndexes: {"uniq_atlas_items_source": "atlas-source"}, blobColumns: ["storage_key"],
+  },
+  "atlas_tags": {
+    class: "account", primaryKey: ["id"], idKind: "text", stream: "account", ownerRoot: null, primaryRegister: "row",
+    registers: { row: ["id", "account_id", "name", "normalized_name", "created_at"] }, localColumns: [],
+    references: { account_id: { table: "accounts", class: "required" } }, uniqueIndexes: { uniq_atlas_tags_name: "tag-name" }, blobColumns: [],
+  },
+  "atlas_item_tags": {
+    class: "account", primaryKey: ["item_id", "tag_id"], idKind: "composite", stream: "account", ownerRoot: null, primaryRegister: "row",
+    registers: { row: ["item_id", "tag_id", "source", "is_excluded"] }, localColumns: [],
+    references: { item_id: { table: "atlas_items", class: "required" }, tag_id: { table: "atlas_tags", class: "required" } }, uniqueIndexes: {}, blobColumns: [],
   },
   "atlas_page_file_refs": {
     class: "append-only", primaryKey: ["revision_id", "file_id"], idKind: "composite", stream: "account",

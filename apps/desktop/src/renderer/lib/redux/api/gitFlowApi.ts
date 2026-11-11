@@ -61,6 +61,7 @@ export interface PublishResult {
 }
 
 export interface PublishRepoPayload {
+  operationId?: string;
   workspaceId: string;
   ownerRepo: string;
   visibility: "private" | "public";
@@ -81,6 +82,7 @@ export interface PullResult {
 }
 
 export interface CommitGitFlowPayload {
+  operationId?: string;
   workspaceId: string;
   message?: string;
   includeUnstaged?: boolean;

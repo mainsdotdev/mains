@@ -76,6 +76,10 @@ import type { TurnSteerResponse } from "./generated/v2/TurnSteerResponse";
 import type { TurnStartParams } from "./generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "./generated/v2/TurnStartResponse";
 
+import type { PermissionProfileListParams } from "./generated/v2/PermissionProfileListParams";
+import type { PermissionProfileListResponse } from "./generated/v2/PermissionProfileListResponse";
+import type { ConfigRequirementsReadResponse } from "./generated/v2/ConfigRequirementsReadResponse";
+
 interface RpcMethod<Params, Result> {
   params: Params;
   result: Result;
@@ -83,7 +87,7 @@ interface RpcMethod<Params, Result> {
 
 /**
  * Typed request/result pairs for every app-server RPC currently emitted by
- * codex.driver.ts, against Codex's generated 0.166.0 bindings. The snapshot is
+ * codex.driver.ts, against Codex's generated 0.167.0 bindings. The snapshot is
  * generated with `--experimental`, so experimental fields the driver actually
  * sends — `collaborationMode` on turn/start, `dynamicTools` on thread/start —
  * are typed here rather than patched in at the call site.
@@ -108,6 +112,8 @@ export interface CodexAppServerRpc {
   >;
   "skills/list": RpcMethod<SkillsListParams, SkillsListResponse>;
 
+  "permissionProfile/list": RpcMethod<PermissionProfileListParams, PermissionProfileListResponse>;
+  "configRequirements/read": RpcMethod<undefined, ConfigRequirementsReadResponse>;
   "config/value/write": RpcMethod<ConfigValueWriteParams, ConfigWriteResponse>;
   "config/read": RpcMethod<
     { includeLayers?: boolean; cwd?: string | null },

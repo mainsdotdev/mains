@@ -27,6 +27,7 @@ export function registerUpdatesIpc() {
 }
 
 export function unregisterUpdatesIpc() {
+  updatesService.shutdown();
   ipcMain.removeHandler(CHANNELS.updates.check);
   ipcMain.removeHandler(CHANNELS.updates.download);
   ipcMain.removeHandler(CHANNELS.updates.quitAndInstall);

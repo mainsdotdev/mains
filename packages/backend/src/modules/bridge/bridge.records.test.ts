@@ -23,7 +23,7 @@ describe("Bridge schema registry", () => {
     expect(item.registers.content).toEqual(expect.arrayContaining(["id", "account_id", "kind", "title", "source_key", "storage_key", "created_at"]));
     expect(item.registers.metadata).toContain("is_favorite");
     expect(item.registers.content).not.toContain("is_favorite");
-    expect(item.localColumns).toEqual(["version", "updated_at"]);
+    expect(item.localColumns).toEqual(["version", "updated_at", "bookmark_job"]);
   });
 
   it("keeps equal local integers on different runs distinct on the wire", () => {

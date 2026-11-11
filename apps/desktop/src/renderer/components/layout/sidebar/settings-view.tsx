@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from "react-router-dom";
 import { Button, Text } from "@/components/ui";
-import { ProjectFolder } from "@/components/ui/icons";
+import { ProjectIcon } from "./project-icon";
 import {
   useGetAccountQuery,
   useListCollectionsQuery,
@@ -9,7 +9,6 @@ import {
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { useIsMobile } from "@/lib/platform";
-import { iconTintClass, parseIcon, type IconComponent } from "@/lib/icon-registry";
 import {
   getSettingsRouteId,
   isSettingsNavItemActive,
@@ -134,22 +133,6 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                   isOnSettingsPage &&
                   activeSection === "projects" &&
                   activeId === project.id;
-                const parsed = project.icon ? parseIcon(project.icon) : null;
-                let iconContent: React.ReactNode;
-                if (parsed && parsed.type === "icon") {
-                  const IconComp = parsed.value as IconComponent;
-                  iconContent = (
-                    <IconComp className={`size-4 ${iconTintClass(parsed.color)}`} />
-                  );
-                } else if (parsed && parsed.type === "emoji") {
-                  iconContent = (
-                    <span className="text-sm leading-none">
-                      {parsed.value as string}
-                    </span>
-                  );
-                } else {
-                  iconContent = <ProjectFolder className="size-3.5" />;
-                }
                 return (
                   <Button
                     key={project.id}
@@ -167,7 +150,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                       `}
                   >
                     <div className="size-4 rounded-md flex items-center justify-center text-t text-primary-900 dark:text-primary-100 shrink-0">
-                      {iconContent}
+                      <ProjectIcon icon={project.icon} projectName={project.name} />
                     </div>
                     <span className="truncate ">{project.name}</span>
                   </Button>

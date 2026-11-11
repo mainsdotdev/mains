@@ -1,115 +1,54 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { appEvents } from "@/lib/transport";
-import type { GoalMutationOrigin } from "@mains/contracts/provider-goals";
+import { useLayoutEffect, useRef, useState } from "react";
+import { appEvents, getTransport, onTransportChange } from "@/lib/transport";
 import {
-  useLazyGetProviderGoalQuery,
-  useSetProviderGoalMutation,
-  useClearProviderGoalMutation,
-  type GoalInfo,
+  useLazyGetProviderGoalQuery, useSetProviderGoalMutation, useClearProviderGoalMutation,
 } from "@/lib/redux/api/providersApi";
+import {
+  createProviderGoalView, emptyProviderGoalView, type ProviderGoalViewState,
+} from "@mains/backend/shared/provider-goal-lifecycle";
 
-/**
- * Live state + controls for a Codex run's thread goal. Backs the goal card
- * above the input. Pulls the current goal once on mount (covers UI reopened
- * mid-goal) and then tracks the `providers:goalUpdated` push for live
- * status/usage. Returns no-op-safe controls keyed to the active run.
- *
- * `enabled` should be false for non-Codex variants so we don't subscribe or
- * fetch where goals don't exist.
- */
-export function useCodexGoal(
-  providerId: string,
-  runId: string | undefined,
-  enabled: boolean,
-) {
-  // Store the goal alongside the runId it belongs to, so switching runs never
-  // flashes a previous run's goal and we avoid synchronous setState in effects.
-  const [entry, setEntry] = useState<{ runId: string; goal: GoalInfo | null } | null>(null);
+/** One mounted provider/run/transport scope owns projection, controls and timers. */
+export function useCodexGoal(providerId: string, runId: string | undefined, enabled: boolean) {
   const [fetchGoal] = useLazyGetProviderGoalQuery();
-  const [setGoalMut, { isLoading: isSetting }] = useSetProviderGoalMutation();
-  const [clearGoalMut, { isLoading: isClearing }] = useClearProviderGoalMutation();
+  const [setGoal] = useSetProviderGoalMutation();
+  const [clearGoal] = useClearProviderGoalMutation();
+  const [connection, setConnection] = useState(() => ({ transport: getTransport(), revision: 0 }));
+  const input = JSON.stringify([providerId, runId, enabled, connection.revision]);
+  const [scope, setScope] = useState({ input, revision: 0 });
+  if (scope.input !== input) setScope({ input, revision: scope.revision + 1 });
+  const [view, setView] = useState<{ scope: typeof scope; state: ProviderGoalViewState }>({ scope, state: emptyProviderGoalView });
+  const owner = useRef<{ scope: typeof scope; life: ReturnType<typeof createProviderGoalView> } | null>(null);
 
-  // Initial pull when the active run changes.
-  useEffect(() => {
-    if (!enabled || !runId) return;
-    let cancelled = false;
-    fetchGoal({ providerId, runId })
-      .unwrap()
-      .then((g) => {
-        if (!cancelled) setEntry({ runId, goal: g ?? null });
-      })
-      .catch(() => {
-        /* no goal / server down — leave as-is */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled, providerId, runId, fetchGoal]);
-
-  // Live updates (set / status / usage / cleared).
-  useEffect(() => {
-    if (!enabled || !runId) return;
-    const off = appEvents.providers.onGoalUpdated(({ providerId: pid, runId: rid, goal: g }) => {
-      if (pid !== providerId) return;
-      // null runId on the event = couldn't reverse-map thread; accept it.
-      if (rid && rid !== runId) return;
-      setEntry({ runId, goal: (g as GoalInfo | null) ?? null });
+  useLayoutEffect(() => onTransportChange((transport) => {
+    owner.current?.life.retire();
+    setConnection((previous) => ({ transport, revision: previous.revision + 1 }));
+  }), []);
+  useLayoutEffect(() => {
+    const life = createProviderGoalView({
+      current: () => enabled && !!runId && getTransport() === connection.transport,
+      read: () => fetchGoal({ providerId, runId: runId! }).unwrap(),
+      set: (params) => setGoal({ providerId, runId: runId!, params }).unwrap(),
+      clear: (origin) => clearGoal({ providerId, runId: runId!, origin }).unwrap(),
+      change: (state) => setView({ scope, state }),
     });
-    return () => {
-      off();
-    };
-  }, [enabled, providerId, runId]);
+    const entry = { scope, life }; owner.current = entry;
+    const off = enabled && runId ? appEvents.providers.onGoalUpdated((event) => {
+      if (event.providerId === providerId && event.runId === runId) life.receive(event.goal);
+    }) : () => {};
+    void life.load();
+    return () => { life.retire(); off(); if (owner.current === entry) owner.current = null; };
+  }, [scope, connection.transport, providerId, runId, enabled, fetchGoal, setGoal, clearGoal]);
 
-  const updateObjective = useCallback(
-    async (objective: string) => {
-      if (!runId || !objective.trim()) return;
-      const g = await setGoalMut({ providerId, runId, params: { objective, origin: "user" } })
-        .unwrap()
-        .catch(() => null);
-      if (g) setEntry({ runId, goal: g });
-    },
-    [providerId, runId, setGoalMut],
-  );
-
-  const clearWithOrigin = useCallback(async (origin: GoalMutationOrigin) => {
-    if (!runId) return;
-    await clearGoalMut({ providerId, runId, origin }).unwrap().catch(() => false);
-    setEntry({ runId, goal: null });
-  }, [providerId, runId, clearGoalMut]);
-  const clear = useCallback(() => clearWithOrigin("user"), [clearWithOrigin]);
-
-  // Flip the goal's status (Codex `thread/goal/set`). pause → "paused" (the run
-  // keeps running; only the goal flag changes), resume → "active".
-  const setStatus = useCallback(
-    async (status: "paused" | "active") => {
-      if (!runId) return;
-      const g = await setGoalMut({ providerId, runId, params: { status, origin: "user" } })
-        .unwrap()
-        .catch(() => null);
-      if (g) setEntry({ runId, goal: g });
-    },
-    [providerId, runId, setGoalMut],
-  );
-  const pause = useCallback(() => setStatus("paused"), [setStatus]);
-  const resume = useCallback(() => setStatus("active"), [setStatus]);
-
-  const goal = enabled && runId && entry?.runId === runId ? entry.goal : null;
-
-  // When Codex marks the goal complete (`thread/goal/updated` → status
-  // "complete"), briefly show the completed state then auto-remove it — the
-  // run's chat summary already records "Goal marked complete", so a lingering
-  // bar is just noise. Other terminal states (paused/blocked/limited) stay put
-  // since they need user attention. Cleared once per run via the ref.
-  const autoClearedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!runId || goal?.status !== "complete") return;
-    if (autoClearedRef.current === runId) return;
-    const t = setTimeout(() => {
-      autoClearedRef.current = runId;
-      void clearWithOrigin("automatic");
-    }, 3000);
-    return () => clearTimeout(t);
-  }, [runId, goal?.status, clearWithOrigin]);
-
-  return { goal, updateObjective, clear, pause, resume, isBusy: isSetting || isClearing };
+  const act = (action: (life: ReturnType<typeof createProviderGoalView>) => Promise<boolean>) => {
+    const current = owner.current;
+    return current?.scope === scope ? action(current.life) : Promise.resolve(false);
+  };
+  const state = enabled && runId && view.scope === scope ? view.state : emptyProviderGoalView;
+  return {
+    ...state, scopeKey: scope.revision,
+    updateObjective: (objective: string) => act((life) => life.edit(objective)),
+    clear: () => act((life) => life.clear()),
+    pause: () => act((life) => life.pause()),
+    resume: () => act((life) => life.resume()),
+  };
 }

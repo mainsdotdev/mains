@@ -80,7 +80,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   const { spaces, activeSpaceId, activeSpace } = useActiveSpace();
   const [updateSpace] = useUpdateSpaceMutation();
   const spaceProvider = useSpaceProviderVariant();
-  const atlasRoute = isAtlasRoute(location.pathname) && spaceProvider.supportsAtlas;
+  const atlasRoute = isAtlasRoute(location.pathname);
 
   const { searchQuery } = useSidebarSearch();
 

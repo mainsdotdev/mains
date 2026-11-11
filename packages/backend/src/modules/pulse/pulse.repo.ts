@@ -99,9 +99,15 @@ export const pulseRepo = {
       .run();
   },
 
+  /** Restore a retired preparation's slot without overwriting a newer schedule. */
+  releaseClaim(id: string, claimed: Date, previous: Date | null): void {
+    getDb().update(pulses).set({ nextRunAt: previous })
+      .where(and(eq(pulses.id, id), eq(pulses.nextRunAt, claimed))).run();
+  },
+
   markRun(
     id: string,
-    fields: { lastRunAt: Date; nextRunAt: Date; lastRunId?: string | null; lastError?: string | null },
+    fields: { lastRunAt: Date; nextRunAt?: Date; lastRunId?: string | null; lastError?: string | null },
   ): void {
     const db = getDb();
     db.update(pulses)

@@ -1,5 +1,5 @@
 import { BRIDGE_BLOB_GC_GRACE_MS } from "@mains/contracts/bridge-blobs";
-import { archiveBlobChunks } from "./blob-archive";
+export { createBlobCollector } from "./blob-lifecycle";
 
 const nowSql = "CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)";
 const deadlineSql = `${nowSql}+${BRIDGE_BLOB_GC_GRACE_MS}`;
@@ -54,63 +54,4 @@ export function installBlobInventory(storage: DurableObjectStorage) {
         UPDATE blob_gc_state SET chunks_initialized=1,account_prefix=(SELECT substr(key,1,65) FROM quota_chunks WHERE length(key)>=110 LIMIT 1) WHERE id=1;`);
     }
   });
-}
-
-export function createBlobCollector(storage: DurableObjectStorage, bucket: R2Bucket, archive?: R2Bucket) {
-  const sql = storage.sql;
-  function enabled() { return sql.exec<{ legacy_records: number }>("SELECT legacy_records FROM blob_gc_state WHERE id=1").toArray()[0].legacy_records === 0; }
-  async function finish(id: string) {
-    if (sql.exec("SELECT 1 FROM blob_uploads WHERE blob_id=? LIMIT 1", id).toArray().length) throw new Error("Blob upload is still in flight");
-    const prefix = sql.exec<{ account_prefix: string | null }>("SELECT account_prefix FROM blob_gc_state WHERE id=1").toArray()[0].account_prefix;
-    if (!prefix) throw new Error("Bridge blob namespace is not initialized");
-    const start = `${prefix}${id}/`, end = `${prefix}${id}0`;
-    const keys = sql.exec<{ key: string }>("SELECT key FROM quota_chunks WHERE key>=? AND key<?", start, end).toArray().map((row) => row.key);
-    if (keys.length) {
-      await archiveBlobChunks(bucket, archive, keys);
-      await bucket.delete(keys);
-    }
-    storage.transactionSync(() => {
-      sql.exec("DELETE FROM quota_chunks WHERE key>=? AND key<?", start, end);
-      sql.exec("DELETE FROM blob_objects WHERE blob_id=? AND refs=0", id);
-      sql.exec("DELETE FROM blob_deletions WHERE blob_id=?", id);
-    });
-  }
-  const api = {
-    setAccountPrefix(prefix: string) {
-      // A fresh in-memory quota helper reuses the durable prefix. Avoid even a
-      // zero-row UPDATE on ordinary reads: it can open a write transaction.
-      if (sql.exec("SELECT 1 FROM blob_gc_state WHERE id=1 AND account_prefix IS NULL").toArray().length) {
-        sql.exec("UPDATE blob_gc_state SET account_prefix=? WHERE id=1 AND account_prefix IS NULL", prefix);
-      }
-    },
-    isDeleting(id: string) { return !!sql.exec("SELECT 1 FROM blob_deletions WHERE blob_id=?", id).toArray().length; },
-    async resume(id: string) { if (api.isDeleting(id)) await finish(id); },
-    /** An upload renews the grace period even if it reuses previously stored bytes. */
-    protect(blobId: string) { sql.exec("UPDATE blob_objects SET delete_after=max(coalesce(delete_after,0),?) WHERE blob_id=? AND refs=0", Date.now() + BRIDGE_BLOB_GC_GRACE_MS, blobId); },
-    protectRead(blobId: string, expiresAt: number) { sql.exec("UPDATE blob_objects SET delete_after=max(coalesce(delete_after,0),?) WHERE blob_id=? AND refs=0", expiresAt + 1000, blobId); },
-    nextExpiry(): number | null {
-      if (sql.exec("SELECT 1 FROM blob_deletions LIMIT 1").toArray().length) return Date.now();
-      if (!enabled()) return null;
-      return sql.exec<{ expires: number | null }>(`SELECT delete_after expires FROM blob_objects o WHERE refs=0 AND delete_after IS NOT NULL
-        AND NOT EXISTS(SELECT 1 FROM blob_uploads u WHERE u.blob_id=o.blob_id) ORDER BY delete_after LIMIT 1`).toArray()[0]?.expires ?? null;
-    },
-    /** Under the same account gate as publication, reservation and upload receipts.
-     * R2 first, receipts second: a crash/failure stays charged and retries safely. */
-    async collect() {
-      // Finish durable deletion intents even when a legacy writer has since
-      // paused new collection. Never publish a root against stale receipts.
-      const pending = sql.exec<{ blob_id: string }>("SELECT blob_id FROM blob_deletions LIMIT 32").toArray();
-      for (const { blob_id: id } of pending) await finish(id);
-      if (!enabled()) return;
-      const prefix = sql.exec<{ account_prefix: string | null }>("SELECT account_prefix FROM blob_gc_state WHERE id=1").toArray()[0].account_prefix;
-      if (!prefix) return;
-      const candidates = sql.exec<{ blob_id: string }>(`SELECT blob_id FROM blob_objects o WHERE refs=0 AND delete_after<=?
-        AND NOT EXISTS(SELECT 1 FROM blob_uploads u WHERE u.blob_id=o.blob_id) ORDER BY delete_after LIMIT ?`, Date.now(), 32 - pending.length).toArray();
-      for (const { blob_id: id } of candidates) {
-        sql.exec("INSERT OR IGNORE INTO blob_deletions VALUES(?)", id);
-        await finish(id);
-      }
-    },
-  };
-  return api;
 }

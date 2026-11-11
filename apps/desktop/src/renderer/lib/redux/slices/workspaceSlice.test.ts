@@ -28,6 +28,31 @@ import type { ContextItem } from "@/features/workspace/lib/composer-context";
 import { runOwnerKey, workspaceReviewKey } from "../../../../shared/ui-state-keys";
 
 describe("workspaceSlice — provider auth terminal", () => {
+  it("joins duplicate opens without rearming an acknowledged command", () => {
+    const request = { providerId: "codex", command: "codex login" };
+    const first = reducer(undefined, openProviderAuthTerminal(request));
+    const acknowledged = reducer(first, markProviderAuthCommandSent(first.providerAuthTerminal!.id));
+    const duplicate = reducer(acknowledged, openProviderAuthTerminal(request));
+    expect(duplicate.providerAuthTerminal).toEqual(acknowledged.providerAuthTerminal);
+    expect(duplicate.providerAuthTerminal?.pendingCommand).toBeNull();
+  });
+
+  it("uses a fresh identity when sign-in is reopened and ignores a late close callback", () => {
+    const request = { providerId: "codex", command: "codex login" };
+    const first = reducer(undefined, openProviderAuthTerminal(request));
+    const closed = reducer(first, closeProviderAuthTerminal());
+    const replacement = reducer(closed, openProviderAuthTerminal(request));
+    expect(replacement.providerAuthTerminal?.id).not.toBe(first.providerAuthTerminal?.id);
+    const stale = reducer(replacement, closeProviderAuthTerminal(first.providerAuthTerminal!.id));
+    expect(stale.providerAuthTerminal).toEqual(replacement.providerAuthTerminal);
+  });
+  it("keeps a replacement sign-in command pending when an older terminal acknowledges", () => {
+    const first = reducer(undefined, openProviderAuthTerminal({ providerId: "codex", command: "codex login" }));
+    const oldId = first.providerAuthTerminal?.id;
+    const second = reducer(first, openProviderAuthTerminal({ providerId: "claude_code", command: "claude auth login" }));
+    const settled = reducer(second, markProviderAuthCommandSent(oldId));
+    expect(settled.providerAuthTerminal?.pendingCommand).toBe("claude auth login");
+  });
   const opened = () =>
     reducer(
       undefined,
@@ -38,15 +63,16 @@ describe("workspaceSlice — provider auth terminal", () => {
     );
 
   it("opens with a command for exactly one provider", () => {
-    expect(opened().providerAuthTerminal).toEqual({
+    expect(opened().providerAuthTerminal).toMatchObject({
       providerId: "claude_code",
       pendingCommand: "claude auth login",
     });
   });
 
   it("keeps the terminal open after the queued command is sent", () => {
-    const state = reducer(opened(), markProviderAuthCommandSent());
-    expect(state.providerAuthTerminal).toEqual({
+    const initial = opened();
+    const state = reducer(initial, markProviderAuthCommandSent(initial.providerAuthTerminal!.id));
+    expect(state.providerAuthTerminal).toMatchObject({
       providerId: "claude_code",
       pendingCommand: null,
     });

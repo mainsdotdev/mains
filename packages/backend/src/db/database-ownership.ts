@@ -143,7 +143,17 @@ function isInMemoryDatabase(databasePath: string): boolean {
 }
 
 export function databaseOwnershipPath(databasePath: string): string {
-  return `${path.resolve(databasePath)}.backend.lock`;
+  let existing = path.resolve(databasePath);
+  const missing: string[] = [];
+  for (;;) {
+    try { return `${path.join(fs.realpathSync(existing), ...missing)}.backend.lock`; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = path.dirname(existing);
+      if (parent === existing) throw error;
+      missing.unshift(path.basename(existing)); existing = parent;
+    }
+  }
 }
 
 function isOwnershipRecord(value: unknown): value is OwnershipRecord {
@@ -208,15 +218,9 @@ function recoveryClaimIsStale(
   record: OwnershipRecord | null,
 ): boolean {
   if (record) {
-    if (!recordBelongsToRunningProcess(record)) return true;
-    // Recovery is a synchronous rename/delete critical section. A live claim
-    // this old was suspended or abandoned and is safe to supersede after the
-    // owner token is revalidated below.
-    const acquiredAtMs = Date.parse(record.acquiredAt);
-    return (
-      Number.isFinite(acquiredAtMs) &&
-      Date.now() - acquiredAtMs > RECOVERY_STALE_AFTER_MS
-    );
+    // A suspended process can resume inside the rename critical section.
+    // Time alone cannot revoke an identified, still-live recovery owner.
+    return !recordBelongsToRunningProcess(record);
   }
 
   try {
@@ -369,11 +373,11 @@ export function acquireDatabaseOwnership(
         lockPath,
         release() {
           if (released) return;
-          released = true;
           const current = readRecord(path.join(lockPath, OWNER_FILE));
           if (current?.token === record.token) {
             fs.rmSync(lockPath, { recursive: true, force: true });
           }
+          released = true;
         },
       };
     }

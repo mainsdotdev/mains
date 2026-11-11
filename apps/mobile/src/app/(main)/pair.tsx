@@ -3,7 +3,7 @@ import * as Clipboard from "expo-clipboard";
 import Constants from "expo-constants";
 import * as Linking from "expo-linking";
 import { Stack, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react-native";
 
 import { backendSession } from "@/backend/backend-session";
@@ -18,14 +18,8 @@ import {
 } from "@mains/contracts/backend";
 import { startDemo } from "@/backend/demo/start";
 import { goHome } from "@/features/runs";
+import { createPairingFlow, type PairingState } from "@/features/pairing/pairing-flow";
 import { useThemeColors, radius, shadows, spacing, type, useBrandColors } from "@/theme";
-
-type ScanState =
-  | { kind: "scanning" }
-  | { kind: "invalid" }
-  | { kind: "detected"; link: PairingLink }
-  | { kind: "pairing"; link: PairingLink }
-  | { kind: "failed"; link: PairingLink; message: string };
 
 /** Camera is the normal path; manual entry covers simulators and denied camera access. */
 type EntryMode = "camera" | "manual";
@@ -35,37 +29,45 @@ function devicePlatform(): PairedDevicePlatform {
   return os === "ios" || os === "android" || os === "web" ? os : "unknown";
 }
 
-/** A pairing link that arrived as a deep link, if the app was opened by one. */
-function stateFromUrl(url: string | null): ScanState {
-  const link = url ? parsePairingLink(url) : null;
-  return link ? { kind: "detected", link } : { kind: "scanning" };
-}
-
 export default function PairScreen() {
   const colors = useThemeColors();
   const router = useRouter();
   const brand = useBrandColors();
   const [permission, requestPermission] = useCameraPermissions();
-  const [scanState, setScanState] = useState<ScanState>(() =>
-    stateFromUrl(Linking.getLinkingURL()),
-  );
+  const [flow] = useState(() => {
+    const url = Linking.getLinkingURL();
+    return createPairingFlow(url ? parsePairingLink(url) : null, {
+      redeem: (link, signal) => pairWithBackend(link, {
+        deviceName: Constants.deviceName ?? "Phone",
+        platform: devicePlatform(),
+        appVersion: Constants.expoConfig?.version,
+      }, { signal }),
+      save: (backend, signal) => savePairedBackend(backend, { signal }),
+      complete: () => {
+        void backendSession.start().catch(() => console.warn("Could not start paired backend"));
+        goHome();
+      },
+    });
+  });
+  const scanState = useSyncExternalStore(flow.subscribe, flow.getSnapshot, flow.getSnapshot);
   const [entryMode, setEntryMode] = useState<EntryMode>("camera");
   const [manualValue, setManualValue] = useState("");
   const [demoStarting, setDemoStarting] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
 
+  useEffect(() => flow.attach(), [flow]);
+
   useEffect(() => {
     const subscription = Linking.addEventListener("url", ({ url }) => {
       const link = parsePairingLink(url);
-      if (link) setScanState({ kind: "detected", link });
+      if (link) flow.detect(link);
     });
     return () => subscription.remove();
-  }, []);
+  }, [flow]);
 
   const accept = useCallback((value: string) => {
-    const link = parsePairingLink(value);
-    setScanState(link ? { kind: "detected", link } : { kind: "invalid" });
-  }, []);
+    flow.accept(value);
+  }, [flow]);
 
   /**
    * Read the link off the clipboard.
@@ -77,41 +79,15 @@ export default function PairScreen() {
    * that is the better trade.
    */
   const pasteLink = useCallback(async () => {
-    const pasted = (await Clipboard.getStringAsync()).trim();
-    if (!pasted) return;
-    setManualValue(pasted);
-    accept(pasted);
-  }, [accept]);
+    await flow.paste(Clipboard.getStringAsync, setManualValue);
+  }, [flow]);
 
   const handleScan = useCallback(
     (result: BarcodeScanningResult) => accept(result.data),
     [accept],
   );
 
-  const pair = useCallback(
-    async (link: PairingLink) => {
-      setScanState({ kind: "pairing", link });
-      try {
-        const backend = await pairWithBackend(link, {
-          deviceName: Constants.deviceName ?? "Phone",
-          platform: devicePlatform(),
-          appVersion: Constants.expoConfig?.version,
-        });
-        await savePairedBackend(backend);
-        void backendSession.start();
-        goHome();
-      } catch (error) {
-        setScanState({
-          kind: "failed",
-          link,
-          message: error instanceof Error ? error.message : "Pairing failed",
-        });
-      }
-    },
-    [],
-  );
-
-  const reset = () => setScanState({ kind: "scanning" });
+  const reset = () => flow.reset();
   const switchTo = (mode: EntryMode) => {
     setEntryMode(mode);
     reset();
@@ -119,6 +95,7 @@ export default function PairScreen() {
 
   const tryDemo = async () => {
     if (demoStarting) return;
+    flow.reset();
     setDemoStarting(true);
     setDemoError(null);
     try {
@@ -136,7 +113,7 @@ export default function PairScreen() {
       scanState={scanState}
       retryLabel={entryMode === "camera" ? "Scan again" : "Try another link"}
       onRetry={reset}
-      onPair={(link) => void pair(link)}
+      onPair={(link) => void flow.pair(link)}
     />
   );
 
@@ -156,9 +133,9 @@ export default function PairScreen() {
               accessibilityLabel="Pairing link"
               autoCapitalize="none"
               autoCorrect={false}
-              editable={scanState.kind !== "pairing"}
+              editable={scanState.kind !== "pairing" && scanState.kind !== "paired"}
               multiline
-              onChangeText={setManualValue}
+              onChangeText={(value) => { flow.reset(); setManualValue(value); }}
               placeholder="mains://pair#code=…"
               placeholderTextColor={colors.tertiaryLabel as string}
               style={[
@@ -273,7 +250,7 @@ function StatusPanel({
   onRetry,
   onPair,
 }: {
-  scanState: ScanState;
+  scanState: PairingState;
   retryLabel: string;
   onRetry: () => void;
   onPair: (link: PairingLink) => void;
@@ -327,6 +304,8 @@ function StatusPanel({
           <ThemedText variant="subhead">Pairing with {scanState.link.name}…</ThemedText>
         </View>
       );
+    case "paired":
+      return <ThemedText variant="subhead">Paired with {scanState.link.name}.</ThemedText>;
     case "failed":
       return (
         <View style={card}>

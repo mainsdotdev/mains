@@ -49,6 +49,8 @@ export interface CreatePrResult {
 
 export interface CreatePrPayload {
   workspaceId: string;
+  /** Stable logical request identity, retained across an explicit retry. */
+  operationId?: string;
   title?: string;
   body?: string;
   base?: string;

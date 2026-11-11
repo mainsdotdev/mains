@@ -8,7 +8,7 @@ import {
   Web,
 } from "@/components/ui/icons";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
-import { classifyDocType, isTextDocType } from "@/lib/document-viewer";
+import { classifyDocType } from "@/lib/document-viewer";
 import { useComposerContext } from "@/features/workspace/hooks/use-composer-context";
 import type {
   ContextAppshotItem,
@@ -17,14 +17,9 @@ import type {
 import { ImagePreviewModal } from "./image-preview-modal";
 import { ComposerReviewComments } from "./review-comments-attachment";
 import { ComposerBrowserAnnotations } from "./composer-browser-annotations";
+import { ComposerDocumentAnnotations } from "./document-annotations-attachment";
+import { transientDocumentFiles } from "../lib/document-lifecycle";
 
-/**
- * A draft attachment has no file on disk yet, so the viewer reads it through a
- * blob URL (one per file). Held outside the component so a remount of the
- * composer can't revoke a URL the viewer is still reading — it is revoked only
- * once its file leaves the composer.
- */
-const draftDocumentUrls = new Map<File, string>();
 
 function fileExtension(name: string): string | undefined {
   const dot = name.lastIndexOf(".");
@@ -123,7 +118,7 @@ export function ComposerAttachments({
   const [browserPreviewId, setBrowserPreviewId] = useState<string | null>(null);
   const [appshotPreviewId, setAppshotPreviewId] = useState<string | null>(null);
   const preview = previewIndex !== null ? files[previewIndex] : undefined;
-  const { appshots, browserSelections, reviewComments, remove: removeContext } =
+  const { appshots, browserSelections, reviewComments, documentAnnotations, remove: removeContext } =
     useComposerContext();
   const browserPreview = browserSelections.find(
     (selection) => selection.id === browserPreviewId,
@@ -139,26 +134,19 @@ export function ComposerAttachments({
     : undefined;
   const { open: openDocument } = useDocumentViewer();
   const hasAttachments =
-    files.length > 0 || browserSelections.length > 0 || appshots.length > 0 || reviewComments.length > 0;
+    files.length > 0 || browserSelections.length > 0 || appshots.length > 0 || reviewComments.length > 0 || documentAnnotations.length > 0;
 
   useEffect(() => {
-    const present = new Set(files.map((f) => f.file));
-    for (const [file, url] of draftDocumentUrls) {
-      if (present.has(file)) continue;
-      URL.revokeObjectURL(url);
-      draftDocumentUrls.delete(file);
-    }
+    const release = transientDocumentFiles.hold(files);
+    // Let the next committed view acquire its leases before releasing this
+    // one, including Strict Mode replay and a draft-to-viewer handoff.
+    return () => queueMicrotask(release);
   }, [files]);
 
   const openDraftDocument = (file: File) => {
     const docType = classifyDocType(file.name);
-    // Text formats are read from disk by path, which a draft doesn't have.
-    if (!docType || isTextDocType(docType)) return;
-    let url = draftDocumentUrls.get(file);
-    if (!url) {
-      url = URL.createObjectURL(file);
-      draftDocumentUrls.set(file, url);
-    }
+    if (!docType) return;
+    const url = transientDocumentFiles.documentUrl(file);
     openDocument({ path: url, fileName: file.name, docType });
   };
 
@@ -277,13 +265,13 @@ export function ComposerAttachments({
               }
 
               const docType = classifyDocType(file.name);
-              const canOpen = !!docType && !isTextDocType(docType);
+              const canOpen = !!docType;
               const content = (
                 <>
                   <div className="flex flex-1 items-center justify-center">
                     <FileIcon className="size-6 text-primary-400 dark:text-primary-600" />
                   </div>
-                  <div className="flex items-center gap-1.5 px-2.5 pb-2">
+                  <div className="flex items-center gap-1.5 px-2.5 pb-2 text-primary-950 dark:text-primary">
                     <FileIconComponent
                       fileName={file.name}
                       extension={fileExtension(file.name)}
@@ -312,7 +300,7 @@ export function ComposerAttachments({
                       type="button"
                       onClick={() => openDraftDocument(file)}
                       aria-label={`Open ${file.name}`}
-                      className="flex size-full cursor-pointer flex-col text-left outline-none transition-colors hover:bg-primary-200/50 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-primary-900"
+                      className="flex size-full cursor-pointer flex-col text-left outline-none transition-colors hover:bg-primary-200/50 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-[color-mix(in_srgb,var(--color-primary-950)_60%,var(--color-primary-900))]"
                     >
                       {content}
                     </Button>
@@ -327,6 +315,7 @@ export function ComposerAttachments({
               );
             })}
             <ComposerBrowserAnnotations />
+            <ComposerDocumentAnnotations />
             <ComposerReviewComments />
           </div>
         </div>

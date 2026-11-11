@@ -47,7 +47,8 @@ function harness(
       return s;
     },
     token: options.token,
-    schedule: (fn, ms) => scheduled.push({ fn, ms }),
+    schedule: (fn, ms) => { scheduled.push({ fn, ms }); },
+    connectTimeoutMs: 0,
     invokeTimeoutMs: options.invokeTimeoutMs ?? 0,
     reconnect: options.reconnect ?? true,
   });
@@ -198,6 +199,26 @@ describe("WsTransport", () => {
 
     scheduled[0].fn(); // fire the backoff
     expect(sockets).toHaveLength(2); // a new socket was opened
+  });
+
+  it("ignores a retired socket's late open, close, response and event callbacks", async () => {
+    const { transport, sockets, scheduled } = harness();
+    transport.connect(); sockets[0].open();
+    const old = sockets[0];
+    old.serverClose(); scheduled[0].fn(); sockets[1].open();
+    const pending = transport.invoke("runs:getAll");
+    const settled = vi.fn(); void pending.then(settled, settled);
+    const event = vi.fn(); transport.subscribe("runs:statusChanged", event);
+    old.open(); old.emit(responseFrame(1, "stale"));
+    old.emit(JSON.stringify({ kind: "event", channel: "runs:statusChanged", payload: "stale" }));
+    old.serverClose();
+    await Promise.resolve();
+    expect(transport.status()).toBe("connected");
+    expect(settled).not.toHaveBeenCalled();
+    expect(event).not.toHaveBeenCalled();
+    sockets[1].emit(responseFrame(1, "current"));
+    await expect(pending).resolves.toEqual({ success: true, data: "current" });
+    transport.dispose();
   });
 
   it("does not reconnect when disabled", () => {

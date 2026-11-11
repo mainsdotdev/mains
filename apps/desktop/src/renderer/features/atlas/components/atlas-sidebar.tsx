@@ -9,7 +9,8 @@ import {
   Option,
   Picture,
 } from "@/components/ui/icons";
-import { Layers } from "@/components/ui/icons/space";
+import { Bookmark, Layers } from "@/components/ui/icons/space";
+import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
 import { ProjectIcon } from "@/components/layout/sidebar/project-icon";
 import { SidebarGroupSection } from "@/components/layout/sidebar/sidebar-group-section";
 import { useGetAccountQuery, useListCollectionsQuery } from "@/lib/redux/api";
@@ -29,7 +30,7 @@ import {
   atlasView,
 } from "../lib/atlas-navigation";
 
-const typeIcons = { all: Library, page: Page, file: Passport, image: Picture };
+const typeIcons = { all: Library, page: Page, file: Passport, image: Picture, bookmark: Bookmark };
 const itemClass = (active: boolean) =>
   `flex py-1.5 w-full items-center gap-2 text-s text-primary-950 dark:text-primary rounded-[10px] px-2 text-left text-s cursor-pointer transition-colors ${
     active
@@ -38,6 +39,7 @@ const itemClass = (active: boolean) =>
   }`;
 
 export function AtlasSidebar() {
+  const provider = useSpaceProviderVariant();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const [params] = useSearchParams();
@@ -88,7 +90,7 @@ export function AtlasSidebar() {
         <Button
           className={`${itemClass(false)} mb-3`}
           aria-label="New Atlas page"
-          disabled={!account || creating.isLoading}
+          disabled={!account || creating.isLoading || !provider.supportsAtlas}
           onClick={() => void newPage()}
         >
           <New className="size-3.5 shrink-0" />

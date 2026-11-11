@@ -7,6 +7,7 @@ const harness = vi.hoisted(() => ({
   isWeb: false,
   openBrowserUrl: vi.fn(),
   openExternal: vi.fn(),
+  openPullRequest: vi.fn(),
   toastError: vi.fn(),
   navigate: vi.fn(),
   pathname: "/code",
@@ -31,6 +32,9 @@ vi.mock("@/lib/redux/hooks", () => ({
 
 vi.mock("@/hooks/use-browser-panel", () => ({
   useBrowserPanel: () => ({ openUrl: harness.openBrowserUrl }),
+}));
+vi.mock("@/features/pull-requests/hooks/use-open-pull-request", () => ({
+  useOpenPullRequest: () => harness.openPullRequest,
 }));
 
 vi.mock("@/lib/platform", () => ({
@@ -65,6 +69,7 @@ describe("useOpenLink", () => {
     harness.account = { id: "account" };
     harness.backendId = "remote";
     vi.clearAllMocks();
+    harness.openPullRequest.mockReturnValue(false);
     harness.openBrowserUrl.mockResolvedValue(undefined);
     harness.openExternal.mockResolvedValue(undefined);
     Object.defineProperty(window, "api", {
@@ -113,6 +118,16 @@ describe("useOpenLink", () => {
     await act(async () => result.current(url));
 
     expect(harness.openBrowserUrl).toHaveBeenCalledWith(url);
+    expect(harness.openExternal).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("opens a native PR preview in web mode %s before browser routing", async (web) => {
+    harness.isWeb = web;
+    harness.openPullRequest.mockReturnValue(true);
+    const { result } = renderHook(() => useOpenLink());
+    await act(async () => result.current("https://github.com/acme/widget/pull/176"));
+    expect(harness.openPullRequest).toHaveBeenCalledWith("https://github.com/acme/widget/pull/176");
+    expect(harness.openBrowserUrl).not.toHaveBeenCalled();
     expect(harness.openExternal).not.toHaveBeenCalled();
   });
 

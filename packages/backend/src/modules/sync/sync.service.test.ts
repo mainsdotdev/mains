@@ -68,35 +68,26 @@ function mockFetchThrows(err: unknown) {
 describe("syncService", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(syncRepo.commitBatch).mockReturnValue(makeStats());
   });
 
   describe("runEntitySync", () => {
-    it("saves a batch's cursors only after upserting its entities", async () => {
+    it("reports failed records from the atomic checkpoint", async () => {
       const cursors = [{ resourceId: "res-1", syncedAt: new Date("2025-03-01T00:00:00Z") }];
-      mockFetchBatches([{ provider: "linear:issues", entities: [makeEntity()], cursors }]);
-      const order: string[] = [];
-      vi.mocked(syncRepo.upsertEntities).mockImplementation(() => {
-        order.push("upsert");
-        return makeStats({ inserted: 1 });
-      });
-      vi.mocked(syncRepo.saveCursors).mockImplementation(() => {
-        order.push("cursors");
-      });
-
-      await syncService.runEntitySync();
-
-      expect(order).toEqual(["upsert", "cursors"]);
-      expect(syncRepo.saveCursors).toHaveBeenCalledWith("linear:issues", cursors);
+      const entity = makeEntity();
+      mockFetchBatches([{ provider: "linear:issues", entities: [entity], cursors }]);
+      vi.mocked(syncRepo.commitBatch).mockReturnValue(makeStats({ errors: 1 }));
+      const result = await syncService.runEntitySync();
+      expect(result.errors).toBe(1);
+      expect(syncRepo.commitBatch).toHaveBeenCalledWith("linear:issues", [entity], cursors);
     });
 
-    it("advances cursors when nothing changed", async () => {
+    it("checkpoints an empty incremental response so the next sync uses its cursor", async () => {
       const cursors = [{ resourceId: "res-1", syncedAt: new Date("2025-03-01T00:00:00Z") }];
       mockFetchBatches([{ provider: "linear:issues", entities: [], cursors }]);
-
+      vi.mocked(syncRepo.commitBatch).mockReturnValue(makeStats());
       await syncService.runEntitySync();
-
-      expect(syncRepo.upsertEntities).not.toHaveBeenCalled();
-      expect(syncRepo.saveCursors).toHaveBeenCalledWith("linear:issues", cursors);
+      expect(syncRepo.commitBatch).toHaveBeenCalledWith("linear:issues", [], cursors);
     });
 
     it("returns empty result when no entities are fetched", async () => {
@@ -125,7 +116,7 @@ describe("syncService", () => {
       const stats = makeStats({ inserted: 2, updated: 1 });
 
       mockFetchBatches([{ provider: "github", entities }]);
-      vi.mocked(syncRepo.upsertEntities).mockReturnValueOnce(stats);
+      vi.mocked(syncRepo.commitBatch).mockReturnValueOnce(stats);
 
       const result = await syncService.runEntitySync();
       expect(result.total).toBe(3);
@@ -141,7 +132,7 @@ describe("syncService", () => {
         { provider: "github", entities: batchA },
         { provider: "linear", entities: batchB },
       ]);
-      vi.mocked(syncRepo.upsertEntities)
+      vi.mocked(syncRepo.commitBatch)
         .mockReturnValueOnce(makeStats({ inserted: 2 }))
         .mockReturnValueOnce(makeStats({ updated: 1 }));
 
@@ -149,17 +140,17 @@ describe("syncService", () => {
       expect(result.total).toBe(3);
       expect(result.inserted).toBe(2);
       expect(result.updated).toBe(1);
-      expect(syncRepo.upsertEntities).toHaveBeenCalledTimes(2);
-      expect(syncRepo.upsertEntities).toHaveBeenNthCalledWith(1, batchA);
-      expect(syncRepo.upsertEntities).toHaveBeenNthCalledWith(2, batchB);
+      expect(syncRepo.commitBatch).toHaveBeenCalledTimes(2);
+      expect(syncRepo.commitBatch).toHaveBeenNthCalledWith(1, "github", batchA, []);
+      expect(syncRepo.commitBatch).toHaveBeenNthCalledWith(2, "linear", batchB, []);
     });
 
-    it("does not call upsertEntities when batches are all empty", async () => {
+    it("checkpoints even when batches are empty", async () => {
       mockFetchBatches([{ entities: [] }]);
 
       await syncService.runEntitySync();
 
-      expect(syncRepo.upsertEntities).not.toHaveBeenCalled();
+      expect(syncRepo.commitBatch).toHaveBeenCalledWith("github", [], []);
     });
 
     it("throws when the generator throws", async () => {
@@ -172,7 +163,7 @@ describe("syncService", () => {
 
     it("throws when upsertEntities throws", async () => {
       mockFetchBatches([{ entities: [makeEntity()] }]);
-      vi.mocked(syncRepo.upsertEntities).mockImplementationOnce(() => {
+      vi.mocked(syncRepo.commitBatch).mockImplementationOnce(() => {
         throw new Error("Database error");
       });
 

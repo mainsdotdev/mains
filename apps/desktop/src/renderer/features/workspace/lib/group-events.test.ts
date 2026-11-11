@@ -21,6 +21,25 @@ function baseEvents(): RunEvent[] {
 }
 
 describe("groupEvents", () => {
+  it("keeps one stable status row when a native review completes or replays", () => {
+    const start = ev({ id: "review-start", type: "log", content: "Codex is reviewing the action", metadata: {
+      source: "codex_runtime_status", statusId: "review:1", kind: "review", phase: "start", level: "info",
+    } });
+    const complete = ev({ id: "review-complete", type: "log", content: "The safety review denied the action", metadata: { ...start.metadata, phase: "complete", level: "warn" } });
+    const pending = groupEvents([start]);
+    const finished = groupEvents([start, complete, { ...start, id: "late-start" }]);
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ id: pending[0].id, type: "info", isRunning: false, events: [complete] });
+  });
+
+  it("shows long runtime notices and can re-enter buffering after it clears", () => {
+    const metadata = { source: "codex_runtime_status", statusId: "turn:buffering:model", kind: "buffering", phase: "start", level: "info" };
+    const start = ev({ id: "start", type: "log", content: "Waiting ".repeat(50), metadata });
+    const clear = ev({ id: "clear", type: "log", content: "Cleared", metadata: { ...metadata, phase: "complete" } });
+    const again = { ...start, id: "again" };
+    expect(groupEvents([start, clear, again])[0]).toMatchObject({ isRunning: true, events: [again] });
+  });
+
   it("renders a Markdown-delivered image once while retaining other structured images", () => {
     const report = ev({ id: "report", content: "![Result](/out/image.png)", metadata: { kind: "report" } });
     const duplicate = ev({ id: "image", metadata: { kind: "image", inlineInReport: true, path: "/out/image.png" } });

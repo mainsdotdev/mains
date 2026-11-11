@@ -62,12 +62,8 @@ export interface BrowserFindResult {
   finalUpdate: boolean;
 }
 
-export type BrowserDownloadState =
-  | "progressing"
-  | "paused"
-  | "completed"
-  | "cancelled"
-  | "interrupted";
+export type { BrowserDownloadState } from "../../../shared/browser-lifecycle";
+import type { BrowserDownloadState } from "../../../shared/browser-lifecycle";
 
 export interface BrowserDownload {
   id: string;

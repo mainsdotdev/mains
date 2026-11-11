@@ -131,7 +131,7 @@ export function describeApprovalNotification(
  * the notification can't settle) — the caller then opens the run instead.
  * Answers use the same shapes the in-app dialog sends.
  */
-export function responseFromNotification(
+function notificationResponse(
   req: ToolApprovalRequest,
   interaction: NotificationInteraction,
 ): ToolApprovalResponse | null {
@@ -155,4 +155,9 @@ export function responseFromNotification(
     case "open":
       return null;
   }
+}
+
+export function responseFromNotification(req: ToolApprovalRequest, interaction: NotificationInteraction): ToolApprovalResponse | null {
+  const response = notificationResponse(req, interaction);
+  return response && req.approvalToken ? { ...response, approvalToken: req.approvalToken } : response;
 }

@@ -1,36 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
 import { File, EditProvider } from "@pierre/diffs/react";
 import type { EditorFactory, FileContents } from "@pierre/diffs/react";
 import { Editor, type EditorOptions } from "@pierre/diffs/edit";
 import {
-  setSelectedFileContent,
   addContextItem,
   clearEditorReveal,
   type EditorRevealTarget,
 } from "@/lib/redux/slices/workspaceSlice";
-import { useResyncWorkspaceDiffMutation } from "@/lib/redux/api";
+import { useGetAppSettingsQuery } from "@/lib/redux/api";
 import { DIFF_TYPOGRAPHY_STYLE, diffSurfaceOptions } from "@/lib/diff-style";
 import { useDiffHighlighterReady } from "@/lib/diff-highlighter";
 import { debounceEditorSearchInput } from "@/lib/editor-search-debounce";
 import { Button, Text } from "@/components/ui";
-import type {
-  FileContentResponse,
-  ServiceResponse,
-  WriteFileTextResponse,
-} from "@/features/workspace/types/file-explorer";
 import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
 import {
   keyboardShortcutLabel,
   matchesKeyboardShortcut,
 } from "../../../../shared/keyboard-shortcuts";
 
-const AUTOSAVE_DELAY_MS = 750;
-// Must match the optimistic-concurrency error thrown by fileExplorerService.
-const CONFLICT_ERROR = "File changed on disk";
-
-type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
+import { onTransportChange } from "@/lib/transport";
+import { useEditorSave } from "../hooks/use-editor-save";
 
 // Not exported by @pierre/diffs — extracted from the option's signature.
 type SelectionActionCtx = Parameters<
@@ -45,43 +36,29 @@ interface CodeViewerProps {
   filePath?: string;
   /** Disk mtime of `content` — baseline for conflict-guarded auto-saves. */
   mtimeMs?: number;
+  version?: string;
   /** When set, each successful save resyncs this workspace's diff snapshot. */
   workspaceId?: string;
 }
 
-export function CodeViewer({
-  content,
-  filename,
-  className = "",
-  filePath,
-  mtimeMs,
-  workspaceId,
-}: CodeViewerProps) {
+export function CodeViewer(props: CodeViewerProps) {
+  const backendId = useAppSelector((state) => state.backends.activeBackendId);
+  const { data: settings } = useGetAppSettingsQuery();
+  const [transportRevision, setTransportRevision] = useState(0);
+  useLayoutEffect(() => onTransportChange(() => setTransportRevision((value) => value + 1)), []);
+  const ownerKey = JSON.stringify([backendId, settings?.accountId, props.workspaceId, props.filePath]);
+  return <CodeViewerContent key={JSON.stringify([ownerKey, transportRevision])} {...props} ownerKey={ownerKey} backendId={backendId} accountId={settings?.accountId} />;
+}
+
+function CodeViewerContent({ content, filename, className = "", filePath, mtimeMs, version, workspaceId, ownerKey, backendId, accountId }: CodeViewerProps & { ownerKey: string; backendId: string | null; accountId?: string }) {
   const isDarkMode = useIsDarkMode();
   const dispatch = useAppDispatch();
-  const [resyncWorkspaceDiff] = useResyncWorkspaceDiffMutation();
   // Same cold-start blank as the diff viewer: `File` paints nothing while the
   // highlighter is still loading and never repaints on its own.
   const highlighterReady = useDiffHighlighterReady();
 
-  const [saveState, setSaveState] = useState<SaveState>("idle");
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [conflict, setConflict] = useState(false);
-  // Bumped only when reloading from disk after a conflict: a fresh cacheKey
-  // resets the editor's cached document (and undo history) to the reloaded
-  // contents. Regular auto-saves keep the key stable so history survives.
-  const [editSession, setEditSession] = useState(0);
-
-  const draftRef = useRef<string | null>(null);
-  const lastSavedRef = useRef(content);
-  const baselineMtimeRef = useRef(mtimeMs);
-  // Set after a failed save; blocks further auto-saves until the user picks
-  // Reload / Overwrite / Retry so we don't hammer a failing write.
-  const pausedRef = useRef(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Saves are sequenced through this promise chain; each save reads the
-  // latest draft when it runs, so a slow write can never clobber a newer one.
-  const chainRef = useRef<Promise<void>>(Promise.resolve());
+  const save = useEditorSave({ content, mtimeMs, version, filePath, workspaceId, ownerKey, backendId, accountId });
+  const { phase: saveState, error: saveError, conflict, editSession, flush, edit } = save;
   const saveShortcut = useKeyboardShortcutBinding("editor.save");
   const addSelectionShortcut = useKeyboardShortcutBinding(
     "editor.addSelection",
@@ -93,103 +70,11 @@ export function CodeViewer({
   const file: FileContents = useMemo(
     () => ({
       name: filename ?? "file",
-      contents: content,
-      cacheKey: `${filePath ?? filename ?? "file"}:${editSession}`,
+      contents: filePath ? save.draft : content,
+      cacheKey: `${ownerKey}:${editSession}`,
     }),
-    [filename, content, filePath, editSession],
+    [filename, content, save.draft, filePath, ownerKey, editSession],
   );
-
-  const runSave = useCallback(
-    async (force = false) => {
-      if (!filePath) return;
-      const contents = draftRef.current;
-      if (contents == null || (!force && contents === lastSavedRef.current)) {
-        setSaveState((s) => (s === "dirty" ? "saved" : s));
-        return;
-      }
-      if (!force && pausedRef.current) return;
-      setSaveState("saving");
-      try {
-        const result: ServiceResponse<WriteFileTextResponse> =
-          await window.api.fileExplorer.writeFileText({
-            filePath,
-            content: contents,
-            expectedMtimeMs: force ? undefined : baselineMtimeRef.current,
-          });
-        if (result.success && result.data) {
-          lastSavedRef.current = contents;
-          baselineMtimeRef.current = result.data.mtimeMs;
-          dispatch(
-            setSelectedFileContent({
-              content: contents,
-              size: result.data.size,
-              isBinary: false,
-              encoding: "utf-8",
-              mtimeMs: result.data.mtimeMs,
-            }),
-          );
-          setConflict(false);
-          setSaveError(null);
-          setSaveState(draftRef.current === contents ? "saved" : "dirty");
-          // Keep the git side in step: recapture the workspace diff snapshot
-          // so the Changes tab, counts, and +/- stats reflect the edit.
-          if (workspaceId) resyncWorkspaceDiff(workspaceId);
-        } else {
-          const message = result.success ? "Failed to save file" : result.error;
-          pausedRef.current = true;
-          setConflict(message === CONFLICT_ERROR);
-          setSaveError(message);
-          setSaveState("error");
-        }
-      } catch (err) {
-        pausedRef.current = true;
-        setConflict(false);
-        setSaveError(err instanceof Error ? err.message : "Failed to save file");
-        setSaveState("error");
-      }
-    },
-    [filePath, dispatch, workspaceId, resyncWorkspaceDiff],
-  );
-
-  const enqueueSave = useCallback(
-    (force = false) => {
-      chainRef.current = chainRef.current.then(() => runSave(force));
-      return chainRef.current;
-    },
-    [runSave],
-  );
-
-  const flush = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    return enqueueSave();
-  }, [enqueueSave]);
-
-  const flushRef = useRef(flush);
-  useEffect(() => {
-    flushRef.current = flush;
-  }, [flush]);
-
-  // Flush pending edits when the window loses focus or the surface unmounts
-  // (switching files remounts this component via its key).
-  useEffect(() => {
-    const onBlur = () => void flushRef.current();
-    window.addEventListener("blur", onBlur);
-    return () => {
-      window.removeEventListener("blur", onBlur);
-      void flushRef.current();
-    };
-  }, []);
-
-  const schedule = useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      void enqueueSave();
-    }, AUTOSAVE_DELAY_MS);
-  }, [enqueueSave]);
 
   const createEditor = useCallback<EditorFactory<undefined, undefined>>(
     (editorType, surfaceOptions, editStateKey) =>
@@ -322,12 +207,7 @@ export function CodeViewer({
         if (revealedRef.current) selectHit(editor, revealedRef.current);
         applyRevealRef.current();
       },
-      onChange: (edited) => {
-        draftRef.current = edited.file.contents;
-        if (pausedRef.current) return;
-        setSaveState("dirty");
-        schedule();
-      },
+      onChange: (edited) => edit(edited.file.contents),
       enabledSelectionAction: !!filePath,
       // The widget mounts inside the editor's shadow DOM, so Tailwind classes
       // don't reach it — styles must be inline. The library's popover wrapper
@@ -373,41 +253,12 @@ export function CodeViewer({
         return button;
       },
     }),
-    [addSelectionShortcut, schedule, addSelectionToChat, filePath, selectHit],
+    [addSelectionShortcut, edit, addSelectionToChat, filePath, selectHit],
   );
 
-  const handleReload = useCallback(async () => {
-    if (!filePath) return;
-    const result: ServiceResponse<FileContentResponse> =
-      await window.api.fileExplorer.readFileText({ filePath });
-    if (result.success && result.data && !result.data.isBinary) {
-      draftRef.current = null;
-      lastSavedRef.current = result.data.content;
-      baselineMtimeRef.current = result.data.mtimeMs;
-      pausedRef.current = false;
-      setConflict(false);
-      setSaveError(null);
-      setSaveState("idle");
-      dispatch(setSelectedFileContent(result.data));
-      setEditSession((s) => s + 1);
-    } else {
-      setSaveError(result.success ? "Failed to reload file" : result.error);
-    }
-  }, [filePath, dispatch]);
-
-  const handleOverwrite = useCallback(() => {
-    pausedRef.current = false;
-    setConflict(false);
-    setSaveError(null);
-    void enqueueSave(true);
-  }, [enqueueSave]);
-
-  const handleRetry = useCallback(() => {
-    pausedRef.current = false;
-    setSaveError(null);
-    setSaveState("dirty");
-    void enqueueSave();
-  }, [enqueueSave]);
+  const handleReload = save.reload;
+  const handleOverwrite = () => { void save.overwrite(); };
+  const handleRetry = () => { void save.retry(); };
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
@@ -482,7 +333,7 @@ export function CodeViewer({
         <EditProvider createEditor={createEditor}>
           <File
             file={file}
-            edit={!!filePath}
+            edit={!!filePath && !!accountId}
             editorOptions={editorOptions}
             style={DIFF_TYPOGRAPHY_STYLE}
             options={{ ...diffSurfaceOptions(isDarkMode), overflow: "scroll" }}

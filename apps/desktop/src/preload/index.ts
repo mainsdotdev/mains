@@ -1,5 +1,7 @@
+import type { PlanDecisionPayload, PlanDecisionResult } from "@mains/contracts/plan-decision";
+import type { WriteFileTextOptions } from "@mains/contracts/file-text";
 import type { BridgeSignInInput, BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
+import type { AtlasAutoTagging, AtlasSaveBookmark, AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
@@ -10,6 +12,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { RunExperienceOptions, RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
 import type { AnswerAsyncQuestionsPayload, AnswerAsyncQuestionsResponse, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import type { CreateRealtimeConversationPayload, CreateRealtimeConversationResponse, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeEvent } from "@mains/contracts/realtime";
+import type { RunPullRequestCreatedEvent } from "@mains/contracts/runs";
 import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
 import type { ModeId } from "../shared/modes";
@@ -25,7 +28,7 @@ import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type { ServiceResponse } from "@mains/contracts/service-response";
 import type { CancelWorkspaceClonePayload } from "@mains/contracts/workspace-intake";
-import type { TerminalCreateOptions, TerminalDataEvent, TerminalExitEvent, TerminalSession, TerminalSnapshot } from "@mains/contracts/terminal";
+import type { TerminalCreateOptions, TerminalDataEvent, TerminalExitEvent, TerminalSession, TerminalSnapshot, TerminalWriteOptions } from "@mains/contracts/terminal";
 import type { CreatePrPayload, CreatePrResult, PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 import type { BrowserAnnotationTheme } from "../shared/browser-annotation";
 import type {
@@ -241,8 +244,10 @@ const api = {
   },
   // SSH tunneling for remote backends (runs the local ssh client; not served remotely)
   ssh: {
+    cancelTunnelOpen: (requestId: string) => ipcRenderer.invoke(CHANNELS.ssh.cancelTunnelOpen, requestId),
     discoverHosts: () => ipcRenderer.invoke(CHANNELS.ssh.discoverHosts),
     openTunnel: (input: {
+      requestId?: string;
       host: string;
       remotePort: number;
       remoteCommand?: string | null;
@@ -359,6 +364,14 @@ const api = {
   },
   // Non-developer Projects: organizational Collections for Work/Chat runs.
   atlas: {
+    saveBookmark: (input: AtlasSaveBookmark) => ipcRenderer.invoke(CHANNELS.atlas.saveBookmark, input),
+    enrichBookmark: (input: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.enrichBookmark, input),
+    listTags: (input: { accountId: string }) => ipcRenderer.invoke(CHANNELS.atlas.listTags, input),
+    renameTag: (input: AtlasIdentity & { name: string }) => ipcRenderer.invoke(CHANNELS.atlas.renameTag, input),
+    removeTag: (input: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.removeTag, input),
+    setTags: (input: AtlasIdentity & { tags: string[] }) => ipcRenderer.invoke(CHANNELS.atlas.setTags, input),
+    getAutoTagging: (input: { accountId: string }) => ipcRenderer.invoke(CHANNELS.atlas.getAutoTagging, input),
+    setAutoTagging: (input: { accountId: string; config: AtlasAutoTagging }) => ipcRenderer.invoke(CHANNELS.atlas.setAutoTagging, input),
     list: (options: AtlasListOptions) => ipcRenderer.invoke(CHANNELS.atlas.list, options),
     library: (options: AtlasLibraryOptions) => ipcRenderer.invoke(CHANNELS.atlas.library, options),
     generated: (options: AtlasGeneratedOptions) => ipcRenderer.invoke(CHANNELS.atlas.generated, options),
@@ -512,8 +525,14 @@ const api = {
     getCommands: (id: string, workspacePath?: string) =>
       ipcRenderer.invoke(CHANNELS.providers.getCommands, id, workspacePath),
     getSkills: (id: string, workspacePath?: string) => ipcRenderer.invoke(CHANNELS.providers.getSkills, id, workspacePath),
+    onSkillsUpdated: (callback: (data: { providerId: string }) => void) => {
+      const listener = (_: any, data: any) => callback(data);
+      ipcRenderer.on(CHANNELS.providers.skillsUpdated, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.providers.skillsUpdated, listener);
+    },
     getRateLimits: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRateLimits, id),
     getRealtimeVoices: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRealtimeVoices, id),
+    getCodexPermissions: (id: string, cwd?: string) => ipcRenderer.invoke(CHANNELS.providers.getCodexPermissions, id, cwd),
     getCodexMemorySettings: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getCodexMemorySettings, id),
     setCodexMemorySetting: (id: string, setting: "memoriesEnabled" | "allowToolAssistedChats", enabled: boolean) =>
       ipcRenderer.invoke(CHANNELS.providers.setCodexMemorySetting, id, setting, enabled),
@@ -820,6 +839,7 @@ const api = {
     }) => ipcRenderer.invoke(CHANNELS.runs.continue, payload),
     steer: (payload: RunSteerPayload) => ipcRenderer.invoke(CHANNELS.runs.steer, payload),
     inputStatus: (payload: RunInputStatusPayload) => ipcRenderer.invoke(CHANNELS.runs.inputStatus, payload),
+    decidePlan: (payload: PlanDecisionPayload): Promise<ServiceResponse<PlanDecisionResult>> => ipcRenderer.invoke(CHANNELS.runs.decidePlan, payload),
     answerAsyncQuestions: (payload: AnswerAsyncQuestionsPayload): Promise<ServiceResponse<AnswerAsyncQuestionsResponse>> => ipcRenderer.invoke(CHANNELS.runs.answerAsyncQuestions, payload),
     dismissAsyncQuestions: (payload: DismissAsyncQuestionsPayload): Promise<ServiceResponse<void>> => ipcRenderer.invoke(CHANNELS.runs.dismissAsyncQuestions, payload),
     createRealtimeConversation: (payload: CreateRealtimeConversationPayload): Promise<ServiceResponse<CreateRealtimeConversationResponse>> => ipcRenderer.invoke(CHANNELS.runs.createRealtimeConversation, payload),
@@ -924,6 +944,11 @@ const api = {
       const listener = (_: any, data: any) => callback(data);
       ipcRenderer.on(CHANNELS.runs.eventPersisted, listener);
       return () => ipcRenderer.removeListener(CHANNELS.runs.eventPersisted, listener);
+    },
+    onPullRequestCreated: (callback: (data: RunPullRequestCreatedEvent) => void) => {
+      const listener = (_: unknown, data: RunPullRequestCreatedEvent) => callback(data);
+      ipcRenderer.on(CHANNELS.runs.pullRequestCreated, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.runs.pullRequestCreated, listener);
     },
     // Fired when a run's session starts ("running") and when it reaches a
     // terminal status (succeeded / failed / canceled).
@@ -1040,11 +1065,7 @@ const api = {
      * regular-file safeguards as readFileText; does not create new files.
      * Pass expectedMtimeMs to reject the write if the file changed on disk.
      */
-    writeFileText: (options: {
-      filePath: string;
-      content: string;
-      expectedMtimeMs?: number;
-    }) => ipcRenderer.invoke(CHANNELS.fileExplorer.writeFileText, options),
+    writeFileText: (options: WriteFileTextOptions) => ipcRenderer.invoke(CHANNELS.fileExplorer.writeFileText, options),
   },
   // NOTE: there is deliberately no `git` namespace — the git module is
   // main-process-internal. Renderer-triggered git effects are workspace/gitFlow
@@ -1057,6 +1078,7 @@ const api = {
     /** Stage (+ optionally generate message) + commit, optionally pushing */
     commit: (payload: {
       workspaceId: string;
+      operationId?: string;
       message?: string;
       includeUnstaged?: boolean;
       providerId?: string;
@@ -1097,11 +1119,11 @@ const api = {
       ipcRenderer.invoke(CHANNELS.terminal.create, payload),
     attach: (id: string): Promise<ServiceResponse<TerminalSnapshot>> => ipcRenderer.invoke(CHANNELS.terminal.attach, id),
     list: (): Promise<ServiceResponse<TerminalSession[]>> => ipcRenderer.invoke(CHANNELS.terminal.list),
-    write: (id: string, data: string) =>
-      ipcRenderer.invoke(CHANNELS.terminal.write, id, data),
-    resize: (id: string, cols: number, rows: number) =>
-      ipcRenderer.invoke(CHANNELS.terminal.resize, id, cols, rows),
-    destroy: (id: string) => ipcRenderer.invoke(CHANNELS.terminal.destroy, id),
+    write: (id: string, data: string, options?: TerminalWriteOptions) =>
+      ipcRenderer.invoke(CHANNELS.terminal.write, id, data, options),
+    resize: (id: string, cols: number, rows: number, instanceId?: string) =>
+      ipcRenderer.invoke(CHANNELS.terminal.resize, id, cols, rows, instanceId),
+    destroy: (id: string, instanceId?: string) => ipcRenderer.invoke(CHANNELS.terminal.destroy, id, instanceId),
     destroyIdle: (workspaceId: string): Promise<ServiceResponse<string[]>> =>
       ipcRenderer.invoke(CHANNELS.terminal.destroyIdle, workspaceId),
     onData: (callback: (data: TerminalDataEvent) => void) => {

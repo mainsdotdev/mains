@@ -101,7 +101,7 @@ export function ContextPicker({
   // Tagged with what was asked rather than cleared when the ask changes: a
   // synchronous reset inside the effect is the cascading render the lint rule
   // is about, and comparing the tag discards a stale answer just as well.
-  const request = `${providerId}|${workspacePath ?? ""}`;
+  const request = `${backendId}|${providerId}|${workspacePath ?? ""}`;
   const [answered, setAnswered] = useState<{
     request: string;
     result: ContextSourcesResult | null;
@@ -109,13 +109,29 @@ export function ContextPicker({
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    void backendSession.refreshContextSources(providerId, workspacePath).then((result) => {
-      if (!cancelled) setAnswered({ request, result });
-    });
+    let refreshing = false;
+    let refreshAgain = false;
+    const current = () => !cancelled && backendSession.getSnapshot().backend?.backendId === backendId;
+    const refresh = async () => {
+      if (!current()) return;
+      if (refreshing) { refreshAgain = true; return; }
+      refreshing = true;
+      try {
+        do {
+          refreshAgain = false;
+          const result = await backendSession.refreshContextSources(providerId, workspacePath);
+          if (!current()) return;
+          setAnswered({ request, result });
+        } while (refreshAgain);
+      } finally { refreshing = false; }
+    };
+    const off = backendSession.onContextSourcesChanged((changedId) => { if (changedId === providerId) void refresh(); });
+    void refresh();
     return () => {
       cancelled = true;
+      off();
     };
-  }, [visible, providerId, workspacePath, request]);
+  }, [visible, backendId, providerId, workspacePath, request]);
   const outcome = answered?.request === request ? answered.result : null;
 
   // An empty list has three quite different causes, and the rows cannot tell

@@ -33,10 +33,39 @@ async function initialize(server: CodexAppServer): Promise<void> {
 
 afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_HANG_METHOD;
+  delete process.env.MAINS_CODEX_FIXTURE_RPC_ERROR;
   await Promise.all(servers.splice(0).map((server) => server.stop()));
 });
 
 describe("CodexAppServer", () => {
+  it.each([
+    { code: -32600, data: { type: "modelProviderMismatch", savedProvider: "original" } },
+    { code: -32600, data: { reason: "serverShuttingDown" } },
+    { code: -32001, data: null },
+    { code: -32602, data: undefined },
+  ])("preserves native RPC error code and data: %j", async ({ code, data }) => {
+    process.env.MAINS_CODEX_FIXTURE_RPC_ERROR = JSON.stringify({ method: "thread/resume", code, data, message: "Native request rejected" });
+    const server = await startServer();
+    await initialize(server);
+    const error = await server.sendRequest("thread/resume", { threadId: "thread" }).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ code, nativeMessage: "Native request rejected", message: `Native request rejected (code: ${code})` });
+    expect((error as { data?: unknown }).data).toEqual(data);
+    await expect(server.sendRequest("account/read", {})).resolves.toMatchObject({ requiresOpenaiAuth: false });
+  });
+
+  it("rejects a failed spawn and can retry with a working binary", async () => {
+    const server = new CodexAppServer();
+    servers.push(server);
+
+    await expect(server.start(`${fixtureBinary}.missing`, process.cwd()))
+      .rejects.toThrow(/ENOENT/);
+    expect(server.isRunning).toBe(false);
+    await server.start(fixtureBinary, process.cwd());
+    await initialize(server);
+    expect(server.isRunning).toBe(true);
+  });
+
   it("correlates typed requests with their responses", async () => {
     const server = await startServer();
 
@@ -107,13 +136,17 @@ describe("CodexAppServer", () => {
     expect(backgroundNotifications).toContain("turn/completed");
   });
 
-  it("rejects pending requests when the app-server process exits", async () => {
+  it("rejects all pending requests on process exit and can restart cleanly", async () => {
+    process.env.MAINS_CODEX_FIXTURE_HANG_METHOD = "model/list";
     const server = await startServer();
     await initialize(server);
     const threadResponse = await server.sendRequest("thread/start", {
       cwd: process.cwd(),
     });
     const threadId = threadResponse.thread.id;
+
+    const pending = expect(server.sendRequest("model/list", {}))
+      .rejects.toThrow("Codex app-server exited with code 17");
 
     await expect(
       server.sendRequest("turn/start", {
@@ -127,6 +160,13 @@ describe("CodexAppServer", () => {
         ],
       }),
     ).rejects.toThrow("Codex app-server exited with code 17");
+    await pending;
+    // exit can precede close; stop joins the remaining process cleanup.
+    await server.stop();
+    delete process.env.MAINS_CODEX_FIXTURE_HANG_METHOD;
+    await server.start(fixtureBinary, process.cwd());
+    await initialize(server);
+    await expect(server.sendRequest("account/read", {})).resolves.toMatchObject({ requiresOpenaiAuth: false });
   });
 
   it("times out a request without poisoning later request correlation", async () => {

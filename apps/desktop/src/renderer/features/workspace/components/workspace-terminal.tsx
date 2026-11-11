@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useId, useRef } from "react";
+import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   Button,
   getSegmentedTabId,
@@ -19,7 +19,7 @@ import {
   selectTerminal,
   terminalWorkspaceKey,
 } from "@/lib/redux/slices/terminalSlice";
-import { BOTTOM_TERMINAL_HEIGHT } from "@/lib/layout";
+import { BOTTOM_TERMINAL_CONTENT_HEIGHT, BOTTOM_TERMINAL_HEIGHT } from "@/lib/layout";
 
 const XtermTerminal = lazy(() =>
   import("./xterm-terminal").then((module) => ({
@@ -52,13 +52,20 @@ export function WorkspaceTerminal({
   const [create, creation] = useCreateTerminalMutation();
   const [stop, stopping] = useStopTerminalMutation();
   const attempted = useRef<string | null>(null);
+  const [lastActive, setLastActive] = useState<{ key: string; id?: string }>({ key });
   const tabsId = useId();
   const panelId = `${tabsId}-panel`;
   const sessions = (query.currentData ?? []).filter(
     (session) => session.workspaceId === workspaceId,
   );
   const active =
-    sessions.find((session) => session.id === selectedId) ?? sessions[0];
+    sessions.find((session) => session.id === selectedId) ??
+    sessions.find((session) => lastActive.key === key && session.id === lastActive.id) ?? sessions[0];
+  // A create reply can select the new id before the catalog includes it.
+  // Retain the visible tab until then, rather than mounting the first tab in between.
+  if (lastActive.key !== key || lastActive.id !== active?.id) {
+    setLastActive({ key, id: active?.id });
+  }
 
   const addTerminal = useCallback(
     async (initial = false) => {
@@ -127,7 +134,8 @@ export function WorkspaceTerminal({
       {isOpen && (
         <section
           aria-label="Workspace terminals"
-          className="flex h-full flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950"
+          className="flex flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950"
+          style={{ height: BOTTOM_TERMINAL_CONTENT_HEIGHT }}
         >
           <div className="flex min-w-0 items-center gap-2 px-3 pt-2 pb-1">
             <HorizontalFadeScroller

@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { createAsyncResourceLifecycle } from "../../runtime/async-resource-lifecycle";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import type { UsagePricingStatus } from "./stats.dto";
 import { measured, object, type ConsumptionRecord } from "./stats.transcripts";
@@ -86,52 +88,59 @@ export function estimateRecord(record: ConsumptionRecord, prices: ModelPrices): 
 
 /** One loader per host, with a disk snapshot so offline dashboards still work. */
 export function createPricingLoader(cacheFile: string, fetchPrices: typeof fetch = fetch) {
-  let prices: ModelPrices = new Map();
-  let fetchedAt: number | null = null;
-  let nextAttempt = 0;
-  let loadedDisk = false;
-  let pending: Promise<{ prices: ModelPrices; pricing: UsagePricingStatus }> | null = null;
-  const snapshot = (): { prices: ModelPrices; pricing: UsagePricingStatus } => ({
-    prices,
-    pricing: { status: fetchedAt === null ? "unavailable" : Date.now() - fetchedAt < DAY_MS ? "fresh" : "cached",
-      source: MODEL_PRICES_URL, fetchedAt: fetchedAt === null ? null : new Date(fetchedAt).toISOString() },
-  });
-  const load = async () => {
-    if (!loadedDisk) {
-      loadedDisk = true;
+  const cache = createAsyncResourceLifecycle<{ prices: ModelPrices; document: unknown }>({
+    ttlMs: DAY_MS, retryMs: 60_000,
+    async prepare() {
       try {
         const saved = object(JSON.parse(await fs.readFile(cacheFile, "utf8")));
-        const savedAt = measured(saved?.fetchedAt);
-        const parsed = parseModelPrices(saved?.document);
-        if (savedAt !== null && savedAt <= Date.now() && parsed.size > 0) { prices = parsed; fetchedAt = savedAt; }
-      } catch { /* A missing or corrupt price cache does not affect token history. */ }
-    }
-    if ((fetchedAt !== null && Date.now() - fetchedAt < DAY_MS) || Date.now() < nextAttempt) return snapshot();
-    nextAttempt = Date.now() + 60_000;
-    try {
-      const response = await fetchPrices(MODEL_PRICES_URL, { signal: AbortSignal.timeout(5_000) });
-      if (!response.ok) return snapshot();
+        const fetchedAt = measured(saved?.fetchedAt);
+        const prices = parseModelPrices(saved?.document);
+        if (fetchedAt !== null && fetchedAt <= Date.now() && prices.size) return { value: { prices, document: saved?.document }, fetchedAt };
+      } catch { /* Missing/corrupt snapshots leave pricing unavailable until refresh. */ }
+      return undefined;
+    },
+    async load(_key, context) {
+      const response = await fetchPrices(MODEL_PRICES_URL, { signal: AbortSignal.any([context.signal, AbortSignal.timeout(5_000)]) });
+      context.assertCurrent();
+      if (!response.ok) throw new Error(`Price refresh failed (${response.status}).`);
       const document: unknown = await response.json();
-      const parsed = parseModelPrices(document);
-      if (!parsed.size) return snapshot();
-      prices = parsed; fetchedAt = Date.now();
+      context.assertCurrent();
+      const prices = parseModelPrices(document);
+      if (!prices.size) throw new Error("Price refresh returned no valid model rates.");
+      return { prices, document };
+    },
+    async publish(_key, snapshot, context) {
+      const temporary = `${cacheFile}.${randomUUID()}.tmp`;
       try {
-        await fs.mkdir(path.dirname(cacheFile), { recursive: true });
-        const temporary = `${cacheFile}.tmp`;
-        await fs.writeFile(temporary, JSON.stringify({ fetchedAt, document }), { mode: 0o600 });
-        await fs.rename(temporary, cacheFile);
-      } catch { /* A read-only cache location only affects the next launch. */ }
-    } catch { /* A cached table or unpriced metrics are valid offline states. */ }
-    return snapshot();
-  };
-  return { read: () => {
-    pending ??= load().finally(() => { pending = null; });
-    return pending;
-  } };
+        context.assertCurrent(); await fs.mkdir(path.dirname(cacheFile), { recursive: true }); context.assertCurrent();
+        await fs.writeFile(temporary, JSON.stringify({ fetchedAt: snapshot.fetchedAt, document: snapshot.value.document }), { mode: 0o600 });
+        context.assertCurrent(); await fs.rename(temporary, cacheFile);
+      } catch { /* Read-only cache storage affects the next launch, not current prices. */ }
+      finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
+    },
+  });
+  return { async read() {
+    const snapshot = await cache.read().catch(() => cache.peek());
+    const fetchedAt = snapshot?.fetchedAt ?? null;
+    return { prices: snapshot?.value.prices ?? new Map() as ModelPrices,
+      pricing: { status: fetchedAt === null ? "unavailable" : Date.now() >= fetchedAt && Date.now() - fetchedAt < DAY_MS ? "fresh" : "cached",
+        source: MODEL_PRICES_URL, fetchedAt: fetchedAt === null ? null : new Date(fetchedAt).toISOString() } as UsagePricingStatus };
+  }, dispose: cache.dispose };
 }
 
-let hostLoader: ReturnType<typeof createPricingLoader> | undefined;
+let hostLoader: { runtime: ReturnType<typeof getBackendRuntime>; cacheFile: string; loader: ReturnType<typeof createPricingLoader> } | undefined;
+let pricingOpen = true;
+export function startUsagePrices() { pricingOpen = true; }
+export function shutdownUsagePrices() {
+  pricingOpen = false; hostLoader?.loader.dispose(); hostLoader = undefined;
+}
 export function readUsagePrices() {
-  hostLoader ??= createPricingLoader(path.join(getBackendRuntime().getPath("userData"), "usage", "model-prices.json"));
-  return hostLoader.read();
+  if (!pricingOpen) return Promise.resolve({ prices: new Map() as ModelPrices,
+    pricing: { status: "unavailable", source: MODEL_PRICES_URL, fetchedAt: null } as UsagePricingStatus });
+  const runtime = getBackendRuntime();
+  const cacheFile = path.join(runtime.getPath("userData"), "usage", "model-prices.json");
+  if (!hostLoader || hostLoader.runtime !== runtime || hostLoader.cacheFile !== cacheFile) {
+    hostLoader?.loader.dispose(); hostLoader = { runtime, cacheFile, loader: createPricingLoader(cacheFile) };
+  }
+  return hostLoader.loader.read();
 }

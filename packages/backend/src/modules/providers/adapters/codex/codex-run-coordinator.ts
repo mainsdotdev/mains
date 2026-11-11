@@ -27,13 +27,12 @@ import {
 import type { MainsToolContext } from "../mains-tools.core";
 import { createCodexRequestBroker } from "./codex-request-broker";
 import { buildCodexTurnInput } from "./codex-turn-input";
+import { createInputReceipt } from "../input-receipt-lifecycle";
 
-interface TrackedInput {
-  accept: (turnId: string) => Promise<void>;
+type TrackedInput = ReturnType<typeof createInputReceipt<string>> & {
+  expectedTurnId?: string;
   finish: () => void;
   settled: Promise<void>;
-  accepted: boolean;
-  turnId?: string;
 }
 
 export interface CodexRunSession {
@@ -109,6 +108,7 @@ export function createCodexRunCoordinator(
   const runSinks = new Map<string, CodexRunSink>();
   const serverRequestOwners = new Map<string, string>();
   const turnOwners = new Map<string, string>();
+  const closingStatusWrites = new Set<Promise<void>>();
   const realtimeOwners = new Map<string, {
     model: string | undefined;
     work: RealtimeWorkHandlers;
@@ -121,26 +121,17 @@ export function createCodexRunCoordinator(
     runId: string,
     clientId: string,
     onAccepted: (turnId: string) => Promise<void>,
+    expectedTurnId?: string,
   ): TrackedInput {
     const sink = runSinks.get(runId);
     if (!sink) throw new Error("There is no active Codex turn to steer.");
     const existing = sink.inputs.get(clientId);
     if (existing) return existing;
-    let projection: Promise<void> | undefined;
     let finish!: () => void;
     const settled = new Promise<void>((resolve) => { finish = resolve; });
-    const tracked: TrackedInput = {
-      accepted: false,
-      settled,
-      finish,
-      accept(turnId) {
-        tracked.accepted = true;
-        tracked.turnId ??= turnId;
-        // ACK and native userMessage echo share one projection, including
-        // when completion arrives before the steer response.
-        return projection ??= Promise.resolve().then(() => onAccepted(turnId));
-      },
-    };
+    const tracked: TrackedInput = Object.assign(createInputReceipt(onAccepted), {
+      expectedTurnId, settled, finish,
+    });
     sink.inputs.set(clientId, tracked);
     return tracked;
   }
@@ -167,7 +158,7 @@ export function createCodexRunCoordinator(
         contextSkills: request.skills,
         providerTurnId,
         delivery: "steer",
-      }),
+      }), turnId,
     );
     try {
       const input = buildCodexTurnInput(request.message, request);
@@ -177,15 +168,18 @@ export function createCodexRunCoordinator(
         clientUserMessageId: request.clientUserMessageId,
         input,
       });
+      if (!response || response.turnId !== turnId) {
+        throw new Error("Codex replied for a different turn; delivery is unknown");
+      }
       await tracked.accept(response.turnId);
       return response;
     } catch (error) {
       // A native echo proves acceptance even if its RPC response was lost.
       if (tracked.accepted) {
-        await tracked.accept(tracked.turnId!);
-        return { turnId: tracked.turnId! };
+        await tracked.accept(tracked.acceptance!);
+        return { turnId: tracked.acceptance! };
       }
-      if (!/timeout|exited|stopping|connection/i.test(error instanceof Error ? error.message : String(error))) {
+      if (!/timeout|exited|stopping|connection|delivery is unknown/i.test(error instanceof Error ? error.message : String(error))) {
         sink.inputs.delete(request.clientUserMessageId);
       }
       throw error;
@@ -526,6 +520,10 @@ export function createCodexRunCoordinator(
         if (state && threadId) {
           if (!state.threadId || threadId === state.threadId) {
             state.turnId = turnId;
+            state.runtimeStatusesClosed = false;
+            // Initial turn/start input has no native id at admission. Bind it
+            // before asynchronous handlers or a later completion change state.
+            for (const input of runSinks.get(runId)?.inputs.values() ?? []) input.expectedTurnId ??= turnId;
           } else {
             ensureSubAgent(state, threadId).activeTurnId = turnId;
           }
@@ -543,6 +541,9 @@ export function createCodexRunCoordinator(
       }
       const sink = runSinks.get(runId);
       if (!sink) return;
+
+      const fileChange = eventMapper.captureFileChanges(method, params, runId);
+      if (fileChange) requestBroker.refreshFileApprovals(runId, fileChange.threadId, fileChange.itemId);
 
       sink.notificationQueue = sink.notificationQueue
         .then(() => sink.handleNotification(method, params))
@@ -566,7 +567,7 @@ export function createCodexRunCoordinator(
       const runId = runIdForLiveThread(method, params);
       const sink = runId ? runSinks.get(runId) : undefined;
       if (!runId || !sink) {
-        requestBroker.rejectInactive(server, id, method);
+        requestBroker.rejectInactive(server, id, method, params);
         return;
       }
 
@@ -635,6 +636,7 @@ export function createCodexRunCoordinator(
       const finalize = (result: TurnCompletion) => {
         if (resolved) return;
         resolved = true;
+        for (const input of sink.inputs.values()) input.retire();
         clearTimeout(timeoutTimer);
         if (runSinks.get(runId) === sink) {
           runSinks.delete(runId);
@@ -649,7 +651,17 @@ export function createCodexRunCoordinator(
           }
         }
         cancelPendingRequests(runId);
-        resolve(result);
+        const closingStatuses = eventMapper.closeRuntimeStatuses(runId);
+        if (closingStatuses.length === 0) { resolve(result); return; }
+        // Admission is closed synchronously; accepted status persistence still
+        // belongs to this turn and must settle before its terminal outcome.
+        const closing = (async () => {
+          for (const event of closingStatuses) await onEvent(event);
+        })().then(() => resolve(result), (error) => resolve({
+          status: "failed", error: `Codex status persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+        }));
+        closingStatusWrites.add(closing);
+        void closing.then(() => closingStatusWrites.delete(closing));
       };
 
       const timeoutTimer = setTimeout(() => {
@@ -677,7 +689,8 @@ export function createCodexRunCoordinator(
         if (method === "item/started" || method === "item/completed") {
           const payload = params as { threadId?: string; turnId?: string; item?: { type?: string; clientId?: string } };
           if (payload.threadId === state?.threadId && payload.item?.type === "userMessage" && payload.item.clientId && payload.turnId) {
-            await sink.inputs.get(payload.item.clientId)?.accept(payload.turnId);
+            const input = sink.inputs.get(payload.item.clientId);
+            if (input && (input.expectedTurnId ?? state?.turnId) === payload.turnId) await input.accept(payload.turnId);
           }
         }
 
@@ -863,14 +876,20 @@ export function createCodexRunCoordinator(
       try {
         await session.startTurn();
       } catch (error) {
-        runSinks.get(session.runId)?.finalize({
-          status: "failed",
-          error:
-            error instanceof Error
-              ? error.message
-              : String(error),
-        });
-        await completion;
+        const state = activeRuns.get(session.runId);
+        try {
+          if (!signal.aborted && runSinks.has(session.runId)) {
+            for (const event of eventMapper.mapNotification("error", {
+              threadId: state?.threadId, turnId: state?.turnId, error, willRetry: false,
+            }, session.runId, session.model)) await onEvent(event);
+          }
+        } finally {
+          runSinks.get(session.runId)?.finalize({
+            status: "failed",
+            error: formatCodexError(error, String(error)),
+          });
+          await completion;
+        }
         throw error;
       }
       const result = await completion;
@@ -880,8 +899,7 @@ export function createCodexRunCoordinator(
         usage: eventMapper.flushUsage(session.runId),
       };
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error);
+      const message = formatCodexError(error, error instanceof Error ? error.message : String(error));
       logger.error("executeTurn failed:", message);
       eventMapper.flushUsage(session.runId);
       return { status: "failed", summary: message };
@@ -936,13 +954,12 @@ export function createCodexRunCoordinator(
     }
   }
 
-  function shutdown(): void {
+  function shutdown(): Promise<void> {
     realtimeOwners.clear();
     for (const [runId, state] of activeRuns) {
       state.aborted = true;
       cancelPendingRequests(runId);
     }
-    activeRuns.clear();
     sessionIdMap.clear();
     sessionSubAgents.clear();
     eventMapper.clear();
@@ -952,9 +969,11 @@ export function createCodexRunCoordinator(
         error: "Codex driver is shutting down",
       });
     }
+    activeRuns.clear();
     runSinks.clear();
     serverRequestOwners.clear();
     turnOwners.clear();
+    return Promise.all([...closingStatusWrites]).then(() => undefined);
   }
 
   return {

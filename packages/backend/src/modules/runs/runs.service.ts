@@ -1,6 +1,13 @@
+import { assertNoPlanDecisionPatch } from "@mains/contracts/plan-decision";
+import { assertPlanContinuationCurrent, decidePlan } from "./plan-decision-lifecycle";
+import type { PlanDecisionPayload } from "@mains/contracts/plan-decision";
+import { retireAnswer } from "./async-answer-lifecycle";
+import { runGitOperation } from "../../runtime/git-operation-lifecycle";
+import { runTurnUndo } from "./run-turn-changes-lifecycle";
 import { assertOwnedRecord, bridgeService } from "../bridge";
 import type { ResolveArtifactPathPayload } from "@mains/contracts/runs";
 import { CHANNELS } from "@mains/contracts/channels";
+import { RUN_INPUT_ERRORS } from "@mains/contracts/run-input";
 import { conversationSettingsFrom, type ConversationSettings } from "@mains/contracts/run-settings";
 import type {
   CreateRealtimeConversationPayload,
@@ -11,9 +18,11 @@ import type {
   VoiceTaskLink,
 } from "@mains/contracts/realtime";
 import { insertRunInputArtifact } from "./run-input-artifact";
-import { answerAsyncQuestions, assertAsyncQuestionCanReply, dismissAsyncQuestions } from "./run-async-questions";
+import { assertRunCanContinue, canSteerRun, claimRunResponse, isRunResponseStarting, startingRunResponseIds } from "./run-lifecycle";
+import { answerAsyncQuestions, assertAsyncQuestionCanReply, assertAsyncQuestionDecisionCurrent, dismissAsyncQuestions } from "./run-async-questions";
 import type { AnswerAsyncQuestionsPayload, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import { providerTurnLineageMetadata } from "../../../shared/provider-turn-lineage";
+import { turnUndoOwnershipError } from "../../../shared/turn-change-ownership";
 import {
   createVoiceTaskCoordinator,
   VOICE_COORDINATOR_INSTRUCTIONS,
@@ -33,7 +42,7 @@ import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload } from "@mains
 import { providersService } from "../providers";
 import { collectionsService } from "../collections";
 import { projectsService } from "../projects";
-import { workspaceService, assertWorkspacePathExists } from "../workspace";
+import { workspaceService, assertWorkspaceCanExecute } from "../workspace";
 import { gitService } from "../git";
 import { spaceService } from "../space";
 import { appSettingsService } from "../appSettings";
@@ -76,8 +85,7 @@ import {
 } from "./run-session";
 import {
   managedRunDir,
-  removeManagedRunDir,
-  removeManagedRunImages,
+  managedRunImageDir,
   resolveRunExecution,
 } from "./run-execution";
 import {
@@ -101,6 +109,8 @@ import {
 import { resolveAtlasPageContext } from "./run-atlas-page";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
+import { assertRecordAvailable, finishRecordDeletion, isRecordTransitioning, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
+import { restoreRecordStorage, stageRecordStorage } from "../../runtime/record-storage";
 import { withImageContentHashes } from "./run-image-content-hashes";
 import { deliverableReplies, projectRunDeliverables } from "./run-deliverables";
 import { resolveOutputFilePath } from "./run-output-references";
@@ -670,8 +680,6 @@ async function syncCodexRunSession(
 // Single-item reads return null for absence; mutations on a missing
 // target throw (see CONTEXT.md "absence rule").
 // ─────────────────────────────────────────────────────────────
-// Claims cover async continuation preparation, before a live session exists.
-const continuingRuns = new Set<string>();
 const realtimeConnections = new Map<
   string,
   {
@@ -681,6 +689,12 @@ const realtimeConnections = new Map<
     dispose?: () => void;
   }
 >();
+
+function assertRunCanRetire(runId: string): void {
+  if (isRunResponseStarting(runId) || runSessionRegistry.get(runId) || realtimeConnections.has(runId)) {
+    throw new Error("Stop active responses and voice chat before archiving or deleting this run.");
+  }
+}
 
 export const runsService = {
   async createRealtimeConversation(
@@ -705,7 +719,7 @@ export const runsService = {
       if (!workspace) throw new Error("Workspace not found");
       if (workspace.accountId !== payload.accountId)
         throw new Error("Workspace does not belong to this account");
-      assertWorkspacePathExists(workspace.rootPath, workspace.name);
+      assertWorkspaceCanExecute(workspace);
     } else if (payload.workspaceId) {
       throw new Error("Work and Chat runs do not use a workspace");
     }
@@ -720,6 +734,7 @@ export const runsService = {
       composeConfigSnapshot(mode, space.providerId, null),
       undefined,
       payload.conversationSettings,
+      { inheritProviderPermissions: true },
     );
     const configSnapshot = normalizeAdditionalDirectories(
       composeConfigSnapshot(mode, space.providerId, {
@@ -753,6 +768,7 @@ export const runsService = {
 
   async startRealtime(payload: RunRealtimeStartPayload): Promise<void> {
     assertOwnedRecord("runs", payload.runId);
+    assertRecordAvailable(recordKey("run", payload.runId));
     if (
       typeof payload?.connectionId !== "string" ||
       !/^[\w-]{1,80}$/.test(payload.connectionId) ||
@@ -772,12 +788,13 @@ export const runsService = {
       );
     if (run.providerId !== PROVIDER_IDS.codex)
       throw new Error("Voice chat is currently available for Codex.");
-    if (continuingRuns.has(run.id))
+    if (isRunResponseStarting(run.id))
       throw new Error(
         "Wait for this response to start before opening voice chat.",
       );
     if (realtimeConnections.has(run.id))
       throw new Error("Voice chat is already active for this conversation.");
+    assertRecordAvailable(recordKey("run", run.id));
     let prepared!: () => void;
     const connection: NonNullable<ReturnType<typeof realtimeConnections.get>> =
       {
@@ -801,7 +818,7 @@ export const runsService = {
       if (run.workspaceId && !workspace)
         throw new Error("Run workspace no longer exists");
       if (workspace)
-        assertWorkspacePathExists(workspace.rootPath, workspace.name);
+        assertWorkspaceCanExecute(workspace);
       const execution = resolveRunExecution({
         runId: run.id,
         mode: run.mode,
@@ -897,7 +914,6 @@ export const runsService = {
               },
             ],
           });
-          await runsService.updateRun(runId, { title: args.title });
           return {
             id: runId,
             taskKey: args.taskKey,
@@ -910,6 +926,9 @@ export const runsService = {
           };
         },
         async persist(link) {
+          // The coordinator already owns the created worker before either
+          // checkpoint. A retry must save this link, never execute work again.
+          await runsService.updateRun(link.id, { title: link.title });
           await insertRunInputArtifact(run.id, {
             type: "artifact",
             kind: "report",
@@ -1663,63 +1682,95 @@ export const runsService = {
   },
 
   async deleteRun(id: string): Promise<void> {
-    assertOwnedRecord("runs", id);
-    const run = await runsRepo.findRunById(id);
-    if (!run) throw new Error("Run not found");
-    await syncCodexRunSession(run, "delete");
-    removeManagedRunDir(run.id, run.mode);
-    await runsRepo.deleteRun(id);
-    removeManagedRunImages(id);
-    await pruneUnreferencedAttachments();
+    return transitionRecord(recordKey("run", id), "delete", async () => {
+      assertOwnedRecord("runs", id);
+      const run = await runsRepo.findRunById(id);
+      if (!run) throw new Error("Run not found");
+      assertRunCanRetire(id);
+      await syncCodexRunSession(run, "delete");
+      const staged: ReturnType<typeof stageRecordStorage>[] = [];
+      try {
+        if (run.mode !== "developer") staged.push(stageRecordStorage(path.dirname(managedRunDir(id, run.mode))));
+        staged.push(stageRecordStorage(managedRunImageDir(id)));
+        await runsRepo.deleteRun(id);
+      } catch (error) {
+        if (await runsRepo.findRunById(id)) {
+          await restoreRecordStorage(staged, error);
+          throw error;
+        }
+      }
+      await finishRecordDeletion(recordKey("run", id), async () => {
+        for (const storage of staged) storage.commit();
+        await pruneUnreferencedAttachments();
+      });
+    });
   },
 
   /** Delete every run of a workspace (project removal cleanup). */
   async deleteRunsByWorkspace(workspaceId: string): Promise<void> {
     const runIds = await runsRepo.findRunIdsByWorkspaceId(workspaceId);
-    await runsRepo.deleteRunsByWorkspaceId(workspaceId);
-    for (const runId of runIds) removeManagedRunImages(runId);
-    await pruneUnreferencedAttachments();
+    for (const runId of runIds) assertRunCanRetire(runId);
+    for (const runId of runIds) await this.deleteRun(runId);
+  },
+
+  async assertWorkspaceCanRetire(workspaceId: string): Promise<void> {
+    const runIds = await runsRepo.findRunIdsByWorkspaceId(workspaceId);
+    for (const runId of runIds) {
+      assertRunCanRetire(runId);
+      if (isRecordTransitioning(recordKey("run", runId))) throw new Error("Wait for this workspace's run archive, restore or deletion to finish.");
+    }
   },
 
   async archiveRun(id: string): Promise<RunResponse> {
-    assertOwnedRecord("runs", id);
-    const run = await runsRepo.findRunById(id);
-    if (!run) throw new Error("Run not found");
-    await syncCodexRunSession(run, "archive");
-    const archived = await runsRepo.archiveRun(id);
-    if (!archived) throw new Error("Run not found");
-    return archived;
+    return transitionRecord(recordKey("run", id), "archive", async () => {
+      assertOwnedRecord("runs", id);
+      const run = await runsRepo.findRunById(id);
+      if (!run) throw new Error("Run not found");
+      assertRunCanRetire(id);
+      if (run.isArchived) return run;
+      await syncCodexRunSession(run, "archive");
+      const archived = await runsRepo.archiveRun(id);
+      if (!archived) throw new Error("Run not found");
+      return archived;
+    });
   },
 
   async unarchiveRun(id: string): Promise<RunResponse> {
-    assertOwnedRecord("runs", id);
-    const run = await runsRepo.findRunById(id);
-    if (!run) throw new Error("Run not found");
-    if (run.workspaceId) {
-      const workspace = await workspaceService.get(run.workspaceId);
-      if (workspace) assertOwnedRecord("workspaces", workspace.id);
-      if (!workspace) {
-        throw new Error("Cannot restore a run whose workspace was deleted");
+    return transitionRecord(recordKey("run", id), "restore", async () => {
+      assertOwnedRecord("runs", id);
+      const run = await runsRepo.findRunById(id);
+      if (!run) throw new Error("Run not found");
+      if (run.workspaceId) {
+        assertRecordAvailable(recordKey("workspace", run.workspaceId));
+        const workspace = await workspaceService.get(run.workspaceId);
+        if (workspace) assertOwnedRecord("workspaces", workspace.id);
+        if (!workspace) {
+          throw new Error("Cannot restore a run whose workspace was deleted");
+        }
+        if (workspace.isArchived) {
+          throw new Error("Unarchive the workspace before restoring this run");
+        }
+        assertRecordAvailable(recordKey("project", workspace.projectId));
+      } else if (run.mode === "developer") {
+        throw new Error("Cannot restore a developer run without a workspace");
       }
-      if (workspace.isArchived) {
-        throw new Error("Unarchive the workspace before restoring this run");
+      let detachCollection = false;
+      if (run.collectionId) {
+        const collection = await collectionsService.get({
+          id: run.collectionId,
+          accountId: run.accountId,
+        });
+        if (!collection || collection.isArchived) {
+          detachCollection = true;
+        }
       }
-    } else if (run.mode === "developer") {
-      throw new Error("Cannot restore a developer run without a workspace");
-    }
-    if (run.collectionId) {
-      const collection = await collectionsService.get({
-        id: run.collectionId,
-        accountId: run.accountId,
-      });
-      if (!collection || collection.isArchived) {
-        await runsRepo.moveToCollection(run.id, null);
-      }
-    }
-    await syncCodexRunSession(run, "unarchive");
-    const unarchived = await runsRepo.unarchiveRun(id);
-    if (!unarchived) throw new Error("Run not found");
-    return unarchived;
+      assertRunCanRetire(id);
+      if (!run.isArchived) return run;
+      await syncCodexRunSession(run, "unarchive");
+      const unarchived = await runsRepo.unarchiveRun(id, { detachCollection });
+      if (!unarchived) throw new Error("Run not found");
+      return unarchived;
+    });
   },
 
   // ─── Run Context Operations ───
@@ -2002,6 +2053,7 @@ export const runsService = {
     payload: UpdateToolCallPayload,
   ): Promise<void> {
     assertOwnedRecord("tool_calls", id);
+    assertNoPlanDecisionPatch(payload);
     await runsRepo.updateToolCall(id, payload);
   },
 
@@ -2038,6 +2090,7 @@ export const runsService = {
       await browserCaptureDir(),
     );
     const runId = generateRunId();
+    const releaseResponse = claimRunResponse(runId);
     try {
       const provider = await providersService.getById(payload.providerId);
       if (!provider) {
@@ -2092,7 +2145,7 @@ export const runsService = {
         if (workspace.accountId !== payload.accountId) {
           throw new Error("Workspace does not belong to this account");
         }
-        assertWorkspacePathExists(workspace.rootPath, workspace.name);
+        assertWorkspaceCanExecute(workspace);
       } else if (payload.workspaceId) {
         throw new Error("Work and Chat runs do not use a workspace");
       }
@@ -2119,6 +2172,7 @@ export const runsService = {
         composeConfigSnapshot(mode, payload.providerId, payload.configSnapshot),
         payload.model,
         payload.conversationSettings,
+        { inheritProviderPermissions: payload.configSnapshot?.sandboxMode === undefined },
       );
       const configSnapshot = normalizeAdditionalDirectories(
         composeConfigSnapshot(mode, payload.providerId, {
@@ -2182,6 +2236,11 @@ export const runsService = {
         }
       }
 
+      if (workspace) {
+        const fresh = await workspaceService.get(workspace.id);
+        if (!fresh) throw new Error("Run workspace no longer exists");
+        assertWorkspaceCanExecute(fresh);
+      }
       const session = createRunSession({
         onTurnClosed: runsService.snapshotBridgeOutputs,
         runId,
@@ -2242,7 +2301,7 @@ export const runsService = {
     } catch (error) {
       await handlePreSessionFailure(runId, error);
       throw error;
-    }
+    } finally { releaseResponse(); }
   },
 
   /**
@@ -2251,6 +2310,7 @@ export const runsService = {
    */
   async executeReview(payload: ReviewRunPayload): Promise<StartRunResponse> {
     const runId = generateRunId();
+    const releaseResponse = claimRunResponse(runId);
     try {
       const provider = await providersService.getById(payload.providerId);
       if (!provider) {
@@ -2282,7 +2342,7 @@ export const runsService = {
       if (!workspace) {
         throw new Error(`Workspace "${payload.workspaceId}" not found`);
       }
-      assertWorkspacePathExists(workspace.rootPath, workspace.name);
+      assertWorkspaceCanExecute(workspace);
 
       await workspaceService.update(payload.workspaceId, {
         status: "in_review",
@@ -2304,6 +2364,7 @@ export const runsService = {
         payload.configSnapshot,
         payload.model,
         payload.conversationSettings,
+        { inheritProviderPermissions: payload.configSnapshot?.sandboxMode === undefined },
       );
       const configSnapshot = composeConfigSnapshot(mode, payload.providerId, {
         ...payload.configSnapshot,
@@ -2331,6 +2392,11 @@ export const runsService = {
       });
       await runsRepo.updateRun(runId, { startedAt: new Date() });
 
+      if (workspace) {
+        const fresh = await workspaceService.get(workspace.id);
+        if (!fresh) throw new Error("Run workspace no longer exists");
+        assertWorkspaceCanExecute(fresh);
+      }
       const session = createRunSession({
         onTurnClosed: runsService.snapshotBridgeOutputs,
         runId,
@@ -2387,7 +2453,7 @@ export const runsService = {
     } catch (error) {
       await handlePreSessionFailure(runId, error);
       throw error;
-    }
+    } finally { releaseResponse(); }
   },
 
   /**
@@ -2397,30 +2463,19 @@ export const runsService = {
    */
   async continueRun(payload: ContinueRunPayload): Promise<ContinueRunResponse> {
     assertOwnedRecord("runs", payload.runId);
+    assertRecordAvailable(recordKey("run", payload.runId));
     const { runId, accountId, message, additionalContext } = payload;
-    if (continuingRuns.has(runId))
-      throw new Error("This conversation is already starting a response.");
-    continuingRuns.add(runId);
+    const releaseResponse = claimRunResponse(runId);
     try {
       // Preconditions must not mark someone else's live turn failed.
       const existing = await runsRepo.findRunById(runId);
       if (!existing) throw new Error("Run not found");
       if (existing.accountId !== accountId)
         throw new Error("Run does not belong to this account");
-      if (realtimeConnections.has(runId))
-        throw new Error("End voice chat before starting a new text response.");
-      if (existing.isArchived)
-        throw new Error(
-          "Unarchive this conversation before sending a message.",
-        );
-      if (
-        runSessionRegistry.get(runId) ||
-        existing.status === "running" ||
-        existing.status === "queued"
-      ) {
-        throw new Error("This conversation already has an active response.");
-      }
+      if (existing.workspaceId) assertRecordAvailable(recordKey("workspace", existing.workspaceId));
+      assertRunCanContinue(existing, runSessionRegistry.get(runId)?.phase, realtimeConnections.has(runId));
       if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
+      assertPlanContinuationCurrent(runId, payload.clientUserMessageId);
       const uploads = sanitizeRunAttachments(
         payload.attachments,
         await browserCaptureDir(),
@@ -2454,7 +2509,7 @@ export const runsService = {
           throw new Error("Run workspace no longer exists");
         }
         if (workspace) {
-          assertWorkspacePathExists(workspace.rootPath, workspace.name);
+          assertWorkspaceCanExecute(workspace);
         }
         const execution = resolveRunExecution({
           runId,
@@ -2472,6 +2527,9 @@ export const runsService = {
             throw new Error("Session cannot be resumed (not found or expired)");
           }
         }
+
+        if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
+        assertPlanContinuationCurrent(runId, payload.clientUserMessageId);
 
         const attachments = await prepareRunAttachments(
           runId,
@@ -2557,6 +2615,20 @@ export const runsService = {
           }
         }
 
+        if (workspace) {
+          const fresh = await workspaceService.get(workspace.id);
+          if (!fresh) throw new Error("Run workspace no longer exists");
+          assertWorkspaceCanExecute(fresh);
+        }
+
+        // Complete every awaited preparation before registering the native
+        // session; Stop/dismiss must still be able to retire this decision.
+        const space = await findSpaceForRun(run.spaceId);
+        if (payload.asyncQuestionReply) {
+          await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
+          assertAsyncQuestionDecisionCurrent(runId, payload.asyncQuestionReply);
+        }
+        assertPlanContinuationCurrent(runId, payload.clientUserMessageId);
         const session = createRunSession({
           onTurnClosed: runsService.snapshotBridgeOutputs,
           runId,
@@ -2569,10 +2641,6 @@ export const runsService = {
             : undefined,
           seedTurnIndex,
         });
-
-        // Re-derive the harness from the run row's mode snapshot — the space's
-        // current mode is irrelevant, but its system prompt is re-read live.
-        const space = await findSpaceForRun(run.spaceId);
 
         let acceptInput: () => void = () => {};
         const inputAccepted = new Promise<void>((resolve) => {
@@ -2649,7 +2717,7 @@ export const runsService = {
         throw error;
       }
     } finally {
-      continuingRuns.delete(runId);
+      releaseResponse();
     }
   },
 
@@ -2660,14 +2728,12 @@ export const runsService = {
     if (run.accountId !== payload.accountId)
       throw new Error("Run does not belong to this account");
     if (run.isArchived)
-      throw new Error("Unarchive this conversation before sending a message.");
+      throw new Error(RUN_INPUT_ERRORS.archived);
     if (run.providerId !== PROVIDER_IDS.codex && run.providerId !== PROVIDER_IDS.claude)
       throw new Error("This provider does not support steering.");
     const activeSession = runSessionRegistry.get(run.id);
-    if (!activeSession || run.status !== "running") {
-      throw new Error(
-        "There is no active turn to steer. The message stays queued.",
-      );
+    if (!canSteerRun(run.status, activeSession?.phase)) {
+      throw new Error(RUN_INPUT_ERRORS.noActiveTurn);
     }
     if (!payload.clientUserMessageId || typeof payload.message !== "string")
       throw new Error("Invalid message.");
@@ -2685,10 +2751,11 @@ export const runsService = {
       uploads,
       payload.clientUserMessageId,
     );
-    if (runSessionRegistry.get(run.id) !== activeSession) {
-      throw new Error("The active turn changed before sending. The message stays queued.");
-    }
     if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(run.id, payload.asyncQuestionReply);
+    if (runSessionRegistry.get(run.id) !== activeSession || !canSteerRun(run.status, activeSession?.phase)) {
+      throw new Error(RUN_INPUT_ERRORS.turnChanged);
+    }
+    if (payload.asyncQuestionReply) assertAsyncQuestionDecisionCurrent(run.id, payload.asyncQuestionReply);
     const { turnId } = await adapter.steerRun({
       runId: run.id,
       message: payload.message,
@@ -2702,6 +2769,11 @@ export const runsService = {
       skills: payload.contextSkills,
     });
     return { runId: run.id, turnId };
+  },
+
+  decidePlan(payload: PlanDecisionPayload) {
+    assertOwnedRecord("runs", payload.runId);
+    return decidePlan(payload, this);
   },
 
   answerAsyncQuestions(payload: AnswerAsyncQuestionsPayload) {
@@ -2791,6 +2863,7 @@ export const runsService = {
       await browserCaptureDir(),
     );
     const newRunId = generateRunId();
+    const releaseResponse = claimRunResponse(newRunId);
     try {
       const sourceRun = await runsRepo.findRunById(sourceRunId);
       if (!sourceRun) throw new Error("Source run not found");
@@ -2819,7 +2892,7 @@ export const runsService = {
         throw new Error("Source run workspace no longer exists");
       }
       if (workspace) {
-        assertWorkspacePathExists(workspace.rootPath, workspace.name);
+        assertWorkspaceCanExecute(workspace);
       }
 
       const adapter = createWorkAdapter(provider);
@@ -2906,6 +2979,11 @@ export const runsService = {
         }
       }
 
+      if (workspace) {
+        const fresh = await workspaceService.get(workspace.id);
+        if (!fresh) throw new Error("Run workspace no longer exists");
+        assertWorkspaceCanExecute(fresh);
+      }
       const session = createRunSession({
         onTurnClosed: runsService.snapshotBridgeOutputs,
         runId: newRunId,
@@ -2966,7 +3044,7 @@ export const runsService = {
     } catch (error) {
       await handlePreSessionFailure(newRunId, error);
       throw error;
-    }
+    } finally { releaseResponse(); }
   },
 
   /**
@@ -2977,6 +3055,7 @@ export const runsService = {
    */
   async abortRun(runId: string): Promise<void> {
     assertOwnedRecord("runs", runId);
+    retireAnswer(runId);
     const run = await runsRepo.findRunById(runId);
     if (!run) throw new Error("Run not found");
     if (run.status !== "running" && run.status !== "queued") {
@@ -3046,64 +3125,67 @@ export const runsService = {
     turnId: number,
   ): Promise<RunTurnChangesSummary> {
     assertOwnedRecord("runs", runId);
-    const run = await runsRepo.findRunById(runId);
-    if (!run) throw new Error("Run not found");
-    if (runSessionRegistry.get(runId)) {
-      throw new Error("Wait for the run to finish before undoing its changes.");
-    }
-    const changes = await runsRepo.findTurnChanges(runId, turnId);
-    if (!changes) throw new Error("This turn has no recorded changes.");
-    if (changes.undoneAt) throw new Error("These changes were already undone.");
-    if (changes.truncated) {
-      throw new Error(
-        "This turn's changes were too large to store in full, so they can't be undone.",
-      );
-    }
-    // Reverse-applying would take the parallel run's edits to these files too.
-    if (changes.files.some((f) => f.shared)) {
-      throw new Error(
-        "A parallel run changed some of these files too, so this turn can't be undone automatically.",
-      );
-    }
-    const workspace = run.workspaceId
-      ? await workspaceService.get(run.workspaceId)
-      : null;
-    if (!workspace) throw new Error("Workspace not found");
+    return runTurnUndo(runId, turnId, async () => {
+      const run = await runsRepo.findRunById(runId);
+      if (!run) throw new Error("Run not found");
+      if (runSessionRegistry.get(runId)) {
+        throw new Error("Wait for the run to finish before undoing its changes.");
+      }
+      const changes = await runsRepo.findTurnChanges(runId, turnId);
+      if (!changes) throw new Error("This turn has no recorded changes.");
+      if (changes.undoneAt) throw new Error("These changes were already undone.");
+      if (changes.truncated) {
+        throw new Error(
+          "This turn's changes were too large to store in full, so they can't be undone.",
+        );
+      }
+      // Legacy records can contain an unmarked peer shell's edits too.
+      const ownershipError = turnUndoOwnershipError(changes.files);
+      if (ownershipError) throw new Error(ownershipError);
+      const workspace = run.workspaceId
+        ? await workspaceService.get(run.workspaceId)
+        : null;
+      if (!workspace) throw new Error("Workspace not found");
 
-    const { diffText, ...summary } = changes;
-    const applies = await gitService.canApplyPatch(
-      workspace.rootPath,
-      diffText,
-      {
-        reverse: true,
-      },
-    );
-    if (!applies) {
-      throw new Error(
-        "Some of these files changed after this turn, so its changes can't be undone automatically.",
-      );
-    }
-    await gitService.applyPatch(workspace.rootPath, diffText, {
-      reverse: true,
-    });
-    const undoneAt = new Date();
-    await runsRepo.markTurnChangesUndone(changes.id, undoneAt);
+      if (run.isArchived || workspace.isArchived) throw new Error("Restore the run and workspace before undoing changes.");
+      return runGitOperation({ workspaceId: workspace.id, operationId: `turn-undo:${runId}:${turnId}`, runId, turnId, changesId: changes.id }, "undo-turn", async (scope) => {
+        await scope.bind(workspace.rootPath);
+        const result = await scope.step("applied", async () => {
+          const targetRoot = await fs.promises.realpath(workspace.rootPath);
+          const peerIds = new Set([...runSessionRegistry.active()].map((session) => session.runId));
+          for (const id of startingRunResponseIds()) if (id !== runId) peerIds.add(id);
+          for (const id of peerIds) {
+            const peer = await runsRepo.findRunById(id);
+            if (!peer?.workspaceId) continue;
+            const peerWorkspace = await workspaceService.get(peer.workspaceId);
+            const peerRoot = peerWorkspace ? await fs.promises.realpath(peerWorkspace.rootPath).catch(() => null) : null;
+            if (peer.workspaceId === workspace.id || peerRoot === targetRoot) throw new Error("Wait for workspace runs to finish before undoing changes.");
+          }
+          const { diffText, ...summary } = changes;
+          const applies = await gitService.canApplyPatch(workspace.rootPath, diffText, { reverse: true });
+          if (!applies) throw new Error("Some of these files changed after this turn, so its changes can't be undone automatically.");
+          await gitService.applyPatch(workspace.rootPath, diffText, { reverse: true });
+          return { ...summary, undoneAt: new Date() };
+        });
+        await scope.step("marked", () => runsRepo.markTurnChangesUndone(changes.id, result.undoneAt));
 
-    // The workspace's own diff (sidebar count, Changes tab) moved underneath it.
-    await workspaceService
-      .resyncDiff(workspace.id)
-      .catch((err) =>
-        console.error(
-          `[RunsService] resyncDiff after undo failed for ${runId}:`,
-          err,
-        ),
-      );
-    emit("runs:diffUpdated", {
-      runId,
-      workspaceId: workspace.id,
-      ts: Date.now(),
+        // The workspace's own diff (sidebar count, Changes tab) moved underneath it.
+        await workspaceService
+          .resyncDiff(workspace.id)
+          .catch((err) =>
+            console.error(
+              `[RunsService] resyncDiff after undo failed for ${runId}:`,
+              err,
+            ),
+          );
+        emit("runs:diffUpdated", {
+          runId,
+          workspaceId: workspace.id,
+          ts: Date.now(),
+        });
+        return result;
+      });
     });
-    return { ...summary, undoneAt };
   },
 
   async deleteRunSession(runId: string): Promise<void> {

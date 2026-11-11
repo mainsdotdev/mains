@@ -1,0 +1,40 @@
+/* Scoped PDF.js text-layer geometry. The canvas owns the visible page paint. */
+.document-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  text-align: initial;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  --scale-round-x: 0.01px;
+  --scale-round-y: 0.01px;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.document-text-layer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+  user-select: text;
+}
+.document-text-layer > :not(.markedContent),
+.document-text-layer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.document-text-layer .markedContent { display: contents; }
+[data-document-selection-mode="region"] .document-text-layer :is(span, br) { cursor: crosshair; user-select: none; }
+.document-text-layer ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); color: transparent; }
+.document-text-layer[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.document-text-layer[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.document-text-layer[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }

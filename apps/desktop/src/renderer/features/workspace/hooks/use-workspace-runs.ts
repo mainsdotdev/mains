@@ -11,7 +11,8 @@
  * Both reach back through the same three seams (`registerNewRun`,
  * `loadRunDetails`, `onRunUpdated`), which is the whole contract between them
  * and this hook. Bookkeeping that isn't React state at all — the retained-run
- * LRU, loaded flags, in-flight dedup — lives in `lib/run-cache.ts`.
+ * LRU, loaded flags, finalization — lives in `lib/run-cache.ts`. History request
+ * ordering and refresh coalescing belong to the shared transcript owner.
  */
 
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
@@ -39,9 +40,10 @@ export function useWorkspaceRuns(
   /** Workspaces the user can switch to next; their run lists are fetched ahead. */
   prefetchWorkspaceIds: readonly string[] = NO_WORKSPACE_IDS,
   /** Embedded app conversations own their selection without changing workspace tabs. */
-  options: { selection?: "workspace" | "local"; retainedRunIds?: readonly string[] } = {},
+  options: { selection?: "workspace" | "local"; retainedRunIds?: readonly string[]; operationIsCurrent?: (accountId?: string) => boolean } = {},
 ) {
   const publishSelection = options.selection !== "local";
+  const operationIsCurrent = options.operationIsCurrent;
   const [runs, setRuns] = useState<Run[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [cache] = useState(createRunCache);
@@ -140,31 +142,14 @@ export function useWorkspaceRuns(
 
   // --- Data loading ---
 
-  const loadRunDetailsOnce = loadHistory;
-
-  /** Public entry point: runs at most one `loadRunDetailsOnce` per run at a time,
-   *  with a single trailing refresh if another request arrived while it ran. This
-   *  keeps the selected window and its committed event base consistent — concurrent refreshes coalesce while paging is serialized
-   *  by useRunHistory. */
-  const loadRunDetails = useCallback(
-    async (runId: string) => {
-      // Admit one load per run; a request mid-load queues a single trailing reload.
-      if (!cache.tryAcquireLoad(runId)) return;
-      try {
-        do {
-          cache.clearPending(runId);
-          await loadRunDetailsOnce(runId);
-        } while (cache.hasPending(runId));
-      } finally {
-        cache.releaseLoad(runId);
-      }
-    },
-    [loadRunDetailsOnce, cache],
-  );
+  // Refresh coalescing and navigation now share the history owner's queue.
+  const loadRunDetails = loadHistory;
 
   /** Select a newly created run and catch up even if its first push already fired. */
   const registerNewRun = useCallback(async (runId: string): Promise<string | null> => {
+    if (operationIsCurrent && !operationIsCurrent()) return null;
     const runResult = await appApi.runs.getById(runId);
+    if (operationIsCurrent && !operationIsCurrent(runResult.success ? runResult.data?.accountId : undefined)) return null;
     if (runResult.success && runResult.data) {
       const newId = runResult.data.id;
       setRuns((prev) => [runResult.data, ...prev.filter((run) => run.id !== newId)]);
@@ -177,7 +162,7 @@ export function useWorkspaceRuns(
       return newId;
     }
     return null;
-  }, [dispatch, cache, loadRunDetails]);
+  }, [dispatch, cache, loadRunDetails, operationIsCurrent]);
 
   const loadWorkspaceRuns = useCallback(
     async (wsId: string, isCurrent: () => boolean) => {
@@ -359,8 +344,9 @@ export function useWorkspaceRuns(
 
   // --- Delegated subjects ---
 
-  const { finalizeRun } = useRunSync({
+  const { finalizeRun, beginRunRead } = useRunSync({
     runs,
+    scopeKey: JSON.stringify([viewKey, providerId, mode]),
     activeRunId,
     cache,
     loadRunDetails,
@@ -377,7 +363,7 @@ export function useWorkspaceRuns(
     forkRun,
     executeReview,
     checkCanResume,
-  } = useRunOperations({ registerNewRun, loadRunDetails, onRunUpdated });
+  } = useRunOperations({ registerNewRun, loadRunDetails, onRunUpdated, operationIsCurrent });
 
   const continueRun = useCallback(async (...args: Parameters<typeof continueRunOperation>) => {
     const succeeded = await continueRunOperation(...args);
@@ -412,15 +398,15 @@ export function useWorkspaceRuns(
     if (activeStreams.length === 0) return dbEvents;
 
     const streamRunEvents: RunEvent[] = activeStreams.map((se) => {
-      // Live progress for codex commands (e.g. npm install) routes to the
-      // AsciiLoader status line, not into the main timeline as an
-      // agent-message bubble.
+      // Command progress and provider thoughts stay out of assistant bubbles;
+      // command stdout must never be mistaken for a reasoning summary.
       const kind =
         se.kind === "user-prompt" ? "user-prompt"
           : se.kind === "image_generation" ? "image_generation"
           : se.kind === "thinking" ? "thinking"
+          : se.kind === "tool_progress" ? "tool_progress"
           : se.streamId.startsWith("cursor-think-") ? "thinking"
-          : se.streamId.startsWith("codex-cmd-") ? "thinking"
+          : se.streamId.startsWith("codex-cmd-") ? "tool_progress"
           : se.streamId.startsWith("claude-think-") ? "thinking"
           : "report";
       return {
@@ -494,24 +480,29 @@ export function useWorkspaceRuns(
       // Always reconcile on tab focus. Besides refreshing the transcript,
       // this is the immediate fallback for a dropped/backgrounded status push.
       void loadRunDetails(runId);
+      const request = beginRunRead(runId);
+      if (!request) return;
       void (async () => {
-        const result = await appApi.runs.getById(runId);
-        if (revision !== selectionRevisionRef.current || !result.success || !result.data) return;
-        const run = result.data;
-        if (run.isArchived ||
-          (providerId && run.providerId !== providerId) ||
-          (mode && run.mode !== mode) ||
-          (workspaceId && run.workspaceId !== workspaceId)) return;
+        try {
+          const result = await appApi.runs.getById(runId);
+          if (!request.current() || revision !== selectionRevisionRef.current || !result.success || !result.data) return;
+          const run = result.data;
+          if (run.isArchived ||
+            (providerId && run.providerId !== providerId) ||
+            (mode && run.mode !== mode) ||
+            (workspaceId && run.workspaceId !== workspaceId)) return;
 
-        // The other renderer can create a run after this window loaded its
-        // workspace. Selecting it must also make its tab available locally.
-        setRuns((previous) => previous.some((item) => item.id === run.id)
-          ? previous.map((item) => item.id === run.id ? run : item)
-          : [run, ...previous]);
-        if (wasPending) await finalizeRun(run);
+          // The other renderer can create a run after this window loaded its
+          // workspace. Selecting it must also make its tab available locally.
+          setRuns((previous) => previous.some((item) => item.id === run.id)
+            ? previous.map((item) => item.id === run.id ? run : item)
+            : [run, ...previous]);
+          if (wasPending) await finalizeRun(run, request.current);
+        } catch { /* Failed metadata refresh preserves the selected context for retry. */ }
+        finally { request.release(); }
       })();
     },
-    [runs, loadRunDetails, finalizeRun, workspaceId, providerId, mode],
+    [runs, loadRunDetails, finalizeRun, workspaceId, providerId, mode, beginRunRead],
   );
 
   const activeRun = runs.find((r) => r.id === activeRunId);

@@ -1,10 +1,12 @@
 import type { RunStatus } from "@/lib/redux/api/runsApi";
 import type { Transport } from "@/lib/transport/types";
 import { CHANNELS } from "@mains/contracts/channels";
+import { isRunInputDeliveryUncertain, isRunResponseBusy } from "@mains/contracts/run-input";
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import {
   forgetRunQueue, markRunMessageSending, deferRunMessage, observeQueuedRunStatus, pauseRunQueue,
   removeRunMessage, resumeRunQueue, setRunMessageError,
+  canStartRunMessage, canSubmitRunMessage, canContinueRunQueue,
   type RunQueueState, type QueuedRunMessage,
 } from "@/lib/redux/slices/runQueueSlice";
 import type { UnknownAction } from "@reduxjs/toolkit";
@@ -17,10 +19,6 @@ interface QueueControllerDeps {
   getTransport: () => Transport;
   serializeUploads: (ownerKey: string) => Promise<Attachments | undefined>;
   clearUploads: (ownerKey: string) => void;
-}
-
-function isUncertainError(error: string): boolean {
-  return /timeout|timed out|disconnect|offline|exited|stopping|socket|connection|transport|delivery is unknown/i.test(error);
 }
 
 /** One consumer per renderer; UI mounts and duplicate status events cannot race it. */
@@ -55,7 +53,7 @@ export function createRunQueueController(deps: QueueControllerDeps) {
     const queue = queueFor(ownerKey);
     let message = queue?.messages.find((entry) => entry.id === id);
     const transport = getTransport();
-    if (!queue || !message || message.status !== "queued" || !isCurrent(queue.backendId, transport)) return false;
+    if (!queue || !message || !canStartRunMessage(queue, id, delivery) || !isCurrent(queue.backendId, transport)) return false;
     locks.add(ownerKey);
     let invoked = false;
     let accepted = false;
@@ -69,19 +67,19 @@ export function createRunQueueController(deps: QueueControllerDeps) {
           dispatch(pauseRunQueue({ ownerKey, reason: "This conversation is archived." }));
           return false;
         }
-        if (run.status !== "succeeded" && !(queue.resumeRequested && (run.status === "failed" || run.status === "canceled"))) return false;
+        if (!canContinueRunQueue(run.status, queue.resumeRequested)) return false;
         if (queue.resumeRequested && (run.status === "failed" || run.status === "canceled")) dispatch(resumeRunQueue(ownerKey));
       }
       // Editing/removal may have happened while the status read was pending.
       const current = queueFor(ownerKey);
       const nextMessage = delivery === "queue" ? current?.messages[0] : current?.messages.find((entry) => entry.id === id);
-      if (!current || nextMessage?.status !== "queued" ||
-          (delivery === "queue" && current.pauseReason && !queue.resumeRequested)) return false;
+      if (!nextMessage || !canStartRunMessage(current, nextMessage.id, delivery)) return false;
       // A drag during preflight changes the FIFO head, before any input is sent.
       message = nextMessage;
       id = message.id;
       dispatch(markRunMessageSending({ ownerKey, id, delivery }));
       if (queueFor(ownerKey)?.messages.find((entry) => entry.id === id)?.status !== "sending") return false;
+      const preparationRevision = queueFor(ownerKey)?.deliveryRevision ?? 0;
       const uploads = await deps.serializeUploads(message.uploadOwnerKey);
       const { initialContext, ...context } = buildRunContextPayload(message.contextItems, uploads);
       if (!isCurrent(queue.backendId, transport)) throw new Error("Backend connection changed before sending.");
@@ -89,6 +87,10 @@ export function createRunQueueController(deps: QueueControllerDeps) {
       if (!account) throw new Error("No account found.");
       if (delivery === "queue") await waitForConversationSettings(transport, queue.runId);
       if (!isCurrent(queue.backendId, transport)) throw new Error("Backend connection changed before sending.");
+      if (!canSubmitRunMessage(queueFor(ownerKey), id, preparationRevision)) {
+        dispatch(deferRunMessage({ ownerKey, id }));
+        return false;
+      }
       invoked = true;
       await invoke(transport, delivery === "steer" ? CHANNELS.runs.steer : CHANNELS.runs.continue, [{
         runId: queue.runId, accountId: account.id, message: message.text,
@@ -100,14 +102,14 @@ export function createRunQueueController(deps: QueueControllerDeps) {
       return true;
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
-      if (delivery === "queue" && /already (?:has an active response|starting a response)/i.test(text)) {
+      if (delivery === "queue" && isRunResponseBusy(text)) {
         // Polling may see the terminal run row while its previous session is
         // still closing Git/tool state. Keep FIFO intact until it is ready.
         deferredUntil.set(ownerKey, Date.now() + 1000);
         dispatch(deferRunMessage({ ownerKey, id }));
         return false;
       }
-      dispatch(setRunMessageError({ ownerKey, id, error: text, unknown: invoked && isUncertainError(text) }));
+      dispatch(setRunMessageError({ ownerKey, id, error: text, unknown: invoked && isRunInputDeliveryUncertain(text) }));
       return false;
     } finally {
       locks.delete(ownerKey);
@@ -123,7 +125,7 @@ export function createRunQueueController(deps: QueueControllerDeps) {
     await Promise.all(Object.entries(getState().runQueue.byOwner).map(async ([ownerKey, queue]) => {
       if (queue.backendId !== activeBackend() || queue.pauseReason || locks.has(ownerKey)) return;
       const head = queue.messages[0];
-      if (!head || head.status !== "queued" || queue.messages.some((entry) => entry.status === "sending")) return;
+      if (!head || !canStartRunMessage(queue, head.id, "queue")) return;
       await send(ownerKey, head.id, "queue");
     }));
   }

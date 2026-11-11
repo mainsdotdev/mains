@@ -20,7 +20,8 @@ export function usePreviewPanel() {
     : mode === "developer" && workspaceId ? workspaceBrowserExpansionKey(backendId, workspaceId) : composerKey;
   const group = useAppSelector((state) => state.preview.byOwner[ownerKey] ?? EMPTY_PREVIEW_GROUP);
   const activeTab = group.tabs.find((tab) => tab.id === group.activeTabId) ?? null;
-  const isOpen = group.open && !!activeTab && (atlas || ready) && !shouldHideRightPanel(pathname);
+  const canOpen = (atlas || ready) && !shouldHideRightPanel(pathname);
+  const isOpen = group.open && !!activeTab && canOpen;
   const reveal = useCallback(() => {
     dispatch(setRightPanelOpen(false));
     dispatch(setSessionPanelOpen(false));
@@ -33,7 +34,7 @@ export function usePreviewPanel() {
   const toggleExpanded = useCallback(() => {
     if (!atlas) dispatch(setPreviewExpanded({ ownerKey, expanded: !group.expanded }));
   }, [dispatch, ownerKey, group.expanded, atlas]);
-  return { ownerKey, group, activeTab, isOpen, isExpanded: isOpen && group.expanded && !atlas,
+  return { ownerKey, group, activeTab, isOpen, canOpen, isExpanded: isOpen && group.expanded && !atlas,
     workspaceScoped: !atlas && mode === "developer" && !!workspaceId,
     canExpand: !atlas, select, hide, reveal, toggleExpanded };
 }

@@ -160,6 +160,9 @@ export function prepareRecord(store: BridgeStore, entry: OutboxEntry): PreparedR
     table: entry.table_name, pk: entry.pk, register: entry.register, schemaVersion: store.wireSchemaVersion ?? store.schemaVersion,
     ...portableValues(store, entry.table_name, clock), blobRefs: JSON.parse(clock.blob_refs_json ?? "[]"),
   };
+  if ("values" in body && (body.table === "atlas_tags" || body.table === "atlas_item_tags"
+    || body.table === "atlas_items" && (body.register === "bookmark" || body.values.kind === "bookmark")))
+    body.schemaVersion = Math.max(body.schemaVersion, 5);
   if (entry.op === "upsert" && !clock.portable && "values" in body) {
     // Keep the original wire references after ACK as well, so a projection repair can
     // remap integers again even when the former physical parent no longer exists.

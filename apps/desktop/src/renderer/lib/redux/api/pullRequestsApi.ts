@@ -1,3 +1,5 @@
+export type { PrRefInput } from "@mains/contracts/pull-requests";
+import type { PrRefInput } from "@mains/contracts/pull-requests";
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 
@@ -93,13 +95,6 @@ export interface PullRequestDetail extends PullRequestSummary {
   checks: PrCheck[];
 }
 
-export interface PrRefInput {
-  provider?: string;
-  owner: string;
-  repo: string;
-  number: number;
-}
-
 export type PrMergeMethod = "merge" | "squash" | "rebase";
 
 export interface PrDiff {
@@ -107,8 +102,8 @@ export interface PrDiff {
   truncated: boolean;
 }
 
-const detailTag = (ref: PrRefInput) =>
-  ({ type: "PullRequestDetail", id: `${ref.owner}/${ref.repo}#${ref.number}` }) as const;
+export const pullRequestDetailTag = (ref: PrRefInput) =>
+  ({ type: "PullRequestDetail", id: `${ref.provider ?? "github"}:${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}#${ref.number}` }) as const;
 
 export const pullRequestsApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
@@ -138,7 +133,7 @@ export const pullRequestsApi = baseApi.injectEndpoints({
         handler: CHANNELS.pullRequests.getDetail,
         args: [input],
       }),
-      providesTags: (_result, _error, input) => [detailTag(input)],
+      providesTags: (_result, _error, input) => [pullRequestDetailTag(input), "Connection"],
     }),
 
     getPrDiff: builder.query<PrDiff, PrRefInput>({
@@ -146,7 +141,7 @@ export const pullRequestsApi = baseApi.injectEndpoints({
         handler: CHANNELS.pullRequests.getDiff,
         args: [input],
       }),
-      providesTags: (_result, _error, input) => [detailTag(input)],
+      providesTags: (_result, _error, input) => [pullRequestDetailTag(input), "Connection"],
     }),
 
     mergePr: builder.mutation<void, PrRefInput & { method?: PrMergeMethod }>({
@@ -156,7 +151,7 @@ export const pullRequestsApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (_result, _error, input) => [
         "PullRequests",
-        detailTag(input),
+        pullRequestDetailTag(input),
       ],
     }),
 
@@ -170,7 +165,7 @@ export const pullRequestsApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (_result, _error, input) => [
         "PullRequests",
-        detailTag(input),
+        pullRequestDetailTag(input),
       ],
     }),
 
@@ -179,7 +174,7 @@ export const pullRequestsApi = baseApi.injectEndpoints({
         handler: CHANNELS.pullRequests.addComment,
         args: [input],
       }),
-      invalidatesTags: (_result, _error, input) => [detailTag(input)],
+      invalidatesTags: (_result, _error, input) => [pullRequestDetailTag(input)],
     }),
 
     addPrReviewComment: builder.mutation<
@@ -195,7 +190,7 @@ export const pullRequestsApi = baseApi.injectEndpoints({
         handler: CHANNELS.pullRequests.addReviewComment,
         args: [input],
       }),
-      invalidatesTags: (_result, _error, input) => [detailTag(input)],
+      invalidatesTags: (_result, _error, input) => [pullRequestDetailTag(input)],
     }),
 
     replyToPrThread: builder.mutation<
@@ -206,7 +201,7 @@ export const pullRequestsApi = baseApi.injectEndpoints({
         handler: CHANNELS.pullRequests.replyToThread,
         args: [{ provider, threadId, body }],
       }),
-      invalidatesTags: (_result, _error, input) => [detailTag(input)],
+      invalidatesTags: (_result, _error, input) => [pullRequestDetailTag(input)],
     }),
 
     resolvePrThread: builder.mutation<
@@ -217,7 +212,7 @@ export const pullRequestsApi = baseApi.injectEndpoints({
         handler: CHANNELS.pullRequests.resolveThread,
         args: [{ provider, threadId, resolved }],
       }),
-      invalidatesTags: (_result, _error, input) => [detailTag(input)],
+      invalidatesTags: (_result, _error, input) => [pullRequestDetailTag(input)],
     }),
   }),
   overrideExisting: false,

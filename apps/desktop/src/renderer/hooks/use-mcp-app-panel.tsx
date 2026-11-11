@@ -21,11 +21,12 @@ import { previewOwnerKey } from "@/features/workspace/lib/preview-tabs";
 import { sameMcpApp, sameMcpAppScope, mcpAppConversationPath, type McpAppScope } from "@/features/workspace/lib/mcp-app-panel";
 import { hasUsableMcpAppResult } from "@/features/workspace/lib/mcp-app-tool-result";
 import { McpAppCompatibilityNotice } from "@/features/workspace/components/mcp-app-compatibility-notice";
-import { mcpAppCompatibility, mcpAppPath } from "@/lib/mcp-app-extensions";
+import { mcpAppCompatibility, mcpAppLaunchIssue, mcpAppPath } from "@/lib/mcp-app-extensions";
 import { mcpAppContextItems, mcpAppContextState, mcpAppMessageText, normalizeMcpAppContext,
   type McpAppMessageOptions, type McpAppModelContextState } from "@/features/workspace/lib/mcp-app-context";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
 import { usePreviewPanel } from "./use-preview-panel";
+import { createMcpAppLaunch } from "../../shared/mcp-app-lifecycle";
 
 export interface McpAppPanelDocument {
   id: string;
@@ -102,6 +103,7 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
   const { mode } = useModeConfig();
   const backendId = useAppSelector((s) => s.backends.activeBackendId);
   const composerKey = useAppSelector((s) => s.workspace.composerContextKey);
+  const selectedCollectionId = useAppSelector((s) => s.workspace.selectedCollectionId);
   const contextItems = useAppSelector((s) => s.workspace.contextItems);
   const contextItemsByKey = useAppSelector((s) => s.workspace.contextItemsByKey);
   const groups = useAppSelector((s) => s.preview.byOwner);
@@ -135,14 +137,15 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     if (!current || (Object.keys(patch).length === 1 && "chatHost" in patch && current.chatHost === patch.chatHost)) return;
     commit({ ...current, ...patch });
   }, [commit]);
-  const activeContext = `${backendId}/${activeSpaceId}/${provider.providerId}/${mode}`;
-  const activeContextRef = useRef(activeContext);
-  const pathnameRef = useRef(pathname);
-  useLayoutEffect(() => { activeContextRef.current = activeContext; pathnameRef.current = pathname; }, [activeContext, pathname]);
+  const activeContext = JSON.stringify([backendId, activeSpaceId, provider.providerId, mode,
+    mode === "developer" ? workspaceId : selectedCollectionId]);
+  const [launch] = useState(() => createMcpAppLaunch(activeContext, pathname));
   const hostRef = useRef<McpAppConversationHost | null>(null);
-  const openingRevision = useRef(0);
-  const [opening, setOpening] = useState<string | null>(null);
+  const [openingRequest, setOpening] = useState<{ id: string; request: ReturnType<typeof launch.begin> } | null>(null);
+  const opening = openingRequest?.request.context === activeContext && openingRequest.request.path === pathname && openingRequest.request.current()
+    ? openingRequest.id : null;
   const [error, setError] = useState<string | null>(null);
+  useLayoutEffect(() => { launch.bind(activeContext, pathname); }, [launch, activeContext, pathname]);
   const sending = useRef(new Set<string>());
   const activeId = preview.activeTab?.kind === "app" ? preview.activeTab.id : "";
 
@@ -171,20 +174,29 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
   };
 
   const openGlobal = useCallback(async (app: McpAppEntrypoint) => {
+    if (mcpAppLaunchIssue(app)) {
+      launch.invalidate();
+      setOpening(null);
+      setError(null);
+      navigate(mcpAppPath(app));
+      return;
+    }
     const scope = captureScope();
     const current = Object.values(panelsRef.current).find((panel) => sameMcpAppScope(panel.scope, scope) && sameMcpApp(panel.document.app, app));
     setError(null);
-    const revision = ++openingRevision.current;
-    const openingPath = pathnameRef.current;
+    const request = launch.begin();
+    if (!request.current()) return;
+    const openingPath = request.path;
     const replace = openingPath.startsWith("/apps/");
-    const isCurrent = () => revision === openingRevision.current && activeContext === activeContextRef.current && openingPath === pathnameRef.current;
+    const isCurrent = request.current;
     if (current) {
+      request.finish();
       setOpening(null);
       reveal(current);
       showConversation(current.scope, current.runId, replace);
       return;
     }
-    setOpening(app.id);
+    setOpening({ id: app.id, request });
     try {
       let runId: string | undefined = store.getState().workspace.mcpAppRunIdByKey[mcpAppConversationKey(scope, app.id)];
       let runScope = scope;
@@ -207,8 +219,8 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
       showConversation(runScope, runId, replace);
     } catch (reason) {
       if (isCurrent()) { const message = reason instanceof Error ? reason.message : String(reason); setError(message); toast.error(message); }
-    } finally { if (revision === openingRevision.current) setOpening(null); }
-  }, [captureScope, activeContext, commit, reveal, showConversation]);
+    } finally { if (request.finish()) setOpening(null); }
+  }, [captureScope, launch, commit, reveal, showConversation, navigate]);
 
   const openTool = useCallback((result: McpAppToolOpen, automatic = false) => {
     if (!hasUsableMcpAppResult(result.output)) return;
@@ -226,13 +238,13 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     const panel = current ? { ...current, document: { ...current.document, input: result.input ?? {}, output: result.output } }
       : createPanel({ id: crypto.randomUUID(), app: { ...app, originCallId: result.app.originCallId },
           resourceRunId: result.runId, input: result.input ?? {}, output: result.output }, scope, result.runId);
-    ++openingRevision.current;
+    launch.invalidate();
     setOpening(null);
     commit(panel);
     reveal(panel);
     rememberRun(panel, result.runId);
     if (!automatic) showConversation(scope, result.runId);
-  }, [captureScope, composerKey, entries, commit, reveal, rememberRun, showConversation]);
+  }, [captureScope, composerKey, entries, commit, reveal, rememberRun, showConversation, launch]);
 
   const attachRun = useCallback((fromKey: string, runId: string, scope: McpAppScope) => {
     for (const current of Object.values(panelsRef.current)) {
@@ -310,8 +322,8 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     });
   }, []);
   const hidePreview = preview.hide;
-  const close = useCallback(() => { ++openingRevision.current; setOpening(null); hidePreview(); }, [hidePreview]);
-  useEffect(() => () => { openingRevision.current++; }, []);
+  const close = useCallback(() => { launch.invalidate(); setOpening(null); hidePreview(); }, [hidePreview, launch]);
+  useEffect(() => () => { launch.release(); }, [launch]);
   useEffect(() => {
     const ids = new Set(Object.values(groups).flatMap((group) => group.tabs.filter((tab) => tab.kind === "app").map((tab) => tab.id)));
     const removed = Object.values(panelsRef.current).filter((panel) => !ids.has(panel.document.id));
@@ -336,7 +348,7 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     return { document: panel?.document ?? null, scope: panel?.scope ?? null, ownerKey: panel?.ownerKey ?? null, runId: panel?.runId,
       isOpen, isExpanded: isOpen && preview.isExpanded, width,
       setWidth: (next) => dispatch(setBrowserPanelWidth(clamp(next, BROWSER_PANEL_WIDTH_MIN, BROWSER_PANEL_WIDTH_MAX))),
-      chatMode: panel?.chatMode ?? "input", chatVisible: !!panel?.chatVisible && !mcpAppCompatibility(panel?.document.app).notice,
+      chatMode: panel?.chatMode ?? "input", chatVisible: !!panel?.chatVisible && !mcpAppCompatibility(panel?.document.app).notice && !mcpAppLaunchIssue(panel?.document.app),
       chatHost: panel?.chatHost ?? null, ...bound, opening, error, openGlobal, openTool, close,
       toggleExpanded: preview.toggleExpanded, registerConversation, attachRun, appContext,
       modelContext: panel ? mcpAppContextState((ownItems ?? []).filter((item) => item.kind === "mcp-app"), id) : null };

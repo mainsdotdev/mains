@@ -80,6 +80,7 @@ export function AtlasTrashMenu({
   const show = (item: AtlasItem) => {
     close();
     if (item.kind === "page") requestAtlasPage({ ownerKey, id: item.id });
+    else if (item.kind === "bookmark" && item.url) void window.api.shell.openExternal(item.url).catch((error: unknown) => toast.error(atlasError(error)));
     else if (item.kind === "image") setPreview(item);
     else if (item.path)
       open({
@@ -218,7 +219,7 @@ export function AtlasTrashMenu({
                             ? "Pages"
                             : item.kind === "image"
                               ? "Images"
-                              : "Docs")}
+                              : item.kind === "bookmark" ? "Bookmarks" : "Docs")}
                       </span>
                     </span>
                   </Button>

@@ -32,6 +32,7 @@ vi.mock("../writeback/runWriteback", () => ({
   createRunWriteback: vi.fn().mockReturnValue({
     handleEvent: vi.fn().mockResolvedValue(undefined),
     getPendingToolCallCount: vi.fn().mockReturnValue(0),
+    finish: vi.fn().mockResolvedValue(undefined),
   }),
 }));
 
@@ -221,6 +222,20 @@ describe("runDispatcher", () => {
 
       const wb = vi.mocked(createRunWriteback).mock.results[0]!.value;
       expect(wb.handleEvent).toHaveBeenCalledWith({ type: "log", message: "hello" });
+    });
+    it("does not report completion before admitted writeback work drains", async () => {
+      setupHappyPath();
+      const writer = createRunWriteback({ accountId: "acc-1", providerId: "copilot_cli", runId: "fixture" });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      vi.mocked(writer.finish).mockReturnValueOnce(gate);
+      const dispatching = dispatchRun(BASE_REQUEST);
+      try {
+        await vi.waitFor(() => expect(writer.finish).toHaveBeenCalled());
+        expect(vi.mocked(runsService.updateRun).mock.calls.some(([, patch]) => patch.status === "succeeded")).toBe(false);
+        release();
+        expect((await dispatching).result.status).toBe("succeeded");
+      } finally { release(); await dispatching; }
     });
 
     it("passes model and systemPrompt to adapter", async () => {

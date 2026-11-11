@@ -1,5 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useVisibleToolCalls } from "../../lib/tool-activity-presence";
 import { isDeferredToolOutput, type DeferredToolOutput } from "@mains/contracts/runs";
+import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { appApi } from "@/lib/transport";
 import { useReplicaView } from "@/hooks/use-replica-view";
 import { TranscriptItemScope, useToolExpansion } from "../../lib/transcript-view-state";
@@ -161,7 +163,12 @@ const DISPATCH: Renderer[] = [
   })),
   withOutput<EnterPlanParams>(["enterplanmode"], EnterPlanDisplay, () => ({})),
 
-  withOutput<EditParams>(["edit", "replace"], EditDisplay, summaryAs("file_path")),
+  (ctx) => {
+    if (!["edit", "replace"].includes(ctx.toolNameLower)) return null;
+    return <EditDisplay params={pickParams<EditParams>(ctx, { file_path: ctx.summary })}
+      output={ctx.event.metadata?.output} isCompact={ctx.isCompact}
+      fullFileSnapshots={ctx.event.metadata?.providerId === PROVIDER_IDS.cursor} />;
+  },
 
   // Copilot CLI's apply_patch — the input is a raw `*** Begin Patch …` envelope
   // string (no params object). `metadata.input` is dropped upstream (a bare
@@ -269,6 +276,7 @@ const DISPATCH: Renderer[] = [
         status={eventToolStatus(ctx.event)}
         runId={typeof runId === "string" ? runId : undefined}
         mcpApp={mcpApp}
+        backgroundTask={(ctx.event.metadata?.task as TaskMetadata | undefined)?.taskType === "mcp_task"}
       />
     );
   },
@@ -291,6 +299,8 @@ const DISPATCH: Renderer[] = [
 ];
 
 export function ToolCallItem(props: ToolCallItemProps) {
+  const visibleToolIds = useMemo(() => [props.event.id], [props.event.id]);
+  useVisibleToolCalls(visibleToolIds);
   return <TranscriptItemScope id={props.event.id}>
     {isDeferredToolOutput(props.event.metadata?.output)
       ? <DeferredOutputRow {...props} deferred={props.event.metadata.output} />

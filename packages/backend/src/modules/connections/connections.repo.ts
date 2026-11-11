@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import {
@@ -7,6 +8,17 @@ import {
   connectionStates,
   entities,
 } from "../../db/schema";
+
+interface TokenRotation {
+    connectionId: string;
+    accessTokenEnc: Buffer;
+    refreshTokenEnc: Buffer | null;
+    tokenType: string;
+    expiresAt: Date | null;
+    tokenHash: Buffer;
+    keyVersion: number;
+    encryptionFormat: (typeof connectionTokens.$inferSelect)["encryptionFormat"];
+}
 
 // ─────────────────────────────────────────────────────────────
 // Connections Repository
@@ -45,6 +57,39 @@ export const connectionsRepo = {
   }) {
     const db = getDb();
     return db.insert(connections).values(data).returning().get();
+  },
+
+  credentialIdentity(provider: string, connectionId?: string) {
+    const filter = connectionId ? eq(connections.id, connectionId) : eq(connections.provider, provider);
+    return getDb().select().from(connections).where(filter).get();
+  },
+
+  /** Local fingerprint, including host-format tokens. Never sent over IPC. */
+  credentialFingerprint(connectionId: string): string {
+    const db = getDb();
+    const connection = db.select().from(connections).where(eq(connections.id, connectionId)).get();
+    const tokens = db.select().from(connectionTokens).where(and(eq(connectionTokens.connectionId, connectionId), eq(connectionTokens.isCurrent, true))).all();
+    return createHash("sha256").update(JSON.stringify([connection, tokens])).digest("hex");
+  },
+
+  syncScopeFingerprint(provider: string): string {
+    const db = getDb();
+    const connection = db.select().from(connections).where(eq(connections.provider, provider)).get();
+    if (!connection) return "missing";
+    const resources = db.select().from(connectionResources).where(and(eq(connectionResources.connectionId, connection.id), eq(connectionResources.selected, true))).all();
+    return createHash("sha256").update(JSON.stringify([this.credentialFingerprint(connection.id), resources])).digest("hex");
+  },
+
+  saveResources(connectionId: string, resources: Array<{ externalId: string; kind: string; name: string; url?: string; metadata: Record<string, unknown> }>): void {
+    const db = getDb();
+    db.transaction(() => {
+      for (const resource of resources) {
+        const existing = db.select().from(connectionResources).where(and(eq(connectionResources.connectionId, connectionId), eq(connectionResources.externalId, resource.externalId))).get();
+        const values = { ...resource, metadata: JSON.stringify(resource.metadata), selected: true, lastSeenAt: new Date() };
+        if (existing) db.update(connectionResources).set(values).where(eq(connectionResources.id, existing.id)).run();
+        else db.insert(connectionResources).values({ ...values, id: `${connectionId}:${resource.externalId}`, connectionId }).run();
+      }
+    });
   },
 
   // Token queries
@@ -87,16 +132,7 @@ export const connectionsRepo = {
    * by the other host stay current, so Desktop and Server cannot invalidate
    * one another merely by reauthorizing the same connection.
    */
-  rotateToken(data: {
-    connectionId: string;
-    accessTokenEnc: Buffer;
-    refreshTokenEnc: Buffer | null;
-    tokenType: string;
-    expiresAt: Date | null;
-    tokenHash: Buffer;
-    keyVersion: number;
-    encryptionFormat: (typeof connectionTokens.$inferSelect)["encryptionFormat"];
-  }): void {
+  rotateToken(data: TokenRotation): void {
     const db = getDb();
     db.transaction(() => {
       db.update(connectionTokens)
@@ -112,6 +148,26 @@ export const connectionsRepo = {
       db.insert(connectionTokens)
         .values({ ...data, isCurrent: true })
         .run();
+    });
+  },
+
+  activateCredentials(provider: string, metadata: string, token: TokenRotation): void {
+    const db = getDb();
+    db.transaction(() => {
+      this.rotateToken(token);
+      db.update(connections).set({ status: "active", metadata, updatedAt: sql`(unixepoch())` }).where(eq(connections.id, token.connectionId)).run();
+      db.update(connectionStates).set({ isConnected: true, connectionId: token.connectionId, updatedAt: sql`(unixepoch())` }).where(eq(connectionStates.id, provider)).run();
+    });
+  },
+
+  revokeConnection(provider: string, connectionId: string, metadata: string): void {
+    const db = getDb();
+    db.transaction(() => {
+      db.update(connections).set({ status: "revoked", metadata, updatedAt: sql`(unixepoch())` }).where(eq(connections.id, connectionId)).run();
+      db.update(connectionTokens).set({ isCurrent: false }).where(eq(connectionTokens.connectionId, connectionId)).run();
+      db.delete(entities).where(eq(entities.connectionId, connectionId)).run();
+      db.delete(connectionResources).where(eq(connectionResources.connectionId, connectionId)).run();
+      db.update(connectionStates).set({ isConnected: false, connectionId: null, updatedAt: sql`(unixepoch())` }).where(eq(connectionStates.id, provider)).run();
     });
   },
 
@@ -225,16 +281,18 @@ export const connectionsRepo = {
       .run();
   },
 
+  findResourceOwner(resourceId: string) {
+    return getDb().select({ provider: connections.provider }).from(connectionResources)
+      .innerJoin(connections, eq(connections.id, connectionResources.connectionId))
+      .where(eq(connectionResources.id, resourceId)).get();
+  },
+
   async deleteResource(resourceId: string) {
     const db = getDb();
-    await db
-      .delete(entities)
-      .where(eq(entities.resourceId, resourceId))
-      .run();
-    return db
-      .delete(connectionResources)
-      .where(eq(connectionResources.id, resourceId))
-      .returning();
+    return db.transaction(() => {
+      db.delete(entities).where(eq(entities.resourceId, resourceId)).run();
+      return db.delete(connectionResources).where(eq(connectionResources.id, resourceId)).returning().all();
+    });
   },
 
   async deleteResourcesByConnectionId(connectionId: string): Promise<void> {

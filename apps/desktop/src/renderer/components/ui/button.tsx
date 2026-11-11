@@ -10,6 +10,7 @@ export type ButtonVariant =
   | "ghost"
   | "danger"
   | "icon"
+  | "filter"
   | "subtle"
   | "bare";
 
@@ -29,6 +30,9 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   tooltipPosition?: TooltipPosition;
 }
 
+const iconStyles =
+  "inline-flex shrink-0 items-center justify-center rounded-xl text-primary-600 enabled:hover:bg-primary-300/20 focus-visible:bg-primary-300/20 focus-visible:ring-2 focus-visible:ring-accent/40 dark:text-primary-400 dark:enabled:hover:bg-primary/10 dark:focus-visible:bg-primary/10 [&>svg]:shrink-0";
+
 const variantStyles: Record<ButtonVariant, string> = {
   // Glass variants carry no bg-*/hover:bg-* — the `glass-*` utility owns the
   // background, and a hover:bg-* would win on specificity and wipe the rim.
@@ -39,7 +43,11 @@ const variantStyles: Record<ButtonVariant, string> = {
   ghost:
     "text-primary-900 dark:text-primary-100 hover:bg-primary dark:hover:bg-primary-950/10",
   danger: "text-primary glass-danger",
-  icon: "inline-flex shrink-0 items-center justify-center rounded-xl text-primary-500 enabled:hover:bg-primary-100 enabled:hover:text-primary-700 focus-visible:bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent/40 dark:enabled:hover:bg-primary-900 dark:enabled:hover:text-primary-300 dark:focus-visible:bg-primary-900 [&>svg]:shrink-0",
+  icon: iconStyles,
+  filter: cn(
+    iconStyles,
+    "enabled:hover:glass-outline enabled:hover:bg-primary/80 enabled:hover:text-primary-900 dark:enabled:hover:bg-primary/10 dark:enabled:hover:text-primary-100",
+  ),
   subtle:
     "flex items-center gap-2 hover:bg-primary/50 dark:hover:bg-primary/5",
   bare: "",
@@ -85,7 +93,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ) => {
     const variantClass = variantStyles[variant];
     const widthClass = fullWidth ? "w-full" : "";
-    const visualBaseClass = variant === "icon"
+    const visualBaseClass = variant === "icon" || variant === "filter"
       ? iconSizeStyles[iconSize]
       : variant === "bare" ? "" : controlStyles;
 

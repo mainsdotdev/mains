@@ -1,6 +1,7 @@
 import type { UploadedFile } from "@/components/ui";
 import type { ConversationQueue, QueuedRunMessage } from "@/lib/redux/slices/runQueueSlice";
 import type { ContextItem } from "./composer-context";
+import { documentAnnotationPageLabel, readDocumentAnnotations } from "@mains/contracts/document-annotations";
 
 export interface QueuedMessagePreview {
   attachment?: { type: "image" | "file"; name: string; src?: string };
@@ -14,6 +15,10 @@ function contextAttachment(item: ContextItem): QueuedMessagePreview["attachment"
     return IMAGE_EXTENSION.test(item.name)
       ? { type: "image", name: item.name, src: item.fullPath }
       : { type: "file", name: item.name };
+  }
+  if (item.kind === "presentation" || item.kind === "document") {
+    const annotation = readDocumentAnnotations([item])[0];
+    return { type: "image", name: `${item.fileName} · ${documentAnnotationPageLabel(annotation)}`, src: `data:image/png;base64,${item.screenshotData}` };
   }
   if (item.kind === "browser" || item.kind === "appshot") {
     return {

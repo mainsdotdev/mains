@@ -263,7 +263,7 @@ export function IssueFilterButton({
   return (
     <>
       <Button
-        variant="icon"
+        variant="filter"
         ref={buttonRef}
         // The menu closes on outside mousedown; without this the click that
         // follows would open it again.

@@ -1,17 +1,17 @@
-import { BRIDGE_MAX_CLOCK_SKEW_MS, type BridgeEnvelope, type BridgeLogRecord, type BridgeStream } from "@mains/contracts/bridge-protocol";
+import { createBridgeReceiveLifecycle } from "./bridge.receive-lifecycle";
+import { acknowledgePublication, clearAcknowledgedGeneration, validateAcknowledgements } from "./bridge.sync-lifecycle";
+import { BRIDGE_MAX_CLOCK_SKEW_MS, type BridgeEnvelope, type BridgeStream } from "@mains/contracts/bridge-protocol";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { SQLiteInstance } from "../../db/types";
 import { emit } from "../../ipc-kit/event-bus";
-import { installBridgeCapture, portablePkSql } from "./bridge.capture";
+import { installBridgeCapture } from "./bridge.capture";
 import { bridgePassThroughCodec, type BridgeCodec } from "./bridge.crypto";
-import { applyBridgeBatch, applyDeletedAck, isRejectedRecord, openPulledRecord, RECHECK_REASON, UNVERIFIED_REASON, verifyEnvelope, type AppliedChange } from "./bridge.applier";
-import { definition, getClock, isAtlas, quote, syncedTables } from "./bridge.sql";
-import { bestClock, captureExisting, outboxInScope, prepareRecord, readRow, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
+import { applyDeletedAck, isRejectedRecord, UNVERIFIED_REASON, type AppliedChange } from "./bridge.applier";
+import { definition, getClock } from "./bridge.sql";
+import { bestClock, outboxInScope, prepareRecord, readRow, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
 import type { BridgeTransport } from "./bridge.transport";
 import type { BridgeBlobRecords } from "./bridge.blob-records";
 import { recoverAtlasPage } from "./bridge.atlas";
-import { valueBlobBytes } from "./bridge.value-blobs";
-import { BRIDGE_TABLES } from "./bridge.records";
 import type { BridgeBlockedRecord } from "@mains/contracts/bridge";
 import { BridgeMembershipNotReadyError } from "./bridge.membership";
 
@@ -34,19 +34,6 @@ export interface BridgeEngineOptions {
    * signature binds a newer head. */
   membershipStale?: () => Promise<void>;
 }
-const backfillTables = dependencyOrder();
-function dependencyOrder(): string[] {
-  const result: string[] = [], visiting = new Set<string>();
-  function visit(table: string) {
-    if (result.includes(table) || visiting.has(table)) return;
-    visiting.add(table);
-    for (const reference of Object.values(definition(table).references)) if (reference.class === "required") visit(reference.table);
-    visiting.delete(table); result.push(table);
-  }
-  for (const [table] of syncedTables) visit(table);
-  return result;
-}
-
 /** One explicitly activated engine per SQLite database. Host startup remains unchanged in B2. */
 export function createBridgeEngine(options: BridgeEngineOptions) {
   const { sqlite, backendId, transport } = options;
@@ -57,7 +44,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   const existing = sqlite.prepare("SELECT backend_id,atlas_enabled FROM bridge_config WHERE id=1").get() as { backend_id: string; atlas_enabled: number } | undefined;
   if (existing && existing.backend_id !== backendId) throw new Error("Bridge database belongs to another backend");
   const store: BridgeStore = { sqlite, backendId, recordKey: Uint8Array.from(options.recordKey), codec: options.codec ?? bridgePassThroughCodec,
-    schemaVersion: options.schemaVersion ?? 4, wireSchemaVersion: options.schemaVersion ?? 3, atlasEnabled: options.experimentalAtlas ?? true,
+    schemaVersion: options.schemaVersion ?? 5, wireSchemaVersion: options.schemaVersion ?? 3, atlasEnabled: options.experimentalAtlas ?? true,
     recover(context) { recoverAtlasPage(context); options.recover?.(context); }, filesEnabled: !!options.blobs };
   sqlite.transaction(() => {
     sqlite.prepare(`INSERT INTO bridge_config(id,backend_id,enabled,tracking_enabled,atlas_enabled) VALUES(1,?,1,1,?)
@@ -66,8 +53,8 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     installBridgeCapture(sqlite);
   })();
   let stopped = false;
+  let stopping: Promise<void> | undefined;
   let queue: Promise<unknown> = Promise.resolve();
-  let parkedCheckedAt: string | undefined, unverifiedChecked = false;
   function deferPreparation(entry: OutboxEntry, cause: unknown) {
     if (cause instanceof BridgeMembershipNotReadyError) throw cause;
     const previous = sqlite.prepare("SELECT retry_generation,retry_attempts FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?")
@@ -90,12 +77,10 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     return Object.entries(def.references).every(([column, ref]) => ref.class !== "required" || row[column] == null ||
       definition(ref.table).stream !== "account" || accountPublished(ref.table, String(row[column]), seen));
   }
-  const parkedState = () => JSON.stringify([
-    (sqlite.prepare("SELECT total_changes() n").get() as { n: number }).n,
-    sqlite.pragma("data_version", { simple: true }), sqlite.pragma("schema_version", { simple: true }),
-    store.schemaVersion, store.atlasEnabled, store.filesEnabled,
-  ]);
+  const receiving = createBridgeReceiveLifecycle({ store, transport, blobs: options.blobs, stageLocalBeforePull: options.stageLocalBeforePull,
+    prepareIncoming: options.prepareIncoming, onApplied: announce, assertActive() { if (stopped) throw new Error("Bridge engine is stopped"); } });
   function serial<T>(work: () => Promise<T>): Promise<T> {
+    if (stopped) return Promise.reject(new Error("Bridge engine is stopped"));
     const next = queue.then(() => { if (stopped) throw new Error("Bridge engine is stopped"); return work(); });
     queue = next.catch(() => undefined);
     return next;
@@ -114,133 +99,6 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
           if (run) emit(CHANNELS.runs.statusChanged, { runId: change.pk, status: run.status, ts: Date.now() });
         } else if (change.runId) emit(CHANNELS.runs.eventPersisted, { runId: change.runId, ts: Date.now() });
       } catch (error) { console.error("Bridge event sink failed", error); }
-    }
-  }
-  function backfill(limit: number): { done: boolean; visited: number } {
-    if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid Bridge backfill limit");
-    return sqlite.transaction(() => {
-      const progress = sqlite.prepare("SELECT backfill_table,backfill_pk,backfill_done,blob_roots_version FROM bridge_config WHERE id=1").get() as { backfill_table: string | null; backfill_pk: string | null; backfill_done: number; blob_roots_version: number };
-      if (progress.backfill_done) return { done: true, visited: 0 };
-      let visited = 0;
-      const start = progress.backfill_table ? backfillTables.indexOf(progress.backfill_table) : 0;
-      for (let i = Math.max(start, 0); i < backfillTables.length; i++) {
-        const table = backfillTables[i];
-        if (isAtlas(table) && !store.atlasEnabled) continue;
-        const pkSql = portablePkSql(table, "r");
-        const after = table === progress.backfill_table ? progress.backfill_pk ?? "" : "";
-        const rows = sqlite.prepare(`SELECT ${pkSql} AS pk FROM ${quote(table)} r WHERE ${pkSql}>? ORDER BY ${pkSql} LIMIT ?`).all(after, limit - visited) as { pk: string }[];
-        for (const row of rows) {
-          if (row.pk) captureExisting(store, table, row.pk, progress.blob_roots_version < 1);
-          visited++;
-          sqlite.prepare("UPDATE bridge_config SET backfill_table=?,backfill_pk=? WHERE id=1").run(table, row.pk);
-        }
-        if (visited >= limit) return { done: false, visited };
-        sqlite.prepare("UPDATE bridge_config SET backfill_table=?,backfill_pk=NULL WHERE id=1").run(backfillTables[i + 1] ?? null);
-      }
-      const deletes = sqlite.prepare(`SELECT t.table_name,t.pk,t.stream,t.owner,t.run_id,c.physical_ms FROM bridge_tombstones t JOIN bridge_row_clock c
-        ON c.table_name=t.table_name AND c.pk=t.pk AND c.register='__delete__' WHERE c.dirty=1 AND c.origin=?
-        AND NOT EXISTS(SELECT 1 FROM bridge_outbox o WHERE o.table_name=t.table_name AND o.pk=t.pk AND o.register='__delete__')`).all(backendId) as (OutboxEntry & { physical_ms: number })[];
-      for (const entry of deletes) if (outboxInScope(store, { ...entry, op: "delete" })) {
-        sqlite.exec("UPDATE bridge_clock SET generation=generation+1 WHERE id=1");
-        sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at)
-          VALUES(?,?,'__delete__','delete',(SELECT generation FROM bridge_clock WHERE id=1),?,?,?,?)`).run(entry.table_name, entry.pk, entry.stream, entry.owner, entry.run_id, entry.physical_ms);
-      }
-      sqlite.prepare("UPDATE bridge_config SET backfill_done=1,blob_roots_version=1 WHERE id=1").run();
-      return { done: true, visited };
-    })();
-  }
-  async function applyRecords(stream: BridgeStream, records: BridgeLogRecord[], cursor?: number) {
-    if (!records.length) {
-      // An empty page can advance past compacted log entries without changing
-      // any dependency. Do not count our own cursor bookkeeping as a reason to
-      // decrypt the durable parked queue again on the next idle pull.
-      const unchanged = parkedCheckedAt === parkedState();
-      if (cursor !== undefined) sqlite.prepare(`INSERT INTO bridge_cursors(stream,seq) VALUES(?,?)
-        ON CONFLICT(stream) DO UPDATE SET seq=excluded.seq WHERE bridge_cursors.seq<excluded.seq`).run(stream, cursor);
-      if (unchanged) parkedCheckedAt = parkedState();
-      return;
-    }
-    const values = new Map<string, string>();
-    for (const record of records) {
-      const { opened } = openPulledRecord(store, stream, record.envelope);
-      if (!opened) continue; // applyBridgeBatch sets it aside.
-      const { body } = opened;
-      if (options.blobs && "schemaVersion" in body && body.schemaVersion <= store.schemaVersion && BRIDGE_TABLES[body.table] && BRIDGE_TABLES[body.table].class !== "local") {
-        for (const [key, value] of await options.blobs.values.restore(body, values)) values.set(key, value);
-      }
-    }
-    store.materializedValues = values;
-    try { announce(applyBridgeBatch(store, stream, records, cursor)); }
-    finally { store.materializedValues = undefined; }
-  }
-  async function retryParked(force = false) {
-    if (!force && parkedCheckedAt === parkedState()) return;
-    // Keep failures retryable even if no further SQL data changes. No opened
-    // plaintext is retained between calls; restart/capability changes recheck.
-    parkedCheckedAt = undefined;
-    announce(applyBridgeBatch(store, "account", []));
-    if (!options.blobs) { parkedCheckedAt = parkedState(); return; }
-    let previous = -1;
-    for (;;) {
-      const pending = sqlite.prepare("SELECT stream,seq,envelope FROM bridge_parked WHERE reason<>? ORDER BY seq").all(UNVERIFIED_REASON) as { stream: BridgeStream; seq: number; envelope: string }[];
-      if (!pending.length || pending.length === previous) break;
-      previous = pending.length;
-      for (const entry of pending) {
-        const record = { seq: entry.seq, envelope: JSON.parse(entry.envelope) }, { body } = verifyEnvelope(store, record.envelope);
-        if ("schemaVersion" in body && body.schemaVersion <= store.schemaVersion && valueBlobBytes(body)) await applyRecords(entry.stream, [record]);
-      }
-    }
-    parkedCheckedAt = parkedState();
-  }
-  /** Once per engine, a set-aside record rejoins the parked queue when an update now accepts it,
-   * or when the hub serves a copy that verifies (the earlier one may have been damaged on the way,
-   * or kept as its header only). A record the hub no longer serves was superseded and is dropped. */
-  async function recheckUnverified() {
-    if (unverifiedChecked) return;
-    const rows = sqlite.prepare("SELECT stream,seq,envelope FROM bridge_parked WHERE reason=? ORDER BY seq LIMIT 100").all(UNVERIFIED_REASON) as { stream: BridgeStream; seq: number; envelope: string }[];
-    for (const row of rows) {
-      let envelope = JSON.parse(row.envelope);
-      if (!openPulledRecord(store, row.stream, envelope).opened) {
-        // A refused deleted ACK has no log position (seq 0) to fetch again.
-        if (row.seq < 1) continue;
-        // Offline: a later pull of this engine checks again.
-        const page = await transport.pull(row.stream, row.seq - 1, 1).catch(() => null);
-        if (!page) return;
-        const fresh = page.records[0];
-        // Compaction keeps every register's latest record and every tombstone.
-        if (fresh?.seq !== row.seq) { sqlite.prepare("DELETE FROM bridge_parked WHERE stream=? AND seq=? AND reason=?").run(row.stream, row.seq, UNVERIFIED_REASON); continue; }
-        if (!openPulledRecord(store, row.stream, fresh.envelope).opened) continue;
-        envelope = fresh.envelope;
-      }
-      sqlite.prepare("UPDATE bridge_parked SET reason=?,envelope=? WHERE stream=? AND seq=?").run(RECHECK_REASON, JSON.stringify(envelope), row.stream, row.seq);
-    }
-    unverifiedChecked = true;
-  }
-  async function pull(stream: BridgeStream, full: boolean, limit: number): Promise<number> {
-    validateLimit(limit);
-    await recheckUnverified();
-    let after = full ? 0 : (sqlite.prepare("SELECT seq FROM bridge_cursors WHERE stream=?").get(stream) as { seq: number } | undefined)?.seq ?? 0;
-    let count = 0, requestLimit = limit;
-    for (;;) {
-      const page = await transport.pull(stream, after, requestLimit);
-      if (!Number.isSafeInteger(page.next) || page.next < after || page.records.length > requestLimit || page.records.some((record, index) =>
-          !Number.isSafeInteger(record.seq) || record.seq <= (index ? page.records[index - 1].seq : after) || record.seq > page.next) || page.hasMore && page.next === after)
-        throw new Error("Invalid Bridge pull page");
-      await options.prepareIncoming?.(page.records.map((record) => record.envelope));
-      // Authenticate the entire page before downloading bytes or mutating SQL.
-      // A record that fails is set aside by the apply below, not retried forever.
-      let restoredBytes = 0;
-      for (const record of page.records) {
-        const { opened } = openPulledRecord(store, stream, record.envelope);
-        if (!opened) continue;
-        const { body } = opened;
-        if ("schemaVersion" in body && body.schemaVersion <= store.schemaVersion) restoredBytes += valueBlobBytes(body);
-      }
-      // A register is bounded to 50 MiB; avoid multiplying that by a large page.
-      if (options.blobs && restoredBytes > 16 * 1024 * 1024 && page.records.length > 1) { requestLimit = 1; continue; }
-      await applyRecords(stream, page.records, page.next);
-      count += page.records.length; after = page.next;
-      if (!page.hasMore) { await retryParked(); return count; }
     }
   }
   /** The hub refused edits stamped while this device's clock ran ahead, so no replica holds a clock of
@@ -314,12 +172,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     })();
     if (!prepared.length) { if (preparationError) throw preparationError; return 0; }
     const results = await transport.push(stream, prepared.map((record) => record.envelope));
-    if (results.length !== prepared.length) throw new Error("Bridge ACK count does not match the push");
-    for (const [index, result] of results.entries()) {
-      if ("error" in result) continue;
-      if (result.publicationId !== (prepared[index].envelope.auth?.publicationId ?? "")) throw new Error("Bridge ACK identifies a different publication");
-      if ("seq" in result && (!Number.isSafeInteger(result.seq) || result.seq < 1)) throw new Error("Invalid Bridge ACK sequence");
-    }
+    validateAcknowledgements(prepared, results);
     await options.prepareIncoming?.(results.flatMap((result) => "deleted" in result ? [result.deleted] : []));
     // A batch can accept new revisions whose encrypted Page identity is unknown
     // to the hub, then reject their Page pointer as deleted. Recover before any
@@ -336,7 +189,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
         continue;
       }
       // Attachment metadata has no outbox entry of its own; its reference is ACKed separately.
-      if (i >= attachmentCount) sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
+      if (i >= attachmentCount) clearAcknowledgedGeneration(store, entry);
     }
     let rejection: string | undefined, hubMs: number | undefined, stale = false;
     const failedAttachments = new Set(prepared.slice(0, attachmentCount).flatMap((sent, index) => "error" in results[index] ? [sent.entry.pk] : []));
@@ -373,16 +226,8 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
         continue;
       }
       if (entry.table_name === "run_attachment_refs" && failedAttachments.has((JSON.parse(entry.pk) as string[])[1])) continue;
-      const clearPublication = () => sqlite.prepare("DELETE FROM bridge_publications WHERE table_name=? AND pk=? AND register=? AND stream=? AND envelope=?")
-        .run(entry.table_name, entry.pk, entry.register, entry.stream, JSON.stringify(sent.envelope));
-      if (i < attachmentCount) { clearPublication(); continue; }
-      sqlite.transaction(() => {
-        clearPublication();
-        const clock = getClock(sqlite, entry.table_name, entry.pk, entry.register);
-        if (clock && clock.physical_ms === sent.clock.physical_ms && clock.counter === sent.clock.counter && clock.origin === sent.clock.origin)
-          sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?),dirty=0,last_ack_ms=? WHERE table_name=? AND pk=? AND register=?").run(result.seq, Date.now(), entry.table_name, entry.pk, entry.register);
-        sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
-      })();
+      acknowledgePublication(store, sent, result.seq, i < attachmentCount);
+      if (i < attachmentCount) continue;
       if (options.blobs) await options.blobs.acknowledged(sent.clock);
     }
     if (stale && !resigned && options.membershipStale && !rejection && !preparationError) {
@@ -398,31 +243,13 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     return prepared.length - attachmentCount;
   }
   return {
-    /** Full account pull precedes first backfill, so untouched fixed-id seeds do not win by installation time. */
-    bootstrap(pageSize = 100) {
-      return serial(async () => {
-        if (options.stageLocalBeforePull) {
-          for (const table of backfillTables) {
-            const pkSql = portablePkSql(table, "r"); let after = "";
-            for (;;) {
-              const batch = sqlite.prepare(`SELECT ${pkSql} pk FROM ${quote(table)} r WHERE ${pkSql}>? ORDER BY ${pkSql} LIMIT 100`).all(after) as { pk: string }[];
-              sqlite.transaction(() => { for (const row of batch) if (table !== "accounts" && !(table === "spaces" && ["claude","codex","copilot","cursor"].includes(row.pk))) captureExisting(store, table, row.pk); })();
-              if (!batch.length) break;
-              after = batch.at(-1)!.pk; await new Promise<void>((resolve) => setImmediate(resolve));
-            }
-          }
-          sqlite.exec("UPDATE bridge_config SET enrollment_staging=0 WHERE id=1");
-        }
-        await pull("account", true, pageSize);
-        while (!backfill(100).done) await new Promise<void>((resolve) => setImmediate(resolve));
-      });
-    },
-    backfill(limit = 100) { return serial(async () => backfill(limit)); },
+    bootstrap(pageSize = 100) { return serial(() => receiving.bootstrap(pageSize)); },
+    backfill(limit = 100) { return serial(async () => receiving.backfill(limit)); },
     push(stream: BridgeStream = "account", limit = 100, deletesOnly = false) { return serial(() => push(stream, limit, deletesOnly)); },
-    pull(stream: BridgeStream = "account", limit = 100) { return serial(() => pull(stream, false, limit)); },
+    pull(stream: BridgeStream = "account", limit = 100) { return serial(() => receiving.pull(stream, false, limit)); },
     /** The shared queue drains in-flight pushes before pulling; local SQL writers stay unblocked. */
-    fullPull(stream: BridgeStream = "account", limit = 100) { return serial(() => pull(stream, true, limit)); },
-    retryParked() { return serial(() => retryParked(true)); },
+    fullPull(stream: BridgeStream = "account", limit = 100) { return serial(() => receiving.pull(stream, true, limit)); },
+    retryParked() { return serial(() => receiving.retryParked(true)); },
     pending() { return sqlite.prepare("SELECT * FROM bridge_outbox ORDER BY generation").all() as OutboxEntry[]; },
     canPushRun(runId: string) { return accountPublished("runs", runId); },
     blocked() {
@@ -441,7 +268,12 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     retryBlocked() { sqlite.prepare("UPDATE bridge_outbox SET retry_after_ms=0 WHERE retry_generation=generation AND retry_error IS NOT NULL").run(); },
     /** Pulled records set aside because this device could not verify or apply them. */
     unverified() { return (sqlite.prepare("SELECT count(*) AS n FROM bridge_parked WHERE reason=?").get(UNVERIFIED_REASON) as { n: number }).n; },
-    async stop() { await queue; stopped = true; store.codec.destroy?.(); },
+    stop() {
+      if (stopping) return stopping;
+      stopped = true;
+      stopping = queue.then(() => { store.codec.destroy?.(); });
+      return stopping;
+    },
   };
 }
 export type BridgeEngine = ReturnType<typeof createBridgeEngine>;

@@ -4,6 +4,7 @@ import type { BridgeUpsertBody } from "@mains/contracts/bridge-protocol";
 import { createTestDb } from "../../../test/setup-db";
 import { createBridgeTestHub, bridgeTestCodec, bridgeTestRecordKey, closeBridgeTestConnections, disposeBridgeTestHub } from "../../../test/bridge-hub";
 import { createBridgeEngine, type BridgeEngineOptions } from "./bridge.engine";
+import { removeBridgeReplicas } from "./bridge.product";
 
 const active = vi.hoisted(() => ({ fixture: null as ReturnType<typeof createTestDb> | null }));
 vi.mock("../../db/client", () => ({ getDb: () => active.fixture!.db, getSqlite: () => active.fixture!.sqlite }));
@@ -43,6 +44,45 @@ async function settle(a: Node, b: Node) {
   expect(a.sqlite.pragma("foreign_key_check")).toEqual([]);
   expect(b.sqlite.pragma("foreign_key_check")).toEqual([]);
 }
+
+describe("Atlas bookmark replication", () => {
+  it("preserves unpublished tag edits during account-object cleanup", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    const saved = await on(a, (s) => s.saveBookmark({ accountId: "default", url: "https://example.com/docs", tags: ["React"] }));
+    await settle(a, b);
+    await on(b, (s) => s.setTags({ accountId: "default", id: saved.id, tags: ["Local research"] }));
+    removeBridgeReplicas(b.sqlite, "B", true);
+    expect((await on(b, (s) => s.get({ accountId: "default", id: saved.id })))?.tags?.map((tag) => tag.name)).toEqual(["Local research"]);
+    expect(b.sqlite.pragma("foreign_key_check")).toEqual([]);
+    await a.engine.stop(); await b.engine.stop();
+  });
+  it("syncs URLs and tag identities while keeping enrichment work on its source backend", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    const saved = await on(a, (s) => s.saveBookmark({ accountId: "default", url: "https://example.com/docs", tags: ["React"] }));
+    await settle(a, b);
+    const received = await on(b, (s) => s.get({ accountId: "default", id: saved.id }));
+    expect(received).toMatchObject({ kind: "bookmark", url: "https://example.com/docs", tags: [{ id: saved.tags![0].id, name: "React" }] });
+    expect(received?.bookmarkState).toBeUndefined();
+    await on(b, (s) => s.renameTag({ accountId: "default", id: saved.tags![0].id, name: "Frontend" }));
+    await settle(a, b);
+    expect((await on(a, (s) => s.get({ accountId: "default", id: saved.id })))?.tags?.[0].name).toBe("Frontend");
+    await on(a, (s) => s.setTags({ accountId: "default", id: saved.id, tags: [] })); await settle(a, b);
+    expect((await on(b, (s) => s.get({ accountId: "default", id: saved.id })))?.tags).toEqual([]);
+    await a.engine.stop(); await b.engine.stop();
+  });
+  it("converges concurrent saves of the same URL and tag into one shared bookmark", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    await on(a, (s) => s.saveBookmark({ accountId: "default", url: "https://example.com/?utm_source=a", tags: ["React"] }));
+    await on(b, (s) => s.saveBookmark({ accountId: "default", url: "https://example.com/", tags: ["react"] }));
+    await settle(a, b);
+    const left = await on(a, (s) => s.list({ accountId: "default", kind: "bookmark" }));
+    const right = await on(b, (s) => s.list({ accountId: "default", kind: "bookmark" }));
+    expect(left).toHaveLength(1); expect(right).toHaveLength(1);
+    expect(left[0].id).toBe(right[0].id); expect(left[0].tags?.[0].id).toBe(right[0].tags?.[0].id);
+    expect(await on(a, (s) => s.listTags({ accountId: "default" }))).toHaveLength(1);
+    await a.engine.stop(); await b.engine.stop();
+  });
+});
 /** One revision per session, then one more save. That save drops the prefix older than the retained window. */
 async function agePrefix(n: Node, original: AtlasPage, extras = HISTORY_CHECKPOINTS) {
   let current = await page(n, original);

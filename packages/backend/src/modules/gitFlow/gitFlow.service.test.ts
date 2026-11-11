@@ -108,6 +108,7 @@ describe("gitFlowService — live branch invariants", () => {
       updatedAt: new Date(),
     });
     gitMock.getCurrentBranch.mockResolvedValue("feature/live");
+    gitMock.getHeadSha.mockResolvedValue("abc123");
     gitMock.getCommitPreviewDiff.mockResolvedValue("");
     // clearAllMocks keeps implementations, so every test starts from "no history".
     gitMock.getRecentSubjects.mockResolvedValue([]);
@@ -145,7 +146,7 @@ describe("gitFlowService — live branch invariants", () => {
       hash: "abc123",
       summary: "1 changed, 1 insertions, 0 deletions",
     });
-    gitMock.getHeadSha.mockRejectedValue(new Error("skip snapshot"));
+    gitMock.getHeadSha.mockResolvedValue("abc123");
 
     await gitFlowService.commit({
       workspaceId: "ws-1",

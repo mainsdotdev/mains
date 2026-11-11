@@ -1,10 +1,11 @@
 import { jwtVerify } from "jose";
 import type { AuthEnv } from "./identity";
 import { backendIdentity, backendStillApproved, type CredentialRotated } from "./devices";
+import { bridgeDevelopmentEnabled } from "./entitlement-lifecycle";
+export { bridgeDevelopmentEnabled } from "./entitlement-lifecycle";
 
 export interface BridgeIdentity { accountId: string; backendId: string; signingPublicKey: string; expiresAt: number; credentialHash?: string }
 export interface DevAuthEnv extends AuthEnv { BRIDGE_DEV_AUTH?: string; BRIDGE_DEV_SECRET?: string }
-export const bridgeDevelopmentEnabled = (env: DevAuthEnv) => env.BRIDGE_DEV_AUTH === "true" && (!env.BRIDGE_ENV || env.BRIDGE_ENV === "local");
 export async function authenticate(request: Request, env: DevAuthEnv, rotated?: CredentialRotated): Promise<BridgeIdentity | null> {
   const backend = await backendIdentity(request, env, false, rotated);
   if (backend) return { accountId: backend.account_id, backendId: backend.backend_id, signingPublicKey: backend.signing_public_key, expiresAt: backend.token_expires_at, credentialHash: backend.token_hash };

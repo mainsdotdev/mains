@@ -1,4 +1,6 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
+import { acknowledgeProviderLogin, closeProviderLogin, openProviderLogin, type ProviderAuthTerminalState } from "@/features/workspace/lib/provider-auth-terminal";
+export type { ProviderAuthTerminalState } from "@/features/workspace/lib/provider-auth-terminal";
 import type { FileNode, FileContentResponse } from "@/features/workspace/types/file-explorer";
 import type { IssueWithEntity } from "@/lib/redux/api/entitiesApi";
 import type { SignalWithEntity } from "@/lib/redux/api/signalsApi";
@@ -24,12 +26,6 @@ export interface ReviewTab {
   id: string;
   title: string;
   status: string;
-}
-
-export interface ProviderAuthTerminalState {
-  providerId: string;
-  /** Cleared after XtermTerminal writes it into the ready PTY. */
-  pendingCommand: string | null;
 }
 
 export type WorkspaceSidebarTab = "files" | "changes" | "reviews";
@@ -646,22 +642,17 @@ const workspaceSlice = createSlice({
       state.pendingGoal = null;
       state.pendingAutoExecute = false;
     },
-    openProviderAuthTerminal: (
-      state,
-      action: PayloadAction<{ providerId: string; command: string }>,
-    ) => {
-      state.providerAuthTerminal = {
-        providerId: action.payload.providerId,
-        pendingCommand: action.payload.command,
-      };
+    openProviderAuthTerminal: {
+      prepare: (request: { providerId: string; command: string }) => ({ payload: { ...request, id: crypto.randomUUID() } }),
+      reducer: (state, action: PayloadAction<{ id: string; providerId: string; command: string }>) => {
+        state.providerAuthTerminal = openProviderLogin(state.providerAuthTerminal, action.payload);
+      },
     },
-    markProviderAuthCommandSent: (state) => {
-      if (state.providerAuthTerminal) {
-        state.providerAuthTerminal.pendingCommand = null;
-      }
+    markProviderAuthCommandSent: (state, action: PayloadAction<string | undefined>) => {
+      state.providerAuthTerminal = acknowledgeProviderLogin(state.providerAuthTerminal, action.payload);
     },
-    closeProviderAuthTerminal: (state) => {
-      state.providerAuthTerminal = null;
+    closeProviderAuthTerminal: (state, action: PayloadAction<string | undefined>) => {
+      state.providerAuthTerminal = closeProviderLogin(state.providerAuthTerminal, action.payload);
     },
     setPendingReviewTarget: (state, action: PayloadAction<WorkspaceState["pendingReviewTarget"]>) => {
       state.pendingReviewTarget = action.payload;

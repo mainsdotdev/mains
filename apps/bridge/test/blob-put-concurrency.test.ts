@@ -1,6 +1,7 @@
 import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { afterEach, expect, it } from "vitest";
+import { BRIDGE_BLOB_CHUNK_BYTES } from "@mains/contracts/bridge-blobs";
 import { fixtureEntryHash, fixtureGenesis, fixturePublicKey } from "./record-signing.mjs";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -9,8 +10,8 @@ const genesis = fixtureGenesis("fixture", "A", new Uint8Array(32));
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
 async function fixture(storageLimit = 1000) {
   let release!: () => void, entered!: () => void, failure = "", puts = 0;
-  const started = new Promise<void>((resolve) => { entered = resolve; });
-  const held = new Promise<void>((resolve) => { release = resolve; });
+  let started = new Promise<void>((resolve) => { entered = resolve; });
+  let held = new Promise<void>((resolve) => { release = resolve; });
   const bundle = await build({ stdin: { resolveDir: process.cwd(), sourcefile: "put-probe.ts", contents: `
     import {AccountHub} from './src/index';
     import {bridgeAccountPrefix} from './src/quota';
@@ -30,16 +31,19 @@ async function fixture(storageLimit = 1000) {
         ctx.storage.sql.exec('INSERT OR IGNORE INTO membership(seq,hash,entry,appended_at) VALUES(0,?,?,0)',${JSON.stringify(fixtureEntryHash(genesis))},${JSON.stringify(JSON.stringify(genesis))});
       }
       identity(){return {accountId:'fixture',backendId:'A',signingPublicKey:${JSON.stringify(fixturePublicKey("fixture", "A"))},credentialHash:'test-credential',expiresAt:Date.now()+3600000}}
-      async key(id='a'){return await bridgeAccountPrefix('fixture')+id.repeat(43)+'/0'}
-      async reserve(id='a',bytes=140){return this.reserveBlobs(this.identity(),[{key:await this.key(id),bytes}],Date.now()+600000)}
-      async put(id='a',byte=7){return this.putBlob(this.identity(),await this.key(id),Date.now()+600000,new Uint8Array(140).fill(byte))}
+      async key(id='a',index=0){return await bridgeAccountPrefix('fixture')+id.repeat(43)+'/'+index}
+      async reserve(id='a',bytes=140,index=0){return this.reserveBlobs(this.identity(),[{key:await this.key(id,index),bytes}],Date.now()+600000)}
+      async put(id='a',byte=7,index=0,bytes=140){return this.putBlob(this.identity(),await this.key(id,index),Date.now()+600000,new Uint8Array(bytes).fill(byte))}
       async status(){return this.getQuota(this.identity())}
       async expire(){this.ctx.storage.sql.exec('UPDATE quota_chunks SET expires_at=0; UPDATE blob_objects SET delete_after=0');return true}
       async collectNow(){await this.alarm();return true}
       async revoke(){this.approval.active=false;return true}
-      async publish(){return this.ctx.blockConcurrencyWhile(async()=>{
+      async failReceipt(enabled){
+        this.ctx.storage.sql.exec(enabled ? "CREATE TRIGGER fail_receipt BEFORE UPDATE OF stored ON quota_chunks WHEN NEW.stored=1 BEGIN SELECT RAISE(ABORT,'Injected receipt failure'); END" : "DROP TRIGGER IF EXISTS fail_receipt");return true;
+      }
+      async publish(withBlob=false){return this.ctx.blockConcurrencyWhile(async()=>{
         const quota=await this.quota.status('fixture');
-        return this.store.push('A','account',[{header:{v:1,stream:'account',rowKey:'unrelated',registerKey:'unrelated-row',origin:'A',op:'upsert',hlc:{physicalMs:1,counter:0},blobs:[]},body:{nonce:null,payload:'opaque'},auth:{publicationId:'fixture-publication',signature:'fixture-signature',membership:{seq:0,hash:'fixture-head'}}}],{...quota,blobBytes:quota.blobBytes+quota.reservedBytes});
+        return this.store.push('A','account',[{header:{v:1,stream:'account',rowKey:'unrelated',registerKey:'unrelated-row',origin:'A',op:'upsert',hlc:{physicalMs:1,counter:0},blobs:withBlob?[{blobId:'a'.repeat(43),size:100}]:[]},body:{nonce:null,payload:'opaque'},auth:{publicationId:'fixture-publication',signature:'fixture-signature',membership:{seq:0,hash:'fixture-head'}}}],{...quota,blobBytes:quota.blobBytes+quota.reservedBytes,hasBlobs:blobs=>this.quota.hasBlobs(blobs)});
       })}
     }
     export default {async fetch(request,env){const {op,args=[]}=await request.json();return Response.json(await env.PROBE.getByName('fixture')[op](...args))}};
@@ -59,7 +63,8 @@ async function fixture(storageLimit = 1000) {
     if (!response.ok) throw new Error(await response.text());
     return response.json() as Promise<any>;
   }
-  return { call, url, started, release, fail: (value: string) => { failure = value; }, puts: () => puts,
+  return { call, url, get started() { return started; }, release: () => release(), fail: (value: string) => { failure = value; }, puts: () => puts,
+    hold() { started = new Promise<void>((resolve) => { entered = resolve; }); held = new Promise<void>((resolve) => { release = resolve; }); },
     bucket: await mf.getR2Bucket("BLOBS"),
     async evict() { const ns = await mf.getDurableObjectNamespace("PROBE"); await mf.unsafeEvictDurableObject("put-probe", "Probe", { id: ns.idFromName("fixture").toString() }); } };
 }
@@ -90,6 +95,22 @@ it("pins expired reservations against reconciliation and GC, coalesces duplicate
   expect(new Uint8Array(await (await p.bucket.get(objects[0].key))!.arrayBuffer()).every((byte) => byte === 7)).toBe(true);
 });
 
+it("protects every stored chunk of a blob while another chunk is uploading", async () => {
+  const firstBytes = BRIDGE_BLOB_CHUNK_BYTES + 40;
+  const p = await fixture(firstBytes + 1000);
+  await p.call("reserve", "a", firstBytes, 0); p.release();
+  expect(await p.call("put", "a", 7, 0, firstBytes)).toMatchObject({ status: 204 });
+  p.hold(); await p.call("reserve", "a", 140, 1);
+  const second = p.call("put", "a", 9, 1); await p.started;
+  try {
+    await p.call("expire"); await p.call("collectNow");
+    expect(await p.call("status")).toMatchObject({ blobBytes: firstBytes, reservedBytes: 140 });
+    expect((await p.bucket.list()).objects.map((object) => object.key.split("/").at(-1))).toEqual(["0"]);
+  } finally { p.release(); await second; }
+  expect(await p.call("status")).toMatchObject({ blobBytes: firstBytes + 140, reservedBytes: 0 });
+  expect((await p.bucket.list()).objects).toHaveLength(2);
+});
+
 it.each(["before", "after"])("reconciles a failed %s R2 commit across object eviction without losing quota", async (failure) => {
   const p = await fixture(); await p.call("reserve"); p.fail(failure); p.release();
   await expect(p.call("put")).rejects.toThrow();
@@ -104,6 +125,20 @@ it("rechecks revocation after I/O while retaining the physical upload charge", a
   expect(await upload).toMatchObject({ status: 403 });
   expect(await p.call("status")).toMatchObject({ reservedBytes: 0, blobBytes: 140 });
   expect((await p.bucket.list()).objects).toHaveLength(1);
+});
+
+it("withholds metadata ACK after a SQL receipt failure and recovers once without another R2 upload", async () => {
+  const p = await fixture(4096); await p.call("reserve");
+  await p.call("failReceipt", true); p.release();
+  await expect(p.call("put")).rejects.toThrow();
+  expect((await p.bucket.list()).objects).toHaveLength(1);
+  await expect(p.call("publish", true)).rejects.toThrow();
+  await p.call("failReceipt", false); await p.evict();
+  expect(await p.call("publish", true)).toMatchObject({ results: [{ seq: 1 }] });
+  expect(await p.call("put")).toMatchObject({ status: 204 });
+  expect(await p.call("publish", true)).toMatchObject({ results: [{ seq: 1 }] });
+  expect(await p.call("status")).toMatchObject({ reservedBytes: 0, blobBytes: 140 });
+  expect(p.puts()).toBe(1);
 });
 
 it("finishes the receipt after the HTTP caller disconnects during the dispatched write", async () => {

@@ -1,4 +1,5 @@
 import { RefObject, useState } from "react";
+import { codexBuiltinSandboxMode } from "@mains/contracts/codex-permissions";
 import { Plan, Lock, Edit, DontAsk, Danger, ArrowUp, Infinite } from "../icons";
 import DropdownWrapper from "../dropdown-wrapper";
 import { Button } from "../button";
@@ -55,7 +56,7 @@ const BYPASS_TRIGGER = {
 } as const;
 
 function isBypassPermissionMode(mode: string): boolean {
-  return mode === "bypassPermissions" || mode === "danger-full-access";
+  return mode === "bypassPermissions" || codexBuiltinSandboxMode(mode) === "danger-full-access";
 }
 
 const PERMISSION_MODE_LABELS: Record<string, string> = {
@@ -99,7 +100,7 @@ function PermissionModeIcon({
   mode: string;
   className?: string;
 }) {
-  switch (mode) {
+  switch (codexBuiltinSandboxMode(mode) ?? mode) {
     case "acceptEdits":
       return <Edit className={className} />;
     case "plan":
@@ -150,7 +151,7 @@ interface PermissionModeDropdownProps {
   onToggle: () => void;
   dropdownRef: RefObject<HTMLDivElement | null>;
   variant?: string;
-  modes?: readonly { value: string; label: string; description?: string }[];
+  modes?: readonly { value: string; label: string; description?: string; disabledReason?: string }[];
   modeLabels?: Record<string, string>;
   /** Codex-only: plan mode runs alongside the sandbox mode. */
   planMode?: boolean;
@@ -175,7 +176,7 @@ export function PermissionModeDropdown({
   iconOnly = false,
 }: PermissionModeDropdownProps) {
   const isCodex = variant === "codex";
-  const [isFullAccessConfirmationOpen, setIsFullAccessConfirmationOpen] = useState(false);
+  const [confirmPermission, setConfirmPermission] = useState<string | null>(null);
   const showPlanRow = isCodex && !!onPlanModeToggle;
   // Goal mode and plan mode are mutually exclusive — when goal is on, the plan
   // row is shown disabled with a tooltip pointing the user at the goal toggle.
@@ -231,9 +232,11 @@ export function PermissionModeDropdown({
             type="button"
             role="menuitemradio"
             aria-checked={permissionMode === mode.value}
+            disabled={!!("disabledReason" in mode && mode.disabledReason)}
             onClick={() => {
-              if (isCodex && mode.value === "danger-full-access") {
-                setIsFullAccessConfirmationOpen(true);
+              if ("disabledReason" in mode && mode.disabledReason) return;
+              if (isCodex && isBypassPermissionMode(mode.value)) {
+                setConfirmPermission(mode.value);
               } else {
                 onPermissionModeChange(mode.value);
               }
@@ -253,7 +256,7 @@ export function PermissionModeDropdown({
             <div className="flex flex-col flex-1 min-w-0">
               <Tiny className="mb-px">{mode.label}</Tiny>
               <Caption>
-                {mode.description}
+                {"disabledReason" in mode && mode.disabledReason ? String(mode.disabledReason) : mode.description}
               </Caption>
             </div>
           </Button>
@@ -300,11 +303,12 @@ export function PermissionModeDropdown({
         </div>
       </DropdownWrapper>
       <FullAccessConfirmationModal
-        isOpen={isFullAccessConfirmationOpen}
-        onCancel={() => setIsFullAccessConfirmationOpen(false)}
+        isOpen={confirmPermission !== null}
+        onCancel={() => setConfirmPermission(null)}
         onConfirm={() => {
-          setIsFullAccessConfirmationOpen(false);
-          onPermissionModeChange("danger-full-access");
+          const mode = modes.find((mode) => mode.value === confirmPermission);
+          setConfirmPermission(null);
+          if (mode && !("disabledReason" in mode && mode.disabledReason)) onPermissionModeChange(mode.value);
         }}
       />
     </div>

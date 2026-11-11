@@ -1,5 +1,5 @@
 import { CHANNELS } from "@mains/contracts/channels";
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedPage, AtlasIdentity, AtlasItem, AtlasLibraryOptions, AtlasLibraryPage, AtlasListItem, AtlasListOptions,
+import type { AtlasAutoTagging, AtlasTag, AtlasSaveBookmark, AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedPage, AtlasIdentity, AtlasItem, AtlasLibraryOptions, AtlasLibraryPage, AtlasListItem, AtlasListOptions,
   AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import { baseApi } from "./baseApi";
 import type { RootState } from "../index";
@@ -7,6 +7,31 @@ import { closeAtlasPageTab } from "../slices/atlasSlice";
 
 export const atlasApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
+    saveAtlasBookmark: builder.mutation<AtlasItem, AtlasSaveBookmark>({
+      query: (input) => ({ handler: CHANNELS.atlas.saveBookmark, args: [input] }), invalidatesTags: ["Atlas"],
+    }),
+    enrichAtlasBookmark: builder.mutation<AtlasItem, AtlasIdentity>({
+      query: (input) => ({ handler: CHANNELS.atlas.enrichBookmark, args: [input] }), invalidatesTags: ["Atlas"],
+    }),
+    listAtlasTags: builder.query<AtlasTag[], { accountId: string }>({
+      query: (input) => ({ handler: CHANNELS.atlas.listTags, args: [input] }), providesTags: ["Atlas"],
+    }),
+    renameAtlasTag: builder.mutation<void, AtlasIdentity & { name: string }>({
+      query: (input) => ({ handler: CHANNELS.atlas.renameTag, args: [input] }), invalidatesTags: ["Atlas"],
+    }),
+    removeAtlasTag: builder.mutation<void, AtlasIdentity>({
+      query: (input) => ({ handler: CHANNELS.atlas.removeTag, args: [input] }), invalidatesTags: ["Atlas"],
+    }),
+    setAtlasTags: builder.mutation<AtlasItem, AtlasIdentity & { tags: string[] }>({
+      query: (input) => ({ handler: CHANNELS.atlas.setTags, args: [input] }),
+      invalidatesTags: (_r, error, { id }) => error ? [] : ["Atlas", { type: "AtlasPage", id }],
+    }),
+    atlasAutoTagging: builder.query<AtlasAutoTagging, { accountId: string }>({
+      query: (input) => ({ handler: CHANNELS.atlas.getAutoTagging, args: [input] }), providesTags: ["Atlas"],
+    }),
+    setAtlasAutoTagging: builder.mutation<AtlasAutoTagging, { accountId: string; config: AtlasAutoTagging }>({
+      query: (input) => ({ handler: CHANNELS.atlas.setAutoTagging, args: [input] }), invalidatesTags: ["Atlas"],
+    }),
     atlasLibrary: builder.query<AtlasLibraryPage, AtlasLibraryOptions>({
       query: (options) => ({ handler: CHANNELS.atlas.library, args: [options] }),
       providesTags: ["Atlas", "RunArtifacts", "RunOutputs", "Runs"],
@@ -101,5 +126,7 @@ export const atlasApi = baseApi.injectEndpoints({
   }),
 });
 export const { useAtlasLibraryQuery, useListAtlasQuery, useAtlasGeneratedQuery, useAtlasPageQuery, useCreateAtlasPageMutation,
+  useSaveAtlasBookmarkMutation, useEnrichAtlasBookmarkMutation, useListAtlasTagsQuery, useRenameAtlasTagMutation,
+  useRemoveAtlasTagMutation, useSetAtlasTagsMutation, useAtlasAutoTaggingQuery, useSetAtlasAutoTaggingMutation,
   useSaveAtlasPageMutation, useAtlasRevisionsQuery, useAtlasRevisionQuery, useResolveAtlasConflictMutation, useRestoreAtlasPageMutation, useSaveToAtlasMutation,
   useUploadAtlasFileMutation, useUpdateAtlasItemMutation, useSetAtlasCoverPresetMutation, useRemoveAtlasItemMutation } = atlasApi;

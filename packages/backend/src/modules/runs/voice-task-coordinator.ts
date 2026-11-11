@@ -1,3 +1,4 @@
+import { createVoiceTaskLifecycle } from "./voice-task-lifecycle";
 import { createHash } from "node:crypto";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { VoiceTaskLink } from "@mains/contracts/realtime";
@@ -46,30 +47,20 @@ export function createVoiceTaskCoordinator(options: {
   end(): Promise<void>;
   notify(content: string, announce: boolean): void;
 }) {
-  const links = new Map(options.links.map((link) => [link.taskKey, link]));
-  const starting = new Map<string, Promise<unknown>>();
-  const deliveries = new Map<string, { message: string; promise: Promise<unknown> }>();
-  const sending = new Map<string, Promise<unknown>>();
-  const cancellations = new Map<string, number>();
-  const seen = new Map<string, string>();
-  const announced = new Map<string, string>();
-  const pending = new Set<string>();
-  const waiters = new Map<string, Set<() => void>>();
-  let closed = false;
-  let ready = false;
-  let ending = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let endTimer: ReturnType<typeof setTimeout> | undefined;
-  let checking = Promise.resolve();
+  const lifecycle = createVoiceTaskLifecycle(options.isActive, options.links);
+  const changed = lifecycle.changed;
 
   function active() {
-    if (closed || !options.isActive()) throw new Error("This voice session has ended.");
+    lifecycle.assertActive();
   }
-  async function linkedRun(runId: string) {
+  function assertLinked(runId: string) {
     active();
-    if (![...links.values()].some((link) => link.id === runId) || runId === options.parentRunId) {
+    if (!lifecycle.tasks().some((link) => link.id === runId) || runId === options.parentRunId) {
       throw new Error("This working chat is not linked to this voice conversation.");
     }
+  }
+  async function linkedRun(runId: string) {
+    assertLinked(runId);
     const run = await options.getRun(runId);
     active();
     if (!run || run.accountId !== options.accountId || run.isArchived) throw new Error("This working chat is unavailable.");
@@ -81,7 +72,10 @@ export function createVoiceTaskCoordinator(options: {
       options.getTurns(runId), options.getArtifacts(runId), options.getTools(runId),
     ]);
     const run = await linkedRun(runId);
-    if (retry && (before.status !== run.status || before.startedAt?.getTime() !== run.startedAt?.getTime())) return read(runId, false);
+    if (before.status !== run.status || before.startedAt?.getTime() !== run.startedAt?.getTime()) {
+      if (retry) return read(runId, false);
+      throw new Error("This working chat changed while reading its report. Read it again for a verified update.");
+    }
     const latestTurn = turns.at(-1);
     const report = artifacts.filter((a) => a.metadata?.kind !== "user-prompt" && a.metadata?.source === "agent_message" &&
       (!latestTurn?.startedAt || a.createdAt >= latestTurn.startedAt)).at(-1);
@@ -93,42 +87,22 @@ export function createVoiceTaskCoordinator(options: {
       run.status, latestTurn?.id, latestTurn?.status, summary, artifacts.at(-1)?.id,
       latestTool?.id, latestTool?.status, approvals.map((a) => a.requestId), run.lastError,
     ])).digest("hex").slice(0, 24);
-    return { runId, title: run.title || [...links.values()].find((link) => link.id === runId)!.title,
+    return { runId, title: run.title || lifecycle.tasks().find((link) => link.id === runId)!.title,
       status: run.status, cursor, turnId: latestTurn?.id ?? null, summary, latestTool: latestTool?.toolName ?? null,
       needsAttention: approvals.length > 0, pendingActions: approvals.map(({ requestId, kind, toolName }) => ({ requestId, kind, toolName })), error: run.lastError };
   }
 
-  function changed(runId: string) {
-    if (closed || ![...links.values()].some((link) => link.id === runId)) return;
-    for (const wake of waiters.get(runId) ?? []) wake();
-    pending.add(runId);
-    if (!ready || timer) return;
-    // Coalesce token/tool notifications. No repeated status polling.
-    timer = setTimeout(() => {
-      timer = undefined;
-      const ids = [...pending]; pending.clear();
-      checking = checking.then(async () => {
-        for (const id of ids) {
-          if (closed || !options.isActive()) return;
-          try {
-            const snapshot = await read(id);
-            const terminal = snapshot.status !== "running" && snapshot.status !== "queued";
-            if (seen.get(id) === snapshot.cursor) continue;
-            seen.set(id, snapshot.cursor);
-            const announcement = `${snapshot.turnId ?? 0}:${snapshot.status}:${snapshot.pendingActions.map((action) => action.requestId).join(",")}`;
-            const speak = terminal || snapshot.needsAttention;
-            if (speak && announced.get(id) === announcement) continue;
-            if (speak) announced.set(id, announcement);
-            // Keep spoken summaries brief; the worker retains the full report.
-            options.notify(JSON.stringify({ workingChat: id, title: snapshot.title.slice(0, 100),
-              status: snapshot.status, needsAttention: snapshot.needsAttention,
-              latestTool: snapshot.latestTool?.slice(0, 80), error: snapshot.error?.slice(0, 160),
-              report: snapshot.summary.length > 600 ? `${snapshot.summary.slice(0, 400)} … ${snapshot.summary.slice(-180)}` : snapshot.summary }), speak);
-          } catch { /* Deleted/archived or an ended call: no announcement. */ }
-        }
-      }).catch(() => {});
-    }, 1500);
-    timer.unref?.();
+  async function notice(runId: string) {
+    const snapshot = await read(runId);
+    return { cursor: snapshot.cursor,
+      announcement: `${snapshot.turnId ?? 0}:${snapshot.status}:${snapshot.pendingActions.map((action) => action.requestId).join(",")}`,
+      announce: (snapshot.status !== "running" && snapshot.status !== "queued") || snapshot.needsAttention,
+      // Keep spoken summaries brief; the worker retains the full report.
+      content: JSON.stringify({ workingChat: runId, title: snapshot.title.slice(0, 100),
+        status: snapshot.status, needsAttention: snapshot.needsAttention,
+        latestTool: snapshot.latestTool?.slice(0, 80), error: snapshot.error?.slice(0, 160),
+        report: snapshot.summary.length > 600 ? `${snapshot.summary.slice(0, 400)} … ${snapshot.summary.slice(-180)}` : snapshot.summary }),
+    };
   }
   const off = registerEventSink({ kind: "voice-coordinator", send(channel, payload) {
     if (channel !== CHANNELS.runs.statusChanged && channel !== CHANNELS.runs.eventPersisted &&
@@ -138,26 +112,14 @@ export function createVoiceTaskCoordinator(options: {
   } });
 
   const tools: VoiceTaskTools = {
-    async start(args) {
-      active();
-      const existing = links.get(args.taskKey);
-      if (existing) return { ...await read(existing.id), reused: true };
-      if (starting.has(args.taskKey)) return starting.get(args.taskKey)!;
-      const promise = (async () => {
-        const link = await options.create(args);
-        // Record ownership even if the call ended during creation. The user
-        // can still open the worker, and a later call can recover the link.
-        links.set(args.taskKey, link);
-        await options.persist(link);
-        changed(link.id);
-        return { runId: link.id, title: link.title, status: "started", reused: false };
-      })();
-      starting.set(args.taskKey, promise);
-      try { return await promise; } finally { starting.delete(args.taskKey); }
-    },
+    start: (args) => lifecycle.start(args.taskKey, {
+      create: () => options.create(args),
+      persist: async (link) => { await options.persist(link); changed(link.id); },
+      read,
+    }),
     async list() {
       active();
-      const tasks = await Promise.all([...links.values()].map(async (link) => {
+      const tasks = await Promise.all(lifecycle.tasks().map(async (link) => {
         try { return { taskKey: link.taskKey, ...await read(link.id) }; }
         catch { return { taskKey: link.taskKey, runId: link.id, title: link.title, status: "unavailable" }; }
       }));
@@ -169,38 +131,19 @@ export function createVoiceTaskCoordinator(options: {
       let snapshot = await read(runId);
       if (!timeout || snapshot.cursor !== afterCursor || snapshot.needsAttention ||
           (snapshot.status !== "running" && snapshot.status !== "queued")) return snapshot;
-      await new Promise<void>((resolve) => {
-        const wakes = waiters.get(runId) ?? new Set();
-        const done = () => { clearTimeout(waitTimer); wakes.delete(done); if (!wakes.size) waiters.delete(runId); resolve(); };
-        const waitTimer = setTimeout(done, timeout);
-        wakes.add(done); waiters.set(runId, wakes);
-        // Recheck after subscribing to cover changes between read and wait.
-        void read(runId).then((fresh) => { if (fresh.cursor !== snapshot.cursor) done(); }).catch(done);
-      });
+      await lifecycle.wait(runId, timeout, async () => (await read(runId)).cursor !== snapshot.cursor);
       snapshot = await read(runId);
       return snapshot;
     },
     async send({ runId, message, messageId }) {
-      await linkedRun(runId);
+      assertLinked(runId);
       const id = `voice-${createHash("sha256").update(`${options.parentRunId}:${messageId}`).digest("hex").slice(0, 40)}`;
       const key = `${runId}:${id}`;
-      const previous = deliveries.get(key);
-      if (previous && previous.message !== message) throw new Error("Use a new messageId for a different instruction.");
-      if (previous) {
-        const outcome = await previous.promise as { delivery: string };
-        if (outcome.delivery === "unconfirmed" && await options.inputAccepted(runId, id).catch(() => false)) {
-          return { runId, delivery: "accepted", reused: true };
-        }
-        return outcome;
-      }
-      const generation = cancellations.get(runId) ?? 0;
-      const previousSend = sending.get(runId) ?? Promise.resolve();
-      const promise = previousSend.catch(() => {}).then(async () => {
-        active();
-        if ((cancellations.get(runId) ?? 0) !== generation) throw new Error("This pending instruction was canceled when the user stopped the task.");
-        if (await options.inputAccepted(runId, id)) return { runId, delivery: "accepted", reused: true };
-        const run = await linkedRun(runId);
-        if ((cancellations.get(runId) ?? 0) !== generation) throw new Error("This pending instruction was canceled when the user stopped the task.");
+      const delivery = lifecycle.deliver(runId, key, message, async (assertCurrent) => {
+        await linkedRun(runId); assertCurrent();
+        const alreadyAccepted = await options.inputAccepted(runId, id); assertCurrent();
+        if (alreadyAccepted) return { runId, delivery: "accepted", reused: true };
+        const run = await linkedRun(runId); assertCurrent();
         try {
           await options.send(runId, message, id, run.status === "running" || run.status === "queued");
           changed(runId);
@@ -212,38 +155,32 @@ export function createVoiceTaskCoordinator(options: {
             nextStep: accepted ? undefined : "Read the working chat before sending any further instruction. Do not resend this instruction with a new messageId." };
         }
       });
-      deliveries.set(key, { message, promise });
-      sending.set(runId, promise);
-      const settled = () => { if (sending.get(runId) === promise) sending.delete(runId); };
-      void promise.then(settled, settled);
-      // Never discard unresolved deliveries during this call.
-      return promise;
+      if (delivery.reused) {
+        await linkedRun(runId);
+        const outcome = await delivery.promise;
+        if (outcome.delivery === "unconfirmed") {
+          const accepted = await options.inputAccepted(runId, id).catch(() => false); active();
+          if (accepted) return { runId, delivery: "accepted", reused: true };
+        }
+        return outcome;
+      }
+      return delivery.promise;
     },
     async cancel({ runId }) {
-      await linkedRun(runId);
-      cancellations.set(runId, (cancellations.get(runId) ?? 0) + 1);
-      await options.cancel(runId);
-      return read(runId);
+      assertLinked(runId);
+      return lifecycle.cancel(runId, async () => {
+        await linkedRun(runId);
+        await options.cancel(runId);
+        return read(runId);
+      });
     },
     async end() {
-      active();
-      if (!ending) {
-        ending = true;
-        // Let the management tool return before closing its own MCP transport.
-        endTimer = setTimeout(() => { void options.end().catch((error) => {
-          ending = false;
-          if (!closed && options.isActive()) options.notify(`Voice closure failed: ${String(error).slice(0, 300)}. The user can retry ending the call.`, true);
-        }); }, 250);
-      }
+      lifecycle.end(options.end, (error) => options.notify(`Voice closure failed: ${String(error).slice(0, 300)}. The user can retry ending the call.`, true));
       return { ending: true, workingChatsContinue: true };
     },
   };
   return { tools,
-    activate() { ready = true; for (const link of links.values()) changed(link.id); },
-    dispose() {
-      closed = true; off(); clearTimeout(timer); clearTimeout(endTimer);
-      for (const wakes of waiters.values()) for (const wake of [...wakes]) wake();
-      waiters.clear(); pending.clear();
-    },
+    activate() { lifecycle.activate(notice, options.notify); },
+    dispose() { lifecycle.dispose(); off(); },
   };
 }

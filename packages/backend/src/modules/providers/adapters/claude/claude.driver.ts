@@ -1,3 +1,4 @@
+import { createClaudeQueryLifecycle, createClaudeQueryPool, type ClaudeQueryScope } from "./claude-query-lifecycle";
 import { pickRunSettingConfig } from "@mains/contracts/run-settings";
 import { bridgeService } from "../../../bridge";
 // ─────────────────────────────────────────────────────────────
@@ -28,7 +29,8 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
-import { spawnProvider as spawn } from "../provider-process";
+import { spawnProvider as spawn, killProviderProcess } from "../provider-process";
+import { createAsyncResourceLifecycle, type ResourceReadContext } from "../../../../runtime/async-resource-lifecycle";
 import type {
   AcquiredSession,
   AgentsConfig,
@@ -109,6 +111,7 @@ interface SDKHookMatcher {
     ) => Promise<Record<string, unknown>>
   >;
   timeout?: number;
+  onFailure?: "continue" | "block";
 }
 
 type SDKHooksConfig = {
@@ -505,9 +508,21 @@ interface SDKResultError extends SDKResultBase {
     | "error_max_budget_usd"
     | "error_max_structured_output_retries";
   errors: string[];
+  startup_failure_reason?: string;
 }
 
 type SDKResultMessage = SDKResultSuccess | SDKResultError;
+
+function describeClaudeResultError(result: SDKResultError): string {
+  const reasons: Record<string, string> = {
+    config_file_invalid: "Claude could not start because a configuration file contains invalid JSON. Fix the file named below and try again.",
+    initialize_not_first: "Claude could not initialize its session. Restart the Claude runtime and try again.",
+    sandbox_required_unavailable: "Claude could not start because its required sandbox is unavailable.",
+  };
+  const reason = result.startup_failure_reason;
+  return [reason ? reasons[reason] ?? `Claude could not start (${reason}).` : undefined,
+    ...result.errors].filter(Boolean).join(" ") || "Claude could not complete this request.";
+}
 
 interface ClaudeTurnModelMessage {
   type?: unknown;
@@ -598,6 +613,7 @@ export interface SDKSystemMessage {
     | "model_refusal_no_fallback"
     | "permission_denied"
     | "informational"
+    | "session_writes_lost"
     | "notification";
   uuid: string;
   session_id: string;
@@ -652,6 +668,8 @@ export interface SDKSystemMessage {
   last_tool_name?: string;
   summary?: string;
   output_file?: string;
+  /** CLI-owned links from a background MCP task's final result. */
+  resource_links?: unknown[];
   skip_transcript?: boolean;
   usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number };
   // subtype: "task_updated" — a wire-safe subset of the changed task fields
@@ -682,6 +700,10 @@ export interface SDKSystemMessage {
   // subtype: "notification"
   text?: string;
   priority?: "low" | "medium" | "high" | "immediate";
+  // subtype: "session_writes_lost"
+  error_code?: string;
+  lost?: string[];
+  transcript_session_ids?: string[];
 }
 
 interface SDKBackgroundTask {
@@ -779,6 +801,7 @@ interface SDKSlashCommand {
 }
 
 interface SDKInitializationResult {
+  capabilities?: string[];
   commands: SDKSlashCommand[];
   output_style: string;
   available_output_styles: string[];
@@ -883,6 +906,7 @@ function setClaudePermissionMode(
 }
 
 interface ClaudeSession {
+  owner: ClaudeQueryScope;
   runId: string;
   options: SDKOptions;
   abortController: AbortController;
@@ -902,6 +926,7 @@ interface ClaudeSession {
     lastAssistantMessage?: { id: string; hasText: boolean; hasTools: boolean };
     lastFastModeState?: FastModeState;
     lastAssistantError?: string;
+    lastResultError?: string;
     sawRateLimitNotice?: boolean;
     /** `system/init`'s protocol capabilities, for features checked mid-turn. */
     capabilities?: string[];
@@ -1894,6 +1919,7 @@ export function buildMcpAppCallRequest(
     tool: mcpToolWireName(server, tool),
     ...(args !== undefined ? { arguments: args } : {}),
     result_not_for_model: true,
+    check_permissions: true,
   };
 }
 
@@ -1947,8 +1973,8 @@ export function toMcpCallToolResult(raw: unknown, fallbackContent?: unknown): Mc
 
 /**
  * Refuse an app's tool call the MCP Apps rules do not allow. The app is
- * untrusted page content and `mcp_call` skips permission checks, so the tool
- * must be one its own server reports, and not one it keeps for the model
+ * untrusted page content, so the tool must be one its own server reports,
+ * and not one it keeps for the model
  * (`visibility` without "app"). An unconnected server fails closed.
  */
 export function assertMcpToolCallableFromApp(
@@ -2051,6 +2077,7 @@ export function mapTaskMessage(
     case "task_notification": {
       const status = msg.status === "completed" || msg.status === "failed" || msg.status === "stopped" ? msg.status : undefined;
       return { ...base, phase: "completed", status, summary: msg.summary, outputFile: msg.output_file,
+        resourceLinks: status === "completed" && task.taskType === "mcp_task" ? msg.resource_links : undefined,
         usage, error: status === "failed" ? msg.summary : undefined };
     }
     default:
@@ -2507,6 +2534,7 @@ export function mapSDKMessage(
         const matchingBackground = background && background.run_id === systemMsg.run_id;
         const taskEvent = mapTaskMessage(matchingBackground ? {
           ...systemMsg,
+          task_type: systemMsg.task_type ?? background.task_type,
           parent_task_id: systemMsg.parent_task_id ?? background.parent_task_id,
           is_backgrounded: systemMsg.is_backgrounded ?? true,
           ambient: systemMsg.ambient ?? background.ambient ?? false,
@@ -2566,6 +2594,18 @@ export function mapSDKMessage(
             agentId: systemMsg.agent_id,
             reason,
           },
+        });
+      } else if (systemMsg.subtype === "session_writes_lost") {
+        const transcriptLost = systemMsg.lost?.includes("transcript");
+        const cause = systemMsg.error_code === "EDQUOT" ? "the disk quota is exhausted" : "the disk is full";
+        events.push({
+          type: "log",
+          message: transcriptLost
+            ? `Claude could not save part of this conversation because ${cause}. Resuming it may miss messages. Free disk space before continuing.`
+            : `Claude could not save its settings because ${cause}. Free disk space before continuing.`,
+          level: "warn", ts,
+          metadata: { source: "session_writes_lost", errorCode: systemMsg.error_code,
+            lost: systemMsg.lost, transcriptSessionIds: systemMsg.transcript_session_ids },
         });
       } else if (systemMsg.subtype === "informational" && systemMsg.content) {
         events.push({
@@ -2664,11 +2704,15 @@ export function mapSDKMessage(
       }
 
       if (resultMsg.subtype !== "success" && resultMsg.is_error) {
+        cs.state.lastResultError = describeClaudeResultError(resultMsg);
         events.push({
           type: "log",
-          message: `[error] ${resultMsg.errors.join(", ")}`,
+          message: `[error] ${cs.state.lastResultError}`,
           level: "error",
           ts,
+          ...(resultMsg.startup_failure_reason ? { metadata: {
+            source: "startup_failure", reason: resultMsg.startup_failure_reason,
+          } } : {}),
         });
       }
 
@@ -2870,9 +2914,9 @@ export function mapSDKMessage(
 // ─────────────────────────────────────────────────────────────
 
 export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDriver {
+  const queryLifecycle = createClaudeQueryLifecycle<typeof import("@anthropic-ai/claude-agent-sdk")>();
   // SDK loader state
   let sdkLoaded = false;
-  let loadError: Error | null = null;
   let queryFn:
     | ((options: { prompt: string | AsyncIterable<unknown>; options?: SDKOptions }) => SDKQuery)
     | null = null;
@@ -2897,35 +2941,98 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     | null = null;
 
   // Cross-run TTL caches
-  let cachedModels: ModelInfo[] | null = null;
-  let cachedModelsTimestamp = 0;
-  const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
+  const modelsCache = createAsyncResourceLifecycle<ModelInfo[]>({
+    ttlMs: 5 * 60 * 1000, load: (_key, context) => loadModels(context),
+  });
 
-  const commandsCache = new Map<
-    string,
-    { commands: CommandInfo[]; timestamp: number }
-  >();
-  const COMMANDS_CACHE_TTL_MS = 10 * 60 * 1000;
-
-  const skillsCache = new Map<string, { skills: SkillInfo[]; timestamp: number }>();
-  const SKILLS_CACHE_TTL_MS = 5 * 60 * 1000;
-
-  // Plugins are fetched via the `claude plugin` CLI subcommands; `--available`
-  // can trigger a remote marketplace sync, so cache the result.
-  let cachedPlugins: PluginListResponse | null = null;
-  let cachedPluginsTimestamp = 0;
-  const PLUGINS_CACHE_TTL_MS = 5 * 60 * 1000;
-  // Late reads may finish for their caller, but cannot rewarm a retired catalog.
-  let catalogGeneration = 0;
+  const commandsCache = createAsyncResourceLifecycle<CommandInfo[] | undefined>({
+    ttlMs: 10 * 60 * 1000, cacheIf: (commands) => commands !== undefined,
+    load: (key, context) => loadCommands(key || undefined, context),
+  });
+  const skillsCache = createAsyncResourceLifecycle<SkillInfo[]>({
+    ttlMs: 5 * 60 * 1000, load: (key, context) => loadDiskSkills(key || undefined, context),
+  });
 
   // A plugin change adds/removes commands, skills, and agents — so installing or
   // uninstalling one must invalidate those caches too, not just the plugin list.
   function invalidatePluginCaches(): void {
-    catalogGeneration++;
-    cachedPlugins = null;
-    cachedPluginsTimestamp = 0;
-    commandsCache.clear();
-    skillsCache.clear();
+    pluginCatalogRead.invalidate();
+    commandsCache.invalidate();
+    skillsCache.invalidate();
+  }
+
+  async function loadModels(context: ResourceReadContext): Promise<ModelInfo[]> {
+    const sdkModels = await withControlQuery((query) => query.supportedModels());
+    context.assertCurrent();
+    if (!sdkModels || sdkModels.length === 0) throw new Error("SDK returned no models");
+
+    // Drop the SDK's synthetic "default" entry ("Use the default model
+    // (currently …)"). It's redundant with the concrete model it resolves
+    // to (Opus 4.8) and just duplicates a row in the picker. Guard against
+    // an account whose only offering is "default" so the list never empties.
+    const selectableSdkModels =
+      sdkModels.length > 1
+        ? sdkModels.filter((m) => m.value !== "default")
+        : sdkModels;
+
+    const defaultModelId = resolveClaudeDefaultModelId(
+      sdkModels,
+      config.defaultModel,
+    );
+
+    const models: ModelInfo[] = selectableSdkModels.map((sdkModel) => {
+      // SDK's .d.ts declares supportsFastMode but the runtime payload doesn't include it.
+      // Fast mode is currently meaningful only on opus; this fallback lights it up
+      // automatically when the SDK starts surfacing the field.
+      const id = sdkModel.value;
+      const fallbackFastMode = id === "opus[1m]";
+      return {
+        id,
+        displayName: sdkModel.displayName,
+        description: sdkModel.description,
+        isDefault: sdkModel.value === defaultModelId,
+        capabilities: {
+          streaming: true,
+          vision: true,
+          functionCalling: true,
+          reasoning: sdkModel.value.includes("opus"),
+        },
+        contextWindow: sdkModel.value.includes("haiku") ? 128000 : 200000,
+        supportsFastMode: sdkModel.supportsFastMode ?? fallbackFastMode,
+        supportsEffort: sdkModel.supportsEffort,
+        supportedEffortLevels: sdkModel.supportedEffortLevels,
+      };
+    });
+
+    return models;
+  }
+
+  async function loadCommands(workspacePath: string | undefined, context: ResourceReadContext): Promise<CommandInfo[] | undefined> {
+    const initResult = await withControlQuery(
+      (query) => query.initializationResult(),
+      workspacePath,
+    );
+    context.assertCurrent();
+    if (!initResult?.commands || initResult.commands.length === 0) {
+      return undefined;
+    }
+
+    // initializationResult().commands mixes built-in /commands with disk-backed skills.
+    // Exclude only skills we discover the same way as the $ menu.
+    const diskSkills = await fetchDiskSkills(workspacePath);
+    context.assertCurrent();
+    const diskSkillNames = new Set(diskSkills.map((s) => s.name));
+
+    const commands: CommandInfo[] = initResult.commands
+      .filter((cmd) => !diskSkillNames.has(cmd.name))
+      .map((cmd) => ({
+        name: cmd.name,
+        description: cmd.description,
+        argumentHint: cmd.argumentHint,
+        userFacing: true,
+      }));
+
+    return commands;
   }
 
   // Cross-run sessionId memo (resume lookup avoids hitting the DB every time)
@@ -2936,26 +3043,77 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   const liveSessions = new Map<string, ClaudeSession>();
   /** runId → the cwd its session ran in, for an MCP host that serves it later. */
   const runCwdMemo = new Map<string, string>();
-  /**
-   * cwd → an idle CLI process that only answers control requests — no prompt
-   * ever reaches it, so no model turn runs. Keyed by cwd because that is what
-   * decides which MCP servers a session configures.
-   */
-  const mcpHosts = new Map<string, { query: SDKQuery; release: () => void; idleTimer?: NodeJS.Timeout }>();
-  // Each host is a whole CLI process (~250 MB), so they are few and short-lived.
-  const MCP_HOST_IDLE_MS = 2 * 60 * 1000;
-  const MAX_MCP_HOSTS = 3;
+  const mcpPolicies = new Map<string, { options: SDKOptions; permissionMode: ClaudePermissionModeRef }>();
+
+  async function mcpPolicyFor(runId: string) {
+    const known = mcpPolicies.get(runId);
+    if (known) return known;
+    const assert = queryLifecycle.checkpoint();
+    // The run service already composed the mode harness into these snapshots.
+    const { runsService } = await import("../../../runs");
+    const run = await runsService.getRunById(runId);
+    assert();
+    if (!run || run.providerId !== "claude_code") throw new Error("Claude conversation not found");
+    const toolPolicy = run.toolPolicySnapshot as WorkRunToolPolicy | null;
+    const permissionMode = createClaudePermissionModeRef(isSDKPermissionMode(run.configSnapshot?.permissionMode)
+      ? run.configSnapshot.permissionMode : config.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE);
+    const bridge = createClaudePermissionBridge({ runId, permissionMode,
+      allowedTools: new Set(resolveEffectiveAllowedTools(toolPolicy)), restrictedToolset: !!toolPolicy?.allowedTools });
+    const hooks = config.hooks ? convertHooksConfig(config.hooks) : {};
+    const guard = await guardsService.buildClaudeGuardHook();
+    assert();
+    if (guard) hooks.PreToolUse = [...(hooks.PreToolUse ?? []), guard];
+    return { permissionMode, options: {
+      ...buildClaudePermissionModeOptions(permissionMode.current, bridge.canUseTool, toolPolicy),
+      hooks, onElicitation: createClaudeElicitationHandler({ runId }),
+      additionalDirectories: run.configSnapshot?.additionalDirectories as string[] | undefined,
+    } };
+  }
+
+  const mcpHosts = createClaudeQueryPool<SDKQuery>({
+    open: (hooks) => queryLifecycle.open(hooks),
+    capacity: 3, idleMs: 2 * 60 * 1000,
+    acquire: async (runId, owner) => {
+      await owner.run(ensureSDK);
+      const cwd = await owner.run(() => resolveRunCwd(runId));
+      const policy = await owner.run(() => mcpPolicyFor(runId));
+      const idle = new Promise<void>((resolve) => {
+        if (owner.signal.aborted) resolve();
+        else owner.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      const noPrompt: AsyncIterable<never> = {
+        [Symbol.asyncIterator]: () => ({ next: () => idle.then(() => ({ done: true as const, value: undefined })) }),
+      };
+      const options: SDKOptions = { ...buildProcessOptions(), ...policy.options,
+        cwd, permissionMode: policy.permissionMode.current };
+      const canUseTool = options.canUseTool!;
+      options.canUseTool = async (tool, input, context) => {
+        const signal = AbortSignal.any([context.signal, owner.signal]);
+        if (signal.aborted) return { behavior: "deny", message: "Claude MCP host closed" };
+        const result = await canUseTool(tool, input, { ...context, signal });
+        return signal.aborted ? { behavior: "deny", message: "Claude MCP host closed" } : result;
+      };
+      const onElicitation = options.onElicitation!;
+      options.onElicitation = (request, context) => onElicitation(request, {
+        signal: AbortSignal.any([context.signal, owner.signal]),
+      });
+      const mcpServers = readMcpServersFromSettings(options.settingSources!, cwd);
+      if (Object.keys(mcpServers).length > 0) options.mcpServers = mcpServers;
+      return owner.acquire(() => queryFn!({ prompt: noPrompt, options }));
+    },
+  });
 
   // ─────────────────────────────────────────────────────────────
   // SDK loader
   // ─────────────────────────────────────────────────────────────
 
   async function ensureSDK(): Promise<void> {
-    if (loadError) throw loadError;
+    const assert = queryLifecycle.checkpoint();
     if (sdkLoaded) return;
 
     try {
-      const ClaudeSDK = await import("@anthropic-ai/claude-agent-sdk").catch(() => null);
+      const ClaudeSDK = await queryLifecycle.load(() => import("@anthropic-ai/claude-agent-sdk"));
+      assert();
 
       if (!ClaudeSDK) {
         throw new Error(
@@ -2981,7 +3139,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       sdkLoaded = true;
       logInfo("SDK loaded successfully");
     } catch (error) {
-      loadError = error instanceof Error ? error : new Error(String(error));
+      const loadError = error instanceof Error ? error : new Error(String(error));
       logError("Failed to load SDK:", loadError.message);
       throw loadError;
     }
@@ -3103,11 +3261,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
                 return result as Record<string, unknown>;
               } catch (error) {
                 logError(`Hook error in ${eventName}:`, error);
+                if (matcher.onFailure) throw error;
                 return {};
               }
             },
         ),
         timeout: matcher.timeout,
+        onFailure: matcher.onFailure,
       }));
     }
     return sdkHooks;
@@ -3162,6 +3322,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       ...process.env,
       // Advertise the host's MCP Apps support when the CLI connects to servers.
       CLAUDE_CODE_MCP_APPS_HOST: "1",
+      CLAUDE_CODE_STARTUP_FAILURE_RESULTS: "1",
     };
     delete cleanEnv.ANTHROPIC_API_KEY;
     delete cleanEnv.ANTHROPIC_AUTH_TOKEN;
@@ -3189,15 +3350,17 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     read: (query: SDKQuery) => Promise<T>,
     cwd?: string,
   ): Promise<T> {
-    await ensureSDK();
-    if (!queryFn) throw new Error("Claude SDK not properly initialized");
-    const options = buildProcessOptions();
-    if (cwd) options.cwd = cwd;
-    const query = queryFn({ prompt: "", options });
+    const controller = new AbortController();
+    const owner = queryLifecycle.open({ cancel: () => controller.abort() });
     try {
-      return await read(query);
+      await owner.run(ensureSDK);
+      const options = buildProcessOptions();
+      options.abortController = controller;
+      if (cwd) options.cwd = cwd;
+      const query = owner.acquire(() => queryFn!({ prompt: "", options }));
+      return await owner.run(() => read(query));
     } finally {
-      query.close();
+      await owner.close();
     }
   }
 
@@ -3231,6 +3394,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     additionalDirectories?: string[];
     configSnapshot?: Record<string, unknown> | null;
   }): Promise<SDKOptions> {
+    const assert = queryLifecycle.checkpoint();
     const {
       model,
       workspacePath,
@@ -3290,6 +3454,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     const options: SDKOptions = {
       ...processOptions,
+      // Only model runs consume native task notifications. App/control hosts
+      // need the synchronous result, and one-shot generation has no task owner.
+      ...(runId ? { env: { ...processOptions.env,
+        CLAUDE_AUTO_BACKGROUND_TASKS: processOptions.env?.CLAUDE_AUTO_BACKGROUND_TASKS ?? "1",
+      } } : {}),
       model,
       ...buildClaudePermissionModeOptions(
         permissionMode,
@@ -3390,6 +3559,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     {
       const guardHook = await guardsService.buildClaudeGuardHook();
+      assert();
       if (guardHook) {
         if (!options.hooks) options.hooks = {};
         if (!options.hooks.PreToolUse) options.hooks.PreToolUse = [];
@@ -3482,36 +3652,29 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // ─────────────────────────────────────────────────────────────
 
   async function fetchDiskSkills(workspacePath?: string): Promise<SkillInfo[]> {
-    const generation = catalogGeneration;
-    const cacheKey = workspacePath ?? "__global__";
-    const now = Date.now();
-    const cached = skillsCache.get(cacheKey);
-    if (cached && now - cached.timestamp < SKILLS_CACHE_TTL_MS) {
-      return cached.skills;
+    try { return (await skillsCache.read(workspacePath ?? "")).value; }
+    catch (error) { logError("Failed to discover skills:", error); return []; }
+  }
+
+  async function loadDiskSkills(workspacePath: string | undefined, context: ResourceReadContext): Promise<SkillInfo[]> {
+    const settingSources = config.settingSources ?? ["user", "project", "local"];
+    const skills: SkillInfo[] = [];
+
+    if (settingSources.includes("user")) {
+      const userSkillsDir = path.join(os.homedir(), ".claude", "skills");
+      const userSkills = await discoverSkillsFromDirectory(userSkillsDir, "user");
+      context.assertCurrent();
+      skills.push(...userSkills);
     }
 
-    try {
-      const settingSources = config.settingSources ?? ["user", "project", "local"];
-      const skills: SkillInfo[] = [];
-
-      if (settingSources.includes("user")) {
-        const userSkillsDir = path.join(os.homedir(), ".claude", "skills");
-        const userSkills = await discoverSkillsFromDirectory(userSkillsDir, "user");
-        skills.push(...userSkills);
-      }
-
-      if (settingSources.includes("project") && workspacePath) {
-        const projectSkillsDir = path.join(workspacePath, ".claude", "skills");
-        const projectSkills = await discoverSkillsFromDirectory(projectSkillsDir, "project");
-        skills.push(...projectSkills);
-      }
-
-      if (generation === catalogGeneration) skillsCache.set(cacheKey, { skills, timestamp: now });
-      return skills;
-    } catch (error) {
-      logError("Failed to discover skills:", error);
-      return [];
+    if (settingSources.includes("project") && workspacePath) {
+      const projectSkillsDir = path.join(workspacePath, ".claude", "skills");
+      const projectSkills = await discoverSkillsFromDirectory(projectSkillsDir, "project");
+      context.assertCurrent();
+      skills.push(...projectSkills);
     }
+
+    return skills;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -3519,6 +3682,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // ─────────────────────────────────────────────────────────────
 
   function newSession(
+    assertCurrent: () => void,
     runId: string,
     options: SDKOptions,
     abortController: AbortController,
@@ -3526,8 +3690,27 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     permissionMode: ClaudePermissionModeRef,
     fastModeRequested = !!config.fastMode,
   ): ClaudeSession {
-    return {
-      runId,
+    try { assertCurrent(); }
+    catch (error) {
+      removeClaudeRuntimeSettings(typeof options.settings === "string" ? options.settings : undefined);
+      throw error;
+    }
+    const owner = queryLifecycle.open({
+      cancel: () => {
+        session.input?.stop();
+        try {
+          if (session.query?.request) void session.query.request({ subtype: "interrupt", cancel_queued: true }).catch(() => {});
+          else if (session.query?.interrupt) void session.query.interrupt().catch(() => {});
+        } finally { abortController.abort(); }
+      },
+      retire: () => session.input?.finish(),
+      release: async () => {
+        await session.input?.drainAccepted();
+        removeClaudeRuntimeSettings(session.runtimeSettingsPath);
+      },
+    });
+    const session: ClaudeSession = {
+      owner, runId,
       options,
       abortController,
       permissionMode,
@@ -3541,6 +3724,16 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       partialTextBuffers: new Map(),
       partialThinkingBuffers: new Map(),
     };
+    // Keep only the permission context, never the turn's temporary settings
+    // file, session id or model prompt. Idle app calls belong to this run.
+    mcpPolicies.set(runId, { permissionMode, options: {
+      ...buildClaudePermissionModeOptions(permissionMode.current, options.canUseTool, {
+        allowedTools: options.allowedTools ?? null, disallowedTools: options.disallowedTools ?? [],
+      }),
+      hooks: options.hooks, onElicitation: options.onElicitation,
+      additionalDirectories: options.additionalDirectories,
+    } });
+    return session;
   }
 
   /**
@@ -3570,10 +3763,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   }
 
   async function lookupSessionId(runId: string): Promise<string | undefined> {
+    const assert = queryLifecycle.checkpoint();
     const memo = sessionIdMemo.get(runId);
     if (memo) return memo;
     try {
       const run = await runsRepo.findRunById(runId);
+      assert();
       if (run?.sessionId) {
         sessionIdMemo.set(runId, run.sessionId);
         return run.sessionId;
@@ -3621,84 +3816,32 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
   /** The directory a run's session ran in, which decides its MCP servers. */
   async function resolveRunCwd(runId: string): Promise<string> {
+    const assert = queryLifecycle.checkpoint();
     const cwd = liveSessions.get(runId)?.options.cwd ?? runCwdMemo.get(runId);
     if (cwd) return cwd;
     // After a restart the transcript is the record: it keeps the session's cwd.
     const sessionId = await lookupSessionId(runId);
     const info = sessionId && getSessionInfoFn ? await getSessionInfoFn(sessionId) : undefined;
+    assert();
     if (!info?.cwd) throw new Error("Cannot find where this run's session ran");
     runCwdMemo.set(runId, info.cwd);
     return info.cwd;
   }
 
-  function closeMcpHost(cwd: string): void {
-    const host = mcpHosts.get(cwd);
-    if (!host) return;
-    mcpHosts.delete(cwd);
-    if (host.idleTimer) clearTimeout(host.idleTimer);
-    host.release();
-    try {
-      host.query.close();
-    } catch (err) {
-      logWarn("Failed to close MCP host:", err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  /** The MCP host for a cwd, started on first use and closed after it idles. */
-  async function mcpHostFor(cwd: string): Promise<SDKQuery> {
-    let host = mcpHosts.get(cwd);
-    if (host) {
-      mcpHosts.delete(cwd); // re-insert: Map order is the eviction order
-    } else {
-      await ensureSDK();
-      if (!queryFn) throw new Error("Claude SDK not properly initialized");
-      while (mcpHosts.size >= MAX_MCP_HOSTS) {
-        closeMcpHost(mcpHosts.keys().next().value as string);
-      }
-      let release!: () => void;
-      const idle = new Promise<void>((resolve) => (release = resolve));
-      // A prompt that never yields keeps stdin open and the process idle.
-      const noPrompt: AsyncIterable<never> = {
-        [Symbol.asyncIterator]: () => ({
-          next: () => idle.then(() => ({ done: true as const, value: undefined })),
-        }),
-      };
-      const options = buildProcessOptions();
-      options.cwd = cwd;
-      const mcpServers = readMcpServersFromSettings(options.settingSources!, cwd);
-      if (Object.keys(mcpServers).length > 0) options.mcpServers = mcpServers;
-      const query = queryFn({ prompt: noPrompt, options });
-      host = { query, release };
-    }
-    mcpHosts.set(cwd, host);
-    if (host.idleTimer) clearTimeout(host.idleTimer);
-    host.idleTimer = setTimeout(() => closeMcpHost(cwd), MCP_HOST_IDLE_MS);
-    host.idleTimer.unref?.();
-    return host.query;
-  }
-
-  /**
-   * Run an MCP control request for a run: through its live turn when there is
-   * one, otherwise through the MCP host for its cwd. A turn that closed under
-   * the request falls through to the host; any other failure is the answer.
-   */
-  async function withMcpQuery<T>(runId: string, fn: (query: SDKQuery) => Promise<T>): Promise<T> {
-    const live = liveSessions.get(runId)?.query;
-    if (live) {
+  /** A closed live turn can fall back to its cwd host; shutdown cannot. */
+  async function withMcpQuery<T>(runId: string, fn: (query: SDKQuery, owner: ClaudeQueryScope) => Promise<T>, retryClosed = true): Promise<T> {
+    const assert = queryLifecycle.checkpoint();
+    const live = liveSessions.get(runId);
+    if (live?.query && live.owner.active) {
       try {
-        return await fn(live);
-      } catch (err) {
-        if (!/closed/i.test(err instanceof Error ? err.message : String(err))) throw err;
+        return await live.owner.run(() => fn(live.query!, live.owner));
+      } catch (error) {
+        assert();
+        if (!retryClosed || live.owner.active || !/closed/i.test(error instanceof Error ? error.message : String(error))) throw error;
       }
     }
-    const cwd = await resolveRunCwd(runId);
-    try {
-      return await fn(await mcpHostFor(cwd));
-    } catch (err) {
-      // A host that died answers every request with the same error; drop it.
-      if (/closed/i.test(err instanceof Error ? err.message : String(err))) closeMcpHost(cwd);
-      throw err;
-    }
+    assert();
+    return mcpHosts.use(runId, fn);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -3710,7 +3853,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     args: string[],
     timeoutMs: number,
     cwd?: string,
+    signal?: AbortSignal,
   ): Promise<{ stdout: string; stderr: string; code: number | null }> {
+    signal?.throwIfAborted();
     const runtime = resolveClaudeRuntime(config.binary);
     if (!runtime) {
       return Promise.resolve({ stdout: "", stderr: "Claude CLI not found", code: null });
@@ -3724,6 +3869,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         // the directory the plugin was installed from.
         ...(cwd ? { cwd } : {}),
       });
+      const abort = () => killProviderProcess(child);
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+      child.once("close", () => signal?.removeEventListener("abort", abort));
+      child.once("error", () => signal?.removeEventListener("abort", abort));
       let stdout = "";
       let stderr = "";
       child.stdout?.on("data", (d: Buffer) => (stdout += d.toString()));
@@ -3734,6 +3884,79 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       );
     });
   }
+
+  // Only mapped catalog results become fresh; CLI error DTOs remain retryable.
+  const pluginCatalogRead = createAsyncResourceLifecycle<{ response: PluginListResponse; cacheable: boolean }>({
+    ttlMs: 5 * 60 * 1000, cacheIf: (value) => value.cacheable,
+    async load(_key, { signal }) {
+
+      const empty = (remoteSyncError: string | null) => ({ cacheable: false, response: {
+        marketplaces: [], marketplaceLoadErrors: [], remoteSyncError, featuredPluginIds: [],
+      } as PluginListResponse });
+
+      try {
+        if (!resolveClaudeRuntime(config.binary)) return empty("Claude CLI not found");
+
+        // `--available` includes the marketplace catalog (and may sync remotely);
+        // marketplace list supplies the install locations / ordering.
+        const [listRes, mpRes] = await Promise.all([
+          runClaudeCli(["plugin", "list", "--json", "--available"], 30000, undefined, signal),
+          runClaudeCli(["plugin", "marketplace", "list", "--json"], 15000, undefined, signal),
+        ]);
+        signal.throwIfAborted();
+
+        const parse = <T>(stdout: string, label: string): T | null => {
+          const trimmed = stdout.trim();
+          if (!trimmed) return null;
+          try {
+            return JSON.parse(trimmed) as T;
+          } catch (err) {
+            logWarn(`Failed to parse ${label} JSON:`, err instanceof Error ? err.message : String(err));
+            return null;
+          }
+        };
+
+        const listJson = parse<{ installed?: unknown[]; available?: unknown[] }>(
+          listRes.stdout,
+          "plugin list",
+        );
+        const mpJson = parse<unknown[]>(mpRes.stdout, "marketplace list");
+
+        if (!listJson && !mpJson) {
+          const msg = (listRes.stderr || mpRes.stderr || "").trim();
+          return empty(msg || null);
+        }
+
+        // Manifest fallback for plugins the catalog cache hasn't indexed yet.
+        const manifestsByMarketplace: Record<
+          string,
+          Record<string, Record<string, any>>
+        > = {};
+        for (const raw of mpJson ?? []) {
+          const mp = raw as Record<string, unknown>;
+          if (mp && typeof mp.name === "string" && typeof mp.installLocation === "string") {
+            manifestsByMarketplace[mp.name] = readMarketplaceManifestPlugins(
+              mp.installLocation,
+            );
+          }
+        }
+
+        const result = mapClaudePluginList(
+          listJson,
+          mpJson,
+          readPluginCatalogPlugins(),
+          readInstalledShaById(),
+          manifestsByMarketplace,
+        );
+        return { response: result, cacheable: true };
+      } catch (error) {
+        signal.throwIfAborted();
+        const msg = error instanceof Error ? error.message : String(error);
+        logError("Failed to list plugins:", msg);
+        return empty(msg);
+      }
+    },
+  });
 
   /** Read the installed Claude Code version (e.g. "2.1.159" from "2.1.159 (Claude Code)"). */
   async function getClaudeVersion(): Promise<string | null> {
@@ -3785,45 +4008,40 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     prompt: string,
     opts?: { system?: string; model?: string },
   ): Promise<string> {
-    await ensureSDK();
-    if (!queryFn) throw new Error("Claude SDK not properly initialized");
-
-    const options = await buildOptions({
-      model: opts?.model ?? "claude-haiku-4-5-20251001",
-    });
-    // Strip the MCP servers buildOptions injects so the model is never tempted
-    // to call a tool — with no tools available it just answers. maxTurns gets a
-    // little slack (not 1) so a stray first-message hiccup can't trip
-    // "error_max_turns" before the final text lands; without tools it still
-    // finishes in a single turn normally.
-    options.maxTurns = 6;
-    options.allowedTools = [];
-    options.disallowedTools = ["*"];
-    options.mcpServers = {};
-    options.systemPrompt =
-      opts?.system ??
-      "You are a helpful assistant. Follow the user's instructions exactly and output only what is requested.";
-
+    const controller = new AbortController();
+    const owner = queryLifecycle.open({ cancel: () => controller.abort() });
     let text = "";
     try {
-      const query = queryFn({ prompt, options });
-      for await (const msg of query) {
-        if (msg.type === "assistant") {
-          const assistantMsg = msg as {
-            message?: { content?: Array<{ type: string; text?: string }> };
-          };
-          for (const block of assistantMsg.message?.content ?? []) {
-            if (block.type === "text" && block.text) text += block.text;
+      await owner.run(ensureSDK);
+      const options = await owner.run(() => buildOptions({
+        model: opts?.model ?? "claude-haiku-4-5-20251001", abortController: controller,
+      }));
+      options.maxTurns = 6;
+      options.allowedTools = [];
+      options.disallowedTools = ["*"];
+      options.mcpServers = {};
+      options.systemPrompt = opts?.system ??
+        "You are a helpful assistant. Follow the user's instructions exactly and output only what is requested.";
+      const query = owner.acquire(() => queryFn!({ prompt, options }));
+      try {
+        await owner.run(async () => {
+          for await (const msg of query) {
+            owner.assertActive();
+            if (msg.type !== "assistant") continue;
+            const assistantMsg = msg as { message?: { content?: Array<{ type: string; text?: string }> } };
+            for (const block of assistantMsg.message?.content ?? []) {
+              if (block.type === "text" && block.text) text += block.text;
+            }
           }
-        }
+        });
+      } catch (error) {
+        // Retain text from SDK error results; cancellation cannot become success.
+        if (!owner.active || !text.trim()) throw error;
       }
-    } catch (err) {
-      // The SDK throws on error results (e.g. max turns). If the model already
-      // produced text before that, use it; otherwise surface the failure.
-      if (!text.trim()) throw err;
+      return text.trim();
+    } finally {
+      await owner.close();
     }
-
-    return text.trim();
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -3832,7 +4050,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
   return {
     async createSession(request: WorkRunRequest): Promise<AcquiredSession> {
+      const assert = queryLifecycle.checkpoint();
+      await mcpHosts.close(request.runId);
       await ensureSDK();
+      assert();
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
       const abortController = new AbortController();
@@ -3863,7 +4084,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, true, permissionModeRef,
+      const session = newSession(assert, request.runId, options, abortController, true, permissionModeRef,
         typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       session.state.sessionId = sessionId;
       sessionIdMemo.set(request.runId, sessionId);
@@ -3871,7 +4092,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async resumeSession(request: WorkRunContinueRequest): Promise<AcquiredSession> {
+      const assert = queryLifecycle.checkpoint();
+      await mcpHosts.close(request.runId);
       await ensureSDK();
+      assert();
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
       const sessionId = await lookupSessionId(request.runId);
@@ -3908,10 +4132,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, false, permissionModeRef,
+      const session = newSession(assert, request.runId, options, abortController, false, permissionModeRef,
         typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       try {
-        for (const anchor of await runsRepo.findClaudeTaskAnchorsByRun(request.runId)) {
+        const anchors = await runsRepo.findClaudeTaskAnchorsByRun(request.runId);
+        session.owner.assertActive();
+        for (const anchor of anchors) {
           if (typeof anchor.taskId !== "string" || !anchor.taskId || !anchor.toolUseId) continue;
           const known = session.taskIndex.get(anchor.taskId);
           if (known?.providerRunId && (!anchor.providerRunId || anchor.providerRunId < known.providerRunId)) continue;
@@ -3931,6 +4157,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       } catch (error) {
         logWarn("Could not restore Claude task identities:", error instanceof Error ? error.message : String(error));
       }
+      session.owner.assertActive();
       // Prime sessionId so executePrompt's "first session_id" persistence is a no-op for resume;
       // the SDK keeps the same id when resuming.
       session.state.sessionId = sessionId;
@@ -3981,7 +4208,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async forkSession(request: WorkRunForkRequest): Promise<AcquiredSession> {
+      const assert = queryLifecycle.checkpoint();
+      await mcpHosts.close(request.runId);
       await ensureSDK();
+      assert();
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
       const sourceSessionId = await lookupSessionId(request.sourceRunId);
@@ -4023,7 +4253,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, true, permissionModeRef,
+      const session = newSession(assert, request.runId, options, abortController, true, permissionModeRef,
         typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       session.state.sessionId = sessionId;
       sessionIdMemo.set(request.runId, sessionId);
@@ -4038,68 +4268,61 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     ): Promise<DriverOutcome> {
       const cs = sessionParam as ClaudeSession;
       const timeout = config.timeout ?? 3_600_000;
+      if (signal.aborted || cs.abortController.signal.aborted || !cs.owner.active) {
+        return classifyOutcome({ stopReason: null, aborted: true, timedOut: false, timeoutMs: timeout });
+      }
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
-      cs.onEvent = onEvent;
-      cs.input = createClaudeTurnInput({
-        initial: {
-          type: "user", uuid: cs.initialInput?.uuid ?? randomUUID(),
-          session_id: cs.state.sessionId!, parent_tool_use_id: null,
-          message: { role: "user", content: prompt },
-        },
-        onInitialAccepted: cs.initialInput?.onAccepted,
-        cancel: async (uuid) => {
-          if (cs.query?.cancelAsyncMessage) return cs.query.cancelAsyncMessage(uuid);
-          if (!cs.query?.request) throw new Error("Claude input cancellation is unavailable");
-          const response = await cs.query.request({ subtype: "cancel_async_message", message_uuid: uuid });
-          const envelope = response as { response?: { cancelled?: boolean } };
-          return envelope?.response?.cancelled === true;
-        },
-      });
-
-      // Stop closes our input first, recalls queued native commands when the
-      // control channel is available, and aborts the process as a backstop.
-      const onAbort = () => {
-        cs.input?.stop();
-        if (cs.query?.request) {
-          void cs.query.request({ subtype: "interrupt", cancel_queued: true }).catch(() => {});
-        } else if (cs.query?.interrupt) {
-          void cs.query.interrupt().catch(() => {});
-        }
-        try {
-          cs.abortController.abort();
-        } catch (err) {
-          logError("Error aborting controller:", err);
-        }
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-
-      // Create the SDK query (this is when the prompt is bound to the session).
-      const query = queryFn({ prompt: cs.input.stream, options: {
-        ...cs.options, extraArgs: { ...cs.options.extraArgs, "replay-user-messages": null },
-      } });
-      cs.query = query;
-      liveSessions.set(cs.runId, cs);
-      if (signal.aborted) onAbort();
-      if (cs.options.cwd) runCwdMemo.set(cs.runId, cs.options.cwd);
-      // A resumed or forked session's results continue from the totals its
-      // transcript saved; read them as the query opens, before the first result.
-      const sessionTotalsBefore = cs.options.resume
-        ? readClaudeSessionTotals(query)
-        : Promise.resolve(null);
-
+      if (cs.query || liveSessions.has(cs.runId)) throw new Error("Claude query is already running for this run");
+      const publish = onEvent;
+      onEvent = (event) => cs.owner.active ? publish(event) : undefined;
+      const assertDriver = queryLifecycle.checkpoint();
+      const onAbort = () => { void cs.owner.cancel().catch((error) => logWarn("Failed to close canceled Claude query:", String(error))); };
       let timeoutId: NodeJS.Timeout | undefined;
       let timedOut = false;
-      const timeoutPromise = new Promise<void>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          timedOut = true;
-          cs.input?.stop();
-          cs.abortController.abort();
-          reject(new Error(`Request timed out after ${timeout}ms`));
-        }, timeout);
-      });
-
       try {
+        cs.onEvent = onEvent;
+        cs.input = createClaudeTurnInput({
+          initial: {
+            type: "user", uuid: cs.initialInput?.uuid ?? randomUUID(),
+            session_id: cs.state.sessionId!, parent_tool_use_id: null,
+            message: { role: "user", content: prompt },
+          },
+          onInitialAccepted: cs.initialInput?.onAccepted,
+          cancel: async (uuid) => {
+            if (cs.query?.cancelAsyncMessage) return cs.query.cancelAsyncMessage(uuid);
+            if (!cs.query?.request) throw new Error("Claude input cancellation is unavailable");
+            const response = await cs.query.request({ subtype: "cancel_async_message", message_uuid: uuid });
+            const envelope = response as { response?: { cancelled?: boolean } };
+            return envelope?.response?.cancelled === true;
+          },
+        });
+
+        signal.addEventListener("abort", onAbort, { once: true });
+
+        // Create the SDK query (this is when the prompt is bound to the session).
+        const query = cs.owner.acquire(() => queryFn!({ prompt: cs.input!.stream, options: {
+          ...cs.options, extraArgs: { ...cs.options.extraArgs, "replay-user-messages": null },
+        } }));
+        cs.query = query;
+        liveSessions.set(cs.runId, cs);
+        if (signal.aborted) onAbort();
+        if (cs.options.cwd) runCwdMemo.set(cs.runId, cs.options.cwd);
+        // A resumed or forked session's results continue from the totals its
+        // transcript saved; read them as the query opens, before the first result.
+        const sessionTotalsBefore = cs.options.resume
+          ? readClaudeSessionTotals(query)
+          : Promise.resolve(null);
+
+        const timeoutPromise = new Promise<void>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            timedOut = true;
+            const error = new Error(`Request timed out after ${timeout}ms`);
+            void cs.owner.cancel(error).catch((cause) => logWarn("Failed to close timed-out Claude query:", String(cause)));
+            reject(error);
+          }, timeout);
+        });
+
         // Context meter, in preference order:
         //   1. The `get_context_usage` control reply — the CLI's own `/context`
         //      report, with the category breakdown and the autocompact
@@ -4147,10 +4370,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
         const streamPromise = (async () => {
           for await (const msg of query) {
-            if (signal.aborted || timedOut) break;
+            if (!cs.owner.active || signal.aborted || timedOut) break;
             // Persist accepted inputs before projecting the reply they own.
             // Result receipts close steering immediately, before any awaits.
             await cs.input!.observe(msg as Parameters<ReturnType<typeof createClaudeTurnInput>["observe"]>[0]);
+            cs.owner.assertActive();
             primaryModel = resolveClaudeTurnModel(
               primaryModel,
               msg as unknown as ClaudeTurnModelMessage,
@@ -4171,6 +4395,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
               }
             }
 
+            cs.owner.assertActive();
             // Track whether any assistant text content has been streamed (for result-message dedup).
             if (msg.type === "assistant") {
               const aMsg = msg as SDKAssistantMessage;
@@ -4303,7 +4528,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           }
         })();
 
-        await Promise.race([streamPromise, timeoutPromise]);
+        // A canceled query may finish its iterator after the owner has retired.
+        void streamPromise.catch(() => {});
+        await cs.owner.run(() => Promise.race([streamPromise, timeoutPromise]));
 
         // Replace the provisional goal-derived title with the CLI's
         // auto-generated aiTitle, once, for the initial run only. Fire-and-forget:
@@ -4313,6 +4540,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           const sessionId = cs.state.sessionId;
           const dir = cs.options.cwd;
           void readAutoTitle(sessionId, dir).then((title) => {
+            try { assertDriver(); } catch { return; }
             if (title) {
               runsRepo
                 .updateRun(cs.runId, { title })
@@ -4325,13 +4553,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           stopReason: cs.state.lastStopReason ?? null,
           usage: cs.state.lastUsage,
           terminalToolNonExecutionKind: cs.state.terminalToolNonExecutionKind,
-          aborted: signal.aborted,
+          aborted: signal.aborted || cs.abortController.signal.aborted,
           timedOut: false,
-          errorMessage: undefined,
+          errorMessage: cs.state.lastResultError,
           timeoutMs: timeout,
         });
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = cs.state.lastResultError ?? (error instanceof Error ? error.message : String(error));
 
         // Emit interrupted events for any pending tool calls
         const ts = Date.now();
@@ -4361,6 +4589,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         cs.input?.finish();
         signal.removeEventListener("abort", onAbort);
         if (liveSessions.get(cs.runId) === cs) liveSessions.delete(cs.runId);
+        await cs.owner.close();
       }
     },
 
@@ -4369,19 +4598,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const cs = session as ClaudeSession;
       cs.input?.finish();
 
-      // The query normally auto-completes when the stream ends, so this is a
-      // backstop: on an aborted or errored run the CLI subprocess can outlive
-      // the stream, and nothing else would reap it.
-      try {
-        cs.query?.close?.();
-      } catch (err) {
-        logWarn(
-          "Failed to close SDK query:",
-          err instanceof Error ? err.message : String(err),
-        );
-      }
+      await cs.owner.close();
 
-      removeClaudeRuntimeSettings(cs.runtimeSettingsPath);
       if (cs.state.sessionId) {
         try {
           await bridgeService.mirrorClaudeSession({ runId: cs.runId, sessionId: cs.state.sessionId, dir: cs.options.cwd ?? process.cwd() });
@@ -4394,11 +4612,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async readMcpAppResource(request) {
-      const result = await withMcpQuery(request.runId, async (query) => {
+      const result = await withMcpQuery(request.runId, async (query, owner) => {
         if (typeof query.readMcpResource !== "function") {
           throw new Error("This Claude Code version cannot read MCP App resources");
         }
-        await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
+        await waitForClaudeMcpServer(() => { owner.assertActive(); return query.mcpServerStatus(); }, request.server);
+        owner.assertActive();
         return query.readMcpResource(request.server, request.uri);
       });
       return { contents: result.contents ?? [], originCallId: request.originCallId ?? null };
@@ -4406,14 +4625,19 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     // `meta` has nowhere to go: mcp_call takes a tool and its arguments only.
     async callMcpAppTool(request) {
-      const raw = await withMcpQuery(request.runId, async (query) => {
+      const raw = await withMcpQuery(request.runId, async (query, owner) => {
         if (typeof query.request !== "function") {
           throw new Error("This Claude Code version cannot call MCP App tools");
         }
-        const statuses = await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
+        const init = await owner.run(() => query.initializationResult());
+        if (!init.capabilities?.includes("mcp_call_check_permissions_v1")) {
+          throw new Error("This Claude Code version cannot check MCP App permissions. Update Claude Code or use the Claude runtime bundled with Mains.");
+        }
+        const statuses = await waitForClaudeMcpServer(() => { owner.assertActive(); return query.mcpServerStatus(); }, request.server);
+        owner.assertActive();
         assertMcpToolCallableFromApp(statuses, request.server, request.tool);
         return query.request(buildMcpAppCallRequest(request.server, request.tool, request.arguments));
-      });
+      }, false);
       // The control reply wraps the tool result in `response`.
       const result = toMcpCallToolResult((raw as { response?: unknown } | null)?.response ?? raw);
       if (!result) throw new Error("MCP App tool call returned no result");
@@ -4432,6 +4656,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async deleteSession(runId: string): Promise<void> {
+      await mcpHosts.close(runId);
       // Resolve before clearing the memo — lookupSessionId reads it.
       const sessionId = await lookupSessionId(runId);
 
@@ -4444,9 +4669,14 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           if (deleteSdkSessionFn) {
             await deleteSdkSessionFn(sessionId);
           } else {
-            logWarn("SDK has no deleteSession(); transcript left on disk");
+            throw new Error("This Claude SDK cannot delete saved sessions. Update Mains and try again.");
           }
         } catch (err) {
+          if ((err as NodeJS.ErrnoException)?.code === "ENOTEMPTY") {
+            throw Object.assign(new Error(`Claude session was only partly deleted. Some files remain on disk; clean them up before retrying. ${err instanceof Error ? err.message : String(err)}`), { cause: err });
+          }
+          if ((err as NodeJS.ErrnoException)?.code !== "ENOENT" &&
+            !(err instanceof Error && err.message.includes(`Session ${sessionId} not found`))) throw err;
           // A missing session throws — that is the already-deleted case, and it
           // must not block clearing our own reference to it.
           logWarn(
@@ -4456,113 +4686,50 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         }
       }
 
+      await runsRepo.updateRun(runId, { sessionId: null });
       sessionIdMemo.delete(runId);
       runCwdMemo.delete(runId);
-      runsRepo
-        .updateRun(runId, { sessionId: null })
-        .catch((err) => logError("Failed to clear session ID in DB:", err));
+      mcpPolicies.delete(runId);
     },
 
     updateConfig(next) {
       const binaryChanged = config.binary !== (next as ClaudeCodeAdapterConfig).binary;
       adoptConfig(config, next as ClaudeCodeAdapterConfig);
       if (binaryChanged) {
-        cachedModels = null;
-        cachedModelsTimestamp = 0;
+        modelsCache.invalidate();
         invalidatePluginCaches();
       }
     },
 
     invalidateCatalogs() {
-      cachedModels = null;
-      cachedModelsTimestamp = 0;
+      modelsCache.invalidate();
       invalidatePluginCaches();
     },
 
     async shutdown(): Promise<void> {
+      const closing = queryLifecycle.shutdown();
       sessionIdMemo.clear();
-      for (const cwd of [...mcpHosts.keys()]) closeMcpHost(cwd);
-      for (const cs of liveSessions.values()) {
-        cs.input?.finish();
-        try {
-          cs.abortController.abort();
-          cs.query?.close();
-        } catch (err) { logWarn("Failed to close Claude query:", err instanceof Error ? err.message : String(err)); }
-      }
       liveSessions.clear();
       runCwdMemo.clear();
+      mcpPolicies.clear();
       sdkLoaded = false;
-      loadError = null;
       queryFn = null;
       getSessionInfoFn = null;
       getSessionMessagesFn = null;
       deleteSdkSessionFn = null;
-      cachedModels = null;
-      cachedModelsTimestamp = 0;
-      cachedPlugins = null;
-      cachedPluginsTimestamp = 0;
-      commandsCache.clear();
-      skillsCache.clear();
+      modelsCache.invalidate();
+      pluginCatalogRead.invalidate();
+      commandsCache.invalidate();
+      skillsCache.invalidate();
+      createSdkMcpServerFn = null;
+      toolFn = null;
+      await closing;
       logInfo("Shutdown complete");
     },
 
     async listModels(): Promise<ModelInfo[]> {
-      const generation = catalogGeneration;
-      const now = Date.now();
-      if (cachedModels && now - cachedModelsTimestamp < MODELS_CACHE_TTL_MS) {
-        return cachedModels;
-      }
-
       try {
-        const sdkModels = await withControlQuery((query) => query.supportedModels());
-        if (!sdkModels || sdkModels.length === 0) {
-          logWarn("SDK returned no models, using fallback");
-          return getDefaultModels(config.defaultModel);
-        }
-
-        // Drop the SDK's synthetic "default" entry ("Use the default model
-        // (currently …)"). It's redundant with the concrete model it resolves
-        // to (Opus 4.8) and just duplicates a row in the picker. Guard against
-        // an account whose only offering is "default" so the list never empties.
-        const selectableSdkModels =
-          sdkModels.length > 1
-            ? sdkModels.filter((m) => m.value !== "default")
-            : sdkModels;
-
-        const defaultModelId = resolveClaudeDefaultModelId(
-          sdkModels,
-          config.defaultModel,
-        );
-
-        const models: ModelInfo[] = selectableSdkModels.map((sdkModel) => {
-          // SDK's .d.ts declares supportsFastMode but the runtime payload doesn't include it.
-          // Fast mode is currently meaningful only on opus; this fallback lights it up
-          // automatically when the SDK starts surfacing the field.
-          const id = sdkModel.value;
-          const fallbackFastMode = id === "opus[1m]";
-          return {
-            id,
-            displayName: sdkModel.displayName,
-            description: sdkModel.description,
-            isDefault: sdkModel.value === defaultModelId,
-            capabilities: {
-              streaming: true,
-              vision: true,
-              functionCalling: true,
-              reasoning: sdkModel.value.includes("opus"),
-            },
-            contextWindow: sdkModel.value.includes("haiku") ? 128000 : 200000,
-            supportsFastMode: sdkModel.supportsFastMode ?? fallbackFastMode,
-            supportsEffort: sdkModel.supportsEffort,
-            supportedEffortLevels: sdkModel.supportedEffortLevels,
-          };
-        });
-
-        if (generation === catalogGeneration) {
-          cachedModels = models;
-          cachedModelsTimestamp = now;
-        }
-        return models;
+        return (await modelsCache.read()).value;
       } catch (error) {
         logError("Failed to fetch models from SDK:", error);
         return getDefaultModels(config.defaultModel);
@@ -4570,39 +4737,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async listCommands(workspacePath?: string): Promise<CommandInfo[]> {
-      const generation = catalogGeneration;
-      const now = Date.now();
-      const cacheKey = workspacePath ?? "__global__";
-      const cachedEntry = commandsCache.get(cacheKey);
-      if (cachedEntry && now - cachedEntry.timestamp < COMMANDS_CACHE_TTL_MS) {
-        return cachedEntry.commands;
-      }
-
       try {
-        const initResult = await withControlQuery(
-          (query) => query.initializationResult(),
-          workspacePath,
-        );
-        if (!initResult?.commands || initResult.commands.length === 0) {
-          return [];
-        }
-
-        // initializationResult().commands mixes built-in /commands with disk-backed skills.
-        // Exclude only skills we discover the same way as the $ menu.
-        const diskSkills = await fetchDiskSkills(workspacePath);
-        const diskSkillNames = new Set(diskSkills.map((s) => s.name));
-
-        const commands: CommandInfo[] = initResult.commands
-          .filter((cmd) => !diskSkillNames.has(cmd.name))
-          .map((cmd) => ({
-            name: cmd.name,
-            description: cmd.description,
-            argumentHint: cmd.argumentHint,
-            userFacing: true,
-          }));
-
-        if (generation === catalogGeneration) commandsCache.set(cacheKey, { commands, timestamp: now });
-        return commands;
+        return (await commandsCache.read(workspacePath ?? "")).value ?? [];
       } catch (error) {
         logError("Failed to fetch commands from SDK:", error);
         return [];
@@ -4613,83 +4749,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       return fetchDiskSkills(workspacePath);
     },
 
-    async listPlugins(): Promise<PluginListResponse> {
-      const generation = catalogGeneration;
-      const now = Date.now();
-      if (cachedPlugins && now - cachedPluginsTimestamp < PLUGINS_CACHE_TTL_MS) {
-        return cachedPlugins;
-      }
-
-      const empty = (remoteSyncError: string | null): PluginListResponse => ({
-        marketplaces: [],
-        marketplaceLoadErrors: [],
-        remoteSyncError,
-        featuredPluginIds: [],
-      });
-
-      try {
-        if (!resolveClaudeRuntime(config.binary)) return empty("Claude CLI not found");
-
-        // `--available` includes the marketplace catalog (and may sync remotely);
-        // marketplace list supplies the install locations / ordering.
-        const [listRes, mpRes] = await Promise.all([
-          runClaudeCli(["plugin", "list", "--json", "--available"], 30000),
-          runClaudeCli(["plugin", "marketplace", "list", "--json"], 15000),
-        ]);
-
-        const parse = <T>(stdout: string, label: string): T | null => {
-          const trimmed = stdout.trim();
-          if (!trimmed) return null;
-          try {
-            return JSON.parse(trimmed) as T;
-          } catch (err) {
-            logWarn(`Failed to parse ${label} JSON:`, err instanceof Error ? err.message : String(err));
-            return null;
-          }
-        };
-
-        const listJson = parse<{ installed?: unknown[]; available?: unknown[] }>(
-          listRes.stdout,
-          "plugin list",
-        );
-        const mpJson = parse<unknown[]>(mpRes.stdout, "marketplace list");
-
-        if (!listJson && !mpJson) {
-          const msg = (listRes.stderr || mpRes.stderr || "").trim();
-          return empty(msg || null);
-        }
-
-        // Manifest fallback for plugins the catalog cache hasn't indexed yet.
-        const manifestsByMarketplace: Record<
-          string,
-          Record<string, Record<string, any>>
-        > = {};
-        for (const raw of mpJson ?? []) {
-          const mp = raw as Record<string, unknown>;
-          if (mp && typeof mp.name === "string" && typeof mp.installLocation === "string") {
-            manifestsByMarketplace[mp.name] = readMarketplaceManifestPlugins(
-              mp.installLocation,
-            );
-          }
-        }
-
-        const result = mapClaudePluginList(
-          listJson,
-          mpJson,
-          readPluginCatalogPlugins(),
-          readInstalledShaById(),
-          manifestsByMarketplace,
-        );
-        if (generation === catalogGeneration) {
-          cachedPlugins = result;
-          cachedPluginsTimestamp = now;
-        }
-        return result;
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        logError("Failed to list plugins:", msg);
-        return empty(msg);
-      }
+    async listPlugins(signal?: AbortSignal): Promise<PluginListResponse> {
+      signal?.throwIfAborted();
+      return (await pluginCatalogRead.read("", { signal })).value.response;
     },
 
     async readPlugin(pluginName: string, marketplacePath: string): Promise<PluginDetail> {
@@ -4700,6 +4762,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       // from the cached list when available, else from installed_plugins.json.
       const catalogPlugins = readPluginCatalogPlugins();
       const installedEnabled: Record<string, boolean> = {};
+      const cachedPlugins = pluginCatalogRead.peek()?.value.response;
       if (cachedPlugins) {
         for (const mp of cachedPlugins.marketplaces) {
           for (const p of mp.plugins) {

@@ -211,7 +211,7 @@ export function AgentsStep({
         </div>
         {activeTerminal && !isSignedIn && (
           <TerminalSection
-            id={`onboarding-auth-${provider.providerId}`}
+            id={`auth-${activeTerminal.id}`}
             isOpen
             title={`Sign in to ${provider.label}`}
             pendingCommand={activeTerminal.pendingCommand}

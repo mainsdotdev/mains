@@ -8,6 +8,7 @@ export const ATLAS_TYPES = [
   { value: "page", label: "Pages" },
   { value: "file", label: "Docs" },
   { value: "image", label: "Images" },
+  { value: "bookmark", label: "Bookmarks" },
 ] as const;
 
 export function atlasView(params: URLSearchParams) {

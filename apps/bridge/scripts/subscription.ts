@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { BridgeBillingInterval } from "@mains/contracts/bridge-subscription";
-import { bridgeAccountId, bridgeEntitlementSelect, bridgeSubscriptionGrant } from "../src/subscription-admin";
+import { bridgeAccountId, bridgeEntitlementSelect, bridgeSubscriptionGrant, bridgeSubscriptionRevoke } from "../src/subscription-admin";
 
 const args = process.argv.slice(2), command = args.shift();
 const values = new Map<string, string>();
@@ -26,7 +26,10 @@ if (command === "grant") {
   const grant = bridgeSubscriptionGrant({ accountId: account, planId: values.get("--plan"), interval: values.get("--interval") as BridgeBillingInterval,
     startsAt: Date.parse(values.get("--starts-at")!) });
   sql = bind(grant.sql, grant.params) + ";\n";
-} else if (command === "revoke") sql = bind("UPDATE account_entitlements SET status='revoked',updated_at=? WHERE account_id=? AND feature='bridge' AND status<>'revoked'", [Date.now(), account]) + ";\n";
+} else if (command === "revoke") {
+  const revoke = bridgeSubscriptionRevoke(account);
+  sql = bind(revoke.sql, revoke.params) + ";\n";
+}
 sql += bind(bridgeEntitlementSelect, [account]) + ";\n";
 const dir = await mkdtemp(join(tmpdir(), "mains-bridge-subscription-"));
 try {

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
+import { stageRecordStorage } from "../../runtime/record-storage";
 
 export interface StagedCollectionStorageRemoval {
   commit(): void;
@@ -107,29 +108,7 @@ export function stageCollectionSourceStorageRemoval(args: {
     "sources",
     args.sourceId,
   );
-  if (!fs.existsSync(source)) return { commit() {}, restore() {} };
-
-  const trashRoot = path.join(collectionsRoot(), ".trash");
-  fs.mkdirSync(trashRoot, { recursive: true });
-  const staged = path.join(
-    trashRoot,
-    `source-${args.sourceId}-${crypto.randomUUID()}`,
-  );
-  fs.renameSync(source, staged);
-  let settled = false;
-  return {
-    commit() {
-      if (settled) return;
-      settled = true;
-      fs.rmSync(staged, { recursive: true, force: true });
-    },
-    restore() {
-      if (settled) return;
-      settled = true;
-      fs.mkdirSync(path.dirname(source), { recursive: true });
-      fs.renameSync(staged, source);
-    },
-  };
+  return stageRecordStorage(source);
 }
 
 /**
@@ -140,28 +119,5 @@ export function stageCollectionSourceStorageRemoval(args: {
 export function stageCollectionStorageRemoval(
   collectionId: string,
 ): StagedCollectionStorageRemoval {
-  const source = collectionRoot(collectionId);
-  if (!fs.existsSync(source)) {
-    return { commit() {}, restore() {} };
-  }
-
-  const trashRoot = path.join(collectionsRoot(), ".trash");
-  fs.mkdirSync(trashRoot, { recursive: true });
-  const staged = path.join(trashRoot, `${collectionId}-${crypto.randomUUID()}`);
-  fs.renameSync(source, staged);
-  let settled = false;
-
-  return {
-    commit() {
-      if (settled) return;
-      settled = true;
-      fs.rmSync(staged, { recursive: true, force: true });
-    },
-    restore() {
-      if (settled) return;
-      settled = true;
-      fs.mkdirSync(path.dirname(source), { recursive: true });
-      fs.renameSync(staged, source);
-    },
-  };
+  return stageRecordStorage(collectionRoot(collectionId));
 }

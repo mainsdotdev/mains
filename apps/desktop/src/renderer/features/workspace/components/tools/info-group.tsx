@@ -51,6 +51,8 @@ import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import { readReviewComments } from "@mains/contracts/review-comments";
 import { ReviewCommentsAttachment } from "../review-comments-attachment";
 import { PromptBrowserAnnotations } from "./prompt-browser-annotations";
+import { readDocumentAnnotations } from "@mains/contracts/document-annotations";
+import { DocumentAnnotationsAttachment } from "../document-annotations-attachment";
 import { VoiceTaskCard } from "../voice-task-card";
 import type { VoiceTaskLink } from "@mains/contracts/realtime";
 import { AskUserQuestionDisplay } from "./ask-user-question-display";
@@ -270,6 +272,7 @@ function InfoGroupImpl({
         Array.isArray(annotation.elements) && annotation.elements.length > 0,
     );
     const reviewComments = readReviewComments(event.metadata?.reviewComments);
+    const documentAnnotations = [...readDocumentAnnotations(event.metadata?.documentAnnotations), ...readDocumentAnnotations(event.metadata?.presentationAnnotations)];
     const skills = (event.metadata?.skills ?? []) as PromptMarkdownSkill[];
 
     if (isReview) {
@@ -357,6 +360,9 @@ function InfoGroupImpl({
             )}
             {reviewComments.length > 0 && (
               <ReviewCommentsAttachment comments={reviewComments} />
+            )}
+            {documentAnnotations.length > 0 && (
+              <DocumentAnnotationsAttachment annotations={documentAnnotations} />
             )}
             {message && (
               <div
@@ -616,7 +622,7 @@ function AttachmentDocumentCard({
   const docType =
     filePath || (runId && attachmentId) ? classifyDocType(name) : null;
   const className =
-    "flex w-60 max-w-full glass-card items-center gap-3 rounded-2xl  p-1.5 pr-3  ";
+    "flex w-60 max-w-full glass-card items-center gap-3 rounded-2xl  p-1.5 pr-3 text-primary-950 dark:text-primary";
   const content = (
     <>
       <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary-100 dark:bg-primary-950">

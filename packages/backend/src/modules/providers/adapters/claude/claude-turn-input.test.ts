@@ -21,6 +21,69 @@ async function harness(cancelled = true) {
 afterEach(() => { vi.useRealTimers(); });
 
 describe("Claude turn input", () => {
+  it("closes admission at result and drains already accepted persistence through Stop", async () => {
+    const h = await harness();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const project = vi.fn(() => gate);
+    const sent = h.input.send(guidance, project); await h.stream.next();
+    const ending = h.input.observe({ type: "result", user_message_uuids: [initial.uuid, guidance.uuid] });
+    let drained = false;
+    try {
+      await vi.waitFor(() => expect(project).toHaveBeenCalledOnce());
+      await expect(h.input.send({ ...guidance, uuid: "too-late" }, project)).rejects.toThrow("no active");
+      h.input.finish();
+      const draining = h.input.drainAccepted().then(() => { drained = true; });
+      await Promise.resolve(); expect(drained).toBe(false);
+      release(); await draining;
+      await expect(sent).resolves.toMatchObject({ delivery: "steer" });
+    } finally { release(); await ending; await sent; h.input.finish(); }
+  });
+
+  it("retains native acceptance when the persistence callback throws synchronously", async () => {
+    const h = await harness();
+    const sent = h.input.send(guidance, () => { throw new Error("Disk unavailable"); });
+    const refused = expect(sent).rejects.toThrow("Delivery is unknown");
+    await expect(h.input.observe({ type: "user", uuid: guidance.uuid, message: guidance.message })).rejects.toThrow("Disk unavailable");
+    await refused;
+    expect(await h.input.getAcceptedStatus(guidance.uuid)).toMatchObject({ accepted: true, turnId: initial.uuid });
+    await h.input.drainAccepted(); h.input.finish();
+  });
+
+  it("keeps a native acceptance that races a positive cancellation response", async () => {
+    const h = await harness();
+    let cancel!: (value: boolean) => void;
+    h.cancel.mockImplementationOnce(() => new Promise((resolve) => { cancel = resolve; }));
+    const project = vi.fn().mockResolvedValue(undefined);
+    const sent = h.input.send(guidance, project); await h.stream.next();
+    const ending = h.input.observe({ type: "result", user_message_uuid: initial.uuid });
+    await vi.waitFor(() => expect(cancel).toBeTypeOf("function"));
+    await h.input.observe({ type: "user", uuid: guidance.uuid, message: guidance.message });
+    cancel(true); await ending;
+    await expect(sent).resolves.toMatchObject({ turnId: guidance.uuid, delivery: "queue" });
+    expect(await h.input.getAcceptedStatus(guidance.uuid)).toMatchObject({ accepted: true, turnId: guidance.uuid });
+    expect(project).toHaveBeenCalledOnce(); h.input.finish();
+  });
+
+  it("publishes its acceptance barrier before a reentrant receipt or recovery query", async () => {
+    const h = await harness();
+    let release!: () => void, recovered = false;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let recovery!: Promise<unknown>;
+    const project = vi.fn(() => {
+      recovery = h.input.getAcceptedStatus(guidance.uuid).then(() => { recovered = true; });
+      void h.input.observe({ type: "command_lifecycle", command_uuid: guidance.uuid, state: "started" });
+      return gate;
+    });
+    const sent = h.input.send(guidance, project);
+    const observing = h.input.observe({ type: "user", uuid: guidance.uuid, message: guidance.message });
+    try {
+      await vi.waitFor(() => expect(project).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      expect(recovered).toBe(false);
+    } finally { release(); await observing; await sent; await recovery; h.input.finish(); }
+  });
+
   it("sends priority now on the open stream and waits for persisted native acceptance", async () => {
     const h = await harness();
     let project!: () => void;

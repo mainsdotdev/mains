@@ -53,9 +53,10 @@ const CONFIG: ResourceWizardConfig = {
   credentialAlternative: {
     label: "Sign in with GitHub",
     tokenLabel: "Access token",
-    render: ({ submitValues, submitting }) => (
+    render: ({ submitValues, submitting, isCurrent }) => (
       <GitHubDeviceFlowPanel
         submitting={submitting}
+        isCurrent={isCurrent}
         onToken={(token) => submitValues({ token })}
       />
     ),
@@ -100,8 +101,8 @@ const CONFIG: ResourceWizardConfig = {
 export default function GitHubModal(props: GitHubModalProps) {
   const [getRepos] = useLazyGetGitHubReposQuery();
   const fetchAllResources = useCallback(
-    async (connectionId: string) => {
-      return getRepos(connectionId).unwrap();
+    async (connectionId: string, scope?: string) => {
+      return getRepos(scope ? { id: connectionId, scope } : connectionId).unwrap();
     },
     [getRepos],
   );

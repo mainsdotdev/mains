@@ -1,17 +1,16 @@
 import type { ComponentType, SVGProps } from "react";
-import { Word, Excel, Powerpoint  } from "@/components/ui/icons";
-import { MarkdownFileIcon, PdfFileIcon, TextFileIcon } from "@/components/ui/icons/file-icons";
+import { ExcelFileIcon, MarkdownFileIcon, PdfFileIcon, PowerPointFileIcon, TextFileIcon, WordFileIcon } from "@/components/ui/icons/file-icons";
 import type { DocType } from "@/lib/document-viewer";
 
-/** Brand icon per viewer DocType. Lives outside `lib/document-viewer.ts` so
+/** Shared file icon per viewer DocType. Lives outside `lib/document-viewer.ts` so
  * that module stays React-free for node-only unit tests. */
 export const DOC_TYPE_ICONS: Record<
   DocType,
   ComponentType<SVGProps<SVGSVGElement>>
 > = {
-  docx: Word,
-  xlsx: Excel,
-  pptx: Powerpoint,
+  docx: WordFileIcon,
+  xlsx: ExcelFileIcon,
+  pptx: PowerPointFileIcon,
   md: MarkdownFileIcon,
   pdf: PdfFileIcon,
   txt: TextFileIcon,

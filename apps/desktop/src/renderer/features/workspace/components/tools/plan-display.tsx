@@ -1,15 +1,17 @@
+import type { PlanDecisionResult } from "@mains/contracts/plan-decision";
+import { onTransportChange } from "@/lib/transport";
 import { useToolExpansion } from "../../lib/transcript-view-state";
-import { useState } from "react";
+import { useLayoutEffect, useReducer, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { markdownComponents } from "@/components/markdown-components";
 import type { RunEvent } from "../../types";
 import { Plan, ArrowUp } from "@/components/ui/icons";
-import { useUpdateToolCallMutation } from "@/lib/redux/api/toolsApi";
-import { Button, Text } from "@/components/ui";
+import { Button, Text, ErrorText } from "@/components/ui";
 import { coerceToolOutput } from "../../lib/parse-tool-content";
 import { useReplicaView } from "@/hooks/use-replica-view";
 import {
+  createPlanViewLifecycle,
   getPersistedPlanStatus,
   shouldShowPlanActions,
   type PlanInteractionMode,
@@ -21,11 +23,17 @@ interface PlanDisplayProps {
   interactionMode?: PlanInteractionMode;
   hasPendingApproval?: boolean;
   isRunActive?: boolean;
-  onApplyPlan?: () => void | Promise<void>;
-  onDismissPlan?: () => void | Promise<void>;
+  onApplyPlan?: (toolCallId: number) => Promise<PlanDecisionResult>;
+  onDismissPlan?: (toolCallId: number) => Promise<PlanDecisionResult>;
 }
 
-export function PlanDisplay({
+export function PlanDisplay(props: PlanDisplayProps) {
+  const [revision, advance] = useReducer((value: number) => value + 1, 0);
+  useLayoutEffect(() => onTransportChange(advance), []);
+  return <PlanDisplayContent key={`${props.event.id}:${revision}`} {...props} />;
+}
+
+function PlanDisplayContent({
   event,
   interactionMode = "follow-up",
   hasPendingApproval = false,
@@ -34,7 +42,12 @@ export function PlanDisplay({
   onDismissPlan,
 }: PlanDisplayProps) {
   const replica = useReplicaView();
-  const [updateToolCall] = useUpdateToolCallMutation();
+  const [owner] = useState(createPlanViewLifecycle);
+  useLayoutEffect(() => {
+    owner.attach();
+    const off = onTransportChange(() => owner.retire());
+    return () => { off(); owner.detach(); };
+  }, [owner]);
 
   const input = event.metadata?.input as Record<string, unknown> | undefined;
   const parsedOutput = coerceToolOutput(event.metadata?.output) as
@@ -42,7 +55,9 @@ export function PlanDisplay({
     | null;
 
   const savedStatus = getPersistedPlanStatus(event.metadata, parsedOutput);
-  const [status, setStatus] = useState<PlanStatus>(savedStatus);
+  const [localStatus, setStatus] = useState<PlanStatus>(savedStatus);
+  const status = savedStatus !== "pending" ? savedStatus : localStatus;
+  const [error, setError] = useState<string>();
   // A plan stays open only while it still needs a decision. Applied, dismissed,
   // and failed ones are settled history, and a transcript of long plans all
   // sitting open buries everything that came after them.
@@ -61,44 +76,24 @@ export function PlanDisplay({
   // Extract tool call DB id from event id (format: "tool-{id}")
   const toolCallId = parseInt(event.id.replace("tool-", ""), 10);
 
-  const persistStatus = async (newStatus: PlanStatus) => {
-    if (replica) return;
-    setStatus(newStatus);
-    if (!isNaN(toolCallId)) {
-      await updateToolCall({
-        id: toolCallId,
-        payload: { metadata: { planStatus: newStatus } },
-      });
-    }
-  };
-
-  const handleApply = async () => {
-    if (replica || isSubmitting) return;
-    setIsSubmitting(true);
+  const decide = async (action: "apply" | "dismiss") => {
+    if (replica || !Number.isSafeInteger(toolCallId) || toolCallId <= 0 || status !== "pending") return;
+    const send = action === "apply" ? onApplyPlan : onDismissPlan;
+    if (!send) return;
+    const lease = owner.begin();
+    if (!lease) return;
+    setIsSubmitting(true); setError(undefined);
     try {
-      await persistStatus("applied");
-      // Collapses on the spot, the way Dismiss does — otherwise a decided plan
-      // reads as open now and closed after the next reload.
-      setIsExpanded(false);
-      await onApplyPlan?.();
-    } finally {
-      setIsSubmitting(false);
-    }
+      const result = await send(toolCallId);
+      if (lease.current()) { setStatus(result.status); setIsExpanded(false); }
+    } catch (caught) {
+      if (lease.current()) setError(caught instanceof Error ? caught.message : "Could not save the plan decision. Retry.");
+    } finally { if (lease.current()) setIsSubmitting(false); lease.finish(); }
   };
+  const handleApply = () => { void decide("apply"); };
+  const handleDismiss = () => { void decide("dismiss"); };
 
-  const handleDismiss = async () => {
-    if (replica || isSubmitting) return;
-    setIsSubmitting(true);
-    try {
-      await persistStatus("dismissed");
-      setIsExpanded(false);
-      await onDismissPlan?.();
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const showActions = !replica && shouldShowPlanActions({
+  const showActions = !replica && (!!onApplyPlan || !!onDismissPlan) && shouldShowPlanActions({
     status,
     interactionMode,
     hasPendingApproval,
@@ -150,20 +145,21 @@ export function PlanDisplay({
             </div>
           </div>
 
+          {error && <ErrorText className="px-6" role="alert">{error}</ErrorText>}
           {/* Live approvals require a pending broker request; follow-ups require a finished run. */}
           {showActions && (
             <div className="flex items-center justify-end gap-2 px-6 py-2.5 border-t border-primary-500/10 dark:border-primary-400/10 shrink-0">
               <Button
                 variant="submit"
                 onClick={handleApply}
-                disabled={isSubmitting}
+                disabled={isSubmitting || !onApplyPlan}
               >
                 Apply Plan
               </Button>
               <Button
                 variant="secondary"
                 onClick={handleDismiss}
-                disabled={isSubmitting}
+                disabled={isSubmitting || !onDismissPlan}
               >
                 Dismiss
               </Button>

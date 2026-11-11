@@ -9,6 +9,7 @@ import {
 import { createPortal } from "react-dom";
 import { cn } from "../../lib/cn";
 import { isAppReady } from "../../lib/app-ready";
+import { useOverlayAnimation } from "@/hooks/use-overlay-lifecycle";
 
 export interface DropdownWrapperProps {
   className?: string;
@@ -55,22 +56,9 @@ export default function DropdownWrapper({
     left: number;
     width: number;
   } | null>(null);
-  const [animateIn, setAnimateIn] = useState(false);
-  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+  const { isAnimatedIn: animateIn } = useOverlayAnimation(isOpen, { frames: 2, immediate: !isAppReady() });
   const internalDropdownRef = useRef<HTMLDivElement>(null);
   const dropdownRef = externalDropdownRef || internalDropdownRef;
-
-  // Reset enter animation when the menu closes or opens so the double-RAF ramp
-  // always starts from prewarm (avoids sync setState in an effect; see react.dev/you-might-not-need-an-effect).
-  // Pre-`app-ready` the ramp is skipped entirely: animations are globally
-  // forced to 0s and the startup-loaded main thread would starve the two rAFs,
-  // holding the menu invisible — latch straight to the (instant) final state.
-  if (isOpen !== prevIsOpen) {
-    setPrevIsOpen(isOpen);
-    if (!isOpen || (isOpen && !prevIsOpen)) {
-      setAnimateIn(isOpen && !isAppReady());
-    }
-  }
 
   useEffect(() => {
     if (isOpen && usePortal && triggerRef?.current) {
@@ -85,21 +73,6 @@ export default function DropdownWrapper({
       setCoords(null);
     }
   }, [isOpen, usePortal, triggerRef, openUpward, position]);
-
-  // Defer animation by two frames so React commit + first paint of children
-  // happen before the GPU starts the keyframe — prevents first-open jank.
-  // (No-op pre-`app-ready`: the latch above already set animateIn.)
-  useEffect(() => {
-    if (!isOpen) return;
-    let raf2 = 0;
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setAnimateIn(true));
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      if (raf2) cancelAnimationFrame(raf2);
-    };
-  }, [isOpen]);
 
   // Closed panels do not exist in the accessibility tree or tab order. The
   // previous opacity-only hiding left their buttons keyboard-focusable.

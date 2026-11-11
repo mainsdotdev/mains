@@ -2,6 +2,8 @@ import { SimpleGit, StatusResult, LogResult, RemoteWithRefs } from "simple-git";
 import path from "path";
 import fs from "fs";
 import { cloneRepositoryName, WORKSPACE_CLONE_CANCELED } from "@mains/contracts/workspace-intake";
+import { runCloneProcess } from "./clone-process";
+import { acquireRepository } from "./repository-acquisition";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { captureDiffSnapshot, openGit, type DiffSnapshot } from "./git-snapshot";
 import {
@@ -180,7 +182,10 @@ async function readOriginUrl(git: SimpleGit): Promise<string | null> {
 export const gitService = {
   /** Current branch name. */
   async getCurrentBranch(rootPath: string): Promise<string> {
-    const branch = await getGit(rootPath).revparse(["--abbrev-ref", "HEAD"]);
+    const git = getGit(rootPath);
+    // symbolic-ref also works before the branch has its first commit.
+    const branch = await git.raw(["symbolic-ref", "--quiet", "--short", "HEAD"])
+      .catch(() => git.revparse(["--abbrev-ref", "HEAD"]));
     return branch.trim();
   },
 
@@ -551,13 +556,11 @@ export const gitService = {
     const targetParent = parentPath ?? getBackendRuntime().getPath("desktop");
     const rootPath = path.join(targetParent, projectName);
     if (fs.existsSync(rootPath)) throw new Error("Folder already exists");
-    fs.mkdirSync(rootPath, { recursive: false });
-
-    try {
-      const git = getGit(rootPath);
+    await acquireRepository(rootPath, async (staging) => {
+      const git = getGit(staging);
       await git.init(false, ["--initial-branch=main"]);
 
-      fs.writeFileSync(path.join(rootPath, "README.md"), `# ${projectName}\n`);
+      fs.writeFileSync(path.join(staging, "README.md"), `# ${projectName}\n`);
       await git.add(".");
       try {
         await git.commit("Initial commit");
@@ -574,15 +577,8 @@ export const gitService = {
         ]);
       }
 
-      return { rootPath, defaultBranch: "main" };
-    } catch (error) {
-      try {
-        fs.rmSync(rootPath, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup
-      }
-      throw error;
-    }
+    });
+    return { rootPath, defaultBranch: "main" };
   },
 
   /** Clone a remote git repository to a local path. */
@@ -594,21 +590,11 @@ export const gitService = {
     assertCloneUrl(url);
     if (signal?.aborted) throw new Error(WORKSPACE_CLONE_CANCELED);
     const clonePath = path.join(targetPath, cloneRepositoryName(url));
-    // Reserve a fresh directory atomically. Failure/cancellation may remove
-    // only this attempt's output, never an existing checkout or folder.
-    await fs.promises.mkdir(clonePath);
-    try {
-      await openGit(undefined, signal).clone(url, clonePath);
-      const defaultBranch = (
-        await openGit(clonePath, signal).revparse(["--abbrev-ref", "HEAD"])
-      ).trim();
-      if (signal?.aborted) throw new Error(WORKSPACE_CLONE_CANCELED);
-      return { clonedPath: clonePath, defaultBranch, originUrl: url };
-    } catch (error) {
-      await fs.promises.rm(clonePath, { recursive: true, force: true });
-      if (signal?.aborted) throw new Error(WORKSPACE_CLONE_CANCELED);
-      throw error;
-    }
+    const defaultBranch = await acquireRepository(clonePath, async (staging) => {
+      await runCloneProcess(url, staging, signal);
+      return (await openGit(staging, signal).revparse(["--abbrev-ref", "HEAD"])).trim();
+    }, signal);
+    return { clonedPath: clonePath, defaultBranch, originUrl: url };
   },
 
   /** Stage files for commit (all when unspecified). */

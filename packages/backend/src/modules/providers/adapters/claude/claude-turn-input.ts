@@ -1,3 +1,5 @@
+import { createInputReceipt } from "../input-receipt-lifecycle";
+
 /** One open input stream per query; only native receipts acknowledge delivery. */
 export interface ClaudeInputMessage {
   type: "user";
@@ -24,10 +26,7 @@ interface ReceiptFrame {
 
 type Acceptance = { turnId: string; delivery: "queue" | "steer" };
 type Input = {
-  accepted: boolean;
-  acceptance?: Acceptance;
-  project: (receipt: Acceptance) => Promise<void>;
-  projection?: Promise<void>;
+  receipt: ReturnType<typeof createInputReceipt<Acceptance>>;
   resolve?: (receipt: Acceptance) => void;
   reject?: (error: Error) => void;
   timer?: ReturnType<typeof setTimeout>;
@@ -49,19 +48,16 @@ export function createClaudeTurnInput(options: {
   const inputs = new Map<string, Input>();
   const messages: ClaudeInputMessage[] = [options.initial];
   let wake: (() => void) | undefined;
-  let closed = false;
-  let stopped = false;
-  let accepting = true;
+  let phase: "open" | "ending" | "closed" | "stopped" = "open";
   let supportsReceipts: boolean | undefined;
   let turnId: string | undefined = options.initial.uuid;
   inputs.set(options.initial.uuid, {
-    accepted: false,
-    project: async ({ turnId }) => { await options.onInitialAccepted?.(turnId); },
+    receipt: createInputReceipt(async ({ turnId }) => { await options.onInitialAccepted?.(turnId); }),
   });
 
   const stream: AsyncIterable<ClaudeInputMessage> = {
     async *[Symbol.asyncIterator]() {
-      while (!closed || messages.length) {
+      while (phase === "open" || phase === "ending" || messages.length) {
         const message = messages.shift();
         if (message) yield message;
         else await new Promise<void>((resolve) => { wake = resolve; });
@@ -70,8 +66,7 @@ export function createClaudeTurnInput(options: {
   };
 
   function close() {
-    accepting = false;
-    closed = true;
+    if (phase !== "stopped") phase = "closed";
     wake?.();
     wake = undefined;
   }
@@ -88,21 +83,19 @@ export function createClaudeTurnInput(options: {
 
   async function accept(uuid: string) {
     const input = inputs.get(uuid);
-    if (!input || stopped) return;
-    if (!input.accepted) {
+    if (!input || phase === "stopped") return;
+    if (!input.receipt.accepted) {
       // A send can reach the CLI as its previous result is already in flight.
       // Represent that delivery as a real continuation, never as a fold into
       // the finished turn. Further steering is closed at the first result.
       const delivery = uuid === options.initial.uuid || !turnId ? "queue" : "steer";
       turnId ??= uuid;
-      input.accepted = true;
-      input.acceptance = { turnId, delivery };
       clearTimeout(input.timer);
-      input.projection = input.project(input.acceptance);
+      void input.receipt.accept({ turnId, delivery }).catch(() => {});
     }
     try {
-      await input.projection;
-      input.resolve?.(input.acceptance!);
+      await input.receipt.projection;
+      input.resolve?.(input.receipt.acceptance!);
     } catch (error) {
       input.reject?.(new Error(`Delivery is unknown: Claude accepted the message but could not save its receipt. ${String(error)}`));
       throw error;
@@ -111,7 +104,7 @@ export function createClaudeTurnInput(options: {
 
   async function observe(frame: ReceiptFrame) {
     if (frame.agent_id || frame.parent_tool_use_id) return;
-    if (frame.type === "result") accepting = false;
+    if (frame.type === "result" && phase === "open") phase = "ending";
     if (frame.type === "system" && frame.subtype === "init") {
       supportsReceipts = frame.capabilities?.includes("msg_lifecycle_v1") ?? false;
     }
@@ -120,7 +113,7 @@ export function createClaudeTurnInput(options: {
       if (uuid && frame.state === "started") await accept(uuid);
       else if (uuid && frame.state === "cancelled") {
         const input = inputs.get(uuid);
-        if (input && !input.accepted) {
+        if (input && !input.receipt.accepted) {
           clearTimeout(input.timer);
           input.reject?.(new Error("Claude did not accept this message. It stays queued."));
           inputs.delete(uuid);
@@ -137,15 +130,17 @@ export function createClaudeTurnInput(options: {
       }
     }
     if (frame.type === "result") {
-      accepting = false;
       turnId = undefined;
       // Withdraw messages that missed the active turn. A false cancellation
       // is not an ACK: a dequeued message must still produce a native receipt.
-      await Promise.all([...inputs].filter(([, input]) => !input.accepted).map(async ([uuid, input]) => {
+      await Promise.all([...inputs].filter(([, input]) => !input.receipt.accepted).map(async ([uuid, input]) => {
         try {
           const queuedIndex = messages.findIndex((message) => message.uuid === uuid);
           if (queuedIndex >= 0) messages.splice(queuedIndex, 1);
-          if (queuedIndex >= 0 || await cancel(uuid)) {
+          const withdrawn = queuedIndex >= 0 || await cancel(uuid);
+          // Native acceptance can arrive while cancellation is in flight.
+          // Its receipt is authoritative even if control later says canceled.
+          if (withdrawn && !input.receipt.accepted) {
             clearTimeout(input.timer);
             input.reject?.(new Error("The Claude turn ended before accepting this message. It stays queued."));
             inputs.delete(uuid);
@@ -156,8 +151,8 @@ export function createClaudeTurnInput(options: {
     }
   }
 
-  function send(message: ClaudeInputMessage, project: Input["project"]): Promise<Acceptance> {
-    if (!accepting || stopped || closed) {
+  function send(message: ClaudeInputMessage, project: (receipt: Acceptance) => Promise<void>): Promise<Acceptance> {
+    if (phase !== "open") {
       return Promise.reject(new Error("There is no active Claude turn to steer. The message stays queued."));
     }
     if (supportsReceipts === undefined) {
@@ -168,7 +163,7 @@ export function createClaudeTurnInput(options: {
     }
     if (inputs.has(message.uuid)) return Promise.reject(new Error("This message is already being sent."));
     return new Promise((resolve, reject) => {
-      const input: Input = { accepted: false, project, resolve, reject };
+      const input: Input = { receipt: createInputReceipt(project), resolve, reject };
       input.timer = setTimeout(() => {
         reject(new Error("Timed out waiting for Claude to accept this message. Delivery is unknown."));
       }, options.receiptTimeoutMs ?? 30_000);
@@ -181,7 +176,8 @@ export function createClaudeTurnInput(options: {
   }
 
   function stop() {
-    stopped = true;
+    phase = "stopped";
+    for (const input of inputs.values()) input.receipt.retire();
     messages.length = 0;
     close();
   }
@@ -190,22 +186,25 @@ export function createClaudeTurnInput(options: {
     stop();
     for (const input of inputs.values()) {
       clearTimeout(input.timer);
-      if (!input.accepted) input.reject?.(new Error("Claude connection closed before confirming delivery. The message stays queued."));
+      if (!input.receipt.accepted) input.reject?.(new Error("Claude connection closed before confirming delivery. The message stays queued."));
     }
   }
 
   return {
     stream, send, observe, stop, finish,
+    async drainAccepted() {
+      await Promise.allSettled([...inputs.values()].flatMap((input) => input.receipt.projection ? [input.receipt.projection] : []));
+    },
     getStatus(uuid: string) {
       const input = inputs.get(uuid);
-      return { accepted: input?.accepted ?? false, ...input?.acceptance };
+      return { accepted: input?.receipt.accepted ?? false, ...input?.receipt.acceptance };
     },
     async getAcceptedStatus(uuid: string) {
       const input = inputs.get(uuid);
       // A recovery check must not overtake the original projection and take
       // its artifact identity before that projection creates a late boundary.
-      await input?.projection?.catch(() => {});
-      return { accepted: input?.accepted ?? false, ...input?.acceptance };
+      await input?.receipt.projection?.catch(() => {});
+      return { accepted: input?.receipt.accepted ?? false, ...input?.receipt.acceptance };
     },
   };
 }

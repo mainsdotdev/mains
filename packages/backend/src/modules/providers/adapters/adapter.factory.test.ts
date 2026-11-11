@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ProviderDriver } from "../../../../shared/adapter.types";
 import type { ProviderResponse } from "../providers.dto";
+import { ResourceCleanupError } from "../../../runtime/resource-lifecycle";
 
 const createCodexDriver = vi.fn();
 const createClaudeDriver = vi.fn();
@@ -19,6 +20,14 @@ import {
   updateCliForProvider,
   listSkillsForProvider,
   refreshWorkAdapterConfig,
+  getWorkAdapter,
+  shutdownWorkAdapter,
+  shutdownAllWorkAdapters,
+  installPluginForProvider,
+  uninstallPluginForProvider,
+  setPluginEnabledForProvider,
+  updatePluginForProvider,
+  listPluginsForProvider,
 } from "./adapter.factory";
 
 function fakeDriver(): ProviderDriver & { updateConfig: ReturnType<typeof vi.fn> } {
@@ -44,6 +53,148 @@ describe("createWorkAdapter", () => {
   beforeEach(() => {
     clearAdapterCache();
     vi.clearAllMocks();
+  });
+
+  it("passes catalog cancellation through the shared adapter to its driver", async () => {
+    const driver = { ...fakeDriver(), listPlugins: vi.fn().mockResolvedValue({ marketplaces: [] }) };
+    createCodexDriver.mockReturnValue(driver);
+    const controller = new AbortController();
+    await listPluginsForProvider(codexProvider({}), controller.signal);
+    expect(driver.listPlugins).toHaveBeenCalledWith(controller.signal);
+    controller.abort();
+    await expect(listPluginsForProvider(codexProvider({}), controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(driver.listPlugins).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a plugin claimed across clients until its native installation settles", async () => {
+    let release!: () => void;
+    const driver = { ...fakeDriver(),
+      installPlugin: vi.fn(() => new Promise<void>((resolve) => { release = resolve; })),
+      uninstallPlugin: vi.fn().mockResolvedValue(undefined),
+    };
+    createCodexDriver.mockReturnValue(driver);
+    const provider = codexProvider({});
+    const installing = installPluginForProvider(provider, "demo@market", "user");
+    try {
+      await expect(uninstallPluginForProvider(provider, "demo@market")).rejects.toThrow("operation in progress");
+      expect(driver.uninstallPlugin).not.toHaveBeenCalled();
+    } finally { release(); await installing; }
+    await uninstallPluginForProvider(provider, "demo@market");
+    expect(driver.uninstallPlugin).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { name: "install", method: "installPlugin", call: (p: ProviderResponse) => installPluginForProvider(p, "demo@market", "project") },
+    { name: "uninstall", method: "uninstallPlugin", call: (p: ProviderResponse) => uninstallPluginForProvider(p, "demo@market") },
+    { name: "enable", method: "setPluginEnabled", call: (p: ProviderResponse) => setPluginEnabledForProvider(p, "demo@market", true) },
+    { name: "disable", method: "setPluginEnabled", call: (p: ProviderResponse) => setPluginEnabledForProvider(p, "demo@market", false) },
+    { name: "update", method: "updatePlugin", call: (p: ProviderResponse) => updatePluginForProvider(p, "demo@market") },
+  ] as const)("rejects competing clients during $name and releases a native failure for retry", async ({ method, call }) => {
+    let fail!: (error: Error) => void;
+    const driver = { ...fakeDriver(), installPlugin: vi.fn().mockResolvedValue(undefined),
+      uninstallPlugin: vi.fn().mockResolvedValue(undefined), setPluginEnabled: vi.fn().mockResolvedValue(undefined),
+      updatePlugin: vi.fn().mockResolvedValue(undefined) };
+    driver[method]
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
+    createCodexDriver.mockReturnValue(driver);
+    const provider = codexProvider({});
+    const original = call(provider);
+    try {
+      for (const competing of [
+        () => installPluginForProvider(provider, "demo@market", "local"),
+        () => uninstallPluginForProvider(provider, "demo@market"),
+        () => setPluginEnabledForProvider(provider, "demo@market", false),
+        () => updatePluginForProvider(provider, "demo@market"),
+      ]) await expect(competing()).rejects.toThrow("operation in progress");
+    } finally {
+      fail(new Error("Native mutation failed"));
+      await expect(original).rejects.toThrow("Native mutation failed");
+    }
+    await call(provider);
+    expect(driver[method]).toHaveBeenCalledTimes(2);
+  });
+
+  it("isolates plugin claims by provider and plugin, including configuration changes", async () => {
+    let release!: () => void;
+    const driver = { ...fakeDriver(), installPlugin: vi.fn().mockResolvedValue(undefined) };
+    driver.installPlugin.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    const other = { ...fakeDriver(), installPlugin: vi.fn().mockResolvedValue(undefined) };
+    createCodexDriver.mockReturnValue(driver); createClaudeDriver.mockReturnValue(other);
+    const installing = installPluginForProvider(codexProvider({ binary: "/original" }), "demo@market", "user");
+    try {
+      await installPluginForProvider(codexProvider({ binary: "/original" }), "other@market");
+      await installPluginForProvider({ ...codexProvider({}), id: "claude_code" }, "demo@market");
+      await expect(installPluginForProvider(codexProvider({ binary: "/replacement" }), "demo@market", "local")).rejects.toThrow("operation in progress");
+      expect(driver.installPlugin).toHaveBeenCalledTimes(2);
+      expect(other.installPlugin).toHaveBeenCalledOnce();
+      expect(driver.installPlugin).toHaveBeenNthCalledWith(1, "demo@market", "user");
+      expect(driver.updateConfig).not.toHaveBeenCalledWith(expect.objectContaining({ binary: "/replacement" }));
+    } finally { release(); await installing; }
+  });
+
+  it("refreshes discovery after a failed native mutation that may already have written files", async () => {
+    let installed = false, cached: boolean | undefined;
+    const driver = { ...fakeDriver(),
+      listPlugins: vi.fn(async () => {
+        cached ??= installed;
+        return { marketplaces: [{ name: "market", plugins: [{ id: "demo@market", installed: cached }] }] };
+      }),
+      installPlugin: vi.fn(async () => { installed = true; throw new Error("Enable step failed"); }),
+      invalidateCatalogs: vi.fn(() => { cached = undefined; }),
+    };
+    createCodexDriver.mockReturnValue(driver);
+    const provider = codexProvider({});
+    expect((await listPluginsForProvider(provider)).marketplaces[0].plugins[0].installed).toBe(false);
+    await expect(installPluginForProvider(provider, "demo@market")).rejects.toThrow("Enable step failed");
+    expect((await listPluginsForProvider(provider)).marketplaces[0].plugins[0].installed).toBe(true);
+  });
+
+  it("retains a failed shutdown in the cache so the same owner can be retried", async () => {
+    const driver = { ...fakeDriver(), shutdown: vi.fn().mockRejectedValueOnce(new Error("close failed")).mockResolvedValue(undefined) };
+    createCodexDriver.mockReturnValue(driver);
+    const provider = codexProvider({});
+    const adapter = createWorkAdapter(provider);
+    await expect(shutdownWorkAdapter(provider.id)).rejects.toThrow("close failed");
+    expect(getWorkAdapter(provider.id)).toBe(adapter);
+    expect(createWorkAdapter(provider)).toBe(adapter);
+    expect(createCodexDriver).toHaveBeenCalledTimes(1);
+    await shutdownWorkAdapter(provider.id);
+    expect(getWorkAdapter(provider.id)).toBeUndefined();
+    expect(driver.shutdown).toHaveBeenCalledTimes(2);
+  });
+
+  it("cannot evict a replacement adapter when an older shutdown completes late", async () => {
+    let release!: () => void;
+    const old = { ...fakeDriver(), shutdown: vi.fn(() => new Promise<void>((resolve) => { release = resolve; })) };
+    createCodexDriver.mockReturnValue(old);
+    const provider = codexProvider({});
+    const original = createWorkAdapter(provider);
+    const stopping = shutdownWorkAdapter(provider.id);
+    await vi.waitFor(() => expect(old.shutdown).toHaveBeenCalledTimes(1));
+    expect(getWorkAdapter(provider.id)).toBe(original);
+    clearAdapterCache();
+    createCodexDriver.mockReturnValue(fakeDriver());
+    const replacement = createWorkAdapter(provider);
+    release(); await stopping;
+    expect(getWorkAdapter(provider.id)).toBe(replacement);
+    await shutdownWorkAdapter(provider.id);
+  });
+
+  it("reports bulk shutdown failure, retains failed owners, and retries only those owners", async () => {
+    const failed = { ...fakeDriver(), shutdown: vi.fn().mockRejectedValueOnce(new Error("native shutdown failed")).mockResolvedValue(undefined) };
+    const successful = { ...fakeDriver(), shutdown: vi.fn().mockResolvedValue(undefined) };
+    createCodexDriver.mockReturnValue(failed);
+    createClaudeDriver.mockReturnValue(successful);
+    const codex = createWorkAdapter(codexProvider({}));
+    createWorkAdapter({ ...codexProvider({}), id: "claude_code", displayName: "Claude" });
+    const error: unknown = await shutdownAllWorkAdapters().catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(ResourceCleanupError);
+    expect(getWorkAdapter("codex")).toBe(codex);
+    expect(getWorkAdapter("claude_code")).toBeUndefined();
+    await (error as ResourceCleanupError).close();
+    expect(getWorkAdapter("codex")).toBeUndefined();
+    expect(failed.shutdown).toHaveBeenCalledTimes(2);
+    expect(successful.shutdown).toHaveBeenCalledTimes(1);
   });
 
   /**

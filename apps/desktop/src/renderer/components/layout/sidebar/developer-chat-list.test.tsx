@@ -3,14 +3,18 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project, RecentRun, Workspace } from "@/lib/redux/api";
 import workspaceReducer from "@/lib/redux/slices/workspaceSlice";
 import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
 
-const state = vi.hoisted(() => ({ projects: [] as Project[], chats: [] as RecentRun[], jump: vi.fn(), refetch: vi.fn() }));
-vi.mock("@/lib/redux/api", () => ({ useListProjectsQuery: () => ({ data: state.projects }) }));
+const state = vi.hoisted(() => ({ projects: [] as Project[], chats: [] as RecentRun[], jump: vi.fn(), refetch: vi.fn(), createWorkspace: vi.fn() }));
+vi.mock("@/lib/redux/api", () => ({
+  useListProjectsQuery: () => ({ data: state.projects }),
+  useGetAccountQuery: () => ({ data: { id: "account" } }),
+  useCreateWorkspaceFromSourceMutation: () => [state.createWorkspace, { isLoading: false }],
+}));
 vi.mock("./use-recent-chats", () => ({ useRecentChats: () => ({ data: state.chats, isLoading: false, isFetching: false, refetch: state.refetch }) }));
 vi.mock("@/hooks/use-active-space", () => ({ useActiveSpace: () => ({ activeSpaceId: "codex-space", activeSpace: { id: "codex-space", providerId: "codex" } }) }));
 vi.mock("@/features/workspace/hooks/use-jump-to-run", () => ({ useJumpToRun: () => state.jump }));
@@ -32,6 +36,7 @@ beforeEach(() => {
   state.projects = [{ id: "mains", name: "mains", rootPath: "/repo", icon: null, sortOrder: 0, isArchived: false } as Project];
   state.chats = [makeChat("review", "Review changes", "local"), makeChat("fix", "Fix login", "tree")];
   state.jump.mockReset();
+  state.createWorkspace.mockReset().mockReturnValue({ unwrap: async () => ({ ...worktree, id: "created-tree" }) });
   vi.stubGlobal("requestAnimationFrame", () => 1);
   vi.stubGlobal("cancelAnimationFrame", () => {});
 });
@@ -40,7 +45,10 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function setup(searchQuery = "") {
   const store = configureStore({ reducer: { workspace: workspaceReducer, appSettings: appSettingsReducer,
     backends: () => ({ activeBackendId: null }) } });
-  function Location() { return <output aria-label="Location">{useLocation().pathname}</output>; }
+  function Location() {
+    const location = useLocation();
+    return <output aria-label="Location">{location.pathname}{location.search}</output>;
+  }
   const view = (workspaces: Workspace[]) => <Provider store={store}><MemoryRouter initialEntries={["/code/local"]}>
     <DeveloperChatList workspaces={workspaces} gitStateByWorkspaceId={gitStates} searchQuery={searchQuery}
       pendingClones={[]} onCancelClone={vi.fn()} onRetryClone={vi.fn()} onDismissClone={vi.fn()} />
@@ -99,6 +107,40 @@ describe("developer project chat sidebar", () => {
     expect(store.getState().workspace.activeWorkspaceId).toBe("local");
     expect(store.getState().workspace.activeTab).toBe("new-run");
     expect(screen.getByRole("status", { name: "Location" }).textContent).toBe("/code/local");
+  });
+
+  it("places project options before New chat and opens the project's settings without collapsing it", () => {
+    setup();
+    const header = screen.getByText("mains").parentElement!;
+    const options = screen.getByRole("button", { name: "Project options" });
+    expect(within(header).getAllByRole("button")).toEqual([
+      options, screen.getByRole("button", { name: "New chat in mains" }),
+    ]);
+    fireEvent.click(options);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(options.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("menuitem", { name: "New worktree" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Project settings" }));
+    expect(screen.getByRole("status", { name: "Location" }).textContent).toBe("/settings?section=projects&kind=code&id=mains");
+    expect(screen.queryByRole("menu", { name: "Project actions" })).toBeNull();
+  });
+
+  it("creates and opens a worktree for the selected project", async () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Project options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "New worktree" }));
+    expect(state.createWorkspace).toHaveBeenCalledExactlyOnceWith({
+      accountId: "account", source: { kind: "worktree", projectId: "mains" },
+    });
+    await waitFor(() => expect(screen.getByRole("status", { name: "Location" }).textContent).toBe("/code/created-tree"));
+  });
+
+  it("keeps local project options available when there is no local checkout for a new chat", () => {
+    const { updateWorkspaces } = setup();
+    updateWorkspaces([{ ...local, isReplica: true }]);
+    expect(screen.queryByRole("button", { name: "New chat in mains" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Project options" }));
+    expect(screen.getByRole("menuitem", { name: "Project settings" })).toBeTruthy();
   });
 
   it("keeps the original workspace view accessible from the sidebar menu", () => {

@@ -65,6 +65,11 @@ function isBlockedIpv6(ip: string): boolean {
 }
 
 export function isBlockedIp(ip: string): boolean {
+  const hexMapped = ip.match(/^::ffff:([\da-f]{1,4}):([\da-f]{1,4})$/i);
+  if (hexMapped) {
+    const high = parseInt(hexMapped[1], 16), low = parseInt(hexMapped[2], 16);
+    return isBlockedIpv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+  }
   const v4mapped = ip.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
   if (v4mapped) return isBlockedIpv4(v4mapped[1]);
   return ip.includes(":") ? isBlockedIpv6(ip) : isBlockedIpv4(ip);
@@ -76,7 +81,7 @@ export function isBlockedIp(ip: string): boolean {
  * is blocked too. NOTE: a small resolve-then-fetch TOCTOU (DNS-rebinding)
  * window remains — acceptable for this single-user desktop threat model.
  */
-async function assertUrlAllowed(urlStr: string): Promise<void> {
+export async function assertPublicHttpUrl(urlStr: string): Promise<void> {
   let u: URL;
   try {
     u = new URL(urlStr);
@@ -210,7 +215,7 @@ export const imageProxyService = {
     let headers: Record<string, string> | undefined = authHeaders ?? undefined;
 
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      await assertUrlAllowed(url);
+      await assertPublicHttpUrl(url);
       // Manual redirect: undici (Node's global fetch) exposes the Location
       // header — unlike a browser's opaqueredirect — so we re-validate each
       // hop instead of letting the network stack follow redirects blindly

@@ -47,6 +47,17 @@ describe("codex.driver / generated protocol snapshot", () => {
 });
 
 describe("codex.driver / thread availability errors", () => {
+  it.each([
+    [{ type: "modelProviderMismatch" }, "different model provider"],
+    [{ reason: "serverShuttingDown" }, "shutting down"],
+  ])("keeps structured error details while explaining %j", (data, explanation) => {
+    const error = Object.assign(new Error("Native failure"), { code: -32600, data, nativeMessage: "Native failure" });
+    const normalized = normalizeCodexResumeError(error);
+    expect(normalized.message).toContain(explanation);
+    expect(normalized).toMatchObject({ code: -32600, data, nativeMessage: "Native failure" });
+    expect(error.message).toBe("Native failure");
+  });
+
   it("maps an archived-session RPC error to the Mains user-facing message", () => {
     const error = new Error(
       "session 019faaad is archived. Run `codex unarchive 019faaad` to unarchive it first. (code: -32600)",

@@ -92,9 +92,19 @@ export const backendRepo = {
     commandId: string;
     channel: string;
     result: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const db = getDb();
-    await db.insert(commandReceipts).values(data).onConflictDoNothing();
+    const result = await db.insert(commandReceipts).values(data).onConflictDoNothing();
+    return result.changes > 0;
+  },
+
+  /** Only an unfinished reservation may acquire its final result. */
+  async completeCommandReceipt(deviceId: string, commandId: string, channel: string, pendingResult: string, result: string): Promise<void> {
+    const updated = await getDb().update(commandReceipts).set({ result }).where(and(
+      eq(commandReceipts.deviceId, deviceId), eq(commandReceipts.commandId, commandId),
+      eq(commandReceipts.channel, channel), eq(commandReceipts.result, pendingResult),
+    ));
+    if (!updated.changes) throw new Error("Command receipt is no longer pending");
   },
 
   /** Drop receipts older than `before`. Returns how many went. */

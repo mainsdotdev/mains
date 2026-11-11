@@ -22,6 +22,17 @@ beforeEach(() => {
 });
 
 describe("Codex speed preferences", () => {
+  it("keeps native profile preferences distinct and clears them when a legacy sandbox is selected", async () => {
+    const change = vi.fn();
+    const h = renderHook(() => useProviderModels("codex", "codex", "a", undefined, undefined,
+      { permissionProfile: "project-edit", sandboxMode: "read-only" }, change));
+    expect(h.result.current.permissionMode).toBe("profile:project-edit");
+    await act(() => h.result.current.handlePermissionModeChange("profile:other-project"));
+    expect(change).toHaveBeenLastCalledWith({ permissionProfile: "other-project" });
+    await act(() => h.result.current.handlePermissionModeChange("workspace-write"));
+    expect(change).toHaveBeenLastCalledWith({ permissionProfile: "", sandboxMode: "workspace-write" });
+  });
+
   it("stores the advertised Ultrafast id as a user choice", async () => {
     const change = vi.fn();
     const h = renderHook(() => useProviderModels("codex", "codex", "a", undefined, undefined, { serviceTier: "fast" }, change));

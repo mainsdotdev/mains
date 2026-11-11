@@ -75,6 +75,7 @@ async function readSnapshot(): Promise<TraySnapshot> {
       const spec = describeApprovalNotification(request, runLabel);
       return {
         requestId: request.requestId,
+        ...(request.approvalToken ? { approvalToken: request.approvalToken } : {}),
         runId: request.runId,
         title: spec.title,
         runLabel,

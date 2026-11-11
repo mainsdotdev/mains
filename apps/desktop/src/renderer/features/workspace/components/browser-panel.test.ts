@@ -560,20 +560,25 @@ describe("BrowserPanel browser menu", () => {
     expect(api.navigate).toHaveBeenCalledWith("https://mains.dev/");
   });
 
-  it("opens recent pages in the blank tab and updates them when history changes", async () => {
+  it("groups recent pages by site, opens its home page, and updates when history changes", async () => {
     const user = userEvent.setup();
     const api = createBrowserApi();
     const recent = {
       id: "mains-recent",
-      url: "https://mains.dev/",
-      title: "Mains",
+      url: "https://mains.dev/projects?view=recent#work",
+      title: "Projects",
       faviconUrl: null,
       visitedAt: "2026-09-30T15:00:00.000Z",
       visitCount: 1,
     };
     api.getHistory.mockResolvedValue({
       success: true,
-      data: [recent, { ...recent, id: "mains-older" }],
+      data: [
+        recent,
+        { ...recent, id: "mains-older", url: "https://mains.dev/notes", title: "Notes" },
+        { ...recent, id: "mains-www", url: "https://www.mains.dev/bookmarks" },
+        { ...recent, id: "other-site", url: "https://example.com/article", title: "Article" },
+      ],
     });
     Object.defineProperty(window, "api", {
       configurable: true,
@@ -581,18 +586,18 @@ describe("BrowserPanel browser menu", () => {
     });
 
     render(createElement(BrowserPanel));
-    const section = await screen.findByRole("region", { name: "Recent tabs" });
-    expect(section.querySelectorAll("button")).toHaveLength(1);
+    const section = await screen.findByRole("region", { name: "Recent sites" });
+    expect(Array.from(section.querySelectorAll("button"), (button) => button.textContent)).toEqual(["mains.dev", "example.com"]);
     expect(screen.queryByText("A fresh tab, ready when you are.")).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Mains" }));
-    expect(api.navigate).toHaveBeenCalledWith(recent.url);
+    await user.click(screen.getByRole("button", { name: "mains.dev" }));
+    expect(api.navigate).toHaveBeenCalledWith("https://mains.dev/");
     expect(api.createTab).not.toHaveBeenCalled();
 
     const historyChanged = api.onHistoryChanged.mock.calls[0][0];
     act(() => historyChanged([]));
     await screen.findByText("A fresh tab, ready when you are.");
-    expect(screen.queryByRole("region", { name: "Recent tabs" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Recent sites" })).toBeNull();
   });
 
   it("hides a loaded page after a failed preview so a suggestion can be clicked", async () => {

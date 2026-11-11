@@ -12,6 +12,7 @@ import {
   readStandaloneServerToken,
 } from "./server-token";
 import { startStandaloneServer } from "./standalone-server";
+import { ResourceCleanupError } from "@mains/backend/runtime/resource-lifecycle";
 import {
   discoverReachableEndpoints,
   normalizeEndpoint,
@@ -136,14 +137,30 @@ async function runServeCommand(argv: string[]): Promise<void> {
     explicitToken: serverOptions.token,
     rotate: rotateToken,
   });
-  const server = await startStandaloneServer({
-    ...serverOptions,
-    webRoot: serverOptions.webRoot ?? findBundledWebRoot(packageRoot),
-    token: token.token,
-    appVersion,
-    appRoot: packageRoot,
-    resourcesPath: findResourcesPath(),
-  });
+  const startup = new AbortController();
+  const cancelStartup = () => startup.abort();
+  process.once("SIGINT", cancelStartup);
+  process.once("SIGTERM", cancelStartup);
+  let server: Awaited<ReturnType<typeof startStandaloneServer>>;
+  try {
+    server = await startStandaloneServer({
+      signal: startup.signal,
+      ...serverOptions,
+      webRoot: serverOptions.webRoot ?? findBundledWebRoot(packageRoot),
+      token: token.token,
+      appVersion,
+      appRoot: packageRoot,
+      resourcesPath: findResourcesPath(),
+    });
+  } catch (error) {
+    if (startup.signal.aborted && !(error instanceof ResourceCleanupError)) {
+      console.log("[serve] startup canceled"); return;
+    }
+    throw error;
+  } finally {
+    process.removeListener("SIGINT", cancelStartup);
+    process.removeListener("SIGTERM", cancelStartup);
+  }
   try {
     commitStandaloneServerToken(token);
   } catch (error) {

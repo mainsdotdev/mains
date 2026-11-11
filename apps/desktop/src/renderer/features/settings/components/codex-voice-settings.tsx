@@ -25,7 +25,13 @@ export function CodexVoiceSettings({ config, catalog, loading, error, updating, 
   const orbStyle = resolveVoiceOrbStyle(config.voiceOrbStyle);
   const voice = config.realtimeVoice || catalog?.defaultVoice || "";
   const supported = !!catalog?.voices.includes(voice);
-  const choices = catalog?.voices.map((id) => ({ value: id, label: voiceLabel(id) })) ?? [];
+  const choices = catalog?.voices
+    .map((id) => ({
+      value: id,
+      label: voiceLabel(id),
+      description: voicePreviewUrl(id) ? undefined : "No preview",
+    }))
+    .sort((a, b) => Number(!!voicePreviewUrl(b.value)) - Number(!!voicePreviewUrl(a.value))) ?? [];
   const preview = useVoicePreview();
 
   return (
@@ -59,8 +65,9 @@ export function CodexVoiceSettings({ config, catalog, loading, error, updating, 
           placeholder={loading ? "Loading voices…" : voice && !supported ? `${voiceLabel(voice)} (unavailable)` : "Voices unavailable"}
           disabled={updating || loading || !catalog?.voices.length || !!error}
           onChange={(realtimeVoice) => {
-            preview.play(realtimeVoice);
-            void onUpdate({ realtimeVoice }).then((saved) => { if (!saved) preview.stop(); });
+            const stopPreview = preview.play(realtimeVoice);
+            try { void onUpdate({ realtimeVoice }).then((saved) => { if (!saved) stopPreview(); }, stopPreview); }
+            catch { stopPreview(); }
           }}
         />
       </SettingsRow>

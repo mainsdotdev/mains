@@ -576,16 +576,18 @@ describe("connectionsService", () => {
 
     it("saveResources returns error on failure", async () => {
       createConnection(db, { id: "c1", provider: "github" });
-      vi.spyOn(connectionsRepo, "findResourceByExternalId").mockRejectedValueOnce(new Error("db"));
+      vi.spyOn(connectionsRepo, "saveResources").mockImplementationOnce(() => { throw new Error("db"); });
       await expect(connectionsService.saveResources({ provider: "github", connectionId: "c1", resources: [{ id: 1, fullName: "u/r", name: "r", owner: "u", private: false, description: null, language: null, stars: 0, forks: 0, defaultBranch: "main", htmlUrl: "", updatedAt: null }], })).rejects.toThrow("db");
     });
 
     it("removeResource returns error on failure", async () => {
+      vi.spyOn(connectionsRepo, "findResourceOwner").mockReturnValueOnce({ provider: "github" });
       vi.spyOn(connectionsRepo, "deleteResource").mockRejectedValueOnce(new Error("db"));
       await expect(connectionsService.removeResource("res1")).rejects.toThrow("db");
     });
 
     it("deleteResource returns error on failure", async () => {
+      vi.spyOn(connectionsRepo, "findResourceOwner").mockReturnValueOnce({ provider: "github" });
       vi.spyOn(connectionsRepo, "deleteResource").mockRejectedValueOnce(new Error("db"));
       await expect(connectionsService.deleteResource("res1")).rejects.toThrow("db");
     });

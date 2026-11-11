@@ -13,6 +13,8 @@ export interface IconPath {
   d: string;
   fillRule?: "evenodd" | "nonzero";
   clipRule?: "evenodd" | "nonzero";
+  opacity?: number;
+  transform?: string;
 }
 
 export interface IconShape {
@@ -29,7 +31,7 @@ export type ParsedIcon =
  * the desktop never offers them as a pick — a space showing one is the
  * seeded default rather than a user choice.
  */
-export const PROVIDER_ICON_NAMES = new Set(["claude", "copilot", "codex", "cursor"]);
+export const PROVIDER_ICON_NAMES = new Set(["claude", "copilot", "codex", "cursor", "opencode"]);
 
 export function iconShape(name: string): IconShape | undefined {
   return ICON_SHAPES[name];

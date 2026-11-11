@@ -165,6 +165,7 @@ export const MODE_HARNESSES: Record<ModeId, ModeHarnessDescriptor> = {
       [PROVIDER_IDS.copilot]: { permissionMode: "default" },
       [PROVIDER_IDS.codex]: {
         sandboxMode: "read-only",
+        permissionProfile: "",
         planMode: false,
         goalMode: false,
       },

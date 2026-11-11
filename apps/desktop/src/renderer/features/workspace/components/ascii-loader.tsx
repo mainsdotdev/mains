@@ -5,6 +5,7 @@ import { resolveTool } from "../lib/resolve-tool";
 import { coerceToolOutput, parseToolContent, previewParams } from "../lib/parse-tool-content";
 import { shortFileName } from "../lib/path-utils";
 import { toPresentTense } from "./tools/_shared";
+import { useIsToolVisible } from "../lib/tool-activity-presence";
 
 export { AsciiSpinner };
 
@@ -81,6 +82,8 @@ export function AsciiLoader({
   thinkingText?: string;
   activeTool?: RunEvent;
 }) {
+  const toolVisible = useIsToolVisible(activeTool?.id);
+  if (toolVisible) return null;
   return (
     <div className={`flex min-w-0 items-center gap-2 ${className || ""}`}>
       {activeTool ? <ToolActivity event={activeTool} /> : (

@@ -24,7 +24,7 @@ import {
   ChevronLeft,
   Clock,
   Close,
-  Crop,
+  RequestEdits,
   DeviceMobile,
   Document,
   Download,
@@ -45,6 +45,7 @@ import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setBrowserPanelWidth } from "@/lib/redux/slices/appSettingsSlice";
 import { setLayoutWidthVar } from "@/hooks/use-layout-width-vars";
 import { ResizeHandle } from "@/components/layout/resize-handle";
+import { PreviewToolbar } from "@/components/layout/preview-toolbar";
 import {
   BROWSER_PANEL_WIDTH_VAR,
   BROWSER_PANEL_WIDTH_MIN,
@@ -326,9 +327,14 @@ export function BrowserPanel({
 
   useEffect(() => {
     if (!isOpen || !selectedPreviewId || !api || selectedPreviewId === activeTabIdRef.current) return;
-    void api.activateTab(selectedPreviewId).then((response: any) => {
+    const requestedId = selectedPreviewId;
+    let current = true;
+    void api.activateTab(requestedId).then((response: any) => {
+      // Close or a newer selection can retire this request before it returns.
+      if (!current || requestedId === activeTabIdRef.current) return;
       applyResponseState(response, "Failed to activate browser tab");
     });
+    return () => { current = false; };
   }, [api, isOpen, selectedPreviewId, applyResponseState]);
 
   const applyDownloads = useCallback(
@@ -1507,7 +1513,7 @@ export function BrowserPanel({
 
       <div data-browser-content="" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
       <div className="relative">
-        <div className="flex items-center gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
+        <PreviewToolbar aria-label="Browser navigation">
           <div className="flex items-center gap-1 rounded-full p-0.5 ">
             <Button
               variant="icon"
@@ -1519,6 +1525,7 @@ export function BrowserPanel({
               }}
               disabled={!activeTab?.canGoBack}
               aria-label="Back"
+              className="glass-card"
             >
               <ChevronLeft className="size-5" />
             </Button>
@@ -1532,6 +1539,7 @@ export function BrowserPanel({
               }}
               disabled={!activeTab?.canGoForward}
               aria-label="Forward"
+              className="glass-card"
             >
               <ChevronLeft className="size-5 rotate-180" />
             </Button>
@@ -1542,7 +1550,7 @@ export function BrowserPanel({
               onClick={() => {
                 void (activeTab?.isLoading ? api.stop() : api.reload());
               }}
-              className="group"
+              className="glass-card group"
               aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
             >
               {activeTab?.isLoading ? (
@@ -1553,7 +1561,7 @@ export function BrowserPanel({
             </Button>
           </div>
 
-          <div className="relative mx-auto my-1 flex min-w-0 max-w-3xl flex-1">
+          <div className="relative mx-auto flex min-w-0 max-w-3xl flex-1">
             <Input
               ref={locationInputRef}
               type="text"
@@ -1634,7 +1642,7 @@ export function BrowserPanel({
               autoCapitalize="none"
               autoComplete="off"
               autoCorrect="off"
-              className="w-full max-w-3xl rounded-xl py-2 pr-9 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:[--glass-fill-input:var(--color-primary-900)] dark:text-primary-100 dark:focus:bg-primary-800/60"
+              className="h-8 w-full max-w-3xl rounded-xl py-0 pr-9 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:[--glass-fill-input:var(--color-primary-900)] dark:text-primary-100 dark:focus:bg-primary-800/60"
               spellCheck={false}
             />
             {urlInput && (
@@ -1683,11 +1691,11 @@ export function BrowserPanel({
               tooltipShortcut="Esc"
               tooltipPosition="top-left"
               onClick={() => void toggleSelect()}
-              className={selectMode ? "bg-primary-500/20 text-primary-700 dark:text-primary-300" : undefined}
+              className={`glass-card ${selectMode ? "text-accent dark:text-accent" : ""}`}
               aria-label={selectMode ? "Exit annotation mode" : "Annotate browser"}
               aria-pressed={selectMode}
             >
-              <Crop className="size-4" />
+              <RequestEdits className="size-4" />
             </Button>
             <Button
               variant="icon"
@@ -1699,11 +1707,12 @@ export function BrowserPanel({
               aria-label="Open browser menu"
               aria-haspopup="menu"
               aria-expanded={browserMenuOpen}
+              className="glass-card"
             >
               <Option className="size-4 rotate-90" />
             </Button>
           </div>
-        </div>
+        </PreviewToolbar>
 
       </div>
 

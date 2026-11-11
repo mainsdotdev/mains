@@ -5,6 +5,8 @@
 // Tag types stay split (Workspaces, WorkspaceActivity, WorkspaceDiffs,
 // Reviews, ReviewFindings) so UI sections refresh independently.
 
+import { onTransportChange } from "@/lib/transport/registry";
+import { accountApi } from "./accountApi";
 import { appApi, getTransport } from "@/lib/transport";
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
@@ -344,19 +346,24 @@ export const workspaceApi = baseApi.injectEndpoints({
     // Create a project + workspace from a repo (picked folder / clone / init).
     // Returns the created workspace so callers can navigate to it.
     createWorkspaceFromSource: builder.mutation<Workspace, WorkspaceIntakePayload>({
-      async queryFn(payload, { dispatch }, _extra, baseQuery) {
+      async queryFn(payload, { dispatch, getState }, _extra, baseQuery) {
         const transport = getTransport();
-        const result = await baseQuery({ handler: CHANNELS.workspace.createFromSource, args: [payload] });
-        if (result.error) return { error: result.error };
-        const workspace = result.data as Workspace;
-        // Replace a clone's pending row without waiting for the list refetch.
-        // A late intake response must never enter another backend's cache.
-        if (getTransport() === transport) {
-          dispatch(workspaceApi.util.updateQueryData("listWorkspaces", undefined, (workspaces) => {
-            if (!workspaces.some((row) => row.id === workspace.id)) workspaces.push(workspace);
-          }));
-        }
-        return { data: workspace };
+        let retired = false;
+        const off = onTransportChange(() => { retired = true; });
+        try {
+          const result = await baseQuery({ handler: CHANNELS.workspace.createFromSource, args: [payload] });
+          if (result.error) return { error: result.error };
+          const workspace = result.data as Workspace;
+          const account = accountApi.endpoints.getAccount.select()(getState() as RootState).data;
+          // Any transport swap retires this projection, including a round trip.
+          // A still-loading or replaced account is not proof of cache ownership.
+          if (!retired && getTransport() === transport && account?.id === payload.accountId) {
+            dispatch(workspaceApi.util.updateQueryData("listWorkspaces", undefined, (workspaces) => {
+              if (!workspaces.some((row) => row.id === workspace.id)) workspaces.push(workspace);
+            }));
+          }
+          return { data: workspace };
+        } finally { off(); }
       },
       invalidatesTags: ["Workspaces", "WorkspaceGitStates", "Projects"],
     }),

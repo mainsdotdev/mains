@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createShortcutWriteQueue } from "../../shared/capture-shortcut-lifecycle";
 import { capabilities } from "@/lib/platform";
 import type { ServiceResponse } from "../../shared/ipc-kit/service-response";
 import {
@@ -62,6 +63,7 @@ export function KeyboardShortcutsProvider({ children }: { children: ReactNode })
   const [status, setStatus] = useState<KeyboardShortcutsStatus>(DEFAULT_STATUS);
   const [isLoading, setIsLoading] = useState(capabilities.windowChrome);
   const [error, setError] = useState<string | null>(null);
+  const controls = useRef<{ queue: ReturnType<typeof createShortcutWriteQueue>; api: typeof window.api.keyboardShortcuts } | null>(null);
   const registrations = useRef(
     new Map<KeyboardShortcutId, Set<ShortcutRegistration>>(),
   );
@@ -87,29 +89,22 @@ export function KeyboardShortcutsProvider({ children }: { children: ReactNode })
     [],
   );
 
-  useEffect(() => {
-    if (!capabilities.windowChrome) return;
-    let cancelled = false;
-    void window.api.keyboardShortcuts.get().then(
-      (response: ServiceResponse<KeyboardShortcutsStatus>) => {
-        if (cancelled) return;
-        if (response.success) {
-          setStatus(response.data);
-          setError(null);
-        } else {
-          setError(response.error);
-        }
+  useLayoutEffect(() => {
+    const queue = createShortcutWriteQueue();
+    const api = window.api?.keyboardShortcuts;
+    const owned = { queue, api };
+    controls.current = owned;
+    if (capabilities.windowChrome) {
+      void queue.restore(async (): Promise<ServiceResponse<KeyboardShortcutsStatus>> => {
+        try { return await api.get(); }
+        catch (loadError) { return { success: false, error: loadError instanceof Error ? loadError.message : String(loadError) }; }
+      }, (response) => {
+        if (response.success) { setStatus(response.data); setError(null); }
+        else setError(response.error);
         setIsLoading(false);
-      },
-      (loadError: unknown) => {
-        if (cancelled) return;
-        setError(loadError instanceof Error ? loadError.message : String(loadError));
-        setIsLoading(false);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
+      });
+    }
+    return () => { void queue.stop(); if (controls.current === owned) controls.current = null; };
   }, []);
 
   useEffect(() => {
@@ -148,25 +143,18 @@ export function KeyboardShortcutsProvider({ children }: { children: ReactNode })
     return unsubscribe;
   }, [runShortcut]);
 
-  const update = useCallback(
-    async (id: KeyboardShortcutId, binding: string | null) => {
-      const response = (await window.api.keyboardShortcuts.update({
-        id,
-        binding,
-      })) as ServiceResponse<KeyboardShortcutsStatus>;
+  const persist = useCallback(async (effect: (api: typeof window.api.keyboardShortcuts) => Promise<ServiceResponse<KeyboardShortcutsStatus>>) => {
+    const owned = controls.current;
+    if (!owned) throw new Error("Keyboard shortcut view is closed");
+    return owned.queue.run(async (current) => {
+      const response = await effect(owned.api);
+      if (!current()) throw new Error("Keyboard shortcut view is closed");
       if (!response.success) throw new Error(response.error);
-      setStatus(response.data);
-      setError(null);
-    },
-    [],
-  );
-
-  const resetAll = useCallback(async () => {
-    const response = (await window.api.keyboardShortcuts.resetAll()) as ServiceResponse<KeyboardShortcutsStatus>;
-    if (!response.success) throw new Error(response.error);
-    setStatus(response.data);
-    setError(null);
+      setStatus(response.data); setError(null); setIsLoading(false);
+    });
   }, []);
+  const update = useCallback((id: KeyboardShortcutId, binding: string | null) => persist((api) => api.update({ id, binding })), [persist]);
+  const resetAll = useCallback(() => persist((api) => api.resetAll()), [persist]);
 
   const register = useCallback(
     (id: KeyboardShortcutId, registration: ShortcutRegistration) => {

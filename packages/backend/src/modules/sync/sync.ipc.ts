@@ -1,3 +1,4 @@
+import { openSourceSync } from "./sync-lifecycle";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { syncService } from "./sync.service";
@@ -8,6 +9,7 @@ import type { SetIssueStatusMappingInput } from "@mains/contracts/issue-status";
 // IPC Handlers - Thin layer, just registers handlers
 // ─────────────────────────────────────────────────────────────
 export function registerSyncIpc() {
+  openSourceSync();
   ipcMain.handle(
     CHANNELS.sync.runEntitySync,
     handle((provider?: string) => syncService.runEntitySync(provider)),

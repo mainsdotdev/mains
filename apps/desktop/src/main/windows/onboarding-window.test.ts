@@ -123,6 +123,32 @@ afterEach(() => {
 });
 
 describe("native onboarding window", () => {
+  it.each(["fullscreen", "resize"])("releases native %s waiters when the OS operation throws", async (operation) => {
+    const window = createWindow();
+    if (operation === "fullscreen") {
+      await setMainWindowOnboarding(false);
+      window.completeFullscreen(true);
+      window.setFullScreen.mockImplementationOnce(() => { throw new Error("Native transition failed"); });
+      await expect(setMainWindowOnboarding(true)).rejects.toThrow("Native transition failed");
+      expect(window.listenerCount("leave-full-screen")).toBe(1);
+    } else {
+      await setMainWindowOnboarding(true);
+      window.show();
+      window.setBounds.mockImplementationOnce(() => { throw new Error("Native transition failed"); });
+      await expect(setMainWindowOnboarding(false)).rejects.toThrow("Native transition failed");
+      expect(window.listenerCount("resized")).toBe(0);
+    }
+  });
+  it("retries a failed compact presentation without replacing the original workspace snapshot", async () => {
+    const window = createWindow();
+    window.setBounds.mockImplementationOnce(() => { throw new Error("Native resize failed"); });
+    await expect(setMainWindowOnboarding(true)).rejects.toThrow("Native resize failed");
+    await setMainWindowOnboarding(true);
+    expect(window.getBounds().width).toBe(1080);
+    await setMainWindowOnboarding(false);
+    expect(window.getNormalBounds()).toEqual(workspaceBounds);
+    expect(window.isResizable()).toBe(true);
+  });
   it.each(["darwin", "win32"])("keeps the splash until the main window is shown on %s", async (platform) => {
     Object.defineProperty(process, "platform", { ...hostPlatform, value: platform });
     const transitions: string[] = [];

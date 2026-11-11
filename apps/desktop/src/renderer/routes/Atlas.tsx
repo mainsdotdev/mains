@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { PageShell } from "@/components/layout/page-shell";
@@ -16,15 +16,17 @@ import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
 import { getTransport } from "@/lib/transport";
 import { subscribeAtlasPageRequests, type AtlasPendingPageAction } from "@/features/atlas/lib/page-actions";
 import { ActiveSpaceOverrideProvider, useActiveSpace } from "@/hooks/use-active-space";
+import { createAtlasPageLifecycle, type AtlasPageIntent, type AtlasPageOperation } from "@/features/atlas/lib/page-lifecycle";
 
 const AtlasPageEditor = lazy(() => import("@/features/atlas/components/atlas-page-editor"));
 const AtlasImageCreator = lazy(() => import("@/features/atlas/components/atlas-image-creator"));
 
 export default function Atlas({ imageCreation = false }: { imageCreation?: boolean }) {
   const provider = useSpaceProviderVariant();
+  const { itemId } = useParams();
   const { activeSpace } = useActiveSpace();
   const workSpace = useMemo(() => activeSpace ? { ...activeSpace, mode: "work" as const } : null, [activeSpace]);
-  if (!provider.supportsAtlas) return <PageShell>
+  if (!provider.supportsAtlas && (imageCreation || itemId)) return <PageShell>
     <Heading3 className="mb-6">Atlas</Heading3>
     <Muted>Atlas isn&apos;t available for this agent yet.</Muted>
   </PageShell>;
@@ -61,20 +63,30 @@ function AtlasSurface({ accountId, imageCreation }: { accountId: string; imageCr
   const editorRef = useRef<AtlasPageEditorHandle>(null);
   const [createPage] = useCreateAtlasPageMutation();
   const [busy, setBusy] = useState(false);
-  const pending = useRef(false);
   const collectionId = params.get("project");
-  const runAction = useCallback(async (action: () => Promise<void>) => {
-    if (pending.current) return;
-    pending.current = true;
-    setBusy(true);
-    try { await action(); }
-    catch (error) { toast.error(atlasError(error)); }
-    finally { pending.current = false; setBusy(false); }
-  }, []);
+  const transport = getTransport();
+  const saveEditor = useCallback(() => editorRef.current?.flush() ?? Promise.resolve(true), []);
+  const lifecycle = useMemo(() => {
+    // The factory stores saveEditor; it only invokes it from actions/effects.
+    // eslint-disable-next-line react-hooks/refs
+    return createAtlasPageLifecycle({
+      isCurrent: () => getTransport() === transport,
+      save: saveEditor,
+      onState: ({ busy }) => setBusy(busy),
+    });
+  }, [transport, saveEditor]);
+  useLayoutEffect(() => {
+    lifecycle.activate();
+    return () => lifecycle.deactivate();
+  // Each route entry owns its continuations, including browser back/forward.
+  }, [lifecycle, ownerKey, itemId, location.key]);
+  const runAction = useCallback(async (action: (operation: AtlasPageOperation) => Promise<void> | void, intent: AtlasPageIntent = "navigate") => {
+    try { await lifecycle.run(action, intent); }
+    catch (error) { if (lifecycle.owned) toast.error(atlasError(error)); }
+  }, [lifecycle]);
   const selectPage = useCallback((id: string) => {
     if (id === itemId) return;
     void runAction(async () => {
-      if (editorRef.current && !(await editorRef.current.flush())) return;
       navigate(`/atlas/${id}`);
       document.getElementById(`atlas-tab-${id}`)?.focus();
       document.getElementById(`atlas-tab-${id}`)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
@@ -84,14 +96,11 @@ function AtlasSurface({ accountId, imageCreation }: { accountId: string; imageCr
     if (request.ownerKey !== ownerKey) return;
     const action = request.action;
     if (!action) { selectPage(request.id); return; }
-    const transport = getTransport();
+    if (request.id === itemId && editorRef.current) {
+      void runAction(() => editorRef.current!.performAction(action), "read");
+      return;
+    }
     void runAction(async () => {
-      if (request.id === itemId && editorRef.current) {
-        await editorRef.current.performAction(action);
-        return;
-      }
-      if (editorRef.current && !(await editorRef.current.flush())) return;
-      if (getTransport() !== transport) return;
       navigate(`/atlas/${request.id}`, { state: {
         atlasPageAction: { ...request, action, token: crypto.randomUUID() } satisfies AtlasPendingPageAction,
       } });
@@ -107,21 +116,19 @@ function AtlasSurface({ accountId, imageCreation }: { accountId: string; imageCr
   }, [location, navigate, requestedAction?.token]);
   const closePage = useCallback((id: string) => {
     void runAction(async () => {
-      if (id === itemId && editorRef.current && !(await editorRef.current.flush())) return;
       dispatch(closeAtlasPageTab({ ownerKey, id }));
       if (id !== itemId) return;
       const index = tabs.findIndex((tab) => tab.id === id);
       const remaining = tabs.filter((tab) => tab.id !== id);
       const next = remaining[Math.min(index, remaining.length - 1)];
       navigate(next ? `/atlas/${next.id}` : "/atlas?type=page");
-    });
+    }, id === itemId ? "navigate" : "read");
   }, [dispatch, itemId, navigate, ownerKey, runAction, tabs]);
   const newPage = useCallback(() => {
-    void runAction(async () => {
-      if (editorRef.current && !(await editorRef.current.flush())) return;
+    void runAction(async ({ current }) => {
       const next = await createPage({ accountId, title: "Untitled page",
         collectionId: editorRef.current?.collectionId ?? collectionId ?? null }).unwrap();
-      navigate(`/atlas/${next.item.id}`);
+      if (current()) navigate(`/atlas/${next.item.id}`);
     });
   }, [accountId, collectionId, createPage, navigate, runAction]);
   const titleChanged = useCallback((title: string) => {

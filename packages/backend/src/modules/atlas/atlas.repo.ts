@@ -1,14 +1,108 @@
 import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
-import type { AtlasListOptions, AtlasMetadataPatch } from "@mains/contracts/atlas";
+import { randomUUID } from "node:crypto";
+import type { AtlasListOptions, AtlasMetadataPatch, AtlasItemTag, AtlasTag } from "@mains/contracts/atlas";
 import { ATLAS_LIBRARY_PAGE_SIZE } from "@mains/contracts/atlas";
 import { getDb } from "../../db/client";
-import { atlasItems, atlasPageRevisions, atlasPageFileRefs, runs } from "../../db/schema";
+import { atlasItems, atlasPageRevisions, atlasPageFileRefs, atlasTags, atlasItemTags, runs } from "../../db/schema";
 import { mergeMetadata, readMetadata } from "./atlas.metadata";
 
 export type AtlasRecord = typeof atlasItems.$inferSelect;
 export type RevisionRecord = typeof atlasPageRevisions.$inferSelect;
 
 export const atlasRepo = {
+  saveBookmark(id: string, accountId: string, fields: Partial<AtlasRecord> & { title: string }, tags?: string[]) {
+    getDb().transaction(() => {
+      if (atlasRepo.find(id, accountId)) atlasRepo.update(id, accountId, fields);
+      else atlasRepo.insert({ id, accountId, kind: "bookmark", ...fields });
+      if (tags) atlasRepo.setTags(id, accountId, tags, "user");
+    });
+  },
+  classifyBookmark(id: string, accountId: string, tags: string[], metadata: string, bookmarkJob: string) {
+    getDb().transaction(() => {
+      atlasRepo.setTags(id, accountId, tags, "ai");
+      atlasRepo.update(id, accountId, { metadata, bookmarkJob });
+    });
+  },
+  itemTags(ids: string[], accountId: string): Map<string, AtlasItemTag[]> {
+    const result = new Map<string, AtlasItemTag[]>();
+    if (!ids.length) return result;
+    const rows = getDb().select({ itemId: atlasItemTags.itemId, id: atlasTags.id, name: atlasTags.name, source: atlasItemTags.source })
+      .from(atlasItemTags).innerJoin(atlasTags, eq(atlasTags.id, atlasItemTags.tagId))
+      .innerJoin(atlasItems, eq(atlasItems.id, atlasItemTags.itemId))
+      .where(and(inArray(atlasItemTags.itemId, ids), eq(atlasTags.accountId, accountId), eq(atlasItems.accountId, accountId),
+        eq(atlasItemTags.isExcluded, false))).orderBy(atlasTags.normalizedName).all();
+    for (const { itemId, ...tag } of rows) result.set(itemId, [...(result.get(itemId) ?? []), tag]);
+    return result;
+  },
+  listTags(accountId: string): AtlasTag[] {
+    return getDb().select({ id: atlasTags.id, name: atlasTags.name,
+      count: sql<number>`count(CASE WHEN ${atlasItems.trashedAt} IS NULL AND ${atlasItemTags.isExcluded}=0 THEN ${atlasItems.id} END)` })
+      .from(atlasTags).leftJoin(atlasItemTags, eq(atlasTags.id, atlasItemTags.tagId))
+      .leftJoin(atlasItems, and(eq(atlasItems.id, atlasItemTags.itemId), eq(atlasItems.accountId, accountId)))
+      .where(eq(atlasTags.accountId, accountId)).groupBy(atlasTags.id).orderBy(atlasTags.normalizedName).all();
+  },
+  /** Names and ids both resolve within this account. User removal records an
+   * exclusion, so another enrichment cannot resurrect that relationship. */
+  setTags(itemId: string, accountId: string, inputs: string[], source: "user" | "ai") {
+    const db = getDb();
+    db.transaction(() => {
+      const item = atlasRepo.find(itemId, accountId);
+      if (!item || item.trashedAt) throw new Error("Atlas item unavailable");
+      const ids = inputs.map((input) => {
+        const byId = db.select().from(atlasTags).where(eq(atlasTags.id, input)).get();
+        if (byId && byId.accountId !== accountId) throw new Error("Tag belongs to a different account");
+        const normalized = input.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+        const tag = db.select().from(atlasTags).where(and(eq(atlasTags.accountId, accountId),
+          sql`(${atlasTags.id}=${input} OR ${atlasTags.normalizedName}=${normalized})`)).get();
+        if (tag) return tag.id;
+        const id = randomUUID();
+        db.insert(atlasTags).values({ id, accountId, name: input.trim().replace(/\s+/g, " "), normalizedName: normalized }).run();
+        return id;
+      });
+      if (source === "user") {
+        const previous = db.select().from(atlasItemTags).where(eq(atlasItemTags.itemId, item.id)).all();
+        for (const tag of previous) if (!ids.includes(tag.tagId)) db.update(atlasItemTags).set({ isExcluded: true })
+          .where(and(eq(atlasItemTags.itemId, item.id), eq(atlasItemTags.tagId, tag.tagId))).run();
+      } else {
+        // Replace stale AI classifications while keeping authored tags and
+        // explicit user exclusions independent of the latest model response.
+        const previous = db.select().from(atlasItemTags).where(and(eq(atlasItemTags.itemId, item.id),
+          eq(atlasItemTags.source, "ai"), eq(atlasItemTags.isExcluded, false))).all();
+        for (const tag of previous) if (!ids.includes(tag.tagId)) db.delete(atlasItemTags)
+          .where(and(eq(atlasItemTags.itemId, item.id), eq(atlasItemTags.tagId, tag.tagId))).run();
+      }
+      for (const tagId of new Set(ids)) {
+        const old = db.select().from(atlasItemTags).where(and(eq(atlasItemTags.itemId, item.id), eq(atlasItemTags.tagId, tagId))).get();
+        if (old && source === "ai") continue; // Preserve user provenance and exclusions.
+        db.insert(atlasItemTags).values({ itemId: item.id, tagId, source, isExcluded: false })
+          .onConflictDoUpdate({ target: [atlasItemTags.itemId, atlasItemTags.tagId], set: { source: old && !old.isExcluded ? old.source : source, isExcluded: false } }).run();
+      }
+      atlasRepo.update(item.id, accountId, {});
+    });
+  },
+  renameTag(id: string, accountId: string, name: string) {
+    const db = getDb(), normalizedName = name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+    const tag = db.select().from(atlasTags).where(and(eq(atlasTags.id, id), eq(atlasTags.accountId, accountId))).get();
+    if (!tag) throw new Error("Tag not found");
+    const same = db.select().from(atlasTags).where(and(eq(atlasTags.accountId, accountId), eq(atlasTags.normalizedName, normalizedName))).get();
+    if (same && same.id !== id) throw new Error("A tag with this name already exists");
+    db.update(atlasTags).set({ name: name.trim(), normalizedName }).where(eq(atlasTags.id, id)).run();
+  },
+  removeTag(id: string, accountId: string) {
+    const result = getDb().delete(atlasTags).where(and(eq(atlasTags.id, id), eq(atlasTags.accountId, accountId))).run();
+    if (!result.changes) throw new Error("Tag not found");
+  },
+  hasTag(itemId: string, tagId: string) {
+    return !!getDb().select().from(atlasItemTags).where(and(eq(atlasItemTags.itemId, itemId),
+      eq(atlasItemTags.tagId, tagId), eq(atlasItemTags.isExcluded, false))).get();
+  },
+  pendingBookmarks(offset = 0) {
+    return getDb().select().from(atlasItems).where(and(eq(atlasItems.kind, "bookmark"), isNull(atlasItems.trashedAt),
+      sql`CASE WHEN json_valid(${atlasItems.bookmarkJob}) THEN
+        json_extract(${atlasItems.bookmarkJob}, '$.status') IN ('pending','running')
+        AND json_extract(${atlasItems.bookmarkJob}, '$.nextAt') <= ${Date.now()} ELSE 0 END`))
+      .orderBy(atlasItems.updatedAt, atlasItems.id).limit(50).offset(offset).all();
+  },
   list({ accountId, includePagePreview = false, kind, ids, trashed, collectionId,
     isFavorite, offset, limit }: AtlasListOptions) {
     // Read only a small excerpt, in the same query as the library. The indexed
@@ -63,6 +157,7 @@ export const atlasRepo = {
   update(id: string, accountId: string, fields: Partial<typeof atlasItems.$inferInsert>, metadata?: AtlasMetadataPatch | null) {
     const db = getDb();
     db.transaction(() => {
+      const canonical = atlasRepo.find(id, accountId)?.id ?? id;
       const next = { ...fields, updatedAt: new Date() };
       if (metadata !== undefined) {
         const item = atlasRepo.find(id, accountId);
@@ -77,7 +172,7 @@ export const atlasRepo = {
         }
       }
       db.update(atlasItems).set(next)
-        .where(and(eq(atlasItems.id, id), eq(atlasItems.accountId, accountId))).run();
+        .where(and(eq(atlasItems.id, canonical), eq(atlasItems.accountId, accountId))).run();
     });
   },
   /** Newest first. Summaries only, so a deep window stays cheap; history reads the recent part of it. */
@@ -210,7 +305,8 @@ export const atlasRepo = {
     });
   },
   generatedRuns(accountId: string, offset: number, limit: number, collectionId?: string) {
-    const conditions = [eq(runs.accountId, accountId)];
+    // Only Work conversations feed Atlas automatically. Explicit saves resolve their run directly.
+    const conditions = [eq(runs.accountId, accountId), eq(runs.mode, "work")];
     if (collectionId) conditions.push(eq(runs.collectionId, collectionId));
     return getDb().select({ id: runs.id, title: runs.title, collectionId: runs.collectionId, mode: runs.mode })
       .from(runs).where(and(...conditions)).orderBy(desc(runs.createdAt), desc(runs.id))

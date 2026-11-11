@@ -1,24 +1,13 @@
-import { useCallback, useRef, useState } from "react";
-import type { RunHistoryCursor, ReadRunHistoryPayload } from "@mains/contracts/runs";
-import { historyEndAfter } from "@mains/contracts/run-history";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import type { ReadRunHistoryPayload } from "@mains/contracts/runs";
+import { EMPTY_HISTORY, beginHistoryWindow, completeHistoryWindow, failHistoryWindow, followHistoryWindow,
+  historyWindowRequest, createHistoryRequests, type HistoryWindowState as HistoryState } from "@mains/contracts/transcript-history";
 import type { RunTurn } from "@/lib/redux/api";
 import { appApi } from "@/lib/transport";
+import { onTransportChange } from "@/lib/transport/registry";
 import type { RunEvent } from "../types";
 import { mergeRunEvents, mergeMappedRunEvents } from "../lib/run-event-mappers";
 import { createRunCache, pruneRunMap } from "../lib/run-cache";
-
-interface HistoryState {
-  start: RunHistoryCursor | null;
-  end: RunHistoryCursor | null;
-  last: RunHistoryCursor | null;
-  hasOlder: boolean;
-  hasNewer: boolean;
-  loading: boolean;
-  error: string | null;
-  following: boolean;
-  historical: boolean;
-  latestRevision: number;
-}
 
 export interface TranscriptHistory {
   hasOlder: boolean;
@@ -42,11 +31,13 @@ export function useRunHistory(cache: ReturnType<typeof createRunCache>, activeRu
   const [runTurns, setRunTurns] = useState<Record<string, RunTurn[]>>({});
   const [states, setStates] = useState<Record<string, HistoryState>>({});
   const stateRef = useRef<Record<string, HistoryState>>({});
-  const jobs = useRef(new Map<string, Promise<void>>());
-  const revision = useRef(0);
+  const [requests] = useState(createHistoryRequests);
+  const attached = useRef(true);
   const latestSequence = useRef(0);
-  const following = useRef(new Map<string, boolean>());
-  const versions = useRef(new Map<string, number>());
+  useLayoutEffect(() => {
+    attached.current = true;
+    return () => { attached.current = false; requests.clear(); };
+  }, [requests]);
 
   const update = useCallback((runId: string, state: HistoryState) => {
     stateRef.current = { ...stateRef.current, [runId]: state };
@@ -54,38 +45,22 @@ export function useRunHistory(cache: ReturnType<typeof createRunCache>, activeRu
   }, []);
 
   const load = useCallback((runId: string, direction: ReadRunHistoryPayload["direction"] = "refresh") => {
-    const generation = revision.current;
-    const version = versions.current.get(runId) ?? 0;
-    if (direction === "latest") following.current.set(runId, true);
-    else if (direction === "older" || direction === "newer") following.current.set(runId, false);
-    const isCurrent = () => generation === revision.current && version === (versions.current.get(runId) ?? 0);
-    // Paging and refreshes share a queue. A late live refresh cannot overwrite
-    // the older window the reader just requested.
-    const previous = jobs.current.get(runId) ?? Promise.resolve();
-    const task = previous.catch(() => {}).then(async () => {
-      if (!isCurrent()) return;
-      const current = stateRef.current[runId];
-      const initial: HistoryState = current ?? {
-        start: null, end: null, last: null, hasOlder: false, hasNewer: false, loading: false, error: null,
-        following: true, historical: false, latestRevision: 0,
-      };
-      update(runId, { ...initial, following: following.current.get(runId) ?? initial.following, loading: true, error: null });
-      const request: ReadRunHistoryPayload = { runId, direction: current?.start ? direction : "latest", deferToolOutput: true };
-      if (direction === "older" && current?.start) request.cursor = current.start;
-      if (direction === "newer" && current?.end) request.cursor = current.end;
-      if (direction === "refresh" && current) {
-        request.cursor = current.start ?? undefined;
-        request.end = current.end;
-      }
+    if (!attached.current) return Promise.resolve();
+    return requests.run(runId, cache, direction, async (signal) => {
+      const initial = stateRef.current[runId] ?? EMPTY_HISTORY;
+      const request = historyWindowRequest(runId, initial, direction);
+      update(runId, beginHistoryWindow(initial, request.direction));
       try {
         const response = await appApi.runs.getHistory(request);
-        if (!isCurrent()) return;
+        if (signal.aborted) return;
         if (!response.success) throw new Error(response.error);
         const page = response.data;
-        // Preserve a pause that happened while the request was in flight.
-        const pausedEnd = following.current.get(runId) === false && page.last
-          ? historyEndAfter(page.last) : null;
         const allowed = cache.touch(runId);
+        // Only an already retained window can be evicted. Other conversations
+        // may still be preparing their independent first page.
+        for (const [id, state] of Object.entries(stateRef.current)) {
+          if (state.loaded && !allowed.has(id)) requests.retire(id);
+        }
         cache.markLoaded(runId);
         const incoming = mergeRunEvents([], page.artifacts, page.toolCalls);
         const ids = new Set(incoming.map((event) => event.id));
@@ -104,46 +79,38 @@ export function useRunHistory(cache: ReturnType<typeof createRunCache>, activeRu
             undoneAt: turn.changes.undoneAt == null ? null : new Date(turn.changes.undoneAt).getTime() } : null,
         }));
         setRunTurns((previousTurns) => pruneRunMap({ ...previousTurns, [runId]: turns }, allowed));
-        stateRef.current = pruneRunMap(stateRef.current, allowed);
-        update(runId, { start: page.start, end: page.end ?? pausedEnd ?? null, last: page.last,
-          hasOlder: page.hasOlder, hasNewer: page.hasNewer, loading: false, error: null,
-          following: following.current.get(runId) ?? true,
-          // A reading pause freezes the query boundary without removing live
-          // rows. Only page navigation can move the display into older history.
-          historical: request.direction === "refresh"
-            ? stateRef.current[runId]?.historical ?? initial.historical
-            : request.direction !== "latest" && page.end != null,
-          latestRevision: request.direction === "latest" ? ++latestSequence.current : initial.latestRevision });
+        const metadata = new Set(allowed);
+        for (const [id, state] of Object.entries(stateRef.current)) {
+          if (!state.loaded && state.loading) metadata.add(id);
+        }
+        stateRef.current = pruneRunMap(stateRef.current, metadata);
+        update(runId, completeHistoryWindow(stateRef.current[runId] ?? initial, page, request.direction,
+          request.direction === "latest" ? ++latestSequence.current : initial.latestRevision));
       } catch (error) {
-        if (!isCurrent()) return;
-        update(runId, { ...(stateRef.current[runId] ?? initial), loading: false,
-          error: error instanceof Error ? error.message : "Could not load conversation history" });
+        if (signal.aborted) return;
+        update(runId, failHistoryWindow(stateRef.current[runId] ?? initial, request.direction, error));
       }
     });
-    jobs.current.set(runId, task);
-    void task.finally(() => { if (jobs.current.get(runId) === task) jobs.current.delete(runId); });
-    return task;
-  }, [cache, update]);
+  }, [cache, requests, update]);
 
   const clear = useCallback(() => {
-    revision.current += 1;
+    requests.clear();
+    cache.clear();
     stateRef.current = {};
-    jobs.current.clear();
-    following.current.clear();
     setStates({});
     setRunEvents({});
     setRunTurns({});
-  }, []);
+  }, [cache, requests]);
+  useLayoutEffect(() => onTransportChange(clear), [clear]);
   const forget = useCallback((runId: string) => {
-    versions.current.set(runId, (versions.current.get(runId) ?? 0) + 1);
-    following.current.delete(runId);
+    requests.retire(runId);
     const next = { ...stateRef.current };
     delete next[runId];
     stateRef.current = next;
     setStates(next);
     setRunEvents((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => id !== runId)));
     setRunTurns((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => id !== runId)));
-  }, []);
+  }, [requests]);
 
   const current = activeRunId ? states[activeRunId] : undefined;
   const history: TranscriptHistory = {
@@ -157,21 +124,12 @@ export function useRunHistory(cache: ReturnType<typeof createRunCache>, activeRu
     loadOlder: () => activeRunId ? load(activeRunId, "older") : Promise.resolve(),
     loadNewer: () => activeRunId ? load(activeRunId, "newer") : Promise.resolve(),
     loadLatest: () => activeRunId ? load(activeRunId, "latest") : Promise.resolve(),
-    retry: () => activeRunId ? load(activeRunId) : Promise.resolve(),
+    retry: () => activeRunId ? load(activeRunId, stateRef.current[activeRunId]?.retryDirection ?? "refresh") : Promise.resolve(),
     setFollowing: (value) => {
-      if (activeRunId) following.current.set(activeRunId, value);
       if (!activeRunId) return;
-      const state = stateRef.current[activeRunId];
-      if (!state) return;
-      if (value && state.end && !state.hasNewer) {
-        update(activeRunId, { ...state, following: true, historical: false, end: null });
-      } else if (!value && state.last && !state.end) {
-        // Freeze after the last known row, even within a second-grained
-        // timestamp. Newly inserted ties stay outside this reading window.
-        update(activeRunId, { ...state, following: false, end: historyEndAfter(state.last) });
-      } else if (state.following !== value) {
-        update(activeRunId, { ...state, following: value });
-      }
+      const state = stateRef.current[activeRunId] ?? EMPTY_HISTORY;
+      const next = followHistoryWindow(state, value);
+      if (state !== next) update(activeRunId, next);
     },
   };
   return { runEvents, runTurns, load, clear, forget, history };

@@ -10,7 +10,8 @@ import { CHANNELS } from "@mains/contracts/channels";
 import { fail, ok, type ServiceResponse } from "@mains/contracts/service-response";
 import { WORKSPACE_CLONE_CANCELED, type CancelWorkspaceClonePayload } from "@mains/contracts/workspace-intake";
 import { baseApi } from "@/lib/redux/api/baseApi";
-import { useListWorkspacesQuery, type Workspace, type WorkspaceIntakePayload } from "@/lib/redux/api/workspaceApi";
+import { workspaceApi, useListWorkspacesQuery, type Workspace, type WorkspaceIntakePayload } from "@/lib/redux/api/workspaceApi";
+import { accountApi } from "@/lib/redux/api/accountApi";
 import appSettingsReducer, { setWorkspaceListGrouping } from "@/lib/redux/slices/appSettingsSlice";
 import backendsReducer, { setActiveBackend } from "@/lib/redux/slices/backendsSlice";
 import workspaceReducer from "@/lib/redux/slices/workspaceSlice";
@@ -156,6 +157,21 @@ afterEach(() => {
 });
 
 describe("background repository clones", () => {
+  it("retires late notifications even when backend swaps are batched back to the original transport", async () => {
+    const original = makeTransport(); setTransport(original);
+    const h = harness();
+    const user = userEvent.setup();
+    await submitClone(user);
+    act(() => {
+      setTransport(makeTransport([])); h.store.dispatch(setActiveBackend("remote"));
+      setTransport(original); h.store.dispatch(setActiveBackend(null));
+    });
+    await completeClone(0);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByTestId("route").textContent).toBe("/code/existing");
+    h.store.dispatch(baseApi.util.resetApiState());
+  });
+
   it("offers only cloning, prefilled, for a repository from another device", async () => {
     harness();
     const user = userEvent.setup();
@@ -182,7 +198,10 @@ describe("background repository clones", () => {
     expect(screen.getByTestId("route").textContent).toBe("/code/existing");
     await completeClone(0);
     await waitFor(() => expect(screen.queryByText("Cloning…")).toBeNull());
-    expect(screen.getByText("main")).toBeTruthy();
+    expect(accountApi.endpoints.getAccount.select()(h.store.getState()).data?.id).toBe(jobs[0].payload.accountId);
+    expect(workspaceApi.endpoints.listWorkspaces.select()(h.store.getState()).data?.map((row) => row.id)).toContain("workspace-website");
+    expect(await screen.findByText("main")).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "website clone status" })).toBeNull();
     expect(screen.getByTestId("route").textContent).toBe("/code/existing");
     const options = vi.mocked(toast.success).mock.calls[0][1]!;
     expect(options.action?.label).toBe("Open");
@@ -215,7 +234,12 @@ describe("background repository clones", () => {
     expect(screen.getByText("Clone failed")).toBeTruthy();
     expect(screen.getByText("Permission denied (publickey)")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Retry cloning website" }));
-    expect(jobs[1].payload).toEqual(jobs[0].payload);
+    expect(jobs[1].payload).toMatchObject({ accountId: jobs[0].payload.accountId, source: {
+      kind: "clone", url: (jobs[0].payload.source as { url: string }).url,
+      targetPath: (jobs[0].payload.source as { targetPath: string }).targetPath,
+      cloneId: (jobs[0].payload.source as { cloneId: string }).cloneId,
+    } });
+    expect((jobs[1].payload.source as { attemptId: string }).attemptId).not.toBe((jobs[0].payload.source as { attemptId: string }).attemptId);
     expect(screen.getByText("Cloning…")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
     await act(async () => jobs[1].finish(fail("Still denied")));
@@ -233,6 +257,7 @@ describe("background repository clones", () => {
     await user.click(screen.getByRole("button", { name: "Cancel cloning website" }));
     expect(cancellations[0].payload).toEqual({
       accountId: "account", cloneId: (jobs[0].payload.source as { cloneId: string }).cloneId,
+      attemptId: (jobs[0].payload.source as { attemptId: string }).attemptId,
     });
     expect(screen.getByText("Canceling…")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Cancel cloning website" }) as HTMLButtonElement).disabled).toBe(true);

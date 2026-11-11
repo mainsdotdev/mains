@@ -4,7 +4,9 @@ import { Button, CircleSpinner, Heading3, Muted } from "@/components/ui";
 import { PageShell } from "@/components/layout/page-shell";
 import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
 import { useMcpAppExtensions } from "@/hooks/use-mcp-app-extensions";
-import { mcpAppId } from "@/lib/mcp-app-extensions";
+import { mcpAppId, mcpAppLaunchIssue } from "@/lib/mcp-app-extensions";
+import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
+import { McpAppUnavailable } from "@/features/workspace/components/mcp-app-unavailable";
 
 /** Rail and deep links show the page while connecting the shared app panel. */
 export default function McpAppPage() {
@@ -12,14 +14,20 @@ export default function McpAppPage() {
   const id = mcpAppId(token);
   const { available, entries, isLoading } = useMcpAppExtensions();
   const panel = useMcpAppPanel();
+  const provider = useSpaceProviderVariant();
   const started = useRef<string | undefined>(undefined);
   const app = entries.find((entry) => entry.id === id);
+  const issue = mcpAppLaunchIssue(app);
+  const blocked = !!issue;
   useEffect(() => {
-    if (!app || !panel || started.current === app.id) return;
+    if (blocked || !app || !panel || started.current === app.id) return;
     started.current = app.id;
     void panel.openGlobal(app);
-  }, [app, panel]);
+  }, [app, panel, blocked]);
   if (!available) return <Navigate to="/" replace />;
+  if (app && issue) return <PageShell className="flex min-h-0 flex-col">
+    <McpAppUnavailable app={app} issue={issue} providerId={provider.providerId} />
+  </PageShell>;
   const error = panel?.error ?? (!isLoading && !app ? "This plugin app is no longer available." : null);
   return <PageShell className="flex min-h-0 flex-col">
     <div className="flex flex-1 flex-col items-center justify-center gap-4 pb-16">

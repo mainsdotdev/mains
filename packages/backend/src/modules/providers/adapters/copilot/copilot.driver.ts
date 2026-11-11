@@ -1,3 +1,5 @@
+import { createAsyncResourceLifecycle, type ResourceReadContext } from "../../../../runtime/async-resource-lifecycle";
+import { CopilotCanceledError, createCopilotLifecycle, type CopilotSessionOwner } from "./copilot-lifecycle";
 import { providerProcessPath } from "../../providers.utils";
 // ─────────────────────────────────────────────────────────────
 // Copilot ProviderDriver
@@ -93,6 +95,7 @@ type CopilotQuotaSnapshot = Partial<NonNullable<
 interface CopilotSession {
   runId: string;
   sdkSession: CopilotSdkSession;
+  owner: CopilotSessionOwner;
   /** UI mode for this run's turns (e.g. "plan" when permissionMode === "plan"). */
   agentMode?: AgentMode;
   /** Captured during executePrompt for use by error-path tool-call interruption emission. */
@@ -214,18 +217,17 @@ export function isFileEditTool(toolName: string): boolean {
 // ─────────────────────────────────────────────────────────────
 
 export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDriver {
-  let client: CopilotClientInterface | null = null;
-  let clientInitPromise: Promise<void> | null = null;
-  let initError: Error | null = null;
-  let currentClientCwd: string | null = null;
-  let clientNeedsRestart = false;
+  const lifecycle = createCopilotLifecycle({
+    create: createClient, initialize: initializeClient,
+    alive: isClientAlive, stop: stopClient, invalidate: invalidateCatalogs,
+  });
   let lastAccountIdentity: string | null | undefined;
 
   // Correlate tool events when toolName/input is missing in completion events.
-  // Module-scoped: shared across runs (matches today's adapter behavior).
+  // Native ids are session-local; include the run to isolate concurrent turns.
   const toolCallIndex = new Map<
     string,
-    { toolName: string; input?: unknown; startedAt?: number }
+    { runId: string; id: string; toolName: string; input?: unknown; startedAt?: number }
   >();
 
   // Per-run event sink, populated for the duration of executePrompt. Lets
@@ -240,19 +242,102 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
   // Slash-command listing cache (keyed by workspace path). Listing spins up a
   // throwaway session, so cache it for a short window.
   const COMMANDS_CACHE_TTL_MS = 60_000;
-  const commandsCache = new Map<string, { commands: CommandInfo[]; timestamp: number }>();
+  const commandsCache = createAsyncResourceLifecycle<CommandInfo[]>({
+    ttlMs: COMMANDS_CACHE_TTL_MS, load: (key, context) => loadCommands(key || undefined, context),
+  });
 
   // Model listing cache. The SDK client memoizes models for its entire lifetime
   // and only drops that cache on stop(), so a sign-in or plan change would never
   // reach the picker without an app restart. We read the uncached RPC instead and
   // expire our own copy, which keeps the renderer's refetch meaningful.
   const MODELS_CACHE_TTL_MS = 60_000;
-  let modelsCache: { models: ModelInfo[]; timestamp: number } | null = null;
-  let catalogGeneration = 0;
+  const modelsCache = createAsyncResourceLifecycle<ModelInfo[]>({
+    ttlMs: MODELS_CACHE_TTL_MS,
+  });
   function invalidateCatalogs(): void {
-    catalogGeneration++;
-    modelsCache = null;
-    commandsCache.clear();
+    modelsCache.invalidate();
+    commandsCache.invalidate();
+  }
+
+  async function loadModels(copilotClient: CopilotClientInterface, context: ResourceReadContext): Promise<ModelInfo[]> {
+    const raw = copilotClient.rpc?.models?.list
+      ? (await copilotClient.rpc.models.list({}))?.models
+      : await copilotClient.listModels();
+
+    context.assertCurrent();
+    if (!Array.isArray(raw)) throw new Error("Invalid models response");
+
+    // The runtime can list every model twice. Ids key the catalogue — a
+    // paired phone stores it under them — so keep the first of each.
+    const seen = new Set<string>();
+    const unique = raw.filter((model) => {
+      if (seen.has(model.id)) return false;
+      seen.add(model.id);
+      return true;
+    });
+
+    // "auto" is the CLI's own synthetic entry: available on every plan and
+    // never retired, so it is the stable fallback when the configured
+    // default has aged out of the catalogue.
+    const defaultId = resolveCatalogDefaultId(
+      unique.map((model) => model.id),
+      config.defaultModel,
+      ["auto"],
+    );
+
+    const models = unique.map(
+      (model): ModelInfo => ({
+        id: model.id,
+        displayName: model.name || model.id,
+        isDefault: model.id === defaultId,
+        capabilities: { vision: model.capabilities?.supports?.vision },
+        contextWindow: model.capabilities?.limits?.max_context_window_tokens,
+        supportsEffort: model.capabilities?.supports?.reasoningEffort ?? false,
+        supportsFastMode: model.id === "auto",
+        supportedEffortLevels: model.supportedReasoningEfforts,
+      }),
+    );
+
+    logInfo(
+      `Listed ${models.length} Copilot model(s): ${models.map((m) => m.id).join(", ") || "(none)"}`,
+    );
+    if (config.defaultModel && !models.some((m) => m.id === config.defaultModel)) {
+      logWarn(
+        `Configured default model "${config.defaultModel}" is not offered by the CLI; the picker will fall back to the first available model.`,
+      );
+    }
+    return models;
+  }
+
+  async function loadCommands(workspacePath: string | undefined, context: ResourceReadContext): Promise<CommandInfo[]> {
+    // Slash commands are session-scoped, so list them on a throwaway session
+    // (commands depend on cwd; set it on the session, not the shared client,
+    // to avoid tearing down an in-flight run's client).
+    let owner: CopilotSessionOwner | undefined;
+    try {
+      owner = await lifecycle.open(undefined, (client) => client.createSession({
+        ...(workspacePath ? { workingDirectory: workspacePath } : {}),
+        onPermissionRequest: approveAllPermissions,
+      }));
+      context.assertCurrent();
+      const session = owner.session;
+      const result = await owner.run(() => session.rpc.commands.list());
+      context.assertCurrent();
+      const raw = Array.isArray(result?.commands) ? result.commands : [];
+      const commands: CommandInfo[] = raw
+        .filter((c) => c && typeof c.name === "string" && c.name.length > 0)
+        .map((c) => ({
+          name: c.name,
+          description: typeof c.description === "string" ? c.description : undefined,
+          argumentHint: c.input?.hint,
+          userFacing: true,
+        }));
+
+      logInfo(`Listed ${commands.length} Copilot slash commands`);
+      return commands;
+    } finally {
+      await owner?.close();
+    }
   }
 
   // Per-run usage accumulator.
@@ -354,8 +439,9 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     return { kind: "approve-once" };
   };
 
-  function buildPermissionHandler(runId: string, permissionMode: string): PermissionHandler {
+  function buildPermissionHandler(runId: string, permissionMode: string, assertCurrent: () => void): PermissionHandler {
     return async (request) => {
+      assertCurrent();
       // Valid kinds are: shell, write, read, mcp, url, memory, custom-tool,
       // hook, extension-management, extension-permission-access. `read`/`shell`
       // map to the pre-approved Read/Bash tools (see COPILOT_EXTRA_ALLOWED), so
@@ -380,6 +466,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       };
 
       const response = await requestToolApproval(req);
+      assertCurrent();
       return response.approved
         ? { kind: "approve-once", approvedInteractively: true }
         : { kind: "reject" };
@@ -389,7 +476,8 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
   function buildPreToolUseHook(
     runId: string,
     permissionMode: string,
-    toolPolicy?: WorkRunToolPolicy | null,
+    toolPolicy: WorkRunToolPolicy | null | undefined,
+    assertCurrent: () => void,
   ): NonNullable<SessionHooks["onPreToolUse"]> {
     const bypass = permissionMode === "bypassPermissions" || permissionMode === "allow";
     // Copilot names its built-in tools in lowercase ("bash", "read"), the
@@ -401,6 +489,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       ? new Set(toolPolicy.allowedTools.map((t) => t.toLowerCase()))
       : null;
     return async (input) => {
+      assertCurrent();
       // A policy-denied tool is denied outright — before bypass, which grants
       // permission but must not resurrect a tool the mode removed.
       if (disallowed.has(input.toolName.toLowerCase())) {
@@ -420,11 +509,13 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       }
 
       const guardHook = await guardsService.buildCopilotGuardHook();
+      assertCurrent();
       if (guardHook) {
         const guardResult = await guardHook({
           toolName: input.toolName, toolArgs: input.toolArgs,
           timestamp: input.timestamp.getTime(), cwd: input.workingDirectory,
         });
+        assertCurrent();
         if (guardResult?.permissionDecision === "deny") {
           return guardResult;
         }
@@ -460,6 +551,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       };
 
       const response = await requestToolApproval(req);
+      assertCurrent();
       if (response.approved) {
         return { permissionDecision: "allow" };
       }
@@ -467,8 +559,9 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     };
   }
 
-  function buildUserInputHandler(runId: string): NonNullable<SessionConfig["onUserInputRequest"]> {
+  function buildUserInputHandler(runId: string, assertCurrent: () => void): NonNullable<SessionConfig["onUserInputRequest"]> {
     return async (request) => {
+      assertCurrent();
       const options = request.choices?.map((c) => ({ label: c }));
       const req: ToolApprovalRequest = {
         requestId: `ask-${runId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -481,6 +574,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       };
 
       const response = await requestToolApproval(req);
+      assertCurrent();
       return { answer: response.answer || "", wasFreeform: true };
     };
   }
@@ -498,8 +592,9 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
    * dropped by the run-session projector, and onEvent is consumed fire-and-forget
    * upstream, so we must await the start's persistence before emitting complete.
    */
-  function buildExitPlanModeHandler(runId: string): ExitPlanModeHandler {
+  function buildExitPlanModeHandler(runId: string, assertCurrent: () => void): ExitPlanModeHandler {
     return async (request) => {
+      assertCurrent();
       const planContent = String(request.planContent ?? request.summary ?? "").trim();
       const onEvent = onEventByRun.get(runId);
 
@@ -528,6 +623,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         }
       }
 
+      assertCurrent();
       return resolveExitPlanDecision();
     };
   }
@@ -550,22 +646,6 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
   // SDK client lifecycle
   // ─────────────────────────────────────────────────────────────
 
-  /** Tear the client down and reset every piece of state derived from it. */
-  async function disposeClient(reason: string): Promise<void> {
-    const current = client;
-    client = null;
-    clientInitPromise = null;
-    initError = null;
-    currentClientCwd = null;
-    clientNeedsRestart = false;
-    // Both are per-runtime/per-account, so a fresh client must re-read them.
-    invalidateCatalogs();
-
-    if (!current) return;
-    logInfo(`Disposing Copilot client: ${reason}`);
-    await stopClient(current);
-  }
-
   async function stopClient(current: CopilotClientInterface): Promise<void> {
     try {
       let timer: NodeJS.Timeout | undefined;
@@ -585,6 +665,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         if (!(err instanceof Error && err.message.includes("ERR_STREAM_DESTROYED"))) {
           logWarn("Error force stopping client:", err);
         }
+        throw err;
       }
     }
   }
@@ -592,23 +673,24 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
   async function createClient(workspaceCwd?: string): Promise<CopilotClientInterface> {
     // Current SDK releases expose both ESM and CJS entry points. The explicit
     // native path also avoids launching Electron as Node in packaged builds.
+    const settings = { ...config };
     const CopilotSDK = await import("@github/copilot-sdk");
-    const runtime = resolveCopilotRuntime(config.binary);
-    if (!config.cliUrl && !runtime) {
+    const runtime = resolveCopilotRuntime(settings.binary);
+    if (!settings.cliUrl && !runtime) {
       throw new Error("Copilot is included with Mains. Reinstall Mains to restore its runtime.");
     }
-    const options: CopilotClientOptions = { logLevel: config.logLevel ?? "info" };
-    if (config.cliUrl) {
-      options.connection = CopilotSDK.RuntimeConnection.forUri(config.cliUrl);
+    const options: CopilotClientOptions = { logLevel: settings.logLevel ?? "info" };
+    if (settings.cliUrl) {
+      options.connection = CopilotSDK.RuntimeConnection.forUri(settings.cliUrl);
     } else {
       const connection = { path: runtime!.path, args: copilotRuntimeArgs(runtime!) };
-      options.connection = config.useStdio === false && config.port
-        ? CopilotSDK.RuntimeConnection.forTcp({ ...connection, port: config.port })
+      options.connection = settings.useStdio === false && settings.port
+        ? CopilotSDK.RuntimeConnection.forTcp({ ...connection, port: settings.port })
         : CopilotSDK.RuntimeConnection.forStdio(connection);
       // forUri rejects these options: external runtimes own their auth. Let
       // the SDK select its normal login default when the fields are omitted.
-      if (config.githubToken !== undefined) options.gitHubToken = config.githubToken;
-      if (config.useLoggedInUser !== undefined) options.useLoggedInUser = config.useLoggedInUser;
+      if (settings.githubToken !== undefined) options.gitHubToken = settings.githubToken;
+      if (settings.useLoggedInUser !== undefined) options.useLoggedInUser = settings.useLoggedInUser;
     }
     if (workspaceCwd) options.workingDirectory = workspaceCwd;
     return new CopilotSDK.CopilotClient(options);
@@ -639,87 +721,31 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     }
   }
 
-  async function ensureClient(workspaceCwd?: string): Promise<CopilotClientInterface> {
-    // The client is process-wide and long-lived; every session carries its own
-    // `workingDirectory`, so a workspace switch no longer needs to tear it down.
-    // (It used to: session `cwd` was being dropped by the SDK, so rebuilding the
-    // client was the only way to move the agent — which also killed any run still
-    // streaming on another workspace, and incidentally papered over a dead CLI
-    // child by rebuilding it. Hence the explicit health check below.)
-    // `currentClientCwd` is now just a record of what the client was built with.
-    if (client && clientNeedsRestart && onEventByRun.size === 0) {
-      await disposeClient("runtime configuration or account changed");
-    }
-    if (client) {
-      if (await isClientAlive(client)) {
-        if (workspaceCwd && currentClientCwd !== workspaceCwd) {
-          logInfo(
-            `Reusing client (built for ${currentClientCwd ?? "no cwd"}); session will run in ${workspaceCwd}`,
-          );
-        }
-        return client;
+  async function initializeClient(candidate: CopilotClientInterface): Promise<void> {
+    try {
+      await candidate.start();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes("ENOENT")) {
+        throw new Error(
+          config.binary
+            ? "Copilot runtime not found. Check the configured executable path."
+            : "Copilot is included with Mains. Reinstall Mains to restore its runtime.",
+        );
+      } else if (errorMessage.includes("ECONNREFUSED")) {
+        throw new Error(
+          `Could not connect to Copilot CLI server. The server may not be running or the port may be blocked. Port: ${config.port || "stdio"}`,
+        );
+      } else if (errorMessage.includes("EACCES")) {
+        throw new Error(
+          `Permission denied when trying to start Copilot CLI. Please check file permissions. Binary path: ${config.binary || "bundled"}`,
+        );
+      } else if (errorMessage.includes("ETIMEDOUT")) {
+        throw new Error("Connection timed out while starting Copilot CLI. The service may be unresponsive.");
+      } else {
+        throw new Error(`Failed to start Copilot CLI: ${errorMessage}`);
       }
-      await disposeClient("runtime connection is closed");
     }
-
-    if (initError) {
-      const err = initError;
-      initError = null;
-      clientInitPromise = null;
-      throw err;
-    }
-
-    if (clientInitPromise) {
-      await clientInitPromise;
-      if (client) return client;
-      throw initError || new Error("Failed to initialize Copilot client");
-    }
-
-    clientInitPromise = (async () => {
-      try {
-        client = await createClient(workspaceCwd);
-        if (workspaceCwd) {
-          currentClientCwd = workspaceCwd;
-          logInfo(`Setting client cwd to: ${workspaceCwd}`);
-        }
-
-        try {
-          await client.start();
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          if (errorMessage.includes("ENOENT")) {
-            throw new Error(
-              config.binary
-                ? "Copilot runtime not found. Check the configured executable path."
-                : "Copilot is included with Mains. Reinstall Mains to restore its runtime.",
-            );
-          } else if (errorMessage.includes("ECONNREFUSED")) {
-            throw new Error(
-              `Could not connect to Copilot CLI server. The server may not be running or the port may be blocked. Port: ${config.port || "stdio"}`,
-            );
-          } else if (errorMessage.includes("EACCES")) {
-            throw new Error(
-              `Permission denied when trying to start Copilot CLI. Please check file permissions. Binary path: ${config.binary || "bundled"}`,
-            );
-          } else if (errorMessage.includes("ETIMEDOUT")) {
-            throw new Error("Connection timed out while starting Copilot CLI. The service may be unresponsive.");
-          } else {
-            throw new Error(`Failed to start Copilot CLI: ${errorMessage}`);
-          }
-        }
-
-        await client.ping("init");
-        logInfo("Client initialized successfully");
-      } catch (error) {
-        initError = error instanceof Error ? error : new Error(String(error));
-        logError("Failed to initialize client:", initError.message);
-        throw initError;
-      }
-    })();
-
-    await clientInitPromise;
-    if (!client) throw initError || new Error("Failed to initialize Copilot client");
-    return client;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -730,8 +756,9 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     runId: string,
     execution: WorkRunRequest["execution"],
     permissionMode: string,
-    mode?: ModeId,
-    toolPolicy?: WorkRunToolPolicy | null,
+    mode: ModeId | undefined,
+    toolPolicy: WorkRunToolPolicy | null | undefined,
+    assertCurrent: () => void,
   ): ResumeSessionConfig {
     const base: ResumeSessionConfig = {
       streaming: true,
@@ -739,8 +766,11 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       // The client's own working directory is whatever the first caller
       // happened to supply (often none), so it can't be relied on here.
       workingDirectory: execution.cwd,
-      onPermissionRequest: buildPermissionHandler(runId, permissionMode),
-      tools: buildMainsTools(execution.workspaceId, execution.cwd, runId, mode),
+      onPermissionRequest: buildPermissionHandler(runId, permissionMode, assertCurrent),
+      tools: buildMainsTools(execution.workspaceId, execution.cwd, runId, mode).map((tool): CopilotTool => {
+        const handler = tool.handler;
+        return handler ? { ...tool, handler: (...args) => { assertCurrent(); return handler(...args); } } : tool;
+      }),
       skillDirectories: [
         path.join(os.homedir(), ".claude", "skills"),
         path.join(os.homedir(), ".copilot", "skills"),
@@ -755,11 +785,11 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     // the hook and leaned solely on onPermissionRequest, which left filesystem
     // reads ungranted. Keeping onUserInputRequest installed also lets `ask_user`
     // work in bypass (it otherwise threw "no handler registered").
-    base.hooks = { onPreToolUse: buildPreToolUseHook(runId, permissionMode, toolPolicy) };
-    base.onUserInputRequest = buildUserInputHandler(runId);
+    base.hooks = { onPreToolUse: buildPreToolUseHook(runId, permissionMode, toolPolicy, assertCurrent) };
+    base.onUserInputRequest = buildUserInputHandler(runId, assertCurrent);
 
     if (permissionMode === "plan") {
-      base.onExitPlanModeRequest = buildExitPlanModeHandler(runId);
+      base.onExitPlanModeRequest = buildExitPlanModeHandler(runId, assertCurrent);
     }
 
     return base;
@@ -780,23 +810,18 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     // New sessions with Fast off use the provider's normal default routing.
     if (model === "auto" && (fastMode || !resuming)) return;
 
-    try {
-      // A continuation without a model override inherits the native session's
-      // model. Never attach an Auto preference to a fixed model.
-      if (!sdkSession.rpc?.model) throw new Error("Copilot runtime cannot read the session model for Fast Mode");
-      const current = await sdkSession.rpc.model.getCurrent();
-      if (current.modelId !== "auto") return;
-      // Leave ordinary Auto routing untouched when Fast was never enabled.
-      // This also avoids requiring Auto V2 tier support just to run with Fast off.
-      const hasFastPreference = [current.autoTier, current.pendingAutoTier, current.activatingAutoTier].includes("fast");
-      if (!fastMode && !hasFastPreference) return;
-      // Omitting capi.autoTier on resume preserves its persisted value. Reset
-      // explicitly when Fast is turned off, including after a cold resume.
-      await sdkSession.setAutoTier(fastMode ? "fast" : null);
-    } catch (error) {
-      await sdkSession.disconnect().catch((err) => logWarn("Error releasing session after Fast Mode failure:", err));
-      throw error;
-    }
+    // A continuation without a model override inherits the native session's
+    // model. Never attach an Auto preference to a fixed model.
+    if (!sdkSession.rpc?.model) throw new Error("Copilot runtime cannot read the session model for Fast Mode");
+    const current = await sdkSession.rpc.model.getCurrent();
+    if (current.modelId !== "auto") return;
+    // Leave ordinary Auto routing untouched when Fast was never enabled.
+    // This also avoids requiring Auto V2 tier support just to run with Fast off.
+    const hasFastPreference = [current.autoTier, current.pendingAutoTier, current.activatingAutoTier].includes("fast");
+    if (!fastMode && !hasFastPreference) return;
+    // Omitting capi.autoTier on resume preserves its persisted value. Reset
+    // explicitly when Fast is turned off, including after a cold resume.
+    await sdkSession.setAutoTier(fastMode ? "fast" : null);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -991,7 +1016,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           payload.arguments;
 
         if (toolCallId) {
-          toolCallIndex.set(toolCallId, { toolName, input, startedAt: ts });
+          toolCallIndex.set(JSON.stringify([runId, toolCallId]), { runId, id: toolCallId, toolName, input, startedAt: ts });
         }
 
         // Suppressed (exit_plan_mode, todo-bookkeeping sql): keep the index
@@ -1017,7 +1042,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       case "tool.execution_end":
       case "tool.execution_complete": {
         const toolCallId = String(payload.toolCallId ?? event.id ?? "");
-        const prev = toolCallId ? toolCallIndex.get(toolCallId) : undefined;
+        const prev = toolCallId ? toolCallIndex.get(JSON.stringify([runId, toolCallId])) : undefined;
 
         const toolName = String(
           payload.toolName ?? prev?.toolName ?? "unknown",
@@ -1039,7 +1064,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           formatToolError(payload.error) ??
           (success === false ? "tool_failed" : undefined);
 
-        if (toolCallId) toolCallIndex.delete(toolCallId);
+        if (toolCallId) toolCallIndex.delete(JSON.stringify([runId, toolCallId]));
 
         if (isSuppressedToolCall(toolName, input)) return null;
 
@@ -1131,6 +1156,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     sdkSession: CopilotSdkSession,
     runId: string,
     onEvent: WorkRunEventHandler,
+    owner: CopilotSessionOwner,
   ): Promise<void> {
     let result: Awaited<ReturnType<CopilotSdkSession["rpc"]["plan"]["readSqlTodos"]>> | undefined;
     try {
@@ -1140,6 +1166,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       return;
     }
 
+    if (!owner.running) return;
     const todos = mapCopilotTodos(result?.rows);
     if (todos.length === 0) return;
 
@@ -1154,20 +1181,22 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     logInfo(`Emitting todos snapshot for run ${runId} (${todos.length} items)`);
     const input = { todos };
     try {
-      await onEvent({
-        type: "tool_call",
-        toolName: "UpdateTodos",
-        input,
-        startedAt: ts,
-        metadata: { phase: "start", toolCallId, todoItems: todos },
-      });
-      await onEvent({
-        type: "tool_call",
-        toolName: "UpdateTodos",
-        input,
-        startedAt: ts,
-        endedAt: ts,
-        metadata: { phase: "complete", toolCallId, todoItems: todos },
+      await owner.project(async () => {
+        await onEvent({
+          type: "tool_call",
+          toolName: "UpdateTodos",
+          input,
+          startedAt: ts,
+          metadata: { phase: "start", toolCallId, todoItems: todos },
+        });
+        await onEvent({
+          type: "tool_call",
+          toolName: "UpdateTodos",
+          input,
+          startedAt: ts,
+          endedAt: ts,
+          metadata: { phase: "complete", toolCallId, todoItems: todos },
+        });
       });
     } catch (err) {
       logError("Error emitting UpdateTodos snapshot:", err);
@@ -1183,12 +1212,15 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     runId: string,
     onEvent: WorkRunEventHandler,
     signal: AbortSignal,
+    owner: CopilotSessionOwner,
   ): () => void {
+    let active = true;
+    const project: WorkRunEventHandler = (event) => owner.project(() => onEvent(event));
     // Buffers belong to this turn, including on resume; native message and
     // reasoning ids keep interleaved output blocks separate.
     const streams = new Map<string, { kind: "report" | "thinking"; content: string }>();
     const emit = (event: WorkRunEvent) => {
-      void Promise.resolve(onEvent(event)).catch((err) => logError("onEvent threw:", err));
+      void Promise.resolve(project(event)).catch((err) => logError("onEvent threw:", err));
     };
     const emitStream = (streamId: string, kind: "report" | "thinking", content: string) => {
       emit({
@@ -1202,7 +1234,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       });
     };
     const unsubscribe = sdkSession.on((event: SessionEvent) => {
-      if (signal.aborted) return;
+      if (!active || !owner.running || signal.aborted) return;
 
       const eventType: string = event.type;
       if (eventType === "assistant.message_delta" || eventType === "assistant.reasoning_delta") {
@@ -1231,7 +1263,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       // Todos changed (ephemeral signal): read the session SQL todos and emit a
       // fresh UpdateTodos snapshot. Handled before the ephemeral early-return.
       if (event.type === "session.todos_changed") {
-        void emitTodosSnapshot(sdkSession, runId, onEvent);
+        void emitTodosSnapshot(sdkSession, runId, onEvent, owner);
         return;
       }
 
@@ -1243,7 +1275,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
               const p = getPayload(event);
               const tcId = String(p.toolCallId ?? event.id ?? "");
               return String(
-                p.toolName ?? (tcId ? toolCallIndex.get(tcId)?.toolName : "") ?? "",
+                p.toolName ?? (tcId ? toolCallIndex.get(JSON.stringify([runId, tcId]))?.toolName : "") ?? "",
               );
             })()
           : "";
@@ -1254,19 +1286,23 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       // which don't reliably raise session.todos_changed. emitTodosSnapshot
       // dedupes, so a redundant read here costs nothing.
       if (completedToolName === "sql") {
-        void emitTodosSnapshot(sdkSession, runId, onEvent);
+        void emitTodosSnapshot(sdkSession, runId, onEvent, owner);
       }
 
       const mapped = mapSessionEvent(event, runId);
       if (!mapped) return;
 
       emit(mapped);
+      if (eventType === "session.error") {
+        const message = getPayload(event).message;
+        owner.cancel(new Error(typeof message === "string" ? message : "Copilot session error"));
+      }
 
       // Tool-completion events also yield artifact events for written files / patches
       if (eventType === "tool.execution_end" || event.type === "tool.execution_complete") {
         const payload = getPayload(event);
         const toolCallId = String(payload.toolCallId ?? "");
-        const prev = toolCallId ? toolCallIndex.get(toolCallId) : undefined;
+        const prev = toolCallId ? toolCallIndex.get(JSON.stringify([runId, toolCallId])) : undefined;
         const toolName = String(payload.toolName ?? prev?.toolName ?? "unknown");
         const toolOutput =
           payload.result ??
@@ -1275,7 +1311,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
         if (toolOutput) {
           for (const artEvent of extractArtifactsFromToolOutput(toolName, toolOutput)) {
-            void Promise.resolve(onEvent(artEvent)).catch((err) =>
+            void Promise.resolve(project(artEvent)).catch((err) =>
               logError("Error emitting artifact:", err),
             );
           }
@@ -1283,9 +1319,13 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       }
     });
     return () => {
+      if (!active) return;
+      active = false;
       unsubscribe();
       // Abort, timeout or an incomplete response must not leave a stale preview.
-      for (const [streamId, stream] of streams) emitStream(streamId, stream.kind, "");
+      for (const [streamId, stream] of streams) {
+        void owner.project(() => onEvent({ type: "artifact", kind: stream.kind, content: "", ephemeral: true, streamId }), true).catch(() => {});
+      }
       streams.clear();
     };
   }
@@ -1331,14 +1371,6 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       };
     }
 
-    if (errorMessage.includes("aborted") || errorMessage.includes("abort")) {
-      return {
-        status: "canceled",
-        summary: "Run was aborted",
-        usage: flushUsage(runId),
-      };
-    }
-
     return {
       status: "failed",
       summary: errorMessage,
@@ -1347,9 +1379,12 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
   }
 
   /** Emit phase=complete events for any tool calls still pending when an error fires. */
-  async function emitPendingToolInterruptions(onEvent: WorkRunEventHandler): Promise<void> {
+  async function emitPendingToolInterruptions(onEvent: WorkRunEventHandler, runId: string): Promise<void> {
     const ts = Date.now();
-    for (const [toolCallId, toolInfo] of toolCallIndex) {
+    for (const [key, toolInfo] of toolCallIndex) {
+      if (toolInfo.runId !== runId) continue;
+      const toolCallId = toolInfo.id;
+      toolCallIndex.delete(key);
       await onEvent({
         type: "tool_call",
         toolName: toolInfo.toolName,
@@ -1359,7 +1394,6 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         metadata: { phase: "complete", toolCallId, interrupted: true },
       });
     }
-    toolCallIndex.clear();
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -1386,14 +1420,13 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     async createSession(request: WorkRunRequest): Promise<AcquiredSession> {
       const { runId, model, systemPrompt } = request;
 
-      const copilotClient = await ensureClient(request.execution.cwd);
-
       const overrides = request.configSnapshot ?? {};
       const permissionMode =
         (typeof overrides.permissionMode === "string" && overrides.permissionMode) ||
         config.permissionMode ||
         "default";
 
+      let sessionOwner!: CopilotSessionOwner;
       const sessionConfig: SessionConfig = {
         sessionId: runId,
         ...buildBaseSessionConfig(
@@ -1402,6 +1435,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           permissionMode,
           request.mode,
           request.toolPolicy,
+          () => sessionOwner.assertActive(),
         ),
       };
 
@@ -1430,8 +1464,10 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         request.extraInstructions,
       );
 
-      const sdkSession = await copilotClient.createSession(sessionConfig);
-      await applyAcquiredFastMode(sdkSession, sessionConfig.model, fastMode, false);
+      const owner = await lifecycle.open(request.execution.cwd, (client, scope) => { sessionOwner = scope; return client.createSession(sessionConfig); });
+      const sdkSession = owner.session;
+      try { await owner.run(() => applyAcquiredFastMode(sdkSession, sessionConfig.model, fastMode, false)); }
+      catch (error) { await owner.close(); throw error; }
       const agentMode = agentModeForPermission(permissionMode);
       logInfo(
         `Created Copilot session for run ${runId} (model: ${sessionConfig.model || "default"}, permissionMode: ${permissionMode}, agentMode: ${agentMode ?? "(default)"})`,
@@ -1439,7 +1475,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
       const session: CopilotSession = {
         runId,
-        sdkSession,
+        sdkSession, owner,
         agentMode,
       };
       return { session, prompt: buildStartPrompt(request) };
@@ -1448,7 +1484,6 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     async resumeSession(request: WorkRunContinueRequest): Promise<AcquiredSession> {
       const { runId } = request;
 
-      const copilotClient = await ensureClient(request.execution.cwd);
       // Same precedence as createSession: run snapshot beats provider config,
       // so a resumed run keeps the permission mode it started with.
       const resumeOverrides = request.configSnapshot ?? {};
@@ -1457,6 +1492,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         config.permissionMode ||
         "default";
 
+      let sessionOwner!: CopilotSessionOwner;
       const resumeConfig: ResumeSessionConfig = {
         ...buildBaseSessionConfig(
           runId,
@@ -1464,6 +1500,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           permissionMode,
           request.mode,
           request.toolPolicy,
+          () => sessionOwner.assertActive(),
         ),
       };
       // Re-apply the composed system message: resumeSession rebuilds the
@@ -1486,13 +1523,15 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         | undefined;
       if (resumeReasoningEffort) resumeConfig.reasoningEffort = resumeReasoningEffort;
 
-      const sdkSession = await copilotClient.resumeSession(runId, resumeConfig);
-      await applyAcquiredFastMode(sdkSession, resumeConfig.model, fastMode, true);
+      const owner = await lifecycle.open(request.execution.cwd, (client, scope) => { sessionOwner = scope; return client.resumeSession(runId, resumeConfig); });
+      const sdkSession = owner.session;
+      try { await owner.run(() => applyAcquiredFastMode(sdkSession, resumeConfig.model, fastMode, true)); }
+      catch (error) { await owner.close(); throw error; }
       logInfo(`Resumed Copilot session for run ${runId}`);
 
       const session: CopilotSession = {
         runId,
-        sdkSession,
+        sdkSession, owner,
         agentMode: agentModeForPermission(permissionMode),
       };
       return { session, prompt: buildContinuePrompt(request) };
@@ -1506,85 +1545,61 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     ): Promise<DriverOutcome> {
       const cs = session as CopilotSession;
       const timeout = config.timeout ?? 3_600_000;
-
-      // Wire abort: when signal fires, ask SDK to abort
-      const onAbort = () => {
-        cs.sdkSession.abort().catch((err) => logError("Error aborting session:", err));
-      };
+      if (signal.aborted || !cs.owner.active) return { status: "canceled", summary: "Run was aborted" };
+      if (onEventByRun.has(cs.runId)) throw new Error("Copilot run already executing");
+      cs.owner.begin();
+      const publish: WorkRunEventHandler = (event) => cs.owner.project(() => onEvent(event));
+      const onAbort = () => cs.owner.cancel();
+      let timer: ReturnType<typeof setTimeout> | undefined;
       signal.addEventListener("abort", onAbort, { once: true });
-
-      // Wire SDK event stream
-      cs.unsubscribe = wireSessionListener(cs.sdkSession, cs.runId, onEvent, signal);
-
-      // Expose onEvent to session-config callbacks (e.g. the exit-plan-mode
-      // handler) for the duration of this turn.
-      onEventByRun.set(cs.runId, onEvent);
-
-      // Plan mode is driven by the *persistent* session mode — the per-message
-      // agentMode below only annotates the turn (it defaults to the session's
-      // current mode), so we must switch the session into plan mode explicitly
-      // or the agent just runs interactively and implements straight away.
-      if (cs.agentMode === "plan") {
-        try {
-          await cs.sdkSession.rpc?.mode?.set?.({ mode: "plan" });
-          logInfo(`Set session mode to "plan" for run ${cs.runId}`);
-        } catch (err) {
-          logWarn("Failed to set session mode to plan:", err);
-        }
-      }
-
       try {
-        const result = await cs.sdkSession.sendAndWait(
-          cs.agentMode ? { prompt, agentMode: cs.agentMode } : { prompt },
-          timeout,
-        );
-
-        if (!result) {
-          await onEvent({
-            type: "log",
-            message: "No response received from Copilot",
-            level: "warn",
-            ts: Date.now(),
-          });
+        cs.unsubscribe = wireSessionListener(cs.sdkSession, cs.runId, onEvent, signal, cs.owner);
+        onEventByRun.set(cs.runId, publish);
+        if (signal.aborted) onAbort();
+        timer = setTimeout(() => cs.owner.cancel(new Error(`Request timed out after ${timeout}ms`)), timeout);
+        if (cs.agentMode === "plan") {
+          try { await cs.owner.run(() => cs.sdkSession.rpc.mode.set({ mode: "plan" })); }
+          catch (error) { cs.owner.assertActive(); logWarn("Failed to set session mode to plan:", error); }
         }
-
-        // sendAndWait returns the last main-agent message after session.idle;
-        // assistant.turn_end only closes one model call inside the tool loop.
+        const result = await cs.owner.run(() => cs.sdkSession.sendAndWait(
+          cs.agentMode ? { prompt, agentMode: cs.agentMode } : { prompt }, timeout,
+        ));
+        if (!result) await publish({ type: "log", message: "No response received from Copilot", level: "warn", ts: Date.now() });
         const payload = result ? getPayload(result) : {};
         const messageId = payload.apiCallId || payload.messageId;
-        if (!signal.aborted && typeof messageId === "string" && messageId &&
-          typeof payload.content === "string" && payload.content.trim()) {
-          await onEvent({ type: "message_phase", messageId, phase: "final_answer" });
+        if (typeof messageId === "string" && messageId && typeof payload.content === "string" && payload.content.trim()) {
+          await publish({ type: "message_phase", messageId, phase: "final_answer" });
         }
         return buildSuccessOutcome(result, cs.runId);
       } catch (error) {
-        await emitPendingToolInterruptions(onEvent);
+        await emitPendingToolInterruptions((event) => cs.owner.project(() => onEvent(event), true), cs.runId);
+        if (signal.aborted || cs.owner.signal.reason instanceof CopilotCanceledError) {
+          return { status: "canceled", summary: "Run was aborted", usage: flushUsage(cs.runId) };
+        }
         return buildErrorOutcome(error, cs.runId, timeout, signal);
       } finally {
-        onEventByRun.delete(cs.runId);
-        lastTodosByRun.delete(cs.runId);
+        clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
-        try {
-          cs.unsubscribe?.();
-        } catch {
-          /* ignore */
+        if (onEventByRun.get(cs.runId) === publish) {
+          onEventByRun.delete(cs.runId); lastTodosByRun.delete(cs.runId);
+          for (const [key, tool] of toolCallIndex) if (tool.runId === cs.runId) toolCallIndex.delete(key);
+        }
+        try { cs.unsubscribe?.(); }
+        finally {
+          try { await cs.owner.finish(); }
+          finally { await cs.owner.close(); }
         }
       }
     },
 
     async cleanup(session): Promise<void> {
       const cs = session as CopilotSession;
-      try {
-        await cs.sdkSession.disconnect();
-      } catch (err) {
-        logError("Error disconnecting session:", err);
-      }
+      await cs.owner.close();
     },
 
     async canResumeSession(runId: string): Promise<boolean> {
       try {
-        const copilotClient = await ensureClient();
-        const sessions = await copilotClient.listSessions();
+        const sessions = await lifecycle.read((client) => client.listSessions());
         return sessions.some((s) => s.sessionId === runId);
       } catch (err) {
         logError("Error checking session:", err);
@@ -1594,8 +1609,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
     async deleteSession(runId: string): Promise<void> {
       try {
-        const copilotClient = await ensureClient();
-        await copilotClient.deleteSession(runId);
+        await lifecycle.read((client) => client.deleteSession(runId));
         logInfo(`Deleted session: ${runId}`);
       } catch (err) {
         logError("Error deleting session:", err);
@@ -1607,7 +1621,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       if (["binary", "cliUrl", "useStdio", "port", "githubToken", "useLoggedInUser"].some((key) =>
         config[key as keyof CopilotAdapterConfig] !== updated[key as keyof CopilotAdapterConfig],
       )) {
-        clientNeedsRestart = true;
+        lifecycle.restart();
         invalidateCatalogs();
       }
       adoptConfig(config, updated);
@@ -1616,18 +1630,13 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     invalidateCatalogs,
 
     async shutdown(): Promise<void> {
-      toolCallIndex.clear();
-      usageAccumulator.clear();
-      onEventByRun.clear();
-      lastTodosByRun.clear();
-
-      await disposeClient("adapter shutdown");
+      modelsCache.dispose(); commandsCache.dispose();
+      await lifecycle.shutdown();
+      toolCallIndex.clear(); usageAccumulator.clear(); onEventByRun.clear(); lastTodosByRun.clear();
       logInfo("Shutdown complete");
     },
 
     async generateTitle(goal: string, context?: WorkRunContextItem[]): Promise<string> {
-      const copilotClient = await ensureClient();
-
       let contextSnippet = "";
       if (context && context.length > 0) {
         contextSnippet = context
@@ -1655,16 +1664,17 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       // GitHub deprecated that model and the SDK now rejects with "Model ... is not
       // available". Omit the model field so the SDK falls back to the user's configured
       // default (or whatever Copilot picks).
-      const session = await copilotClient.createSession({
+      const owner = await lifecycle.open(undefined, (client) => client.createSession({
         systemMessage: {
           content:
             "You are a title generator. Output ONLY a short title (3-5 words) in title case (capitalize the first letter of each word). Never explain, never use tools, never write code.",
         },
         onPermissionRequest: approveAllPermissions,
-      });
+      }));
+      const session = owner.session;
 
       try {
-        const result = await session.sendAndWait({ prompt: titlePrompt }, 15000);
+        const result = await owner.run(() => session.sendAndWait({ prompt: titlePrompt }, 15000));
 
         const titleText = String(
           result ? getPayload(result).content ?? "" : "",
@@ -1683,11 +1693,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
         return title.slice(0, 50);
       } finally {
-        try {
-          await session.disconnect();
-        } catch {
-          /* ignore */
-        }
+        await owner.close();
       }
     },
 
@@ -1695,9 +1701,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       prompt: string,
       opts?: { system?: string; model?: string },
     ): Promise<string> {
-      const copilotClient = await ensureClient();
-
-      const session = await copilotClient.createSession({
+      const owner = await lifecycle.open(undefined, (client) => client.createSession({
         systemMessage: {
           content:
             opts?.system ??
@@ -1705,27 +1709,23 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         },
         ...(opts?.model ? { model: opts.model } : {}),
         onPermissionRequest: approveAllPermissions,
-      });
+      }));
+      const session = owner.session;
 
       try {
-        const result = await session.sendAndWait({ prompt }, 30000);
+        const result = await owner.run(() => session.sendAndWait({ prompt }, 30000));
         const text = String(
           result ? getPayload(result).content ?? "" : "",
         );
         return text.trim();
       } finally {
-        try {
-          await session.disconnect();
-        } catch {
-          /* ignore */
-        }
+        await owner.close();
       }
     },
 
     async getRateLimits(): Promise<RateLimitInfo | null> {
       try {
-        const copilotClient = await ensureClient();
-        const result = await copilotClient.rpc?.account?.getQuota?.({});
+        const result = await lifecycle.read((client) => client.rpc.account.getQuota({}));
         return mapCopilotQuota(result?.quotaSnapshots, Date.now());
       } catch (err) {
         logError("Failed to get quota:", err);
@@ -1734,50 +1734,11 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     },
 
     async listCommands(workspacePath?: string): Promise<CommandInfo[]> {
-      const generation = catalogGeneration;
-      const now = Date.now();
-      const cacheKey = workspacePath ?? "__global__";
-      const cached = commandsCache.get(cacheKey);
-      if (cached && now - cached.timestamp < COMMANDS_CACHE_TTL_MS) {
-        return cached.commands;
-      }
-
-      // Slash commands are session-scoped, so list them on a throwaway session
-      // (commands depend on cwd; set it on the session, not the shared client,
-      // to avoid tearing down an in-flight run's client).
-      let session: CopilotSdkSession | null = null;
       try {
-        const copilotClient = await ensureClient();
-        session = await copilotClient.createSession({
-          ...(workspacePath ? { workingDirectory: workspacePath } : {}),
-          onPermissionRequest: approveAllPermissions,
-        });
-
-        const result = await session.rpc?.commands?.list?.();
-        const raw = Array.isArray(result?.commands) ? result.commands : [];
-        const commands: CommandInfo[] = raw
-          .filter((c) => c && typeof c.name === "string" && c.name.length > 0)
-          .map((c) => ({
-            name: c.name,
-            description: typeof c.description === "string" ? c.description : undefined,
-            argumentHint: c.input?.hint,
-            userFacing: true,
-          }));
-
-        if (generation === catalogGeneration) commandsCache.set(cacheKey, { commands, timestamp: now });
-        logInfo(`Listed ${commands.length} Copilot slash commands`);
-        return commands;
-      } catch (err) {
-        logError("Failed to list commands:", err);
+        return await lifecycle.read(async () => (await commandsCache.read(workspacePath ?? "")).value);
+      } catch (error) {
+        logError("Failed to list commands:", error);
         return [];
-      } finally {
-        if (session) {
-          try {
-            await session.disconnect();
-          } catch {
-            /* ignore */
-          }
-        }
       }
     },
 
@@ -1789,76 +1750,14 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     // (e.g. Copilot Free), not a truncated response. Logged below so it is
     // diagnosable from the app log rather than looking like a failed call.
     async listModels(): Promise<ModelInfo[]> {
-      const generation = catalogGeneration;
-      const now = Date.now();
-      if (modelsCache && now - modelsCache.timestamp < MODELS_CACHE_TTL_MS) {
-        return modelsCache.models;
-      }
-
       try {
-        const copilotClient = await ensureClient();
-
-        // Uncached RPC first; fall back to the memoizing convenience wrapper only
-        // if the runtime predates the `models.list` method.
-        const raw = copilotClient.rpc?.models?.list
-          ? (await copilotClient.rpc.models.list({}))?.models
-          : await copilotClient.listModels();
-
-        if (!Array.isArray(raw)) {
-          logWarn("Invalid models response");
-          return modelsCache?.models ?? [];
-        }
-
-        // The runtime can list every model twice. Ids key the catalogue — a
-        // paired phone stores it under them — so keep the first of each.
-        const seen = new Set<string>();
-        const unique = raw.filter((model) => {
-          if (seen.has(model.id)) return false;
-          seen.add(model.id);
-          return true;
-        });
-
-        // "auto" is the CLI's own synthetic entry: available on every plan and
-        // never retired, so it is the stable fallback when the configured
-        // default has aged out of the catalogue.
-        const defaultId = resolveCatalogDefaultId(
-          unique.map((model) => model.id),
-          config.defaultModel,
-          ["auto"],
-        );
-
-        const models = unique.map(
-          (model): ModelInfo => ({
-            id: model.id,
-            displayName: model.name || model.id,
-            isDefault: model.id === defaultId,
-            capabilities: { vision: model.capabilities?.supports?.vision },
-            contextWindow: model.capabilities?.limits?.max_context_window_tokens,
-            supportsEffort: model.capabilities?.supports?.reasoningEffort ?? false,
-            supportsFastMode: model.id === "auto",
-            supportedEffortLevels: model.supportedReasoningEfforts,
-          }),
-        );
-
-        if (generation === catalogGeneration) modelsCache = { models, timestamp: now };
-        logInfo(
-          `Listed ${models.length} Copilot model(s): ${models.map((m) => m.id).join(", ") || "(none)"}`,
-        );
-        if (config.defaultModel && !models.some((m) => m.id === config.defaultModel)) {
-          logWarn(
-            `Configured default model "${config.defaultModel}" is not offered by the CLI; the picker will fall back to the first available model.`,
-          );
-        }
-        return models;
+        return await lifecycle.read(async (client) =>
+          (await modelsCache.read("", { load: (context) => loadModels(client, context) })).value);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        if (/not authenticated|gh auth login/i.test(msg)) {
-          throw error;
-        }
+        if (/not authenticated|gh auth login/i.test(msg)) throw error;
         logError("Failed to list models:", error);
-        // Serve the last good list rather than blanking the picker on a transient
-        // RPC failure.
-        return modelsCache?.models ?? [];
+        return modelsCache.peek()?.value ?? [];
       }
     },
 
@@ -1875,30 +1774,28 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       // A short-lived control client reads credentials saved by a completed
       // login, even if the run client was started while signed out. No model
       // session or prompt is sent; an active run is never stopped by Recheck.
-      let probe: CopilotClientInterface | null = null;
       let account: AccountInfo["account"] = null;
       try {
-        probe = await createClient();
-        await probe.start();
-        cli.version = (await probe.getStatus()).version ?? null;
-        const status = await probe.getAuthStatus();
-        if (status?.isAuthenticated) {
-          account = { type: "copilot", login: status.login ?? null };
-        }
-        const identity = status?.isAuthenticated
-          ? `${status.host ?? ""}:${status.login ?? ""}:${status.authType ?? ""}`
-          : null;
-        if (identity !== lastAccountIdentity) {
-          lastAccountIdentity = identity;
-          clientNeedsRestart = !!client;
-          invalidateCatalogs();
-        }
+        await lifecycle.probe(async (probe, check) => {
+          cli.version = (await probe.getStatus()).version ?? null;
+          const status = await probe.getAuthStatus();
+          check();
+          if (status?.isAuthenticated) {
+            account = { type: "copilot", login: status.login ?? null };
+          }
+          const identity = status?.isAuthenticated
+            ? `${status.host ?? ""}:${status.login ?? ""}:${status.authType ?? ""}`
+            : null;
+          if (identity !== lastAccountIdentity) {
+            lastAccountIdentity = identity;
+            lifecycle.restart();
+            invalidateCatalogs();
+          }
+        });
       } catch (error) {
         logWarn(
           `getAccountInfo: auth status read failed: ${error instanceof Error ? error.message : String(error)}`,
         );
-      } finally {
-        if (probe) await stopClient(probe);
       }
       return { account, requiresOpenaiAuth: false, cli };
     },

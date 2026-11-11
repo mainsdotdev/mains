@@ -8,7 +8,8 @@ export const runSessionRegistry = {
     activeSessions.set(runId, session);
   },
 
-  unregister(runId: string): void {
+  unregister(runId: string, session?: RunSession): void {
+    if (session && activeSessions.get(runId) !== session) return;
     activeSessions.delete(runId);
     for (const resolve of idleWaiters.get(runId) ?? []) resolve();
     idleWaiters.delete(runId);

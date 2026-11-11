@@ -21,7 +21,15 @@ export function RegistryIcon({
   return (
     <Svg width={size} height={size} viewBox={shape.viewBox} style={style}>
       {shape.paths.map((path, index) => (
-        <Path key={index} d={path.d} fill={color} fillRule={path.fillRule} clipRule={path.clipRule} />
+        <Path
+          key={index}
+          d={path.d}
+          fill={color}
+          fillRule={path.fillRule}
+          clipRule={path.clipRule}
+          opacity={path.opacity}
+          transform={path.transform}
+        />
       ))}
     </Svg>
   );

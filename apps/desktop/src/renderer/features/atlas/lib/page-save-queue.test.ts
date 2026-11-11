@@ -58,6 +58,24 @@ describe("Page autosave", () => {
     expect(await queue.flush()).toBe(true);
     expect(save).toHaveBeenCalledWith({ title: "Edited latest", blocks: [] }, 2);
   });
+  it("retains the local draft when a conflict arrives before its pending save completes", async () => {
+    const writing = pending<AtlasPage>();
+    const persist = vi.fn();
+    const state = vi.fn();
+    const save = vi.fn(() => writing.promise);
+    const queue = createPageSaveQueue({ page: page(), save, persist, onState: state });
+    const draft = { title: "My local work", blocks: [] };
+    queue.edit(draft);
+    const flushing = queue.flush();
+    expect(queue.sync(page(3, "Concurrent changes"))).toBe(false);
+    writing.resolve(page(2, draft.title));
+    expect(await flushing).toBe(false);
+    expect(queue.blocked).toBe(true);
+    expect(state.mock.lastCall?.[0]).toMatchObject({ dirty: true, saving: false });
+    expect(persist.mock.lastCall?.[0]).toEqual(draft);
+    expect(await queue.retry()).toBe(false);
+    expect(save).toHaveBeenCalledOnce();
+  });
   it("applies a newer revision only when the editor has no pending changes", () => {
     const queue = createPageSaveQueue({ page: page(), save: vi.fn(), persist: vi.fn(), onState: vi.fn() });
     expect(queue.sync(page(2, "Updated elsewhere"))).toBe(true);

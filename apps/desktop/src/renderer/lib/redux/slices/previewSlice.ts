@@ -1,12 +1,14 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import type { DocumentViewerDoc } from "./appSettingsSlice";
+import type { PrRefInput } from "../api/pullRequestsApi";
 import { transferRightPaneContext, forgetRunRightPane, forgetWorkspaceRightPanes } from "./appSettingsSlice";
 import { runOwnerKey, workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
 
 export type PreviewTab =
   | { kind: "browser"; id: string; title: string; faviconUrl: string | null; isLoading: boolean; isCrashed: boolean }
   | { kind: "document"; id: string; doc: DocumentViewerDoc }
-  | { kind: "app"; id: string; title: string };
+  | { kind: "app"; id: string; title: string }
+  | { kind: "pull-request"; id: string; title: string; prRef: PrRefInput; url: string };
 
 export interface PreviewGroup {
   tabs: PreviewTab[];
@@ -35,7 +37,7 @@ const previewSlice = createSlice({
   name: "preview",
   initialState,
   reducers: {
-    openPreviewTab(state, { payload }: PayloadAction<{ ownerKey: string; tab: PreviewTab }>) {
+    openPreviewTab(state, { payload }: PayloadAction<{ ownerKey: string; tab: PreviewTab; activate?: boolean }>) {
       const group = groupFor(state, payload.ownerKey);
       const incoming = payload.tab;
       const index = group.tabs.findIndex((tab) => tab.id === incoming.id ||
@@ -43,8 +45,12 @@ const previewSlice = createSlice({
       const id = index < 0 ? incoming.id : group.tabs[index].id;
       if (index < 0) group.tabs.push(payload.tab);
       else group.tabs[index] = { ...payload.tab, id };
-      group.activeTabId = id;
-      group.open = true;
+      if (payload.activate !== false) {
+        group.activeTabId = id;
+        group.open = true;
+      } else if (!group.activeTabId) {
+        group.activeTabId = id;
+      }
     },
     selectPreviewTab(state, { payload }: PayloadAction<{ ownerKey: string; id: string }>) {
       const group = state.byOwner[payload.ownerKey];

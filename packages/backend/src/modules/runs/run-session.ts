@@ -1,12 +1,11 @@
 import { insertRunInputArtifact } from "./run-input-artifact";
-import { randomUUID } from "node:crypto";
-import { isAssistantReportStream } from "../../../shared/report-stream";
+import { createToolCallProjection } from "./tool-call-projection";
+import { createReportProjection } from "./report-projection";
 import {
   couldModifyFiles,
   toolWrites,
   type WorkRunEvent,
 } from "../providers/adapters";
-import type { WorkRunUsage, StopReason } from "../../../shared/adapter.types";
 import type { RunExecutionContext } from "../../../shared/adapter.types";
 import { runsRepo } from "./runs.repo";
 import { providersService } from "../providers";
@@ -19,18 +18,27 @@ import {
   type DiffSnapshot,
   type WorktreeLocation,
 } from "../git";
-import { attributeTurnFiles, type TurnWrites } from "./turn-attribution";
+import { attributeTurnFiles } from "./turn-attribution";
+import { createRunTurnLifecycle, type ClosedRunTurn, type TurnBaseline } from "./run-turn-lifecycle";
 import {
   workspaceService,
   recordWorkspaceDiff,
   clearWorkspaceDiff,
+  captureWorkspaceDiff,
+  createWorkspaceDiffScheduler,
 } from "../workspace";
 import { createWorkAdapter } from "../providers/adapters";
 import { runSessionRegistry } from "./run-session-registry";
+import { createRunSessionLifecycle, type RunSessionPhase, type RunSessionResult } from "./run-lifecycle";
 import { showRunFinishedNotification } from "./run-notification-sink";
 import { emit } from "../../ipc-kit";
 import type { TurnFileChange } from "./runs.dto";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
+import { CHANNELS } from "@mains/contracts/channels";
+import type { RunPullRequestCreatedEvent } from "@mains/contracts/runs";
+import { createdPullRequestUrl, pullRequestCreationCommand } from "./created-pull-request";
+
+export type { RunSessionResult } from "./run-lifecycle";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -38,19 +46,6 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 const LIVE_DIFF_DEBOUNCE_MS = 300;
 const FORCE_FINALIZE_TIMEOUT_MS = 30_000;
-
-/**
- * `metadata.task` statuses the provider has already resolved — the run-end
- * sweep leaves these alone. Mirrors `SubagentTaskMeta["status"]` in the
- * renderer's subagent-identity, minus the live ones (`pending`, `running`,
- * `paused` — a paused task cannot resume once the run's process is gone).
- */
-const TERMINAL_TASK_STATUSES = new Set([
-  "completed",
-  "failed",
-  "killed",
-  "stopped",
-]);
 
 // ─────────────────────────────────────────────────────────────
 // File-level utilities (pure)
@@ -87,28 +82,15 @@ export interface RunSessionContext {
   onTurnClosed?: (runId: string) => Promise<void>;
 }
 
-/** Where a turn began, for turn changes. */
-interface TurnBaseline {
-  /** Working-tree snapshot at the turn's start; null when none could be taken. */
-  tree: Promise<string | null>;
-  at: number;
-  /** What the turn's own tool calls wrote since. */
-  writes: TurnWrites;
-}
-
-export interface RunSessionResult {
-  status: "succeeded" | "failed" | "canceled";
-  summary?: string;
-  stopReason?: StopReason | null;
-  usage?: WorkRunUsage;
-}
-
 export interface RunSession {
   readonly runId: string;
+  /** Live ownership, independent of the persisted execution outcome. */
+  readonly phase: RunSessionPhase;
 
   /**
    * Project an adapter event onto run state.
-   * No-op after finalize. Tolerates out-of-order events by logging + dropping.
+   * No-op after finalize; abort accepts only identified native input receipts.
+   * Tolerates out-of-order events by logging + dropping.
    */
   project(event: WorkRunEvent): Promise<void>;
 
@@ -133,7 +115,7 @@ export interface RunSession {
   updateBaseRef(sha: string): void;
 
   /**
-   * Single cleanup path for all terminal states. Idempotent.
+   * Single cleanup path for all terminal states. Every caller awaits its completion.
    */
   finalize(result: RunSessionResult): Promise<void>;
 }
@@ -146,9 +128,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   const { runId, accountId, providerId, execution } = ctx;
   const workspaceId = execution.workspaceId;
 
-  // ─── Lifecycle flags ───
-  let finalized = false;
-  let aborting = false;
+  const lifecycle = createRunSessionLifecycle();
+  let finalization: Promise<void> | null = null;
   let forceFinalizeTimer: NodeJS.Timeout | null = null;
 
   // ─── Per-run state (was 8 module-scope Maps in runs.service.ts) ───
@@ -157,55 +138,37 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // can use it even when a near-instant run completes first.
   let baseRefCaptured: Promise<void> | null = null;
   let sleepBlockerId: number | null = null;
-  let activeTurnId: number | null = null;
-  // Where the active turn began — closing it diffs `tree` against a fresh
-  // snapshot — and what its own tool calls wrote since. See CONTEXT.md "turn
-  // changes".
-  let turnBaseline: TurnBaseline | null = null;
   const sessionStartedAt = Date.now();
   // The worktree this run shares with any parallel run; null without a
   // workspace or outside a git repo.
   const worktree: Promise<WorktreeLocation | null> = locateWorktree();
-  let initialTurnReady: Promise<void> | null = null;
-  let resolvedToolCallsReady: Promise<void> | null = null;
-  let turnCounter: number = ctx.seedTurnIndex ?? -1;
-  let liveDiffTimer: NodeJS.Timeout | null = null;
-  let liveDiffInFlight = false;
-  let liveDiffPending = false;
-  const pendingToolCalls = new Map<string, number>();
-  // callKey → DB tool call id, retained for the whole run. pendingToolCalls is
-  // emptied on completion, but subagent and background-task events arrive AFTER
-  // their tool call has settled (a backgrounded command reports its real result
-  // once the foreground call already returned "running in background"), so they
-  // need an anchor that outlives it.
-  const resolvedToolCalls = new Map<string, number>();
-  const taskRunIds = new Map<string, string>();
+  const liveDiff = workspaceId ? createWorkspaceDiffScheduler(workspaceId, recomputeLiveDiff, LIVE_DIFF_DEBOUNCE_MS, execution.cwd) : null;
+  const toolProjection = createToolCallProjection({ runId, accountId, providerId });
   // callKey → the files a running tool call named at start, claimed for the
   // turn only when it completes successfully (see noteToolWrites).
   const pendingToolWrites = new Map<string, string[]>();
-  type ArtifactEvent = Extract<WorkRunEvent, { type: "artifact" }>;
-  const reportStreams = new Map<string, ArtifactEvent>();
+  const pendingPrCreations = new Set<string>();
+  const announcedPrUrls = new Set<string>();
+  const reports = createReportProjection();
   const artifactProjections = new Set<Promise<boolean>>();
-  const streamScope = randomUUID();
-  let reportSequence = 0;
-
-  async function hydrateResolvedToolCalls(): Promise<void> {
-    try {
-      const calls = await runsRepo.findToolCallsByRun(runId);
-      for (const call of calls) {
-        if (call.toolId) {
-          resolvedToolCalls.set(call.toolId, call.id);
-          const task = call.metadata?.task as { providerRunId?: string } | undefined;
-          if (task?.providerRunId) taskRunIds.set(call.toolId, task.providerRunId);
-        }
+  const eventProjections = new Set<Promise<void>>();
+  let projectionTail = Promise.resolve();
+  const turns = createRunTurnLifecycle({
+    seedIndex: ctx.seedTurnIndex ?? -1,
+    captureTree: captureTurnTree,
+    open: (turnIndex, promptContent) => runsRepo.insertTurn({ runId, turnIndex, promptContent, startedAt: new Date() }),
+    async opened(id, initial) {
+      if (!initial) return;
+      if (ctx.initialModel) await runsRepo.updateTurn(id, { model: ctx.initialModel });
+      if (ctx.initialProviderTurnId || ctx.initialTurnMetadata) {
+        await runsRepo.patchTurnMetadata(id, {
+          ...ctx.initialTurnMetadata,
+          ...(ctx.initialProviderTurnId ? { providerTurnId: ctx.initialProviderTurnId } : {}),
+        });
       }
-    } catch (err) {
-      console.error(
-        `[RunSession ${runId}] Failed to hydrate tool-call anchors:`,
-        err,
-      );
-    }
-  }
+    },
+    close: persistClosedTurn,
+  });
 
   // ─── Broadcast helpers (channel names + payload shapes preserved exactly) ───
   function broadcastEventPersisted(): void {
@@ -288,14 +251,6 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     }
   }
 
-  function takeTurnBaseline(): TurnBaseline {
-    return {
-      at: Date.now(),
-      tree: captureTurnTree(),
-      writes: { paths: new Set(), unnamed: false },
-    };
-  }
-
   async function locateWorktree(): Promise<WorktreeLocation | null> {
     if (!workspaceId) return null;
     try {
@@ -327,7 +282,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       const repoPath = toWorktreePath(location, execution.cwd, toolPath);
       if (repoPath) paths.push(repoPath);
     }
-    if (writes.unnamed && turnBaseline) turnBaseline.writes.unnamed = true;
+    if (writes.unnamed && turns.baseline) turns.baseline.writes.unnamed = true;
     worktreeWrites.record(
       location.topLevel,
       runId,
@@ -353,7 +308,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       if (!baseline || !start || !end || start === end) return;
       let diff = await gitService.diffTrees(execution.cwd, start, end);
       if (diff.files.length === 0) return;
-      let files: TurnFileChange[] = diff.files;
+      let files: TurnFileChange[] = diff.files.map((file) => ({ ...file, shared: false }));
 
       const location = await worktree;
       const peers = location
@@ -371,7 +326,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
           );
         }
         const shared = new Set(kept.filter((f) => f.shared).map((f) => f.path));
-        files = diff.files.map((f) => (shared.has(f.path) ? { ...f, shared: true } : f));
+        files = diff.files.map((file) => ({ ...file, shared: shared.has(file.path) }));
         if (files.length === 0) return;
       }
 
@@ -390,51 +345,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   }
 
   // ─── Turn boundaries ───
-  async function startNextTurn(promptContent?: string): Promise<void> {
-    // Close any currently-active turn (no-op on the first call for a fresh run).
-    if (activeTurnId !== null) {
-      // One snapshot marks the boundary: the closing turn's end is the next
-      // turn's start, so no change between them goes unattributed.
-      const boundary = takeTurnBaseline();
-      await closeActiveTurn(undefined, boundary.tree);
-      turnBaseline = boundary;
-    }
-    // The first turn's baseline was taken at session start (see Initialize).
-    turnBaseline ??= takeTurnBaseline();
-    try {
-      const nextIndex = turnCounter + 1;
-      const initial = turnCounter === (ctx.seedTurnIndex ?? -1);
-      const id = await runsRepo.insertTurn({
-        runId,
-        turnIndex: nextIndex,
-        promptContent,
-        startedAt: new Date(),
-      });
-      activeTurnId = id;
-      turnCounter = nextIndex;
-      if (initial && ctx.initialModel) await runsRepo.updateTurn(id, { model: ctx.initialModel });
-      if (initial && (ctx.initialProviderTurnId || ctx.initialTurnMetadata)) {
-        await runsRepo.patchTurnMetadata(id, {
-          ...ctx.initialTurnMetadata,
-          ...(ctx.initialProviderTurnId ? { providerTurnId: ctx.initialProviderTurnId } : {}),
-        });
-      }
-    } catch (err) {
-      console.error(`[RunSession ${runId}] Failed to start turn:`, err);
-    }
-  }
-
-  async function closeActiveTurn(
-    usage?: WorkRunUsage,
-    endTree?: Promise<string | null>,
-    outcome?: RunSessionResult["status"],
-  ): Promise<void> {
-    if (activeTurnId === null) return;
-    const turnId = activeTurnId;
-    // Snapshot before the DB writes below, as close to the boundary as we get.
-    const turnEndTree = endTree ?? captureTurnTree();
-    const baseline = turnBaseline;
-    turnBaseline = null;
+  async function persistClosedTurn({ id: turnId, baseline, endTree: turnEndTree, usage, outcome }:
+    ClosedRunTurn): Promise<void> {
     try {
       const now = new Date();
       const turns = await runsRepo.findTurnsByRun(runId);
@@ -457,98 +369,13 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         modelUsage: usage?.modelUsage,
       });
       if (ctx.initialTurnMetadata && outcome) await runsRepo.patchTurnMetadata(turnId, { outcome });
-      activeTurnId = null;
     } catch (err) {
       console.error(`[RunSession ${runId}] Failed to close active turn:`, err);
+      throw err;
     }
     await persistTurnChanges(turnId, baseline, turnEndTree);
     try { await ctx.onTurnClosed?.(runId); }
     catch (error) { console.error(`[RunSession ${runId}] Could not snapshot Bridge outputs:`, error); }
-  }
-
-  // ─── Tool call cleanup ───
-  async function closePendingToolCalls(status: "done" | "error"): Promise<void> {
-    if (pendingToolCalls.size === 0) return;
-    const now = new Date();
-    for (const [callKey, toolCallId] of pendingToolCalls) {
-      try {
-        await runsRepo.updateToolCall(toolCallId, { status, endedAt: now });
-      } catch (err) {
-        console.error(`[RunSession ${runId}] Failed to close orphaned tool call ${callKey}:`, err);
-      }
-    }
-    pendingToolCalls.clear();
-  }
-
-  /**
-   * Settle rows whose terminal lifecycle event never arrived.
-   *
-   * An aborted run tears the provider sink down before the settle
-   * notifications are processed, and a spawn-style call (Codex) is already
-   * "done" the moment the agent starts — so without this sweep the session
-   * panel shows those agents running forever. The run's outcome stands in for
-   * theirs: succeeded → completed, anything else → stopped.
-   *
-   * BOTH lifecycle keys are swept, because they are separate sources of
-   * "still working" and a row can carry either one. `metadata.subagent` is a
-   * spawn's own lifecycle; `metadata.task` is the CLI's task lifecycle, and it
-   * is the ONLY liveness a SendMessage continuation or a backgrounded command
-   * has — settling just the first left a resumed agent (whose live state moved
-   * onto its continuation row) spinning forever after the run that resumed it
-   * was stopped.
-   */
-  async function settleUnfinishedSubagents(
-    runStatus: "succeeded" | "failed" | "canceled",
-  ): Promise<void> {
-    const settledState = runStatus === "succeeded" ? "completed" : "stopped";
-    try {
-      const calls = await runsRepo.findToolCallsByRun(runId);
-      for (const call of calls) {
-        const metadata = call.metadata as Record<string, unknown> | null;
-        const subagent = metadata?.subagent as { phase?: string } | undefined;
-        const task = metadata?.task as
-          | { phase?: string; status?: string; error?: string }
-          | undefined;
-        const patch: Record<string, unknown> = {};
-
-        if (subagent?.phase === "invoked" || subagent?.phase === "running") {
-          patch.subagent = { phase: settledState, updatedAt: Date.now() };
-        }
-        // A task the provider already resolved — by status, by a completed
-        // phase, or by failing — keeps its own outcome.
-        if (
-          task &&
-          !task.error &&
-          task.phase !== "completed" &&
-          !TERMINAL_TASK_STATUSES.has(task.status ?? "")
-        ) {
-          patch.task = { status: settledState, updatedAt: Date.now() };
-        }
-
-        if (Object.keys(patch).length === 0) continue;
-        await runsRepo.updateToolCall(call.id, { metadata: patch });
-      }
-    } catch (err) {
-      console.error(`[RunSession ${runId}] Failed to settle subagents:`, err);
-    }
-  }
-
-  /** Belt-and-suspenders: mark any DB-side tool calls still in "running" as ended. */
-  async function closeRunningToolCallsInDb(status: "done" | "error"): Promise<void> {
-    try {
-      const calls = await runsRepo.findToolCallsByRun(runId);
-      const now = new Date();
-      for (const tc of calls) {
-        if (tc.status !== "running") continue;
-        try {
-          await runsRepo.updateToolCall(tc.id, { status, endedAt: now });
-        } catch (err) {
-          console.error(`[RunSession ${runId}] Failed to close running tool call ${tc.id}:`, err);
-        }
-      }
-    } catch (err) {
-      console.error(`[RunSession ${runId}] Failed to load tool calls for cleanup:`, err);
-    }
   }
 
   // ─── Diff snapshotting ───
@@ -568,14 +395,19 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
    */
   async function snapshotCurrentDiff(): Promise<DiffSnapshot | null> {
     if (!workspaceId) return null;
-    const head = await gitService.getHeadSha(execution.cwd).catch(() => null);
-    // Fall back to the run-start sha only when HEAD is unreadable, so a git
-    // hiccup degrades to the old behaviour instead of dropping the diff.
-    const ref = head ?? baseRef;
-    if (!ref) return null;
-    return gitService
-      .captureDiffSnapshot(execution.cwd, ref)
-      .catch(() => null);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const head = await gitService.getHeadSha(execution.cwd).catch(() => null);
+      const ref = head ?? baseRef;
+      if (!ref) return null;
+      const snapshot = await gitService.captureDiffSnapshot(execution.cwd, ref).catch(() => null);
+      if (!snapshot) return null;
+      const currentHead = await gitService.getHeadSha(execution.cwd).catch(() => null);
+      // The fallback can be read for compatibility, but an unreadable HEAD
+      // cannot replace the workspace's last authoritative projection.
+      if (!head || !currentHead) return null;
+      if (currentHead === head) return snapshot;
+    }
+    return null;
   }
 
   /**
@@ -584,77 +416,50 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
    * (or otherwise resolved changes) between runs, leaving a stale diff row
    * pointing at a now-merged baseRef.
    */
-  async function clearStaleWorkspaceDiff(): Promise<void> {
+  async function clearStaleWorkspaceDiff(current: () => boolean): Promise<void> {
     if (!workspaceId) return;
-    if (await clearWorkspaceDiff(workspaceId)) {
+    if (await clearWorkspaceDiff(workspaceId, current)) {
       broadcastDiffUpdated();
     }
   }
 
   // ─── Live diff scheduler ───
-  async function recomputeLiveDiff(): Promise<void> {
-    if (!workspaceId) return;
+  async function recomputeLiveDiff(current: () => boolean): Promise<void> {
+    if (!workspaceId || !lifecycle.acceptsEvents) return;
     const snapshot = await snapshotCurrentDiff();
-    if (!snapshot) return;
+    if (!snapshot || !lifecycle.acceptsEvents || !current()) return;
     if (snapshot.files.length === 0) {
       try {
-        await clearStaleWorkspaceDiff();
+        await clearStaleWorkspaceDiff(current);
       } catch (err) {
         console.error(`[RunSession ${runId}] clearStaleWorkspaceDiff failed:`, err);
       }
       return;
     }
     const existing = await workspaceService.getDiffByRun(runId);
+    if (!lifecycle.acceptsEvents) return;
     if (existing && hashContent(existing.diffText) === hashContent(snapshot.diffText)) {
       return;
     }
     try {
-      await recordWorkspaceDiff(workspaceId, runId, snapshot);
+      await recordWorkspaceDiff(workspaceId, runId, snapshot, current);
       broadcastDiffUpdated();
     } catch (err) {
       console.error(`[RunSession ${runId}] recomputeLiveDiff failed:`, err);
     }
   }
 
-  async function runLiveDiff(): Promise<void> {
-    if (liveDiffInFlight) {
-      liveDiffPending = true;
-      return;
-    }
-    liveDiffInFlight = true;
-    try {
-      await recomputeLiveDiff();
-    } finally {
-      liveDiffInFlight = false;
-      if (liveDiffPending) {
-        liveDiffPending = false;
-        void runLiveDiff();
-      }
-    }
-  }
-
   function scheduleLiveDiff(): void {
-    if (!workspaceId) return;
-    if (liveDiffTimer) clearTimeout(liveDiffTimer);
-    liveDiffTimer = setTimeout(() => {
-      liveDiffTimer = null;
-      void runLiveDiff();
-    }, LIVE_DIFF_DEBOUNCE_MS);
+    if (lifecycle.acceptsEvents) liveDiff?.schedule();
   }
 
-  function clearLiveDiffSchedule(): void {
-    if (liveDiffTimer) {
-      clearTimeout(liveDiffTimer);
-      liveDiffTimer = null;
-    }
-    liveDiffPending = false;
-  }
+  function clearLiveDiffSchedule(): void { liveDiff?.cancel(); }
 
   // ─── Final diff persistence at completion ───
   async function persistFinalDiff(): Promise<void> {
     if (!workspaceId) return;
     clearLiveDiffSchedule();
-    // The run-start HEAD is only a fallback when the current HEAD is unreadable.
+    // Join the initial baseline read before capturing the final projection.
     if (baseRefCaptured) {
       try {
         await baseRefCaptured;
@@ -662,23 +467,27 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         // captureBaseRef swallows its own errors; guard anyway.
       }
     }
-    const snapshot = await snapshotCurrentDiff();
-    if (!snapshot) return;
-    if (snapshot.files.length === 0) {
-      try {
-        await clearStaleWorkspaceDiff();
-      } catch (err) {
-        console.error(`[RunSession ${runId}] clearStaleWorkspaceDiff failed:`, err);
-      }
-      return;
-    }
-
     try {
-      await recordWorkspaceDiff(workspaceId, runId, snapshot);
-      broadcastDiffUpdated();
-    } catch (err) {
-      console.error(`[RunSession ${runId}] persistFinalDiff failed:`, err);
-    }
+      await captureWorkspaceDiff(workspaceId, async (current) => {
+        const snapshot = await snapshotCurrentDiff();
+        if (!snapshot || !current()) return;
+        if (snapshot.files.length === 0) {
+          try {
+            await clearStaleWorkspaceDiff(current);
+          } catch (err) {
+            console.error(`[RunSession ${runId}] clearStaleWorkspaceDiff failed:`, err);
+          }
+          return;
+        }
+
+        try {
+          await recordWorkspaceDiff(workspaceId, runId, snapshot, current);
+          broadcastDiffUpdated();
+        } catch (err) {
+          console.error(`[RunSession ${runId}] persistFinalDiff failed:`, err);
+        }
+      }, execution.cwd);
+    } catch (error) { console.error(`[RunSession ${runId}] Final diff capture unavailable:`, error); }
   }
 
   // ─── Projection rules (was handleRunEvent's switch in runs.service.ts) ───
@@ -703,86 +512,42 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
 
   async function projectToolCall(
     event: Extract<WorkRunEvent, { type: "tool_call" }>,
-  ): Promise<void> {
-    if (initialTurnReady) await initialTurnReady;
-    const metadata = event.metadata;
-    const phase = metadata?.phase;
-    if (phase === "start") {
-      const metadataToolCallId = metadata?.toolCallId;
-      const parentToolUseId = metadata?.parentToolUseId;
-      const toolCallId = await runsRepo.insertToolCall({
-        accountId,
-        runId,
-        providerId,
-        toolId: metadataToolCallId ? String(metadataToolCallId) : undefined,
-        // Links a subagent's own tool calls back to the call that spawned the
-        // subagent — the session panel's flow view filters on this column.
-        parentToolCallId: parentToolUseId ? String(parentToolUseId) : undefined,
-        toolName: event.toolName,
-        status: "running",
-        input: event.input,
-        startedAt: event.startedAt ? new Date(event.startedAt) : new Date(),
-      });
-      // Capture ownership at start. A late completion must not move a call
-      // into the follow-up turn; metadata patches retain this turn ID.
-      await runsRepo.updateToolCall(toolCallId, { metadata: { ...metadata, turnId: activeTurnId } });
-      const callKey = metadataToolCallId
-        ? String(metadataToolCallId)
-        : `${event.toolName}-${event.startedAt || Date.now()}`;
-      pendingToolCalls.set(callKey, toolCallId);
-      resolvedToolCalls.set(callKey, toolCallId);
+  ): Promise<boolean> {
+    await turns.ready;
+    const result = await toolProjection.project(event, turns.id);
+    const callKey = result.key;
+    if (result.transition === "unchanged") return false;
+    if (result.transition === "started") {
+      if (pullRequestCreationCommand(event)) pendingPrCreations.add(callKey!);
       const named = await noteToolWrites(event);
-      if (named.length > 0) pendingToolWrites.set(callKey, named);
-      return;
+      if (named.length > 0) pendingToolWrites.set(callKey!, named);
+      return true;
     }
-    if (phase === "end" || phase === "complete") {
-      const metadataToolCallId = (event.metadata as Record<string, unknown> | undefined)?.toolCallId;
-      let callKey: string | undefined;
-      if (metadataToolCallId) {
-        // Stable id present → match ONLY by exact id. The name-prefix fallback
-        // below closes the wrong call when many same-named tools run in parallel
-        // (e.g. a subagent reading 10 files), and a completion for an
-        // already-resolved id (duplicate from hook + tool_result block) must be
-        // a no-op rather than closing an unrelated pending call.
-        callKey = String(metadataToolCallId);
-      } else {
-        // No id (legacy/partial providers): best-effort match the oldest pending
-        // call with the same tool name.
-        callKey = Array.from(pendingToolCalls.keys()).find((k) =>
-          k.startsWith(`${event.toolName}-`),
-        );
-      }
-      if (callKey && pendingToolCalls.has(callKey)) {
-        const toolCallId = pendingToolCalls.get(callKey)!;
-        pendingToolCalls.delete(callKey);
-        const latencyMs =
-          event.startedAt && event.endedAt ? event.endedAt - event.startedAt : undefined;
-        await runsRepo.updateToolCall(toolCallId, {
-          status: event.terminalStatus ?? (event.error ? "error" : "done"),
-          input: event.input as Record<string, unknown> | undefined,
-          output: event.output,
-          error: event.error,
-          endedAt: event.endedAt ? new Date(event.endedAt) : new Date(),
-          latencyMs,
-          metadata: event.metadata,
-        });
-      }
-      // Live diff: if this tool could have touched the filesystem, schedule a recomputation.
-      if (!event.error && couldModifyFiles(event.toolName)) {
-        scheduleLiveDiff();
-      }
-      const namedAtStart = (callKey && pendingToolWrites.get(callKey)) || [];
-      if (callKey) pendingToolWrites.delete(callKey);
-      const named = await noteToolWrites(event);
-      // A denied or failed edit wrote nothing. Claiming its file anyway would
-      // put a peer's edit to that same file on this turn's card.
-      const wrote = !event.error && (event.terminalStatus ?? "done") === "done";
-      if (wrote && turnBaseline) {
-        for (const repoPath of [...namedAtStart, ...named]) {
-          turnBaseline.writes.paths.add(repoPath);
+    const wasPrCreation = callKey && pendingPrCreations.delete(callKey);
+    if (wasPrCreation) {
+      const url = createdPullRequestUrl(event);
+      if (url && !announcedPrUrls.has(url)) {
+        announcedPrUrls.add(url);
+        const run = await runsRepo.findRunById(runId);
+        if (run) {
+          const payload: RunPullRequestCreatedEvent = {
+            runId, toolCallId: result.id!, url, mode: run.mode, workspaceId: run.workspaceId,
+          };
+          emit(CHANNELS.runs.pullRequestCreated, payload, { runId, workspaceId: run.workspaceId ?? undefined });
         }
       }
     }
+    if (!event.error && couldModifyFiles(event.toolName)) scheduleLiveDiff();
+    const namedAtStart = (callKey && pendingToolWrites.get(callKey)) || [];
+    if (callKey) pendingToolWrites.delete(callKey);
+    // A completion without input adds no uncertainty to a known named write.
+    // Shells and calls that never named a file still record opaque writes.
+    const named = event.input === undefined && namedAtStart.length > 0 ? [] : await noteToolWrites(event);
+    const wrote = !event.error && (event.terminalStatus ?? "done") === "done";
+    if (wrote && turns.baseline) {
+      for (const repoPath of [...namedAtStart, ...named]) turns.baseline.writes.paths.add(repoPath);
+    }
+    return true;
   }
 
   async function projectArtifact(
@@ -790,17 +555,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   ): Promise<boolean> {
     // Streaming chunks: push to renderer only, skip DB and the persisted-event broadcast.
     if (event.ephemeral) {
-      if (event.streamId && isAssistantReportStream(event)) {
-        const nativeId = event.streamId;
-        const previous = reportStreams.get(nativeId);
-        // Some providers reuse a block id within a turn or on resume. Give
-        // each live message its own identity so an older DB row cannot hide it.
-        const streamId = previous?.streamId ?? (event.content
-          ? `${nativeId}-${streamScope}-${++reportSequence}` : nativeId);
-        event = { ...event, streamId, metadata: { ...event.metadata, streamId } };
-        if (event.content) reportStreams.set(nativeId, event);
-        else reportStreams.delete(nativeId);
-      }
+      // A queued prompt boundary may still be preparing. Let ordered final
+      // projection assign a new stream's turn instead of freezing the old one.
+      event = reports.stream(event, eventProjections.size ? null : turns.id);
       broadcastEphemeralEvent({
         type: event.type,
         kind: event.kind,
@@ -811,39 +568,24 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       return false;
     }
 
-    if (initialTurnReady) await initialTurnReady;
-    event = { ...event, metadata: { ...event.metadata, turnId: activeTurnId } };
-    let reportKey: string | undefined;
-    if (event.kind === "report" && event.metadata?.isFromSubagent !== true) {
-      const streamId = event.streamId ?? event.metadata?.streamId;
-      if (typeof streamId === "string") {
-        reportKey = reportStreams.has(streamId) ? streamId
-          : [...reportStreams].find(([, report]) => report.streamId === streamId)?.[0];
-      } else if (event.content?.trim()) {
-        // Claude's completed text blocks have no native stream id. Match the
-        // final block to its live prefix before retiring that preview.
-        reportKey = [...reportStreams].find(([, report]) =>
-          report.content?.trim() && event.content!.trim().startsWith(report.content.trim()))?.[0];
-      }
-      const report = reportKey === undefined ? undefined : reportStreams.get(reportKey);
-      if (report) event = { ...event, metadata: { ...event.metadata, streamId: report.streamId } };
-    }
+    await turns.ready;
+    event = reports.prepare(event);
+    if (reports.completed(event)) return false;
+    event = { ...event, metadata: { ...event.metadata, turnId: event.metadata?.turnId ?? turns.id } };
     // A Claude send that missed the previous native turn can already have
     // started a new one. Deduplicate it before opening its boundary, and stamp
     // the accepted prompt with the new turn rather than the one it just closed.
-    const startsQueuedTurn = event.kind === "user-prompt" && event.metadata?.delivery === "queue";
-    if (!await insertRunInputArtifact(runId, event, startsQueuedTurn ? async () => {
-      await startNextTurn(event.content);
-      event = { ...event, metadata: { ...event.metadata, turnId: activeTurnId } };
+    const artifactKind = event.metadata?.kind;
+    const startsTurn = event.metadata?.delivery !== "steer" &&
+      (event.kind === "user-prompt" && event.metadata?.delivery === "queue" || artifactKind === "user-prompt");
+    if (!await insertRunInputArtifact(runId, event, startsTurn ? async () => {
+      const inputId = event.metadata?.clientUserMessageId;
+      const turnId = await turns.start(event.content, typeof inputId === "string" ? inputId : undefined);
+      event = { ...event, metadata: { ...event.metadata, turnId } };
       return event;
     } : undefined)) return false;
-    if (reportKey !== undefined) reportStreams.delete(reportKey);
+    reports.commit(event);
 
-    // Turn boundary side-effects
-    const artifactKind = (event.metadata as Record<string, unknown> | undefined)?.kind;
-    if (artifactKind === "user-prompt" && event.metadata?.delivery !== "steer" && !startsQueuedTurn) {
-      await startNextTurn(event.content);
-    }
     if (event.kind === "user-prompt") {
       const resolvedModel =
         typeof event.metadata?.model === "string"
@@ -852,122 +594,21 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       if (resolvedModel) {
         // The core emits the prompt as soon as acquisition resolves, which can
         // race the fire-and-forget initial turn insert in this constructor.
-        if (activeTurnId === null && initialTurnReady) {
-          await initialTurnReady;
-        }
-        if (activeTurnId !== null) {
-          await runsRepo.updateTurn(activeTurnId, { model: resolvedModel });
+        await turns.ready;
+        const turnId = typeof event.metadata?.turnId === "number" ? event.metadata.turnId : turns.id;
+        if (turnId !== null) {
+          await runsRepo.updateTurn(turnId, { model: resolvedModel });
         }
       }
     }
-    if (artifactKind === "result" && event.content && activeTurnId !== null) {
+    if (artifactKind === "result" && event.content && turns.id !== null) {
       try {
-        await runsRepo.appendResponseContent(activeTurnId, event.content);
+        await runsRepo.appendResponseContent(turns.id, event.content);
       } catch (err) {
-        console.error(`[RunSession ${runId}] Failed to append response for turn ${activeTurnId}:`, err);
+        console.error(`[RunSession ${runId}] Failed to append response for turn ${turns.id}:`, err);
       }
     }
     return true;
-  }
-
-  /**
-   * Attach provider detail to an existing tool call's metadata under `key`.
-   *
-   * updateToolCall merges metadata with json_patch, so repeated patches from
-   * different owners accumulate instead of overwriting each other. Returns
-   * false when the tool call is unknown — an Agent/task event whose spawning
-   * call was never projected has nothing to attach to.
-   */
-  async function patchToolCallMetadata(
-    toolUseId: string | undefined,
-    key: "subagent" | "task",
-    detail: Record<string, unknown>,
-    parentToolCallId?: string | null,
-    extraMetadata?: Record<string, unknown>,
-  ): Promise<boolean> {
-    if (!toolUseId) return false;
-    let toolCallId = resolvedToolCalls.get(toolUseId);
-    if (toolCallId === undefined && resolvedToolCallsReady) {
-      await resolvedToolCallsReady;
-      toolCallId = resolvedToolCalls.get(toolUseId);
-    }
-    if (toolCallId === undefined) return false;
-    // Drop undefined fields so a later partial patch cannot blank an earlier one.
-    const clean = Object.fromEntries(
-      Object.entries(detail).filter(([, v]) => v !== undefined),
-    );
-    await runsRepo.updateToolCall(toolCallId, {
-      parentToolCallId,
-      metadata: {
-        ...extraMetadata,
-        [key]: clean,
-        ...(parentToolCallId !== undefined ? { parentToolUseId: parentToolCallId, isFromSubagent: !!parentToolCallId } : {}),
-      },
-    });
-    return true;
-  }
-
-  async function projectSubagent(
-    event: Extract<WorkRunEvent, { type: "subagent" }>,
-  ): Promise<boolean> {
-    if (resolvedToolCallsReady) await resolvedToolCallsReady;
-    const taskRunId = event.parentToolUseId ? taskRunIds.get(event.parentToolUseId) : undefined;
-    if (event.providerRunId && taskRunId && event.providerRunId < taskRunId) return false;
-    return patchToolCallMetadata(event.parentToolUseId, "subagent", {
-      phase: event.phase,
-      agentType: event.agentType,
-      agentId: event.agentId,
-      providerRunId: event.providerRunId,
-      model: event.model,
-      reasoningEffort: event.reasoningEffort,
-      role: event.role,
-      agentPath: event.agentPath,
-      prompt: event.prompt,
-      result: event.result,
-      error: event.error,
-      // Terminal patches overwrite updatedAt, so the spawn moment gets its own
-      // key — the panel derives "worked for Xs" from invokedAt → updatedAt.
-      ...(event.phase === "invoked" ? { invokedAt: event.ts ?? Date.now() } : {}),
-      updatedAt: event.ts ?? Date.now(),
-    });
-  }
-
-  async function projectTask(
-    event: Extract<WorkRunEvent, { type: "task" }>,
-  ): Promise<boolean> {
-    if (resolvedToolCallsReady) await resolvedToolCallsReady;
-    const previousRunId = event.toolCallId ? taskRunIds.get(event.toolCallId) : undefined;
-    if (event.providerRunId && previousRunId && event.providerRunId < previousRunId) return false;
-    const newExecution = !!(event.providerRunId && event.providerRunId !== previousRunId);
-    const didPersist = await patchToolCallMetadata(event.toolCallId, "task", {
-      // json_patch merges partial updates. Explicitly remove the previous
-      // execution's outcome so a resumed task cannot inherit its failure.
-      phase: event.phase,
-      taskId: event.taskId,
-      providerRunId: event.providerRunId,
-      parentTaskId: event.parentTaskId,
-      parentToolCallId: event.parentToolCallId,
-      status: event.status ?? (newExecution ? null : undefined),
-      description: event.description,
-      subagentType: event.subagentType,
-      taskType: event.taskType,
-      summary: event.summary ?? (newExecution ? null : undefined),
-      // Where a backgrounded command's real output landed. The run itself never
-      // carries that output, so this path is the only handle on it.
-      outputFile: event.outputFile ?? (newExecution ? null : undefined),
-      lastToolName: event.lastToolName ?? (newExecution ? null : undefined),
-      usage: event.usage ?? (newExecution ? null : undefined),
-      error: event.error ?? (newExecution ? null : undefined),
-      skipTranscript: event.skipTranscript ?? (newExecution ? null : undefined),
-      isBackgrounded: event.isBackgrounded ?? (newExecution ? null : undefined),
-      backgroundActive: event.backgroundActive ?? (newExecution ? null : undefined),
-      ambient: event.ambient ?? (newExecution ? null : undefined),
-      updatedAt: event.ts ?? Date.now(),
-    }, event.parentToolCallId, newExecution && (event.taskType === "local_agent" || event.subagentType) ? {
-      subagent: { phase: "running", agentId: event.taskId, providerRunId: event.providerRunId, result: null, error: null },
-    } : undefined);
-    if (didPersist && event.toolCallId && event.providerRunId) taskRunIds.set(event.toolCallId, event.providerRunId);
-    return didPersist;
   }
 
   async function projectPromptSuggestion(
@@ -985,16 +626,14 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   async function projectPlanUpdate(
     event: Extract<WorkRunEvent, { type: "plan_update" }>,
   ): Promise<boolean> {
-    if (activeTurnId === null && initialTurnReady) {
-      await initialTurnReady;
-    }
-    if (activeTurnId === null) {
+    await turns.ready;
+    if (turns.id === null) {
       console.warn(
         `[RunSession ${runId}] Dropping plan update without an active turn`,
       );
       return false;
     }
-    await runsRepo.patchTurnMetadata(activeTurnId, {
+    await runsRepo.patchTurnMetadata(turns.id, {
       codexPlan: {
         providerTurnId: event.providerTurnId,
         explanation: event.explanation,
@@ -1006,8 +645,26 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   }
 
   // ─── Public methods ───
-  async function project(event: WorkRunEvent): Promise<void> {
-    if (finalized) return;
+  function trackProjection(work: Promise<void>): Promise<void> {
+    const projection = work.finally(() => { eventProjections.delete(projection); });
+    eventProjections.add(projection);
+    return projection;
+  }
+
+  function project(event: WorkRunEvent): Promise<void> {
+    if (!lifecycle.accepts(event)) return Promise.resolve();
+    if (event.type === "context_usage" || event.type === "artifact" && event.ephemeral) {
+      return trackProjection(projectEvent(event));
+    }
+    if (event.type === "artifact") event = reports.prepare(event);
+    // Preserve admitted event order even when SDK listeners do not await us.
+    // A failed write rejects its caller without poisoning subsequent events.
+    const projection = projectionTail.then(() => projectEvent(event));
+    projectionTail = projection.catch(() => {});
+    return trackProjection(projection);
+  }
+
+  async function projectEvent(event: WorkRunEvent): Promise<void> {
     let didPersist = false;
     switch (event.type) {
       case "log":
@@ -1015,8 +672,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         didPersist = true;
         break;
       case "tool_call":
-        await projectToolCall(event);
-        didPersist = true;
+        didPersist = await projectToolCall(event);
         break;
       case "artifact":
         {
@@ -1050,23 +706,31 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         broadcastContextUsage(event);
         break;
       case "subagent":
-        didPersist = await projectSubagent(event);
+        didPersist = await toolProjection.projectLifecycle(event);
         break;
       case "task":
-        didPersist = await projectTask(event);
+        didPersist = await toolProjection.projectLifecycle(event);
         break;
     }
     if (didPersist) broadcastEventPersisted();
   }
 
   function updateBaseRef(sha: string): void {
-    if (finalized) return;
+    if (!lifecycle.acceptsEvents) return;
     baseRef = sha;
   }
 
   async function abort(): Promise<void> {
-    if (finalized || aborting) return;
-    aborting = true;
+    if (!lifecycle.abort()) return;
+    clearLiveDiffSchedule();
+    // Arm before awaiting the provider: even a stuck interrupt must time out.
+    forceFinalizeTimer = setTimeout(() => {
+      void finalize({
+        status: "canceled",
+        summary: "Forced abort: adapter did not wind down within timeout",
+      });
+    }, FORCE_FINALIZE_TIMEOUT_MS);
+    forceFinalizeTimer.unref();
     try {
       const provider = await providersService.getById(providerId);
       if (provider) {
@@ -1076,33 +740,28 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     } catch (err) {
       console.error(`[RunSession ${runId}] adapter.abortRun failed:`, err);
     }
-    // Belt-and-suspenders: if adapter doesn't wind down, force-finalize.
-    forceFinalizeTimer = setTimeout(() => {
-      if (!finalized) {
-        void finalize({
-          status: "canceled",
-          summary: "Forced abort: adapter did not wind down within timeout",
-        });
-      }
-    }, FORCE_FINALIZE_TIMEOUT_MS);
   }
 
-  async function finalize(result: RunSessionResult): Promise<void> {
-    if (finalized) return;
-    finalized = true;
+  function finalize(result: RunSessionResult): Promise<void> {
+    if (finalization) return finalization;
+    const settled = lifecycle.finalize(result);
+    if (!settled) return Promise.resolve();
+    finalization = finish(settled);
+    return finalization;
+  }
+
+  async function finish(result: RunSessionResult): Promise<void> {
     if (forceFinalizeTimer) {
       clearTimeout(forceFinalizeTimer);
       forceFinalizeTimer = null;
     }
     clearLiveDiffSchedule();
 
-    const toolCallStatus = result.status === "succeeded" ? "done" : "error";
-
     try {
-      // Finish any final-message insert already in flight before recovering
-      // the remaining previews, so a Stop cannot save the same message twice.
-      await Promise.allSettled([...artifactProjections]);
-      for (const report of [...reportStreams.values()]) {
+      // Accepted events own their writes until settlement, including tools and
+      // logs. Cleanup must see them before closing orphan calls or the run row.
+      await Promise.allSettled([...eventProjections]);
+      for (const report of reports.pending()) {
         if (!report.content?.trim()) continue;
         try {
           await projectArtifact({
@@ -1133,11 +792,12 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         stopReason: result.stopReason ?? null,
       });
 
-      if (initialTurnReady) await initialTurnReady;
-      await closeActiveTurn(result.usage, undefined, result.status);
-      await closePendingToolCalls(toolCallStatus);
-      await closeRunningToolCallsInDb(toolCallStatus);
-      await settleUnfinishedSubagents(result.status);
+      try {
+        await turns.ready.catch(() => {});
+        await turns.finish(result.usage, result.status);
+      } finally {
+        await toolProjection.settle(result.status);
+      }
     } catch (cleanupErr) {
       console.error(`[RunSession ${runId}] Cleanup failed:`, cleanupErr);
     } finally {
@@ -1151,12 +811,17 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       broadcastStatusChanged(result.status);
       broadcastEventPersisted();
       void sendNotification(result.status);
-      runSessionRegistry.unregister(runId);
+      lifecycle.close();
+      runSessionRegistry.unregister(runId, session);
     }
   }
 
   // ─── Initialize ───
-  const session: RunSession = { runId, project, abort, finalize, updateBaseRef };
+  // Publish only after the turn barrier exists: event sinks can project back
+  // into this session synchronously while handling the running announcement.
+  void turns.initialize(toolProjection.ready, ctx.initialPromptContent)
+    .catch((error) => console.error(`[RunSession ${runId}] Initial projection failed:`, error));
+  const session: RunSession = { runId, get phase() { return lifecycle.phase; }, project, abort, finalize, updateBaseRef };
   runSessionRegistry.register(runId, session);
   // Announce the live session, not just its terminal status. Clients that did
   // not start this run (another window, a remote client, the background-runs
@@ -1167,7 +832,6 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // Fire-and-forget initialization. Each helper handles its own errors.
   // The first turn's baseline goes first: it has to predate the agent's first
   // write, and the adapter starts as soon as this factory returns.
-  turnBaseline = takeTurnBaseline();
   // Live in the worktree from the moment the first baseline was taken, so a
   // parallel run's turn that overlaps this one knows to sort their files.
   void worktree.then((location) => {
@@ -1176,16 +840,12 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // Keep the baseRef-capture promise so finalize can await it (see persistFinalDiff).
   baseRefCaptured = captureBaseRef();
   void acquireSleepBlocker();
-  resolvedToolCallsReady = hydrateResolvedToolCalls();
-  initialTurnReady = resolvedToolCallsReady.then(() =>
-    startNextTurn(ctx.initialPromptContent),
-  );
   if (ctx.initialTurnMetadata) {
     // The renderer can show delegated work before the first message or tool.
     // The running notification above precedes this turn's asynchronous insert.
-    void initialTurnReady.then(() => {
-      if (activeTurnId !== null) broadcastEventPersisted();
-    });
+    void turns.ready.then(() => {
+      if (turns.id !== null) broadcastEventPersisted();
+    }).catch(() => {});
   }
 
   return session;

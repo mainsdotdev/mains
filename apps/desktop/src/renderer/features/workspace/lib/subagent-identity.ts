@@ -121,6 +121,7 @@ export interface SubagentTaskMeta {
   taskType?: string;
   summary?: string;
   outputFile?: string;
+  resourceLinks?: unknown[];
   lastToolName?: string;
   usage?: { totalTokens?: number; toolUses?: number; durationMs?: number };
   skipTranscript?: boolean;

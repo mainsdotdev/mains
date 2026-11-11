@@ -375,6 +375,7 @@ export const pendingApprovals = sqliteTable(
   {
     backendId: text("backend_id").notNull(),
     requestId: text("request_id").notNull(),
+    approvalToken: text("approval_token"),
     runId: text("run_id").notNull(),
     kind: text("kind").notNull(),
     toolName: text("tool_name").notNull(),

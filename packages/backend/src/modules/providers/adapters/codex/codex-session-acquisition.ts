@@ -27,6 +27,8 @@ import type {
   CodexRunSession,
 } from "./codex-run-coordinator";
 import type { CodexSubAgentRunMeta } from "./codex-event-mapper";
+import { readCodexPermissions, validateCodexPermissions } from "./codex-permissions";
+import { formatCodexError } from "./codex-event-mapper";
 
 export const CODEX_ARCHIVED_CHAT_MESSAGE =
   "This chat is archived in Codex. Unarchive it in Codex to continue, or archive it in Mains to hide it from this workspace.";
@@ -122,12 +124,10 @@ export function isCodexUnavailableThreadError(
 export function normalizeCodexResumeError(
   error: unknown,
 ): Error {
-  if (isCodexArchivedThreadError(error)) {
-    return new Error(CODEX_ARCHIVED_CHAT_MESSAGE);
-  }
-  return error instanceof Error
-    ? error
-    : new Error(String(error));
+  const message = isCodexArchivedThreadError(error) ? CODEX_ARCHIVED_CHAT_MESSAGE
+    : formatCodexError(error, error instanceof Error ? error.message : String(error));
+  if (error instanceof Error && error.message === message) return error;
+  return Object.assign(new Error(message), error && typeof error === "object" ? error : {});
 }
 
 export function mapSandboxMode(
@@ -156,6 +156,7 @@ function buildCodexConfigOverrides(
   additionalDirectories: string[],
 ): CodexConfigOverrides {
   return {
+    model_reasoning_summary: "auto",
     sandbox_workspace_write: {
       network_access: networkAccess,
       writable_roots: additionalDirectories,
@@ -330,7 +331,7 @@ export function createCodexSessionAcquisition(
    * each call site — create, resume, and fork all need it, and three copies is
    * how `sandbox` ended up re-derived after every spread.
    */
-  function threadSettingsFor(overrides: Record<string, unknown> = {}) {
+  async function threadSettingsFor(overrides: Record<string, unknown> = {}, cwd?: string, mode?: string) {
     const sandboxMode =
       typeof overrides.sandboxMode === "string"
         ? (overrides.sandboxMode as CodexAdapterConfig["sandboxMode"])
@@ -338,10 +339,17 @@ export function createCodexSessionAcquisition(
     const additionalDirectories = Array.isArray(overrides.additionalDirectories)
       ? overrides.additionalDirectories as string[]
       : config.additionalDirectories ?? [];
+    let permissionProfile = typeof overrides.permissionProfile === "string" ? overrides.permissionProfile : config.permissionProfile ?? "";
+    const approvalPolicy = config.approvalMode ?? "on-request";
+    const catalog = await readCodexPermissions(await ensureServer(cwd), cwd);
+    if (mode === "chat") permissionProfile = catalog.profiles.some((profile) => profile.id === ":read-only" && profile.allowed) ? ":read-only" : "";
+    const sandbox = mode === "chat" ? "read-only" : mapSandboxMode(sandboxMode);
+    validateCodexPermissions(catalog, { sandboxMode: sandbox, permissionProfile }, approvalPolicy);
+    if (permissionProfile && additionalDirectories.length) throw new Error("Named permission profiles control writable directories. Remove additional directory overrides or choose a legacy sandbox mode.");
     return {
-      approvalPolicy: config.approvalMode ?? "on-request",
-      sandbox: mapSandboxMode(sandboxMode),
-      config: buildCodexConfigOverrides(
+      approvalPolicy,
+      ...(permissionProfile ? { permissions: permissionProfile } : { sandbox }),
+      config: permissionProfile ? { model_reasoning_summary: "auto" } : buildCodexConfigOverrides(
         config.networkAccessEnabled !== false,
         additionalDirectories,
       ),
@@ -401,7 +409,7 @@ export function createCodexSessionAcquisition(
       request.configSnapshot ?? {}
     ) as Record<string, unknown>;
     const toggles = runTogglesFor(overrides);
-    const settings = threadSettingsFor(overrides);
+    const settings = await threadSettingsFor(overrides, request.execution.cwd, request.mode);
     const threadStartParams: CodexThreadStartParams = {
       cwd: request.execution.cwd,
       ...settings,
@@ -489,7 +497,7 @@ export function createCodexSessionAcquisition(
     const resumeOverrides = (
       request.configSnapshot ?? {}
     ) as Record<string, unknown>;
-    const settings = threadSettingsFor(resumeOverrides);
+    const settings = await threadSettingsFor(resumeOverrides, request.execution.cwd, request.mode);
     try {
       const resumeResult = await server.sendRequest("thread/resume", {
         threadId,
@@ -591,7 +599,7 @@ export function createCodexSessionAcquisition(
         await tracked?.accept(result.turn.id);
       } catch (error) {
         if (!tracked?.accepted) throw error;
-        await tracked.accept(tracked.turnId!);
+        await tracked.accept(tracked.acceptance!);
       } finally {
         tracked?.finish();
       }
@@ -626,16 +634,14 @@ export function createCodexSessionAcquisition(
     const forkOverrides = (
       request.configSnapshot ?? {}
     ) as Record<string, unknown>;
-    const settings = threadSettingsFor(forkOverrides);
+    const settings = await threadSettingsFor(forkOverrides, request.execution.cwd, request.mode);
     const forkResult = await server.sendRequest("thread/fork", {
       threadId: sourceThreadId,
       excludeTurns: true,
       cwd: request.execution.cwd,
-      approvalPolicy: settings.approvalPolicy,
-      sandbox: settings.sandbox,
+      ...settings,
       ...(model ? { model } : {}),
       ...buildDeveloperInstructionsParam(request.extraInstructions),
-      config: settings.config,
     });
     model = resolveSessionModel(model, forkResult.model, "thread/fork");
     const forkedThreadId = forkResult.thread.id;
@@ -691,7 +697,7 @@ export function createCodexSessionAcquisition(
     const target = buildCodexReviewTarget(request.target);
     let model = await effectiveModel(request.model);
     const server = await ensureServer();
-    const settings = threadSettingsFor(request.configSnapshot ?? {});
+    const settings = await threadSettingsFor(request.configSnapshot ?? {}, request.execution.cwd);
     const threadStartParams: CodexThreadStartParams = {
       cwd: request.execution.cwd,
       ...settings,
@@ -775,7 +781,7 @@ export function createCodexSessionAcquisition(
       await bridge?.start();
       let model = await effectiveModel(request.model);
       const overrides = request.configSnapshot ?? {};
-      const settings = threadSettingsFor(overrides);
+      const settings = await threadSettingsFor(overrides, request.execution.cwd, request.mode);
       const turn = turnSettingsFor(overrides);
       const params = {
         cwd: request.execution.cwd, ...settings,

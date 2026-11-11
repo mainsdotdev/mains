@@ -127,6 +127,7 @@ export function isPlanToolCallGroup(group: EventGroup): boolean {
 export function groupEvents(events: RunEvent[]): EventGroup[] {
   const groups: EventGroup[] = [];
   const compactionGroups = new Map<string, EventGroup>();
+  const runtimeStatusGroups = new Map<string, EventGroup>();
   let currentToolGroup: RunEvent[] = [];
 
   const flushToolGroup = () => {
@@ -197,11 +198,12 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
       if (event.metadata?.isFromSubagent) {
         continue;
       }
-      flushToolGroup();
-      // Cursor agent thought stream — UI-only (e.g. loader), not a chat bubble
-      if (event.metadata?.kind === "thinking") {
+      // Live status belongs to the activity line, not a chat bubble or a
+      // boundary between otherwise adjacent tool calls.
+      if (event.metadata?.kind === "thinking" || event.metadata?.kind === "tool_progress") {
         continue;
       }
+      flushToolGroup();
       const isUserPrompt = event.metadata?.kind === "user-prompt";
       const isPromptSuggestion = event.metadata?.kind === "prompt_suggestion";
       const isImage = event.metadata?.kind === "image";
@@ -258,6 +260,25 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
       }
     } else if (event.type === "log") {
       if (event.metadata?.isFromSubagent) continue;
+      if (event.metadata?.source === "codex_runtime_status" && typeof event.metadata.statusId === "string") {
+        flushToolGroup();
+        const statusId = event.metadata.statusId;
+        const running = event.metadata.phase === "start";
+        const existing = runtimeStatusGroups.get(statusId);
+        if (existing) {
+          if (!running || existing.isRunning || event.metadata.kind === "buffering" || event.metadata.kind === "verification") {
+            existing.events = [event];
+            existing.endTime = event.timestamp;
+            existing.isRunning = running;
+          }
+          continue;
+        }
+        const group: EventGroup = { id: `codex-status-${statusId}`, type: "info", events: [event],
+          startTime: event.timestamp, endTime: event.timestamp, isRunning: running };
+        runtimeStatusGroups.set(statusId, group);
+        groups.push(group);
+        continue;
+      }
       if (event.metadata?.source === "context_compaction") {
         flushToolGroup();
         const itemId = typeof event.metadata.itemId === "string" ? event.metadata.itemId : event.id;

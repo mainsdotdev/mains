@@ -3,6 +3,7 @@
 // by handle().
 // ─────────────────────────────────────────────────────────────
 
+import { openGitFlow } from "./gitFlow.lifecycle";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { gitFlowService } from "./gitFlow.service";
@@ -10,6 +11,7 @@ import { CHANNELS } from "@mains/contracts/channels";
 import type { CreatePrPayload, PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 
 export function registerGitFlowIpc(): void {
+  openGitFlow();
   ipcMain.handle(
     CHANNELS.gitFlow.getStatus,
     handle((workspaceId: string) => gitFlowService.getStatus(workspaceId)),
@@ -19,6 +21,7 @@ export function registerGitFlowIpc(): void {
     CHANNELS.gitFlow.commit,
     handle(
       (payload: {
+        operationId?: string;
         workspaceId: string;
         message?: string;
         includeUnstaged?: boolean;
@@ -55,6 +58,7 @@ export function registerGitFlowIpc(): void {
     CHANNELS.gitFlow.generateCommitMessage,
     handle(
       (payload: {
+        operationId?: string;
         workspaceId: string;
         providerId: string;
         model?: string;
@@ -68,6 +72,7 @@ export function registerGitFlowIpc(): void {
     CHANNELS.gitFlow.generatePrBody,
     handle(
       (payload: {
+        operationId?: string;
         workspaceId: string;
         providerId: string;
         model?: string;
@@ -87,6 +92,7 @@ export function registerGitFlowIpc(): void {
     CHANNELS.gitFlow.publish,
     handle(
       (payload: {
+        operationId?: string;
         workspaceId: string;
         ownerRepo: string;
         visibility: "private" | "public";

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useMemo, useState, useSyncExternalStore } from "react";
 import { getTransport, onTransportChange } from "@/lib/transport";
+import type { Transport } from "@/lib/transport";
 import { CHANNELS } from "@mains/contracts/channels";
-import type { TerminalDataEvent, TerminalExitEvent, TerminalSnapshot } from "@mains/contracts/terminal";
+import type { TerminalDataEvent, TerminalExitEvent } from "@mains/contracts/terminal";
 import { Button, Text } from "@/components/ui";
 import { createTerminalReplay } from "../lib/terminal-replay";
+import { acquireTemporaryTerminal, createTerminalAttachment, createTerminalCommand, validateTerminalSnapshot } from "../lib/terminal-view-lifecycle";
 import { Terminal, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useDarkMode } from "@/hooks/use-dark-mode";
@@ -116,13 +118,20 @@ export function XtermTerminal({
 }: XtermTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
+  const fitRef = useRef<(() => void) | null>(null);
   const transport = useSyncExternalStore(onTransportChange, getTransport);
   const { darkMode } = useDarkMode();
-  const [ptyReady, setPtyReady] = useState(false);
+  const [connection, setConnection] = useState<{
+    id: string;
+    transport: Transport;
+    instanceId?: string;
+    attachment: ReturnType<typeof createTerminalAttachment>;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [retry, setRetry] = useState(0);
+  const [command] = useState(createTerminalCommand);
+  const commandOwner = useRef(command);
 
   const scale = useThemeTokens(SCALE_TOKENS);
   const theme = useMemo(() => terminalTheme(scale, darkMode), [scale, darkMode]);
@@ -144,14 +153,14 @@ export function XtermTerminal({
     const term = termRef.current;
     if (!term || term.options.fontFamily === fontFamily) return;
     term.options.fontFamily = fontFamily;
-    fitAddonRef.current?.fit();
-    const dims = fitAddonRef.current?.proposeDimensions();
-    if (dims) void transport.invoke(CHANNELS.terminal.resize, [id, dims.cols, dims.rows]).catch(() => {});
-  }, [fontFamily, id, transport]);
+    fitRef.current?.();
+  }, [fontFamily]);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const temporary = persistent ? null : acquireTemporaryTerminal(transport, id, rootPath);
+    commandOwner.current = temporary?.command ?? command;
 
     const term = new Terminal({
       cursorBlink: true,
@@ -166,53 +175,63 @@ export function XtermTerminal({
     term.loadAddon(fitAddon);
 
     termRef.current = term;
-    fitAddonRef.current = fitAddon;
 
     term.open(container);
 
-    let disposed = false;
-    let generation = 0;
+    const attachment = createTerminalAttachment();
     let frame = 0;
-    let ready = false;
-    let observedExit: number | null = null;
-    const replay = createTerminalReplay((data) => { if (!disposed && data) term.write(data); });
-    setPtyReady(false);
+    let lastSize: { cols: number; rows: number } | null = null;
+    let nativeInstance: string | undefined;
+    const replay = createTerminalReplay((data) => { if (attachment.alive && data) term.write(data); });
+    setConnection(null);
     setError(null);
     setExitCode(null);
 
+    const syncSize = () => {
+      if (!attachment.ready || (lastSize?.cols === term.cols && lastSize.rows === term.rows)) return;
+      const size = { cols: term.cols, rows: term.rows };
+      lastSize = size;
+      const failed = () => { if (lastSize === size) lastSize = null; };
+      void transport.invoke(CHANNELS.terminal.resize, nativeInstance ? [id, size.cols, size.rows, nativeInstance] : [id, size.cols, size.rows])
+        .then((result) => { if (!result.success) failed(); }).catch(failed);
+    };
+    const fitNow = () => {
+      if (!attachment.alive || !container.clientWidth || !container.clientHeight) return false;
+      fitAddon.fit();
+      syncSize();
+      return true;
+    };
+    fitRef.current = fitNow;
     const fit = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        if (disposed || !container.clientWidth || !container.clientHeight) return;
-        fitAddon.fit();
-        const dims = fitAddon.proposeDimensions();
-        if (dims && ready) void transport.invoke(CHANNELS.terminal.resize, [id, dims.cols, dims.rows]).catch(() => {});
+        fitNow();
       });
     };
-    const connect = async () => {
-      const attempt = ++generation;
-      ready = false;
-      observedExit = null;
-      setPtyReady(false);
+    const connect = async (reconnect = false) => {
+      const attempt = attachment.begin();
+      if (!attempt) return;
+      lastSize = null;
+      setConnection(null);
       replay.begin();
       try {
-        const result = await transport.invoke(persistent ? CHANNELS.terminal.attach : CHANNELS.terminal.create,
-          persistent ? [id] : [{ id, cwd: rootPath }]);
-        if (disposed || attempt !== generation) return;
+        const result = temporary ? await temporary.connect(reconnect) : await transport.invoke(CHANNELS.terminal.attach, [id]);
+        if (!attempt.current()) return;
         if (!result.success) throw new Error(result.error);
-        const snapshot = result.data as TerminalSnapshot | undefined;
-        if (!snapshot || snapshot.session?.id !== id || typeof snapshot.data !== "string" || !Number.isSafeInteger(snapshot.sequence)) {
-          throw new Error("Could not connect to terminal. Restart Mains and try again.");
-        }
+        const snapshot = result.data;
+        validateTerminalSnapshot(snapshot, id);
         term.reset();
+        nativeInstance = snapshot.session.instanceId;
+        const fitted = fitNow();
         replay.restore(snapshot);
-        ready = observedExit === null && snapshot.session.status === "running";
-        setPtyReady(ready);
-        setExitCode(observedExit ?? snapshot.session.exitCode);
+        attachment.restore(snapshot);
+        setConnection(attachment.ready ? { id, transport, instanceId: nativeInstance, attachment } : null);
+        setExitCode(attachment.exitCode);
         setError(null);
-        fit();
+        if (fitted) syncSize();
+        else fit();
       } catch (err) {
-        if (!disposed && attempt === generation) setError(err instanceof Error ? err.message : "Could not connect to terminal.");
+        if (attempt.current()) setError(err instanceof Error ? err.message : "Could not connect to terminal.");
       }
     };
 
@@ -220,35 +239,33 @@ export function XtermTerminal({
     const removeDataListener = transport.subscribe(CHANNELS.terminal.data,
       (value) => {
         const payload = value as TerminalDataEvent;
-        if (!disposed && payload.id === id) replay.push(payload);
+        if (attachment.alive && payload.id === id) replay.push(payload);
       },
     );
     const removeExitListener = transport.subscribe(CHANNELS.terminal.exit, (value) => {
       const payload = value as TerminalExitEvent;
-      if (disposed || payload.id !== id) return;
-      ready = false;
-      observedExit = payload.exitCode;
-      setPtyReady(false);
+      if (payload.id !== id || !attachment.exit(payload.exitCode)) return;
+      setConnection(null);
       setExitCode(payload.exitCode);
     });
 
     // xterm input → PTY
     const onDataDisposable = term.onData((data) => {
-      if (ready) void transport.invoke(CHANNELS.terminal.write, [id, data]).catch(() => {});
+      if (attachment.ready) void transport.invoke(CHANNELS.terminal.write, nativeInstance ? [id, data, { instanceId: nativeInstance }] : [id, data]).catch(() => {});
     });
 
     // Auto-fit on resize
     const resizeObserver = new ResizeObserver(fit);
     resizeObserver.observe(container);
     const removeStatus = transport.onStatusChange((status) => {
-      if (status === "connected") void connect();
-      else { generation += 1; ready = false; setPtyReady(false); }
+      if (status === "connected") void connect(true);
+      else { attachment.disconnect(); setConnection(null); }
     });
     void connect();
     fit();
 
     return () => {
-      disposed = true;
+      attachment.dispose();
       cancelAnimationFrame(frame);
       resizeObserver.disconnect();
       onDataDisposable.dispose();
@@ -258,9 +275,9 @@ export function XtermTerminal({
       term.dispose();
       // Hiding, changing tabs/workspaces, and renderer reloads only detach a
       // managed view. Stop actions and backend shutdown own PTY destruction.
-      if (!persistent) void transport.invoke(CHANNELS.terminal.destroy, [id]).catch(() => {});
+      temporary?.release();
       termRef.current = null;
-      fitAddonRef.current = null;
+      fitRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, rootPath, persistent, transport, retry]);
@@ -268,13 +285,17 @@ export function XtermTerminal({
   // Write any queued one-shot command once the PTY exists. The shell buffers
   // input arriving before its prompt, so a write right after create is safe.
   useEffect(() => {
-    if (!ptyReady || !pendingCommand) return;
+    if (!connection || connection.id !== id || connection.transport !== transport || !connection.attachment.ready || !pendingCommand) return;
     let cancelled = false;
-    void transport.invoke(CHANNELS.terminal.write, [id, `${pendingCommand}\r`]).then((result) => {
-      if (!cancelled && result.success) onPendingCommandSent?.();
-    }).catch(() => {});
+    void commandOwner.current.send(transport, id, pendingCommand, connection.instanceId).then((result) => {
+      if (cancelled) return;
+      if (result.success) onPendingCommandSent?.();
+      else setError(result.error);
+    }).catch(() => {
+      if (!cancelled) setError("Sign-in command delivery could not be confirmed. Inspect the terminal before starting sign-in again.");
+    });
     return () => { cancelled = true; };
-  }, [ptyReady, pendingCommand, id, onPendingCommandSent, transport]);
+  }, [connection, pendingCommand, id, onPendingCommandSent, transport, command]);
 
   return (
     <div className="flex h-full w-full min-h-0 flex-col">

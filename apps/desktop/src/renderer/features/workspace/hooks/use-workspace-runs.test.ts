@@ -60,7 +60,7 @@ vi.mock("./use-run-operations", () => ({
   }),
 }));
 vi.mock("./use-run-sync", () => ({
-  useRunSync: () => ({ finalizeRun: vi.fn() }),
+  useRunSync: () => ({ finalizeRun: vi.fn(), beginRunRead: () => ({ current: () => true, release: () => {} }) }),
 }));
 vi.mock("./use-streaming-events", () => ({
   useStreamingEvents: () => ({ streamingEvents: streaming.events, clearTurnStreams: vi.fn() }),
@@ -289,6 +289,12 @@ describe("useWorkspaceRuns streaming transcript", () => {
     streaming.events = [preview("Checking files", "thinking")];
     const view = await transcript([]);
     expect(view.result.current.currentEvents[0].metadata).toMatchObject({ kind: "thinking", streaming: true });
+  });
+
+  it("keeps legacy command previews separate from reasoning", async () => {
+    streaming.events = [{ ...preview("Compiled successfully"), streamId: "codex-cmd-run-a-item-1" }];
+    const view = await transcript([]);
+    expect(view.result.current.currentEvents[0].metadata).toMatchObject({ kind: "tool_progress", streaming: true });
   });
 
   it("retains content-based reconciliation for providers without a persisted stream identity", async () => {

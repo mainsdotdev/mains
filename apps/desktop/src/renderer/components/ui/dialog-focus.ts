@@ -2,9 +2,11 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
+import { createOverlayFocusLifecycle, restoreOverlayFocus } from "@/lib/overlay-lifecycle";
 
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -49,7 +51,7 @@ export function useDialogFocus({
   returnFocusRef,
   closeOnEscape = true,
 }: DialogFocusOptions) {
-  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const [focus] = useState(createOverlayFocusLifecycle);
   const onCloseRef = useRef(onClose);
 
   useEffect(() => {
@@ -59,30 +61,25 @@ export function useDialogFocus({
   useEffect(() => {
     if (!isOpen) return;
 
-    previousFocusRef.current =
+    const previousFocus =
       returnFocusRef?.current ??
       (document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null);
 
-    const focusFrame = requestAnimationFrame(() => {
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-
-      const requestedFocus = initialFocusRef?.current;
-      const firstFocusable = getFocusableElements(dialog)[0];
-      (requestedFocus ?? firstFocusable ?? dialog).focus();
+    const surface = dialogRef.current;
+    return focus.acquire({
+      deferred: true,
+      enter() {
+        const dialog = dialogRef.current;
+        if (!dialog) return;
+        const requestedFocus = initialFocusRef?.current;
+        const firstFocusable = getFocusableElements(dialog)[0];
+        (requestedFocus ?? firstFocusable ?? dialog).focus();
+      },
+      restore: () => restoreOverlayFocus(previousFocus, surface),
     });
-
-    return () => {
-      cancelAnimationFrame(focusFrame);
-      const previousFocus = previousFocusRef.current;
-      previousFocusRef.current = null;
-      if (!previousFocus?.isConnected) return;
-
-      requestAnimationFrame(() => previousFocus.focus());
-    };
-  }, [dialogRef, initialFocusRef, isOpen, returnFocusRef]);
+  }, [dialogRef, focus, initialFocusRef, isOpen, returnFocusRef]);
 
   return useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
