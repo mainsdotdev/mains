@@ -15,7 +15,9 @@ const invoke = vi.fn();
 const events = new Map<string, Set<(payload: any) => void>>();
 const stores: ReturnType<typeof makeStore>[] = [];
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((yes) => { resolve = yes; }); return { promise, resolve }; }
-function makeStore() { return configureStore({ reducer: { [baseApi.reducerPath]: baseApi.reducer }, middleware: (defaults) => defaults().concat(baseApi.middleware) }); }
+// Keep batched notifications inside the test environment instead of leaving a
+// requestAnimationFrame fallback timer behind after jsdom has been torn down.
+function makeStore() { return configureStore({ reducer: { [baseApi.reducerPath]: baseApi.reducer }, middleware: (defaults) => defaults().concat(baseApi.middleware), enhancers: (defaults) => defaults({ autoBatch: { type: "tick" } }) }); }
 function harness() {
   const store = makeStore(); stores.push(store);
   return { store, ...renderHook(({ providerId, runId, enabled }) => useCodexGoal(providerId, runId, enabled), {

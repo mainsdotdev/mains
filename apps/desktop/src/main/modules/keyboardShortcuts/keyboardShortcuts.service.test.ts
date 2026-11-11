@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const storage = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn() }));
 vi.mock("@mains/backend/modules/appSettings", () => ({ appSettingsService: { getSettings: storage.get, updateKeyboardShortcutOverrides: storage.save } }));
 let service: typeof import("./keyboardShortcuts.service")["keyboardShortcutsService"];
@@ -7,6 +7,7 @@ beforeEach(async () => {
   vi.resetModules(); storage.get.mockReset().mockResolvedValue({ keyboardShortcutOverrides: "{}" }); storage.save.mockReset().mockResolvedValue(undefined);
   service = (await import("./keyboardShortcuts.service")).keyboardShortcutsService;
 });
+afterEach(() => vi.unstubAllGlobals());
 it("preserves both admitted edits when the earlier persistence write is slow", async () => {
   const firstWrite = deferred<void>(); storage.save.mockReturnValueOnce(firstWrite.promise);
   const first = service.update({ id: "app.newItem", binding: null });
@@ -17,13 +18,15 @@ it("preserves both admitted edits when the earlier persistence write is slow", a
   expect(JSON.parse(storage.save.mock.calls.at(-1)![0])).toEqual({ "app.newItem": null, "app.openSettings": null });
 });
 
-it("validates a queued edit against the preceding edit's confirmed bindings", async () => {
+it.each(["darwin", "linux", "win32"])("validates a queued edit against confirmed bindings on %s", async (platform) => {
+  vi.stubGlobal("window", { api: { platform: { os: platform } } });
+  const binding = platform === "darwin" ? "Command+N" : "Control+N";
   const firstWrite = deferred<void>(); storage.save.mockReturnValueOnce(firstWrite.promise);
   const unassign = service.update({ id: "app.newItem", binding: null });
   await vi.waitFor(() => expect(storage.save).toHaveBeenCalledOnce());
-  const reassign = service.update({ id: "app.commandMenu", binding: "Command+N" });
+  const reassign = service.update({ id: "app.commandMenu", binding });
   firstWrite.resolve(); await Promise.all([unassign, reassign]);
-  expect(service.getStatus().overrides).toEqual({ "app.newItem": null, "app.commandMenu": "Command+N" });
+  expect(service.getStatus().overrides).toEqual({ "app.newItem": null, "app.commandMenu": binding });
 });
 it("ignores startup reads after a manual edit or shutdown", async () => {
   const initial = deferred<{ keyboardShortcutOverrides: string }>(); storage.get.mockReturnValueOnce(initial.promise);
