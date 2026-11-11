@@ -16,6 +16,8 @@ import { ArrowUp, Selected } from "./icons";
 import { Button } from "./button";
 import { CheckboxMark } from "./checkbox";
 import { focusNextFrom } from "./focus-navigation";
+import { canRestoreOverlayFocus, createOverlayFocusLifecycle, restoreOverlayFocus } from "@/lib/overlay-lifecycle";
+import { useOverlayLifecycle } from "@/hooks/use-overlay-lifecycle";
 
 const MENU_ITEM_SELECTOR = [
   '[role="menuitem"]',
@@ -173,7 +175,8 @@ export function DropdownMenu({
   const [scrollOverflow, setScrollOverflow] = useState(false);
   const [scrollEdges, setScrollEdges] = useState({ up: false, down: false });
   const submenuRefs = useRef<Set<HTMLElement>>(new Set());
-  const previouslyFocused = useRef<HTMLElement | null>(null);
+  const [focus] = useState(createOverlayFocusLifecycle);
+  const tabDirection = useRef<boolean | null>(null);
   const shouldRestoreFocus = useRef(true);
   const [menuSize, setMenuSize] = useState<{
     width: number;
@@ -190,33 +193,24 @@ export function DropdownMenu({
 
   useLayoutEffect(() => {
     if (!isOpen) return;
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    const target = document.activeElement as HTMLElement | null;
+    const surface = menuRef.current;
     shouldRestoreFocus.current = initialFocus !== "none";
-    const enabledItems = getEnabledMenuItems(menuRef.current);
-    const selectedItem = enabledItems.find(
-      (item) => item.getAttribute("aria-checked") === "true",
-    );
-    const itemToFocus =
-      initialFocus === "selected"
-        ? (selectedItem ?? enabledItems[0])
-        : enabledItems[0];
-    if (initialFocus !== "none" || initialFocusRef) (initialFocusRef?.current ?? itemToFocus)?.focus();
-
-    return () => {
-      const target = previouslyFocused.current;
-      if (!shouldRestoreFocus.current || !target?.isConnected) return;
-      // An item's action can hand focus to whatever it just opened — an inline
-      // editor, a modal. Those focus calls land in the same commit as this
-      // cleanup, so decide a frame later instead: reclaim the trigger only when
-      // nothing else claimed focus, or the restore would blur what the item
-      // opened (and blur-to-commit editors would close on the spot).
-      requestAnimationFrame(() => {
-        const active = document.activeElement;
-        if (active && active !== document.body) return;
-        if (target.isConnected) target.focus();
-      });
-    };
-  }, [initialFocus, initialFocusRef, isOpen]);
+    tabDirection.current = null;
+    return focus.acquire({
+      enter() {
+        const enabledItems = getEnabledMenuItems(menuRef.current);
+        const selectedItem = enabledItems.find((item) => item.getAttribute("aria-checked") === "true");
+        const itemToFocus = initialFocus === "selected" ? (selectedItem ?? enabledItems[0]) : enabledItems[0];
+        if (initialFocus !== "none" || initialFocusRef) (initialFocusRef?.current ?? itemToFocus)?.focus();
+      },
+      restore() {
+        if (tabDirection.current !== null) {
+          if (canRestoreOverlayFocus(target, surface)) focusNextFrom(target, tabDirection.current);
+        } else if (shouldRestoreFocus.current) restoreOverlayFocus(target, surface);
+      },
+    });
+  }, [focus, initialFocus, initialFocusRef, isOpen]);
 
   useLayoutEffect(() => {
     if (!isOpen || !menuRef.current) return;
@@ -326,9 +320,8 @@ export function DropdownMenu({
       // Continue from the trigger so a portaled menu cannot dump focus on body.
       event.preventDefault();
       shouldRestoreFocus.current = false;
-      const anchor = previouslyFocused.current;
+      tabDirection.current = event.shiftKey;
       onClose();
-      requestAnimationFrame(() => focusNextFrom(anchor, event.shiftKey));
     }
   };
 
@@ -475,8 +468,9 @@ export function DropdownMenuSub({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const submenuElementRef = useRef<HTMLDivElement | null>(null);
   const focusSubmenuOnOpen = useRef(false);
-  const [isOpen, setIsOpen] = useState(false);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const overlay = useOverlayLifecycle({ frames: 0 });
+  const { open: openOverlay, close: closeOverlay } = overlay;
+  const isOpen = overlay.isVisible;
   const [submenuPosition, setSubmenuPosition] = useState({ top: 0, left: 0, transformOrigin: "top left" });
 
   const updateSubmenuPosition = useCallback(() => {
@@ -506,38 +500,18 @@ export function DropdownMenuSub({
     [registerSubmenu, unregisterSubmenu],
   );
 
-  const clearCloseTimer = useCallback(() => {
-    if (!closeTimer.current) return;
-    clearTimeout(closeTimer.current);
-    closeTimer.current = null;
-  }, []);
+  const closeSubmenu = useCallback((restoreTriggerFocus = false) => {
+    closeOverlay();
+    if (restoreTriggerFocus) restoreOverlayFocus(triggerRef.current, submenuElementRef.current);
+  }, [closeOverlay]);
 
-  const closeSubmenu = useCallback(
-    (restoreTriggerFocus = false) => {
-      clearCloseTimer();
-      setIsOpen(false);
-      if (restoreTriggerFocus) triggerRef.current?.focus();
-    },
-    [clearCloseTimer],
-  );
+  const openSubmenu = useCallback((moveFocusInside: boolean) => {
+    updateSubmenuPosition();
+    focusSubmenuOnOpen.current = moveFocusInside;
+    openOverlay({ immediate: true });
+  }, [openOverlay, updateSubmenuPosition]);
 
-  const openSubmenu = useCallback(
-    (moveFocusInside: boolean) => {
-      clearCloseTimer();
-      // Repeated pointer/click opens can happen while the submenu is already
-      // mounted. Reuse its real dimensions instead of resetting the corrected
-      // position back to the first-render estimate.
-      updateSubmenuPosition();
-      focusSubmenuOnOpen.current = moveFocusInside;
-      setIsOpen(true);
-    },
-    [clearCloseTimer, updateSubmenuPosition],
-  );
-
-  const startCloseTimer = useCallback(() => {
-    clearCloseTimer();
-    closeTimer.current = setTimeout(() => setIsOpen(false), 150);
-  }, [clearCloseTimer]);
+  const startCloseTimer = () => overlay.close(150);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -560,8 +534,6 @@ export function DropdownMenuSub({
       window.removeEventListener("scroll", update, true);
     };
   }, [isOpen, updateSubmenuPosition]);
-
-  useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
 
   const handleTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (event.key === "ArrowRight") {
@@ -618,7 +590,7 @@ export function DropdownMenuSub({
             role="menu"
             aria-labelledby={triggerId}
             onKeyDown={handleSubmenuKeyDown}
-            onMouseEnter={clearCloseTimer}
+            onMouseEnter={() => overlay.open({ immediate: true })}
             onMouseLeave={startCloseTimer}
             className="fixed z-(--z-dropdown-sub) overflow-x-hidden overflow-y-auto p-1.5 rounded-2xl glass-surface animate-dropdown-sub-in space-y-0.5"
             style={{

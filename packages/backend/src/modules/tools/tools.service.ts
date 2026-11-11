@@ -1,3 +1,4 @@
+import { assertNoPlanDecisionPatch } from "@mains/contracts/plan-decision";
 import { toolsRepo } from "./tools.repo";
 import type {
   CreateToolCallPayload,
@@ -51,6 +52,7 @@ export const toolsService = {
     id: number,
     payload: UpdateToolCallPayload,
   ): Promise<void> {
+    assertNoPlanDecisionPatch(payload);
     await toolsRepo.updateToolCall(id, payload);
   },
 

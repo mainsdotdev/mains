@@ -1,3 +1,4 @@
+import { getTransport } from "@/lib/transport";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "@/components/ui";
@@ -51,7 +52,7 @@ import { useActiveSpace } from "@/hooks/use-active-space";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import {
   isExitPlanApproval,
-  respondToExitPlanApproval,
+  submitPlanDecision,
 } from "@/features/workspace/lib/plan-approval";
 import { WorkspaceReview } from "./workspace-review";
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
@@ -436,50 +437,22 @@ function InteractiveWorkspaceProviderPage({
     [ws],
   );
 
-  const handleApplyPlan = useCallback(async () => {
-    if (planExitConfig) {
-      const currentConfig = ws.conversationSettings.config;
-      if (
-        (currentConfig as Record<string, unknown>)[planExitConfig.key] ===
-        planExitConfig.planValue
-      ) {
-        if (!await ws.handleSettingsConfigChange({ [planExitConfig.key]: planExitConfig.nextValue })) return;
+  const planTransport = getTransport();
+  const planAccountId = account?.id;
+  const decideCurrentPlan = useCallback(async (toolCallId: number, decision: "apply" | "dismiss") => {
+    const runId = ws.activeRunId ?? ws.composerRun?.id;
+    if (!runId || !planAccountId) throw new Error("Open the plan's conversation before deciding it.");
+    return submitPlanDecision({ runId, accountId: planAccountId, toolCallId, decision,
+      approvalRequestId: currentPlanApproval?.requestId, approvalToken: currentPlanApproval?.approvalToken }, async () => {
+      if (decision !== "apply" || !planExitConfig) return;
+      const current = ws.conversationSettings.config as Record<string, unknown>;
+      if (current[planExitConfig.key] === planExitConfig.planValue && !await ws.handleSettingsConfigChange({ [planExitConfig.key]: planExitConfig.nextValue })) {
+        throw new Error("Could not save the plan execution settings. Retry.");
       }
-    }
-
-    if (
-      respondToExitPlanApproval(
-        currentPlanApproval,
-        true,
-        respondToolApproval,
-      )
-    ) {
-      return;
-    }
-
-    // A plan tool-call start can render a frame before its approval request
-    // reaches renderer state. Never launch a second turn during that gap (or
-    // while another tool approval is pending); the active run owns the plan.
-    if (ws.composerRun?.status === "running" || ws.composerRun?.status === "queued") {
-      return;
-    }
-
-    ws.setGoal("Execute the plan above.");
-    ws.setAutoExecute(true);
-  }, [
-    ws,
-    planExitConfig,
-    currentPlanApproval,
-    respondToolApproval,
-  ]);
-
-  const handleDismissPlan = useCallback(() => {
-    respondToExitPlanApproval(
-      currentPlanApproval,
-      false,
-      respondToolApproval,
-    );
-  }, [currentPlanApproval, respondToolApproval]);
+    }, planTransport);
+  }, [ws, planAccountId, currentPlanApproval, planExitConfig, planTransport]);
+  const handleApplyPlan = useCallback((toolCallId: number) => decideCurrentPlan(toolCallId, "apply"), [decideCurrentPlan]);
+  const handleDismissPlan = useCallback((toolCallId: number) => decideCurrentPlan(toolCallId, "dismiss"), [decideCurrentPlan]);
 
   const tabBar = useMemo(
     () =>
@@ -1046,7 +1019,7 @@ function InteractiveWorkspaceProviderPage({
 
       {activeAuthTerminal ? (
         <TerminalSection
-          id={`auth-${providerId}`}
+          id={`auth-${activeAuthTerminal.id}`}
           isOpen
           title={`Sign in to ${providerLabel}`}
           pendingCommand={activeAuthTerminal.pendingCommand}

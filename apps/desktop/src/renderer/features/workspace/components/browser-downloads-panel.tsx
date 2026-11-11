@@ -164,7 +164,7 @@ export function BrowserDownloadsPanel({
                 className="group/download flex gap-2.5  p-1.5 transition-colors hover:bg-primary-200/35 dark:hover:bg-primary/5"
                 role="none"
               >
-                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center p-2">
+                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center p-2 text-primary-800 dark:text-primary-200">
                   <FileIconComponent
                     fileName={download.fileName}
                     extension={fileExtension(download.fileName)}

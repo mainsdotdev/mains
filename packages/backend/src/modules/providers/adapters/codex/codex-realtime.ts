@@ -21,9 +21,12 @@ interface VoiceSession {
   canonicalTimeline: boolean;
   startRequest?: Promise<unknown>;
   startup?: Promise<void>;
+  preparation?: Promise<void>;
   cancelRequested?: boolean;
   stopping?: Promise<void>;
   finishing?: Promise<void>;
+  closed: Promise<void>;
+  confirmClosed: () => void;
 }
 
 /** One native call per driver; its lifetime is independent of work turns. */
@@ -34,6 +37,7 @@ export function createCodexRealtime(options: {
   getVoice?: () => string | undefined;
 }) {
   let active: VoiceSession | undefined;
+  const closing = new Set<VoiceSession>();
   let startup = Promise.resolve();
   let cleanup = Promise.resolve();
 
@@ -45,14 +49,20 @@ export function createCodexRealtime(options: {
     if (session.finishing) return session.finishing;
     if (active !== session) return Promise.resolve();
     active = undefined;
+    closing.add(session);
     session.release?.();
-    cleanup = Promise.all([
-      session.server ? options.runs.cleanupRun(session.server, session.runId) : Promise.resolve(),
-      session.dispose?.(),
-    ]).then(() => {}).catch(() => {});
+    // A rejected cleanup must not skip another still-pending resource owner.
+    cleanup = Promise.resolve(session.preparation).then(() => Promise.allSettled([
+      Promise.resolve().then(() => session.server && options.runs.cleanupRun(session.server, session.runId)),
+      Promise.resolve().then(() => session.dispose?.()),
+    ])).then(() => {});
     // A new ordinary continuation must see closed only after the old thread's
     // subscription cleanup is complete, not while unsubscribe is in flight.
-    return session.finishing = cleanup.then(() => publish(session, { type: "closed", reason }));
+    return session.finishing = cleanup.then(() => {
+      closing.delete(session);
+      publish(session, { type: "closed", reason });
+      session.confirmClosed();
+    });
   }
 
   function transcript(session: VoiceSession, itemId: string, role: "user" | "assistant", text: string, final: boolean) {
@@ -125,20 +135,26 @@ export function createCodexRealtime(options: {
 
   async function start(request: WorkRunRealtimeRequest, onEvent: (event: RunRealtimeEvent) => void, work: RealtimeWorkHandlers) {
     if (active) throw new Error("End the current voice chat before starting another one.");
+    let confirmClosed!: () => void;
+    const closed = new Promise<void>((resolve) => { confirmClosed = resolve; });
     const session: VoiceSession = {
       runId: request.runId, connectionId: request.connectionId, publish: onEvent,
       items: new Map(), legacyIds: new Map(), sequence: 0, latestUserText: "", canonicalTimeline: false,
+      closed, confirmClosed,
     };
     active = session;
     const previousStartup = startup;
+    const previousCleanup = cleanup;
     let finishStartup!: () => void;
+    let finishPreparation!: () => void;
     startup = new Promise<void>((resolve) => { finishStartup = resolve; });
     session.startup = startup;
+    session.preparation = new Promise<void>((resolve) => { finishPreparation = resolve; });
     try {
       // A canceled preparation may still be resuming a thread. Finish it
       // before a new call can register ownership over that same thread.
       await previousStartup;
-      await cleanup;
+      await previousCleanup;
       if (active !== session || session.cancelRequested) return;
       const prepared = await options.sessions.prepareRealtimeSession(request);
       if (active !== session || session.cancelRequested) {
@@ -167,25 +183,34 @@ export function createCodexRealtime(options: {
           initialItems: [{ role: "developer", text: "You are the voice coordinator. For work requests, ask the backing Codex agent to use the mains_voice task tools and return promptly. Working chats run independently. Speak naturally in the user's language. Report only verified results." }],
         } : {}),
       });
-      await session.startRequest;
+      finishPreparation();
+      await Promise.race([session.startRequest, session.closed]);
     } catch (error) {
+      finishPreparation();
       await finish(session, "start_failed");
       throw error;
-    } finally { finishStartup(); }
+    } finally { finishPreparation(); finishStartup(); }
   }
 
   async function stop(runId: string, connectionId: string) {
+    const pending = [...closing].find((session) => session.runId === runId && session.connectionId === connectionId);
+    if (pending) { await pending.finishing; return; }
     const session = active;
     if (!session || session.runId !== runId || session.connectionId !== connectionId) return;
     const stopping = session.stopping ??= (async () => {
       session.cancelRequested = true;
       try {
-        await (session.startRequest ?? session.startup)?.catch(() => {});
-        if (active !== session) { await session.finishing; return; }
-        if (session.server?.isRunning && session.threadId) {
-          await session.server.sendRequest("thread/realtime/stop", { threadId: session.threadId });
-        }
-        await finish(session, "ended");
+        await Promise.race([
+          (async () => {
+            await (session.startRequest ?? session.startup)?.catch(() => {});
+            if (active !== session) { await session.finishing; return; }
+            if (session.server?.isRunning && session.threadId) {
+              await session.server.sendRequest("thread/realtime/stop", { threadId: session.threadId });
+            }
+            await finish(session, "ended");
+          })(),
+          session.closed,
+        ]);
       } catch (error) {
         // A native close or process exit confirms teardown even if the
         // concurrent stop RPC fails. Otherwise retain ownership for a retry.
@@ -209,7 +234,8 @@ export function createCodexRealtime(options: {
       void finish(active, "disconnected");
     },
     async stopRun(runId: string) {
-      if (active?.runId === runId) await stop(runId, active.connectionId);
+      const owned = [...closing, ...(active ? [active] : [])].filter((session) => session.runId === runId);
+      await Promise.all(owned.map((session) => stop(runId, session.connectionId)));
     },
   };
 }

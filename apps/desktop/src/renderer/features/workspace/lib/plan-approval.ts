@@ -1,3 +1,9 @@
+import { waitForConversationSettings } from "./conversation-settings-writer";
+import { createDecisionOwner } from "@mains/contracts/decision-owner";
+import { CHANNELS } from "@mains/contracts/channels";
+import { readPlanStatus, type PlanStatus, type PlanDecisionPayload, type PlanDecisionResult } from "@mains/contracts/plan-decision";
+import { getTransport, onTransportChange, type Transport } from "@/lib/transport";
+export type { PlanStatus } from "@mains/contracts/plan-decision";
 interface ToolApprovalLike {
   requestId: string;
   toolName: string;
@@ -9,27 +15,28 @@ type RespondToToolApproval = (
   answer?: string,
 ) => void;
 
-export type PlanStatus = "pending" | "applied" | "dismissed" | "failed";
 export type PlanInteractionMode = "live-approval" | "follow-up";
 
-function isPlanStatus(value: unknown): value is PlanStatus {
-  return (
-    value === "pending" ||
-    value === "applied" ||
-    value === "dismissed" ||
-    value === "failed"
-  );
+export const getPersistedPlanStatus = readPlanStatus;
+
+/** Bind the settings barrier and native plan decision to one backend. */
+export async function submitPlanDecision(payload: PlanDecisionPayload, prepare?: () => Promise<void>, transport: Transport = getTransport()): Promise<PlanDecisionResult> {
+  let retired = false;
+  const off = onTransportChange(() => { retired = true; });
+  const current = () => {
+    if (retired || getTransport() !== transport || transport.status() !== "connected") throw new Error("The plan backend changed. Reopen the plan to continue.");
+  };
+  try {
+    current(); await prepare?.(); current();
+    await waitForConversationSettings(transport, payload.runId); current();
+    const result = await transport.invoke(CHANNELS.runs.decidePlan, [payload]);
+    current();
+    if (!result.success) throw new Error(result.error);
+    return result.data as PlanDecisionResult;
+  } finally { off(); }
 }
 
-export function getPersistedPlanStatus(
-  metadata: Record<string, unknown> | undefined,
-  legacyOutput: Record<string, unknown> | null,
-): PlanStatus {
-  if (isPlanStatus(metadata?.planStatus)) return metadata.planStatus;
-  if (isPlanStatus(legacyOutput?.planStatus)) return legacyOutput.planStatus;
-  if (metadata?.status === "error") return "failed";
-  return "pending";
-}
+export const createPlanViewLifecycle = createDecisionOwner;
 
 export function shouldShowPlanActions({
   status,

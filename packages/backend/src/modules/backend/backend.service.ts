@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { CHANNELS } from "@mains/contracts/channels";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
+import { assertAuthActive, createAuthFence, createAuthGrants } from "@mains/contracts/auth-lifecycle";
 import { registeredChannels } from "../../ipc-kit";
-import { generateToken, hashToken, tokensMatch } from "../../ipc-kit/ws-auth";
+import { PENDING_COMMAND_RESULT } from "../../ipc-kit/command-delivery";
+import { generateToken, hashToken } from "../../ipc-kit/ws-auth";
 import { backendRepo } from "./backend.repo";
 import { parseDeviceName, parsePairDeviceInput } from "./backend.validation";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
@@ -73,6 +75,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // offers, so a phone can attach one the way the desktop's "@" menu does.
   // Read-only listings — installing or editing a skill stays off this list.
   CHANNELS.providers.getSkills,
+  CHANNELS.providers.getCodexPermissions,
   CHANNELS.providers.getCommands,
 ]);
 
@@ -127,6 +130,7 @@ export const PAIRED_DEVICE_EVENTS: ReadonlySet<string> = new Set([
   CHANNELS.runs.toolApprovalResolved,
   CHANNELS.runs.diffUpdated,
   CHANNELS.providers.modelsUpdated,
+  CHANNELS.providers.skillsUpdated,
   CHANNELS.workspace.gitStateChanged,
 ]);
 
@@ -176,21 +180,12 @@ function machineName(): string {
 
 const CODE_TTL_MS = 5 * 60 * 1000;
 
-interface IssuedCode {
-  hash: string;
-  expiresAt: number;
-}
+const pairingCodes = createAuthGrants<true>(32);
+const deviceAuth = createAuthFence();
 
-// A handful of short-lived entries at most; scanned with constant-time compares.
-let issued: IssuedCode[] = [];
-
-function pruneExpired(now: number): void {
-  issued = issued.filter((entry) => entry.expiresAt > now);
-}
-
-/** Test seam — forget every outstanding pairing code. */
+/** Retire every outstanding/preparing grant when its host authority ends. */
 export function clearPairingCodes(): void {
-  issued = [];
+  pairingCodes.clear(); deviceAuth.clear();
 }
 
 /**
@@ -261,17 +256,18 @@ export const backendService = {
    * backend on (http(s)://host:port), most private first.
    */
   async createPairingCode(endpoints: string[]): Promise<PairingCode> {
+    const signal = pairingCodes.signal;
     if (endpoints.length === 0) {
       throw new Error(
         "No address a device could reach — turn on network access or Tailscale HTTPS first",
       );
     }
+    const { name } = await this.describe();
+    assertAuthActive(signal, "Pairing request is no longer active");
     const now = Date.now();
-    pruneExpired(now);
     const code = generateToken();
     const expiresAt = now + CODE_TTL_MS;
-    issued.push({ hash: hashToken(code), expiresAt });
-    const { name } = await this.describe();
+    pairingCodes.issue(hashToken(code), true, expiresAt);
     return {
       code,
       link: buildPairingLink({ code, name, endpoints }),
@@ -282,14 +278,12 @@ export const backendService = {
   /** Exchange a code for a device token. The code is spent whether or not the insert succeeds. */
   async pairDevice(input: unknown): Promise<PairDeviceResult> {
     const parsed = parsePairDeviceInput(input);
-    pruneExpired(Date.now());
-    const presented = hashToken(parsed.code);
-    const index = issued.findIndex((entry) => tokensMatch(entry.hash, presented));
-    if (index === -1) {
+    const signal = pairingCodes.signal;
+    if (!pairingCodes.take(hashToken(parsed.code))) {
       throw new Error("Pairing code is invalid or has expired");
     }
-    issued.splice(index, 1);
-
+    const backend = await this.describe();
+    assertAuthActive(signal, "Pairing request is no longer active");
     const deviceToken = generateToken();
     const deviceId = randomUUID();
     await backendRepo.insertPairedDevice({
@@ -299,16 +293,22 @@ export const backendService = {
       appVersion: parsed.appVersion ?? null,
       tokenHash: hashToken(deviceToken),
     });
-    return { deviceId, deviceToken, backend: await this.describe() };
+    if (signal.aborted) {
+      await backendRepo.revokePairedDevice(deviceId);
+      assertAuthActive(signal, "Pairing request is no longer active");
+    }
+    return { deviceId, deviceToken, backend };
   },
 
   /** Resolve a presented device token, recording the sighting. Null when unknown or revoked. */
   async verifyDeviceToken(token: string): Promise<PairedDeviceAccess | null> {
+    const current = deviceAuth.observe();
     const device = await backendRepo.findActivePairedDeviceByTokenHash(
       hashToken(token),
     );
-    if (!device) return null;
+    if (!device || !current(device.id)) return null;
     await backendRepo.touchPairedDeviceLastSeen(device.id);
+    if (!current(device.id)) return null;
     return {
       deviceId: device.id,
       channels: PAIRED_DEVICE_CHANNELS,
@@ -323,13 +323,16 @@ export const backendService = {
     find(deviceId: string, commandId: string): Promise<string | null> {
       return backendRepo.findCommandReceipt(deviceId, commandId);
     },
+    reserve(deviceId: string, commandId: string, channel: string, result: string): Promise<boolean> {
+      return backendRepo.insertCommandReceipt({ deviceId, commandId, channel, result });
+    },
     async record(
       deviceId: string,
       commandId: string,
       channel: string,
       result: string,
     ): Promise<void> {
-      await backendRepo.insertCommandReceipt({ deviceId, commandId, channel, result });
+      await backendRepo.completeCommandReceipt(deviceId, commandId, channel, PENDING_COMMAND_RESULT, result);
       // Piggyback the sweep on writes: cheap (indexed) and needs no timer.
       await backendRepo.pruneCommandReceipts(new Date(Date.now() - COMMAND_RECEIPT_TTL_MS));
     },
@@ -355,6 +358,7 @@ export const backendService = {
   },
 
   async revokePairedDevice(id: string): Promise<void> {
+    deviceAuth.retire(id);
     const revoked = await backendRepo.revokePairedDevice(id);
     if (!revoked) throw new Error("Paired device not found");
   },

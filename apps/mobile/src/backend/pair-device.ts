@@ -5,6 +5,7 @@ import {
   type PairingLink,
 } from "@mains/contracts/backend";
 import type { PairedBackend } from "./paired-backend-store";
+import { assertAuthActive } from "@mains/contracts/auth-lifecycle";
 
 const PAIR_TIMEOUT_MS = 8000;
 
@@ -14,8 +15,12 @@ export class PairingRejectedError extends Error {}
 async function postPair(
   endpoint: string,
   input: PairDeviceInput,
+  signal?: AbortSignal,
 ): Promise<PairDeviceResult> {
+  assertAuthActive(signal, "Pairing canceled");
   const controller = new AbortController();
+  const cancel = () => controller.abort();
+  signal?.addEventListener("abort", cancel, { once: true });
   const timer = setTimeout(() => controller.abort(), PAIR_TIMEOUT_MS);
   try {
     const res = await fetch(`${endpoint}/pair`, {
@@ -25,6 +30,8 @@ async function postPair(
       signal: controller.signal,
     });
     const payload: unknown = await res.json().catch(() => null);
+    assertAuthActive(signal, "Pairing canceled");
+    assertAuthActive(controller.signal, "Pairing request timed out");
     if (!res.ok) {
       const message =
         payload && typeof payload === "object" && "error" in payload
@@ -38,6 +45,7 @@ async function postPair(
     return payload;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", cancel);
   }
 }
 
@@ -50,11 +58,13 @@ async function postPair(
 export async function pairWithBackend(
   link: PairingLink,
   device: Omit<PairDeviceInput, "code">,
+  options: { signal?: AbortSignal } = {},
 ): Promise<PairedBackend> {
   let lastError: Error | null = null;
   for (const endpoint of link.endpoints) {
+    assertAuthActive(options.signal, "Pairing canceled");
     try {
-      const result = await postPair(endpoint, { code: link.code, ...device });
+      const result = await postPair(endpoint, { code: link.code, ...device }, options.signal);
       return {
         backendId: result.backend.backendId,
         name: result.backend.name,
@@ -66,6 +76,7 @@ export async function pairWithBackend(
         protocolVersion: result.backend.protocolVersion,
       };
     } catch (error) {
+      assertAuthActive(options.signal, "Pairing canceled");
       if (error instanceof PairingRejectedError) throw error;
       lastError = error instanceof Error ? error : new Error(String(error));
     }

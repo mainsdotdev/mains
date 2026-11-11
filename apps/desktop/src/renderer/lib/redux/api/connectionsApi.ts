@@ -1,3 +1,7 @@
+import type { ExpectedConnectionRevision, SavedConnectionCredentials, SavedConnectionResources } from "@mains/contracts/connection-lifecycle";
+import type { RootState } from "@/lib/redux";
+import { appSettingsApi } from "./appSettingsApi";
+import { getTransport, onTransportChange } from "@/lib/transport";
 import { baseApi } from './baseApi';
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import { syncApi } from './syncApi';
@@ -12,6 +16,7 @@ export interface Connection {
   id: string;
   provider: string;
   status: string;
+  revision?: string;
   metadata?: any;
 }
 
@@ -196,7 +201,7 @@ export interface SelectedSocketDevOrganization {
 // Payload types
 // ─────────────────────────────────────────────────────────────
 
-export interface SaveCredentialsPayload {
+export interface SaveCredentialsPayload extends ExpectedConnectionRevision {
   provider: string;
   connectionId: string;
   token?: string;
@@ -211,11 +216,16 @@ export interface SaveCredentialsPayload {
   organization?: string; // sentry
 }
 
-export interface SaveResourcesPayload {
+export interface SaveResourcesPayload extends ExpectedConnectionRevision {
   provider: string;
   connectionId: string;
   resources: any[];
 }
+
+/** The scope participates only in RTK's cache key, never in the wire args.
+ * A reopened/rebound wizard cannot join a read admitted by its old backend. */
+export type ConnectionReadKey = string | { id: string; scope: string };
+const readId = (key: ConnectionReadKey) => typeof key === "string" ? key : key.id;
 
 // ─────────────────────────────────────────────────────────────
 // Endpoints
@@ -258,17 +268,17 @@ export const connectionsApi = baseApi.injectEndpoints({
     }),
 
     // ── identity ──
-    getConnection: builder.query<Connection, string>({
+    getConnection: builder.query<Connection, ConnectionReadKey>({
       query: (provider) => ({
         handler: CHANNELS.connections.getByProvider,
-        args: [provider],
+        args: [readId(provider)],
       }),
       transformResponse: (response: { connection: Connection }) =>
         response.connection,
       providesTags: ['Connection'],
     }),
 
-    saveCredentials: builder.mutation<void, SaveCredentialsPayload>({
+    saveCredentials: builder.mutation<SavedConnectionCredentials, SaveCredentialsPayload>({
       query: (body) => ({
         handler: CHANNELS.connections.saveCredentials,
         args: [body],
@@ -287,66 +297,66 @@ export const connectionsApi = baseApi.injectEndpoints({
     }),
 
     // ── per-provider resource discovery ──
-    getGitHubRepos: builder.query<GitHubRepo[], string>({
+    getGitHubRepos: builder.query<GitHubRepo[], ConnectionReadKey>({
       query: (connectionId) => ({
         handler: CHANNELS.connections.getGithubRepos,
-        args: [connectionId],
+        args: [readId(connectionId)],
       }),
       transformResponse: (response: { repos: GitHubRepo[] }) => response.repos,
     }),
 
-    getLinearTeams: builder.query<LinearTeam[], string>({
+    getLinearTeams: builder.query<LinearTeam[], ConnectionReadKey>({
       query: (connectionId) => ({
         handler: CHANNELS.connections.getLinearTeams,
-        args: [connectionId],
+        args: [readId(connectionId)],
       }),
       transformResponse: (response: { teams: LinearTeam[] }) => response.teams,
     }),
 
-    getJiraProjects: builder.query<JiraProject[], string>({
+    getJiraProjects: builder.query<JiraProject[], ConnectionReadKey>({
       query: (connectionId) => ({
         handler: CHANNELS.connections.getJiraProjects,
-        args: [connectionId],
+        args: [readId(connectionId)],
       }),
       transformResponse: (response: { projects: JiraProject[] }) => response.projects,
     }),
 
-    getAsanaProjects: builder.query<AsanaProject[], string>({
+    getAsanaProjects: builder.query<AsanaProject[], ConnectionReadKey>({
       query: (connectionId) => ({
         handler: CHANNELS.connections.getAsanaProjects,
-        args: [connectionId],
+        args: [readId(connectionId)],
       }),
       transformResponse: (response: { projects: AsanaProject[] }) => response.projects,
     }),
 
-    getGitLabProjects: builder.query<GitLabProject[], string>({
+    getGitLabProjects: builder.query<GitLabProject[], ConnectionReadKey>({
       query: (connectionId) => ({
         handler: CHANNELS.connections.getGitlabProjects,
-        args: [connectionId],
+        args: [readId(connectionId)],
       }),
       transformResponse: (response: { projects: GitLabProject[] }) => response.projects,
     }),
 
-    getTrelloBoards: builder.query<TrelloBoard[], string>({
+    getTrelloBoards: builder.query<TrelloBoard[], ConnectionReadKey>({
       query: (connectionId) => ({
         handler: CHANNELS.connections.getTrelloBoards,
-        args: [connectionId],
+        args: [readId(connectionId)],
       }),
       transformResponse: (response: { boards: TrelloBoard[] }) => response.boards,
     }),
 
-    getSentryProjects: builder.query<SentryProject[], string>({
+    getSentryProjects: builder.query<SentryProject[], ConnectionReadKey>({
       query: (connectionId) => ({
         handler: CHANNELS.connections.getSentryProjects,
-        args: [connectionId],
+        args: [readId(connectionId)],
       }),
       transformResponse: (response: { projects: SentryProject[] }) => response.projects,
     }),
 
-    getSocketDevOrganizations: builder.query<SocketDevOrganization[], string>({
+    getSocketDevOrganizations: builder.query<SocketDevOrganization[], ConnectionReadKey>({
       query: (connectionId) => ({
         handler: CHANNELS.connections.getSocketDevOrganizations,
-        args: [connectionId],
+        args: [readId(connectionId)],
       }),
       transformResponse: (response: { organizations: SocketDevOrganization[] }) => response.organizations,
     }),
@@ -358,39 +368,51 @@ export const connectionsApi = baseApi.injectEndpoints({
      * here so the renderer always sees `{ items, connectionId }`.
      */
     getSelectedResources: builder.query<
-      { items: any[]; connectionId: string },
-      string
+      { items: any[]; connectionId: string; revision?: string },
+      ConnectionReadKey
     >({
       query: (provider) => ({
         handler: CHANNELS.connections.getSelectedResources,
-        args: [provider],
+        args: [readId(provider)],
       }),
       transformResponse: (response: any) => {
-        const { connectionId = '', ...rest } = response ?? {};
+        const { connectionId = '', revision, ...rest } = response ?? {};
         const items = (Object.values(rest)[0] as any[]) ?? [];
-        return { items, connectionId };
+        return { items, connectionId, revision };
       },
       providesTags: ['Connection'],
     }),
 
-    saveResources: builder.mutation<void, SaveResourcesPayload>({
+    saveResources: builder.mutation<SavedConnectionResources, SaveResourcesPayload>({
       query: (body) => ({
         handler: CHANNELS.connections.saveResources,
         args: [body],
       }),
       invalidatesTags: ['Connection'],
-      async onQueryStarted(arg, { dispatch, queryFulfilled }) {
+      async onQueryStarted(arg, { dispatch, getState, queryFulfilled }) {
+        const transport = getTransport(), state = getState() as RootState;
+        const backendId = state.backends.activeBackendId;
+        const accountId = appSettingsApi.endpoints.getAppSettings.select()(state).data?.accountId;
+        let retired = false, toastId: string | undefined;
+        const current = () => {
+          const next = getState() as RootState;
+          return !retired && getTransport() === transport && next.backends.activeBackendId === backendId && appSettingsApi.endpoints.getAppSettings.select()(next).data?.accountId === accountId;
+        };
+        const off = onTransportChange(() => { retired = true; if (toastId) toast.dismiss(toastId); });
         try {
           await queryFulfilled;
-          const syncPromise = dispatch(syncApi.endpoints.runEntitySync.initiate(arg.provider)).unwrap();
-          toast.promise(syncPromise, {
-            loading: "Syncing...",
-            success: (data) => `Synced ${data.total} items`,
-            error: "Sync failed",
-          });
+          if (!current()) return;
+          toastId = toast.loading("Syncing...");
+          try {
+            const data = await dispatch(syncApi.endpoints.runEntitySync.initiate(arg.provider)).unwrap();
+            if (current()) {
+              if (data.errors) toast.error(`Sync completed with ${data.errors} error(s)`);
+              else toast.success(`Synced ${data.total} items`);
+            }
+          } catch { if (current()) toast.error("Sync failed"); }
         } catch {
-          // save itself failed — no sync needed
-        }
+          // The save failed; the wizard keeps its input for retry.
+        } finally { off(); if (toastId) toast.dismiss(toastId); }
       },
     }),
 

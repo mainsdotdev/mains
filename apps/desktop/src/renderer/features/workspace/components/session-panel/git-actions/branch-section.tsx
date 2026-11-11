@@ -29,7 +29,7 @@ export function BranchSection({ panel }: { panel: GitActionsPanel }) {
     toggleSection,
     closeSection,
     pending,
-    setPending,
+    begin,
     busy,
   } = panel;
   const isOpen = isSectionOpen("branch");
@@ -72,13 +72,17 @@ export function BranchSection({ panel }: { panel: GitActionsPanel }) {
    */
   const handleCreateBranch = useCallback(async () => {
     const name = newBranchName.trim();
-    if (!name || pending) return;
+    if (!name) return;
+    const lease = begin("newBranch", name);
+    if (!lease) return;
+    let accepted = false;
     // Read before the mutation: this is the branch being forked from, and the
     // one the workspace will target from now on.
     const parent = status?.branch;
-    setPending("newBranch");
     try {
       await createWorkspaceBranch({ workspaceId, branch: name }).unwrap();
+      accepted = true;
+      if (!lease.current()) return;
       toast.success(
         parent
           ? `Created ${name} — pull requests will target ${parent}`
@@ -88,18 +92,18 @@ export function BranchSection({ panel }: { panel: GitActionsPanel }) {
       closeSection("newBranch");
       refreshStatus();
     } catch (err) {
+      if (!lease.current()) return;
       // git owns branch naming: "already exists" and "not a valid branch name"
       // are its refusals, and they say more than a re-derived check would.
       toast.error(extractErrorMessage(err, `Could not create ${name}.`));
     } finally {
-      setPending(null);
+      lease.finish(accepted);
     }
   }, [
     workspaceId,
     newBranchName,
     status?.branch,
-    pending,
-    setPending,
+    begin,
     createWorkspaceBranch,
     closeSection,
     refreshStatus,
@@ -107,22 +111,27 @@ export function BranchSection({ panel }: { panel: GitActionsPanel }) {
 
   const runBranchSwitch = useCallback(
     async (branch: string) => {
-      if (switchingBranch) return;
+      const lease = begin("switchBranch", branch);
+      if (!lease) return;
+      let accepted = false;
       setSwitchingBranch(branch);
       try {
         await switchWorkspaceBranch({ workspaceId, branch }).unwrap();
+        accepted = true;
+        if (!lease.current()) return;
         toast.success(`Switched to ${branch}`);
         refreshStatus();
       } catch (err) {
+        if (!lease.current()) return;
         // git refuses a checkout that would overwrite local work, or one whose
         // branch is checked out in another worktree. Its message says which.
         toast.error(extractErrorMessage(err, `Could not switch to ${branch}.`));
       } finally {
-        setSwitchingBranch(null);
-        setConfirmBranch(null);
+        if (lease.current()) { setSwitchingBranch(null); setConfirmBranch(null); }
+        lease.finish(accepted);
       }
     },
-    [workspaceId, switchingBranch, switchWorkspaceBranch, refreshStatus],
+    [workspaceId, begin, switchWorkspaceBranch, refreshStatus],
   );
 
   /**
@@ -182,6 +191,7 @@ export function BranchSection({ panel }: { panel: GitActionsPanel }) {
             ref={newBranchInputRef}
             type="text"
             value={newBranchName}
+            disabled={busy}
             onChange={(e) => setNewBranchName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -234,7 +244,7 @@ export function BranchSection({ panel }: { panel: GitActionsPanel }) {
                       : `Switch to ${branch}`
                   }
                   onClick={isCurrent ? undefined : () => handleBranchClick(branch)}
-                  disabled={switchingBranch !== null}
+                  disabled={busy}
                   loading={switchingBranch === branch}
                   // The checkout it's on, marked rather than offered again.
                   trailing={isCurrent ? <Check className="size-3.5" /> : undefined}

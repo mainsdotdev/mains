@@ -21,7 +21,6 @@ import {
   setChatListSourceVisible,
 } from "@/lib/redux/slices/appSettingsSlice";
 import { SourceFilterButton } from "./source-filter-menu";
-import type { BridgeBackendInfo } from "@mains/contracts/bridge";
 import { useBridgeStatus } from "@/features/bridge/hooks/use-bridge";
 import { bridgeBackend } from "@/features/bridge/lib/backends";
 import {
@@ -43,7 +42,7 @@ import { useActiveSpace } from "@/hooks/use-active-space";
 import { resolveRunSpaceTarget } from "@/features/workspace/lib/background-runs";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
-import { iconColorClass, splitStoredIcon } from "@/lib/icon-registry";
+import { SIDEBAR_PROJECT_CHILD_ROW_CLASS } from "@/lib/sidebar-layout";
 import { useChatActions } from "@/features/workspace/hooks/use-chat-actions";
 import { SidebarGroupSection } from "./sidebar-group-section";
 import { ChatItem, chatLabel } from "./chat-item";
@@ -153,13 +152,9 @@ export function SidebarChatList({
     !query && collectionRows.length > 1 && !isReorderingCollections;
 
   // Empty states. Waits for the collections query, so "No projects yet" never
-  // flashes before the list arrives. Recents stays up with a note when there
-  // are no chats at all; a search that matches nothing says so instead of
-  // leaving the sidebar blank.
+  // flashes before the list arrives. A search that matches nothing says so
+  // instead of leaving the sidebar blank.
   const hasNoProjects = !!collections && collectionRows.length === 0;
-  const hasNoChats = !query && (recentRuns?.length ?? 0) === 0;
-  const filterHidesChats =
-    !query && (recentRuns?.length ?? 0) > 0 && runs.length === 0;
   const hasNoMatches =
     !!query &&
     pinnedRuns.length === 0 &&
@@ -281,7 +276,8 @@ export function SidebarChatList({
     }
   };
 
-  const renderChat = (run: RecentRun, device: BridgeBackendInfo | undefined = run.isReplica ? bridgeBackend(bridgeStatus, run.ownerBackendId) : undefined) => {
+  const renderChat = (run: RecentRun, inProject = false) => {
+    const device = run.isReplica ? bridgeBackend(bridgeStatus, run.ownerBackendId) : undefined;
     const provider = getProviderVariantById(run.providerId);
     const linkedPageId = run.configSnapshot?.atlasPageId;
     const pageId = typeof linkedPageId === "string" ? linkedPageId.trim() : "";
@@ -289,6 +285,7 @@ export function SidebarChatList({
     return <ChatItem
       key={run.id}
       run={run}
+      inProject={inProject}
       device={device}
       variant={provider?.variant ?? "null"}
       isActive={activeTab === run.id}
@@ -322,9 +319,8 @@ export function SidebarChatList({
         <SidebarGroupSection
           groupKey="pinned"
           label="Pinned"
-          // Quieter than a project title: this header names a shelf, not
-          // something the user made and gave a colour to.
-          labelTint="text-primary-800 dark:text-primary-200"
+          labelWeight="medium"
+          labelTint="text-primary-700 dark:text-primary-300"
           count={pinnedRuns.length}
         >
           <div className="flex flex-col space-y-0.5 mt">
@@ -369,12 +365,7 @@ export function SidebarChatList({
                     <SidebarGroupSection
                       groupKey={`collection-${collection.id}`}
                       label={collection.name}
-                      // The title wears the icon's tint: an emoji or an
-                      // untinted icon resolves to "", which leaves the neutral
-                      // tone.
-                      labelTint={iconColorClass(
-                        splitStoredIcon(collection.icon).color,
-                      )}
+                      labelWeight="medium"
                       icon={(expanded) => (
                         <ProjectIcon
                           icon={collection.icon}
@@ -399,9 +390,9 @@ export function SidebarChatList({
                     >
                       <div className="flex flex-col space-y-0.5">
                         {collectionRuns.length > 0 ? (
-                          collectionRuns.map((run) => renderChat(run))
+                          collectionRuns.map((run) => renderChat(run, true))
                         ) : (
-                          <div className="pl-2.5 pr-2.5 py-1">
+                          <div className={`flex items-center ${SIDEBAR_PROJECT_CHILD_ROW_CLASS}`}>
                             <Text as="span" size="xxs" tone="muted">
                               No chats
                             </Text>
@@ -417,28 +408,22 @@ export function SidebarChatList({
           {hasNoProjects && <EmptyListNote>No projects yet</EmptyListNote>}
         </div>
       )}
-      {(standaloneRuns.length > 0 ||
-        hasNoChats ||
-        (filterHidesChats && collectionRows.length === 0)) && (
+      {standaloneRuns.length > 0 && (
         <SidebarGroupSection
           groupKey="recents"
           label="Recents"
+          labelWeight="medium"
+          labelTint="text-primary-700 dark:text-primary-300"
           // What the section actually lists: the tail past RECENTS_LIMIT is not
           // reachable from here, so counting it would promise rows that never
           // arrive.
           count={Math.min(standaloneRuns.length, RECENTS_LIMIT)}
         >
-          {hasNoChats || filterHidesChats ? (
-            <EmptyListNote>
-              {hasNoChats ? "No chats yet" : "No chats"}
-            </EmptyListNote>
-          ) : (
-            <div className="flex flex-col space-y-0.5">
-              {standaloneRuns
-                .slice(0, RECENTS_LIMIT)
-                .map((run) => renderChat(run))}
-            </div>
-          )}
+          <div className="flex flex-col space-y-0.5">
+            {standaloneRuns
+              .slice(0, RECENTS_LIMIT)
+              .map((run) => renderChat(run))}
+          </div>
         </SidebarGroupSection>
       )}
       {hasNoMatches && <EmptyListNote>No matching chats</EmptyListNote>}
@@ -507,7 +492,7 @@ export function SidebarChatList({
 function EmptyListNote({ children }: { children: ReactNode }) {
   return (
     <div className="flex items-center justify-center h-16">
-      <Text size="xs">{children}</Text>
+      <Text size="s" tone="faint">{children}</Text>
     </div>
   );
 }

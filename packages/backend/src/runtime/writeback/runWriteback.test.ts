@@ -1,443 +1,123 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-vi.mock("../../modules/runs", () => ({
-  RunArtifactKind: {},
-  runsService: {
-    addArtifact: vi.fn().mockResolvedValue({ success: true }),
-  },
-}));
-
-vi.mock("../../modules/tools", () => ({
-  toolsService: {
-    createToolCall: vi.fn().mockResolvedValue(1),
-    updateToolCall: vi.fn().mockResolvedValue(undefined),
-    findToolCallRowId: vi.fn().mockResolvedValue(null),
-    findOpenToolCallRowId: vi.fn().mockResolvedValue(null),
-  },
-}));
-
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestDb } from "../../../test/setup-db";
+import { createAccount, createProvider, createRun, createToolCall } from "../../../test/factories";
+import type { DatabaseInstance } from "../../db/types";
 import { createRunWriteback } from "./runWriteback";
 import { runsService } from "../../modules/runs";
 import { toolsService } from "../../modules/tools";
 
-const CONFIG = {
-  accountId: "acc-1",
-  providerId: "copilot_cli",
-  runId: "run-1",
-};
+let db: DatabaseInstance;
+let cleanup: () => void;
+vi.mock("../../db/client", () => ({ getDb: () => db }));
+const CONFIG = { accountId: "default", providerId: "copilot_cli", runId: "writeback-run" };
+beforeEach(() => {
+  ({ db, cleanup } = createTestDb());
+  createAccount(db, { id: CONFIG.accountId });
+  createProvider(db, { id: CONFIG.providerId });
+  createRun(db, { id: CONFIG.runId, accountId: CONFIG.accountId, providerId: CONFIG.providerId });
+});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+const calls = () => toolsService.getToolCallsByRun(CONFIG.runId);
 
-describe("runWriteback", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+describe("run writeback through shared projection rules", () => {
+  it("settles tools and saves other reports when one recovery write fails", async () => {
+    const writer = createRunWriteback(CONFIG);
+    await writer.handleEvent({ type: "tool_call", toolName: "Bash", metadata: { phase: "start", toolCallId: "failed-recovery" } });
+    for (const streamId of ["first-report", "second-report"]) await writer.handleEvent({ type: "artifact", kind: "report", ephemeral: true, streamId, content: streamId });
+    const insert = vi.spyOn(runsService, "addArtifact").mockRejectedValueOnce(new Error("Database busy"));
+    try {
+      await expect(writer.finish("canceled")).rejects.toThrow("Database busy");
+      expect((await calls())[0].status).toBe("error");
+      expect((await runsService.getArtifactsByRun(CONFIG.runId)).map((artifact) => artifact.content)).toEqual(["second-report"]);
+    } finally { insert.mockRestore(); }
   });
-
-  it("creates writeback with zero pending tool calls", () => {
-    const wb = createRunWriteback(CONFIG);
-    expect(wb.getPendingToolCallCount()).toBe(0);
+  it("drains admitted writes and settles tools, background work and partial text before closing", async () => {
+    const writer = createRunWriteback(CONFIG);
+    const start = writer.handleEvent({ type: "tool_call", toolName: "Agent", metadata: { phase: "start", toolCallId: "closing-agent" } });
+    const task = writer.handleEvent({ type: "task", toolCallId: "closing-agent", taskId: "agent", phase: "started", status: "running" });
+    await writer.handleEvent({ type: "artifact", kind: "report", ephemeral: true, streamId: "unfinished", content: "Keep this answer" });
+    await writer.finish("canceled"); await Promise.all([start, task]);
+    expect(await calls()).toEqual([expect.objectContaining({ status: "error", metadata: expect.objectContaining({ task: expect.objectContaining({ status: "stopped" }) }) })]);
+    expect(await runsService.getArtifactsByRun(CONFIG.runId)).toEqual([expect.objectContaining({ content: "Keep this answer", metadata: expect.objectContaining({ interrupted: true, streaming: false }) })]);
+    await writer.handleEvent({ type: "log", message: "Too late" });
+    await writer.finish("succeeded");
+    expect(await runsService.getArtifactsByRun(CONFIG.runId)).toHaveLength(1);
   });
-
-  // ─────────────────────────────────────────────────────────────
-  // Log events
-  // ─────────────────────────────────────────────────────────────
-  describe("log events", () => {
-    it("persists log event as artifact", async () => {
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "log",
-        message: "Hello world",
-      });
-
-      expect(runsService.addArtifact).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: "run-1",
-          kind: "log",
-          content: "Hello world",
-        }),
-      );
-    });
-
-    it("includes level and timestamp in metadata", async () => {
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "log",
-        message: "Warning",
-        level: "warn",
-        ts: 1234567890,
-      });
-
-      expect(runsService.addArtifact).toHaveBeenCalledWith(
-        expect.objectContaining({
-          metadata: expect.objectContaining({
-            level: "warn",
-            ts: 1234567890,
-          }),
-        }),
-      );
-    });
+  it("never stores transient snapshots as durable transcript rows", async () => {
+    const writer = createRunWriteback(CONFIG);
+    await writer.handleEvent({ type: "artifact", kind: "report", ephemeral: true, streamId: "live-only", content: "Partial" });
+    expect(await runsService.getArtifactsByRun(CONFIG.runId)).toEqual([]);
   });
-
-  // ─────────────────────────────────────────────────────────────
-  // Artifact events
-  // ─────────────────────────────────────────────────────────────
-  describe("artifact events", () => {
-    it("persists artifact with content hash", async () => {
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "artifact",
-        kind: "file",
-        path: "/src/main.ts",
-        content: "const x = 1;",
-      });
-
-      expect(runsService.addArtifact).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: "run-1",
-          kind: "file",
-          path: "/src/main.ts",
-          content: "const x = 1;",
-          contentHash: expect.any(String),
-        }),
-      );
-    });
-
-    it("persists artifact without content (no hash)", async () => {
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "artifact",
-        kind: "report",
-        metadata: { key: "val" },
-      });
-
-      expect(runsService.addArtifact).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "report",
-          contentHash: undefined,
-        }),
-      );
-    });
+  it("starts empty and persists log and artifact content through the public services", async () => {
+    const writer = createRunWriteback(CONFIG);
+    expect(writer.getPendingToolCallCount()).toBe(0);
+    await writer.handleEvent({ type: "log", level: "warn", message: "Warning", ts: 123 });
+    await writer.handleEvent({ type: "artifact", kind: "report", content: "const x = 1;" });
+    const artifacts = await runsService.getArtifactsByRun(CONFIG.runId);
+    expect(artifacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "log", content: "Warning", metadata: expect.objectContaining({ level: "warn", ts: 123 }) }),
+      expect.objectContaining({ kind: "report", content: "const x = 1;", contentHash: expect.any(String) }),
+    ]));
   });
-
-  // ─────────────────────────────────────────────────────────────
-  // Tool call events - start phase
-  // ─────────────────────────────────────────────────────────────
-  describe("tool_call start", () => {
-    it("creates tool call and adds to pending map", async () => {
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Bash",
-        metadata: { phase: "start", toolCallId: "tc-1" },
-      });
-
-      expect(toolsService.createToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          accountId: "acc-1",
-          runId: "run-1",
-          toolName: "Bash",
-          status: "running",
-          toolCallId: "tc-1",
-        }),
-      );
-      expect(wb.getPendingToolCallCount()).toBe(1);
-    });
-
-    it("uses fallback key when no toolCallId", async () => {
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Read",
-        metadata: { phase: "start" },
-      });
-
-      expect(toolsService.createToolCall).toHaveBeenCalled();
-      expect(wb.getPendingToolCallCount()).toBe(1);
-    });
+  it.each(["toolCallId", "tool_call_id", "id"])("correlates %s without creating duplicate rows", async (field) => {
+    const writer = createRunWriteback(CONFIG);
+    const start = { type: "tool_call" as const, toolName: "Read", startedAt: 1000,
+      metadata: { phase: "start", [field]: "stable-call", parentToolCallId: "parent" } };
+    await Promise.all([writer.handleEvent(start), writer.handleEvent(start), writer.handleEvent({
+      ...start, endedAt: 2000, output: { content: "result" }, metadata: { ...start.metadata, phase: "end" },
+    })]);
+    expect(await calls()).toEqual([expect.objectContaining({ toolCallId: "stable-call", parentToolCallId: "parent",
+      status: "done", output: { content: "result" }, latencyMs: 1000 })]);
+    expect(writer.getPendingToolCallCount()).toBe(0);
   });
-
-  // ─────────────────────────────────────────────────────────────
-  // Tool call events - end phase
-  // ─────────────────────────────────────────────────────────────
-  describe("tool_call end", () => {
-    it("correlates by toolCallId via DB lookup", async () => {
-      vi.mocked(toolsService.findToolCallRowId).mockResolvedValueOnce(42);
-
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Bash",
-        output: { stdout: "ok" },
-        metadata: { phase: "end", toolCallId: "tc-1" },
-        startedAt: 1000,
-        endedAt: 2000,
-      });
-
-      expect(toolsService.findToolCallRowId).toHaveBeenCalledWith("run-1", "tc-1");
-      expect(toolsService.updateToolCall).toHaveBeenCalledWith(
-        42,
-        expect.objectContaining({
-          status: "done",
-          latencyMs: 1000,
-        }),
-      );
-    });
-
-    it("correlates by pending map when DB lookup fails", async () => {
-      vi.mocked(toolsService.findToolCallRowId).mockResolvedValue(null);
-      vi.mocked(toolsService.createToolCall).mockResolvedValueOnce(99);
-
-      const wb = createRunWriteback(CONFIG);
-
-      // Start phase
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Bash",
-        metadata: { phase: "start", toolCallId: "tc-2" },
-      });
-      expect(wb.getPendingToolCallCount()).toBe(1);
-
-      // End phase
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Bash",
-        metadata: { phase: "end", toolCallId: "tc-2" },
-      });
-
-      expect(toolsService.updateToolCall).toHaveBeenCalledWith(
-        99,
-        expect.objectContaining({ status: "done" }),
-      );
-      expect(wb.getPendingToolCallCount()).toBe(0);
-    });
-
-    it("correlates by toolName fallback when key not in pending map", async () => {
-      vi.mocked(toolsService.findToolCallRowId).mockResolvedValue(null);
-      vi.mocked(toolsService.createToolCall).mockResolvedValueOnce(77);
-
-      const wb = createRunWriteback(CONFIG);
-
-      // Start with a composite key (no toolCallId)
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Grep",
-        metadata: { phase: "start" },
-        startedAt: 5000,
-      });
-      expect(wb.getPendingToolCallCount()).toBe(1);
-
-      // End with a different composite key but same toolName
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Grep",
-        metadata: { phase: "end" },
-        startedAt: 6000,
-        endedAt: 7000,
-      });
-
-      // Should find via findPendingToolCallByName fallback
-      expect(toolsService.updateToolCall).toHaveBeenCalledWith(
-        77,
-        expect.objectContaining({ status: "done" }),
-      );
-      expect(wb.getPendingToolCallCount()).toBe(0);
-    });
-
-    it("falls back to DB open tool call lookup when not in pending map", async () => {
-      vi.mocked(toolsService.findToolCallRowId).mockResolvedValue(null);
-      vi.mocked(toolsService.findOpenToolCallRowId).mockResolvedValueOnce(55);
-
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Write",
-        metadata: { phase: "end", toolCallId: "unknown-tc" },
-      });
-
-      expect(toolsService.findOpenToolCallRowId).toHaveBeenCalledWith("run-1", "Write");
-      expect(toolsService.updateToolCall).toHaveBeenCalledWith(
-        55,
-        expect.objectContaining({ status: "done" }),
-      );
-    });
-
-    it("creates new record when no correlation found", async () => {
-      vi.mocked(toolsService.findToolCallRowId).mockResolvedValue(null);
-      vi.mocked(toolsService.findOpenToolCallRowId).mockResolvedValue(null);
-      vi.mocked(toolsService.createToolCall).mockResolvedValueOnce(88);
-
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Edit",
-        output: { result: "ok" },
-        metadata: { phase: "end", toolCallId: "orphan-tc" },
-      });
-
-      // Should create a new record since no correlation found
-      expect(toolsService.createToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "Edit",
-          status: "done",
-        }),
-      );
-    });
-
-    it("sets error status when event has error", async () => {
-      vi.mocked(toolsService.findToolCallRowId).mockResolvedValueOnce(10);
-
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Bash",
-        error: "command failed",
-        metadata: { phase: "end", toolCallId: "tc-err" },
-      });
-
-      expect(toolsService.updateToolCall).toHaveBeenCalledWith(
-        10,
-        expect.objectContaining({
-          status: "error",
-          error: "command failed",
-        }),
-      );
-    });
+  it("never closes a same-named sibling when a different stable id completes", async () => {
+    const writer = createRunWriteback(CONFIG);
+    await writer.handleEvent({ type: "tool_call", toolName: "Read", metadata: { phase: "start", toolCallId: "live" } });
+    await writer.handleEvent({ type: "tool_call", toolName: "Read", output: { content: "orphan" }, metadata: { phase: "end", toolCallId: "other" } });
+    const rows = await calls();
+    expect(rows.find((row) => row.toolCallId === "live")?.status).toBe("running");
+    expect(rows.find((row) => row.toolCallId === "other")).toMatchObject({ status: "done", output: { content: "orphan" } });
+    expect(writer.getPendingToolCallCount()).toBe(1);
   });
-
-  // ─────────────────────────────────────────────────────────────
-  // Tool call events - no phase (complete record)
-  // ─────────────────────────────────────────────────────────────
-  describe("tool_call no phase", () => {
-    it("creates a complete tool call record", async () => {
-      vi.mocked(toolsService.createToolCall).mockResolvedValueOnce(33);
-
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Read",
-        input: { path: "/file.ts" },
-        output: { content: "code" },
-        startedAt: 1000,
-        endedAt: 1500,
-      });
-
-      expect(toolsService.createToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "Read",
-          status: "done",
-        }),
-      );
-      expect(toolsService.updateToolCall).toHaveBeenCalledWith(
-        33,
-        expect.objectContaining({
-          startedAt: expect.any(Date),
-          endedAt: expect.any(Date),
-        }),
-      );
-    });
+  it("hydrates an existing open call and resolves it by exact identity", async () => {
+    createToolCall(db, { runId: CONFIG.runId, toolCallId: "restored", toolName: "Bash", status: "running" });
+    const writer = createRunWriteback(CONFIG);
+    await writer.handleEvent({ type: "tool_call", toolName: "Bash", metadata: { phase: "end", toolCallId: "restored" }, output: { stdout: "ok" } });
+    expect(await calls()).toEqual([expect.objectContaining({ toolCallId: "restored", status: "done", output: { stdout: "ok" } })]);
+    expect(writer.getPendingToolCallCount()).toBe(0);
   });
-
-  // ─────────────────────────────────────────────────────────────
-  // Status events
-  // ─────────────────────────────────────────────────────────────
-  describe("status events", () => {
-    it("handles status event without error (noop)", async () => {
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "status",
-        status: "running",
-      });
-
-      // Status events are just logged, no DB writes
-      expect(runsService.addArtifact).not.toHaveBeenCalled();
-      expect(toolsService.createToolCall).not.toHaveBeenCalled();
-    });
+  it("matches the oldest legacy call by name when no stable id exists", async () => {
+    const writer = createRunWriteback(CONFIG);
+    await writer.handleEvent({ type: "tool_call", toolName: "Grep", startedAt: 5000, metadata: { phase: "start" } });
+    await writer.handleEvent({ type: "tool_call", toolName: "Grep", startedAt: 6000, metadata: { phase: "end" }, output: { matches: 2 } });
+    expect(await calls()).toEqual([expect.objectContaining({ status: "done", output: { matches: 2 } })]);
+    expect(writer.getPendingToolCallCount()).toBe(0);
   });
-
-  // ─────────────────────────────────────────────────────────────
-  // Error handling
-  // ─────────────────────────────────────────────────────────────
-  describe("error handling", () => {
-    it("catches and logs errors in event handler", async () => {
-      vi.mocked(runsService.addArtifact).mockRejectedValueOnce(new Error("db down"));
-
-      const wb = createRunWriteback(CONFIG);
-
-      // Should not throw
-      await wb.handleEvent({
-        type: "log",
-        message: "will fail",
-      });
-    });
+  it.each(["done", "error", "canceled"] as const)("persists a complete record with terminal status %s", async (terminalStatus) => {
+    const writer = createRunWriteback(CONFIG);
+    await writer.handleEvent({ type: "tool_call", toolName: "Bash", terminalStatus, output: { stdout: "output" },
+      ...(terminalStatus === "error" ? { error: "Failed" } : {}), metadata: { toolCallId: "complete" } });
+    expect(await calls()).toEqual([expect.objectContaining({ status: terminalStatus, output: { stdout: "output" } })]);
   });
-
-  // ─────────────────────────────────────────────────────────────
-  // extractToolCallIds
-  // ─────────────────────────────────────────────────────────────
-  describe("toolCallId extraction", () => {
-    it("extracts tool_call_id from snake_case metadata", async () => {
-      vi.mocked(toolsService.createToolCall).mockResolvedValueOnce(11);
-
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Bash",
-        metadata: { phase: "start", tool_call_id: "snake-id" },
-      });
-
-      expect(toolsService.createToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolCallId: "snake-id",
-        }),
-      );
-    });
-
-    it("extracts parentToolCallId from metadata", async () => {
-      vi.mocked(toolsService.createToolCall).mockResolvedValueOnce(12);
-
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Bash",
-        metadata: { phase: "start", toolCallId: "child", parentToolCallId: "parent" },
-      });
-
-      expect(toolsService.createToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolCallId: "child",
-          parentToolCallId: "parent",
-        }),
-      );
-    });
-
-    it("extracts id field as toolCallId fallback", async () => {
-      vi.mocked(toolsService.createToolCall).mockResolvedValueOnce(13);
-
-      const wb = createRunWriteback(CONFIG);
-
-      await wb.handleEvent({
-        type: "tool_call",
-        toolName: "Bash",
-        metadata: { phase: "start", id: "id-fallback" },
-      });
-
-      expect(toolsService.createToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolCallId: "id-fallback",
-        }),
-      );
-    });
+  it("keeps a definitive completion when the provider repeats the same result", async () => {
+    const writer = createRunWriteback(CONFIG);
+    const event = { type: "tool_call" as const, toolName: "Read", output: { content: "one" }, metadata: { phase: "end", toolCallId: "once" } };
+    await writer.handleEvent(event); await writer.handleEvent(event);
+    expect(await calls()).toHaveLength(1);
+  });
+  it("logs a failed write without preventing later event processing", async () => {
+    const writer = createRunWriteback(CONFIG);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const write = vi.spyOn(runsService, "addArtifact").mockRejectedValueOnce(new Error("Database busy"));
+    await writer.handleEvent({ type: "log", message: "rejected" });
+    await writer.handleEvent({ type: "log", message: "saved" });
+    expect(log).toHaveBeenCalled();
+    expect((await runsService.getArtifactsByRun(CONFIG.runId)).map((artifact) => artifact.content)).toEqual(["saved"]);
+    write.mockRestore();
+  });
+  it("does not turn provider status events into a second run status owner", async () => {
+    const writer = createRunWriteback(CONFIG);
+    await writer.handleEvent({ type: "status", status: "failed" });
+    expect((await runsService.getRunById(CONFIG.runId))?.status).toBe("queued");
   });
 });

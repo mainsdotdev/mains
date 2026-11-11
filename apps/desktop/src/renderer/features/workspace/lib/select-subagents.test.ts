@@ -130,12 +130,12 @@ describe("selectSessionSubagents", () => {
     });
   });
 
-  it("excludes backgrounded shell commands, which are tasks but not subagents", () => {
+  it.each(["local_bash", "mcp_task"])("excludes %s tasks from the subagent panel", (taskType) => {
     const agents = selectSessionSubagents([
       call({
         id: 1,
         toolName: "Bash",
-        metadata: { task: { phase: "started", taskType: "local_bash" } },
+        metadata: { task: { phase: "started", taskType } },
       }),
     ]);
 

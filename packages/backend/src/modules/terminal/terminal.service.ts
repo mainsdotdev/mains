@@ -1,11 +1,13 @@
 import * as pty from "node-pty";
+import { randomUUID } from "node:crypto";
 import { assertOwnedRecord } from "../bridge";
 import { existsSync } from "fs";
 import os from "os";
 import path from "path";
-import type { TerminalCreateOptions, TerminalSession, TerminalSnapshot } from "@mains/contracts/terminal";
+import type { TerminalCreateOptions, TerminalSession, TerminalSnapshot, TerminalWriteOptions } from "@mains/contracts/terminal";
 import { scanIdleTerminalShells, scanTerminalServers } from "./terminal-servers";
 import { disposeShellIntegration, workspaceShellEnvironment } from "./terminal-shell";
+import { createTerminalLifecycle, createTerminalMonitor } from "./terminal-lifecycle";
 
 type DataCallback = (id: string, data: string, sequence: number) => void;
 type ExitCallback = (id: string, exitCode: number) => void;
@@ -20,17 +22,13 @@ interface PtyInstance {
   data: string;
   sequence: number;
   shellSignals?: ReturnType<typeof workspaceShellEnvironment>["signals"];
-  activityRevision: number;
+  lifecycle: ReturnType<typeof createTerminalLifecycle>;
   lastInputAt: number;
 }
 
 const instances = new Map<string, PtyInstance>();
 const MAX_OUTPUT_CHARS = 128 * 1024;
 const MAX_TERMINALS = 64;
-const SERVER_CHECK_INTERVAL_MS = 2500;
-let serversChanged: (() => void) | null = null;
-let serverTimer: ReturnType<typeof setTimeout> | null = null;
-let serverCheck: Promise<void> | null = null;
 
 function cloneSession(session: TerminalSession): TerminalSession {
   return { ...session, servers: session.servers?.map((server) => ({ ...server })) ?? null };
@@ -38,27 +36,40 @@ function cloneSession(session: TerminalSession): TerminalSession {
 
 function hasManagedShells(): boolean {
   return [...instances.values()].some((entry) => entry.session.workspaceId !== null &&
-    entry.session.status === "running" && Number.isSafeInteger(entry.process.pid) && entry.process.pid > 0);
+    entry.lifecycle.running && Number.isSafeInteger(entry.process.pid) && entry.process.pid > 0);
 }
 
-function scheduleServerCheck(): void {
-  // The Windows beta retains PowerShell tabs until explicitly stopped. POSIX
-  // process/listener probes and zsh prompt-based idle cleanup do not apply.
-  if (process.platform === "win32") return;
-  if (!serversChanged || serverTimer || !hasManagedShells()) return;
-  serverTimer = setTimeout(() => {
-    serverTimer = null;
-    void terminalService.refreshServers().finally(scheduleServerCheck);
-  }, SERVER_CHECK_INTERVAL_MS);
-  serverTimer.unref();
-}
-
-function clearUnusedServerTimer(): void {
-  if (serverTimer && !hasManagedShells()) { clearTimeout(serverTimer); serverTimer = null; }
-}
+const monitor = createTerminalMonitor({
+  enabled: () => process.platform !== "win32",
+  hasTargets: hasManagedShells,
+  async read() {
+    const targets = [...instances.values()].filter((entry) => entry.session.workspaceId !== null &&
+      entry.lifecycle.running && Number.isSafeInteger(entry.process.pid) && entry.process.pid > 0);
+    const roots = new Map(targets.map((entry) => [entry.session.id, entry.process.pid]));
+    let result: Awaited<ReturnType<typeof scanTerminalServers>> | null;
+    try { result = await scanTerminalServers(roots); } catch { result = null; }
+    return { targets, result };
+  },
+  apply({ targets, result }) {
+    let changed = false;
+    for (const entry of targets) {
+      if (instances.get(entry.session.id) !== entry || !entry.lifecycle.running) continue;
+      const servers = result?.get(entry.session.id) ?? null;
+      if (JSON.stringify(entry.session.servers) === JSON.stringify(servers)) continue;
+      entry.session.servers = servers; changed = true;
+    }
+    return changed;
+  },
+});
 
 function snapshot(instance: PtyInstance): TerminalSnapshot {
   return { session: cloneSession(instance.session), data: instance.data, sequence: instance.sequence };
+}
+
+function disposeListeners(instance: PtyInstance): void {
+  for (const disposable of [instance.onDataDispose, instance.onExitDispose]) {
+    try { disposable.dispose(); } catch (error) { console.error("Could not release terminal listener:", error); }
+  }
 }
 
 function requireInstance(id: string): PtyInstance {
@@ -126,38 +137,45 @@ export const terminalService = {
     const nextNumber = Math.max(0, ...siblings.map((entry) => Number(entry.session.title.slice(9)) || 0)) + 1;
     const instance: PtyInstance = {
       process: proc, onData, onExit, data: "", sequence: 0,
-      shellSignals: integration?.signals, activityRevision: 0, lastInputAt: 0,
+      shellSignals: integration?.signals, lifecycle: createTerminalLifecycle(), lastInputAt: 0,
       onDataDispose: { dispose() {} }, onExitDispose: { dispose() {} },
-      session: { id, cwd: resolved, workspaceId, workspaceName: options.workspaceName ?? null,
+      session: { id, instanceId: randomUUID(), cwd: resolved, workspaceId, workspaceName: options.workspaceName ?? null,
         title: `Terminal ${nextNumber}`, status: "running", exitCode: null, createdAt: Date.now(), servers: null },
     };
     instances.set(id, instance);
-    instance.onDataDispose = proc.onData((data) => {
-      if (instances.get(id) !== instance) return;
-      instance.activityRevision += 1;
-      data = instance.shellSignals?.consume(data) ?? data;
-      if (!data) return;
-      instance.data = (instance.data + data).slice(-MAX_OUTPUT_CHARS);
-      instance.sequence += 1;
-      instance.onData(id, data, instance.sequence);
-    });
-    instance.onExitDispose = proc.onExit(({ exitCode }) => {
-      if (instances.get(id) !== instance) return;
-      instance.session.status = "exited";
-      instance.session.exitCode = exitCode;
-      instance.session.servers = [];
-      instance.onDataDispose.dispose();
-      instance.onExitDispose.dispose();
-      instance.onExit?.(id, exitCode);
-      clearUnusedServerTimer();
-    });
-    scheduleServerCheck();
+    try {
+      instance.onDataDispose = proc.onData((data) => {
+        if (instances.get(id) !== instance || !instance.lifecycle.running) return;
+        instance.lifecycle.touch();
+        data = instance.shellSignals?.consume(data) ?? data;
+        if (!data) return;
+        instance.data = (instance.data + data).slice(-MAX_OUTPUT_CHARS);
+        instance.sequence += 1;
+        instance.onData(id, data, instance.sequence);
+      });
+      instance.onExitDispose = proc.onExit(({ exitCode }) => {
+        if (instances.get(id) !== instance || !instance.lifecycle.exit()) return;
+        instance.session.status = "exited";
+        instance.session.exitCode = exitCode;
+        instance.session.servers = [];
+        disposeListeners(instance);
+        instance.onExit?.(id, exitCode);
+        monitor.targetsChanged();
+      });
+    } catch (error) {
+      instance.lifecycle.fail();
+      try { this.destroy(id); }
+      catch (cleanup) { throw Object.assign(new Error("Terminal initialization and cleanup failed"), { errors: [error, cleanup] }); }
+      throw error;
+    }
+    monitor.targetsChanged();
     return snapshot(instance);
   },
 
   attach(id: string, onData: DataCallback, onExit?: ExitCallback): TerminalSnapshot {
     const instance = requireInstance(id);
-    instance.activityRevision += 1;
+    if (!instance.lifecycle.attachable) throw new Error("Terminal initialization failed. Stop this terminal before opening another.");
+    instance.lifecycle.touch();
     instance.onData = onData;
     instance.onExit = onExit;
     return snapshot(instance);
@@ -170,64 +188,46 @@ export const terminalService = {
   },
 
   watchServers(onChanged: () => void): () => void {
-    serversChanged = onChanged;
-    scheduleServerCheck();
-    return () => {
-      if (serversChanged !== onChanged) return;
-      serversChanged = null;
-      if (serverTimer) { clearTimeout(serverTimer); serverTimer = null; }
-    };
+    return monitor.watch(onChanged);
   },
 
   refreshServers(): Promise<void> {
-    if (process.platform === "win32") return Promise.resolve();
-    if (serverCheck) return serverCheck;
-    const targets = [...instances.values()].filter((entry) => entry.session.workspaceId !== null &&
-      entry.session.status === "running" && Number.isSafeInteger(entry.process.pid) && entry.process.pid > 0);
-    if (targets.length === 0) return Promise.resolve();
-    const roots = new Map(targets.map((entry) => [entry.session.id, entry.process.pid]));
-    serverCheck = (async () => {
-      let result: Awaited<ReturnType<typeof scanTerminalServers>> | null;
-      try { result = await scanTerminalServers(roots); } catch { result = null; }
-      let changed = false;
-      for (const entry of targets) {
-        if (instances.get(entry.session.id) !== entry || entry.session.status !== "running") continue;
-        const servers = result?.get(entry.session.id) ?? null;
-        if (JSON.stringify(entry.session.servers) === JSON.stringify(servers)) continue;
-        entry.session.servers = servers;
-        changed = true;
-      }
-      if (changed) serversChanged?.();
-    })().finally(() => { serverCheck = null; });
-    return serverCheck;
+    return monitor.refresh();
   },
 
-  write(id: string, data: string): void {
+  write(id: string, data: string, options?: TerminalWriteOptions): void {
     const instance = instances.get(id);
-    if (instance?.session.status === "running") {
-      instance.activityRevision += 1;
+    if (options !== undefined && (!options || typeof options !== "object" || Array.isArray(options) ||
+      [options.instanceId, options.commandId].some((key) => key !== undefined && (typeof key !== "string" || !key.trim() || key.length > 256)))) {
+      throw new Error("Invalid terminal input identity");
+    }
+    if (typeof data !== "string") throw new Error("Invalid terminal input");
+    if (options?.instanceId && instance?.session.instanceId !== options.instanceId) throw new Error("Terminal process changed or no longer exists");
+    if (!instance && options?.commandId) throw new Error("Terminal no longer accepts commands");
+    instance?.lifecycle.input(data, () => {
       instance.lastInputAt = Date.now();
       if (/[\r\n]/.test(data)) instance.shellSignals?.commandSent();
       instance.process.write(data);
-    }
+    }, options?.commandId);
   },
 
-  resize(id: string, cols: number, rows: number): void {
+  resize(id: string, cols: number, rows: number, instanceId?: string): void {
     if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1 || cols > 1000 || rows > 1000) return;
     const instance = instances.get(id);
-    if (instance?.session.status === "running") {
+    if (instanceId && instance?.session.instanceId !== instanceId) return;
+    if (instance?.lifecycle.running) {
       instance.process.resize(cols, rows);
     }
   },
 
-  destroy(id: string): void {
+  destroy(id: string, instanceId?: string): void {
     const instance = instances.get(id);
+    if (instanceId && instance?.session.instanceId !== instanceId) return;
     if (instance) {
+      if (!instance.lifecycle.destroy(() => instance.process.kill())) return;
       instances.delete(id);
-      instance.onDataDispose.dispose();
-      instance.onExitDispose.dispose();
-      if (instance.session.status === "running") instance.process.kill();
-      clearUnusedServerTimer();
+      disposeListeners(instance);
+      monitor.targetsChanged();
     }
   },
 
@@ -236,15 +236,15 @@ export const terminalService = {
       throw new Error("Invalid terminal workspace.");
     }
     const candidates = [...instances.values()].filter((entry) => entry.session.workspaceId === workspaceId)
-      .map((entry) => ({ entry, revision: entry.activityRevision }));
-    const roots = new Map(candidates.filter(({ entry }) => entry.session.status === "running" &&
+      .map((entry) => ({ entry, revision: entry.lifecycle.revision }));
+    const roots = new Map(candidates.filter(({ entry }) => entry.lifecycle.running &&
       entry.shellSignals?.atPrompt === true && Number.isSafeInteger(entry.process.pid) && entry.process.pid > 0)
       .map(({ entry }) => [entry.session.id, entry.process.pid]));
     let idle: Set<string>;
     try { idle = await scanIdleTerminalShells(roots); } catch { idle = new Set(); }
     const stopped: string[] = [];
     for (const { entry, revision } of candidates) {
-      if (instances.get(entry.session.id) !== entry || entry.activityRevision !== revision) continue;
+      if (instances.get(entry.session.id) !== entry || entry.lifecycle.revision !== revision) continue;
       if (entry.session.status !== "exited" && (!idle.has(entry.session.id) ||
         entry.shellSignals?.atPrompt !== true || Date.now() - entry.lastInputAt < 300)) continue;
       this.destroy(entry.session.id);
@@ -254,9 +254,14 @@ export const terminalService = {
   },
 
   destroyAll(): void {
+    monitor.stop();
+    const errors: unknown[] = [];
     for (const id of instances.keys()) {
-      this.destroy(id);
+      try { this.destroy(id); } catch (error) { errors.push(error); }
     }
-    disposeShellIntegration();
+    if (instances.size === 0) {
+      try { disposeShellIntegration(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw Object.assign(new Error("Could not stop all terminals"), { errors });
   },
 };

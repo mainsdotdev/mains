@@ -12,12 +12,13 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { markdownComponents } from "@/components/markdown-components";
-import { Box, Close, FileIconComponent } from "@/components/ui/icons";
+import { Box, Close, FileIconComponent, Sparkles } from "@/components/ui/icons";
 import { applySignedSrc } from "@/lib/local-image-url";
 import { useIsMobile, isWeb } from "@/lib/platform";
 import Text from "../text";
 
-const sparklesIconMarkup = renderToStaticMarkup(<Box className="size-3.5 shrink-0" />);
+const sparklesIconMarkup = renderToStaticMarkup(<Sparkles className="size-3.5 shrink-0" />);
+const pluginIconMarkup = renderToStaticMarkup(<Box className="size-3.5 shrink-0" />);
 
 export interface RichSkillChipData {
   name: string;
@@ -27,6 +28,7 @@ export interface RichSkillChipData {
   iconSmall?: string;
   iconLarge?: string;
   brandColor?: string;
+  scope?: string;
   /** Serialized prompt token. Mac apps use @Name; skills use $name. */
   token?: string;
 }
@@ -282,6 +284,7 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   // Icon slot is always present (even as an empty 14×14 spacer) so chip width/height stay stable.
   const { iconSlot, glyph } = createChipIconSlot(labelText);
   const iconPath = skill.iconLarge || skill.iconSmall;
+  const fallbackIconMarkup = ["plugin", "mac", "mac_app", "computer"].includes((skill.scope || "").toLowerCase()) ? pluginIconMarkup : sparklesIconMarkup;
   if (iconPath) {
     const img = document.createElement("img");
     img.alt = "";
@@ -291,13 +294,13 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
     }
     img.draggable = false;
     img.onerror = () => {
-      // Swap to the Sparkles placeholder so a missing asset doesn't render a broken-image glyph.
-      glyph.innerHTML = sparklesIconMarkup;
+      // Keep the context type recognizable when supplied artwork is unavailable.
+      glyph.innerHTML = fallbackIconMarkup;
     };
     glyph.appendChild(img);
     applySignedSrc(img, iconPath);
   } else {
-    glyph.innerHTML = sparklesIconMarkup;
+    glyph.innerHTML = fallbackIconMarkup;
   }
   chip.appendChild(iconSlot);
   appendChipLabel(chip, labelText);
@@ -1209,7 +1212,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           className={`w-full text-sm outline-none whitespace-pre-wrap wrap-break-word [&>p]:my-2 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0 overflow-y-auto noscrollbar dark:text-primary-300 text-primary-700 ${compact
-            ? "min-h-12 max-h-40 rounded-[28px] py-3 pl-12 pr-44"
+            ? "min-h-8 max-h-40 py-1.5"
             : dense
               ? "min-h-9 max-h-40 rounded-2xl px-5 pt-3"
               : "min-h-12 max-h-80 rounded-2xl pl-5 pr-24 pt-4 pb-1 @max-[480px]/composer:pr-5"}`}
@@ -1218,7 +1221,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           <Text
             as="div"
             tone="faint"
-            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "left-12 right-44 top-3.5" : dense ? "left-5 right-5 top-3" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20 @max-[480px]/composer:pr-0" : "right-5"}`}`}
+            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "inset-x-0 top-1.5" : dense ? "left-5 right-5 top-3" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20 @max-[480px]/composer:pr-0" : "right-5"}`}`}
           >
             {placeholderIcon ? (
               <span

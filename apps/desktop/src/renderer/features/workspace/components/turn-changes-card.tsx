@@ -10,6 +10,7 @@ import {
   type TurnFileChange,
 } from "@/lib/redux/api";
 import { DIFF_ADDED_TEXT, DIFF_REMOVED_TEXT } from "../lib/severity";
+import { turnUndoOwnershipError } from "@mains/backend/shared/turn-change-ownership";
 
 const DiffViewer = lazy(() =>
   import("./diff-viewer").then((m) => ({ default: m.DiffViewer })),
@@ -163,9 +164,10 @@ export function TurnChangesCard({
   // A parallel run wrote some of these files too; undoing would take its
   // hunks with ours, so the backend refuses.
   const hasSharedFiles = files.some((file) => file.shared);
+  const ownershipError = turnUndoOwnershipError(files);
   let undoTitle = "Undo this turn's file changes";
-  if (hasSharedFiles) {
-    undoTitle = "A parallel run changed some of these files too, so this turn can't be undone";
+  if (ownershipError) {
+    undoTitle = ownershipError;
   } else if (!canUndo) {
     undoTitle = "Undo is available when the run finishes";
   }
@@ -296,7 +298,7 @@ export function TurnChangesCard({
         {!replica && !isUndone && (
           <Button
             onClick={handleUndo}
-            disabled={isUndoing || !canUndo || hasSharedFiles}
+            disabled={isUndoing || !canUndo || ownershipError !== null}
             title={undoTitle}
             className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-s text-primary-700 hover:bg-primary-100 dark:text-primary-300 dark:hover:bg-primary-900"
           >
@@ -321,7 +323,7 @@ export function TurnChangesCard({
                 <Button
                   onClick={() => toggleFile(file.path)}
                   aria-expanded={open}
-                  className="sticky top-0 z-10 flex w-full items-center gap-2 bg-primary px-3 py-1.5 text-left hover:bg-primary-100/95 dark:bg-primary-950 dark:hover:bg-primary-900/95"
+                  className="sticky top-0 z-10 flex w-full items-center gap-2 bg-primary px-3 py-1.5 text-left text-primary-600 hover:bg-primary-100/95 dark:bg-primary-950 dark:text-primary-400 dark:hover:bg-primary-900/95"
                 >
                   <FileIconComponent
                     fileName={name}

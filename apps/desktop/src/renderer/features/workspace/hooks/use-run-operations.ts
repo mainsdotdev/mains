@@ -38,6 +38,8 @@ export interface ReviewTarget {
 }
 
 export interface RunOperationsDeps {
+  /** Embedded owners may retire preparation before the native write starts. */
+  operationIsCurrent?: (accountId?: string) => boolean;
   /** Pull a newly created run into the list, select it, and return its id. */
   registerNewRun: (runId: string) => Promise<string | null>;
   /** Refresh one run's transcript. */
@@ -50,6 +52,7 @@ export function useRunOperations({
   registerNewRun,
   loadRunDetails,
   onRunUpdated,
+  operationIsCurrent,
 }: RunOperationsDeps) {
   const dispatch = useAppDispatch();
   const [isLoading, setIsLoading] = useState(false);
@@ -62,27 +65,38 @@ export function useRunOperations({
 
   /** Wraps async run operations with loading state, account fetch, and error handling */
   const runOperation = useCallback(async <T>(
-    fn: (accountId: string) => Promise<T>,
+    fn: (accountId: string, assertCurrent: () => void) => Promise<T>,
     fallback: T,
     errorLabel: string,
   ): Promise<T> => {
+    if (operationIsCurrent && !operationIsCurrent()) return fallback;
+    let currentAccountId: string | undefined;
+    const assertCurrent = () => {
+      if (operationIsCurrent && !operationIsCurrent(currentAccountId)) throw new Error("This conversation changed before the operation completed.");
+    };
     setIsLoading(true);
     setError(null);
     try {
       const accountRes = await appApi.account.get();
+      assertCurrent();
       if (!accountRes.success || !accountRes.data) {
         throw new Error("No account found");
       }
-      return await fn(accountRes.data.id);
+      currentAccountId = accountRes.data.id;
+      assertCurrent();
+      const result = await fn(accountRes.data.id, assertCurrent);
+      assertCurrent();
+      return result;
     } catch (err) {
+      if (operationIsCurrent && !operationIsCurrent()) return fallback;
       const message = err instanceof Error ? err.message : errorLabel;
       setError(message);
       toast.error(message);
       return fallback;
     } finally {
-      setIsLoading(false);
+      if (!operationIsCurrent || operationIsCurrent()) setIsLoading(false);
     }
-  }, []);
+  }, [operationIsCurrent]);
 
   const createVoiceConversation = useCallback(async (
     selectedWorkspace?: string,
@@ -129,7 +143,7 @@ export function useRunOperations({
         uploads,
       );
 
-      return runOperation(async (accountId) => {
+      return runOperation(async (accountId, assertCurrent) => {
         const result = await appApi.runs.execute({
           accountId,
           workspaceId: selectedWorkspace || undefined,
@@ -154,6 +168,7 @@ export function useRunOperations({
           throw new Error(result.error || "Failed to start run");
         }
 
+        assertCurrent();
         return registerNewRun(result.data.runId);
       }, null, "Failed to execute run");
     },
@@ -184,8 +199,9 @@ export function useRunOperations({
       uploads,
     );
 
-    return runOperation(async (accountId) => {
+    return runOperation(async (accountId, assertCurrent) => {
       await waitForConversationSettings(getTransport(), runId);
+      assertCurrent();
       const result = await appApi.runs.continue({
         runId,
         accountId,
@@ -198,12 +214,14 @@ export function useRunOperations({
         additionalContext: initialContext,
         ...contextPayload,
       });
+      assertCurrent();
 
       if (!result.success) {
         throw new Error(result.error || "Failed to continue run");
       }
 
       const runResult = await appApi.runs.getById(runId);
+      assertCurrent();
       if (runResult.success && runResult.data) {
         onRunUpdated(runResult.data);
       }

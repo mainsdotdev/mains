@@ -3,6 +3,7 @@
 // Agent/work runtime oriented interfaces for code-writing flows
 // ─────────────────────────────────────────────────────────────
 
+import type { CodexPermissionCatalog } from "@mains/contracts/codex-permissions";
 import type { ClaudePermissionMode } from "@mains/contracts/claude-permission-modes";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModeId } from "@mains/contracts/modes";
@@ -259,6 +260,8 @@ export interface WorkRunTaskEvent {
   summary?: string;
   /** Path to the task's captured output — where a backgrounded command's real output lands. */
   outputFile?: string;
+  /** Provider-owned resource links from a completed background MCP task. */
+  resourceLinks?: unknown[];
   /** Most recent tool the task ran (progress phase). */
   lastToolName?: string;
   /** Token/tool/duration totals reported for the task. */
@@ -753,6 +756,7 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
   ): Promise<ConsumeRateLimitResetCreditOutcome>;
 
   /** Read the Codex host's memory preferences from App Server. */
+  getCodexPermissions?(cwd?: string): Promise<CodexPermissionCatalog>;
   getCodexMemorySettings?(): Promise<CodexMemorySettings>;
   /** Set one Codex memory preference; `allowToolAssistedChats` is the UI-facing inverse. */
   setCodexMemorySetting?(setting: CodexMemorySetting, enabled: boolean): Promise<void>;
@@ -780,9 +784,11 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
 
   /**
    * List available plugins from the provider's marketplace.
+   * Cancellation releases this reader; shared native discovery is stopped
+   * when its last reader leaves, where the provider supports cancellation.
    * @returns Promise resolving to plugin marketplace data
    */
-  listPlugins?(): Promise<PluginListResponse>;
+  listPlugins?(signal?: AbortSignal): Promise<PluginListResponse>;
 
   /**
    * List installed plugins without loading the full remote marketplace.
@@ -964,9 +970,11 @@ export interface ProviderDriver extends RealtimeAdapterControls {
    */
   updateConfig?(config: AdapterConfig): void;
 
+  /** Close native provider resources; Core also drains its owned executions and cleanup. */
+  shutdown?(): Promise<void>;
+
   // ── Pass-through methods (Core delegates 1:1 to the matching WorkRunAdapter method) ──
   invalidateCatalogs?(): void;
-  shutdown?(): Promise<void>;
   canResumeSession?(runId: string): Promise<boolean>;
   archiveSession?(runId: string): Promise<void>;
   unarchiveSession?(runId: string): Promise<void>;
@@ -984,12 +992,13 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   consumeRateLimitResetCredit?(
     params: ConsumeRateLimitResetCreditParams,
   ): Promise<ConsumeRateLimitResetCreditOutcome>;
+  getCodexPermissions?(cwd?: string): Promise<CodexPermissionCatalog>;
   getCodexMemorySettings?(): Promise<CodexMemorySettings>;
   setCodexMemorySetting?(setting: CodexMemorySetting, enabled: boolean): Promise<void>;
   resetCodexMemories?(): Promise<void>;
   getAccountInfo?(): Promise<AccountInfo>;
   updateCli?(): Promise<CliUpdateResult>;
-  listPlugins?(): Promise<PluginListResponse>;
+  listPlugins?(signal?: AbortSignal): Promise<PluginListResponse>;
   listInstalledPlugins?(workspacePath?: string): Promise<PluginListResponse>;
   readPlugin?(pluginName: string, marketplacePath: string): Promise<PluginDetail>;
   installPlugin?(pluginId: string, scope?: PluginScope): Promise<void>;
@@ -1143,6 +1152,7 @@ export interface CodexAdapterConfig {
   approvalMode?: "untrusted" | "on-request" | "never";
   /** Sandbox mode for file/network isolation */
   sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
+  permissionProfile?: string;
   /** App-server effort identifier, advertised per model by model/list. */
   modelReasoningEffort?: EffortLevel;
   /**
@@ -1949,6 +1959,8 @@ export interface HookMatcher {
   hooks: HookCallback[];
   /** Timeout in seconds (default: 60). Increase for hooks that make external API calls */
   timeout?: number;
+  /** Block the guarded action if a callback throws or returns invalid output. */
+  onFailure?: "continue" | "block";
 }
 
 /**

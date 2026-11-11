@@ -845,6 +845,7 @@ describe("workspaceService — workspace lifecycle", () => {
     });
 
     it("delete returns error on failure", async () => {
+      createWorkspace(db, { id: "ws1" });
       vi.spyOn(workspaceRepo, "delete").mockRejectedValueOnce(new Error("db"));
       await expect(workspaceService.delete("ws1")).rejects.toThrow("db");
     });
@@ -3047,6 +3048,7 @@ describe("workspaceService — createFromSource (workspace intake)", () => {
     expect(gitMock.cloneRepo).toHaveBeenCalledWith(
       "https://github.com/foo/qux.git",
       "/clones",
+      expect.any(AbortSignal),
     );
     expect(gitMock.importLocalRepoDirect).toHaveBeenCalledWith("/clones/qux");
     expect(result.name).toBe("qux");

@@ -2,7 +2,7 @@ import { ReactNode, RefObject, useCallback, useEffect, useMemo, useReducer, useS
 import { Button, DropdownWrapper, Text } from "@/components/ui";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import type { CommandInfo, SkillInfo } from "@/lib/redux/api/providersApi";
-import { ArrowUp, Box } from "@/components/ui/icons";
+import { ArrowUp, Box, Slash, Sparkles } from "@/components/ui/icons";
 import { useDropdownKeyboardNavigation } from "@/features/workspace/hooks/use-dropdown-keyboard-navigation";
 import { FileIconComponent } from "@/components/ui/icons";
 import type { DirEntry, FileNode } from "@/features/workspace/types/file-explorer";
@@ -144,12 +144,17 @@ function SkillRowIcon({ skill }: { skill: SkillInfo }) {
       />
     );
   }
+  return <ContextRowFallbackIcon brandColor={skill.brandColor} kind={bucketSkill(skill) === "skills" ? "skill" : "plugin"} />;
+}
+
+function ContextRowFallbackIcon({ brandColor, kind = "plugin" }: { brandColor?: string; kind?: "skill" | "plugin" | "command" }) {
+  const Icon = kind === "command" ? Slash : kind === "skill" ? Sparkles : Box;
   return (
     <div
       className="size-5 rounded-md shrink-0 flex items-center justify-center bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200"
-      style={skill.brandColor ? { backgroundColor: skill.brandColor, color: "#fff" } : undefined}
+      style={brandColor ? { backgroundColor: brandColor, color: "#fff" } : undefined}
     >
-      <Box className="size-3.5" />
+      <Icon className="size-3.5" />
     </div>
   );
 }
@@ -794,18 +799,21 @@ export function UnifiedContextDropdown({
                     const cmd = row.command;
                     return (
                       <RowButton key={`cmd-${cmd.name}`} {...rowProps} className="text-xs">
-                        <div className="flex flex-col gap-0.5">
-                          <div className="flex items-center justify-between gap-2">
-                            <Text as="div" size="inherit" tone="inherit" weight="medium">/{cmd.name}</Text>
-                            {cmd.argumentHint && (
-                              <Text as="span" size="xs" tone="subtle">{cmd.argumentHint}</Text>
+                        <div className="flex items-start gap-2">
+                          <ContextRowFallbackIcon kind="command" />
+                          <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <Text as="div" size="inherit" tone="inherit" weight="medium">/{cmd.name}</Text>
+                              {cmd.argumentHint && (
+                                <Text as="span" size="xs" tone="subtle">{cmd.argumentHint}</Text>
+                              )}
+                            </div>
+                            {cmd.description && (
+                              <Text as="div" size="xs" tone="subtle" className="line-clamp-2">
+                                {cmd.description}
+                              </Text>
                             )}
                           </div>
-                          {cmd.description && (
-                            <Text as="div" size="xs" tone="subtle" className="line-clamp-2">
-                              {cmd.description}
-                            </Text>
-                          )}
                         </div>
                       </RowButton>
                     );

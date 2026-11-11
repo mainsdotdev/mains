@@ -1,8 +1,9 @@
-import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
-import { useAppDispatch } from "@/lib/redux/hooks";
+import { createContext, useCallback, useContext, useEffect, useMemo, type ReactNode } from "react";
+import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 import { openPreviewTab } from "@/lib/redux/slices/previewSlice";
 import { usePreviewPanel } from "./use-preview-panel";
+import { transientDocumentFiles } from "@/features/workspace/lib/document-lifecycle";
 
 interface DocumentViewerContextValue {
   isOpen: boolean;
@@ -15,6 +16,12 @@ const Context = createContext<DocumentViewerContextValue | null>(null);
 export function DocumentViewerProvider({ children }: { children: ReactNode }) {
   const dispatch = useAppDispatch();
   const preview = usePreviewPanel();
+  const groups = useAppSelector((state) => state.preview.byOwner);
+  useEffect(() => {
+    const releases = Object.values(groups).flatMap((group) => group.tabs.flatMap((tab) =>
+      tab.kind === "document" ? [transientDocumentFiles.retainPreview(tab.doc.path)] : []));
+    return () => queueMicrotask(() => releases.forEach((release) => release()));
+  }, [groups]);
   const { ownerKey, reveal, hide } = preview;
   const open = useCallback((doc: DocumentViewerDoc) => {
     reveal();

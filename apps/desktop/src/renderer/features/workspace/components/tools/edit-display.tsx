@@ -2,6 +2,7 @@ import { useToolExpansion } from "../../lib/transcript-view-state";
 import { useMemo } from "react";
 import { Edit } from "@/components/ui/icons";
 import { normalizePatchForPatchDiff } from "../../lib/patch-utils";
+import { editTextDiff, type EditDiffLine as DiffLine } from "../../lib/edit-text-diff";
 import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
 import { FileIconComponent } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolDiffBody, ToolDiffStats, ToolHeader } from "./_shared";
@@ -21,19 +22,17 @@ export interface EditParams {
   newString?: string;
 }
 
-interface DiffLine {
-  type: "add" | "remove" | "context";
-  text: string;
-}
-
 export function EditDisplay({
   params,
   output,
   isCompact = false,
+  fullFileSnapshots = false,
 }: {
   params: EditParams;
   output?: unknown;
   isCompact?: boolean;
+  /** Cursor ACP supplies whole-file snapshots rather than replacement strings. */
+  fullFileSnapshots?: boolean;
 }) {
   const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const openFile = useOpenFileInEditor();
@@ -48,7 +47,7 @@ export function EditDisplay({
     lines: patchLines,
     added,
     removed,
-  } = useMemo(() => parsePatch(output, params), [output, params]);
+  } = useMemo(() => parsePatch(output, params, fullFileSnapshots), [output, params, fullFileSnapshots]);
   const hasDiff = patchLines.length > 0;
 
   const unifiedDiff = useMemo(() => {
@@ -137,6 +136,7 @@ function buildUnifiedDiff(lines: DiffLine[], fileName: string): string {
 function parsePatch(
   output: unknown,
   params: EditParams,
+  fullFileSnapshots: boolean,
 ): { lines: DiffLine[]; added: number; removed: number } {
   // Try structuredPatch from output first (Claude)
   const patch = extractPatchLines(output);
@@ -155,6 +155,7 @@ function parsePatch(
   const oldStr = params.old_string ?? params.old_str ?? params.oldString;
   const newStr = params.new_string ?? params.new_str ?? params.newString;
   if (oldStr || newStr) {
+    if (fullFileSnapshots) return editTextDiff(oldStr ?? "", newStr ?? "");
     const oldLines = (oldStr || "").split("\n");
     const newLines = (newStr || "").split("\n");
     const lines: DiffLine[] = [];

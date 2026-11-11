@@ -196,3 +196,20 @@ describe("pending tool approvals across navigation", () => {
     expect(source.read).toHaveBeenCalledTimes(2);
   });
 });
+it("does not remove a replacement approval when an old answer acknowledgement arrives", async () => {
+  const old = { ...request(), approvalToken: "old-token" };
+  source.read.mockResolvedValue([old]);
+  const waiting = deferred<ServiceResponse<undefined>>(); source.respond.mockReturnValueOnce(waiting.promise);
+  const view = renderHook(() => useToolApproval(running)); await act(async () => {});
+  let pending!: Promise<void>;
+  act(() => { pending = view.result.current.respond(old.requestId, true); });
+  act(() => source.emit(CHANNELS.runs.toolApprovalRequest, { ...old, approvalToken: "replacement" }));
+  await act(async () => { waiting.resolve({ success: true, data: undefined }); await pending; });
+  expect(view.result.current.pendingApprovals[0].approvalToken).toBe("replacement");
+});
+it("ignores an old generation's resolved push while restoring a newer approval", async () => {
+  source.read.mockResolvedValue([{ ...request(), approvalToken: "replacement" }]);
+  const view = renderHook(() => useToolApproval(running)); await act(async () => {});
+  act(() => source.emit(CHANNELS.runs.toolApprovalResolved, { requestId: "approval-1", approvalToken: "retired" }));
+  expect(view.result.current.pendingApprovals[0].approvalToken).toBe("replacement");
+});

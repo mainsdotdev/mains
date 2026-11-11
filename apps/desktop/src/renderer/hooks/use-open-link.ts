@@ -10,6 +10,7 @@ import { atlasPageIdFromHref } from "@/features/atlas/lib/page-link";
 import { requestAtlasPage } from "@/features/atlas/lib/page-actions";
 import { useGetAccountQuery } from "@/lib/redux/api/accountApi";
 import { useAppSelector } from "@/lib/redux/hooks";
+import { useOpenPullRequest } from "@/features/pull-requests/hooks/use-open-pull-request";
 
 /** Only URLs the embedded browser explicitly supports belong in its panel. */
 export function isInAppBrowserUrl(rawUrl: string): boolean {
@@ -27,6 +28,7 @@ export function isInAppBrowserUrl(rawUrl: string): boolean {
  */
 export function useOpenLink(): (url: string) => Promise<void> {
   const { openUrl } = useBrowserPanel();
+  const openPullRequest = useOpenPullRequest();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { currentData: account } = useGetAccountQuery();
@@ -45,6 +47,7 @@ export function useOpenLink(): (url: string) => Promise<void> {
           }
           return;
         }
+        if (openPullRequest(url)) return;
         if (!isWeb && isInAppBrowserUrl(url)) {
           await openUrl(url);
           return;
@@ -54,6 +57,6 @@ export function useOpenLink(): (url: string) => Promise<void> {
         toast.error(extractErrorMessage(error, "Failed to open link"));
       }
     },
-    [openUrl, navigate, pathname, account, backendId],
+    [openUrl, openPullRequest, navigate, pathname, account, backendId],
   );
 }

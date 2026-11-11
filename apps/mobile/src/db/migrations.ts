@@ -340,6 +340,8 @@ export const MIGRATIONS: readonly (string | ((database: MigrationDatabase) => vo
     PRIMARY KEY (backend_id, run_id, attachment_id)
   );
   `,
+  // v22 — correlate answers with one broker approval incarnation
+  `ALTER TABLE pending_approvals ADD COLUMN approval_token TEXT;`,
 ];
 
 export function migrateDatabase(database: MigrationDatabase): void {

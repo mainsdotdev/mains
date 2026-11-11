@@ -330,7 +330,7 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(atlasService.list({ accountId: "default" })).toEqual([]);
     expect(fs.existsSync(path.join(directory, "atlas"))).toBe(false);
   });
-  it.each(["work", "chat"] as const)("shows only delivered files in a %s folder", async (mode) => {
+  it.each(["work", "developer", "chat"] as const)("automatically lists delivered files only from Work (%s)", async (mode) => {
     const runId = `folder-${mode}`;
     createRun(db, { id: runId, mode, status: "succeeded" });
     const files = ["screenshot.PNG", "nested/chart.svg", "export.webp", "report.pdf", "summary.txt", "registered.png"]
@@ -347,7 +347,7 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(files).toHaveLength(6);
 
     const result = await atlasService.generated({ accountId: "default" });
-    expect(result.items.map((item) => item.fileName).sort()).toEqual(["report.pdf", "summary.txt"]);
+    expect(result.items.map((item) => item.fileName).sort()).toEqual(mode === "work" ? ["report.pdf", "summary.txt"] : []);
   });
   it("projects and saves Codex images from the native thread folder without final file references", async () => {
     vi.spyOn(os, "homedir").mockReturnValue(directory);
@@ -378,37 +378,62 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(fs.readFileSync(saved.path!, "utf8")).toBe("generated image");
     await expect(atlasService.saveFile({ accountId: "default", runId: "codex-run", path: unrelated })).rejects.toThrow("outside");
   });
-  it("keeps repository files cited by a Code conversation out of the library unless it delivered them", async () => {
-    createRun(db, { id: "code", mode: "developer", title: "MAI-295", status: "succeeded" });
-    const folder = root("code", "developer");
+  it.each(["developer", "chat"] as const)("keeps %s files in their conversation until explicitly saved", async (mode) => {
+    createRun(db, { id: "conversation", mode, status: "succeeded" });
+    const folder = root("conversation", mode);
     fs.mkdirSync(folder, { recursive: true });
     const cited = path.join(folder, "CONTEXT.md");
     const delivered = path.join(folder, "summary.pdf");
     fs.writeFileSync(cited, "project context");
     fs.writeFileSync(delivered, "report");
-    createRunArtifact(db, { runId: "code", kind: "document", metadata: JSON.stringify({ path: delivered, outputRole: "deliverable" }) });
-    createRunArtifact(db, { runId: "code", kind: "report", content: `Updated [CONTEXT.md](<${cited}>) and [summary](<${delivered}>)`,
+    const image = path.join(folder, "generated.png");
+    fs.writeFileSync(image, "native image");
+    createRunArtifact(db, { runId: "conversation", kind: "document", metadata: JSON.stringify({ path: delivered, outputRole: "deliverable" }) });
+    createRunArtifact(db, { runId: "conversation", kind: "image", path: image,
+      metadata: JSON.stringify({ path: image, source: "codex_image_generation" }) });
+    createRunArtifact(db, { runId: "conversation", kind: "report", content: `Updated [CONTEXT.md](<${cited}>), [summary](<${delivered}>) and [image](<${image}>)`,
       metadata: JSON.stringify({ messagePhase: "final_answer" }) });
-    const [attachment] = (await prepareRunAttachments("code", [{ name: "screen.png", type: "image",
+    const [attachment] = (await prepareRunAttachments("conversation", [{ name: "screen.png", type: "image",
       mimeType: "image/png", data: Buffer.from("uploaded original").toString("base64") }]))!;
 
-    const library = await atlasService.library({ accountId: "default", scope: "all" });
-    expect(library.items.map((entry) => entry.title).sort()).toEqual(["screen.png", "summary.pdf"]);
-    // The conversation's own file card still offers every selected output.
-    const generated = await atlasService.generated({ accountId: "default" });
-    expect(generated.items.map((item) => item.fileName)).toContain("CONTEXT.md");
-    await expect(atlasService.saveFile({ accountId: "default", runId: "code", path: cited })).resolves.toMatchObject({ title: "CONTEXT.md" });
-    expect(fs.existsSync(attachment.sourcePath)).toBe(true);
+    for (const scope of ["all", "generated", "uploads"] as const)
+      expect((await atlasService.library({ accountId: "default", scope })).items).toEqual([]);
+    expect(await atlasService.generated({ accountId: "default" })).toEqual({ items: [], nextOffset: null });
+    const { runsService } = await import("../runs");
+    expect((await runsService.getOutputArtifacts("conversation")).filter((item) => item.metadata?.outputSelected).map((item) => item.path).sort())
+      .toEqual([cited, delivered, image].map((file) => fs.realpathSync(file)).sort());
+    expect(await resolveRunAttachment("conversation", attachment.attachmentId!)).toMatchObject({ path: attachment.sourcePath });
+
+    for (const file of [cited, delivered, image, attachment.sourcePath]) {
+      const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+      expect(fs.readFileSync(saved.path!)).toEqual(fs.readFileSync(file));
+    }
+    const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "Keep me" });
+    const titles = ["CONTEXT.md", "summary.pdf", "generated.png", "screen.png", page.item.title].sort();
+    for (const scope of ["all", "saved"] as const)
+      expect((await atlasService.library({ accountId: "default", scope })).items.map((entry) => entry.title).sort()).toEqual(titles);
+    db.delete(runs).where(eq(runs.id, "conversation")).run();
+    expect((await atlasService.library({ accountId: "default" })).items.map((entry) => entry.title).sort()).toEqual(titles);
   });
-  it("applies the same Code-conversation rule to another device's synced outputs", async () => {
-    createRun(db, { id: "replica-code", title: "MAI-296", ownerBackendId: "laptop", mode: "developer" });
-    const output = (id: number, name: string, metadata: object) => ({ id, runId: "replica-code", kind: "document", path: null,
+  it.each(["work", "developer", "chat"] as const)("automatically lists synced %s files only for Work", async (mode) => {
+    createRun(db, { id: "replica", ownerBackendId: "laptop", mode });
+    const attachmentId = "b".repeat(64);
+    db.insert(runAttachments).values({ id: attachmentId, name: "upload.png", type: "image", mimeType: "image/png",
+      storageKey: `attachments/${attachmentId}/upload.png`, byteSize: 10, contentHash: "c".repeat(64) }).run();
+    db.insert(runAttachmentRefs).values({ runId: "replica", attachmentId, inputKey: "prompt", ordinal: 0 }).run();
+    const output = (id: number, name: string, metadata: object) => ({ id, runId: "replica", kind: "document", path: null,
       content: "", blobData: null, entityId: null, contentHash: null, createdAt: new Date("2026-10-17T10:00:00Z"),
       metadata: { outputSelected: true, path: `/Users/laptop/repo/${name}`, fileName: name, byteSize: 10, ...metadata } });
-    replicaOutputs.set("replica-code", [output(-1, "CLAUDE.md", {}), output(-2, "brief.pdf", { outputRole: "deliverable" })]);
+    replicaOutputs.set("replica", [output(-1, "CLAUDE.md", {}), output(-2, "brief.pdf", { outputRole: "deliverable" }),
+      output(-3, "generated.png", { source: "codex_image_generation" })]);
     try {
-      expect((await atlasService.library({ accountId: "default", scope: "generated" })).items.map((entry) => entry.title)).toEqual(["brief.pdf"]);
-    } finally { replicaOutputs.delete("replica-code"); }
+      const outputs = ["CLAUDE.md", "brief.pdf", "generated.png"];
+      for (const [scope, titles] of [["all", [...outputs, "upload.png"]], ["generated", outputs], ["uploads", ["upload.png"]]] as const)
+        expect((await atlasService.library({ accountId: "default", scope })).items.map((entry) => entry.title).sort())
+          .toEqual(mode === "work" ? [...titles].sort() : []);
+      expect((await atlasService.generated({ accountId: "default" })).items.map((item) => item.fileName).sort())
+        .toEqual(mode === "work" ? [...outputs, "upload.png"].sort() : []);
+    } finally { replicaOutputs.delete("replica"); }
   });
   it("selects a native generated image when the completed reply contains no file reference", async () => {
     createRun(db, { id: "inline-image", providerId: "codex", mode: "work", status: "succeeded" });
@@ -423,7 +448,7 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect((await atlasService.generated({ accountId: "default" })).items.map((item) => item.path)).toEqual([fs.realpathSync(image)]);
   });
   it("projects durable image attachments separately from creations and can save their originals", async () => {
-    createRun(db, { id: "uploads", mode: "chat" });
+    createRun(db, { id: "uploads", mode: "work" });
     const [attachment] = (await prepareRunAttachments("uploads", [{ name: "screen.png", type: "image",
       mimeType: "image/png", data: Buffer.from("uploaded original").toString("base64") }]))!;
     createRun(db, { id: "foreign-uploads", accountId: "other", mode: "work" });
@@ -441,7 +466,7 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect((await atlasService.generated({ accountId: "default" })).items).toEqual([]);
   });
   it("excludes historical annotation screenshots while retaining ordinary uploads and chat originals", async () => {
-    createRun(db, { id: "annotations" });
+    createRun(db, { id: "annotations", mode: "work" });
     const files = (await prepareRunAttachments("annotations", [
       { name: "browser-localhost-annotation-abcdef.png", type: "image", mimeType: "image/png", data: Buffer.from("annotation").toString("base64") },
       { name: "browser-localhost-annotation-other.png", type: "image", mimeType: "image/png", data: Buffer.from("ordinary upload").toString("base64") },
@@ -456,8 +481,8 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect((await atlasService.saveFile({ accountId: "default", runId: "annotations", path: files[0].sourcePath })).kind).toBe("image");
   });
   it("uses annotation attachment identity regardless of filename, including inherited fork attachments", async () => {
-    createRun(db, { id: "annotation-source" });
-    createRun(db, { id: "annotation-fork" });
+    createRun(db, { id: "annotation-source", mode: "work" });
+    createRun(db, { id: "annotation-fork", mode: "work" });
     const [image] = (await prepareRunAttachments("annotation-source", [{ name: "capture.png", type: "image",
       mimeType: "image/png", data: Buffer.from("annotation").toString("base64") }], "sent"))!;
     await insertRunInputArtifact("annotation-source", { type: "artifact", kind: "user-prompt", content: "change it",
@@ -492,7 +517,7 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     } finally { replicaOutputs.clear(); }
   });
   it("projects image content hashes across uploads and generated files and refreshes changed outputs", async () => {
-    createRun(db, { id: "hash-uploads" });
+    createRun(db, { id: "hash-uploads", mode: "work" });
     const [upload] = (await prepareRunAttachments("hash-uploads", [{ name: "photo.png", type: "image", mimeType: "image/png",
       data: Buffer.from("same image bytes").toString("base64") }]))!;
     const generated = output("generated.png", "hash-generated");
@@ -562,13 +587,17 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect((await atlasService.generated({ accountId: "default" })).items).toHaveLength(1);
     await expect(atlasService.saveFile({ accountId: "default", runId: "conversation", path: escape })).rejects.toThrow("outside");
   });
-  it("paginates conversations including older generated files", async () => {
+  it("filters out Code and Chat conversations before paginating older Work files", async () => {
     output("one.pdf", "first"); output("two.pdf", "second");
+    db.update(runs).set({ createdAt: new Date("2020-01-01") }).run();
+    for (let index = 0; index < 30; index++)
+      createRun(db, { id: `excluded-${index}`, mode: index % 2 ? "chat" : "developer" });
     const first = await atlasService.generated({ accountId: "default", limit: 1 });
     const second = await atlasService.generated({ accountId: "default", limit: 1, offset: first.nextOffset! });
     expect(first.items).toHaveLength(1); expect(second.items).toHaveLength(1);
     expect(first.items[0].sourceKey).not.toBe(second.items[0].sourceKey);
     expect(second.nextOffset).toBeNull();
+    expect((await atlasService.library({ accountId: "default" })).items.map((entry) => entry.title).sort()).toEqual(["one.pdf", "two.pdf"]);
   });
 });
 describe("Atlas library pagination", { timeout: 15000 }, () => {
@@ -848,6 +877,23 @@ describe("Atlas Pages", { timeout: 15000 }, () => {
     const versions = db.select().from(atlasPageRevisions).where(eq(atlasPageRevisions.itemId, page.item.id)).all()
       .map((row) => row.version).sort((left, right) => right - left);
     expect(versions).toEqual([3, 2, 1]);
+  });
+  it("preserves Page content and history through Trash and rejects writes or permanent deletion in the wrong state", async () => {
+    const first = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "Original" });
+    const identity = { accountId: "default", id: first.item.id };
+    const latest = await atlasService.savePage({ ...identity, title: "Latest notes", expectedVersion: 1, markdown: "Keep this" }, "agent");
+    await expect(atlasService.remove(identity)).rejects.toThrow("Trash");
+    await atlasService.update({ ...identity, trashed: true });
+    await expect(atlasService.savePage({ ...identity, title: "Late write", expectedVersion: 2, markdown: "Wrong" })).rejects.toThrow("Trash");
+    await expect(atlasService.restore({ ...identity, revisionId: first.revision.id, expectedVersion: 2 })).rejects.toThrow("Trash");
+    expect(atlasService.getPage(identity)?.revision).toEqual(latest.revision);
+    expect(atlasService.revisions(identity).map((row) => row.id)).toEqual([latest.revision.id, first.revision.id]);
+    await atlasService.update({ ...identity, trashed: false });
+    expect(atlasService.getPage(identity)?.item).toMatchObject({ title: "Latest notes", version: 2, trashedAt: null });
+    await expect(atlasService.remove(identity)).rejects.toThrow("Trash");
+    await atlasService.update({ ...identity, trashed: true });
+    await atlasService.remove(identity);
+    expect(atlasService.getPage(identity)).toBeNull();
   });
   it("folds a user's autosaves into one revision while the Page version still advances", async () => {
     const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "v1" });

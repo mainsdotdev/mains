@@ -10,14 +10,17 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function liveRun() {
+function liveRun(beforeStart?: (coordinator: ReturnType<typeof createCodexRunCoordinator>) => void, project?: (event: WorkRunEvent) => Promise<void>) {
   const coordinator = createCodexRunCoordinator();
   let notify!: (method: string, params: unknown) => void;
+  let serverRequest!: (id: number | string, method: string, params: unknown) => void;
   const ack = deferred<{ turnId: string }>();
   const sendRequest = vi.fn((method: string, _params: unknown) => method === "turn/steer" ? ack.promise : Promise.resolve({}));
   const server = { isRunning: true, sendRequest,
     setNotificationHandler: (callback: typeof notify) => { notify = callback; },
-    setServerRequestHandler: () => {},
+    setServerRequestHandler: (callback: typeof serverRequest) => { serverRequest = callback; },
+    respondToRequest: vi.fn(),
+    respondToRequestError: vi.fn(),
   } as unknown as CodexAppServer;
   coordinator.installDispatcher(server);
   coordinator.registerRun({ runId: "run", threadId: "parent", mainsCtx: { workspaceId: null, rootPath: null, runId: "run" } });
@@ -25,13 +28,116 @@ function liveRun() {
   const finished = coordinator.executeTurn(server, {
     runId: "run", model: "model", timeout: 5000,
     startTurn: async () => {
+      beforeStart?.(coordinator);
       notify("turn/started", { threadId: "parent", turn: { id: "turn-parent", status: "inProgress" } });
     },
-  }, async (event) => { events.push(event); }, new AbortController().signal);
-  return { coordinator, server, ack, sendRequest, events, finished, notify: (method: string, params: unknown) => notify(method, params) };
+  }, async (event) => { events.push(event); await project?.(event); }, new AbortController().signal);
+  return { coordinator, server, ack, sendRequest, events, finished,
+    serverRequest: (id: number | string, method: string, params: unknown) => serverRequest(id, method, params),
+    notify: (method: string, params: unknown) => notify(method, params) };
 }
 
 describe("Codex active input delivery", () => {
+  it("settles active status rows on shutdown and waits for their persistence", async () => {
+    const closing = deferred<void>();
+    const h = liveRun(undefined, async (event) => {
+      if (event.type === "log" && event.metadata?.source === "codex_runtime_status" && event.metadata.phase === "complete") await closing.promise;
+    });
+    h.notify("model/safetyBuffering/updated", { threadId: "parent", turnId: "turn-parent", model: "model", showBufferingUi: true });
+    await vi.waitFor(() => expect(h.events).toContainEqual(expect.objectContaining({ type: "log", metadata: expect.objectContaining({ phase: "start" }) })));
+    h.coordinator.shutdown();
+    let finished = false;
+    void h.finished.then(() => { finished = true; });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    expect(h.events).toContainEqual(expect.objectContaining({ type: "log", metadata: expect.objectContaining({ phase: "complete", status: "interrupted" }) }));
+    closing.resolve();
+    await expect(h.finished).resolves.toMatchObject({ status: "canceled" });
+  });
+
+  it("releases a failed start even if persisting its error also fails", async () => {
+    const h = liveRun(() => { throw Object.assign(new Error("Native rejection"), { code: -32600, data: { reason: "serverShuttingDown" } }); },
+      async () => { throw new Error("Error storage unavailable"); });
+    try {
+      await expect(h.finished).resolves.toMatchObject({ status: "failed", summary: "Error storage unavailable" });
+      expect(h.coordinator.hasLiveTurn("run")).toBe(false);
+    } finally { h.coordinator.shutdown(); }
+  });
+
+  it("keeps verification, buffering, reviews and hook failures informational until the turn ends", async () => {
+    const h = liveRun();
+    let finished = false;
+    void h.finished.then(() => { finished = true; });
+    h.notify("model/verification", { threadId: "parent", turnId: "turn-parent", verifications: ["trustedAccessForCyber"] });
+    h.notify("model/safetyBuffering/updated", { threadId: "parent", turnId: "turn-parent", model: "model", showBufferingUi: true });
+    h.notify("item/autoApprovalReview/completed", { threadId: "parent", turnId: "turn-parent", reviewId: "review", review: { status: "denied", rationale: "Policy" } });
+    h.notify("hook/completed", { threadId: "parent", turnId: "turn-parent", run: { id: "hook", eventName: "preToolUse", status: "blocked" } });
+    await vi.waitFor(() => expect(h.events.filter((event) => event.type === "log" && event.metadata?.source === "codex_runtime_status")).toHaveLength(4));
+    expect(finished).toBe(false);
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+    await expect(h.finished).resolves.toMatchObject({ status: "succeeded" });
+    h.coordinator.shutdown();
+  });
+
+  it("rejects an unowned human approval using its offered choices without borrowing the live run", async () => {
+    const h = liveRun();
+    try {
+      h.serverRequest("replayed-approval", "item/commandExecution/requestApproval", {
+        threadId: "unowned-thread", kind: "humanCommand", availableDecisions: ["accept", "cancel"],
+      });
+      expect(h.server.respondToRequest).toHaveBeenCalledExactlyOnceWith("replayed-approval", { decision: "cancel" });
+      expect(h.server.respondToRequestError).not.toHaveBeenCalled();
+    } finally { h.coordinator.shutdown(); await h.finished; }
+  });
+
+  it("binds initial input before queued echoes race synchronous turn completion", async () => {
+    let input!: ReturnType<ReturnType<typeof createCodexRunCoordinator>["trackInput"]>;
+    const project = vi.fn().mockResolvedValue(undefined);
+    const h = liveRun((coordinator) => { input = coordinator.trackInput("run", "initial", project); });
+    h.notify("item/started", { threadId: "parent", turnId: "turn-parent", item: { type: "userMessage", clientId: "initial" } });
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+    try {
+      await vi.waitFor(() => expect(project).toHaveBeenCalledExactlyOnceWith("turn-parent"));
+    } finally { input.finish(); await h.finished; h.coordinator.shutdown(); }
+  });
+
+  it("retains uncertainty instead of projecting an ACK for a different turn", async () => {
+    const h = liveRun();
+    const sending = h.coordinator.steerRun(h.server, { runId: "run", clientUserMessageId: "mismatch", message: "guidance" });
+    const refused = expect(sending).rejects.toThrow(/different turn|unknown/i);
+    try {
+      h.ack.resolve({ turnId: "replacement-turn" }); await refused;
+      expect(h.events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toHaveLength(0);
+      await expect(h.coordinator.steerRun(h.server, { runId: "run", clientUserMessageId: "mismatch", message: "guidance" })).rejects.toThrow("already");
+      expect(h.sendRequest.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(1);
+    } finally { h.coordinator.shutdown(); await h.finished; }
+  });
+
+  it("does not project a late steer ACK after its execution owner has shut down", async () => {
+    const h = liveRun();
+    const sending = h.coordinator.steerRun(h.server, { runId: "run", clientUserMessageId: "late", message: "guidance" });
+    const refused = expect(sending).rejects.toThrow(/closed|unknown/i);
+    h.coordinator.shutdown(); await h.finished;
+    h.ack.resolve({ turnId: "turn-parent" });
+    await refused;
+    expect(h.events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toHaveLength(0);
+  });
+
+  it("ignores a matching client id echoed by another parent turn", async () => {
+    const h = liveRun();
+    const sending = h.coordinator.steerRun(h.server, { runId: "run", clientUserMessageId: "client", message: "guidance" });
+    h.notify("item/started", { threadId: "parent", turnId: "older-turn",
+      item: { type: "userMessage", clientId: "client", content: [{ type: "text", text: "guidance" }] } });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(h.events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toHaveLength(0);
+    } finally {
+      h.ack.resolve({ turnId: "turn-parent" }); await sending;
+      h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+      await h.finished; h.coordinator.shutdown();
+    }
+  });
+
   it.each(["error", "turn/completed"])("returns actionable failure guidance from %s", async (method) => {
     const h = liveRun();
     const error = { message: "Native model failure", codexErrorInfo: "modelNotFound" };

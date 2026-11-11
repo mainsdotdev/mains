@@ -30,3 +30,11 @@ test("transient response metadata keeps its stable wire identity", () => {
     { key: "stream-answer", kind: "response", text: "Partial", at: 42 },
   ]);
 });
+
+test("identical text in an older message cannot acknowledge a different live stream", () => {
+  const projected = projectStreamingTranscript([
+    { key: "response-old", kind: "response", text: "Done", at: 1, streamId: "old-message" },
+  ], [{ key: "stream-new", streamId: "new-message", text: "Done", at: 20 }]);
+  assert.equal(projected.streamingItems.length, 1);
+  assert.deepEqual([...projected.persistedStreamIds], ["old-message"]);
+});

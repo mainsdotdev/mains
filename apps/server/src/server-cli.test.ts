@@ -65,6 +65,27 @@ describe("runServerCli argument validation", () => {
 });
 
 describe("runServerCli token rotation", () => {
+  it("cancels a pending start on SIGTERM without committing a rotated token", async () => {
+    const dataDir = makeDataDir(), original = prepareStandaloneServerToken(dataDir);
+    commitStandaloneServerToken(original);
+    const signals = new Map<string, (...args: any[]) => void>();
+    vi.spyOn(process, "once").mockImplementation((event, listener) => { signals.set(String(event), listener); return process; });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    mocks.startStandaloneServer.mockImplementationOnce((options) => new Promise((_resolve, reject) => {
+      release = () => reject(new Error("Canceled startup"));
+      options.signal?.addEventListener("abort", release, { once: true }); entered();
+    }));
+    const running = runServerCli(["serve", "--rotate-token", "--data-dir", dataDir, "--no-pairing"]);
+    void running.catch(() => {}); await started;
+    try {
+      expect(signals.get("SIGTERM")).toBeTypeOf("function");
+      signals.get("SIGTERM")!("SIGTERM"); await running;
+      expect(readStandaloneServerToken(dataDir)).toBe(original.token);
+    } finally { release(); await Promise.allSettled([running]); }
+  });
+
   it("keeps the stored token when server startup fails", async () => {
     const dataDir = makeDataDir();
     const original = prepareStandaloneServerToken(dataDir);

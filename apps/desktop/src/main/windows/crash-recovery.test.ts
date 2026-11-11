@@ -34,6 +34,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 beforeEach(() => {
   mocks.showMessageBox.mockReset();
+  vi.mocked(mocks.app.quit).mockClear();
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -150,17 +151,98 @@ describe("attachCrashRecovery", () => {
     expect(mocks.showMessageBox).toHaveBeenCalledTimes(2);
   });
 
-  // Keep last: quitting is one-way for the module.
-  it("does nothing once the app is quitting", () => {
+  it("ignores a late Reload response from a hang prompt after the window recovered", async () => {
     const { window, contents } = fakeWindow();
+    let answer!: (value: { response: number }) => void;
+    mocks.showMessageBox.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
     attachCrashRecovery(window as unknown as BrowserWindow);
+    window.emit("unresponsive");
+    window.emit("responsive");
+    answer({ response: 1 });
+    await flush();
+    expect(contents.forcefullyCrashRenderer).not.toHaveBeenCalled();
+    expect(contents.reload).not.toHaveBeenCalled();
+  });
+
+  it("keeps one crash-loop prompt while more crash events arrive", async () => {
+    const { window, contents } = fakeWindow();
+    let answer!: (value: { response: number }) => void;
+    mocks.showMessageBox.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    attachCrashRecovery(window as unknown as BrowserWindow, createCrashLoopGuard(1));
+    contents.emit("render-process-gone", ...gone("crashed"));
+    contents.emit("render-process-gone", ...gone("crashed"));
+    expect(mocks.showMessageBox).toHaveBeenCalledOnce();
+    answer({ response: 0 }); await flush();
+    expect(contents.reload).toHaveBeenCalledOnce();
+  });
+
+  it("retires a hang prompt when a crash already restarted its renderer", async () => {
+    const { window, contents } = fakeWindow();
+    let answer!: (value: { response: number }) => void;
+    mocks.showMessageBox.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    attachCrashRecovery(window as unknown as BrowserWindow);
+    window.emit("unresponsive");
+    contents.emit("render-process-gone", ...gone("oom"));
+    answer({ response: 1 }); await flush();
+    expect(contents.reload).toHaveBeenCalledOnce();
+    expect(contents.forcefullyCrashRenderer).not.toHaveBeenCalled();
+  });
+
+  it.each(["hang", "crash"])("retires a pending %s response and listeners when the window closes", async (kind) => {
+    const { window, contents } = fakeWindow();
+    let answer!: (value: { response: number }) => void;
+    mocks.showMessageBox.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    attachCrashRecovery(window as unknown as BrowserWindow, createCrashLoopGuard(1));
+    if (kind === "hang") window.emit("unresponsive");
+    else contents.emit("render-process-gone", ...gone("crashed"));
+    const signal = mocks.showMessageBox.mock.calls[0][1].signal;
+    window.emit("closed");
+    answer({ response: 1 }); await flush();
+    expect(signal.aborted).toBe(true);
+    expect(contents.listenerCount("render-process-gone")).toBe(0);
+    expect(window.listenerCount("unresponsive")).toBe(0);
+    expect(contents.reload).not.toHaveBeenCalled();
+    expect(contents.forcefullyCrashRenderer).not.toHaveBeenCalled();
+    expect(mocks.app.quit).not.toHaveBeenCalled();
+  });
+
+  it("allows a retry after the native prompt rejects", async () => {
+    const { window } = fakeWindow();
+    mocks.showMessageBox.mockRejectedValueOnce(new Error("Dialog unavailable")).mockResolvedValue({ response: 0 });
+    attachCrashRecovery(window as unknown as BrowserWindow);
+    window.emit("unresponsive"); await flush();
+    window.emit("unresponsive"); await flush();
+    expect(mocks.showMessageBox).toHaveBeenCalledTimes(2);
+    expect(console.error).toHaveBeenCalledWith("Unable to show window recovery prompt:", expect.any(Error));
+  });
+
+  it("attaches one recovery owner per window and releases it explicitly", () => {
+    const { window, contents } = fakeWindow();
+    const dispose = attachCrashRecovery(window as unknown as BrowserWindow);
+    expect(attachCrashRecovery(window as unknown as BrowserWindow)).toBe(dispose);
+    contents.emit("render-process-gone", ...gone("oom"));
+    expect(contents.reload).toHaveBeenCalledOnce();
+    dispose(); dispose();
+    contents.emit("render-process-gone", ...gone("oom"));
+    expect(contents.reload).toHaveBeenCalledOnce();
+  });
+
+  // Keep last: quitting is one-way for the module.
+  it("does nothing once the app is quitting, including a pending Reload response", async () => {
+    const { window, contents } = fakeWindow();
+    let answer!: (value: { response: number }) => void;
+    mocks.showMessageBox.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    attachCrashRecovery(window as unknown as BrowserWindow);
+    window.emit("unresponsive");
     mocks.app.emit("before-quit");
+    answer({ response: 1 }); await flush();
 
     contents.emit("render-process-gone", ...gone("killed"));
     window.emit("unresponsive");
 
     expect(contents.reload).not.toHaveBeenCalled();
-    expect(mocks.showMessageBox).not.toHaveBeenCalled();
+    expect(mocks.showMessageBox).toHaveBeenCalledOnce();
+    expect(contents.forcefullyCrashRenderer).not.toHaveBeenCalled();
   });
 });
 

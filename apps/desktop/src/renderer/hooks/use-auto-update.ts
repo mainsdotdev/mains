@@ -1,68 +1,46 @@
-import { useState, useEffect, useCallback } from "react";
-
-type UpdateStatus =
-  | "idle"
-  | "checking"
-  | "available"
-  | "not-available"
-  | "downloading"
-  | "downloaded"
-  | "error";
-
-type UpdateInfo = {
-  version: string;
-  releaseDate?: string;
-  releaseNotes?: string;
-};
-
-type UpdateProgress = {
-  percent: number;
-  bytesPerSecond: number;
-  transferred: number;
-  total: number;
-};
-
-type UpdateState = {
-  status: UpdateStatus;
-  info: UpdateInfo | null;
-  progress: UpdateProgress | null;
-  error: string | null;
-};
-
-const INITIAL_STATE: UpdateState = {
-  status: "idle",
-  info: null,
-  progress: null,
-  error: null,
-};
+import { useState, useEffect, useCallback, useRef } from "react";
+import { createUpdateProjection, initialUpdateState } from "../../shared/update-lifecycle";
 
 export function useAutoUpdate() {
-  const [state, setState] = useState<UpdateState>(INITIAL_STATE);
+  const [state, setState] = useState(initialUpdateState);
+  const owner = useRef<ReturnType<typeof createUpdateProjection> | null>(null);
 
   useEffect(() => {
-    // Fetch current state from main process on mount
-    window.api.updates.getStatus().then((result: any) => {
-      if (result?.success && result.data) {
-        setState(result.data);
-      }
-    });
-
-    // Listen for state changes pushed from main process
-    const unsubscribe = window.api.updates.onStatusChange((data: UpdateState) => {
-      if (data) setState(data);
-    });
-    return () => { unsubscribe(); };
+    const projection = createUpdateProjection(setState);
+    owner.current = projection;
+    const read = projection.read();
+    // Update status belongs to the local shell even while a remote backend is
+    // selected. Subscribe before reading so synchronous pushes cannot be lost.
+    const off = window.api.updates.onStatusChange(projection.push);
+    void (async () => {
+      try {
+        const result = await window.api.updates.getStatus();
+        if (result?.success && result.data) read.apply(result.data);
+        else read.fail(result?.error);
+      } catch (error) { read.fail(error); }
+    })();
+    return () => { projection.close(); off(); if (owner.current === projection) owner.current = null; };
   }, []);
 
   const check = useCallback(async () => {
-    const result = await window.api.updates.checkForUpdates();
-    if (result?.success && result.data) {
-      setState(result.data);
-    }
+    const read = owner.current?.read();
+    if (!read) return;
+    try {
+      const result = await window.api.updates.checkForUpdates();
+      if (result?.success && result.data) read.apply(result.data);
+      else read.fail(result?.error);
+    } catch (error) { read.fail(error); }
   }, []);
 
   const install = useCallback(() => {
-    window.api.updates.quitAndInstall();
+    const read = owner.current?.read();
+    if (!read) return;
+    void (async () => {
+      try {
+        const result = await window.api.updates.quitAndInstall();
+        if (!result?.success) read.fail(result?.error);
+      } catch (error) { read.fail(error); }
+    })();
   }, []);
 
   return { state, check, install };

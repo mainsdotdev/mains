@@ -18,6 +18,8 @@ interface McpDisplayProps {
   status?: ToolStatus;
   runId?: string;
   mcpApp?: McpAppToolMetadata;
+  /** Native background tasks return a placeholder, without an app payload. */
+  backgroundTask?: boolean;
 }
 
 function formatCodePayload(raw: string): string {
@@ -76,6 +78,7 @@ export function McpDisplay({
   status = "done",
   runId,
   mcpApp,
+  backgroundTask = false,
 }: McpDisplayProps) {
   const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const resolvedIcon = icon ?? resolveTool(displayName).icon;
@@ -97,6 +100,7 @@ export function McpDisplay({
 
       {runId &&
         mcpApp &&
+        !backgroundTask &&
         status === "done" &&
         hasUsableMcpAppResult(output) && (
           <McpAppLauncher

@@ -40,7 +40,6 @@ interface NavigationRailProps {
 export function NavigationRail({
   showTasks,
   pluginsAvailable,
-  atlasAvailable,
   spaces,
   activeSpaceId,
   onHomeClick,
@@ -65,7 +64,7 @@ export function NavigationRail({
   const destinations: Array<{
     label: string; path: string; Icon: typeof Plugin; disabled?: boolean;
   }> = [
-    { label: "Atlas", path: "/atlas", Icon: Globe, disabled: !atlasAvailable },
+    { label: "Atlas", path: "/atlas", Icon: Globe },
     {
       label: "Plugins",
       path: "/plugins",

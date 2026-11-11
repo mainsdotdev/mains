@@ -1,4 +1,11 @@
-import { ReactNode, useState } from "react";
+import { useStore } from "react-redux";
+import type { RootState } from "@/lib/redux";
+import { useAppSelector } from "@/lib/redux/hooks";
+import { useGetAppSettingsQuery } from "@/lib/redux/api";
+import { appSettingsApi } from "@/lib/redux/api/appSettingsApi";
+import { getTransport, onTransportChange } from "@/lib/transport";
+import { createConnectionWizardLifecycle, type ConnectionWizardLifecycle } from "../../../lib/connection-wizard-lifecycle";
+import { ReactNode, createContext, useContext, useLayoutEffect, useState } from "react";
 
 import {
   ErrorText,
@@ -24,6 +31,13 @@ import { useConnectionModalState } from "./use-connection-modal-state";
 import { ConnectionLoadingStep } from "./connection-loading-step";
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import { withMinDelay } from "@/lib/with-min-delay";
+
+const OwnerContext = createContext<ConnectionWizardLifecycle | null>(null);
+function useConnectionOwner() {
+  const owner = useContext(OwnerContext);
+  if (!owner) throw new Error("Connection wizard owner is missing");
+  return owner;
+}
 
 const CRED_MIN_LOADING_MS = 800;
 const SAVE_MIN_LOADING_MS = 1000;
@@ -66,6 +80,7 @@ export interface ResourceWizardConfig {
     render: (ctx: {
       submitValues: (values: Record<string, string>) => Promise<void>;
       submitting: boolean;
+      isCurrent: () => boolean;
     }) => ReactNode;
   };
 
@@ -98,6 +113,7 @@ export interface ResourceWizardConfig {
 
 interface WizardData {
   connectionId: string;
+  revision?: string;
   items: any[];
   selectedIds: Set<string>;
   current: any[];
@@ -117,6 +133,7 @@ interface ResourceWizardModalProps {
   /** Provider-specific "fetch all" trigger; caller invokes the lazy hook. */
   fetchAllResources: (
     connectionId: string,
+    scope?: string,
   ) => Promise<any[]>;
 }
 
@@ -132,10 +149,12 @@ function CredentialsStep({
   config: ResourceWizardConfig;
   fetchAllResources: (
     connectionId: string,
+    scope?: string,
   ) => Promise<any[]>;
   onSuccess?: () => void;
 }) {
   const { data, setData, goTo } = useWizard<WizardData>();
+  const owner = useConnectionOwner();
   const [loading, setLoading] = useState(false);
   const [method, setMethod] = useState<"alternative" | "token">(
     config.credentialAlternative ? "alternative" : "token",
@@ -146,36 +165,45 @@ function CredentialsStep({
   // Shared submit tail — both the token form and any alternative sign-in
   // method (device flow) land here with the same credential values shape.
   const submitValues = async (formValues: Record<string, string>) => {
+    const lease = owner.begin("credentials");
+    if (!lease) return;
     setLoading(true);
     setData({ errorMessage: "" });
 
     try {
       const work = (async () => {
-        const connection = await getConnection(config.provider).unwrap();
+        const connection = await getConnection({ id: config.provider, scope: owner.scope }).unwrap();
+        lease.assertCurrent();
         const connId = connection.id;
 
-        await saveCredentials({
+        const saved = await saveCredentials({
+          expectedRevision: connection.revision,
           provider: config.provider,
           connectionId: connId,
           ...config.buildCredentials(formValues),
         }).unwrap();
 
-        onSuccess?.();
-
-        const items = await fetchAllResources(connId);
-        return { connId, items };
+        lease.assertCurrent();
+        const items = await fetchAllResources(connId, owner.scope);
+        lease.assertCurrent();
+        return { connId, items, revision: saved?.revision };
       })();
 
-      const { connId, items } = await withMinDelay(work, CRED_MIN_LOADING_MS);
+      const { connId, items, revision } = await withMinDelay(work, CRED_MIN_LOADING_MS);
+      lease.assertCurrent();
 
       setData({
         connectionId: connId,
+        revision,
         items,
         isFirstConnection: true,
         fromManage: false,
+        ...Object.fromEntries(config.credentialFields.map((field) => [field.dataKey, ""])),
       });
-      goTo("add");
+      if (lease.move("add")) goTo("add");
+      onSuccess?.();
     } catch (err) {
+      if (!lease.current()) return;
       console.error(`[${config.provider}] credentials submit:`, err);
       setData({
         errorMessage: extractErrorMessage(
@@ -184,7 +212,8 @@ function CredentialsStep({
         ),
       });
     } finally {
-      setLoading(false);
+      if (lease.current()) setLoading(false);
+      lease.finish();
     }
   };
 
@@ -240,6 +269,7 @@ function CredentialsStep({
         id="connection-auth-method-tabs"
         value={method}
         onChange={(next) => {
+          if (loading) return;
           setMethod(next);
           setData({ errorMessage: "" });
         }}
@@ -251,9 +281,8 @@ function CredentialsStep({
         aria-label="Authentication method"
         className="w-fit"
       />
-      {/* Both panes stay mounted in the same grid cell so the modal keeps
-          one height across tabs (the taller pane sets it) and each tab's
-          state survives switching. */}
+      {/* Unmount the inactive device-flow pane so hidden polls cannot
+          deliver credentials through an earlier callback. */}
       <div
         id="connection-auth-method-panel"
         role="tabpanel"
@@ -277,7 +306,7 @@ function CredentialsStep({
           }`}
           aria-hidden={method === "token"}
         >
-          {alternative.render({ submitValues, submitting: loading })}
+          {method === "alternative" ? alternative.render({ submitValues, submitting: loading, isCurrent: owner.current }) : null}
           {data.errorMessage ? <ErrorText>{data.errorMessage}</ErrorText> : null}
         </div>
       </div>
@@ -297,6 +326,7 @@ function SelectStep({
   onComplete: () => void;
 }) {
   const { data, setData, goTo } = useWizard<WizardData>();
+  const owner = useConnectionOwner();
   const [loading, setLoading] = useState(false);
   const [saveResources] = useSaveResourcesMutation();
   const [getSelected] = useLazyGetSelectedResourcesQuery();
@@ -304,6 +334,7 @@ function SelectStep({
   const selectedIds = data.selectedIds || new Set<string>();
 
   const toggle = (id: string | number) => {
+    if (loading) return;
     const key = String(id);
     const next = new Set(selectedIds);
     if (next.has(key)) next.delete(key);
@@ -319,6 +350,8 @@ function SelectStep({
       return;
     }
 
+    const lease = owner.begin("save");
+    if (!lease) return;
     setLoading(true);
     setData({ errorMessage: "" });
 
@@ -327,40 +360,47 @@ function SelectStep({
         const selectedItems = data.items.filter((item) =>
           selectedIds.has(config.identityForItem(item)),
         );
-        await saveResources({
+        const saved = await saveResources({
+          expectedRevision: data.revision,
           provider: config.provider,
           connectionId: data.connectionId,
           resources: selectedItems,
         }).unwrap();
 
+        lease.assertCurrent();
         if (data.fromManage) {
-          const result = await getSelected(config.provider).unwrap();
-          return result.items;
+          const result = await getSelected({ id: config.provider, scope: owner.scope }).unwrap();
+          lease.assertCurrent();
+          return result;
         }
-        return null;
+        return { items: [], revision: saved?.revision };
       })();
 
       const refetched = await withMinDelay(work, SAVE_MIN_LOADING_MS);
+      lease.assertCurrent();
 
       if (data.fromManage) {
         if (refetched) {
-          setData({ current: refetched, selectedIds: new Set() });
+          setData({ current: refetched.items, revision: refetched.revision, selectedIds: new Set() });
         }
-        goTo("manage");
+        if (lease.move("manage")) goTo("manage");
       } else {
         onComplete();
       }
     } catch (err) {
+      if (!lease.current()) return;
       setData({ errorMessage: extractErrorMessage(err) });
     } finally {
-      setLoading(false);
+      if (lease.current()) setLoading(false);
+      lease.finish();
     }
   };
 
   const handleBack = () => {
-    if (data.fromManage) goTo("manage");
+    if (loading) return;
+    if (data.fromManage && owner.back("manage")) goTo("manage");
     else if (data.isFirstConnection) onComplete();
-    else goTo("setToken");
+    else if (owner.back("setToken")) goTo("setToken");
   };
 
   const saveLabel =
@@ -400,30 +440,41 @@ function ManageStep({
   config: ResourceWizardConfig;
   fetchAllResources: (
     connectionId: string,
+    scope?: string,
   ) => Promise<any[]>;
   onRevoke: () => void;
 }) {
   const { data, setData, goTo } = useWizard<WizardData>();
+  const owner = useConnectionOwner();
   const [loading, setLoading] = useState(false);
   const [deleteResource] = useDeleteResourceMutation();
   const [getSelected] = useLazyGetSelectedResourcesQuery();
 
   const handleRemove = async (resourceId: string) => {
-    setData({ errorMessage: "" });
-    try {
-      await deleteResource(resourceId).unwrap();
-      const result = await getSelected(config.provider).unwrap();
-      setData({ current: result.items });
-    } catch (err) {
-      setData({ errorMessage: extractErrorMessage(err) });
-    }
-  };
-
-  const handleAddNew = async () => {
+    const lease = owner.begin("remove");
+    if (!lease) return;
     setLoading(true);
     setData({ errorMessage: "" });
     try {
-      const items = await fetchAllResources(data.connectionId);
+      await deleteResource(resourceId).unwrap();
+      lease.assertCurrent();
+      const result = await getSelected({ id: config.provider, scope: owner.scope }).unwrap();
+      lease.assertCurrent();
+      setData({ current: result.items, revision: result.revision });
+    } catch (err) {
+      if (!lease.current()) return;
+      setData({ errorMessage: extractErrorMessage(err) });
+    } finally { if (lease.current()) setLoading(false); lease.finish(); }
+  };
+
+  const handleAddNew = async () => {
+    const lease = owner.begin("discover");
+    if (!lease) return;
+    setLoading(true);
+    setData({ errorMessage: "" });
+    try {
+      const items = await fetchAllResources(data.connectionId, owner.scope);
+      lease.assertCurrent();
       const currentIds = new Set(data.current.map(config.identityForCurrent));
       const available = items.filter(
         (item) => !currentIds.has(config.identityForItem(item)),
@@ -439,11 +490,13 @@ function ManageStep({
         selectedIds: new Set(),
         fromManage: true,
       });
-      goTo("add");
+      if (lease.move("add")) goTo("add");
     } catch (err) {
+      if (!lease.current()) return;
       setData({ errorMessage: extractErrorMessage(err) });
     } finally {
-      setLoading(false);
+      if (lease.current()) setLoading(false);
+      lease.finish();
     }
   };
 
@@ -484,14 +537,33 @@ function capitalize(s: string): string {
 // Modal
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function ResourceWizardModal({
+export function ResourceWizardModal(props: ResourceWizardModalProps) {
+  const backendId = useAppSelector((state) => state.backends.activeBackendId);
+  const { data: settings } = useGetAppSettingsQuery();
+  const [transportRevision, setTransportRevision] = useState(0);
+  useLayoutEffect(() => onTransportChange(() => setTransportRevision((value) => value + 1)), []);
+  if (!props.open) return null;
+  return <ResourceWizardContent key={JSON.stringify([props.config.provider, backendId, settings?.accountId, transportRevision])} {...props} backendId={backendId} accountId={settings?.accountId} />;
+}
+
+function ResourceWizardContent({
   open,
   onClose,
   isConnected,
   onSuccess,
   config,
   fetchAllResources,
-}: ResourceWizardModalProps) {
+  backendId,
+  accountId,
+}: ResourceWizardModalProps & { backendId: string | null; accountId?: string }) {
+  const store = useStore<RootState>();
+  const [owner] = useState(() => {
+    const transport = getTransport();
+    return createConnectionWizardLifecycle(() => {
+      const state = store.getState();
+      return getTransport() === transport && state.backends.activeBackendId === backendId && appSettingsApi.endpoints.getAppSettings.select()(state).data?.accountId === accountId;
+    });
+  });
   const [getSelected] = useLazyGetSelectedResourcesQuery();
 
   const baseData: Partial<WizardData> = {
@@ -515,6 +587,7 @@ export function ResourceWizardModal({
     handleRevoke,
     isRevoking,
   } = useConnectionModalState<WizardData>({
+    owner,
     open,
     onClose,
     isConnected,
@@ -522,10 +595,11 @@ export function ResourceWizardModal({
     appName: config.appName,
     baseData,
     fetchSelected: async () => {
-      const result = await getSelected(config.provider).unwrap();
+      const result = await getSelected({ id: config.provider, scope: owner.scope }).unwrap();
       return {
         connectionId: result.connectionId,
         current: result.items,
+        revision: result.revision,
       };
     },
   });
@@ -567,7 +641,7 @@ export function ResourceWizardModal({
   ];
 
   return (
-    <>
+    <OwnerContext.Provider value={owner}>
       <WizardModal
         open={open}
         onOpenChange={(isOpen) => !isOpen && handleClose()}
@@ -588,6 +662,6 @@ export function ResourceWizardModal({
           description={config.revokeDescription}
         />
       )}
-    </>
+    </OwnerContext.Provider>
   );
 }

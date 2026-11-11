@@ -1,15 +1,10 @@
 import type { AuthEnv } from "./identity";
 import { HttpError } from "./auth-http";
 import { createBridgeSubscriptions } from "./subscriptions";
-
-export const BRIDGE_BETA_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+import { betaActivation, bridgeAccessDecision, reusableBetaActivation, type BetaInvite, type BridgeAccess } from "./entitlement-lifecycle";
+export { BRIDGE_BETA_DURATION_MS, type BetaInvite, type BridgeAccess } from "./entitlement-lifecycle";
 export const BRIDGE_ACCESS_UNAVAILABLE = "Bridge access is not available for this account yet.";
 type VerifiedUser = { id: string; email: string; emailVerified: boolean };
-export interface BetaInvite {
-  email: string; account_id: string | null; status: "invited" | "active" | "revoked";
-  invited_at: number; activated_at: number | null; expires_at: number | null;
-}
-export type BridgeAccess = "allowed" | "invited" | "unavailable";
 
 async function invitation(env: AuthEnv, user: VerifiedUser): Promise<BetaInvite | null> {
   return env.AUTH_DB!.prepare(`SELECT email,account_id,status,invited_at,activated_at,expires_at FROM bridge_beta_invites WHERE account_id=?
@@ -22,13 +17,14 @@ async function invitation(env: AuthEnv, user: VerifiedUser): Promise<BetaInvite 
 export async function bridgeAccess(env: AuthEnv, user: VerifiedUser): Promise<BridgeAccess> {
   if (!user.emailVerified) return "unavailable";
   const { subscription } = await createBridgeSubscriptions(env).status(user.id);
-  if (subscription.canUpload) return "allowed";
+  const input = { accountId: user.id, verified: user.emailVerified, subscription };
+  const direct = bridgeAccessDecision(input);
+  if (direct) return direct;
   const invite = await invitation(env, user);
-  if (invite?.status === "invited" && invite.activated_at === null) return "invited";
-  if (invite?.account_id === user.id && invite.activated_at !== null) return "allowed";
-  if (subscription.status !== "none" && subscription.status !== "unavailable") return "allowed";
+  const invited = bridgeAccessDecision({ ...input, invite });
+  if (invited) return invited;
   const existing = await env.AUTH_DB!.prepare("SELECT 1 FROM bridge_accounts WHERE account_id=?").bind(user.id).first();
-  return existing ? "allowed" : "unavailable";
+  return bridgeAccessDecision({ ...input, invite, existingAccount: !!existing }) ?? "unavailable";
 }
 export async function requireBridgeAccess(env: AuthEnv, user: VerifiedUser): Promise<void> {
   const access = await bridgeAccess(env, user);
@@ -44,12 +40,10 @@ export async function activateBridgeBeta(env: AuthEnv, user: VerifiedUser, now =
   if (!user.emailVerified) throw new HttpError(403, BRIDGE_ACCESS_UNAVAILABLE);
   // One conditional statement claims and starts the invitation. Concurrent
   // clicks, login retries and additional devices cannot move either timestamp.
-  const row = await env.AUTH_DB!.prepare(`UPDATE bridge_beta_invites SET account_id=?,status='active',activated_at=?,expires_at=?,updated_at=?
-    WHERE email=? AND account_id IS NULL AND status='invited' AND activated_at IS NULL
-    AND NOT EXISTS(SELECT 1 FROM bridge_beta_invites WHERE account_id=?) RETURNING *`)
-    .bind(user.id, now, now + BRIDGE_BETA_DURATION_MS, now, user.email.trim().toLowerCase(), user.id).first<BetaInvite>();
+  const command = betaActivation(user.id, user.email.trim().toLowerCase(), now);
+  const row = await env.AUTH_DB!.prepare(command.sql).bind(...command.params).first<BetaInvite>();
   if (row) return row;
   const existing = await invitation(env, user);
-  if (existing?.account_id === user.id && existing.activated_at !== null && existing.status === "active") return existing;
+  if (reusableBetaActivation(existing, user.id)) return existing!;
   throw new HttpError(403, BRIDGE_ACCESS_UNAVAILABLE);
 }

@@ -60,6 +60,188 @@ afterEach(async () => {
 });
 
 describe("Codex capabilities", () => {
+  it("retries a failed feature probe instead of retaining its rejected promise", async () => {
+    let probes = 0;
+    const server = { sendRequest: vi.fn(async (method: string) => {
+      if (method !== "experimentalFeature/list") return { marketplaces: [] };
+      if (++probes === 1) throw new Error("temporary probe failure");
+      return { data: [{ name: "plugins", enabled: true }], nextCursor: null };
+    }) } as unknown as CodexAppServer;
+    const capabilities = createCodexCapabilities({ ensureServer: async () => server, getRunningServer: () => server, getCliHealth: vi.fn() });
+    expect((await capabilities.listPlugins()).remoteSyncError).toContain("temporary probe failure");
+    expect((await capabilities.listPlugins()).remoteSyncError).toBeNull();
+    expect(probes).toBe(2);
+    capabilities.shutdown();
+  });
+
+  it("rejects a repeated inventory cursor without publishing its partial result", async () => {
+    const sendRequest = vi.fn().mockResolvedValueOnce({ data: [], nextCursor: "same" })
+      .mockResolvedValueOnce({ data: [], nextCursor: "same" }).mockRejectedValue(new Error("unexpected next page"));
+    const server = { sendRequest } as unknown as CodexAppServer;
+    const capabilities = createCodexCapabilities({ ensureServer: async () => server, getRunningServer: () => server, getCliHealth: vi.fn() });
+    await expect(capabilities.readMcpInventory()).rejects.toThrow("repeated MCP inventory cursor");
+    expect(sendRequest).toHaveBeenCalledTimes(2);
+    sendRequest.mockResolvedValue({ data: [], nextCursor: null });
+    await expect(capabilities.readMcpInventory()).resolves.toEqual([]);
+    capabilities.shutdown();
+  });
+
+  it("does not request the next MCP inventory page after its server owner retires", async () => {
+    let finish!: (value: unknown) => void;
+    const sendRequest = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
+      .mockResolvedValue({ data: [], nextCursor: null });
+    const server = { sendRequest } as unknown as CodexAppServer;
+    const capabilities = createCodexCapabilities({ ensureServer: async () => server, getRunningServer: () => server, getCliHealth: vi.fn() });
+    const pending = capabilities.readMcpInventory().catch((error: unknown) => error);
+    await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledOnce());
+    capabilities.onServerClosed(); finish({ data: [], nextCursor: "obsolete-page" }); await pending;
+    await new Promise<void>((resolve) => setImmediate(resolve)); expect(sendRequest).toHaveBeenCalledOnce();
+  });
+
+  it("does not read installed-plugin assets from a response delivered after shutdown", async () => {
+    let finish!: (value: unknown) => void;
+    const sendRequest = vi.fn((method: string) => method === "experimentalFeature/list"
+      ? Promise.resolve({ data: [{ name: "plugins", enabled: true }], nextCursor: null })
+      : new Promise((resolve) => { finish = resolve; }));
+    const server = { sendRequest } as unknown as CodexAppServer;
+    const capabilities = createCodexCapabilities({ ensureServer: async () => server, getRunningServer: () => server, getCliHealth: vi.fn() });
+    const read = vi.spyOn(fs.promises, "readFile");
+    try {
+      const pending = capabilities.listInstalledPlugins();
+      await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledWith("plugin/installed", {}, 30000));
+      capabilities.shutdown();
+      finish({ marketplaces: [{ name: "retired", plugins: [{ id: "late", interface: { logo: "/retired/catalog/logo.svg" } }] }] });
+      await pending; await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(read.mock.calls.filter(([file]) => file === "/retired/catalog/logo.svg")).toHaveLength(0);
+    } finally { read.mockRestore(); }
+  });
+
+  it("claims an installed-plugin refresh before reentrant server acquisition", async () => {
+    const server = { sendRequest: vi.fn(async (method: string) => method === "experimentalFeature/list"
+      ? { data: [{ name: "plugins", enabled: true }], nextCursor: null }
+      : { marketplaces: [] }) } as unknown as CodexAppServer;
+    let repeated: Promise<unknown> | undefined;
+    let first = true;
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => { if (first) { first = false; repeated = capabilities.listInstalledPlugins(); } return server; },
+      getRunningServer: () => server, getCliHealth: vi.fn(),
+    });
+    await capabilities.listInstalledPlugins(); await repeated;
+    expect(vi.mocked(server.sendRequest).mock.calls.filter(([method]) => method === "plugin/installed")).toHaveLength(1);
+  });
+
+  it("abandons an unused catalog before reading its assets and reuses its pending native request on return", async () => {
+    let finish!: (result: unknown) => void;
+    const sendRequest = vi.fn((method: string) => method === "experimentalFeature/list"
+      ? Promise.resolve({ data: [{ name: "plugins", enabled: true }], nextCursor: null })
+      : new Promise((resolve) => { finish = resolve; }));
+    const server = { sendRequest } as unknown as CodexAppServer;
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server, getRunningServer: () => server,
+      getCliHealth: vi.fn(),
+    });
+    const controller = new AbortController();
+    let outcome = "pending";
+    const abandoned = capabilities.listPlugins(controller.signal).then(
+      () => { outcome = "completed"; },
+      () => { outcome = "aborted"; },
+    );
+    await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledWith("plugin/list", {}, 30000));
+    controller.abort();
+    await abandoned;
+    expect(outcome).toBe("aborted");
+    const returning = capabilities.listPlugins();
+    finish({ marketplaces: [{ name: "fixture", plugins: [{ id: "demo", name: "demo" }] }] });
+    await abandoned;
+    expect((await returning).marketplaces[0].plugins[0].id).toBe("demo");
+    expect(sendRequest.mock.calls.filter(([method]) => method === "plugin/list")).toHaveLength(1);
+  });
+
+  it("does not synchronously read catalog assets on the backend event loop", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-plugin-assets-"));
+    tempDirs.push(dir);
+    const logo = path.join(dir, "logo.svg");
+    fs.writeFileSync(logo, "<svg/>");
+    const read = vi.spyOn(fs, "readFileSync");
+    try {
+      const server = { sendRequest: vi.fn(async (method: string) => method === "experimentalFeature/list"
+        ? { data: [{ name: "plugins", enabled: true }], nextCursor: null }
+        : { marketplaces: [{ name: "fixture", plugins: [{ id: "demo", interface: { logo } }] }] }),
+      } as unknown as CodexAppServer;
+      const capabilities = createCodexCapabilities({
+        ensureServer: async () => server, getRunningServer: () => server, getCliHealth: vi.fn(),
+      });
+      const result = await capabilities.listPlugins();
+      expect(result.marketplaces[0].plugins[0].interface?.logo).toBe("data:image/svg+xml;base64,PHN2Zy8+");
+      expect(read.mock.calls.filter(([file]) => file === logo)).toHaveLength(0);
+    } finally { read.mockRestore(); }
+  });
+
+  it("does not launch catalog discovery if the page leaves during server startup", async () => {
+    let ready!: (server: CodexAppServer) => void;
+    const server = { sendRequest: vi.fn() } as unknown as CodexAppServer;
+    const ensureServer = vi.fn(() => new Promise<CodexAppServer>((resolve) => { ready = resolve; }));
+    const capabilities = createCodexCapabilities({ ensureServer, getRunningServer: () => server, getCliHealth: vi.fn() });
+    const controller = new AbortController();
+    const request = capabilities.listPlugins(controller.signal);
+    const rejected = expect(request).rejects.toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => expect(ensureServer).toHaveBeenCalledOnce());
+    controller.abort();
+    await rejected;
+    ready(server);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(server.sendRequest).not.toHaveBeenCalled();
+  });
+
+  it("discards a late native catalog without reading artwork after every consumer has left", async () => {
+    let finish!: (result: unknown) => void;
+    const sendRequest = vi.fn((method: string) => method === "experimentalFeature/list"
+      ? Promise.resolve({ data: [{ name: "plugins", enabled: true }], nextCursor: null })
+      : new Promise((resolve) => { finish = resolve; }));
+    const server = { sendRequest } as unknown as CodexAppServer;
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server, getRunningServer: () => server, getCliHealth: vi.fn(),
+    });
+    const read = vi.spyOn(fs.promises, "readFile");
+    const controller = new AbortController();
+    const pending = capabilities.listPlugins(controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    try {
+      await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledWith("plugin/list", {}, 30000));
+      controller.abort();
+      await rejected;
+      finish({ marketplaces: [{ plugins: [{ interface: { logo: "/catalog/late.svg" } }] }] });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(read.mock.calls.filter(([file]) => file === "/catalog/late.svg")).toHaveLength(0);
+      const retry = capabilities.listPlugins();
+      await vi.waitFor(() => expect(sendRequest.mock.calls.filter(([method]) => method === "plugin/list")).toHaveLength(2));
+      finish({ marketplaces: [] });
+      await retry;
+    } finally { read.mockRestore(); }
+  });
+
+  it("keeps another catalog reader alive when only one consumer cancels", async () => {
+    let finish!: (result: unknown) => void;
+    const sendRequest = vi.fn((method: string) => method === "experimentalFeature/list"
+      ? Promise.resolve({ data: [{ name: "plugins", enabled: true }], nextCursor: null })
+      : new Promise((resolve) => { finish = resolve; }));
+    const server = { sendRequest } as unknown as CodexAppServer;
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server, getRunningServer: () => server, getCliHealth: vi.fn(),
+    });
+    const controller = new AbortController();
+    const first = capabilities.listPlugins(controller.signal);
+    const rejected = expect(first).rejects.toMatchObject({ name: "AbortError" });
+    const second = capabilities.listPlugins();
+    await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledWith("plugin/list", {}, 30000));
+    controller.abort();
+    await rejected;
+    finish({ marketplaces: [] });
+    await expect(second).resolves.toMatchObject({ marketplaces: [] });
+    await capabilities.listPlugins();
+    expect(sendRequest.mock.calls.filter(([method]) => method === "plugin/list")).toHaveLength(1);
+  });
+
   it("collects every model page, including an empty intermediate page, before mapping the catalog", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-model-pages-"));
     tempDirs.push(dir);

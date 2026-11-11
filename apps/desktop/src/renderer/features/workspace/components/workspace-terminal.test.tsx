@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { TerminalCreateOptions, TerminalSession } from "@mains/contracts/terminal";
 import { baseApi } from "@/lib/redux/api/baseApi";
-import terminalReducer from "@/lib/redux/slices/terminalSlice";
+import terminalReducer, { selectTerminal, terminalWorkspaceKey } from "@/lib/redux/slices/terminalSlice";
 import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
 import { resetTransport, setTransport, type Transport } from "@/lib/transport";
 import { WorkspaceTerminal } from "./workspace-terminal";
@@ -77,6 +77,27 @@ afterEach(async () => {
 });
 
 describe("workspace terminal tabs", () => {
+  it("keeps the second terminal visible while a new terminal waits for the catalog refresh", async () => {
+    sessions = [session("first"), session("second", "a", "Terminal 2")];
+    const key = terminalWorkspaceKey("local", "a");
+    testStore.dispatch(selectTerminal({ key, id: "second" }));
+    render(workspace());
+    await waitFor(() => expect(screen.getByTestId("terminal-view").getAttribute("data-session")).toBe("second"));
+    const original = invoke.getMockImplementation()!;
+    const pending: ((value: unknown) => void)[] = [];
+    let delayCatalog = true;
+    invoke.mockImplementation((channel, args) => channel === CHANNELS.terminal.list && delayCatalog
+      ? new Promise((resolve) => pending.push(resolve)) : original(channel, args));
+    fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
+    await waitFor(() => expect(sessions).toHaveLength(3));
+    await waitFor(() => expect(testStore.getState().terminal.selectedByWorkspace[key]).toBe(sessions[2].id));
+    const duringRefresh = screen.getByTestId("terminal-view").getAttribute("data-session");
+    delayCatalog = false;
+    act(() => { for (const finish of pending) finish({ success: true, data: [...sessions] }); });
+    await waitFor(() => expect(screen.getByTestId("terminal-view").getAttribute("data-session")).toBe(sessions[2].id));
+    expect(duringRefresh).toBe("second");
+  });
+
   it("creates tabs on demand and retains each workspace's selected terminal through hide and navigation", async () => {
     const view = render(workspace("a", false));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith(CHANNELS.terminal.list, []));

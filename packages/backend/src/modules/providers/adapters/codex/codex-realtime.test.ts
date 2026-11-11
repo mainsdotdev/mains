@@ -58,6 +58,51 @@ describe("Codex native voice signaling", () => {
     await h.native.stop("run", "connection");
     expect(dispose).toHaveBeenCalledOnce();
   });
+
+  it.each(["stop", "native close"])("keeps repeated stops pending through cleanup after %s", async (source) => {
+    const h = setup();
+    let cleaned!: () => void;
+    h.runs.cleanupRun.mockReturnValueOnce(new Promise<void>((resolve) => { cleaned = resolve; }));
+    await h.start();
+    const first = source === "stop"
+      ? h.native.stop("run", "connection")
+      : (h.notify("thread/realtime/closed", { reason: "ended" }), Promise.resolve());
+    await vi.waitFor(() => expect(h.runs.cleanupRun).toHaveBeenCalledOnce());
+    let confirmed = false;
+    const repeated = h.native.stop("run", "connection").then(() => { confirmed = true; });
+    let runStopped = false;
+    const stoppedRun = h.native.stopRun("run").then(() => { runStopped = true; });
+    await h.native.stop("run", "stale-connection");
+    expect(confirmed).toBe(false);
+    expect(runStopped).toBe(false);
+    expect(h.events.filter((event) => event.type === "closed")).toHaveLength(0);
+    cleaned();
+    await Promise.all([first, repeated, stoppedRun]);
+    expect(confirmed).toBe(true);
+    expect(runStopped).toBe(true);
+    expect(h.events.filter((event) => event.type === "closed")).toHaveLength(1);
+    expect(h.release).toHaveBeenCalledOnce();
+  });
+
+  it("waits for bridge disposal even when thread cleanup rejects", async () => {
+    const h = setup();
+    let disposed!: () => void;
+    const dispose = vi.fn().mockResolvedValue(undefined)
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { disposed = resolve; }));
+    h.sessions.prepareRealtimeSession.mockResolvedValue({ server: h.server, threadId: "thread", model: "resolved", dispose } as never);
+    h.runs.cleanupRun.mockRejectedValueOnce(new Error("Server disconnected during unsubscribe"));
+    await h.start();
+    const stopping = h.native.stop("run", "connection");
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+    expect(h.events.filter((event) => event.type === "closed")).toHaveLength(0);
+    const next = h.start("next");
+    expect(h.sessions.prepareRealtimeSession).toHaveBeenCalledOnce();
+    disposed();
+    await Promise.all([stopping, next]);
+    expect(h.events.filter((event) => event.type === "closed")).toHaveLength(1);
+    expect(h.sessions.prepareRealtimeSession).toHaveBeenCalledTimes(2);
+    await h.native.stop("run", "next");
+  });
   it("uses v3 WebRTC with server-owned work, without starting a text turn", async () => {
     const h = setup();
     await h.start();
@@ -142,6 +187,27 @@ describe("Codex native voice signaling", () => {
     await h.native.stop("run", "next");
   });
 
+  it("keeps closure pending on process exit until late preparation has disposed its resources", async () => {
+    const h = setup();
+    let prepared!: (value: unknown) => void;
+    h.sessions.prepareRealtimeSession.mockReturnValueOnce(new Promise((resolve) => { prepared = resolve; }));
+    const dispose = vi.fn().mockResolvedValue(undefined);
+    const starting = h.start();
+    await vi.waitFor(() => expect(h.sessions.prepareRealtimeSession).toHaveBeenCalledOnce());
+    h.server.isRunning = false;
+    h.native.serverClosed();
+    let confirmed = false;
+    const stopping = h.native.stop("run", "connection").then(() => { confirmed = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(confirmed).toBe(false);
+    expect(h.events.filter((event) => event.type === "closed")).toHaveLength(0);
+    prepared({ server: h.server, threadId: "thread", model: "resolved", dispose });
+    await Promise.all([starting, stopping]);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(h.server.sendRequest).not.toHaveBeenCalled();
+    expect(h.events.filter((event) => event.type === "closed")).toHaveLength(1);
+  });
+
   it("deduplicates pending stops and never sends an old stop after a new call owns the thread", async () => {
     const h = setup();
     let accept!: (value: unknown) => void;
@@ -206,5 +272,40 @@ describe("Codex native voice signaling", () => {
     expect(h.events.filter((event) => event.type === "closed")).toHaveLength(1);
     expect(h.release).toHaveBeenCalledOnce();
     expect(h.runs.cleanupRun).toHaveBeenCalledOnce();
+  });
+
+  it("confirms a native close without waiting for a lost stop response", async () => {
+    const h = setup();
+    await h.start();
+    let rejectStop!: (error: Error) => void;
+    h.server.sendRequest.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectStop = reject; }));
+    let confirmed = false;
+    const stopping = h.native.stop("run", "connection").then(() => { confirmed = true; });
+    await vi.waitFor(() => expect(h.server.sendRequest).toHaveBeenCalledTimes(2));
+    h.notify("thread/realtime/closed", { reason: "ended" });
+    await vi.waitFor(() => expect(confirmed).toBe(true));
+    await stopping;
+    await h.start("next");
+    rejectStop(new Error("Old transport timed out"));
+    await h.native.stop("run", "next");
+    expect(h.events.filter((event) => event.type === "closed").map((event) => event.connectionId)).toEqual(["connection", "next"]);
+    expect(h.release).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows the next call after native closure even if the old start response is lost", async () => {
+    const h = setup();
+    let rejectStart!: (error: Error) => void;
+    h.server.sendRequest.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectStart = reject; }));
+    let started = false;
+    const starting = h.start().then(() => { started = true; });
+    await vi.waitFor(() => expect(h.server.sendRequest).toHaveBeenCalledOnce());
+    h.notify("thread/realtime/closed", { reason: "ended" });
+    await vi.waitFor(() => expect(started).toBe(true));
+    await starting;
+    await h.start("next");
+    rejectStart(new Error("Old start response timed out"));
+    await h.native.stop("run", "next");
+    expect(h.events.filter((event) => event.type === "closed").map((event) => event.connectionId)).toEqual(["connection", "next"]);
+    expect(h.release).toHaveBeenCalledTimes(2);
   });
 });

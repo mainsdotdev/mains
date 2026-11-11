@@ -2,8 +2,8 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { builtinModules } from "node:module";
 import path from "node:path";
+import { discoverRuntimeDependencies } from "./runtime-dependencies.mjs";
 
 const appRoot = path.resolve(import.meta.dirname, "..");
 const repositoryRoot = path.resolve(appRoot, "../..");
@@ -33,49 +33,6 @@ function assertDirectory(directory, label) {
   if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) {
     throw new Error(`${label} is missing: ${directory}`);
   }
-}
-
-function packageName(specifier) {
-  if (specifier.startsWith("@")) {
-    return specifier.split("/").slice(0, 2).join("/");
-  }
-  return specifier.split("/")[0];
-}
-
-function walkJavaScript(directory) {
-  const files = [];
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...walkJavaScript(entryPath));
-    else if (/\.(?:c?js|mjs)$/.test(entry.name)) files.push(entryPath);
-  }
-  return files;
-}
-
-function discoverRuntimeDependencies() {
-  const builtins = new Set([
-    ...builtinModules,
-    ...builtinModules.map((name) => `node:${name}`),
-  ]);
-  const dependencies = new Set(dynamicRuntimeDependencies);
-  const importPattern = /(?:require|import)\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
-
-  for (const file of walkJavaScript(serverBuild)) {
-    const source = fs.readFileSync(file, "utf8");
-    for (const match of source.matchAll(importPattern)) {
-      const specifier = match[1];
-      if (
-        specifier.startsWith(".") ||
-        path.isAbsolute(specifier) ||
-        builtins.has(specifier)
-      ) {
-        continue;
-      }
-      dependencies.add(packageName(specifier));
-    }
-  }
-
-  return [...dependencies].sort();
 }
 
 function exactVersion(name) {
@@ -135,7 +92,10 @@ generateThirdPartyNotices(
   path.join(packageRoot, "THIRD-PARTY-NOTICES.txt"),
 );
 
-const dependencyNames = discoverRuntimeDependencies();
+const dependencyNames = [...new Set([
+  ...dynamicRuntimeDependencies,
+  ...discoverRuntimeDependencies(serverBuild),
+])].sort();
 const undeclaredDependencies = dependencyNames.filter(
   (name) => !(name in (appPackage.dependencies ?? {})),
 );

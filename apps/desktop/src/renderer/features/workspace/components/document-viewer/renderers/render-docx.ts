@@ -1,8 +1,10 @@
 // DOCX renderer — wraps `docx-preview`. Lazy-imported so the library only loads
 // when a Word document is opened. Renders into the provided container (a div
 // inside the viewer's shadow root); docx-preview injects its own scoped styles.
+import { docxAnnotationSurface, type DocumentAnnotationSurface } from "../../../lib/document-selection";
 
 export interface DocxRenderController {
+  annotationSurface: DocumentAnnotationSurface;
   setZoom: (zoom: number) => void;
   destroy: () => void;
 }
@@ -26,6 +28,7 @@ export async function renderDocx(
 .docx-render-root { margin-inline: auto; }
 .docx-render-root > .docx-wrapper { padding: 0; background: transparent; }
 .docx-render-root > .docx-wrapper > section.docx:last-child { margin-bottom: 0; }
+.docx-render-root[data-document-selection-mode="region"] * { cursor: crosshair !important; user-select: none !important; }
 `;
   container.prepend(style);
 
@@ -46,6 +49,7 @@ export async function renderDocx(
   fit();
 
   return {
+    annotationSurface: docxAnnotationSurface(container, size.viewport.parentElement ?? size.viewport),
     setZoom(value) { zoom = value; fit(); },
     destroy() { destroyed = true; observer.disconnect(); },
   };

@@ -54,11 +54,10 @@ describe("sync.connection-utils", () => {
       expect(result).toEqual([]);
     });
 
-    it("returns empty array on error", async () => {
+    it("rejects a failed selection read instead of widening the fetch scope", async () => {
       vi.mocked(getDb).mockImplementation(() => { throw new Error("db error"); });
 
-      const result = await getSelectedResources("c1");
-      expect(result).toEqual([]);
+      await expect(getSelectedResources("c1")).rejects.toThrow("db error");
     });
 
     it("passes kind filter when provided", async () => {

@@ -37,7 +37,7 @@ Thumbs.db
 /docs/*
 !/docs/design/
 /docs/design/*
-!/docs/design/windows-x64-beta.md
+!/docs/design/*.md
 
 # Coverage
 coverage/

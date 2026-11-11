@@ -16,9 +16,16 @@ Native sheet routes share `nativeSheetOptions`: iOS retains its transparent Liqu
 Demo Mode bundles a discoverable **Review demo files** conversation with a completed turn, two file-change summaries, a stored text patch, a PDF prompt attachment, and PDF/Markdown outputs. `demo-review.ts` scopes the patch reader to the sample run and turn, validates Unicode offsets, and serves the same `runs:readHistoryContent` channel as a paired backend. The production `readTurnFileDiff` reader renders its files; no real workspace is edited or AI provider contacted. App Review instructions must match this path.
 _Avoid_: Advertising a demo diff viewer without a stored patch, returning a different conversation's sample diff, presenting simulated changes as real agent work.
 
+**User decision ownership**:
+Approvals cache the backend's opaque incarnation token in migration 22; answers and resolved events target that token as well as the original backend. The shared `decision-owner` synchronously admits one action and retires consent/settings preparation on backend changes, including returning to the old backend. Recovery of the same backend keeps draft input. Form values remain local, and failed replies preserve them for retry. Async question delivery uncertainty still permits only receipt checks. See the desktop's [User decision lifecycle](../desktop/docs/design/user-decisions-lifecycle.md) for the distinct native approval, question disposition/delivery and plan checkpoint owners.
+
 **Connection recovery**:
 Each WebSocket handshake has a 10-second deadline. The supervisor allows at most 30 seconds of visible recovery, including initial snapshot sync, then holds `unreachable` without a spinner while probing saved endpoints after 30-second waits. A previously successful address rotates after repeated failed opens too; address rotation does not restart the recovery budget. Manual retry, a network recovery/change signal, or returning to the foreground bypasses the wait. Offline/background states cancel sockets and retry timers; foreground restarts them. Authorization and protocol failures remain terminal until re-pairing or an update. Late socket callbacks and superseded sync attempts cannot change the replacement connection or acknowledge its pending commands.
 _Avoid_: An unlimited Reconnecting spinner, retrying only a previously reachable IP forever, reporting Live before sync completes, retry timers while offline/backgrounded, reviving a disposed socket through late native events.
+
+**Remote command delivery**:
+The socket lifecycle is shared with desktop/browser through `@mains/contracts/ws-client`; the mobile transport file re-exports that implementation. `backend/command-delivery.ts` owns a command's stable `commandId`, original backend and total deadline across connection recovery and response waiting. Only connection loss retries. A timeout, refusal or uncertain-result response is final for that attempt; expired commands never send after a late reconnect, and a different backend cannot receive retries or supply a late success. The backend reserves a durable uncertainty receipt before effects and replaces it with the confirmed result. If recording fails or the backend restarts mid-command, replay reports the uncertain outcome rather than repeating effects. Receipt protection lasts seven days. The phone does not automatically create a new command identity to resolve uncertainty.
+_Avoid_: Treating socket connectivity as command acceptance, resetting the command deadline on reconnect, retrying a mutation after a timeout or backend refusal, claiming exactly-once execution beyond receipt retention or across new command identities.
 
 **History window**:
 A disposable, bounded page of chronological artifacts and tool calls for the
@@ -29,8 +36,19 @@ background status events synchronize conversation metadata rather than history.
 _Avoid_: Downloading all history, treating a prompt-count limit as a data-size
 limit, accumulating full tool output while reading chunks.
 
+Inventory 94 + 95 + 56 uses `@mains/contracts/transcript-history` for window
+transitions, failed-direction retry and the per-backend/run request queue.
+Adjacent waiting refreshes join; directional navigation preserves its place.
+Transport replacement/detach, forget and eviction retire old writers and release
+their waiters. Sync builds bounds at history dispatch and replaces disposable
+rows transactionally before publishing confirmed metadata. Pending first loads
+do not count as retained completed windows. See [Transcript history lifecycle](../desktop/docs/design/transcript-history-lifecycle.md).
+
+**Live transcript acknowledgement**:
+The streaming store uses `@mains/contracts/transcript-stream`, shared with desktop. Terminal status settles parent prose until the matching durable stream id arrives; late deltas cannot replace settled or acknowledged text. Durable response items retain `metadata.streamId`, so identical text from an older identified answer cannot hide a new live message. Older servers without stream ids use a timestamp-constrained text fallback. Backend replacement clears stream state and fences old transport callbacks. See [Run projection lifecycle](../desktop/docs/design/run-projection-lifecycle.md) for inventory 5, 6, 16.
+
 **Transcript scroll**:
-Touching the transcript pauses native chasing without freezing its history window. Only an upward departure beyond 80pt from the inset-aware end leaves following mode; returning near the actual end restores it when no newer page is missing. A single floating arrow is offered beyond 220pt or when a historical window has newer messages. Streaming growth and programmatic jumps do not flash the arrow. Drag/momentum intent gates automatic paging by direction, while anchor corrections reset motion tracking. Pages that fit the viewport use the explicit earlier/newer load controls, so rubber-band bounces cannot replace them. `features/runs/lib/transcript-scroll.ts` owns these decisions independently of native rendering.
+Touching the transcript pauses native chasing without freezing its history window. Only an upward departure beyond 80pt from the inset-aware end leaves following mode; returning near the actual end restores it when no newer page is missing. A single floating arrow is offered beyond 220pt or when a historical window has newer messages. Streaming growth and programmatic jumps do not flash the arrow. Drag/momentum intent gates automatic paging by direction, while anchor corrections reset motion tracking. Pages that fit the viewport use the explicit earlier/newer load controls, so rubber-band bounces cannot replace them. `features/runs/lib/transcript-scroll.ts` re-exports the portable `@mains/contracts/transcript-viewport` owner. Its page lease scopes native anchors and late landing/finally callbacks to their original view; latest starts chasing only after its page is confirmed.
 _Avoid_: Freezing history at touch-down, inserting a Jump to latest row into the transcript, treating programmatic offsets as user gestures, chasing the end during deceleration.
 
 **Execution progress**:

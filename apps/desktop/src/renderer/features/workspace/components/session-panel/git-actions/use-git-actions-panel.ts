@@ -8,20 +8,11 @@
  * "more than one section needs it".
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import { useGetGitFlowStatusQuery, type GitFlowStatus } from "@/lib/redux/api";
-import { appEvents } from "@/lib/transport";
-
-/** The action currently in flight, or null. Only one at a time, panel-wide. */
-export type PendingAction =
-  | "commit"
-  | "commitPush"
-  | "push"
-  | "pull"
-  | "pr"
-  | "publish"
-  | "newBranch"
-  | null;
+import { createGitActionsLifecycle } from "./git-actions-lifecycle";
+export type { PendingAction } from "./git-actions-lifecycle";
+import { appEvents, onTransportChange } from "@/lib/transport";
 
 /**
  * The panel rows that open in place. `newBranch` is the odd one out: it has no
@@ -69,7 +60,13 @@ function sectionStillUsable(section: Section, status: GitFlowStatus): boolean {
 
 export function useGitActionsPanel(workspaceId: string) {
   const [openSections, setOpenSections] = useState<Section[]>([]);
-  const [pending, setPending] = useState<PendingAction>(null);
+  const [actions] = useState(createGitActionsLifecycle);
+  const pending = useSyncExternalStore(actions.subscribe, actions.snapshot);
+  useLayoutEffect(() => {
+    actions.activate();
+    const off = onTransportChange(() => actions.retire());
+    return () => { off(); actions.retire(); };
+  }, [actions]);
 
   const { data: status, refetch } = useGetGitFlowStatusQuery(workspaceId, {
     // Pull fresh status each time the panel opens, so reopening after a
@@ -100,14 +97,16 @@ export function useGitActionsPanel(workspaceId: string) {
   // Every status refresh funnels through here so stale accordions close as
   // soon as the fresh state lands, whatever triggered the change.
   const refreshStatus = useCallback(async () => {
+    const current = actions.capture();
     const res = await refetch();
+    if (!current()) return;
     const fresh = res.data;
     if (!fresh) return;
     setOpenSections((prev) => {
       const next = prev.filter((s) => sectionStillUsable(s, fresh));
       return next.length === prev.length ? prev : next;
     });
-  }, [refetch]);
+  }, [refetch, actions]);
 
   // Live counts during a run: the run session recomputes the workspace diff
   // whenever a file-touching tool finishes and broadcasts it. getGitFlowStatus
@@ -138,7 +137,8 @@ export function useGitActionsPanel(workspaceId: string) {
     toggleSection,
     closeSection,
     pending,
-    setPending,
+    begin: actions.begin,
+    capture: actions.capture,
     busy: pending !== null,
 
     // Derived working-tree facts, defaulted in one place so every section

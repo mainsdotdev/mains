@@ -109,8 +109,8 @@ const CONFIG: ResourceWizardConfig = {
 export default function TrelloModal(props: TrelloModalProps) {
   const [getBoards] = useLazyGetTrelloBoardsQuery();
   const fetchAllResources = useCallback(
-    async (connectionId: string) => {
-      return getBoards(connectionId).unwrap();
+    async (connectionId: string, scope?: string) => {
+      return getBoards(scope ? { id: connectionId, scope } : connectionId).unwrap();
     },
     [getBoards],
   );

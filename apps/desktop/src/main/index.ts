@@ -1,3 +1,6 @@
+import { shutdownUserDecisions } from "@mains/backend/modules/runs";
+import { createResourceLifecycle, type ResourceScope } from "@mains/backend/runtime/resource-lifecycle";
+import { shutdownRecordLifecycles } from "@mains/backend/runtime/record-lifecycle";
 if (process.platform === "win32") {
   if (require("electron-squirrel-startup")) process.exit(0);
 }
@@ -37,13 +40,14 @@ import { DatabaseOwnershipError } from "@mains/backend/db/database-ownership";
 import { registerBrowserWindowSink } from "./ipc-kit/browser-window-sink";
 import { startBackendServer } from "@mains/backend/serve";
 import { registerAccountIpc, unregisterAccountIpc } from "@mains/backend/modules/account";
-import { registerSyncIpc, unregisterSyncIpc } from "@mains/backend/modules/sync";
+import { registerSyncIpc, unregisterSyncIpc, shutdownSourceSync } from "@mains/backend/modules/sync";
 import {
   registerEntitiesHandlers,
   unregisterEntitiesHandlers,
 } from "@mains/backend/modules/entities";
 import {
   registerConnectionsHandlers,
+  shutdownConnections,
   unregisterConnectionsHandlers,
 } from "@mains/backend/modules/connections";
 import { registerSpaceIpc, unregisterSpaceIpc } from "@mains/backend/modules/space";
@@ -62,12 +66,14 @@ import { registerToolsIpc, unregisterToolsIpc } from "@mains/backend/modules/too
 import {
   registerWorkspaceIpc,
   unregisterWorkspaceIpc,
+  shutdownWorkspaceIntakes,
+  shutdownWorkspaceDiffs,
 } from "@mains/backend/modules/workspace";
 import {
   registerWorkspaceDialogIpc,
   unregisterWorkspaceDialogIpc,
 } from "./modules/workspace/workspace.dialog.ipc";
-import { registerAtlasIpc, unregisterAtlasIpc } from "@mains/backend/modules/atlas";
+import { registerAtlasIpc, unregisterAtlasIpc, shutdownAtlasBookmarks } from "@mains/backend/modules/atlas";
 import { registerRunsIpc, unregisterRunsIpc, configureRunNotificationSink, startAttachmentMaintenance, stopAttachmentMaintenance } from "@mains/backend/modules/runs";
 import { createElectronRunNotificationSink } from "./modules/runs/run-notifications";
 import { runSessionRegistry } from "@mains/backend/modules/runs";
@@ -78,13 +84,14 @@ import {
 } from "@mains/backend/modules/collections";
 import {
   registerFileExplorerIpc,
+  shutdownFileWrites,
   unregisterFileExplorerIpc,
 } from "@mains/backend/modules/fileExplorer";
 import {
   registerFileExplorerDialogIpc,
   unregisterFileExplorerDialogIpc,
 } from "./modules/fileExplorer/fileExplorer.dialog.ipc";
-import { registerGitFlowIpc, unregisterGitFlowIpc } from "@mains/backend/modules/gitFlow";
+import { registerGitFlowIpc, unregisterGitFlowIpc, shutdownGitFlow } from "@mains/backend/modules/gitFlow";
 import {
   registerTerminalIpc,
   unregisterTerminalIpc,
@@ -806,7 +813,16 @@ const SERVE = parseServeOptions();
 /**
  * Initialize the application
  */
-async function initializeApp() {
+const appLifecycle = createResourceLifecycle<void>("Desktop backend");
+function initializeApp(): Promise<void> {
+  if (isShuttingDown) return Promise.resolve();
+  return appLifecycle.start((scope) => initializeAppResources(scope));
+}
+async function initializeAppResources(scope: ResourceScope) {
+  const step = async <T>(work: T | PromiseLike<T>): Promise<T> => {
+    const value = await work; scope.assertActive(); return value;
+  };
+  if (!SERVE.serve) scope.defer(cleanupAppResources);
   try {
     console.log("Initializing application...");
     watchChildProcesses();
@@ -820,6 +836,7 @@ async function initializeApp() {
     // host (which registers the WebSocket event sink). See docs/design/remote-backend.md.
     if (SERVE.serve) {
       const server = await startBackendServer({
+        signal: scope.signal,
         port: SERVE.port,
         host: SERVE.host,
         token: SERVE.token,
@@ -827,6 +844,8 @@ async function initializeApp() {
         tailscaleServe: SERVE.tailscaleServe,
         tailscaleServePort: SERVE.tailscaleServePort,
       });
+      scope.defer(() => server.close());
+      scope.assertActive();
       if (
         server.webUiAvailable &&
         process.stdout.isTTY &&
@@ -860,15 +879,15 @@ async function initializeApp() {
 
     // Running from the DMG or Downloads breaks auto-update: offer the move
     // before anything boots. On a move the app quits and relaunches itself.
-    if (await offerMoveToApplications()) return;
+    if (await step(offerMoveToApplications())) return;
 
     // Initialize database
-    await initializeDatabase({
+    await step(initializeDatabase({
       verbose: !app.isPackaged,
       enableWAL: true,
       busyTimeout: 5000,
-    });
-    await keyboardShortcutsService.start();
+    }));
+    await step(keyboardShortcutsService.start());
 
     // Wire the outbound event bus to the local renderer before any module can
     // emit. A headless `mains serve` would register a WebSocket sink instead.
@@ -917,7 +936,7 @@ async function initializeApp() {
     stopBridgeNotifications = startBridgeNotifications();
     registerLocalBackendIpc();
     registerSearchIpc();
-    await bridgeService.start();
+    await step(bridgeService.start());
     // Re-apply any persisted "This machine" exposure (survives app restarts).
     void localBackendService.restore();
     automationsService.start();
@@ -1155,9 +1174,10 @@ async function initializeApp() {
 
     // Create menu bar (tray) icon — respects user preference
     try {
-      const settings = await appSettingsService.ensureSettings();
+      const settings = await step(appSettingsService.ensureSettings());
       if (settings.showMenuBarIcon) showTray();
     } catch (err) {
+      scope.assertActive();
       console.warn("Failed to read menu bar icon preference, defaulting to shown:", err);
       showTray();
     }
@@ -1201,7 +1221,7 @@ async function initializeApp() {
       },
     });
 
-    await appshotsService.start();
+    await step(appshotsService.start());
 
     console.log("Application initialized successfully");
   } catch (error) {
@@ -1214,29 +1234,30 @@ async function initializeApp() {
     if (error instanceof DatabaseOwnershipError) {
       dialog.showErrorBox("Mains data is already in use", error.message);
     }
-    app.quit();
+    throw error;
   }
 }
 
 /**
  * Cleanup before app quits
  */
-async function cleanupApp() {
+function cleanupApp(): Promise<void> { return appLifecycle.close(); }
+async function cleanupAppResources() {
   try {
     console.log("Cleaning up application...");
+    await Promise.all([automationsService.stop(), pulseService.stop(), sshService.closeAllTunnels(), shutdownAtlasBookmarks(), appshotsService.stop(), keyboardShortcutsService.stop()]);
 
     // Destroy tray and the Dock menu's status feed
     hideTray();
     stopDockMenu();
 
     // Destroy all terminal PTY instances
-    destroyAllTerminals();
-
-    // Tear down any open SSH tunnels
-    sshService.closeAllTunnels();
+    try { destroyAllTerminals(); }
+    catch (error) { console.error("Could not stop all terminals:", error); }
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
     stopBridgeNotifications?.();
+    await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync(), shutdownUserDecisions()]);
     await bridgeService.stop();
     await localBackendService.shutdown();
     // Stop `tailscale serve` if this process started it (no-op otherwise)
@@ -1262,7 +1283,7 @@ async function cleanupApp() {
     unregisterWorkspaceDialogIpc();
     unregisterProjectsIpc();
     unregisterCollectionsIpc();
-    unregisterAtlasIpc();
+    await unregisterAtlasIpc();
     await stopAttachmentMaintenance();
     unregisterRunsIpc();
     unregisterFileExplorerIpc();
@@ -1274,9 +1295,7 @@ async function cleanupApp() {
     unregisterMcpAppsProtocolHandler();
     unregisterStatsIpc();
     unregisterUpdatesIpc();
-    automationsService.stop();
     unregisterAutomationsIpc();
-    pulseService.stop();
     unregisterPulseIpc();
     unregisterGuardsIpc();
     unregisterPullRequestsIpc();
@@ -1284,7 +1303,6 @@ async function cleanupApp() {
     try { browserService.destroy(); } catch { /* ignore */ }
     unregisterBrowserIpc();
     unregisterBrowserChatWindowIpc();
-    appshotsService.stop();
     unregisterAppshotsIpc();
     unregisterKeyboardShortcutsIpc();
     unregisterSshIpc();
@@ -1317,6 +1335,7 @@ async function cleanupApp() {
     console.log("Application cleanup completed");
   } catch (error) {
     console.error("Error during cleanup:", error);
+    throw error;
   }
 }
 
@@ -1358,10 +1377,10 @@ app.setAboutPanelOptions({
 registerImageProxyScheme();
 
 // App lifecycle events
-app.whenReady().then(initializeApp);
+app.whenReady().then(initializeApp).catch((error) => { console.error("Application startup failed:", error); app.quit(); });
 
 app.on("activate", () => {
-  if (SERVE.serve) return; // headless backend has no window to re-create
+  if (SERVE.serve || isShuttingDown || !appLifecycle.ready) return; // no window creation during teardown
   // On macOS it's common to re-create a window when dock icon is clicked
   const allWindows = BrowserWindow.getAllWindows();
   if (allWindows.length === 0) {
@@ -1384,7 +1403,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", async (event) => {
   if (isShuttingDown) {
-    return;
+    event.preventDefault(); return;
   }
 
   // Show confirmation if there are unsaved changes
@@ -1419,8 +1438,8 @@ app.on("before-quit", async (event) => {
 
   event.preventDefault();
   isShuttingDown = true;
-  await cleanupApp();
-  app.exit(0);
+  try { await cleanupApp(); app.exit(0); }
+  catch (error) { isShuttingDown = false; console.error("Application close failed; cleanup can be retried:", error); }
 });
 
 // Handle graceful shutdown signals

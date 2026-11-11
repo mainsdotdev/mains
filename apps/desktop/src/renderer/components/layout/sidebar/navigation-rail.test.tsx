@@ -62,14 +62,13 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("rail app navigation", () => {
-  it.each(["copilot_cli", "cursor", "opencode"])("disables Atlas for %s", (providerId) => {
+  it.each(["copilot_cli", "cursor", "opencode"])("opens the Atlas library for %s", (providerId) => {
     mocks.providerId = providerId;
     renderRail();
     const button = screen.getByRole("button", { name: "Atlas" }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    expect(button.disabled).toBe(false);
     fireEvent.click(button);
-    expect(screen.queryByText("Atlas page")).toBeNull();
-    expect(screen.getByText("Conversation")).toBeTruthy();
+    expect(screen.getByText("Atlas page")).toBeTruthy();
   });
 
   it.each(["claude_code", "codex"])("opens Atlas for %s", (providerId) => {

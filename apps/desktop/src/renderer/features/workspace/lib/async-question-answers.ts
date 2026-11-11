@@ -1,6 +1,6 @@
 import type { AnswerAsyncQuestionsPayload, AnswerAsyncQuestionsResponse, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import { CHANNELS } from "@mains/contracts/channels";
-import { getTransport, type Transport } from "@/lib/transport";
+import { getTransport, onTransportChange, type Transport } from "@/lib/transport";
 import { waitForConversationSettings } from "./conversation-settings-writer";
 
 function assertConnected(transport: Transport) {
@@ -22,8 +22,11 @@ async function questionAccountId(transport: Transport): Promise<string> {
 export async function dismissAsyncQuestions(
   payload: Omit<DismissAsyncQuestionsPayload, "accountId">,
   transport: Transport = getTransport(),
+  assertOwner: () => void = () => {},
 ): Promise<void> {
+  assertOwner();
   const accountId = await questionAccountId(transport);
+  assertOwner();
   assertConnected(transport);
   const result = await transport.invoke(CHANNELS.runs.dismissAsyncQuestions, [{ ...payload, accountId }]);
   if (!result.success) throw new Error(result.error);
@@ -32,12 +35,16 @@ export async function dismissAsyncQuestions(
 export async function sendAsyncQuestionAnswers(
   payload: Omit<AnswerAsyncQuestionsPayload, "accountId">,
   transport: Transport = getTransport(),
+  assertOwner: () => void = () => {},
 ): Promise<AnswerAsyncQuestionsResponse> {
-  let invoked = false;
+  let invoked = false, retired = false;
+  const off = onTransportChange(() => { retired = true; });
+  const current = () => { assertOwner(); if (retired) throw new Error("Backend connection changed before sending."); assertConnected(transport); };
   try {
+    current();
     const accountId = await questionAccountId(transport);
     if (!payload.checkOnly) await waitForConversationSettings(transport, payload.runId);
-    assertConnected(transport);
+    current();
     invoked = true;
     const result = await transport.invoke(CHANNELS.runs.answerAsyncQuestions, [{ ...payload, accountId }]);
     if (!result.success) throw new Error(result.error);
@@ -49,5 +56,5 @@ export async function sendAsyncQuestionAnswers(
       throw new Error("Delivery is unknown. Check delivery before sending again.");
     }
     throw error;
-  }
+  } finally { off(); }
 }

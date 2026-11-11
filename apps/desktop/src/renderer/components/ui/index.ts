@@ -1,6 +1,8 @@
 // Buttons
 export { Button } from "./button";
 export type { ButtonProps, ButtonVariant } from "./button";
+export { DiffFileHeader } from "./diff-file-header";
+export type { DiffFileHeaderStatus } from "./diff-file-header";
 export { CopyButton } from "./copy-button";
 export { AgentGlyph } from "./agent-glyph";
 

@@ -5,6 +5,7 @@
  * icon picked on the Mac (`icon:rocket|pink`) draws the same glyph on every surface.
  *
  *   npm run generate   (in packages/icons; optional arg = path to the desktop app)
+ *   node scripts/generate-shapes.mjs --only=opencode   (sync a single icon)
  *
  * The desktop icons are React SVG components; this pulls out each one's
  * `viewBox` and `<path>` data and emits plain objects for react-native-svg.
@@ -16,7 +17,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const mainsRoot = path.resolve(process.argv[2] ?? path.join(here, "..", "..", "..", "apps", "desktop"));
+const args = process.argv.slice(2);
+const only = args.find((arg) => arg.startsWith("--only="))?.slice("--only=".length);
+const mainsRoot = path.resolve(args.find((arg) => !arg.startsWith("--")) ?? path.join(here, "..", "..", "..", "apps", "desktop"));
 const iconsDir = path.join(mainsRoot, "src/renderer/components/ui/icons");
 const registryFile = path.join(mainsRoot, "src/renderer/lib/icon-registry.tsx");
 const outFile = path.join(here, "..", "src", "shapes.generated.ts");
@@ -27,12 +30,14 @@ const outFile = path.join(here, "..", "src", "shapes.generated.ts");
  * - copilot: the registry points at an animated sprite; the phone takes the
  *   desktop's static mark (`CopilotStatic`, same one its settings use).
  * - cursor: two path variants for a flip animation; the first is the mark.
+ * - opencode: the viewBox is in a props object; a group centers the mark.
  * `fillRule` covers a rule set on the `<svg>` element rather than the path.
  */
 const OVERRIDES = {
   claude: { viewBox: "0 0 100 100" },
   copilot: { source: { component: "CopilotStatic", fromSpace: false }, fillRule: "evenodd" },
   cursor: { viewBox: "0 0 24 24", pathLimit: 1, fillRule: "evenodd" },
+  opencode: { viewBox: "0 0 300 300", pathTransform: "translate(30, 0)" },
 };
 
 const read = (file) => readFileSync(file, "utf8");
@@ -83,7 +88,7 @@ function styleAttrs(attrs) {
   return out;
 }
 
-const KNOWN_ATTRS = new Set(["d", "fill", "fillRule", "clipRule", "style", "stroke", "strokeWidth"]);
+const KNOWN_ATTRS = new Set(["d", "fill", "fillRule", "clipRule", "style", "stroke", "strokeWidth", "opacity", "transform"]);
 
 function extractPaths(src, name) {
   const paths = [];
@@ -102,13 +107,19 @@ function extractPaths(src, name) {
     const clipRule = attr(attrs, "clipRule") ?? style.clipRule;
     if (fillRule) p.fillRule = fillRule;
     if (clipRule) p.clipRule = clipRule;
+    const opacity = attr(attrs, "opacity") ?? style.opacity;
+    if (opacity !== undefined) p.opacity = Number(opacity);
+    const transform = attr(attrs, "transform");
+    if (transform) p.transform = transform;
     paths.push(p);
   }
   return paths;
 }
 
 const shapes = [];
-for (const entry of registryEntries()) {
+const entries = registryEntries().filter((entry) => !only || entry.name === only);
+if (only && entries.length === 0) throw new Error(`No registry icon named "${only}"`);
+for (const entry of entries) {
   const override = OVERRIDES[entry.name] ?? {};
   const file = componentFile(override.source ? { ...entry, ...override.source } : entry);
   const src = read(file);
@@ -118,6 +129,7 @@ for (const entry of registryEntries()) {
   let paths = extractPaths(src, entry.name);
   if (override.pathLimit) paths = paths.slice(0, override.pathLimit);
   if (override.fillRule) paths = paths.map((p) => ({ fillRule: override.fillRule, ...p }));
+  if (override.pathTransform) paths = paths.map((p) => ({ ...p, transform: override.pathTransform }));
   if (paths.length === 0) throw new Error(`${entry.name}: no paths in ${file}`);
   shapes.push({ name: entry.name, viewBox, paths });
 }
@@ -130,22 +142,38 @@ const lines = [
   "",
   "export const ICON_SHAPES: Record<string, IconShape> = {",
 ];
-for (const shape of shapes) {
-  lines.push(`  ${shape.name}: {`);
-  lines.push(`    viewBox: ${JSON.stringify(shape.viewBox)},`);
-  lines.push("    paths: [");
+function shapeSource(shape) {
+  const lines = [
+    `  ${shape.name}: {`,
+    `    viewBox: ${JSON.stringify(shape.viewBox)},`,
+    "    paths: [",
+  ];
   for (const p of shape.paths) {
     const fields = [`d: ${JSON.stringify(p.d)}`];
     if (p.fillRule) fields.push(`fillRule: ${JSON.stringify(p.fillRule)}`);
     if (p.clipRule) fields.push(`clipRule: ${JSON.stringify(p.clipRule)}`);
+    if (p.opacity !== undefined) fields.push(`opacity: ${JSON.stringify(p.opacity)}`);
+    if (p.transform) fields.push(`transform: ${JSON.stringify(p.transform)}`);
     lines.push(`      { ${fields.join(", ")} },`);
   }
   lines.push("    ],");
   lines.push("  },");
+  return lines.join("\n");
 }
+const generated = shapes.map(shapeSource).join("\n");
+lines.push(generated);
 lines.push("};");
 lines.push("");
 
+let output = lines.join("\n");
+if (only) {
+  // Keep other generated shapes intact when their desktop components changed.
+  const previous = read(outFile);
+  const block = new RegExp(`^  ${only}: \\{\\n[\\s\\S]*?^  \\},\\n`, "m");
+  output = block.test(previous)
+    ? previous.replace(block, () => `${generated}\n`)
+    : previous.replace(/\n\};\n$/, () => `\n${generated}\n};\n`);
+}
 mkdirSync(path.dirname(outFile), { recursive: true });
-writeFileSync(outFile, lines.join("\n"));
+writeFileSync(outFile, output);
 console.log(`wrote ${shapes.length} icons to ${path.relative(process.cwd(), outFile)}`);

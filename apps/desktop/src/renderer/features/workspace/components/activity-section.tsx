@@ -172,7 +172,7 @@ function ActivityTime({ createdAt }: { createdAt: number }) {
       tone="subtle"
       weight="normal"
       title={formatAbsoluteDate(createdAt)}
-      className="mt-1 ml-4 shrink-0 tabular-nums"
+      className="mt-1 mr-2 ml-4 shrink-0 tabular-nums"
     >
       {relative}
     </Text>

@@ -18,7 +18,7 @@ export function PublishSection({ panel }: { panel: GitActionsPanel }) {
   const {
     workspaceId,
     pending,
-    setPending,
+    begin,
     busy,
     refreshStatus,
     isSectionOpen,
@@ -48,21 +48,25 @@ export function PublishSection({ panel }: { panel: GitActionsPanel }) {
       : "";
 
   const handlePublish = useCallback(async () => {
-    if (pending) return;
     const ownerRepo = (publishOwnerRepo || defaultOwnerRepo).trim();
     if (!ownerRepo.includes("/") || ownerRepo.split("/").some((s) => !s.trim())) {
       toast.error("Enter the repository as owner/name.");
       return;
     }
-    setPending("publish");
+    const lease = begin("publish", JSON.stringify([ownerRepo, publishPrivate, publishRemote.trim(), publishSsh]));
+    if (!lease) return;
+    let accepted = false;
     try {
       const result = await publishRepo({
         workspaceId,
+        operationId: lease.operationId,
         ownerRepo,
         visibility: publishPrivate ? "private" : "public",
         remoteName: publishRemote.trim() || "origin",
         protocol: publishSsh ? "ssh" : "https",
       }).unwrap();
+      accepted = true;
+      if (!lease.current()) return;
       toast.success(`Published ${result.owner}/${result.repo}`);
       if (result.url) window.api.shell.openExternal(result.url);
       // Repo now has a remote — collapse this form (push/PR rows take its
@@ -74,14 +78,14 @@ export function PublishSection({ panel }: { panel: GitActionsPanel }) {
       setPublishAdvanced(false);
       refreshStatus();
     } catch (err) {
+      if (!lease.current()) return;
       toast.error(extractErrorMessage(err, "Failed to publish repository."));
     } finally {
-      setPending(null);
+      lease.finish(accepted);
     }
   }, [
     workspaceId,
-    pending,
-    setPending,
+    begin,
     publishRepo,
     publishOwnerRepo,
     defaultOwnerRepo,
@@ -124,6 +128,7 @@ export function PublishSection({ panel }: { panel: GitActionsPanel }) {
                 github.com/
               </Text>
               <Input
+                disabled={busy}
                 variant="bare"
                 type="text"
                 value={publishOwnerRepo || defaultOwnerRepo}
@@ -144,6 +149,7 @@ export function PublishSection({ panel }: { panel: GitActionsPanel }) {
             </Caption>
             <div className="flex items-center gap-4">
               <CheckboxOption
+                disabled={busy}
                 checked={publishPrivate}
                 onChange={() => setPublishPrivate(true)}
               >
@@ -151,6 +157,7 @@ export function PublishSection({ panel }: { panel: GitActionsPanel }) {
                 Private
               </CheckboxOption>
               <CheckboxOption
+                disabled={busy}
                 checked={!publishPrivate}
                 onChange={() => setPublishPrivate(false)}
               >
@@ -160,6 +167,7 @@ export function PublishSection({ panel }: { panel: GitActionsPanel }) {
           </div>
 
           <Button
+            disabled={busy}
             type="button"
             onClick={() => setPublishAdvanced((v) => !v)}
             className="flex items-center gap-1 pt-2 text-s text-primary-500 hover:text-primary-700 dark:hover:text-primary-300"
@@ -185,6 +193,7 @@ export function PublishSection({ panel }: { panel: GitActionsPanel }) {
                     Remote
                   </Caption>
                   <Input
+                    disabled={busy}
                     value={publishRemote}
                     onChange={(e) => setPublishRemote(e.target.value)}
                     placeholder="origin"
@@ -198,12 +207,14 @@ export function PublishSection({ panel }: { panel: GitActionsPanel }) {
                   </Caption>
                   <div className="flex items-center gap-4">
                     <CheckboxOption
+                      disabled={busy}
                       checked={publishSsh}
                       onChange={() => setPublishSsh(true)}
                     >
                       SSH
                     </CheckboxOption>
                     <CheckboxOption
+                      disabled={busy}
                       checked={!publishSsh}
                       onChange={() => setPublishSsh(false)}
                     >

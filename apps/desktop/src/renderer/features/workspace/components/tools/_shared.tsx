@@ -10,6 +10,7 @@ import {
 import { ArrowUp } from "@/components/ui/icons";
 import { Button, SquareSpinner, Text } from "@/components/ui";
 import type { RunEvent } from "../../types";
+import { subagentStateOf, type SubagentTaskMeta } from "../../lib/subagent-identity";
 
 const ToolDiffBodyContent = lazy(() => import("./tool-diff-body"));
 
@@ -33,6 +34,12 @@ export function useToolStatus(): ToolStatus {
 
 /** Read a normalized `ToolStatus` off an event's metadata (unknown → "done"). */
 export function eventToolStatus(event: RunEvent): ToolStatus {
+  const task = event.metadata?.task as SubagentTaskMeta | undefined;
+  if (task?.taskType === "mcp_task") {
+    // Its tool_result only acknowledges backgrounding; the task owns the outcome.
+    const state = subagentStateOf({ toolName: "", callStatus: "", task });
+    return { running: "running", idle: "queued", done: "done", failed: "error", stopped: "canceled" }[state] as ToolStatus;
+  }
   const raw = event.metadata?.status;
   if (
     raw === "running" ||
@@ -72,6 +79,10 @@ export function demoteStaleRunningTools(events: RunEvent[]): RunEvent[] {
   // after it is the trailing in-flight block and is left spinning.
   let cut = -1;
   for (let i = events.length - 1; i >= 0; i--) {
+    // Thinking and stdout snapshots can arrive while a tool is still working.
+    // They are not evidence that its lifecycle has completed.
+    if (events[i].type === "artifact" &&
+      (events[i].metadata?.kind === "thinking" || events[i].metadata?.kind === "tool_progress")) continue;
     if (!isInflightTool(events[i])) {
       cut = i;
       break;

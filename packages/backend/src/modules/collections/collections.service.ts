@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
+import { finishRecordDeletion, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
+import { restoreRecordStorage } from "../../runtime/record-storage";
 import { collectionsRepo } from "./collections.repo";
 import { bridgeService } from "../bridge";
 import {
@@ -153,53 +155,63 @@ export const collectionsService = {
   async archive(
     options: CollectionIdentityOptions,
   ): Promise<CollectionResponse> {
-    const collection = await requireOwnedCollection(
-      options.id,
-      options.accountId,
-    );
-    const archived = await collectionsRepo.setArchived(
-      collection.id,
-      collection.accountId,
-      true,
-    );
-    if (!archived) throw new Error("Collection not found");
-    return archived;
+    return transitionRecord(recordKey("collection", options.id, options.accountId), "archive", async () => {
+      const collection = await requireOwnedCollection(
+        options.id,
+        options.accountId,
+      );
+      if (collection.isArchived === true) return collection;
+      const archived = await collectionsRepo.setArchived(
+        collection.id,
+        collection.accountId,
+        true,
+      );
+      if (!archived) throw new Error("Collection not found");
+      return archived;
+    });
   },
 
   async unarchive(
     options: CollectionIdentityOptions,
   ): Promise<CollectionResponse> {
-    const collection = await requireOwnedCollection(
-      options.id,
-      options.accountId,
-    );
-    const restored = await collectionsRepo.setArchived(
-      collection.id,
-      collection.accountId,
-      false,
-    );
-    if (!restored) throw new Error("Collection not found");
-    return restored;
+    return transitionRecord(recordKey("collection", options.id, options.accountId), "restore", async () => {
+      const collection = await requireOwnedCollection(
+        options.id,
+        options.accountId,
+      );
+      if (collection.isArchived === false) return collection;
+      const restored = await collectionsRepo.setArchived(
+        collection.id,
+        collection.accountId,
+        false,
+      );
+      if (!restored) throw new Error("Collection not found");
+      return restored;
+    });
   },
 
   /** Removing a Collection preserves its runs; the FK detaches them. */
   async remove(options: CollectionIdentityOptions): Promise<void> {
-    const collection = await requireOwnedCollection(
-      options.id,
-      options.accountId,
-    );
-    const stagedStorage = stageCollectionStorageRemoval(collection.id);
-    try {
-      const removed = await collectionsRepo.remove(
-        collection.id,
-        collection.accountId,
+    return transitionRecord(recordKey("collection", options.id, options.accountId), "delete", async () => {
+      const collection = await requireOwnedCollection(
+        options.id,
+        options.accountId,
       );
-      if (!removed) throw new Error("Collection not found");
-      stagedStorage.commit();
-    } catch (error) {
-      stagedStorage.restore();
-      throw error;
-    }
+      const stagedStorage = stageCollectionStorageRemoval(collection.id);
+      try {
+        const removed = await collectionsRepo.remove(
+          collection.id,
+          collection.accountId,
+        );
+        if (!removed) throw new Error("Collection not found");
+      } catch (error) {
+        if (await collectionsRepo.findById(collection.id)) {
+          await restoreRecordStorage([stagedStorage], error);
+          throw error;
+        }
+      }
+      await finishRecordDeletion(recordKey("collection", options.id, options.accountId), () => stagedStorage.commit());
+    });
   },
 
   async listSources(
@@ -236,83 +248,91 @@ export const collectionsService = {
 
   async addSource(payload: unknown): Promise<CollectionSourceResponse> {
     const data = validateAddCollectionSource(payload);
-    const collection = await requireOwnedCollection(
-      data.collectionId,
-      data.accountId,
-    );
-    if (collection.isArchived) {
-      throw new Error("Archived collections cannot accept sources");
-    }
+    return transitionRecord(recordKey("collection", data.collectionId, data.accountId), Symbol("add-source"), async () => {
+      const collection = await requireOwnedCollection(
+        data.collectionId,
+        data.accountId,
+      );
+      if (collection.isArchived) {
+        throw new Error("Archived collections cannot accept sources");
+      }
 
-    const bytes =
-      data.kind === "file"
-        ? decodeBase64(data.data)
-        : Buffer.from(data.text, "utf8");
-    const contentHash = createHash("sha256").update(bytes).digest("hex");
-    const existing = await collectionsRepo.findSourceByHash(
-      collection.id,
-      contentHash,
-    );
-    if (existing) return existing;
-
-    const id = randomUUID();
-    const storageKey = writeCollectionSource({
-      collectionId: collection.id,
-      sourceId: id,
-      name: data.name,
-      bytes,
-    });
-    const now = new Date();
-    try {
-      await collectionsRepo.insertSource({
-        id,
-        collectionId: collection.id,
-        kind: data.kind,
-        name: data.name,
-        mimeType: data.kind === "file" ? data.mimeType : "text/plain",
-        byteSize: bytes.byteLength,
+      const bytes =
+        data.kind === "file"
+          ? decodeBase64(data.data)
+          : Buffer.from(data.text, "utf8");
+      const contentHash = createHash("sha256").update(bytes).digest("hex");
+      const existing = await collectionsRepo.findSourceByHash(
+        collection.id,
         contentHash,
-        storageKey,
-        createdAt: now,
-        updatedAt: now,
-      });
-    } catch (error) {
-      removeCollectionSourceStorage({
+      );
+      if (existing) return existing;
+
+      const id = randomUUID();
+      const storageKey = writeCollectionSource({
         collectionId: collection.id,
         sourceId: id,
+        name: data.name,
+        bytes,
       });
-      throw error;
-    }
+      const now = new Date();
+      try {
+        await collectionsRepo.insertSource({
+          id,
+          collectionId: collection.id,
+          kind: data.kind,
+          name: data.name,
+          mimeType: data.kind === "file" ? data.mimeType : "text/plain",
+          byteSize: bytes.byteLength,
+          contentHash,
+          storageKey,
+          createdAt: now,
+          updatedAt: now,
+        });
+      } catch (error) {
+        removeCollectionSourceStorage({
+          collectionId: collection.id,
+          sourceId: id,
+        });
+        throw error;
+      }
 
-    const created = await collectionsRepo.findSourceById(id);
-    if (!created) throw new Error("Failed to create collection source");
-    return {
-      id: created.id,
-      collectionId: created.collectionId,
-      kind: created.kind,
-      name: created.name,
-      mimeType: created.mimeType,
-      byteSize: created.byteSize,
-      contentHash: created.contentHash,
-      createdAt: created.createdAt,
-      updatedAt: created.updatedAt,
-    };
+      const created = await collectionsRepo.findSourceById(id);
+      if (!created) throw new Error("Failed to create collection source");
+      return {
+        id: created.id,
+        collectionId: created.collectionId,
+        kind: created.kind,
+        name: created.name,
+        mimeType: created.mimeType,
+        byteSize: created.byteSize,
+        contentHash: created.contentHash,
+        createdAt: created.createdAt,
+        updatedAt: created.updatedAt,
+      };
+    });
   },
 
   async removeSource(payload: RemoveCollectionSourcePayload): Promise<void> {
-    const source = await collectionsRepo.findSourceById(payload.id);
-    if (!source) throw new Error("Collection source not found");
-    await requireOwnedCollection(source.collectionId, payload.accountId);
-    const stagedStorage = stageCollectionSourceStorageRemoval({
-      collectionId: source.collectionId,
-      sourceId: source.id,
+    const sourceKey = recordKey("collection-source", payload.id, payload.accountId);
+    return transitionRecord(sourceKey, "delete", async () => {
+      const initial = await collectionsRepo.findSourceById(payload.id);
+      if (!initial) throw new Error("Collection source not found");
+      const parentKey = recordKey("collection", initial.collectionId, payload.accountId);
+      return transitionRecord(parentKey, `source-delete:${payload.id}`, async () => {
+        const source = await collectionsRepo.findSourceById(payload.id);
+        if (!source) throw new Error("Collection source not found");
+        await requireOwnedCollection(source.collectionId, payload.accountId);
+        const stagedStorage = stageCollectionSourceStorageRemoval({ collectionId: source.collectionId, sourceId: source.id });
+        try { await collectionsRepo.removeSource(source.id); }
+        catch (error) {
+          if (await collectionsRepo.findSourceById(source.id)) {
+            await restoreRecordStorage([stagedStorage], error);
+            throw error;
+          }
+        }
+        await finishRecordDeletion(sourceKey, () => stagedStorage.commit());
+      });
     });
-    try {
-      await collectionsRepo.removeSource(source.id);
-      stagedStorage.commit();
-    } catch (error) {
-      stagedStorage.restore();
-      throw error;
-    }
   },
 };

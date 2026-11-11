@@ -1,4 +1,5 @@
 import { screen, systemPreferences, type BrowserWindow, type Rectangle } from "electron";
+import { createWindowPresentationLifecycle } from "../../shared/window-lifecycle";
 
 interface WorkspaceWindowState {
   bounds: Rectangle;
@@ -12,17 +13,18 @@ interface WorkspaceWindowState {
 /** macOS completes fullscreen changes asynchronously, including their bounds. */
 async function setFullscreen(window: BrowserWindow, fullscreen: boolean): Promise<void> {
   if (window.isDestroyed() || window.isFullScreen() === fullscreen) return;
-  await new Promise<void>((resolve) => {
-    const done = () => {
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
       window.removeListener("enter-full-screen", done);
       window.removeListener("leave-full-screen", done);
       window.removeListener("closed", done);
-      resolve();
     };
+    const done = () => { cleanup(); resolve(); };
     if (fullscreen) window.once("enter-full-screen", done);
     else window.once("leave-full-screen", done);
     window.once("closed", done);
-    window.setFullScreen(fullscreen);
+    try { window.setFullScreen(fullscreen); }
+    catch (error) { cleanup(); reject(error); }
   });
 }
 
@@ -36,36 +38,35 @@ async function restoreBounds(window: BrowserWindow, bounds: Rectangle): Promise<
     window.setBounds(bounds, false);
     return;
   }
-  await new Promise<void>((resolve) => {
-    const done = () => {
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
       clearTimeout(fallback);
       window.removeListener("resized", done);
       window.removeListener("closed", done);
-      resolve();
     };
+    const done = () => { cleanup(); resolve(); };
     const fallback = setTimeout(done, 1500);
     window.once("resized", done);
     window.once("closed", done);
-    window.setBounds(bounds, true);
+    try { window.setBounds(bounds, true); }
+    catch (error) { cleanup(); reject(error); }
   });
 }
 
 /** Owns the temporary native bounds; renderer reloads must keep the snapshot. */
 export function createOnboardingWindowState(window: BrowserWindow, savedMaximized = false) {
-  let workspace: WorkspaceWindowState | null = null;
-  let initialized = false;
-  let pending = 0;
-  let operation = Promise.resolve();
+  const lifecycle = createWindowPresentationLifecycle<WorkspaceWindowState>();
+  window.once("closed", lifecycle.close);
 
   return {
-    isTemporary: () => !initialized || workspace !== null || pending > 0,
+    isTemporary: lifecycle.temporary,
     setOnboarding(onboarding: boolean): Promise<void> {
-      pending += 1;
-      operation = operation.catch(() => {}).then(async () => {
+      return lifecycle.enqueue(async () => {
         if (window.isDestroyed()) return;
         if (!onboarding) {
-          if (workspace) {
-            const previous = workspace;
+          const initialized = lifecycle.initialized();
+          const previous = lifecycle.restore();
+          if (previous) {
             window.setResizable(previous.resizable);
             window.setMaximizable(previous.maximizable);
             window.setFullScreenable(previous.fullscreenable);
@@ -73,24 +74,22 @@ export function createOnboardingWindowState(window: BrowserWindow, savedMaximize
             if (window.isDestroyed()) return;
             if (previous.maximized) window.maximize();
             await setFullscreen(window, previous.fullscreen);
-            workspace = null;
           } else if (!initialized && savedMaximized) {
             window.maximize();
           }
-          initialized = true;
+          lifecycle.restored(previous);
           return;
         }
         // StrictMode, HMR, and crash recovery can send the same mode again.
-        if (workspace) return;
-        workspace = {
+        const workspace = lifecycle.enter((first) => ({
           bounds: window.getNormalBounds(),
-          maximized: window.isMaximized() || (!initialized && savedMaximized),
+          maximized: window.isMaximized() || (first && savedMaximized),
           fullscreen: window.isFullScreen(),
           resizable: window.isResizable(),
           maximizable: window.isMaximizable(),
           fullscreenable: window.isFullScreenable(),
-        };
-        initialized = true;
+        }));
+        if (!workspace) return;
         await setFullscreen(window, false);
         if (window.isDestroyed()) return;
         if (window.isMaximized()) window.unmaximize();
@@ -106,8 +105,8 @@ export function createOnboardingWindowState(window: BrowserWindow, savedMaximize
           width,
           height,
         }, false);
+        lifecycle.entered(workspace);
       });
-      return operation.finally(() => { pending -= 1; });
     },
   };
 }

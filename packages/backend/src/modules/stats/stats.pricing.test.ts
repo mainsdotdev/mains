@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPricingLoader, estimateRecord, findModelPrice, parseModelPrices } from "./stats.pricing";
+import { createPricingLoader, estimateRecord, findModelPrice, parseModelPrices, readUsagePrices, startUsagePrices, shutdownUsagePrices } from "./stats.pricing";
+import { configureBackendRuntime, type BackendRuntime } from "../../runtime/backend-runtime";
 import type { ConsumptionRecord } from "./stats.transcripts";
 
 const document = { "claude-test": { input_cost_per_token: 2, output_cost_per_token: 8,
@@ -13,8 +14,47 @@ const record: ConsumptionRecord = { providerId: "claude_code", timestamp: 0, ses
 let root: string;
 
 describe("API-equivalent estimates", () => {
-  beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), "mains-usage-prices-")); });
-  afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+  beforeEach(async () => { startUsagePrices(); root = await fs.mkdtemp(path.join(os.tmpdir(), "mains-usage-prices-")); });
+  afterEach(async () => { shutdownUsagePrices(); await fs.rm(root, { recursive: true, force: true }); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it("does not consume a late response body after the price owner is disposed", async () => {
+    let finish!: (response: Response) => void;
+    const native = new Promise<Response>((resolve) => { finish = resolve; });
+    const fetcher = vi.fn<typeof fetch>().mockReturnValue(native);
+    const loader = createPricingLoader(path.join(root, "prices.json"), fetcher);
+    const reading = loader.read(); await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    loader.dispose(); expect((await reading).pricing.status).toBe("unavailable");
+    const response = new Response(JSON.stringify(document)); const body = vi.spyOn(response, "json");
+    finish(response); await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(body).not.toHaveBeenCalled(); expect((fetcher.mock.calls[0][1]?.signal as AbortSignal).aborted).toBe(true);
+  });
+
+  it("binds the host price loader to its current backend runtime and cache directory", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify(document)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ "claude-test": { input_cost_per_token: 3, output_cost_per_token: 9 } })));
+    vi.stubGlobal("fetch", fetcher);
+    const restoreFirst = configureBackendRuntime({ getPath: () => path.join(root, "first") } as unknown as BackendRuntime);
+    let restoreSecond: (() => void) | undefined;
+    try {
+      expect((await readUsagePrices()).prices.get("claude-test")?.input).toBe(2);
+      restoreSecond = configureBackendRuntime({ getPath: () => path.join(root, "second") } as unknown as BackendRuntime);
+      expect((await readUsagePrices()).prices.get("claude-test")?.input).toBe(3);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(await fs.readFile(path.join(root, "second", "usage", "model-prices.json"), "utf8")).document["claude-test"].input_cost_per_token).toBe(3);
+    } finally { restoreSecond?.(); restoreFirst(); }
+  });
+
+  it("starts the retry cooldown when a slow failed refresh settles", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); const start = Date.now();
+    let fail!: (error: unknown) => void;
+    const failed = new Promise<Response>((_resolve, reject) => { fail = reject; });
+    const fetcher = vi.fn<typeof fetch>().mockReturnValueOnce(failed).mockRejectedValue(new Error("Still offline"));
+    const loader = createPricingLoader(path.join(root, "prices.json"), fetcher);
+    const reading = loader.read(); await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    vi.setSystemTime(start + 120_000); fail(new Error("Slow failure")); await reading;
+    await loader.read(); expect(fetcher).toHaveBeenCalledOnce();
+    vi.setSystemTime(start + 180_000); await loader.read(); expect(fetcher).toHaveBeenCalledTimes(2);
+  });
 
   it("prices every input category once and computes cache read savings", () => {
     expect(estimateRecord(record, parseModelPrices(document))).toEqual({ cost: 393, savings: 72, reported: false });
@@ -88,5 +128,32 @@ describe("API-equivalent estimates", () => {
     const empty = await createPricingLoader(path.join(root, "missing.json"), offline).read();
     expect(empty.pricing).toMatchObject({ status: "unavailable", fetchedAt: null });
     expect(estimateRecord(record, empty.prices).cost).toBeNull();
+  });
+
+  it.each([
+    ["HTTP failure", () => new Response("unavailable", { status: 503 })],
+    ["malformed JSON", () => new Response("{")],
+    ["no valid rates", () => new Response(JSON.stringify({ model: { input_cost_per_token: -1 } }))],
+  ])("preserves the table and its timestamp after %s", async (_label, response) => {
+    const cacheFile = path.join(root, "prices.json");
+    const fetchedAt = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    const saved = JSON.stringify({ fetchedAt, document }); await fs.writeFile(cacheFile, saved);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response());
+    const loader = createPricingLoader(cacheFile, fetcher);
+    const result = await loader.read();
+    expect(result.pricing).toMatchObject({ status: "cached", fetchedAt: new Date(fetchedAt).toISOString() });
+    expect(result.prices.get("claude-test")?.input).toBe(2);
+    expect(await fs.readFile(cacheFile, "utf8")).toBe(saved);
+    await loader.read(); expect(fetcher).toHaveBeenCalledOnce();
+    loader.dispose();
+  });
+
+  it("keeps fetched prices available when cache storage cannot be written", async () => {
+    const occupied = path.join(root, "occupied"); await fs.writeFile(occupied, "file");
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(document)));
+    const loader = createPricingLoader(path.join(occupied, "prices.json"), fetcher);
+    expect((await loader.read()).pricing.status).toBe("fresh");
+    expect((await loader.read()).prices.get("claude-test")?.input).toBe(2);
+    expect(fetcher).toHaveBeenCalledOnce(); loader.dispose();
   });
 });

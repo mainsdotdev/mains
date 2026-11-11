@@ -6,9 +6,14 @@ import process from "node:process";
 import { setTimeout } from "node:timers";
 
 const fixtureCliVersion =
-  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.166.0";
+  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.167.0";
 
 if (process.argv.includes("--version")) {
+  const gate = process.env.MAINS_CODEX_FIXTURE_VERSION_GATE;
+  if (gate) {
+    fs.writeFileSync(`${gate}.waiting`, "waiting");
+    while (!fs.existsSync(gate)) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   process.stdout.write(`codex-cli ${fixtureCliVersion}\n`);
   process.exit(0);
 }
@@ -138,11 +143,16 @@ input.on("line", (line) => {
   }
 
   const { id, method, params = {} } = message;
+  const rpcError = process.env.MAINS_CODEX_FIXTURE_RPC_ERROR ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_RPC_ERROR) : null;
+  if (rpcError?.method === method) {
+    send({ id, error: { code: rpcError.code, message: rpcError.message, ...(rpcError.data !== undefined ? { data: rpcError.data } : {}) } });
+    return;
+  }
   if (process.env.MAINS_CODEX_FIXTURE_HANG_METHOD === method) return;
 
   switch (method) {
-    case "initialize":
-      respond(
+    case "initialize": {
+      const initialize = () => respond(
         id,
         process.env.MAINS_CODEX_FIXTURE_LEGACY_INITIALIZE === "1"
           ? { userAgent: "mains-test-codex-app-server" }
@@ -153,7 +163,14 @@ input.on("line", (line) => {
               platformOs: "macos",
             },
       );
+      const gate = process.env.MAINS_CODEX_FIXTURE_INITIALIZE_GATE;
+      const complete = () => {
+        if (gate && !fs.existsSync(gate)) setTimeout(complete, 10).unref();
+        else initialize();
+      };
+      complete();
       break;
+    }
 
     case "thread/turns/list": {
       const pages = JSON.parse(process.env.MAINS_CODEX_FIXTURE_HISTORY_PAGES ?? '[{"cursor":null,"result":{"data":[],"nextCursor":null,"backwardsCursor":null}}]');
@@ -164,6 +181,12 @@ input.on("line", (line) => {
       break;
     }
 
+    case "configRequirements/read":
+      respond(id, { requirements: process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS) : null });
+      break;
+    case "permissionProfile/list":
+      respond(id, { data: process.env.MAINS_CODEX_FIXTURE_PROFILES ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_PROFILES) : [], nextCursor: null });
+      break;
     case "thread/start": {
       const threadId = `thread-${nextThreadId++}`;
       activeThreads.add(threadId);
@@ -190,6 +213,7 @@ input.on("line", (line) => {
           turns: [],
         },
       });
+      if (process.env.MAINS_CODEX_FIXTURE_SKILLS_CHANGED === "1") notify("skills/changed", {});
       break;
     }
 
@@ -230,6 +254,10 @@ input.on("line", (line) => {
     case "thread/fork": {
       const threadId = `${params.threadId}-fork`;
       activeThreads.add(threadId);
+      // Opt-in scenario: the provider returns an inherited goal on the fork.
+      if (process.env.MAINS_CODEX_FIXTURE_FORK_GOAL === "1" && threadGoals.has(params.threadId)) {
+        threadGoals.set(threadId, { ...threadGoals.get(params.threadId), threadId });
+      }
       respond(id, {
         model: fixtureResponseModel(params),
         thread: {
@@ -437,6 +465,22 @@ input.on("line", (line) => {
               }],
             },
           });
+        }
+        if (prompt.includes("human command approval")) {
+          pendingDynamicTools.set(904, { threadId: params.threadId, turnId });
+          send({
+            jsonrpc: "2.0",
+            id: 904,
+            method: "item/commandExecution/requestApproval",
+            params: {
+              kind: "humanCommand", threadId: params.threadId, turnId,
+              itemId: "human-command-1", startedAtMs: Date.now(), environmentId: null,
+              command: "deploy production", cwd: "/workspace",
+              reason: "This command requires fresh human approval.",
+              availableDecisions: ["accept", "decline", "cancel"],
+            },
+          });
+          return;
         }
         if (prompt.includes("network approval")) {
           send({
@@ -660,6 +704,10 @@ input.on("line", (line) => {
     }
 
     case "thread/goal/get":
+      if (process.env.MAINS_CODEX_FIXTURE_GOAL_GET_ERROR === "1") {
+        respondError(id, -32603, "Goal lookup failed");
+        break;
+      }
       respond(id, { goal: threadGoals.get(params.threadId) ?? null });
       break;
 

@@ -1,17 +1,26 @@
 import { CHANNELS } from "@mains/contracts/channels";
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile,
+import type { AtlasAutoTagging, AtlasSaveBookmark, AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile,
   AtlasSavePage, AtlasSetCoverPreset, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import { handle } from "../../ipc-kit/handle";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { atlasService } from "./atlas.service";
+import { atlasBookmarks } from "./atlas.bookmarks";
 
 export function registerAtlasIpc() {
+  ipcMain.handle(CHANNELS.atlas.saveBookmark, handle((input: AtlasSaveBookmark) => atlasService.saveBookmark(input)));
+  ipcMain.handle(CHANNELS.atlas.enrichBookmark, handle((input: AtlasIdentity) => atlasService.enrichBookmark(input)));
+  ipcMain.handle(CHANNELS.atlas.listTags, handle((input: { accountId: string }) => atlasService.listTags(input)));
+  ipcMain.handle(CHANNELS.atlas.renameTag, handle((input: AtlasIdentity & { name: string }) => atlasService.renameTag(input)));
+  ipcMain.handle(CHANNELS.atlas.removeTag, handle((input: AtlasIdentity) => atlasService.removeTag(input)));
+  ipcMain.handle(CHANNELS.atlas.setTags, handle((input: AtlasIdentity & { tags: string[] }) => atlasService.setTags(input)));
+  ipcMain.handle(CHANNELS.atlas.getAutoTagging, handle((input: { accountId: string }) => atlasService.getAutoTagging(input)));
+  ipcMain.handle(CHANNELS.atlas.setAutoTagging, handle((input: { accountId: string; config: AtlasAutoTagging }) => atlasService.setAutoTagging(input)));
   ipcMain.handle(CHANNELS.atlas.list, handle((options: AtlasListOptions) => atlasService.list(options)));
   ipcMain.handle(CHANNELS.atlas.library, handle((options: AtlasLibraryOptions) => atlasService.library(options)));
   ipcMain.handle(CHANNELS.atlas.generated, handle((options: AtlasGeneratedOptions) => atlasService.generated(options)));
   ipcMain.handle(CHANNELS.atlas.get, handle(async (options: AtlasIdentity) => {
     const item = atlasService.get(options);
-    return item?.kind === "page" ? atlasService.getPage(options) : item ? { ...item, path: await atlasService.resolveFile(options) } : null;
+    return item?.kind === "page" ? atlasService.getPage(options) : item?.kind === "bookmark" ? item : item ? { ...item, path: await atlasService.resolveFile(options) } : null;
   }));
   ipcMain.handle(CHANNELS.atlas.createPage, handle((input: AtlasCreatePage) => atlasService.createPage(input)));
   ipcMain.handle(CHANNELS.atlas.savePage, handle((input: AtlasSavePage) => atlasService.savePage(input)));
@@ -25,7 +34,11 @@ export function registerAtlasIpc() {
   ipcMain.handle(CHANNELS.atlas.update, handle((input: AtlasUpdateItem) => atlasService.update(input)));
   ipcMain.handle(CHANNELS.atlas.setCoverPreset, handle((input: AtlasSetCoverPreset) => atlasService.setCoverPreset(input)));
   ipcMain.handle(CHANNELS.atlas.remove, handle((input: AtlasIdentity) => atlasService.remove(input)));
+  atlasBookmarks.start();
 }
 export function unregisterAtlasIpc() {
+  const closing = shutdownAtlasBookmarks();
   Object.values(CHANNELS.atlas).forEach((channel) => ipcMain.removeHandler(channel));
+  return closing;
 }
+export function shutdownAtlasBookmarks() { return atlasBookmarks.stop(); }

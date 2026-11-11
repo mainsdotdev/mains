@@ -77,8 +77,12 @@ be retried after release/expiry; no incomplete capture is listed as successful.
    schema instead of silently omitting recovery state. No D1 migration is needed for
    this additive DO schema change. Pages are bounded by rows and bytes;
    they are read synchronously, then spooled to private runner disk. A per-object
-   session nonce plus SQLite `total_changes()` rejects intervening SQL writes or
-   object restarts on each page. Cloudflare's native PITR commit bookmark fences
+   session nonce plus SQLite `total_changes()` and the current application catalog
+   reject row changes, schema mismatches or object restarts on each page. Empty
+   table/index creation does not advance the row-change counter, so the catalog
+   check is independent. These transitions share the compaction lifecycle in
+   [Maintenance and snapshot consistency](MAINTENANCE-LIFECYCLE.md).
+   Cloudflare's native PITR commit bookmark fences
    the **whole capture**, from before its first page to after its last page.
    A read-only hibernation can resume at the unread page with a fresh session
    token only while the original bookmark and schema remain unchanged. The

@@ -37,12 +37,96 @@ describe("serveConnection", () => {
     clearHandlers();
   });
 
+  it.each(["read", "reserve"])("does not execute a command after a receipt %s failure", async (stage) => {
+    const run = vi.fn(async () => ({ success: true as const, data: "executed" }));
+    registerHandler("runs:continue", run);
+    const conn = Object.assign(fakeConn("phone"), { deviceId: "device-read-failure" });
+    const receipts = { find: stage === "read" ? vi.fn().mockRejectedValue(new Error("Database unavailable")) : vi.fn().mockResolvedValue(null),
+      reserve: vi.fn().mockRejectedValue(new Error("Disk full")), record: vi.fn() };
+    serveConnection(conn, new WebSocketSink(), { commandReceipts: receipts });
+    conn.emit(JSON.stringify({ kind: "invoke", id: 1, channel: "runs:continue", args: [], commandId: "retry" }));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(run).not.toHaveBeenCalled();
+    expect(decodeWsMessage(conn.sent[0])).toMatchObject({ kind: "response", result: { success: false } });
+  });
+
+  it("refuses device commands when durable delivery is unavailable", async () => {
+    const run = vi.fn(async () => ({ success: true as const, data: "executed" }));
+    registerHandler("runs:continue", run);
+    const conn = Object.assign(fakeConn("phone"), { deviceId: "device-no-store", allowedChannels: new Set<string>(), commandChannels: new Set(["runs:continue"]) });
+    serveConnection(conn, new WebSocketSink());
+    conn.emit(JSON.stringify({ kind: "invoke", id: 1, channel: "runs:continue", args: [], commandId: "one-attempt" }));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(run).not.toHaveBeenCalled();
+    expect(decodeWsMessage(conn.sent[0])).toMatchObject({ result: { success: false } });
+  });
+
+  it("preserves an uncertain outcome across reconnect and restart when saving the result fails", async () => {
+    const run = vi.fn(async () => ({ success: true as const, data: "executed" }));
+    registerHandler("runs:continue", run);
+    const rows = new Map<string, string>();
+    const makeStore = () => ({
+      find: async (_device: string, id: string) => rows.get(id) ?? null,
+      reserve: async (_device: string, id: string, _channel: string, pending: string) => {
+        if (rows.has(id)) return false;
+        rows.set(id, pending); return true;
+      },
+      record: vi.fn().mockRejectedValue(new Error("Disk full")),
+    });
+    const store = makeStore();
+    const frame = (id: number) => JSON.stringify({ kind: "invoke", id, channel: "runs:continue", args: [], commandId: "uncertain" });
+    for (const [index, receipts] of [store, store, makeStore()].entries()) {
+      const conn = Object.assign(fakeConn(`phone-${index}`), { deviceId: "device-write-failure" });
+      serveConnection(conn, new WebSocketSink(), { commandReceipts: receipts });
+      conn.emit(frame(index + 1));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(decodeWsMessage(conn.sent[0])).toMatchObject({ result: { success: false, error: expect.stringMatching(/unknown|uncertain/i) } });
+    }
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("joins a running command after losing its first connection and replays its saved result", async () => {
+    let finish!: (value: { success: true; data: string }) => void;
+    const run = vi.fn(() => new Promise<{ success: true; data: string }>((resolve) => { finish = resolve; }));
+    registerHandler("runs:continue", run);
+    const rows = new Map<string, string>();
+    const receipts = {
+      find: async (_device: string, id: string) => rows.get(id) ?? null,
+      reserve: async (_device: string, id: string, _channel: string, result: string) => {
+        if (rows.has(id)) return false;
+        rows.set(id, result); return true;
+      },
+      record: vi.fn(async (_device: string, id: string, _channel: string, result: string) => { rows.set(id, result); }),
+    };
+    const first = Object.assign(fakeConn("old-socket"), { deviceId: "device-lost-reply" });
+    const next = Object.assign(fakeConn("replacement"), { deviceId: "device-lost-reply" });
+    const frame = (id: number) => JSON.stringify({ kind: "invoke", id, channel: "runs:continue", args: [], commandId: "same-command" });
+    const sink = new WebSocketSink();
+    serveConnection(first, sink, { commandReceipts: receipts });
+    first.emit(frame(1));
+    await new Promise((resolve) => setImmediate(resolve));
+    first.fireClose();
+    serveConnection(next, sink, { commandReceipts: receipts });
+    next.emit(frame(2));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(run).toHaveBeenCalledOnce();
+    finish({ success: true, data: "saved" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(first.sent).toEqual([]);
+    expect(decodeWsMessage(next.sent[0])).toMatchObject({ id: 2, result: { success: true, data: "saved" } });
+    next.emit(frame(3));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(decodeWsMessage(next.sent[1])).toMatchObject({ id: 3, result: { success: true, data: "saved" } });
+    expect(run).toHaveBeenCalledOnce();
+    expect(receipts.record).toHaveBeenCalledOnce();
+  });
+
   it("never writes or replays recovery material through persistent command receipts", async () => {
     const channel = CHANNELS.bridge.takeRecoveryCode;
     let taken = false;
     registerHandler(channel, async () => { const code = taken ? null : "one-use-recovery-secret"; taken = true; return { success: true, data: code }; });
     const conn = Object.assign(fakeConn("browser"), { deviceId: "web-session" });
-    const receipts = { find: vi.fn().mockResolvedValue(null), record: vi.fn().mockResolvedValue(undefined) };
+    const receipts = { find: vi.fn().mockResolvedValue(null), reserve: vi.fn(), record: vi.fn().mockResolvedValue(undefined) };
     serveConnection(conn, new WebSocketSink(), { commandReceipts: receipts });
     const frame = (id: number) => JSON.stringify({ kind: "invoke", id, channel, args: [], commandId: "same-attempt" });
     conn.emit(frame(1)); await new Promise((resolve) => setImmediate(resolve));

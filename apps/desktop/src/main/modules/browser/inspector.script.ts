@@ -4,21 +4,24 @@ import type {
   BrowserSelectionElement,
 } from "../../../shared/browser-annotation";
 
+import { createBrowserCaptureLifecycle } from "../../../shared/browser-lifecycle";
+
 export const INSPECTOR_SENTINEL = "[[MAINS_BROWSER_SELECTION_V1]]";
 
 // Self-contained: serialized into the guest page, which has no Node access or
 // renderer bridge. The shadow root isolates controls from the page's styles.
-function installInspector(enabled: boolean, sentinel: string, theme?: BrowserAnnotationTheme) {
+function installInspector(enabled: boolean, sentinel: string, theme: BrowserAnnotationTheme | undefined, createCapture: typeof createBrowserCaptureLifecycle) {
   const guest = window as typeof window & {
     __mainsInspectorState__?: {
       active: boolean;
       teardown: () => void;
-      finishCapture: (error?: string) => void;
+      finishCapture: (error?: string, captureId?: string) => void;
     };
   };
   if (!enabled) { guest.__mainsInspectorState__?.teardown(); return "ok"; }
   if (guest.__mainsInspectorState__?.active) return "already-active";
 
+  const capture = createCapture();
   const host = document.createElement("div");
   host.setAttribute("data-mains-inspector", "1");
   host.style.cssText = "all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none";
@@ -127,12 +130,10 @@ function installInspector(enabled: boolean, sentinel: string, theme?: BrowserAnn
 
   let selected: Element[] = [];
   let hovered: Element | null = null;
-  let capturePending = false;
   let captureTimer: ReturnType<typeof setTimeout> | undefined;
   let frame = 0;
   let draggedPosition: { x: number; y: number } | null = null;
   let drag: { x: number; y: number; left: number; top: number } | null = null;
-  let active = true;
 
   function emit(payload: unknown) { console.log(sentinel + JSON.stringify(payload)); }
   function own(event: Event) { return event.composedPath().includes(host); }
@@ -196,7 +197,7 @@ function installInspector(enabled: boolean, sentinel: string, theme?: BrowserAnn
     });
   }
   function positionCard() {
-    if (!selected.length || capturePending) return;
+    if (!selected.length || capture.pending()) return;
     const rect = selected[0].getBoundingClientRect();
     const width = card.offsetWidth || Math.min(360, window.innerWidth - 24);
     const height = card.offsetHeight || 175;
@@ -214,7 +215,7 @@ function installInspector(enabled: boolean, sentinel: string, theme?: BrowserAnn
       const number = node("span", "number", outline);
       number.textContent = String(index + 1);
     });
-    if (hovered?.isConnected && !selected.includes(hovered) && !capturePending) {
+    if (hovered?.isConnected && !selected.includes(hovered) && !capture.pending()) {
       placeOutline(hoverOutline, hovered);
       hoverOutline.hidden = hoverLabel.hidden = false;
       const rect = hovered.getBoundingClientRect();
@@ -241,47 +242,51 @@ function installInspector(enabled: boolean, sentinel: string, theme?: BrowserAnn
       remove.textContent = "×";
       remove.setAttribute("aria-label", `Remove selected item ${index + 1}`);
       remove.onclick = () => {
-        if (capturePending) return;
+        if (capture.pending()) return;
         selected = selected.filter((candidate) => candidate !== element);
         renderSelection();
       };
     });
-    card.hidden = !selected.length || capturePending;
-    hint.hidden = !!selected.length || capturePending;
+    card.hidden = !selected.length || capture.pending();
+    hint.hidden = !!selected.length || capture.pending();
     if (!selected.length) { comment.value = ""; draggedPosition = null; }
     layout();
   }
-  function finishCapture(error?: string) {
+  function finishCapture(error?: string, captureId?: string) {
+    if (!capture.finish(captureId)) return;
     if (captureTimer) clearTimeout(captureTimer);
-    capturePending = false;
+    captureTimer = undefined;
     if (!error) { selected = []; comment.value = ""; draggedPosition = null; }
     help.textContent = error || "Click more to select · Enter to add";
     renderSelection();
     if (error) comment.focus({ preventScroll: true });
   }
   function submit() {
-    if (capturePending) return;
+    if (capture.pending()) return;
     selected = selected.filter((element) => element.isConnected);
     if (!selected.length) { renderSelection(); return; }
     const elements = selected.map(describe);
+    const captureId = capture.begin();
+    if (!captureId) return;
     const payload = {
       ...elements[0], type: "browser_selection", url: location.href, title: document.title || "",
-      elements, comment: comment.value.trim(), timestamp: new Date().toISOString(),
+      captureId, elements, comment: comment.value.trim(), timestamp: new Date().toISOString(),
     };
-    capturePending = true;
     card.hidden = hint.hidden = hoverOutline.hidden = hoverLabel.hidden = true;
     // Paint the hidden editor before main captures the highlighted viewport.
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (!active || !capturePending) return;
+      if (!capture.current(captureId)) return;
       emit(payload);
-      captureTimer = setTimeout(() => finishCapture("Capture timed out. Try adding the annotation again."), 15000);
+      if (capture.current(captureId)) captureTimer = setTimeout(() => finishCapture("Capture timed out. Try adding the annotation again.", captureId), 15000);
     }));
   }
   add.onclick = submit;
-  discard.onclick = () => { if (!capturePending) finishCapture(); };
+  discard.onclick = () => {
+    if (!capture.pending()) { selected = []; comment.value = ""; draggedPosition = null; renderSelection(); }
+  };
 
   function onMove(event: MouseEvent) {
-    if (capturePending || own(event)) { hovered = null; layout(); return; }
+    if (capture.pending() || own(event)) { hovered = null; layout(); return; }
     const element = event.target instanceof Element ? event.target : null;
     if (hovered !== element) { hovered = element; layout(); }
   }
@@ -293,7 +298,7 @@ function installInspector(enabled: boolean, sentinel: string, theme?: BrowserAnn
   function onClick(event: MouseEvent) {
     if (own(event)) return;
     blockPagePointer(event);
-    if (capturePending || !(event.target instanceof Element)) return;
+    if (capture.pending() || !(event.target instanceof Element)) return;
     const element = event.target;
     if (selected.includes(element)) selected = selected.filter((candidate) => candidate !== element);
     else if (selected.length < 30) selected.push(element);
@@ -320,7 +325,7 @@ function installInspector(enabled: boolean, sentinel: string, theme?: BrowserAnn
   }
   function onLayout() {
     if (frame) cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(() => { frame = 0; if (active) layout(); });
+    frame = requestAnimationFrame(() => { frame = 0; if (capture.live()) layout(); });
   }
   header.onpointerdown = (event) => {
     if (event.target === discard) return;
@@ -337,7 +342,7 @@ function installInspector(enabled: boolean, sentinel: string, theme?: BrowserAnn
   header.onpointerup = header.onpointercancel = () => { drag = null; };
 
   function teardown() {
-    active = false;
+    capture.dispose();
     if (frame) cancelAnimationFrame(frame);
     if (captureTimer) clearTimeout(captureTimer);
     host.remove();
@@ -366,10 +371,10 @@ function installInspector(enabled: boolean, sentinel: string, theme?: BrowserAnn
 }
 
 export function buildInspectorScript(enable: boolean, theme?: BrowserAnnotationTheme): string {
-  return `(${installInspector.toString()})(${JSON.stringify(enable)},${JSON.stringify(INSPECTOR_SENTINEL)},${JSON.stringify(theme) ?? "undefined"});`;
+  return `(${installInspector.toString()})(${JSON.stringify(enable)},${JSON.stringify(INSPECTOR_SENTINEL)},${JSON.stringify(theme) ?? "undefined"},(${createBrowserCaptureLifecycle.toString()}));`;
 }
 
 /** Restore a failed draft or clear a completed group while annotation stays on. */
-export function buildInspectorCaptureCompleteScript(error?: string): string {
-  return `window.__mainsInspectorState__?.finishCapture(${JSON.stringify(error) ?? "undefined"});`;
+export function buildInspectorCaptureCompleteScript(error?: string, captureId?: string): string {
+  return `window.__mainsInspectorState__?.finishCapture(${JSON.stringify(error) ?? "undefined"},${JSON.stringify(captureId) ?? "undefined"});`;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Select, Text, Toggle, toast } from "@/components/ui";
 import { Check } from "@/components/ui/icons";
 import {
@@ -15,6 +15,8 @@ import {
   type AppshotsSystemSettingsPane,
 } from "../../../../shared/appshots";
 import type { ServiceResponse } from "../../../../shared/ipc-kit/service-response";
+
+import { createCaptureSettingsView } from "../../../../shared/capture-shortcut-lifecycle";
 
 const SHORTCUT_OPTIONS = APPSHOT_SHORTCUTS.map((value) => ({
   value,
@@ -55,6 +57,7 @@ function PermissionStatus({ granted }: { granted: boolean }) {
 }
 
 export default function LensSettings() {
+  const owner = useRef<ReturnType<typeof createCaptureSettingsView> | null>(null);
   const [status, setStatus] = useState<AppshotsStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -70,73 +73,61 @@ export default function LensSettings() {
     return false;
   }, []);
 
-  const loadStatus = useCallback(async () => {
-    const response = (await window.api.appshots.getStatus()) as ServiceResponse<AppshotsStatus>;
-    applyStatus(response);
-  }, [applyStatus]);
-
   useEffect(() => {
-    let cancelled = false;
+    const view = createCaptureSettingsView(); owner.current = view;
     const refresh = () => {
+      const current = view.read();
+      if (!current) return;
       void window.api.appshots.getStatus().then(
         (response: ServiceResponse<AppshotsStatus>) => {
-          if (cancelled) return;
-          applyStatus(response);
-          setIsLoading(false);
+          if (!current()) return;
+          applyStatus(response); setIsLoading(false);
         },
         (error: unknown) => {
-          if (cancelled) return;
-          setLoadError(error instanceof Error ? error.message : String(error));
-          setIsLoading(false);
+          if (!current()) return;
+          setLoadError(error instanceof Error ? error.message : String(error)); setIsLoading(false);
         },
       );
     };
-    refresh();
-    window.addEventListener("focus", refresh);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", refresh);
-    };
+    refresh(); window.addEventListener("focus", refresh);
+    return () => { view.close(); if (owner.current === view) owner.current = null; window.removeEventListener("focus", refresh); };
   }, [applyStatus]);
 
-  const configure = async (configuration: AppshotsConfiguration) => {
+  const runAction = async (effect: (current: () => boolean) => Promise<void>) => {
+    const action = owner.current?.begin();
+    if (!action) return;
     setBusy(true);
-    try {
-      const response = (await window.api.appshots.configure(
-        configuration,
-      )) as ServiceResponse<AppshotsStatus>;
-      applyStatus(response);
-      if (!response.success) {
-        toast.error(response.error);
-        await loadStatus();
-      }
-    } finally {
-      setBusy(false);
+    try { await effect(action.current); }
+    catch (error) { if (action.current()) toast.error(error instanceof Error ? error.message : String(error)); }
+    finally {
+      if (action.current()) { setBusy(false); setIsLoading(false); }
+      action.finish();
     }
   };
-
-  const captureWindow = async () => {
-    setBusy(true);
-    try {
-      const response = (await window.api.appshots.captureNow()) as ServiceResponse<unknown>;
-      if (!response.success) toast.error(response.error);
-    } finally {
-      setBusy(false);
+  const configure = (configuration: AppshotsConfiguration) => runAction(async (current) => {
+    const response = await window.api.appshots.configure(configuration) as ServiceResponse<AppshotsStatus>;
+    if (!current()) return;
+    applyStatus(response);
+    if (!response.success) {
+      toast.error(response.error);
+      const restored = await window.api.appshots.getStatus() as ServiceResponse<AppshotsStatus>;
+      if (current()) applyStatus(restored);
     }
-  };
-
-  const requestAccessibility = async () => {
-    const response = (await window.api.appshots.requestAccessibility()) as ServiceResponse<AppshotsStatus>;
+  });
+  const captureWindow = () => runAction(async (current) => {
+    const response = await window.api.appshots.captureNow() as ServiceResponse<unknown>;
+    if (current() && !response.success) toast.error(response.error);
+  });
+  const requestAccessibility = () => runAction(async (current) => {
+    const response = await window.api.appshots.requestAccessibility() as ServiceResponse<AppshotsStatus>;
+    if (!current()) return;
     if (response.success) setStatus(response.data);
     else toast.error(response.error);
-  };
-
-  const openSystemSettings = async (pane: AppshotsSystemSettingsPane) => {
-    const response = (await window.api.appshots.openSystemSettings(
-      pane,
-    )) as ServiceResponse<null>;
-    if (!response.success) toast.error(response.error);
-  };
+  });
+  const openSystemSettings = (pane: AppshotsSystemSettingsPane) => runAction(async (current) => {
+    const response = await window.api.appshots.openSystemSettings(pane) as ServiceResponse<null>;
+    if (current() && !response.success) toast.error(response.error);
+  });
 
   const supported = status?.supported === true;
   const enabled = supported ? status.enabled : false;
@@ -204,7 +195,7 @@ export default function LensSettings() {
             <Button
               type="button"
               variant="ghost"
-              disabled={!supported}
+              disabled={!supported || busy}
               onClick={() => void openSystemSettings("screen-recording")}
             >
               {status?.screenPermission === "granted"
@@ -223,7 +214,7 @@ export default function LensSettings() {
             <Button
               type="button"
               variant="ghost"
-              disabled={!supported}
+              disabled={!supported || busy}
               onClick={() => void openSystemSettings("accessibility")}
             >
               Accessibility
@@ -231,7 +222,7 @@ export default function LensSettings() {
             <Button
               type="button"
               variant="ghost"
-              disabled={!supported}
+              disabled={!supported || busy}
               onClick={() => void openSystemSettings("automation")}
             >
               Automation
@@ -240,7 +231,7 @@ export default function LensSettings() {
               <Button
                 type="button"
                 variant="primary"
-                disabled={!supported}
+                disabled={!supported || busy}
                 onClick={() => void requestAccessibility()}
               >
                 Request Access
@@ -258,7 +249,7 @@ export default function LensSettings() {
           <Button
             type="button"
             variant="primary"
-            disabled={!supported}
+            disabled={!supported || busy}
             isLoading={busy || status?.capturing === true}
             onClick={() => void captureWindow()}
           >

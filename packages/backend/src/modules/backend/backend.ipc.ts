@@ -2,7 +2,7 @@ import { ipcMain } from "../../ipc-kit/ipc-main";
 import type { IpcInvokeContext } from "../../ipc-kit";
 import { CHANNELS } from "@mains/contracts/channels";
 import { ok, fail } from "@mains/contracts/service-response";
-import { backendService } from "./backend.service";
+import { backendService, clearPairingCodes } from "./backend.service";
 
 // Registered through the ipcMain shim (not raw Electron ipcMain) so the handler
 // lands in the registry the WS router serves: a phone or another mains reaches
@@ -25,5 +25,6 @@ export function registerBackendIpc() {
 }
 
 export function unregisterBackendIpc() {
+  clearPairingCodes();
   ipcMain.removeHandler(CHANNELS.backend.describe);
 }

@@ -8,6 +8,13 @@ import { createOnboardingStartupState } from "./onboarding-startup";
 beforeEach(() => vi.clearAllMocks());
 
 describe("onboarding startup presentation", () => {
+  it("releases the startup splash only once when readiness and close both finish", () => {
+    const startup = createOnboardingStartupState(true);
+    startup.update(false, false);
+    startup.finish();
+    startup.finish();
+    expect(mocks.closeSplashWindow).toHaveBeenCalledOnce();
+  });
   it("does not authorize a splash from a previous launch before the current renderer confirms completion", () => {
     const startup = createOnboardingStartupState(true);
     expect(startup.needsOnboarding()).toBe(true);

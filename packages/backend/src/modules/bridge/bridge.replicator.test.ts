@@ -106,6 +106,35 @@ describe("Bridge development configuration", () => {
 });
 
 describe.skipIf(!networkMode)("Bridge background replication for desktop/server viewers", () => {
+  it("does not mark a reopened view ready from its retired pull", async () => {
+    const account = randomUUID(), a = await node(account, "A"); run(a); await a.replicator.syncNow();
+    const original = websocket.createBridgeWebSocketTransport;
+    let pulling!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => { pulling = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let held = false;
+    vi.spyOn(websocket, "createBridgeWebSocketTransport").mockImplementation((options) => {
+      const transport = original(options), pull = transport.pull;
+      transport.pull = async (stream, after, limit) => {
+        const result = await pull(stream, after, limit);
+        if (stream === "run:r" && !held) { held = true; pulling(); await gate; }
+        return result;
+      };
+      return transport;
+    });
+    const b = await node(account, "B"); await b.replicator.syncNow();
+    b.replicator.watchRun("r", "old-view");
+    const syncing = b.replicator.syncNow();
+    try {
+      await entered;
+      b.replicator.unwatchRun("old-view"); b.replicator.watchRun("r", "new-view");
+      release(); await syncing;
+      expect(b.replicator.getStatus().runs).toEqual([{ runId: "r", ready: false, error: null }]);
+      await b.replicator.syncNow();
+      expect(b.replicator.getStatus().runs).toEqual([{ runId: "r", ready: true, error: null }]);
+    } finally { release(); await syncing; }
+  });
+
   it("keeps unrelated account/run writes and watched pulls live while one account file is damaged", async () => {
     const account = randomUUID(), dataDir = await fs.mkdtemp(join(tmpdir(), "bridge-isolation-"));
     cleanups.push(() => fs.rm(dataDir, { recursive: true, force: true }));
@@ -364,13 +393,13 @@ describe.skipIf(!networkMode)("Bridge background replication for desktop/server 
     await flushBackground(() => !n.sqlite.prepare("SELECT 1 FROM bridge_outbox WHERE stream='account'").get());
     expect(replicator.getStatus()).toMatchObject({ error: null, pendingRecords: 1 });
   });
-  it("leaves inactive changes queued without repeated uploads or quota queries and resumes after the renewal refresh", async () => {
+  it.each(["expired", "revoked", "scheduled", "none", "unavailable"] as const)("leaves %s inactive changes queued without repeated uploads or quota queries and resumes after the renewal refresh", async (inactive) => {
     const original = globalThis.fetch, now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
     let active = false;
     const fetches = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
       const response = await original(url, options);
       if (new URL(String(url)).pathname !== "/v1/quota") return response;
-      return Response.json({ ...await response.json(), subscription: { status: active ? "active" : "expired", canUpload: active, planId: "standard", billingInterval: "monthly",
+      return Response.json({ ...await response.json(), subscription: { status: active ? "active" : inactive, canUpload: active, planId: "standard", billingInterval: "monthly",
         startsAt: new Date(now - 60_000).toISOString(), expiresAt: new Date(active ? now + 120_000 : now - 1).toISOString() } });
     });
     const quotaRequests = () => fetches.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/v1/quota").length;

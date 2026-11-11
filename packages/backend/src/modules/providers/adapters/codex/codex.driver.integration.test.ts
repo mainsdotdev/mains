@@ -19,9 +19,11 @@ vi.setConfig({ testTimeout: 30_000 });
 const approvalHarness = vi.hoisted(() => ({
   requests: [] as Array<Record<string, unknown>>,
   formAnswer: undefined as string | undefined,
+  commandAnswer: undefined as string | undefined,
 }));
 
 vi.mock("../../../runs/user-input-broker", () => ({
+  updatePendingRequest: vi.fn(() => true),
   cancelPendingRequest: vi.fn(),
   cancelPendingRequests: vi.fn(),
   requestToolApproval: vi.fn(async (request: Record<string, unknown>) => {
@@ -29,7 +31,8 @@ vi.mock("../../../runs/user-input-broker", () => ({
     return {
       requestId: request.requestId,
       approved: true,
-      answer: request.kind === "elicitation" ? approvalHarness.formAnswer ?? "Yes" : "Yes",
+      answer: request.kind === "elicitation" ? approvalHarness.formAnswer ?? "Yes"
+        : request.toolName === "Bash" ? approvalHarness.commandAnswer : "Yes",
     };
   }),
 }));
@@ -122,6 +125,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   approvalHarness.requests.length = 0;
   approvalHarness.formAnswer = undefined;
+  approvalHarness.commandAnswer = undefined;
   delete process.env.MAINS_CODEX_FIXTURE_LOG;
   delete process.env.MAINS_CODEX_FIXTURE_EFFORTS;
   delete process.env.MAINS_CODEX_FIXTURE_VERSION;
@@ -134,6 +138,9 @@ afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_OAUTH_ERROR;
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_OAUTH;
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_TURN_LINEAGE;
+  delete process.env.MAINS_CODEX_FIXTURE_RPC_ERROR;
+  delete process.env.MAINS_CODEX_FIXTURE_PROFILES;
+  delete process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS;
   await Promise.all(drivers.splice(0).map((driver) => driver.shutdown?.()));
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -141,6 +148,224 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it("sends named permissions without legacy sandbox overrides on create, resume, and fork", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-permission-profiles-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_PROFILES = JSON.stringify([{ id: "project-edit", description: "Project only", allowed: true }]);
+    process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS = JSON.stringify({ allowedPermissionProfiles: { "project-edit": true } });
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 1000, sandboxMode: "danger-full-access", permissionProfile: "project-edit" });
+    drivers.push(driver);
+    const acquired = await driver.createSession(request("profile-source"));
+    await driver.executePrompt(acquired.session, acquired.prompt, async () => {}, new AbortController().signal);
+    const resumed = await driver.resumeSession!({ runId: "profile-source", accountId: "account-1", execution: request("profile-source").execution, message: "Continue" });
+    await driver.executePrompt(resumed.session, resumed.prompt, async () => {}, new AbortController().signal);
+    await driver.forkSession!({ runId: "profile-fork", sourceRunId: "profile-source", accountId: "account-1", execution: request("profile-fork").execution, message: "Fork" });
+    const requests = readProtocolLog(logPath).filter((entry) => ["thread/start", "thread/resume", "thread/fork"].includes(String(entry.method)));
+    expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "thread/resume", "thread/fork"]);
+    for (const entry of requests) {
+      expect(entry.params).toMatchObject({ permissions: "project-edit", config: { model_reasoning_summary: "auto" } });
+      expect(entry.params).not.toHaveProperty("sandbox");
+      expect((entry.params as any).config).not.toHaveProperty("sandbox_workspace_write");
+    }
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "permissionProfile/list")?.params).toMatchObject({ cwd: request("profile-source").execution.cwd });
+  });
+
+  it("blocks forbidden permissions before a native thread is created", async () => {
+    process.env.MAINS_CODEX_FIXTURE_PROFILES = JSON.stringify([{ id: "forbidden", description: null, allowed: false }]);
+    const driver = createCodexDriver({ binary: fixtureBinary, permissionProfile: "forbidden" });
+    drivers.push(driver);
+    await expect(driver.createSession(request("forbidden-profile"))).rejects.toThrow("does not allow this profile");
+    await expect(driver.createSession({ ...request("missing-profile"), configSnapshot: { permissionProfile: "missing" } })).rejects.toThrow("unavailable");
+  });
+
+  it("keeps Chat read-only even with a writable default and a managed named-profile requirement", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-chat-permissions-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_PROFILES = JSON.stringify([{ id: ":read-only", description: null, allowed: true }, { id: "project-edit", description: null, allowed: true }]);
+    process.env.MAINS_CODEX_FIXTURE_REQUIREMENTS = JSON.stringify({ allowedPermissionProfiles: { ":read-only": true, "project-edit": true } });
+    const driver = createCodexDriver({ binary: fixtureBinary, permissionProfile: "project-edit", sandboxMode: "danger-full-access" });
+    drivers.push(driver);
+    await driver.createSession({ ...request("readonly-profile"), mode: "chat", configSnapshot: { sandboxMode: "read-only", permissionProfile: "" } });
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/start")?.params).toMatchObject({ permissions: ":read-only" });
+  });
+
+  it("broadcasts watched skill changes without requiring a running turn", async () => {
+    vi.stubEnv("MAINS_CODEX_FIXTURE_SKILLS_CHANGED", "1");
+    const send = vi.fn();
+    const off = registerEventSink({ kind: "test", send });
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    try {
+      await driver.createSession(request("idle-skills"));
+      await vi.waitFor(() => expect(send).toHaveBeenCalledWith(CHANNELS.providers.skillsUpdated, { providerId: "codex" }, undefined));
+    } finally { off(); }
+  });
+
+  it.each([
+    [{ type: "modelProviderMismatch" }, "different model provider"],
+    [{ reason: "serverShuttingDown" }, "shutting down"],
+  ])("persists native turn-start error details and explains %j without retrying the turn", async (data, guidance) => {
+    vi.stubEnv("MAINS_CODEX_FIXTURE_RPC_ERROR", JSON.stringify({ method: "turn/start", code: -32600, message: "Native rejection", data }));
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const session = await driver.createSession(request("failed-start"));
+    const events: Array<Record<string, unknown>> = [];
+    const outcome = await driver.executePrompt(session.session, session.prompt, async (event) => { events.push(event as unknown as Record<string, unknown>); }, new AbortController().signal);
+    expect(outcome).toMatchObject({ status: "failed", summary: expect.stringContaining(guidance) });
+    expect(events).toContainEqual(expect.objectContaining({ type: "log", level: "error", metadata: expect.objectContaining({ code: -32600, data, rawMessage: "Native rejection" }) }));
+  });
+
+  it.each([
+    ["0.153.0", false], ["0.162.1", false], ["0.166.0", false], ["0.167.0", true],
+  ])("negotiates required human approval with CLI %s (enabled=%s)", async (version, enabled) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-human-capability-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_VERSION", version);
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    await driver.createSession(request("human-capability"));
+    const initialize = readProtocolLog(logPath).find((message) => message.method === "initialize");
+    const capabilities = (initialize?.params as { capabilities: Record<string, unknown> }).capabilities;
+    expect(capabilities.experimentalApi).toBe(true);
+    if (enabled) expect(capabilities.requiredHumanApproval).toBe(true);
+    else expect(capabilities).not.toHaveProperty("requiredHumanApproval");
+  });
+
+  it("routes a native human command to one-call approval and waits for the response", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-human-command-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    approvalHarness.commandAnswer = "acceptForSession";
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const nativeRequest = { ...request("human-command"), goal: "human command approval" };
+    const acquired = await driver.createSession(nativeRequest);
+    const outcome = await driver.executePrompt(acquired.session, acquired.prompt, async () => {}, new AbortController().signal);
+    expect(outcome.status).toBe("succeeded");
+    expect(approvalHarness.requests).toContainEqual(expect.objectContaining({
+      runId: "human-command", kind: "tool_approval", toolName: "Bash", suppressAlwaysAllowRule: true,
+      toolInput: expect.objectContaining({ command: "deploy production" }),
+    }));
+    expect(readProtocolLog(logPath)).toContainEqual(expect.objectContaining({ id: 904, result: { decision: "accept" } }));
+  });
+
+  it.each(["active", "paused", "blocked", "usageLimited", "budgetLimited"])("preserves a native %s goal on continuation and an inheriting fork", async (status) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-goal-inherit-")); tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl"); vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_FORK_GOAL", "1");
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000, goalMode: true }); drivers.push(driver);
+    await driver.createSession(request("goal-source"));
+    await driver.setGoal!("goal-source", { status });
+    await driver.resumeSession!({ ...request("goal-source"), message: "Follow-up that must not replace the goal" });
+    await driver.forkSession!({ ...request("goal-fork"), sourceRunId: "goal-source", message: "Fork follow-up" });
+    await expect(driver.getGoal!("goal-source")).resolves.toMatchObject({ objective: "Return structured output", status });
+    await expect(driver.getGoal!("goal-fork")).resolves.toMatchObject({ threadId: "thread-1-fork", objective: "Return structured output", status });
+    expect(readProtocolLog(logPath).filter((entry) => entry.method === "thread/goal/set")).toHaveLength(2);
+  });
+  it("renews a native completed goal as active on continuation", async () => {
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000, goalMode: true }); drivers.push(driver);
+    await driver.createSession(request("goal-renew"));
+    await driver.setGoal!("goal-renew", { status: "complete" });
+    await driver.resumeSession!({ ...request("goal-renew"), message: "Next objective" });
+    await expect(driver.getGoal!("goal-renew")).resolves.toMatchObject({ objective: "Next objective", status: "active" });
+  });
+  it("does not automatically clear a goal that is still active on the provider", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-goal-clear-")); tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl"); vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000, goalMode: true }); drivers.push(driver);
+    await driver.createSession(request("run-goal-clear"));
+    await expect(driver.clearGoal!("run-goal-clear", "automatic")).resolves.toBe(false);
+    expect(readProtocolLog(logPath).some((entry) => entry.method === "thread/goal/clear")).toBe(false);
+    await expect(driver.getGoal!("run-goal-clear")).resolves.toMatchObject({ status: "active", objective: "Return structured output" });
+  });
+  it("preserves an established goal when continuation goal lookup fails", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-goal-preserve-")); tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_GOAL_GET_ERROR", "1");
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000, goalMode: true }); drivers.push(driver);
+    await driver.createSession(request("run-goal-preserve"));
+    await driver.resumeSession!({ ...request("run-goal-preserve"), message: "A small follow-up" });
+    const writes = readProtocolLog(logPath).filter((entry) => entry.method === "thread/goal/set");
+    expect(writes).toHaveLength(1);
+    expect(writes[0].params).toEqual({ threadId: "thread-1", objective: "Return structured output", origin: "automatic" });
+  });
+  it("cancels startup during the CLI probe without spawning an app-server after shutdown", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-probe-"));
+    tempDirs.push(dir);
+    const gate = path.join(dir, "version-ready");
+    const logPath = path.join(dir, "protocol.jsonl");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_VERSION_GATE", gate);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const opening = driver.createSession(request("startup-probe"));
+    const rejected = expect(opening).rejects.toThrow(/canceled/);
+    let closing: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(fs.existsSync(`${gate}.waiting`)).toBe(true), { timeout: 2000 });
+      closing = driver.shutdown?.();
+    } finally {
+      fs.writeFileSync(gate, "ready");
+      await closing;
+    }
+    await rejected;
+    expect(readProtocolLog(logPath)).toEqual([]);
+  });
+
+  it("cancels a pending initialize and permits a clean startup after shutdown", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-cancel-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_HANG_METHOD", "initialize");
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const opening = driver.createSession(request("startup-cancel"));
+    const rejected = expect(opening).rejects.toThrow("App-server stopping");
+    expect(await waitForProtocolMessage(logPath, (m) => m.method === "initialize", 2000)).toBeDefined();
+    await Promise.all([driver.shutdown?.(), driver.shutdown?.()]);
+    await rejected;
+    expect(readProtocolLog(logPath).map((m) => m.method)).toEqual(["initialize"]);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_HANG_METHOD", "");
+    await driver.createSession(request("startup-after-cancel"));
+    expect(readProtocolLog(logPath).filter((m) => m.method === "initialize")).toHaveLength(2);
+    expect(readProtocolLog(logPath).filter((m) => m.method === "initialized")).toHaveLength(1);
+  });
+
+  it("shares startup through the initialize handshake before serving concurrent callers", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-startup-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    const gate = path.join(dir, "initialize-ready");
+    vi.stubEnv("MAINS_CODEX_FIXTURE_LOG", logPath);
+    vi.stubEnv("MAINS_CODEX_FIXTURE_INITIALIZE_GATE", gate);
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const first = driver.createSession(request("startup-first"));
+    const outcomes = Promise.allSettled([first]);
+    expect(await waitForProtocolMessage(logPath, (m) => m.method === "initialize", 2000)).toBeDefined();
+    const second = driver.createSession(request("startup-second"));
+    const both = Promise.allSettled([first, second]);
+    try {
+      expect(await waitForProtocolMessage(logPath, (m) => m.method !== "initialize", 100)).toBeUndefined();
+    } finally {
+      fs.writeFileSync(gate, "ready");
+      await outcomes;
+      await both;
+    }
+    expect((await both).every((result) => result.status === "fulfilled")).toBe(true);
+    expect(readProtocolLog(logPath).filter((m) => m.method === "initialize")).toHaveLength(1);
+    expect(readProtocolLog(logPath).slice(0, 2).map((m) => m.method)).toEqual(["initialize", "initialized"]);
+  });
+
   describe("input acceptance history", () => {
     function turn(id: string, clientId: string) {
       return { id, rootTurnId: null, itemsView: "full", status: "completed", error: null,
@@ -223,6 +448,7 @@ describe("codex.driver / app-server protocol", () => {
     await expect(driver.setGoal?.("run-goal-origin", { status: "active" })).resolves.toMatchObject({ status: "active" });
     await expect(driver.clearGoal?.("run-goal-origin")).resolves.toBe(true);
     await driver.setGoal?.("run-goal-origin", { objective: "Next objective" });
+    await driver.setGoal?.("run-goal-origin", { status: "complete" });
     await expect(driver.clearGoal?.("run-goal-origin", "automatic")).resolves.toBe(true);
     const mutations = readProtocolLog(logPath).filter((entry) => entry.method === "thread/goal/set" || entry.method === "thread/goal/clear");
     expect(mutations.map((entry) => entry.params)).toEqual([
@@ -232,6 +458,7 @@ describe("codex.driver / app-server protocol", () => {
       { threadId: "thread-1", status: "active", origin: "user" },
       { threadId: "thread-1", origin: "user" },
       { threadId: "thread-1", objective: "Next objective", origin: "user" },
+      { threadId: "thread-1", status: "complete", origin: "user" },
       { threadId: "thread-1", origin: "automatic" },
     ]);
   });
@@ -999,7 +1226,7 @@ describe("codex.driver / app-server protocol", () => {
     });
   });
 
-  it("rejects an app-server that does not expose the current initialize contract", async () => {
+  it("rolls back an incompatible initialize and can retry with a compatible process", async () => {
     process.env.MAINS_CODEX_FIXTURE_LEGACY_INITIALIZE = "1";
 
     const driver = createCodexDriver({
@@ -1013,6 +1240,8 @@ describe("codex.driver / app-server protocol", () => {
     ).rejects.toThrow(
       `Codex app-server initialize response is incompatible with protocol ${CODEX_APP_SERVER_PROTOCOL_VERSION}`,
     );
+    delete process.env.MAINS_CODEX_FIXTURE_LEGACY_INITIALIZE;
+    await expect(driver.createSession(request("run-initialize-retry"))).resolves.toBeDefined();
   });
 
   it("scopes skill discovery to the requested workspace", async () => {
@@ -1572,7 +1801,7 @@ describe("codex.driver / app-server protocol", () => {
     expect(log.some((message) => message.method === "thread/goal/set")).toBe(false);
   });
 
-  it("uses chat-specific effort, sandbox, and fast mode on start, resume, and fork", async () => {
+  it("uses chat-specific effort, sandbox, and fast mode with reasoning summaries on start, resume, and fork", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-settings-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
@@ -1583,21 +1812,24 @@ describe("codex.driver / app-server protocol", () => {
     const configSnapshot = { sandboxMode: "read-only", modelReasoningEffort: "low", serviceTier: "" };
     const created = await driver.createSession({ ...request("settings-source"), configSnapshot });
     await driver.executePrompt(created.session, created.prompt, async () => undefined, new AbortController().signal);
-    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/start")?.params).toMatchObject({ sandbox: "read-only" });
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/start")?.params)
+      .toMatchObject({ sandbox: "read-only", config: { model_reasoning_summary: "auto" } });
     expect(readProtocolLog(logPath).filter((entry) => entry.method === "turn/start").at(-1)?.params)
       .toMatchObject({ effort: "low", serviceTier: null });
 
     const resumed = await driver.resumeSession!({ runId: "settings-source", accountId: "account-1",
       execution: request("settings-source").execution, message: "Reasoning off", configSnapshot: { ...configSnapshot, modelReasoningEffort: "" } });
     await driver.executePrompt(resumed.session, resumed.prompt, async () => undefined, new AbortController().signal);
-    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/resume")?.params).toMatchObject({ sandbox: "read-only" });
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/resume")?.params)
+      .toMatchObject({ sandbox: "read-only", config: { model_reasoning_summary: "auto" } });
     expect(readProtocolLog(logPath).filter((entry) => entry.method === "turn/start").at(-1)?.params)
       .toMatchObject({ effort: null, serviceTier: null, collaborationMode: { settings: { reasoning_effort: null } } });
 
     const forked = await driver.forkSession!({ runId: "settings-fork", sourceRunId: "settings-source", accountId: "account-1",
       execution: request("settings-fork").execution, message: "Fork", configSnapshot });
     await driver.executePrompt(forked.session, forked.prompt, async () => undefined, new AbortController().signal);
-    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/fork")?.params).toMatchObject({ sandbox: "read-only" });
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/fork")?.params)
+      .toMatchObject({ sandbox: "read-only", config: { model_reasoning_summary: "auto" } });
     expect(readProtocolLog(logPath).filter((entry) => entry.method === "turn/start").at(-1)?.params)
       .toMatchObject({ effort: "low", serviceTier: null });
   });
@@ -2359,11 +2591,12 @@ describe("codex.driver / app-server protocol", () => {
   });
 
   it(
-    "fails pending RPCs immediately when app-server exits",
+    "fails pending RPCs on exit and can acquire a replacement server",
     async () => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
       tempDirs.push(tempDir);
-      process.env.MAINS_CODEX_FIXTURE_LOG = path.join(tempDir, "protocol.jsonl");
+      const logPath = path.join(tempDir, "protocol.jsonl");
+      process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
 
       const driver = createCodexDriver({
         binary: fixtureBinary,
@@ -2385,6 +2618,19 @@ describe("codex.driver / app-server protocol", () => {
       expect(outcome.status).toBe("failed");
       expect(outcome.summary).toMatch(/app-server.*(?:exit|close)/i);
       expect(Date.now() - startedAt).toBeLessThan(1000);
+      const gate = path.join(tempDir, "replacement-ready");
+      vi.stubEnv("MAINS_CODEX_FIXTURE_INITIALIZE_GATE", gate);
+      const replacement = driver.createSession(request("run-after-crash"));
+      const settled = Promise.allSettled([replacement]);
+      try {
+        await vi.waitFor(() => expect(readProtocolLog(logPath).filter((m) => m.method === "initialize")).toHaveLength(2), { timeout: 2000 });
+        await expect(driver.getGoal?.("run-crash")).resolves.toBeNull();
+        expect(readProtocolLog(logPath).filter((m) => m.method === "thread/goal/get")).toHaveLength(0);
+      } finally {
+        fs.writeFileSync(gate, "ready");
+        await settled;
+      }
+      await expect(replacement).resolves.toBeDefined();
     },
     35_000,
   );

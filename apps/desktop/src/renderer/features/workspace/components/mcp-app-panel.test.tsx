@@ -80,6 +80,70 @@ describe("retained app tab content", () => {
     await act(async () => lifecycle.prepareClose("document-1"));
     expect(mocks.teardown).toHaveBeenCalledOnce();
   });
+  it("shares a pending idle save with explicit close and keeps close pending until it finishes", async () => {
+    let saved!: () => void;
+    mocks.teardown = vi.fn(() => new Promise<void>((resolve) => { saved = resolve; }));
+    let lifecycle!: ReturnType<typeof usePreviewTabLifecycle>;
+    function Consumer() { lifecycle = usePreviewTabLifecycle(); return null; }
+    const ui = () => <MemoryRouter><PreviewTabLifecycleProvider><Consumer /><McpAppPanel /></PreviewTabLifecycleProvider></MemoryRouter>;
+    const v = render(ui()); act(() => vi.advanceTimersByTime(50));
+    mocks.panel.isOpen = false; v.rerender(ui());
+    act(() => vi.advanceTimersByTime(MCP_APP_IDLE_MS));
+    let closed = false;
+    let closing!: Promise<void>;
+    act(() => { closing = lifecycle.prepareClose("document-1").then(() => { closed = true; }); });
+    expect(mocks.teardown).toHaveBeenCalledOnce();
+    expect(closed).toBe(false);
+    await act(async () => { saved(); await closing; });
+    expect(closed).toBe(true);
+  });
+  it("retains the iframe after a shared save fails and allows close to retry", async () => {
+    let fail!: (error: Error) => void;
+    const teardown = vi.fn(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
+    mocks.teardown = teardown;
+    let lifecycle!: ReturnType<typeof usePreviewTabLifecycle>;
+    function Consumer() { lifecycle = usePreviewTabLifecycle(); return null; }
+    const ui = () => <MemoryRouter><PreviewTabLifecycleProvider><Consumer /><McpAppPanel /></PreviewTabLifecycleProvider></MemoryRouter>;
+    const v = render(ui()); act(() => vi.advanceTimersByTime(50));
+    const frame = screen.getByTitle("App canvas");
+    mocks.panel.isOpen = false; v.rerender(ui());
+    act(() => vi.advanceTimersByTime(MCP_APP_IDLE_MS));
+    const closing = lifecycle.prepareClose("document-1");
+    const failed = expect(closing).rejects.toThrow("Save failed");
+    await act(async () => { fail(new Error("Save failed")); await failed; });
+    expect(document.querySelector("iframe")).toBe(frame);
+    expect(teardown).toHaveBeenCalledOnce();
+    teardown.mockResolvedValueOnce();
+    await act(async () => lifecycle.prepareClose("document-1"));
+    expect(teardown).toHaveBeenCalledTimes(2);
+  });
+  it("ignores an old idle save after Reload replaces the canvas", async () => {
+    let saved!: () => void;
+    mocks.teardown = vi.fn(() => new Promise<void>((resolve) => { saved = resolve; }));
+    const v = view(); act(() => vi.advanceTimersByTime(50));
+    mocks.panel.isOpen = false; rerender(v);
+    act(() => vi.advanceTimersByTime(MCP_APP_IDLE_MS));
+    mocks.panel.isOpen = true; rerender(v);
+    fireEvent.click(screen.getByRole("button", { name: "Reload app" }));
+    const replacement = screen.getByTitle("App canvas");
+    await act(async () => saved());
+    expect(screen.getByTitle("App canvas")).toBe(replacement);
+    expect(mocks.mounts).toBe(2);
+  });
+  it("rebuilds the same conversation when selected before idle teardown finishes", async () => {
+    let saved!: () => void;
+    mocks.teardown = vi.fn(() => new Promise<void>((resolve) => { saved = resolve; }));
+    const v = view(); act(() => vi.advanceTimersByTime(50));
+    const original = screen.getByTitle("App canvas");
+    mocks.panel.isOpen = false; rerender(v);
+    act(() => vi.advanceTimersByTime(MCP_APP_IDLE_MS));
+    mocks.panel.isOpen = true; rerender(v);
+    expect(screen.getByTitle("App canvas")).toBe(original);
+    await act(async () => saved());
+    expect(screen.getByTitle("App canvas")).not.toBe(original);
+    expect(mocks.panel.runId).toBe("run-1");
+    expect(mocks.panel.newChat).not.toHaveBeenCalled();
+  });
   it.each(["figma.open_canvas", "tldraw.open_canvas"])("keeps unsupported %s free of floating chat", (tool) => {
     mocks.panel.document.app.tool = tool; view();
     expect(mocks.panel.setChatHost).not.toHaveBeenCalled();

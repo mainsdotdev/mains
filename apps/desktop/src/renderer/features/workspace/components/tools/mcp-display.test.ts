@@ -22,6 +22,12 @@ const flightApp = {
 };
 
 describe("McpDisplay", () => {
+  it("keeps a background task's placeholder out of its MCP App even after task completion", () => {
+    render(createElement(McpDisplay, { displayName: "Export", params: {}, runId: "run-1", mcpApp: flightApp,
+      backgroundTask: true, status: "done", output: [{ type: "text", text: "Running in background" }] }));
+    expect(screen.queryByRole("button", { name: /in app panel/ })).toBeNull();
+  });
+
   it("opens a text-only app from an older Claude transcript without requiring structured content", () => {
     const output = [{ type: "text", text: "2026-10-12T14:59:37.924Z" }];
     const openTool = vi.fn();

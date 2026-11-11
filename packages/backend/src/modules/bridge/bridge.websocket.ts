@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import type { BridgeClientMessage, BridgeEnvelope, BridgePushResult, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_BATCH, BRIDGE_MAX_FRAME_BYTES, parseBridgeServerFrame, validateEncryptedBridgeEnvelope } from "@mains/contracts/bridge-wire";
 import type { BridgeTransport } from "./bridge.transport";
+import { createBridgeConnectionLifecycle } from "./bridge.connection-lifecycle";
 
 export interface BridgeWebSocketOptions {
   onApproval?: (request: import("@mains/contracts/bridge-auth").BridgeApprovalRequest) => void;
@@ -24,19 +25,17 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
   const url = new URL(options.url);
   if (url.protocol !== "wss:" && !(url.protocol === "ws:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))) throw new Error("Bridge requires wss outside loopback");
   if (url.username || url.password || url.search || url.hash) throw new Error("Bridge credentials belong in the Authorization header");
-  let socket: WebSocket | undefined, connecting: Promise<WebSocket> | undefined, closed = false;
-  let connectionGeneration = 0;
   let stopHeartbeat: (() => void) | undefined;
   let subscriptions: BridgeStream[] = [];
-  const pending = new Map<string, { resolve: (message: BridgeServerMessage) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   const timeout = options.requestTimeoutMs ?? 15000;
   const status = (value: "connecting" | "connected" | "offline") => {
     try { options.onStatusChange?.(value); } catch (error) { console.error("Bridge status listener failed", error); }
   };
-  function rejectAll(error: Error) {
-    for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
-    pending.clear();
-  }
+  const connection = createBridgeConnectionLifecycle<WebSocket>({
+    isOpen: (socket) => socket.readyState === WebSocket.OPEN,
+    dispose(socket) { stopHeartbeat?.(); socket.terminate(); },
+    status,
+  });
   function heartbeat(candidate: WebSocket) {
     let pingTimer: ReturnType<typeof setTimeout> | undefined, pongTimer: ReturnType<typeof setTimeout> | undefined, nonce: string | undefined;
     const stop = () => {
@@ -47,12 +46,12 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
     function next() {
       pingTimer = setTimeout(() => {
         pingTimer = undefined;
-        if (closed || socket !== candidate || candidate.readyState !== WebSocket.OPEN) { stop(); return; }
+        if (!connection.owns(candidate) || candidate.readyState !== WebSocket.OPEN) { stop(); return; }
         nonce = randomUUID();
-        pongTimer = setTimeout(() => { stop(); candidate.terminate(); }, options.heartbeatTimeoutMs ?? 10_000);
+        pongTimer = setTimeout(() => { stop(); connection.retire(candidate, new Error("Bridge heartbeat timed out")); }, options.heartbeatTimeoutMs ?? 10_000);
         pongTimer.unref();
         // Cloudflare handles protocol ping/pong without waking the account DO.
-        candidate.ping(nonce, undefined, (error) => { if (error) { stop(); candidate.terminate(); } });
+        candidate.ping(nonce, undefined, (error) => { if (error) { stop(); connection.retire(candidate, new Error("Bridge heartbeat timed out")); } });
       }, options.heartbeatIntervalMs ?? 25_000);
       pingTimer.unref();
     }
@@ -64,19 +63,16 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
     candidate.on("pong", pong); candidate.once("close", stop);
     stopHeartbeat = stop; next();
   }
-  function receive(data: WebSocket.RawData) {
+  function receive(candidate: WebSocket, data: WebSocket.RawData) {
     let value: BridgeServerMessage | BridgeRpcResponse;
     try {
       const text = Array.isArray(data) ? Buffer.concat(data).toString() : Buffer.isBuffer(data) ? data.toString() : Buffer.from(data).toString();
       if (Buffer.byteLength(text) > BRIDGE_MAX_FRAME_BYTES) throw new Error("oversized");
       value = parseBridgeServerFrame(text);
-    } catch { socket?.terminate(); rejectAll(new Error("Invalid Bridge hub response")); return; }
+    } catch { connection.retire(candidate, new Error("Invalid Bridge hub response")); return; }
     if ("requestId" in value && !("type" in value)) {
-      const entry = pending.get(value.requestId);
-      if (!entry) return;
-      pending.delete(value.requestId); clearTimeout(entry.timer);
-      if ("error" in value) entry.reject(new Error(`Bridge hub rejected request: ${value.error.code}`));
-      else entry.resolve(value.message);
+      connection.reply(candidate, value.requestId, "error" in value
+        ? new Error(`Bridge hub rejected request: ${value.error.code}`) : value.message);
     } else {
       try {
         if (value.type === "presence") options.onPresence?.(value);
@@ -86,58 +82,35 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
       } catch (error) { console.error("Bridge transport listener failed", error); }
     }
   }
-  async function connect(): Promise<WebSocket> {
-    if (closed) throw new Error("Bridge transport is closed");
-    if (socket?.readyState === WebSocket.OPEN) return socket;
-    if (connecting) return connecting;
-    const generation = connectionGeneration;
-    status("connecting");
-    const attempt = (async () => {
+  function connect(): Promise<WebSocket> {
+    return connection.connect(async (scope) => {
       const token = typeof options.token === "function" ? await options.token() : options.token;
-      if (closed) throw new Error("Bridge transport is closed");
-      if (generation !== connectionGeneration) throw new Error("Bridge connection cancelled");
+      if (!scope.current()) throw new Error(connection.closed ? "Bridge transport is closed" : "Bridge connection cancelled");
       return new Promise<WebSocket>((resolve, reject) => {
         const candidate = new WebSocket(url, { headers: { Authorization: `Bearer ${token}` }, maxPayload: BRIDGE_MAX_FRAME_BYTES, handshakeTimeout: timeout });
-        socket = candidate;
-        candidate.on("message", (data) => { if (socket === candidate) receive(data); });
+        scope.bind(candidate);
+        candidate.on("message", (data) => { if (connection.owns(candidate)) receive(candidate, data); });
         candidate.once("open", () => {
-          if (closed || generation !== connectionGeneration) { candidate.terminate(); reject(new Error("Bridge connection cancelled")); return; }
-          resolve(candidate);
-          heartbeat(candidate);
-          status("connected");
+          if (!scope.open(candidate)) { candidate.terminate(); reject(new Error("Bridge connection cancelled")); return; }
+          heartbeat(candidate); resolve(candidate); status("connected");
+          if (!connection.owns(candidate)) return;
           if (options.metadata) candidate.send(JSON.stringify({ requestId: randomUUID(), message: { type: "hello", ...options.metadata } }));
-          // Socket attachments contain subscriptions, so restore them after any reconnect.
           if (subscriptions.length) candidate.send(JSON.stringify({ requestId: randomUUID(), message: { type: "subscribe", streams: subscriptions } }));
         });
         candidate.on("error", () => { reject(new Error("Bridge connection failed")); });
         candidate.once("close", (code) => {
-          if (socket === candidate) {
-            socket = undefined; rejectAll(new Error("Bridge connection closed")); status("offline");
-            if (!closed && code === 1008) {
-              try { options.onAccessChanged?.(); } catch (error) { console.error("Bridge identity listener failed", error); }
-            }
+          if (connection.retire(candidate) && !connection.closed && code === 1008) {
+            try { options.onAccessChanged?.(); } catch (error) { console.error("Bridge identity listener failed", error); }
           }
           reject(new Error("Bridge connection closed"));
         });
       });
-    })();
-    connecting = attempt;
-    try { return await attempt; } finally { if (connecting === attempt) connecting = undefined; }
+    });
   }
   async function rpc(message: BridgeClientMessage): Promise<BridgeServerMessage> {
     const active = await connect(), requestId = randomUUID();
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(requestId); reject(new Error("Bridge request timed out"));
-        active.terminate(); // A retry uses a new connection and cannot consume an older ACK.
-      }, timeout);
-      pending.set(requestId, { resolve, reject, timer });
-      active.send(JSON.stringify({ requestId, message }), (error) => {
-        if (!error) return;
-        const entry = pending.get(requestId);
-        if (entry) { pending.delete(requestId); clearTimeout(entry.timer); entry.reject(new Error("Bridge request could not be sent")); }
-      });
-    });
+    return connection.request(active, requestId, timeout,
+      (done) => active.send(JSON.stringify({ requestId, message }), done));
   }
   const api: BridgeTransport & {
     subscribe(streams: BridgeStream[]): Promise<void>;
@@ -174,13 +147,8 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
       if (response.type !== "subscribed") throw new Error("Invalid Bridge subscription response");
     },
     async compact() { if ((await rpc({ type: "compact" })).type !== "compacted") throw new Error("Invalid Bridge compaction response"); },
-    disconnect() {
-      connectionGeneration++; const previous = socket; socket = undefined; connecting = undefined;
-      stopHeartbeat?.();
-      rejectAll(new Error("Bridge connection closed")); previous?.terminate();
-      status("offline");
-    },
-    close() { closed = true; api.disconnect(); },
+    disconnect: connection.disconnect,
+    close: connection.close,
   };
   return api;
 }

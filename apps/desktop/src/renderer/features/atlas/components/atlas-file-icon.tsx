@@ -1,5 +1,6 @@
 import type { AtlasKind } from "@mains/contracts/atlas";
 import { Document, Picture } from "@/components/ui/icons";
+import { Bookmark } from "@/components/ui/icons/space";
 import { DOC_TYPE_ICONS } from "@/features/workspace/components/document-viewer/doc-type-icons";
 import { classifyDocType } from "@/lib/document-viewer";
 
@@ -10,6 +11,6 @@ export function AtlasFileIcon({ kind, fileName, path, className }: {
   className?: string;
 }) {
   const docType = classifyDocType(fileName ?? "") ?? classifyDocType(path ?? "");
-  const Icon = kind === "image" ? Picture : docType ? DOC_TYPE_ICONS[docType] : Document;
+  const Icon = kind === "bookmark" ? Bookmark : kind === "image" ? Picture : docType ? DOC_TYPE_ICONS[docType] : Document;
   return <Icon aria-hidden="true" className={className} />;
 }

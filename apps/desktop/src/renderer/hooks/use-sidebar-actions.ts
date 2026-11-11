@@ -1,35 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   useSetActiveSpaceMutation,
-  useCreateWorkspaceFromSourceMutation,
-  useCancelWorkspaceCloneMutation,
-  useSelectWorkspaceDirectoryMutation,
   useGetAccountQuery,
   useCreateCollectionMutation,
 } from "@/lib/redux/api";
 import { toast } from "@/components/ui";
+import { useWorkspaceIntake } from "./use-workspace-intake";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import { getTransport } from "@/lib/transport";
-import { cloneRepositoryName, WORKSPACE_CLONE_CANCELED } from "@mains/contracts/workspace-intake";
 import {
   openNewRunTab,
   setSelectedCollectionId,
 } from "@/lib/redux/slices/workspaceSlice";
 import { getSpaceDefaultRoute, WORKSPACE_BASE_PATH } from "@/lib/route-utils";
 
-/** A disposable sidebar row; the backend creates the real workspace after intake. */
-export interface PendingWorkspaceClone {
-  id: string;
-  accountId: string;
-  backendId: string;
-  name: string;
-  url: string;
-  targetPath: string;
-  status: "cloning" | "canceling" | "failed";
-  error: string | null;
-}
+export type { PendingWorkspaceClone } from "./use-workspace-intake";
 
 /** Pull a human message out of an RTK/IPC rejection (string | {error} | Error). */
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -53,24 +39,13 @@ export function useSidebarActions() {
   const { data: account } = useGetAccountQuery();
   const accountId = account?.id || "default";
   const backendId = useAppSelector((state) => state.backends.activeBackendId ?? "local");
-  const cloneScope = useRef({ accountId, backendId });
-  useEffect(() => {
-    cloneScope.current = { accountId, backendId };
-  }, [accountId, backendId]);
 
   const [setActiveSpace] = useSetActiveSpaceMutation();
-  const [selectDirectory] = useSelectWorkspaceDirectoryMutation();
-  const [createWorkspaceFromSource] = useCreateWorkspaceFromSourceMutation();
-  const [cancelWorkspaceClone] = useCancelWorkspaceCloneMutation();
   const [createCollection] = useCreateCollectionMutation();
 
   const [addProjectTab, setAddProjectTab] = useState<"clone" | "create" | null>(null);
   // Prefilled only when cloning a repository that exists on another Bridge device.
   const [cloneDraftUrl, setCloneDraftUrl] = useState("");
-  const [isAddingLocal, setIsAddingLocal] = useState(false);
-  const [cloneJobs, setCloneJobs] = useState<PendingWorkspaceClone[]>([]);
-  const activeCloneRequests = useRef(new Set<string>());
-  const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [isCreateCollectionModalOpen, setIsCreateCollectionModalOpen] =
     useState(false);
   const [isCreatingCollection, setIsCreatingCollection] = useState(false);
@@ -98,25 +73,15 @@ export function useSidebarActions() {
     navigate(`${WORKSPACE_BASE_PATH}/${workspaceId}`);
   };
 
-  // Pick a folder, then hand it to the main-process workspace intake.
+  const intake = useWorkspaceIntake(accountId, backendId, goToWorkspace);
+  const dialogGeneration = useRef(0);
+  const { isAddingLocal, isCreatingProject, pendingClones } = intake;
   const handleAddProject = async () => {
-    setIsAddingLocal(true);
-    try {
-      const selectedPath = await selectDirectory().unwrap();
-      if (!selectedPath) return;
-      const workspace = await createWorkspaceFromSource({
-        accountId: account?.id || "default",
-        source: { kind: "folder", path: selectedPath },
-      }).unwrap();
-      toast.success("Workspace added");
-      setAddProjectTab(null);
-      goToWorkspace(workspace.id);
-    } catch (error) {
-      console.error("Failed to create workspace:", error);
-      toast.error(getErrorMessage(error, "Failed to create workspace"));
-    } finally {
-      setIsAddingLocal(false);
-    }
+    const dialog = dialogGeneration.current;
+    const result = await intake.addFolder();
+    if (!result?.current()) return;
+    toast.success("Workspace added");
+    if (dialog === dialogGeneration.current) { setAddProjectTab(null); goToWorkspace(result.workspace.id); }
   };
 
   /** Top-level New is standalone; a Collection row's + supplies its id. */
@@ -156,137 +121,45 @@ export function useSidebarActions() {
     }
   };
 
-  const runClone = async (clone: PendingWorkspaceClone) => {
-    const requestKey = JSON.stringify([clone.backendId, clone.accountId, clone.url, clone.targetPath]);
-    if (activeCloneRequests.current.has(requestKey)) return;
-    activeCloneRequests.current.add(requestKey);
-    const transport = getTransport();
-    const isCurrentBackend = () => getTransport() === transport &&
-      cloneScope.current.accountId === clone.accountId &&
-      cloneScope.current.backendId === clone.backendId;
-    setCloneJobs((jobs) => [
-      ...jobs.filter((job) => job.id !== clone.id),
-      { ...clone, status: "cloning", error: null },
-    ]);
-    try {
-      const workspace = await createWorkspaceFromSource({
-        accountId: clone.accountId,
-        source: { kind: "clone", url: clone.url, targetPath: clone.targetPath, cloneId: clone.id },
-      }).unwrap();
-      setCloneJobs((jobs) => jobs.filter((job) => job.id !== clone.id));
-      if (isCurrentBackend()) {
-        toast.success(`${clone.name} cloned and workspace created`, {
-          action: {
-            label: "Open",
-            onClick: () => {
-              if (isCurrentBackend()) goToWorkspace(workspace.id);
-            },
-          },
-        });
-      }
-    } catch (error) {
-      const message = getErrorMessage(error, "Failed to clone repository");
-      if (message === WORKSPACE_CLONE_CANCELED) {
-        setCloneJobs((jobs) => jobs.filter((job) => job.id !== clone.id));
-        return;
-      }
-      console.error("Failed to clone repository:", error);
-      setCloneJobs((jobs) => jobs.map((job) => job.id === clone.id
-        ? { ...job, status: "failed", error: message }
-        : job));
-      if (isCurrentBackend()) toast.error(message);
-    } finally {
-      activeCloneRequests.current.delete(requestKey);
-    }
-  };
+  const handleCloneRepo = (url: string, targetPath: string) => { setAddProjectTab(null); intake.clone(url, targetPath); };
+  const handleCancelClone = intake.cancelClone;
+  const handleRetryClone = intake.retry;
+  const handleDismissClone = intake.dismiss;
 
-  const handleCloneRepo = (url: string, targetPath: string) => {
-    url = url.trim();
-    targetPath = targetPath.trim();
-    if (!url || !targetPath) return;
-    const existing = cloneJobs.find((job) => job.accountId === accountId &&
-      job.backendId === backendId && job.url === url && job.targetPath === targetPath);
-    const clone: PendingWorkspaceClone = existing ?? {
-      id: crypto.randomUUID(),
-      accountId,
-      backendId,
-      name: cloneRepositoryName(url),
-      url,
-      targetPath,
-      status: "cloning",
-      error: null,
-    };
-    setAddProjectTab(null);
-    void runClone(clone);
-  };
-
-  const pendingClones = cloneJobs.filter((job) => job.accountId === accountId && job.backendId === backendId);
-  const handleCancelClone = async (id: string) => {
-    const clone = pendingClones.find((job) => job.id === id && job.status === "cloning");
-    if (!clone) return;
-    const transport = getTransport();
-    setCloneJobs((jobs) => jobs.map((job) => job.id === id ? { ...job, status: "canceling" } : job));
-    try {
-      const canceled = await cancelWorkspaceClone({ accountId: clone.accountId, cloneId: id }).unwrap();
-      // The clone may already be complete and importing its workspace. Its
-      // original intake response owns the final row in either race outcome.
-      if (!canceled) {
-        setCloneJobs((jobs) => jobs.map((job) => job.id === id && job.status === "canceling"
-          ? { ...job, status: "cloning" } : job));
-      }
-    } catch (error) {
-      setCloneJobs((jobs) => jobs.map((job) => job.id === id && job.status === "canceling"
-        ? { ...job, status: "cloning" } : job));
-      if (getTransport() === transport) toast.error(getErrorMessage(error, "Failed to cancel repository clone"));
-    }
-  };
-  const handleRetryClone = (id: string) => {
-    const clone = pendingClones.find((job) => job.id === id && job.status === "failed");
-    if (clone) void runClone(clone);
-  };
-  const handleDismissClone = (id: string) => {
-    setCloneJobs((jobs) => jobs.filter((job) => job.id !== id || job.status !== "failed"));
-  };
-
-  const handleOpenAddProjectModal = () => { setCloneDraftUrl(""); setAddProjectTab("clone"); };
+  const handleOpenAddProjectModal = () => { dialogGeneration.current += 1; setCloneDraftUrl(""); setAddProjectTab("clone"); };
   const handleAddProjectTabChange = (tab: "clone" | "create") => {
+    dialogGeneration.current += 1;
     setAddProjectTab(tab);
   };
 
   const handleOpenCloneModal = () => {
+    dialogGeneration.current += 1;
     setCloneDraftUrl("");
     setAddProjectTab("clone");
   };
 
   const handleOpenCloneFor = (url: string) => {
+    dialogGeneration.current += 1;
     setCloneDraftUrl(url);
     setAddProjectTab("clone");
   };
 
   const handleCloseAddProjectModal = () => {
+    dialogGeneration.current += 1;
     setAddProjectTab(null);
   };
 
   const handleOpenCreateProjectModal = () => {
+    dialogGeneration.current += 1;
     setAddProjectTab("create");
   };
 
   const handleCreateProject = async (name: string, parentPath?: string) => {
-    setIsCreatingProject(true);
-    try {
-      const workspace = await createWorkspaceFromSource({
-        accountId: account?.id || "default",
-        source: { kind: "init", name, parentPath },
-      }).unwrap();
-      toast.success("Project created");
-      setAddProjectTab(null);
-      goToWorkspace(workspace.id);
-    } catch (error) {
-      console.error("Failed to create project:", error);
-      toast.error(getErrorMessage(error, "Failed to create project"));
-    } finally {
-      setIsCreatingProject(false);
-    }
+    const dialog = dialogGeneration.current;
+    const result = await intake.init(name, parentPath);
+    if (!result?.current()) return;
+    toast.success("Project created");
+    if (dialog === dialogGeneration.current) { setAddProjectTab(null); goToWorkspace(result.workspace.id); }
   };
 
   return {

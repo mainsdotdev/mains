@@ -137,4 +137,9 @@ describe("toolsService", () => {
       );
     });
   });
+  it("rejects plan decisions through the generic tool metadata mutation", async () => {
+    const plan = createToolCall(db, { toolName: "Plan" });
+    await expect(toolsService.updateToolCall(plan.id, { metadata: { planStatus: "applied" } })).rejects.toThrow(/plan decision/i);
+  });
+
 });

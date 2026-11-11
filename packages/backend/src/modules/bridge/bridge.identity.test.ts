@@ -7,7 +7,7 @@ import { bridgeApprovalCode, bridgeBase64, bridgeBytes, formatBridgeVerification
 import type { BridgeHeader } from "@mains/contracts/bridge-protocol";
 import { bridgeMember, verifyBridgeMembershipLog, type BridgeMember, type BridgeMembershipChange, type BridgeMembershipEntry, type BridgeMembershipSigner } from "@mains/contracts/bridge-membership";
 import { createNodeBackendRuntime } from "../../runtime/node-backend-runtime";
-import { createBridgeIdentity, type BridgeIdentityClient } from "./bridge.identity";
+import { createBridgeIdentity, type BridgeIdentityClient, type BridgeIdentityOptions } from "./bridge.identity";
 import { createBridgeIdentityStorage, createBridgeMembershipStorage, type BridgeSavedIdentity } from "./bridge.identity-storage";
 import { bridgeAccountKeyCommitment, deriveBridgeKeys, generateBridgeAccountKey, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "./bridge.keys";
 import { bridgeRecordKeys, createBridgeSealingCodec } from "./bridge.crypto";
@@ -37,6 +37,95 @@ afterEach(async () => {
 });
 
 describe("Bridge registration cleanup", () => {
+  it("keeps the active login when another sign-in is refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mains-duplicate-login-")); dirs.push(dir);
+    const storage = createNodeBackendRuntime({ dataDir: dir, appVersion: "test" }).secretStorage;
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ device_code: "login", user_code: "code", verification_uri_complete: "https://hub.invalid/verify", expires_in: 600, interval: 5 })));
+    const client = createBridgeIdentity({ backendId: "local", dataDir: dir, storage, kind: "node", openExternal: vi.fn(), ready: vi.fn(), changed: vi.fn(), approval: vi.fn(), revoked: vi.fn(), accountFence });
+    clients.push(client);
+    const input = { hubUrl: "https://hub.invalid", flow: "device" as const, includeExisting: true };
+    const first = await client.signIn(input);
+    await expect(client.signIn(input)).rejects.toThrow(/already active/);
+    expect(client.status().login).toEqual(first.login);
+    expect(client.status().state).toBe("signing-in");
+  });
+
+  it("releases a device-login session returned after sign-out without registering a backend", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mains-cancelled-device-token-")); dirs.push(dir);
+    const storage = createNodeBackendRuntime({ dataDir: dir, appVersion: "test" }).secretStorage;
+    let entered!: () => void, release!: () => void;
+    const entering = new Promise<void>((resolve) => { entered = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const signedOut = vi.fn(), register = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (url: URL) => {
+      if (url.pathname === "/api/auth/device/code") return Response.json({ device_code: "login", user_code: "code", verification_uri_complete: "https://hub.invalid/verify", expires_in: 600, interval: 5 });
+      if (url.pathname === "/api/auth/device/token") { entered(); await blocked; return Response.json({ access_token: "cancelled-session" }); }
+      if (url.pathname === "/api/auth/sign-out") { signedOut(); return Response.json({ success: true }); }
+      register(); throw new Error("Cancelled enrollment must not register");
+    }));
+    const client = createBridgeIdentity({ backendId: "local", dataDir: dir, storage, kind: "node", openExternal: vi.fn(), ready: vi.fn(), changed: vi.fn(), approval: vi.fn(), revoked: vi.fn(), accountFence });
+    clients.push(client);
+    await client.signIn({ hubUrl: "https://hub.invalid", flow: "device", includeExisting: true });
+    const refreshing = client.refresh(); await entering;
+    const signingOut = client.signOut(); release();
+    await Promise.all([refreshing, signingOut]);
+    expect(register).not.toHaveBeenCalled();
+    expect(signedOut).toHaveBeenCalledOnce();
+    expect(client.status()).toMatchObject({ state: "signed-out", accountId: null });
+  });
+
+  it("closes the browser callback when sign-out interrupts opening the system browser", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mains-cancelled-browser-login-")); dirs.push(dir);
+    const storage = createNodeBackendRuntime({ dataDir: dir, appVersion: "test" }).secretStorage;
+    const nativeFetch = globalThis.fetch;
+    let callback!: URL, entered!: () => void, release!: () => void;
+    const entering = new Promise<void>((resolve) => { entered = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const network = vi.fn(); vi.stubGlobal("fetch", network);
+    const client = createBridgeIdentity({ backendId: "local", dataDir: dir, storage, kind: "electron",
+      openExternal: async (url) => {
+        const authorize = new URL(url); callback = new URL(authorize.searchParams.get("redirect_uri")!);
+        callback.searchParams.set("state", authorize.searchParams.get("state")!); callback.searchParams.set("code", "late-code");
+        entered(); await blocked;
+      }, ready: vi.fn(), changed: vi.fn(), approval: vi.fn(), revoked: vi.fn(), accountFence });
+    clients.push(client);
+    const signingIn = client.signIn({ hubUrl: "https://hub.invalid", flow: "loopback", includeExisting: true });
+    await entering;
+    const signingOut = client.signOut(); release();
+    const results = await Promise.allSettled([signingIn, signingOut]);
+    expect(results[1].status).toBe("fulfilled");
+    expect(client.status()).toMatchObject({ state: "signed-out", login: null });
+    await expect(nativeFetch(callback)).rejects.toThrow();
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it("does not restore a device login that finishes after sign-out was requested", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mains-cancelled-login-")); dirs.push(dir);
+    const storage = createNodeBackendRuntime({ dataDir: dir, appVersion: "test" }).secretStorage;
+    let entered!: () => void, release!: () => void;
+    const entering = new Promise<void>((resolve) => { entered = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const poll = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (url: URL) => {
+      if (url.pathname === "/api/auth/device/code") {
+        entered(); await blocked;
+        return Response.json({ device_code: "old-login", user_code: "code", verification_uri_complete: "https://hub.invalid/verify", expires_in: 600, interval: 5 });
+      }
+      poll(); throw new Error("A cancelled login must not poll or register");
+    }));
+    const ready = vi.fn();
+    const client = createBridgeIdentity({ backendId: "local", dataDir: dir, storage, kind: "node", openExternal: vi.fn(), ready, changed: vi.fn(), approval: vi.fn(), revoked: vi.fn(), accountFence });
+    clients.push(client);
+    const signingIn = client.signIn({ hubUrl: "https://hub.invalid", flow: "device", includeExisting: true }).catch(() => {});
+    await entering;
+    const signingOut = client.signOut();
+    release(); await signingIn; await signingOut;
+    expect(client.status()).toMatchObject({ state: "signed-out", login: null, accountId: null });
+    await client.refresh();
+    expect(poll).not.toHaveBeenCalled(); expect(ready).not.toHaveBeenCalled();
+    expect(await createBridgeIdentityStorage(dir, storage).read()).toBeNull();
+  });
+
   it.each(["backendId", "publicKey", "signingPublicKey", "storage"])("revokes the requested pending device after a %s enrollment failure and permits retry", async (field) => {
     const dir = await mkdtemp(join(tmpdir(), "mains-registration-")); dirs.push(dir);
     const storage = createNodeBackendRuntime({ dataDir: dir, appVersion: "test" }).secretStorage;
@@ -93,6 +182,97 @@ describe("Bridge identity from before the membership log", () => {
 });
 
 describe("Bridge identity background cadence", () => {
+  it("joins repeated sign-outs without repeating cleanup", async () => {
+    const f = await fixture(generateBridgeAccountKey()); await f.client.stop();
+    let entered!: () => void, release!: () => void;
+    const entering = new Promise<void>((resolve) => { entered = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const revoked = vi.fn(async () => { entered(); await blocked; });
+    const client = f.makeClient({ revoked }); await client.start();
+    const first = client.signOut({ skipRevoke: true }); await entering;
+    const second = client.signOut({ skipRevoke: true }); release();
+    await Promise.all([first, second]);
+    expect(revoked).toHaveBeenCalledOnce();
+    expect(await f.vault.read()).toBeNull();
+    expect(client.status().state).toBe("signed-out");
+  });
+
+  it("fences a pending renewal before file-preservation cleanup begins", async () => {
+    const f = await fixture(generateBridgeAccountKey()); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const client = f.makeClient(); await client.start();
+    const original = globalThis.fetch;
+    let entered!: () => void, release!: () => void;
+    const entering = new Promise<void>((resolve) => { entered = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      const response = await original(...args);
+      if (new URL(String(args[0])).pathname === "/v1/backends/refresh") { entered(); await blocked; }
+      return response;
+    }));
+    const refreshing = client.refresh(); await entering;
+    try {
+      client.prepareSignOut();
+      expect(() => client.token()).toThrow(/approval/);
+    } finally { release(); await refreshing; }
+    const pending = (await f.vault.read())!;
+    expect(pending.token).toBe(f.saved.token);
+    expect(pending.pendingToken).toBe(f.state.replacement.token);
+    f.state.calls = []; await client.refresh();
+    expect(f.state.calls).toEqual([]);
+    await client.signOut({ skipRevoke: true });
+    expect(await f.vault.read()).toBeNull();
+  });
+
+  it("requires renewed trust before a refused identity can rotate recovery authority", async () => {
+    const f = await fixture(generateBridgeAccountKey()), original = globalThis.fetch;
+    f.state.refused = true;
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      if (new URL(String(args[0])).pathname === "/v1/membership") return Response.json({ error: "Credential refused" }, { status: 401 });
+      return original(...args);
+    }));
+    await f.client.refresh();
+    expect(f.client.status().state).toBe("revoked");
+    expect((await f.vault.read())!.accountKey).not.toBeNull();
+    vi.stubGlobal("fetch", original); f.state.refused = false; f.state.calls = [];
+    await expect(f.client.regenerateRecoveryCode()).rejects.toThrow(/approval|required/i);
+    expect(f.state.calls).toEqual([]);
+  });
+
+  it("keeps a failed sign-out fenced until cleanup is explicitly retried", async () => {
+    const f = await fixture(generateBridgeAccountKey()); await f.client.stop();
+    const revoked = vi.fn().mockRejectedValueOnce(new Error("Could not preserve shared files")).mockResolvedValue(undefined);
+    const client = f.makeClient({ revoked }); await client.start();
+    await expect(client.signOut({ skipRevoke: true })).rejects.toThrow(/preserve shared files/);
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(f.trueKey));
+    expect(() => client.token()).toThrow(/approval/);
+    f.state.calls = [];
+    await client.refresh();
+    await expect(client.signIn({ hubUrl: "https://other.invalid", flow: "device", includeExisting: false })).rejects.toThrow(/cancelled/);
+    expect(f.state.calls).toEqual([]);
+    await client.signOut({ skipRevoke: true });
+    expect(revoked).toHaveBeenCalledTimes(2);
+    expect(await f.vault.read()).toBeNull();
+    expect(client.status()).toMatchObject({ state: "signed-out", error: null });
+  });
+
+  it("retires credential access immediately while sign-out is waiting for an older refresh", async () => {
+    const f = await fixture(generateBridgeAccountKey()), original = globalThis.fetch;
+    let entered!: () => void, release!: () => void;
+    const entering = new Promise<void>((resolve) => { entered = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      const response = await original(...args);
+      if (new URL(String(args[0])).pathname === "/v1/keys/mine") { entered(); await blocked; }
+      return response;
+    }));
+    const refreshing = f.client.refresh(); await entering;
+    const signingOut = f.client.signOut({ skipRevoke: true });
+    try { expect(() => f.client.token()).toThrow(/cancelled|approval|required/i); }
+    finally { release(); await refreshing; await signingOut; }
+    expect(f.client.status()).toMatchObject({ state: "signed-out", accountId: null });
+  });
+
   it.each([null, {}, { expiresAt: "invalid" }, { expiresAt: 0 }, { nextTokenHash: "a".repeat(64), expiresAt: 9999999999999 },
     { token: `b7_${"2".repeat(64)}`, expiresAt: 9999999999999 }])("preserves trusted keys and the current token for a truncated or malformed renewal response (%j)", async (response) => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -343,9 +523,9 @@ async function fixture(accountKey: Uint8Array | null = null, options: { recovery
   const activatedKeys: string[] = [];
   const changed = vi.fn();
   const ready = vi.fn(async (config: { accountKey: Uint8Array }) => { activatedKeys.push(bridgeBase64(config.accountKey)); });
-  function makeClient() {
+  function makeClient(overrides: Partial<Pick<BridgeIdentityOptions, "ready" | "revoked">> = {}) {
     const client = createBridgeIdentity({ backendId: saved.backendId, dataDir: dir, storage, kind: "node", ready,
-      openExternal: async () => {}, changed, approval() {}, revoked: async () => {}, accountFence });
+      openExternal: async () => {}, changed, approval() {}, revoked: async () => {}, accountFence, ...overrides });
     clients.push(client); return client;
   }
   const client = makeClient(); await client.start(); await client.refresh();
@@ -371,6 +551,31 @@ function approval(publicKey: string, code = deviceCode(publicKey)): BridgeApprov
 }
 
 describe("Bridge approval with an untrusted hub", () => {
+  it("does not send an approval after sign-out retires its pending membership read", async () => {
+    const f = await fixture(generateBridgeAccountKey()), request = approval(bridgeBase64(generateBridgeDeviceKeyPair().publicKey));
+    f.state.approvals = [request]; await f.client.refresh();
+    const original = globalThis.fetch;
+    let entered!: () => void, release!: () => void;
+    const entering = new Promise<void>((resolve) => { entered = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      const response = await original(...args);
+      if (new URL(String(args[0])).pathname === "/v1/membership") { entered(); await blocked; }
+      return response;
+    }));
+    const approving = f.client.approve(request);
+    await entering;
+    const queued = f.client.approve(request);
+    const signingOut = f.client.signOut({ skipRevoke: true });
+    release();
+    const [approved, queuedApproval, signedOut] = await Promise.allSettled([approving, queued, signingOut]);
+    expect(approved).toMatchObject({ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("cancelled") }) });
+    expect(queuedApproval).toMatchObject({ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("cancelled") }) });
+    expect(signedOut.status).toBe("fulfilled");
+    expect(f.state.calls.some((call) => call.path === "/v1/keys/wraps")).toBe(false);
+    expect(f.client.status().state).toBe("signed-out");
+  });
+
   it("preserves every one of the 60 comparison bits and excludes unused tail bits", () => {
     const zero = new Uint8Array(8), codes = new Set<string>();
     for (let bit = 0; bit < 60; bit++) {

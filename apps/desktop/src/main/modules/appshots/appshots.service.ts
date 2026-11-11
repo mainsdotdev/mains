@@ -25,6 +25,7 @@ import { createMainWindow, getMainWindow } from "../../windows";
 import { appSettingsService } from "@mains/backend/modules/appSettings";
 import { findWindowSource, parseFrontmostWindow } from "./appshots.capture";
 import { normalizedAppshotShortcut } from "./appshots.validation";
+import { createLensCaptureLifecycle, createShortcutWriteQueue, createLensDeliveryQueue, createShortcutInvocationOwner } from "../../../shared/capture-shortcut-lifecycle";
 
 const execFileAsync = promisify(execFile);
 const CAPTURE_CACHE_MAX_BYTES = 100 * 1024 * 1024;
@@ -161,9 +162,11 @@ const SETTINGS_URLS: Record<AppshotsSystemSettingsPane, string> = {
 let enabled = true;
 let shortcut: AppshotShortcut = DEFAULT_APPSHOT_SHORTCUT;
 let shortcutRegistered = false;
-let capturing = false;
+const captureLifecycle = createLensCaptureLifecycle();
+const configurationQueue = createShortcutWriteQueue();
+const shortcutInvocation = createShortcutInvocationOwner();
 let lastError: string | null = null;
-let pendingCaptures: AppshotCapture[] = [];
+const delivery = createLensDeliveryQueue<AppshotCapture>(MAX_PENDING_CAPTURES);
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -274,6 +277,7 @@ async function accessibleText(processId: number): Promise<{
 }
 
 function unregisterShortcut(): void {
+  shortcutInvocation.retire();
   if (shortcutRegistered) {
     globalShortcut.unregister(shortcut);
     shortcutRegistered = false;
@@ -289,10 +293,12 @@ function emitError(message: string): void {
 
 function registerShortcut(): boolean {
   if (!enabled || process.platform !== "darwin") return false;
+  const current = shortcutInvocation.claim();
   try {
     shortcutRegistered = globalShortcut.register(shortcut, () => {
-      if (capturing) return;
+      if (!current() || !shortcutRegistered || !captureLifecycle.active() || captureLifecycle.busy()) return;
       void appshotsService.captureAndDeliver().catch((error) => {
+        if (!current() || !captureLifecycle.active()) return;
         lastError = messageOf(error);
         emitError(lastError);
       });
@@ -321,17 +327,22 @@ function showMainWindow(): void {
 export const appshotsService = {
   async start(): Promise<AppshotsStatus> {
     if (process.platform !== "darwin") return this.getStatus();
-    const settings = await appSettingsService.getSettings();
-    unregisterShortcut();
-    enabled = settings.appshotsEnabled;
-    shortcut = normalizedAppshotShortcut(settings.appshotsShortcut);
-    if (enabled) registerShortcut();
+    await configurationQueue.restore(() => appSettingsService.getSettings(), (settings) => {
+      unregisterShortcut();
+      enabled = settings.appshotsEnabled;
+      shortcut = normalizedAppshotShortcut(settings.appshotsShortcut);
+      lastError = null;
+      if (enabled) registerShortcut();
+    });
     return this.getStatus();
   },
 
-  stop(): void {
-    unregisterShortcut();
-    pendingCaptures = [];
+  async stop(): Promise<void> {
+    const drain = captureLifecycle.stop();
+    const writes = configurationQueue.stop();
+    delivery.clear();
+    try { unregisterShortcut(); }
+    finally { await Promise.all([drain, writes]); }
   },
 
   getStatus(): AppshotsStatus {
@@ -342,7 +353,7 @@ export const appshotsService = {
       shortcutRegistered,
       screenPermission: screenPermission(),
       accessibilityTrusted: accessibilityTrusted(false),
-      capturing,
+      capturing: captureLifecycle.busy(),
       lastError,
     };
   },
@@ -351,44 +362,48 @@ export const appshotsService = {
     if (process.platform !== "darwin") {
       throw new Error("Lens is currently available on macOS only");
     }
-    const previous = { enabled, shortcut };
-    unregisterShortcut();
-    enabled = input.enabled;
-    shortcut = input.shortcut;
-    lastError = null;
-
-    if (enabled && !registerShortcut()) {
-      const registrationError =
-        lastError ?? `Could not register the shortcut ${shortcut}`;
+    return configurationQueue.run(async (current) => {
+      const previous = { enabled, shortcut };
       unregisterShortcut();
-      enabled = previous.enabled;
-      shortcut = previous.shortcut;
-      if (enabled) registerShortcut();
-      lastError = registrationError;
-      throw new Error(registrationError);
-    }
+      enabled = input.enabled;
+      shortcut = input.shortcut;
+      lastError = null;
 
-    try {
-      await appSettingsService.updateAppshotsSettings({
-        appshotsEnabled: enabled,
-        appshotsShortcut: shortcut,
-      });
-    } catch (error) {
-      unregisterShortcut();
-      enabled = previous.enabled;
-      shortcut = previous.shortcut;
-      if (enabled) registerShortcut();
-      throw error;
-    }
-    lastError = null;
-    return this.getStatus();
+      if (enabled && !registerShortcut()) {
+        const registrationError =
+          lastError ?? `Could not register the shortcut ${shortcut}`;
+        unregisterShortcut();
+        enabled = previous.enabled;
+        shortcut = previous.shortcut;
+        if (enabled) registerShortcut();
+        lastError = registrationError;
+        throw new Error(registrationError);
+      }
+
+      try {
+        await appSettingsService.updateAppshotsSettings({
+          appshotsEnabled: enabled,
+          appshotsShortcut: shortcut,
+        });
+      } catch (error) {
+        if (current()) {
+          unregisterShortcut();
+          enabled = previous.enabled;
+          shortcut = previous.shortcut;
+          if (enabled) registerShortcut();
+        }
+        throw error;
+      }
+      if (!current()) throw new Error("Lens is stopping");
+      lastError = null;
+      return this.getStatus();
+    });
   },
 
   async capture(): Promise<AppshotCapture> {
     if (process.platform !== "darwin") {
       throw new Error("Lens is currently available on macOS only");
     }
-    if (capturing) throw new Error("A Lens capture is already in progress");
     const permission = screenPermission();
     if (permission === "denied" || permission === "restricted") {
       throw new Error(
@@ -396,57 +411,62 @@ export const appshotsService = {
       );
     }
 
-    capturing = true;
-    try {
-      // Resolve the target before Mains is shown or focused.
-      const target = await frontmostWindow();
-      const sources = await desktopCapturer.getSources({
-        types: ["window"],
-        thumbnailSize: { width: 5120, height: 3200 },
-        fetchWindowIcons: false,
-      });
-      const source = findWindowSource(sources, target);
-      if (!source || source.thumbnail.isEmpty()) {
-        throw new Error(
-          "The frontmost window could not be captured. Check Screen Recording permission and try again.",
-        );
+    return captureLifecycle.run(async (assertCurrent) => {
+      let screenshotPath: string | undefined;
+      try {
+        // Resolve the target before Mains is shown or focused.
+        const target = await frontmostWindow();
+        assertCurrent();
+        const sources = await desktopCapturer.getSources({
+          types: ["window"],
+          thumbnailSize: { width: 5120, height: 3200 },
+          fetchWindowIcons: false,
+        });
+        assertCurrent();
+        const source = findWindowSource(sources, target);
+        if (!source || source.thumbnail.isEmpty()) {
+          throw new Error(
+            "The frontmost window could not be captured. Check Screen Recording permission and try again.",
+          );
+        }
+
+        const id = randomUUID();
+        const captureName = `appshot-${id}-${Date.now()}.png`;
+        screenshotPath = path.join(captureDirectory(), captureName);
+        const png = source.thumbnail.toPNG();
+        if (png.length === 0) throw new Error("The captured window was empty");
+        fs.writeFileSync(screenshotPath, png);
+        pruneCaptureCache();
+
+        const accessibility = await accessibleText(target.processId);
+        assertCurrent();
+        const result: AppshotCapture = {
+          id,
+          appName: target.appName,
+          bundleIdentifier: target.bundleIdentifier,
+          windowTitle: target.windowTitle || source.name || target.appName,
+          timestamp: new Date().toISOString(),
+          screenshotPath,
+          screenshotCaptureName: captureName,
+          screenshotMimeType: "image/png",
+          accessibilityText: accessibility.text,
+          accessibilityStatus: accessibility.status,
+          accessibilityTruncated: accessibility.truncated,
+        };
+        lastError = null;
+        return result;
+      } catch (error) {
+        if (screenshotPath) { try { fs.unlinkSync(screenshotPath); } catch { /* best-effort provisional cleanup */ } }
+        if (captureLifecycle.active()) lastError = messageOf(error);
+        throw error;
       }
-
-      const id = randomUUID();
-      const captureName = `appshot-${id}-${Date.now()}.png`;
-      const screenshotPath = path.join(captureDirectory(), captureName);
-      const png = source.thumbnail.toPNG();
-      if (png.length === 0) throw new Error("The captured window was empty");
-      fs.writeFileSync(screenshotPath, png);
-      pruneCaptureCache();
-
-      const accessibility = await accessibleText(target.processId);
-      const result: AppshotCapture = {
-        id,
-        appName: target.appName,
-        bundleIdentifier: target.bundleIdentifier,
-        windowTitle: target.windowTitle || source.name || target.appName,
-        timestamp: new Date().toISOString(),
-        screenshotPath,
-        screenshotCaptureName: captureName,
-        screenshotMimeType: "image/png",
-        accessibilityText: accessibility.text,
-        accessibilityStatus: accessibility.status,
-        accessibilityTruncated: accessibility.truncated,
-      };
-      lastError = null;
-      return result;
-    } catch (error) {
-      lastError = messageOf(error);
-      throw error;
-    } finally {
-      capturing = false;
-    }
+    });
   },
 
   async captureAndDeliver(): Promise<AppshotCapture> {
     const capture = await this.capture();
-    pendingCaptures = [...pendingCaptures, capture].slice(-MAX_PENDING_CAPTURES);
+    captureLifecycle.assertCurrent();
+    delivery.add(capture);
     const window = getMainWindow();
     if (window && !window.isDestroyed()) {
       window.webContents.send(CHANNELS.appshots.captured, capture);
@@ -456,13 +476,11 @@ export const appshotsService = {
   },
 
   consumePending(): AppshotCapture[] {
-    const captures = pendingCaptures;
-    pendingCaptures = [];
-    return captures;
+    return delivery.read();
   },
 
   acknowledge(captureId: string): null {
-    pendingCaptures = pendingCaptures.filter((item) => item.id !== captureId);
+    delivery.acknowledge(captureId);
     return null;
   },
 
@@ -477,9 +495,7 @@ export const appshotsService = {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    pendingCaptures = pendingCaptures.filter(
-      (item) => item.screenshotCaptureName !== captureName,
-    );
+    delivery.remove(captureName);
     return null;
   },
 

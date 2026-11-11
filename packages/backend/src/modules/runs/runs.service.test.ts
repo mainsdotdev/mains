@@ -123,6 +123,7 @@ import { runsRepo } from "./runs.repo";
 import { insertRunInputArtifact } from "./run-input-artifact";
 import { managedRunDir, managedRunImageDir } from "./run-execution";
 import { runSessionRegistry } from "./run-session-registry";
+import { createRunSession } from "./run-session";
 import { prepareRunAttachments } from "./run-attachment-storage";
 import { createWorkAdapter, emitUserPromptArtifact } from "../providers/adapters";
 import { collectionsService } from "../collections";
@@ -179,6 +180,16 @@ describe("runsService", () => {
       return { run, payload, startRealtime, stopRealtime, voice, work: () => work };
     }
 
+    it("requires confirmed voice closure before archiving or deleting the conversation", async () => {
+      const h = voiceFixture();
+      await runsService.startRealtime(h.payload);
+      try {
+        await expect(runsService.archiveRun(h.run.id)).rejects.toThrow("Stop");
+        await expect(runsService.deleteRun(h.run.id)).rejects.toThrow("Stop");
+      } finally { await runsService.stopRealtime(h.payload); }
+      expect(await runsService.getRunById(h.run.id)).not.toBeNull();
+    });
+
     it("links a separate worker with inherited settings, attributes its prompt and recovers it on the next call", async () => {
       const space = createSpace(db, { providerId: "codex", mode: "chat" });
       const h = voiceFixture(false, space.id);
@@ -217,6 +228,58 @@ describe("runsService", () => {
         await expect(next.voiceTools!.start(args)).resolves.toMatchObject({ runId: worker.id, reused: true });
         expect(execute).toHaveBeenCalledOnce();
       } finally { await runsService.stopRealtime({ ...h.payload, connectionId: "next-call" }); h.voice({ type: "closed", reason: "ended" }); }
+    });
+
+    it("does not execute a delegated task twice when its title checkpoint fails", async () => {
+      const space = createSpace(db, { providerId: "codex", mode: "chat" });
+      const h = voiceFixture(false, space.id);
+      const worker = createRun(db, { providerId: "codex", spaceId: space.id, mode: "chat", status: "running" });
+      const execute = vi.spyOn(runsService, "executeRun").mockResolvedValue({ runId: worker.id });
+      const update = vi.spyOn(runsService, "updateRun");
+      try {
+        await runsService.startRealtime(h.payload);
+        update.mockRejectedValueOnce(new Error("Title checkpoint failed"));
+        const tools = h.startRealtime.mock.calls[0][0].voiceTools!;
+        const args = { taskKey: "hero", title: "Hero refactor", prompt: "Refactor the hero" };
+        await expect(tools.start(args)).rejects.toThrow("checkpoint failed");
+        await expect(tools.start(args)).resolves.toMatchObject({ runId: worker.id, reused: true });
+        expect(execute).toHaveBeenCalledOnce();
+        const cards = (await runsRepo.findArtifactsByRun(h.run.id)).filter((artifact) => artifact.metadata?.kind === "voice-task");
+        expect(cards).toHaveLength(1); expect(cards[0].metadata?.voiceTask).toMatchObject({ id: worker.id, taskKey: "hero" });
+        expect((await runsService.getRunById(worker.id))?.title).toBe(args.title);
+      } finally { await runsService.stopRealtime(h.payload); }
+    });
+
+    it("persists a late delegated worker after voice closes and recovers it in a new call", async () => {
+      const space = createSpace(db, { providerId: "codex", mode: "chat" });
+      const h = voiceFixture(false, space.id);
+      const worker = createRun(db, { providerId: "codex", spaceId: space.id, mode: "chat", status: "running" });
+      let resolveWorker!: (result: { runId: string }) => void;
+      const created = new Promise<{ runId: string }>((resolve) => { resolveWorker = resolve; });
+      const execute = vi.spyOn(runsService, "executeRun").mockReturnValue(created);
+      const cancel = vi.spyOn(runsService, "cancelRun");
+      try {
+        await runsService.startRealtime(h.payload);
+        const tools = h.startRealtime.mock.calls[0][0].voiceTools!;
+        const args = { taskKey: "hero", title: "Late hero refactor", prompt: "Refactor the hero" };
+        const starting = tools.start(args);
+        await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+        await runsService.stopRealtime(h.payload);
+        resolveWorker({ runId: worker.id });
+        await expect(starting).resolves.toMatchObject({ runId: worker.id, status: "started" });
+        await expect(tools.send({ runId: worker.id, message: "Stale correction", messageId: "stale" })).rejects.toThrow("ended");
+        const cards = (await runsRepo.findArtifactsByRun(h.run.id)).filter((artifact) => artifact.metadata?.kind === "voice-task");
+        expect(cards).toHaveLength(1); expect(cards[0].metadata?.voiceTask).toMatchObject({ id: worker.id, taskKey: "hero" });
+        await runsService.startRealtime({ ...h.payload, connectionId: "next-call" });
+        const next = h.startRealtime.mock.calls[1][0].voiceTools!;
+        await expect(next.start(args)).resolves.toMatchObject({ runId: worker.id, reused: true });
+        expect(execute).toHaveBeenCalledOnce(); expect(cancel).not.toHaveBeenCalled();
+        expect((await runsService.getRunById(worker.id))?.status).toBe("running");
+      } finally {
+        resolveWorker({ runId: worker.id });
+        await runsService.stopRealtime({ ...h.payload, connectionId: "next-call" });
+        h.voice({ type: "closed", reason: "ended" });
+      }
     });
 
     it("creates a blank conversation with selected settings without writing a prompt or starting work", async () => {
@@ -740,6 +803,7 @@ describe("runsService", () => {
     const registerSession = (runId: string) => {
       runSessionRegistry.register(runId, {
         runId,
+        phase: "active",
         project: vi.fn(),
         abort: vi.fn(),
         finalize: vi.fn(),
@@ -3414,6 +3478,7 @@ describe("runsService", () => {
       const sessionAbort = vi.fn().mockResolvedValue(undefined);
       runSessionRegistry.register("r1", {
         runId: "r1",
+        phase: "active",
         project: vi.fn(),
         abort: sessionAbort,
         finalize: vi.fn(),
@@ -3524,12 +3589,34 @@ describe("runsService", () => {
   // continueRun
   // ─────────────────────────────────────────────────────────────
   describe("steer input delivery", () => {
+    it("does not steer a session stopped during input preparation", async () => {
+      createRun(db, { id: "stopped-steer", providerId: "claude_code", accountId: "default", status: "running" });
+      const session = createRunSession({ runId: "stopped-steer", accountId: "default", providerId: "claude_code",
+        execution: { workspaceId: null, cwd: "/tmp/mains-test" }, initialPromptContent: "initial" });
+      const steerRun = vi.fn().mockResolvedValue({ turnId: "old-turn" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ steerRun, abortRun: vi.fn() } as any);
+      const provider = (await providersService.getById("claude_code"))!;
+      const reading = vi.spyOn(providersService, "getById").mockImplementationOnce(async () => {
+        await session.abort();
+        return provider;
+      });
+      try {
+        await expect(runsService.steerRun({ runId: session.runId, accountId: "default",
+          clientUserMessageId: "late-input", message: "guidance after Stop" })).rejects.toThrow("active turn changed");
+        expect(steerRun).not.toHaveBeenCalled();
+        expect(runSessionRegistry.get(session.runId)).toBe(session);
+      } finally {
+        reading.mockRestore();
+        await session.finalize({ status: "canceled" });
+      }
+    });
+
     it("rejects a stale async answer when an ordinary input is accepted during native preflight", async () => {
       createProvider(db, { id: "codex" });
       createRun(db, { id: "question-race", providerId: "codex", accountId: "default", status: "running" });
       const artifactId = await runsRepo.insertArtifact({ runId: "question-race", kind: "report", content: "Environment?",
         metadata: { source: "codex_async_questions", questions: [{ title: "Environment?", options: null }] } });
-      const active = { runId: "question-race", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() };
+      const active = { phase: "active" as const, runId: "question-race", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() };
       runSessionRegistry.register(active.runId, active);
       const steerRun = vi.fn();
       vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
@@ -3551,7 +3638,7 @@ describe("runsService", () => {
     it.each(["codex", "claude_code"])("forwards %s active input without model or directory overrides", async (providerId) => {
       if (providerId === "codex") createProvider(db, { id: providerId });
       createRun(db, { id: "steer-run", providerId, accountId: "default", status: "running" });
-      runSessionRegistry.register("steer-run", { runId: "steer-run", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() });
+      runSessionRegistry.register("steer-run", { runId: "steer-run", phase: "active", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() });
       const steerRun = vi.fn().mockResolvedValue({ turnId: "native-turn" });
       vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
       try {
@@ -3583,7 +3670,7 @@ describe("runsService", () => {
     it.each(["codex", "claude_code"])("never retargets %s input onto a replacement session during preflight", async (providerId) => {
       if (providerId === "codex") createProvider(db, { id: providerId });
       createRun(db, { id: "replaced-turn", providerId, accountId: "default", status: "running" });
-      const active = { runId: "replaced-turn", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() };
+      const active = { phase: "active" as const, runId: "replaced-turn", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() };
       runSessionRegistry.register(active.runId, active);
       const steerRun = vi.fn(); vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
       const provider = (await providersService.getById(providerId))!;
@@ -3622,6 +3709,72 @@ describe("runsService", () => {
     function createContinuableRun(overrides: Parameters<typeof createRun>[1]) {
       return createRun(db, { status: "succeeded", ...overrides });
     }
+
+    it.each(["question", "plan"] as const)("does not deliver a %s stopped during continuation preparation", async (kind) => {
+      createProvider(db, { id: "codex" });
+      const run = createContinuableRun({ providerId: "codex", accountId: "default", mode: "chat" });
+      let release!: () => void;
+      let reached!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const preparing = new Promise<void>((resolve) => { reached = resolve; });
+      const adapter = setupContinueAdapter({ canResumeSession: vi.fn(async () => { reached(); await gate; return true; }) });
+      const pending = kind === "question"
+        ? runsService.answerAsyncQuestions({ runId: run.id, accountId: "default", answers: ["Staging"],
+            artifactId: await runsRepo.insertArtifact({ runId: run.id, kind: "report", content: "Environment?",
+              metadata: { source: "codex_async_questions", questions: [{ title: "Environment?", options: null }] } }) })
+        : runsService.decidePlan({ runId: run.id, accountId: "default", decision: "apply",
+            toolCallId: createToolCall(db, { runId: run.id, toolName: "Plan", status: "done" }).id });
+      void pending.catch(() => {});
+      try {
+        await preparing;
+        // The idle row has no native work to stop yet; the Stop still retires
+        // the admitted decision that is preparing its continuation.
+        await expect(runsService.abortRun(run.id)).rejects.toThrow("not running");
+        release();
+        await expect(pending).rejects.toThrow(/changed|dismissed/);
+        expect(adapter.continueRun).not.toHaveBeenCalled();
+        expect(runSessionRegistry.get(run.id)).toBeUndefined();
+      } finally { release(); await pending.catch(() => {}); await flushBackground(); }
+    });
+
+    it("waits for session cleanup even after its run row becomes terminal", async () => {
+      const workspace = createWorkspace(db);
+      createContinuableRun({ id: "closing-run", workspaceId: workspace.id, accountId: "default", status: "running" });
+      const adapter = setupContinueAdapter();
+      let release!: () => void;
+      let reached!: () => void;
+      const cleanupGate = new Promise<void>((resolve) => { release = resolve; });
+      const cleanupReached = new Promise<void>((resolve) => { reached = resolve; });
+      const session = createRunSession({ runId: "closing-run", accountId: "default", providerId: "copilot_cli",
+        execution: { workspaceId: workspace.id, cwd: workspace.rootPath }, initialPromptContent: "initial",
+        onTurnClosed: async () => { reached(); await cleanupGate; } });
+      await flushBackground();
+      const closing = session.finalize({ status: "succeeded" });
+      try {
+        await cleanupReached;
+        expect((await runsService.getRunById(session.runId))?.status).toBe("succeeded");
+        let idle = false;
+        const waiting = runSessionRegistry.whenIdle(session.runId).then(() => { idle = true; });
+        let alsoClosed = false;
+        const alsoClosing = session.finalize({ status: "canceled" }).then(() => { alsoClosed = true; });
+
+        await expect(runsService.continueRun({ runId: session.runId, accountId: "default", message: "next" }))
+          .rejects.toThrow("active response");
+        expect(adapter.continueRun).not.toHaveBeenCalled();
+        expect(idle).toBe(false);
+        expect(alsoClosed).toBe(false);
+
+        release();
+        await Promise.all([closing, alsoClosing, waiting]);
+        await expect(runsService.continueRun({ runId: session.runId, accountId: "default", message: "next" }))
+          .resolves.toEqual({ runId: session.runId, resumed: true });
+        expect(adapter.continueRun).toHaveBeenCalledOnce();
+        await flushBackground();
+      } finally {
+        release();
+        await closing;
+      }
+    });
 
     it("rejects a stale async answer before changing an idle run or starting its provider", async () => {
       createProvider(db, { id: "codex" });

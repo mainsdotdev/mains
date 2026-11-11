@@ -1,3 +1,4 @@
+import { createDecisionOwner } from "@mains/contracts/decision-owner";
 import * as Network from "expo-network";
 import { useSyncExternalStore } from "react";
 import { AppState } from "react-native";
@@ -77,7 +78,8 @@ import {
   readHistoryContent,
   applyConversationSettings,
 } from "./sync";
-import { isConnectionLoss, WsTransport, type CloseInfo } from "./ws-transport";
+import { WsTransport, type CloseInfo } from "./ws-transport";
+import { deliverCommand } from "./command-delivery";
 import {
   clearAllStreamingMessages,
   clearStreamingMessages,
@@ -173,6 +175,7 @@ class BackendSession {
     refreshing: false,
   };
   private readonly listeners = new Set<() => void>();
+  private readonly contextSourceListeners = new Set<(providerId: string) => void>();
 
   private supervisor: ConnectionSupervisor | null = null;
   private unsubscribeSupervisor: (() => void) | null = null;
@@ -253,13 +256,19 @@ class BackendSession {
         });
         const detachStreaming = transport.subscribe(CHANNELS.runs.ephemeralEvent, (payload) => {
           const event = payload as RunEphemeralEvent;
-          if (event.runId === this.viewingRunId) receiveStreamingMessage(event);
+          if (this.transport === transport && this.snapshot.backend?.backendId === backend.backendId && event.runId === this.viewingRunId) receiveStreamingMessage(event);
         });
         const detachTargets = attachTargetEvents(transport, backend.backendId);
+        const detachSkills = transport.subscribe(CHANNELS.providers.skillsUpdated, (payload) => {
+          if (this.transport !== transport || this.snapshot.backend?.backendId !== backend.backendId) return;
+          const providerId = (payload as { providerId?: unknown })?.providerId;
+          if (typeof providerId === "string") for (const listener of this.contextSourceListeners) listener(providerId);
+        });
         this.detachEvents = () => {
           detachRuns();
           detachStreaming();
           detachTargets();
+          detachSkills();
         };
         if (this.viewingRunId) {
           void syncRun(transport, backend.backendId, this.viewingRunId).catch(() => {});
@@ -436,6 +445,15 @@ class BackendSession {
    * this is for the moments a stale listing shows: opening the picker, or a
    * plugin installed on the Mac since the phone last connected.
    */
+  async getCodexPermissions(cwd?: string): Promise<import("@mains/contracts/codex-permissions").CodexPermissionCatalog> {
+    const transport = this.transport;
+    if (!transport) throw new Error("Connect to Mains to load Codex permissions.");
+    const result = await transport.invoke(CHANNELS.providers.getCodexPermissions, ["codex", cwd]) as ServiceResponse<import("@mains/contracts/codex-permissions").CodexPermissionCatalog>;
+    if (this.transport !== transport) throw new Error("The backend connection changed. Reopen permissions.");
+    if (!result.success) throw new Error(result.error);
+    return result.data;
+  }
+
   async refreshContextSources(
     providerId: string,
     workspacePath?: string | null,
@@ -460,18 +478,40 @@ class BackendSession {
     }
   }
 
+  onContextSourcesChanged(listener: (providerId: string) => void): () => void {
+    this.contextSourceListeners.add(listener);
+    return () => { this.contextSourceListeners.delete(listener); };
+  }
+
+  /** Retain backend identity across recovery; a backend switch retires it permanently. */
+  captureDecisionOwner() {
+    const backendId = this.snapshot.backend?.backendId;
+    const owner = createDecisionOwner(() => !!backendId && this.snapshot.backend?.backendId === backendId);
+    let off: (() => void) | undefined;
+    return { ...owner,
+      attach: () => {
+        owner.attach(); off?.();
+        off = this.subscribe(() => { if (this.snapshot.backend?.backendId !== backendId) owner.retire(); });
+      },
+      detach: () => { off?.(); off = undefined; owner.detach(); },
+    };
+  }
+
   /** Answer an agent's request. The row leaves the projection as soon as the Mac confirms. */
   async respondToApproval(
     requestId: string,
     approved: boolean,
     answer?: string,
+    binding?: { backendId: string; approvalToken?: string | null },
   ): Promise<ServiceResponse<void>> {
+    const backendId = this.snapshot.backend?.backendId;
+    if (binding && binding.backendId !== backendId) return { success: false, error: "The approval backend changed. Reopen the conversation." };
     const body: ToolApprovalResponse = answer === undefined
       ? { requestId, approved }
       : { requestId, approved, answer };
+    if (binding?.approvalToken) body.approvalToken = binding.approvalToken;
     const result = await this.command<void>(CHANNELS.runs.toolApprovalResponse, [body]);
-    const backendId = this.snapshot.backend?.backendId;
-    if (result.success && backendId) deletePendingApproval(backendId, requestId);
+    if (result.success && backendId) deletePendingApproval(backendId, requestId, binding?.approvalToken);
     return result;
   }
 
@@ -738,9 +778,9 @@ class BackendSession {
   }
 
   /**
-   * Issue a mutation with exactly-once semantics. The same `commandId` is
-   * re-sent after a dropped connection until the Mac answers — its receipt
-   * store guarantees the handler ran at most once — or the deadline passes.
+   * Retry the same command identity after connection loss, within one backend
+   * and deadline. The backend reserves a receipt before effects; interrupted
+   * results remain uncertain instead of being executed again.
    * A `success: false` reply is an answer, not a reason to retry.
    */
   async command<T = unknown>(
@@ -748,19 +788,11 @@ class BackendSession {
     args: unknown[] = [],
     options: { timeoutMs?: number; backendId?: string } = {},
   ): Promise<ServiceResponse<T>> {
-    const commandId = newCommandId();
-    const deadline = Date.now() + (options.timeoutMs ?? 60_000);
-    for (;;) {
-      const transport = await this.waitForConnected(deadline);
-      if (options.backendId && this.snapshot.backend?.backendId !== options.backendId) {
-        throw new Error("The connected computer changed");
-      }
-      try {
-        return (await transport.invoke(channel, args, { commandId })) as ServiceResponse<T>;
-      } catch (error) {
-        if (!isConnectionLoss(error) || Date.now() >= deadline) throw error;
-      }
-    }
+    const backendId = options.backendId ?? this.snapshot.backend?.backendId;
+    return deliverCommand<T>({
+      waitForConnected: (deadline) => this.waitForConnected(deadline),
+      isCurrent: () => this.snapshot.backend?.backendId === backendId,
+    }, channel, args, newCommandId(), options.timeoutMs);
   }
 
   /** Resolve with the live transport once the session is `connected`. */

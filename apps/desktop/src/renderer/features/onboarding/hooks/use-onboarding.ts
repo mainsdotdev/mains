@@ -1,7 +1,7 @@
 import {
   useCallback,
   useEffect,
-  useRef,
+  useLayoutEffect,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -32,6 +32,8 @@ import {
   onboardingSettingsPatch,
 } from "../lib/onboarding-state";
 import { revealOnboardingWorkspace } from "../lib/onboarding-completion";
+import { createOnboardingCompletionLifecycle } from "../../../../shared/window-lifecycle";
+import { onTransportChange } from "@/lib/transport";
 
 const ALL_ONBOARDING_STEPS = [
   "welcome",
@@ -73,9 +75,18 @@ export function useOnboarding(beforeComplete?: () => Promise<void>) {
   });
   const [updateSettings, { isLoading: isSaving }] =
     useUpdateAppSettingsMutation();
-  const saving = useRef(false);
+  const [completion] = useState(createOnboardingCompletionLifecycle);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isCompleting, setIsCompleting] = useState(false);
+  useLayoutEffect(() => {
+    completion.mount();
+    const off = onTransportChange(() => {
+      completion.mount();
+      setIsCompleting(false);
+      setSaveError(null);
+    });
+    return () => { off(); completion.close(); };
+  }, [completion]);
   const [{ index: storedIndex, direction }, setStep] = useState({
     index: 0,
     direction: 1,
@@ -151,20 +162,21 @@ export function useOnboarding(beforeComplete?: () => Promise<void>) {
   }, [step, recheckProviders]);
 
   const goTo = (next: number) => {
-    if (saving.current || isCompleting || next < 0 || next >= ONBOARDING_STEPS.length) return;
+    if (completion.busy() || isCompleting || next < 0 || next >= ONBOARDING_STEPS.length) return;
     setSaveError(null);
     setStep({ index: next, direction: next > index ? 1 : -1 });
   };
 
   const finish = async () => {
     if (
-      saving.current ||
+      completion.busy() ||
       !canContinue ||
       !settingsQuery.data ||
       !spacesQuery.data
     )
       return;
-    saving.current = true;
+    const attempt = completion.begin();
+    if (!attempt) return;
     setSaveError(null);
     try {
       const patch = onboardingSettingsPatch(
@@ -174,6 +186,7 @@ export function useOnboarding(beforeComplete?: () => Promise<void>) {
         { enableWorktrees, notifyOnRunComplete },
       );
       const saved = await updateSettings(patch).unwrap();
+      if (!attempt.saved()) return;
       setIsCompleting(true);
       // Mount the shell with the committed provider, before the invalidated
       // query refetches. A failed save never marks onboarding complete.
@@ -185,7 +198,9 @@ export function useOnboarding(beforeComplete?: () => Promise<void>) {
         ),
       );
       await beforeComplete?.();
+      if (!attempt.current()) return;
       revealOnboardingWorkspace(() => {
+        if (!attempt.commit()) return;
         dispatch(
           setThemeChoice({
             providerId: null,
@@ -208,12 +223,11 @@ export function useOnboarding(beforeComplete?: () => Promise<void>) {
         dispatch(setOnboardingCompleted(true));
       });
     } catch {
+      if (!attempt.fail()) return;
       setIsCompleting(false);
       setSaveError(
         "Couldn’t save your setup. Your choices are still here — try again.",
       );
-    } finally {
-      saving.current = false;
     }
   };
 

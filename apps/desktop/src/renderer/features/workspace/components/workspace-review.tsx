@@ -3,8 +3,8 @@ import { LazyMotion, domAnimation, m } from "motion/react";
 import { FileDiff, Virtualizer, useVirtualizer, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { DEFAULT_VIRTUAL_FILE_METRICS, type SelectedLineRange } from "@pierre/diffs";
 import type { ReviewComment } from "@mains/contracts/review-comments";
-import { Button, Checkbox, Text, Tooltip, toast } from "@/components/ui";
-import { ArrowUp, Chat, Refresh, FileIconComponent, Review } from "@/components/ui/icons";
+import { Button, Checkbox, DiffFileHeader, Text, Tooltip, toast } from "@/components/ui";
+import { Refresh, Review } from "@/components/ui/icons";
 import { PreviewPanelControls } from "@/components/layout/preview-panel-controls";
 import { useGetLatestWorkspaceDiffQuery, useResyncWorkspaceDiffMutation } from "@/lib/redux/api";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
@@ -94,18 +94,10 @@ const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPat
     setDraft({ side, lineNumber, ...(endLineNumber !== lineNumber ? { endLineNumber } : {}), lineText });
   };
   return <section ref={section} className="border-b border-primary-200/60 dark:border-primary-800/60" aria-label={`Changes in ${file.path}`}>
-    <div className="sticky top-0 z-10 flex items-center bg-primary dark:bg-primary-950">
-      <Button ref={header} type="button" aria-label={`Toggle changes in ${file.path}`} aria-expanded={!collapsed} onClick={() => onCollapsedChange(file, !collapsed)}
-        className="flex min-w-0 flex-1 items-center gap-2.5 px-4 py-3 text-left text-xs">
-        <ArrowUp className={`size-3.5 shrink-0 text-primary-500 transition-transform ${collapsed ? "rotate-90" : "rotate-180"}`} />
-        <FileIconComponent fileName={file.path} className="size-4 shrink-0" />
-        <span className={`min-w-0 flex-1 truncate ${reviewed ? "text-primary-500" : "text-primary-900 dark:text-primary-100"}`} title={file.path}>
-          {file.diff?.prevName && <span className="text-primary-500">{file.diff.prevName} → </span>}{file.path}
-        </span>
-        {!!comments.length && <span className="flex items-center gap-1 text-primary-500"><Chat className="size-3" />{comments.length}</span>}
-        <span className="text-primary-500">{status}</span>
-        <span className="tabular-nums text-success">+{additions}</span><span className="tabular-nums text-danger">-{deletions}</span>
-      </Button>
+    <div className="sticky top-0 z-10 flex items-center diff-file-surface">
+      <DiffFileHeader ref={header} path={file.path} previousPath={file.diff?.prevName} status={status}
+        additions={additions} deletions={deletions} expanded={!collapsed} onToggle={() => onCollapsedChange(file, !collapsed)}
+        commentCount={comments.length} muted={reviewed} />
       <label className={`flex shrink-0 items-center gap-1.5 pr-4 text-xs text-primary-500 ${file.reviewUnavailable ? "cursor-not-allowed" : "cursor-pointer"}`}
         title={file.reviewUnavailable ? "The file's changes cannot be verified. Refresh changes to try again." : undefined}>
         <Checkbox checked={reviewed} disabled={file.reviewUnavailable} aria-label={`Reviewed ${file.path}`}

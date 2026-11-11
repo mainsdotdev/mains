@@ -43,3 +43,5 @@ export type {
 
 // Connections
 export * from "./connections";
+
+export { shutdownSourceSync } from "./sync-lifecycle";

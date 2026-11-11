@@ -11,19 +11,22 @@ import { PdfDocument } from "./document-viewer/pdf-document";
 import { DocumentViewerToolbar } from "./document-viewer/document-viewer-toolbar";
 import { DocumentFallback } from "./document-viewer/document-fallback";
 import { documentPreviewLimit } from "@mains/contracts/output-files";
+import { documentOwnerMatchesBackend } from "../lib/document-lifecycle";
 
 /** Each file owns its zoom, scroll containers and renderer for its open lifetime. */
 export function DocumentViewerPanel() {
   const preview = usePreviewPanel();
   const groups = useAppSelector((state) => state.preview.byOwner);
-  return <>{Object.entries(groups).flatMap(([ownerKey, group]) => group.tabs.flatMap((tab) => tab.kind === "document"
+  const backendId = useAppSelector((state) => state.backends.activeBackendId);
+  return <>{Object.entries(groups).flatMap(([ownerKey, group]) => documentOwnerMatchesBackend(ownerKey, backendId) ? group.tabs.flatMap((tab) => tab.kind === "document"
     ? [<DocumentPreview key={tab.id} currentDoc={tab.doc}
-        active={preview.isOpen && preview.ownerKey === ownerKey && preview.activeTab?.id === tab.id} />] : []))}</>;
+        active={preview.isOpen && preview.ownerKey === ownerKey && preview.activeTab?.id === tab.id} />] : []) : [])}</>;
 }
 
 function DocumentPreview({ currentDoc, active }: { currentDoc: DocumentViewerDoc; active: boolean }) {
   const [zoom, setZoom] = useState(1);
   const [isSaving, setIsSaving] = useState(false);
+  const [annotating, setAnnotating] = useState(false);
   // "Save a copy": the viewer shows a file that lives in a run directory or a
   // workspace, and the user's own copy belongs wherever they say. Main owns the
   // native dialog; cancelling comes back as a null path, which is not an error.
@@ -50,6 +53,9 @@ function DocumentPreview({ currentDoc, active }: { currentDoc: DocumentViewerDoc
   return <div data-document-viewer-panel="" hidden={!active} inert={!active}
     className="absolute inset-0 flex min-h-0 flex-col overflow-hidden" style={{ display: active ? undefined : "none" }}>
     <DocumentViewerToolbar doc={currentDoc} zoom={zoom} onZoomChange={setZoom}
+      annotating={annotating && active} onToggleAnnotating={["pptx", "pdf", "docx"].includes(currentDoc.docType) && !currentDoc.path.startsWith("blob:") &&
+        (currentDoc.byteSize === undefined || currentDoc.byteSize <= documentPreviewLimit(currentDoc.docType))
+        ? () => setAnnotating((value) => !value) : undefined}
       isSaving={isSaving} onSaveCopy={() => void saveCopy()} />
     {currentDoc.byteSize !== undefined && currentDoc.byteSize > documentPreviewLimit(currentDoc.docType) ? (
       <div className="relative flex-1">
@@ -58,9 +64,10 @@ function DocumentPreview({ currentDoc, active }: { currentDoc: DocumentViewerDoc
     ) : isTextDocType(currentDoc.docType) ? (
       <MarkdownDocument path={currentDoc.path} docType={currentDoc.docType} />
     ) : currentDoc.docType === "pdf" ? (
-      <PdfDocument doc={currentDoc} zoom={zoom} />
+      <PdfDocument doc={currentDoc} zoom={zoom} annotating={annotating && active} onExitAnnotation={() => setAnnotating(false)} />
     ) : (
-      <DocumentRenderHost doc={{ ...currentDoc, docType: currentDoc.docType }} zoom={zoom} />
+      <DocumentRenderHost doc={{ ...currentDoc, docType: currentDoc.docType }} zoom={zoom}
+        annotating={annotating && active} onExitAnnotation={() => setAnnotating(false)} />
     )}
   </div>;
 }

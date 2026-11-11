@@ -56,6 +56,24 @@ describe("startWsHost (integration)", () => {
     clearHandlers();
   });
 
+  it("waits for an accepted HTTP pairing operation even after its socket is closed", async () => {
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let completed = false;
+    host = await startWsHost({ port: 0, host: "127.0.0.1", token: TOKEN,
+      pairDevice: async () => { enter(); await gate; completed = true; return { deviceId: "device", deviceToken: "secret" }; } });
+    const request = fetch(`http://127.0.0.1:${host.port}/pair`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: "pairing-code", deviceName: "Phone", platform: "ios", appVersion: "test" }) }).catch(() => null);
+    await entered;
+    let closed = false; const closing = host.close().then(() => { closed = true; });
+    try {
+      await request; await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+    } finally { release(); await closing; }
+    expect(completed).toBe(true);
+  });
+
   it("serves invokes and pushes bus events end-to-end", async () => {
     host = await startWsHost({ port: 0, host: "127.0.0.1", token: TOKEN });
     registerHandler("ping:ping", async (_ctx, name) => ({
@@ -348,6 +366,20 @@ describe("startWsHost browser sessions and HTTP image proxy", () => {
       crossOrigin.once("error", (reason) => resolve(reason.message)),
     );
     expect(error).toBe("Unexpected server response: 401");
+  });
+  it("retires an already-open socket when its browser session is evicted", async () => {
+    const { host: currentHost } = await startBrowserHost();
+    const origin = `http://127.0.0.1:${currentHost.port}`;
+    const first = await exchangeLogin(currentHost);
+    const browser = new WebSocket(`ws://127.0.0.1:${currentHost.port}/__mains/ws`, buildSubprotocols(), {
+      headers: { Cookie: cookiePair(cookies(first), "mains_web_"), Origin: origin },
+    });
+    let closed = false; browser.on("close", () => { closed = true; });
+    try {
+      await opened(browser);
+      for (let index = 0; index < 128; index++) expect((await exchangeLogin(currentHost)).status).toBe(204);
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 1000 });
+    } finally { browser.terminate(); }
   });
 
   it("marks cookies Secure when the login link is HTTPS", async () => {

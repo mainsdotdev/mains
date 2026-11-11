@@ -7,7 +7,7 @@ import {
   MarkdownLink,
   markdownComponents,
 } from "@/components/markdown-components";
-import { Apps, FileIconComponent } from "@/components/ui/icons";
+import { Apps, FileIconComponent, Sparkles } from "@/components/ui/icons";
 import { Button } from "@/components/ui";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useOpenComposerMention } from "../hooks/use-open-composer-mention";
@@ -168,6 +168,7 @@ function PromptSkillChip({ skill, onOpen }: {
   const label = skill.displayName || skill.name;
   const tooltip = skill.shortDescription || skill.description || label;
   const clickable = composerSkillDestination(skill) !== null;
+  const FallbackIcon = ["plugin", "mac", "mac_app", "computer"].includes((skill.scope || "").toLowerCase()) ? Apps : Sparkles;
   const Chip = clickable ? Button : "span";
 
   return (
@@ -196,7 +197,7 @@ function PromptSkillChip({ skill, onOpen }: {
             onError={() => setFailed(true)}
           />
         ) : (
-          <Apps className="size-3 shrink-0" />
+          <FallbackIcon className="size-3 shrink-0" />
         )}
       </span>
       <span className="leading-none">{label}</span>

@@ -56,6 +56,14 @@ describe("attributeTurnFiles", () => {
     expect(unnamed.shared).toBe(true);
   });
 
+  it.each([
+    file("mine.ts"),
+    file("renamed.ts", { status: "renamed", oldPath: "mine.ts" }),
+  ])("marks a named edit shared with an unnamed peer write: $path", (changed) => {
+    const [kept] = attributeTurnFiles([changed], own(["mine.ts"]), peers([], true));
+    expect(kept).toEqual({ ...changed, shared: true });
+  });
+
   it("matches a move by either of its paths", () => {
     const moved = file("new.ts", { status: "renamed", oldPath: "old.ts" });
     expect(attributeTurnFiles([moved], own(["old.ts"]), peers([]))).toEqual([moved]);

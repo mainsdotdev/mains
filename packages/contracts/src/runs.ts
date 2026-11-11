@@ -402,7 +402,10 @@ export interface CollectionResponse {
  * echo it back as context, and nothing else.
  *
  * `iconSmall` / `iconLarge` are, for a plugin, its artwork inlined as a data
- * URL (or a remote https URL), which a device draws as is. For any other skill
+ * URL (or a remote https URL), which a device draws as is. Paired-device
+ * discovery may omit large artwork and send only one small icon per row to
+ * keep the catalogue within the mobile response budget; clients use a default
+ * icon when artwork is absent. For any other skill
  * they are absolute paths on the Mac — a device cannot read those, and carries
  * them only so the value round-trips into the prompt's artifact metadata
  * untouched.
@@ -515,6 +518,15 @@ export interface RunEventPersistedEvent {
   ts: number;
 }
 
+/** A live, successful PR creation tool result; never replayed from history. */
+export interface RunPullRequestCreatedEvent {
+  runId: string;
+  workspaceId: string | null;
+  mode: ModeId;
+  toolCallId: number;
+  url: string;
+}
+
 /**
  * `runs:ephemeralEvent` push — an in-memory artifact snapshot used while an
  * agent message is still being written. It is never persisted or replayed;
@@ -544,6 +556,8 @@ export type ApprovalKind = "tool_approval" | "ask_user" | "elicitation";
 /** The `runs:toolApprovalRequest` push — an agent waiting on the user. */
 export interface ToolApprovalRequest {
   requestId: string;
+  /** Opaque broker incarnation; echo with a response to reject stale decisions. */
+  approvalToken?: string;
   runId: string;
   toolName: string;
   toolInput?: Record<string, unknown>;
@@ -577,6 +591,7 @@ export interface PendingApproval extends ToolApprovalRequest {
 
 export interface ToolApprovalResolvedEvent {
   requestId: string;
+  approvalToken?: string;
 }
 
 /**
@@ -587,6 +602,7 @@ export interface ToolApprovalResolvedEvent {
  */
 export interface ToolApprovalResponse {
   requestId: string;
+  approvalToken?: string;
   approved: boolean;
   answer?: string;
 }

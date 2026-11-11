@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   AsciiSpinner,
   Button,
@@ -12,16 +12,19 @@ import { Github } from "@/components/ui/icons";
 import {
   useStartGithubDeviceFlowMutation,
   usePollGithubDeviceFlowMutation,
-  type GitHubDeviceAuthorization,
 } from "@/lib/redux/api";
 import { extractErrorMessage } from "@/lib/extract-error-message";
+import { createGitHubDeviceFlowLifecycle, idleGitHubDeviceFlow } from "../../../lib/github-device-flow-lifecycle";
+import { onTransportChange } from "@/lib/transport";
 
 interface GitHubDeviceFlowPanelProps {
   /** Runs the wizard's shared save-credentials tail with the token. */
   onToken: (token: string) => Promise<void>;
   /** True while the wizard is saving the token / loading repositories. */
   submitting: boolean;
+  isCurrent?: () => boolean;
 }
+const currentPane = () => true;
 
 /**
  * GitHub OAuth device flow: show a one-time code, send the user to
@@ -32,82 +35,34 @@ interface GitHubDeviceFlowPanelProps {
 export function GitHubDeviceFlowPanel({
   onToken,
   submitting,
+  isCurrent = currentPane,
 }: GitHubDeviceFlowPanelProps) {
-  const [startFlow, { isLoading: isStarting }] =
-    useStartGithubDeviceFlowMutation();
+  const [startFlow] = useStartGithubDeviceFlowMutation();
   const [pollFlow] = usePollGithubDeviceFlowMutation();
+  const [view, setView] = useState({ scope: isCurrent, state: idleGitHubDeviceFlow });
+  // A replacement wizard must never paint the previous wizard's code.
+  if (view.scope !== isCurrent) setView({ scope: isCurrent, state: idleGitHubDeviceFlow });
+  const state = view.scope === isCurrent ? view.state : idleGitHubDeviceFlow;
+  const callback = useRef(onToken);
+  const owner = useRef<ReturnType<typeof createGitHubDeviceFlowLifecycle> | null>(null);
+  useLayoutEffect(() => { callback.current = onToken; });
+  useLayoutEffect(() => {
+    const lifecycle = createGitHubDeviceFlowLifecycle({
+      start: () => startFlow().unwrap(), poll: (code) => pollFlow(code).unwrap(),
+      open: (url) => window.api.shell.openExternal(url),
+      onToken: (token) => callback.current(token),
+      change: (state) => setView({ scope: isCurrent, state }), error: extractErrorMessage,
+      isCurrent,
+    });
+    owner.current = lifecycle;
+    const off = onTransportChange(() => lifecycle.retire());
+    return () => { off(); lifecycle.close(); if (owner.current === lifecycle) owner.current = null; };
+  }, [startFlow, pollFlow, isCurrent]);
+  const { auth, error } = state;
+  const isStarting = state.phase === "starting";
+  const handleStart = () => { void owner.current?.start(); };
 
-  const [auth, setAuth] = useState<GitHubDeviceAuthorization | null>(null);
-  const [error, setError] = useState("");
-
-  const handleStart = async () => {
-    setError("");
-    try {
-      const authorization = await startFlow().unwrap();
-      setAuth(authorization);
-      // Send the user straight to the approval page — the code is on screen.
-      window.api.shell.openExternal(authorization.verificationUri);
-    } catch (err) {
-      setError(extractErrorMessage(err, "Could not start GitHub sign-in"));
-    }
-  };
-
-
-  // Poll while an authorization is pending. GitHub dictates the pace
-  // (interval, slow_down); the loop dies with the effect on cancel/unmount.
-  useEffect(() => {
-    if (!auth) return;
-
-    let cancelled = false;
-    let timer: number | undefined;
-    let intervalMs = Math.max(auth.interval, 1) * 1000;
-    const expiresAt = Date.now() + auth.expiresIn * 1000;
-
-    const tick = async () => {
-      if (cancelled) return;
-      if (Date.now() > expiresAt) {
-        setAuth(null);
-        setError("The sign-in code expired. Start again.");
-        return;
-      }
-      try {
-        const result = await pollFlow(auth.deviceCode).unwrap();
-        if (cancelled) return;
-
-        if (result.status === "success") {
-          setAuth(null);
-          await onToken(result.token);
-          return;
-        }
-        if (result.status === "slow_down") {
-          intervalMs = Math.max(result.interval, 1) * 1000;
-        } else if (result.status === "expired") {
-          setAuth(null);
-          setError("The sign-in code expired. Start again.");
-          return;
-        } else if (result.status === "denied") {
-          setAuth(null);
-          setError("Sign-in was declined on GitHub.");
-          return;
-        }
-      } catch (err) {
-        if (cancelled) return;
-        setAuth(null);
-        setError(extractErrorMessage(err, "GitHub sign-in failed"));
-        return;
-      }
-      timer = window.setTimeout(tick, intervalMs);
-    };
-
-    timer = window.setTimeout(tick, intervalMs);
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth]);
-
-  if (submitting) {
+  if (submitting || state.phase === "submitting") {
     return (
       <div className="flex flex-1 items-center gap-2 py-6 justify-center">
         <AsciiSpinner variant="null" />
@@ -138,18 +93,20 @@ export function GitHubDeviceFlowPanel({
           />
         </div>
 
+        {error && <ErrorText>{error}</ErrorText>}
+
         <div className="flex items-center justify-between gap-3">
           <span className="flex items-center gap-2">
             <AsciiSpinner variant="null" kind="circle" />
             <Caption>Waiting for approval on GitHub...</Caption>
           </span>
           <span className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => setAuth(null)}>
+            <Button variant="secondary" onClick={() => owner.current?.cancel()}>
               Cancel
             </Button>
             <Button
           variant="ghost"
-          onClick={() => window.api.shell.openExternal(auth.verificationUri)}
+          onClick={() => owner.current?.openBrowser()}
           className="flex glass-outline py-2 items-center gap-2 bg-primary-950 hover:bg-primary-900 text-primary!"
             >
           <Github className="size-4" />
@@ -176,7 +133,7 @@ export function GitHubDeviceFlowPanel({
         <Button
           variant="ghost"
           onClick={handleStart}
-          disabled={isStarting}
+          disabled={isStarting || state.phase === "retired"}
           isLoading={isStarting}
           className="flex glass-outline py-2 items-center gap-2 bg-primary-950 hover:bg-primary-900 text-primary!"
         >

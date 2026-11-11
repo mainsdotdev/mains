@@ -23,6 +23,9 @@ export function validateConversationSettings(providerId: string, value: Conversa
   if (permission !== undefined && !permissionModeIdsFor(providerId).includes(String(permission))) {
     throw new Error(`Unknown permission mode "${permission}" for ${providerId}`);
   }
+  if (value.config.permissionProfile !== undefined && (providerId !== PROVIDER_IDS.codex || value.config.permissionProfile.length > 512 || Array.from(value.config.permissionProfile).some((char) => char.charCodeAt(0) < 32))) {
+    throw new Error("Invalid Codex permission profile");
+  }
   // Codex and OpenCode advertise their own effort identifiers. The other
   // providers stay on the fixed vocabulary.
   if (providerId !== PROVIDER_IDS.codex && providerId !== PROVIDER_IDS.opencode) {
@@ -41,9 +44,15 @@ export function resolveConversationSettings(
   snapshot: Record<string, unknown> | null | undefined,
   previousModel: string | null | undefined,
   requested?: ConversationSettings,
+  options: { inheritProviderPermissions?: boolean } = {},
 ): ConversationSettings {
   const saved = conversationSettingsFrom(snapshot);
   const selected = requested ? validateConversationSettings(providerId, requested) : saved;
+  const profileSource = selected?.config ?? saved?.config ?? snapshot;
+  // Only new-conversation callers may inherit a provider profile. Existing
+  // and pre-profile clients retain their explicit legacy permission choice.
+  const keepLegacyPermissions = providerId === PROVIDER_IDS.codex &&
+    !!(selected || saved || !options.inheritProviderPermissions) && typeof profileSource?.permissionProfile !== "string";
   return {
     model: selected?.model || previousModel || String(providerConfig?.defaultModel ?? ""),
     config: snapshotRunSettingConfig(providerId, {
@@ -51,6 +60,7 @@ export function resolveConversationSettings(
       ...pickRunSettingConfig(snapshot ?? {}),
       ...saved?.config,
       ...selected?.config,
+      ...(keepLegacyPermissions ? { permissionProfile: "" } : {}),
     }),
   };
 }

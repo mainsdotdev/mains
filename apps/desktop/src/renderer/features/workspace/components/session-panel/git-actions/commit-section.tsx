@@ -28,7 +28,7 @@ export function CommitSection({
     canPush,
     hasRemote,
     pending,
-    setPending,
+    begin,
     busy,
     refreshStatus,
     isSectionOpen,
@@ -53,6 +53,8 @@ export function CommitSection({
    */
   const handleGenerateMessage = useCallback(() => {
     if (!providerId || generatingMessage) return;
+    const lease = begin("generateCommit", JSON.stringify([includeUnstaged, providerId]));
+    if (!lease) return;
     const seq = prefillSeqRef.current;
     generateCommitMessage({
       workspaceId,
@@ -62,39 +64,40 @@ export function CommitSection({
     })
       .unwrap()
       .then((generated) => {
-        if (prefillSeqRef.current !== seq) return;
+        if (!lease.current() || prefillSeqRef.current !== seq) return;
         setMessage(generated);
       })
-      .catch((err) =>
-        toast.error(extractErrorMessage(err, "Failed to generate a commit message.")),
-      );
+      .catch((err) => { if (lease.current()) toast.error(extractErrorMessage(err, "Failed to generate a commit message.")); })
+      .finally(() => lease.finish(true));
   }, [
     workspaceId,
     providerId,
     generatingMessage,
+    begin,
     includeUnstaged,
     generateCommitMessage,
   ]);
 
   const handleCommit = useCallback(
     async (push: boolean) => {
-      if (pending) return;
-      setPending(push ? "commitPush" : "commit");
-      // Persistent loading toast: the toast store is global, so the progress
-      // stays visible (and the outcome lands) even if the panel closes and
-      // this component unmounts mid-operation. Success/error reuse the id to
-      // swap the same toast in place.
+      const lease = begin(push ? "commitPush" : "commit", JSON.stringify([message.trim(), includeUnstaged, providerId, push]));
+      if (!lease) return;
+      let accepted = false;
+      // The view owns feedback; retired responses cannot update a replacement form.
       const toastId = toast.loading(
         push ? "Committing and pushing…" : "Committing…",
       );
       try {
         const result = await commitGitFlow({
           workspaceId,
+          operationId: lease.operationId,
           message: message.trim() || undefined,
           includeUnstaged,
           providerId,
           push,
         }).unwrap();
+        accepted = true;
+        if (!lease.current()) return;
         prefillSeqRef.current++;
         setMessage("");
         toast.success(
@@ -107,17 +110,18 @@ export function CommitSection({
         // otherwise the dropdown keeps showing the pre-commit changes.
         refreshStatus();
       } catch (err) {
-        toast.error(typeof err === "string" ? err : "Commit failed", {
+        if (!lease.current()) return;
+        toast.error(extractErrorMessage(err, "Commit failed"), {
           id: toastId,
         });
       } finally {
-        setPending(null);
+        if (!lease.current()) toast.dismiss(toastId);
+        lease.finish(accepted);
       }
     },
     [
       workspaceId,
-      pending,
-      setPending,
+      begin,
       commitGitFlow,
       message,
       includeUnstaged,
@@ -127,21 +131,26 @@ export function CommitSection({
   );
 
   const handlePush = useCallback(async () => {
-    if (pending) return;
-    setPending("push");
+    const lease = begin("push", "");
+    if (!lease) return;
+    let accepted = false;
     const toastId = toast.loading("Pushing…");
     try {
       await pushGitFlow(workspaceId).unwrap();
+      accepted = true;
+      if (!lease.current()) return;
       toast.success("Pushed", { id: toastId });
       refreshStatus();
     } catch (err) {
-      toast.error(typeof err === "string" ? err : "Push failed", {
+      if (!lease.current()) return;
+      toast.error(extractErrorMessage(err, "Push failed"), {
         id: toastId,
       });
     } finally {
-      setPending(null);
+      if (!lease.current()) toast.dismiss(toastId);
+      lease.finish(accepted);
     }
-  }, [workspaceId, pending, setPending, pushGitFlow, refreshStatus]);
+  }, [workspaceId, begin, pushGitFlow, refreshStatus]);
 
   return (
     <>
@@ -158,7 +167,8 @@ export function CommitSection({
           <div className="relative">
             <Textarea
               value={message}
-              onChange={(e) => setMessage(e.target.value)}
+              onChange={(e) => { prefillSeqRef.current++; setMessage(e.target.value); }}
+              disabled={busy && !generatingMessage}
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                   e.preventDefault();
@@ -182,6 +192,7 @@ export function CommitSection({
           </div>
           <CheckboxOption
             checked={includeUnstaged}
+            disabled={busy}
             onChange={() => setIncludeUnstaged((v) => !v)}
             className="mt-1 mb-2"
           >

@@ -29,11 +29,11 @@ const BUTTON =
 
 /** Selected experience: icon and its name, in one pill. */
 const SELECTED =
-  "bg-primary-200/90 text-primary-900 dark:bg-primary-800/80 dark:text-primary-50";
+  "bg-primary/50 glass-outline-soft glass-outline text-primary-900 dark:bg-primary/5 dark:text-primary-50";
 
 /** The other experiences stay icon-only until they are the current one. */
 const IDLE =
-  "text-primary-500 hover:bg-primary-200/70 hover:text-primary-800 dark:text-primary-400 dark:hover:bg-primary-800/70 dark:hover:text-primary-100";
+  "text-primary-600 hover:bg-primary-300/20 dark:text-primary-400 dark:hover:bg-primary/10";
 
 /** The name is always mounted; the track collapses so opening and closing ease. */
 const LABEL_TRACK =

@@ -1,68 +1,39 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { UploadedFile } from "@/components/ui";
 import { isWorkspaceDraftOwnerKey } from "../../../../shared/ui-state-keys";
+import { transientDocumentFiles } from "../lib/document-lifecycle";
 
 // File and blob: URLs cannot be JSON persisted. This store survives route
 // unmounts, and disappears with the renderer when the app closes or reloads.
-const EMPTY: UploadedFile[] = [];
-const filesByOwner = new Map<string, UploadedFile[]>();
-const listeners = new Map<string, Set<() => void>>();
-
-function subscribe(owner: string, listener: () => void): () => void {
-  const group = listeners.get(owner) ?? new Set<() => void>();
-  group.add(listener);
-  listeners.set(owner, group);
-  return () => {
-    group.delete(listener);
-    if (group.size === 0) listeners.delete(owner);
-  };
-}
-
-function getFiles(owner: string): UploadedFile[] {
-  return filesByOwner.get(owner) ?? EMPTY;
-}
-
-function replaceFiles(owner: string, next: UploadedFile[]): void {
-  const previous = getFiles(owner);
-  for (const file of previous) {
-    if (file.preview && !next.includes(file)) URL.revokeObjectURL(file.preview);
-  }
-  if (next.length) filesByOwner.set(owner, next);
-  else filesByOwner.delete(owner);
-  listeners.get(owner)?.forEach((listener) => listener());
-}
 
 export function setTransientUploadsForOwner(owner: string, files: UploadedFile[]): void {
-  replaceFiles(owner, files);
+  transientDocumentFiles.replace(owner, files);
 }
 
 export function getTransientUploadsForOwner(owner: string): UploadedFile[] {
-  return getFiles(owner);
+  return transientDocumentFiles.get(owner);
 }
 
 /** Retarget an unsent draft without revoking the previews that move with it. */
-export function moveTransientUploadsToOwner(from: string, to: string): void {
-  if (from === to) return;
-  replaceFiles(to, getFiles(from));
-  filesByOwner.delete(from);
-  listeners.get(from)?.forEach((listener) => listener());
+export function moveTransientUploadsToOwner(from: string, to: string, options?: { merge?: boolean }): void {
+  transientDocumentFiles.move(from, to, options);
 }
 
 export function clearTransientUploads(owner: string): void {
-  replaceFiles(owner, []);
+  transientDocumentFiles.replace(owner, []);
 }
 
 export function clearWorkspaceTransientUploads(backendId: string, workspaceId: string): void {
-  for (const owner of filesByOwner.keys()) {
+  for (const owner of transientDocumentFiles.owners()) {
     if (isWorkspaceDraftOwnerKey(owner, backendId, workspaceId)) clearTransientUploads(owner);
   }
 }
 
 export function useTransientUploads(owner: string) {
   const files = useSyncExternalStore(
-    useCallback((listener) => subscribe(owner, listener), [owner]),
-    useCallback(() => getFiles(owner), [owner]),
+    useCallback((listener) => transientDocumentFiles.subscribe(owner, listener), [owner]),
+    useCallback(() => transientDocumentFiles.get(owner), [owner]),
   );
-  const setFiles = useCallback((next: UploadedFile[]) => replaceFiles(owner, next), [owner]);
+  const setFiles = useCallback((next: UploadedFile[]) => transientDocumentFiles.replace(owner, next), [owner]);
   return [files, setFiles] as const;
 }

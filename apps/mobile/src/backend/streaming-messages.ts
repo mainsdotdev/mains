@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 
+import { createTranscriptStreams } from "@mains/contracts/transcript-stream";
 import type { RunEphemeralEvent } from "@mains/contracts/runs";
 
 /** One cumulative assistant-message snapshot currently alive only on the wire. */
@@ -12,7 +13,7 @@ export interface StreamingMessage {
 }
 
 interface RunStreams {
-  messages: Map<string, StreamingMessage>;
+  model: ReturnType<typeof createTranscriptStreams>;
   snapshot: readonly StreamingMessage[];
   listeners: Set<() => void>;
   frame: number | null;
@@ -25,7 +26,7 @@ function stateFor(runId: string): RunStreams {
   let state = runs.get(runId);
   if (!state) {
     state = {
-      messages: new Map(),
+      model: createTranscriptStreams(),
       snapshot: EMPTY,
       listeners: new Set(),
       frame: null,
@@ -39,9 +40,12 @@ function publish(runId: string): void {
   const state = runs.get(runId);
   if (!state) return;
   state.frame = null;
-  state.snapshot = state.messages.size > 0 ? [...state.messages.values()] : EMPTY;
+  const previews = state.model.values();
+  state.snapshot = previews.length ? previews.map((stream) => ({
+    key: `stream-${stream.streamId}`, streamId: stream.streamId, text: stream.content, at: stream.timestamp,
+  })) : EMPTY;
   for (const listener of state.listeners) listener();
-  if (state.messages.size === 0 && state.listeners.size === 0) runs.delete(runId);
+  if (state.model.values().length === 0 && state.listeners.size === 0) runs.delete(runId);
 }
 
 /** Coalesce token bursts to one React update per native animation frame. */
@@ -64,21 +68,9 @@ function isAssistantMessage(event: RunEphemeralEvent): boolean {
 export function receiveStreamingMessage(payload: RunEphemeralEvent): void {
   if (!isAssistantMessage(payload)) return;
   const streamId = payload.event.streamId!;
-  const text = typeof payload.event.content === "string" ? payload.event.content : "";
-  if (!text) {
-    const state = runs.get(payload.runId);
-    if (state?.messages.delete(streamId)) schedulePublish(payload.runId);
-    return;
-  }
   const state = stateFor(payload.runId);
-  const previous = state.messages.get(streamId);
-  state.messages.set(streamId, {
-    key: `stream-${streamId}`,
-    streamId,
-    text,
-    at: previous?.at ?? payload.ts,
-  });
-  schedulePublish(payload.runId);
+  if (state.model.receive({ kind: payload.event.kind, streamId, content: payload.event.content ?? "",
+    metadata: payload.event.metadata, timestamp: payload.ts })) schedulePublish(payload.runId);
 }
 
 /**
@@ -88,17 +80,16 @@ export function receiveStreamingMessage(payload: RunEphemeralEvent): void {
  */
 export function reconcileStreamingMessages(
   runId: string,
-  persistedResponseContents: ReadonlySet<string>,
+  persistedStreamIds: ReadonlySet<string>,
 ): void {
+  const state = stateFor(runId);
+  if (state.model.acknowledge(persistedStreamIds)) schedulePublish(runId);
+}
+
+/** Terminal status settles a preview; its durable identity retires it later. */
+export function settleStreamingMessages(runId: string, interrupted = false): void {
   const state = runs.get(runId);
-  if (!state) return;
-  let changed = false;
-  for (const [streamId, message] of state.messages) {
-    if (!persistedResponseContents.has(message.text.trim())) continue;
-    state.messages.delete(streamId);
-    changed = true;
-  }
-  if (changed) schedulePublish(runId);
+  if (state?.model.settleTurn(interrupted)) publish(runId);
 }
 
 export function clearStreamingMessages(runId: string): void {
@@ -106,7 +97,7 @@ export function clearStreamingMessages(runId: string): void {
   if (!state) return;
   if (state.frame !== null) cancelAnimationFrame(state.frame);
   state.frame = null;
-  state.messages.clear();
+  state.model.clear();
   state.snapshot = EMPTY;
   for (const listener of state.listeners) listener();
   if (state.listeners.size === 0) runs.delete(runId);
@@ -123,7 +114,7 @@ function subscribe(runId: string, listener: () => void): () => void {
     const current = runs.get(runId);
     if (!current) return;
     current.listeners.delete(listener);
-    if (current.messages.size === 0 && current.listeners.size === 0 && current.frame === null) {
+    if (current.model.values().length === 0 && current.listeners.size === 0 && current.frame === null) {
       runs.delete(runId);
     }
   };

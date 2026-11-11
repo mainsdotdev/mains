@@ -1,93 +1,43 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ConnectorOAuthLoginCompletion } from "@mains/contracts/provider-connectors";
+import { useCallback, useLayoutEffect, useReducer, useState } from "react";
+import { CHANNELS } from "@mains/contracts/channels";
+import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
 import { toast } from "@/components/ui";
-import { extractErrorMessage } from "@/lib/extract-error-message";
 import { useStartProviderConnectorOAuthMutation } from "@/lib/redux/api";
-import { appEvents } from "@/lib/transport/events";
+import { getTransport, onTransportChange } from "@/lib/transport/registry";
+import { createConnectorOAuthLifecycle } from "../lib/connector-oauth-lifecycle";
 
-interface PendingLogin {
-  providerId: string;
-  serverName: string;
-  loginId?: string;
-  responseReceived: boolean;
-  earlyCompletions: Map<string | undefined, ConnectorOAuthLoginCompletion>;
-}
+type Owner = { providerId: string; lifecycle: ReturnType<typeof createConnectorOAuthLifecycle> };
 
-/** Keep each connector pending until its own native OAuth attempt completes. */
+/** React only binds a provider scope, its events and pending-state updates. */
 export function useConnectorOAuth(providerId: string) {
   const [startConnectorOAuth] = useStartProviderConnectorOAuthMutation();
-  const pending = useRef(new Map<string, PendingLogin>());
-  const [waiting, setWaiting] = useState({ providerId, servers: new Set<string>() });
+  const [owner, setOwner] = useState<Owner | null>(null);
+  const [, refresh] = useReducer((revision: number) => revision + 1, 0);
 
-  const finish = useCallback((attempt: PendingLogin, completion: ConnectorOAuthLoginCompletion) => {
-    if (pending.current.get(attempt.serverName) !== attempt) return;
-    pending.current.delete(attempt.serverName);
-    setWaiting((current) => {
-      if (current.providerId !== attempt.providerId) return current;
-      const servers = new Set(current.servers);
-      servers.delete(attempt.serverName);
-      return { ...current, servers };
-    });
-    if (!completion.success) toast.error(completion.error || "Connector login failed");
-  }, []);
-
-  useEffect(() => {
-    const attempts = pending.current;
-    const off = appEvents.providers.onConnectorsUpdated(({ providerId: changedId, oauthLogin }) => {
-      if (changedId !== providerId || !oauthLogin) return;
-      const attempt = attempts.get(oauthLogin.serverName);
-      if (!attempt || attempt.providerId !== providerId) return;
-      // Completion can arrive before the RPC response supplies its loginId.
-      if (!attempt.responseReceived) {
-        attempt.earlyCompletions.set(oauthLogin.loginId, oauthLogin);
-      } else if (!attempt.loginId || attempt.loginId === oauthLogin.loginId) {
-        finish(attempt, oauthLogin);
-      }
-    });
-    return () => {
-      off();
-      for (const [name, attempt] of attempts) {
-        if (attempt.providerId === providerId) attempts.delete(name);
-      }
-    };
-  }, [providerId, finish]);
-
-  const startLogin = useCallback(async (serverName: string) => {
-    if (pending.current.has(serverName)) return;
-    const attempt: PendingLogin = {
-      providerId, serverName, responseReceived: false, earlyCompletions: new Map(),
-    };
-    pending.current.set(serverName, attempt);
-    setWaiting((current) => ({
-      providerId,
-      servers: new Set([...(current.providerId === providerId ? current.servers : []), serverName]),
-    }));
-    try {
-      const result = await startConnectorOAuth({ providerId, serverName }).unwrap();
-      if (pending.current.get(serverName) !== attempt) return;
-      attempt.loginId = result.loginId;
-      attempt.responseReceived = true;
-      // Older runtimes have no loginId; correlate those completions by server.
-      const early = result.loginId
-        ? attempt.earlyCompletions.get(result.loginId)
-        : [...attempt.earlyCompletions.values()].at(-1);
-      attempt.earlyCompletions.clear();
-      if (early) {
-        finish(attempt, early);
-        return;
-      }
-      const opened = await window.api.shell.openExternal(result.authorizationUrl);
-      if (opened?.success === false) throw new Error(opened.error);
-    } catch (error) {
-      finish(attempt, {
-        serverName, success: false,
-        error: extractErrorMessage(error, "Failed to start connector login"),
+  useLayoutEffect(() => {
+    let lifecycle: Owner["lifecycle"] | undefined;
+    let off: (() => void) | undefined;
+    const bind = () => {
+      lifecycle?.dispose(); off?.();
+      const transport = getTransport();
+      const next = createConnectorOAuthLifecycle({
+        providerId,
+        isCurrent: () => getTransport() === transport,
+        start: (serverName) => startConnectorOAuth({ providerId, serverName }).unwrap(),
+        openExternal: (url) => window.api.shell.openExternal(url),
+        changed: refresh,
+        failed: (message) => toast.error(message),
       });
-    }
-  }, [providerId, startConnectorOAuth, finish]);
+      lifecycle = next;
+      off = transport.subscribe(CHANNELS.providers.connectorsUpdated, (payload) => next.receive(payload as ProviderConnectorsUpdatedEvent));
+      setOwner({ providerId, lifecycle });
+    };
+    bind();
+    const offTransport = onTransportChange(bind);
+    return () => { offTransport(); lifecycle?.dispose(); off?.(); };
+  }, [providerId, startConnectorOAuth]);
 
-  return {
-    startLogin,
-    isPending: (serverName: string) => waiting.providerId === providerId && waiting.servers.has(serverName),
-  };
+  const lifecycle = owner?.providerId === providerId ? owner.lifecycle : undefined;
+  const startLogin = useCallback((serverName: string) => lifecycle?.startLogin(serverName) ?? Promise.resolve(), [lifecycle]);
+  return { startLogin, isPending: (serverName: string) => lifecycle?.isPending(serverName) ?? false };
 }

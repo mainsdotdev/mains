@@ -37,4 +37,14 @@ describe("PR media staging", () => {
     expect(other.invoke).not.toHaveBeenCalled();
     expect(first.invoke).toHaveBeenLastCalledWith(CHANNELS.gitFlow.discardPrAttachments, ["ws", ["upload-1"]]);
   });
+  it("reuses staged media for the same failed logical PR request", async () => {
+    const backend = transport(); setTransport(backend);
+    const controller = new AbortController(), file = new File(["abc"], "demo.png");
+    const create = vi.fn().mockRejectedValueOnce(new Error("Push unavailable")).mockResolvedValue({ url: "pr" });
+    await expect(withPrAttachments("ws", [file], create, vi.fn(), controller.signal, "retry-pr")).rejects.toThrow("Push unavailable");
+    await expect(withPrAttachments("ws", [file], create, vi.fn(), controller.signal, "retry-pr")).resolves.toEqual({ url: "pr" });
+    expect(vi.mocked(backend.invoke).mock.calls.filter(([channel]) => channel === CHANNELS.gitFlow.stagePrAttachment)).toHaveLength(1);
+    expect(create.mock.calls).toEqual([[["upload-1"]], [["upload-1"]]]);
+  });
+
 });

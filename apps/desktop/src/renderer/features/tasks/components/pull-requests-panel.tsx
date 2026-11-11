@@ -326,7 +326,7 @@ function PullRequestsList({
             {/* State + repository facet menu, anchored under the button. */}
             <div className="relative" ref={repoDropdownRef}>
               <Button
-                variant="icon"
+                variant="filter"
                 onClick={() => setRepoFilterOpen((open) => !open)}
                 tooltip="Filter pull requests"
                 aria-label="Filter pull requests"

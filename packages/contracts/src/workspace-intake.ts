@@ -1,7 +1,7 @@
 /** Acquiring a repository and importing it into a Developer Project/Workspace. */
 export type WorkspaceIntakeSource =
   | { kind: "folder"; path: string }
-  | { kind: "clone"; url: string; targetPath: string; cloneId?: string }
+  | { kind: "clone"; url: string; targetPath: string; cloneId?: string; attemptId?: string }
   | { kind: "init"; name: string; parentPath?: string }
   | { kind: "worktree"; projectId: string };
 
@@ -13,6 +13,8 @@ export interface WorkspaceIntakePayload {
 export interface CancelWorkspaceClonePayload {
   accountId: string;
   cloneId: string;
+  /** Distinguishes retries of the same sidebar job; older callers omit it. */
+  attemptId?: string;
 }
 
 export const WORKSPACE_CLONE_CANCELED = "Repository clone canceled";

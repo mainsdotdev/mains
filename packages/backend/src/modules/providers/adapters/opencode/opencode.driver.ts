@@ -1,3 +1,4 @@
+import { createOpenCodeLifecycle, OpenCodeCanceledError, type OpenCodeConnection, type OpenCodeRuntimeScope, type OpenCodePromptOwner } from "./opencode-lifecycle";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -34,7 +35,7 @@ import {
   resolveCatalogDefaultId,
 } from "../adapter.shared";
 import { findOpenCodeBinaryPath, providerProcessPath } from "../../providers.utils";
-import { spawnProvider as spawn } from "../provider-process";
+import { spawnProvider as spawn, killProviderProcess } from "../provider-process";
 import { OpenCodeAcpServer } from "./opencode-acp";
 import { decideOpenCodeForm, openCodeFormRequest } from "./opencode-elicitation";
 import {
@@ -63,18 +64,12 @@ interface OpenCodeSession {
   runId: string;
   sessionId: string;
   cwd: string;
-  acp: OpenCodeAcpServer;
+  acp: OpenCodeConnection;
+  owner: OpenCodeRuntimeScope;
   mcp: MainsMcpStdioServer;
   /** Assistant-only ACP context keeps slash commands in the user text intact. */
   promptContext?: string;
   projection: OpenCodeTurnProjection;
-}
-
-type OpenCodeRunRuntime = Pick<OpenCodeSession, "acp" | "mcp">;
-
-interface ActivePrompt {
-  onNotification(method: string, params: unknown): void;
-  onRequest(id: number | string, method: string, params: unknown): void;
 }
 
 function absoluteCwd(cwd: string | null | undefined): string {
@@ -105,10 +100,10 @@ async function adoptOpenCodeTitle(runId: string, title: string): Promise<void> {
   emit("runs:updated", { runId, ts: Date.now() });
 }
 
-async function readOpenCodeTitle(acp: OpenCodeAcpServer, session: { runId: string; sessionId: string; cwd: string }): Promise<void> {
+async function readOpenCodeTitle(acp: OpenCodeConnection, session: { runId: string; sessionId: string; cwd: string }, signal?: AbortSignal): Promise<void> {
   if (!acp.isRunning) return;
   try {
-    const listed = await acp.sendRequest("session/list", { cwd: session.cwd }, 15_000);
+    const listed = await acp.sendRequest("session/list", { cwd: session.cwd }, 15_000, signal);
     const title = titleFromSessionList(listed, session.sessionId);
     if (title) await adoptOpenCodeTitle(session.runId, title);
   } catch (error) {
@@ -158,21 +153,18 @@ function promptText(
 
 export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): ProviderDriver {
   const config = { ...initial };
-  let server: OpenCodeAcpServer | null = null;
-  let starting: Promise<OpenCodeAcpServer> | null = null;
-  let closed = false;
+  const lifecycle = createOpenCodeLifecycle({
+    create: () => new OpenCodeAcpServer(), initialize: initializeServer,
+    retired: () => { models = null; commandsByCwd.clear(); catalogGeneration++; },
+  });
   let versionText = "";
   const sessions = new Map<string, string>();
-  const runRuntimes = new Map<string, OpenCodeRunRuntime>();
-  const textGenerationCleanups = new Set<() => Promise<void>>();
-  const activePrompts = new Map<string, ActivePrompt>();
   const commandsByCwd = new Map<string, CommandInfo[]>();
   let models: ModelInfo[] | null = null;
   let catalogGeneration = 0;
   let effortProbe: Promise<void> | null = null;
   const effortCache = new Map<string, string[]>();
   const EFFORT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-  let catalogListener: ((method: string, params: unknown) => void) | null = null;
 
   function rememberCommands(cwd: string, update: Record<string, unknown>): void {
     if (update.sessionUpdate !== "available_commands_update") return;
@@ -181,26 +173,46 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
   }
 
   async function runBinary(args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string; code: number | null }> {
-    const binaryPath = requireBinary();
-    return new Promise((resolve) => {
+    return lifecycle.control(async (scope) => {
+      const binaryPath = requireBinary();
       const child = spawn(binaryPath, args, {
-        env: { ...process.env, HOME: os.homedir(), PATH: providerProcessPath(binaryPath) },
-        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, HOME: os.homedir(), PATH: providerProcessPath(binaryPath) }, stdio: ["ignore", "pipe", "pipe"],
       });
-      let stdout = "";
-      let stderr = "";
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-      }, timeoutMs);
-      child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-      child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        resolve({ stdout, stderr, code });
-      });
-      child.on("error", (error) => {
-        clearTimeout(timer);
-        resolve({ stdout, stderr: `${stderr}${error.message}`, code: null });
+      let ended = false;
+      let resolveClosed!: () => void;
+      const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
+      let stopping: Promise<void> | undefined;
+      const stop = (): Promise<void> => {
+        if (ended) return Promise.resolve();
+        if (stopping) return stopping;
+        const pending = new Promise<void>((resolve, reject) => {
+          const force = setTimeout(() => {
+            if (ended) return;
+            try { killProviderProcess(child); } catch (error) { reject(error); }
+          }, 500);
+          void closed.then(() => { clearTimeout(force); resolve(); });
+          try { killProviderProcess(child, "SIGTERM"); }
+          catch (error) { clearTimeout(force); reject(error); }
+        });
+        stopping = pending;
+        void pending.catch(() => { if (stopping === pending) stopping = undefined; });
+        return pending;
+      };
+      return new Promise((resolve, reject) => {
+        let stdout = "", stderr = "";
+        const interrupt = () => { void stop().catch(reject); };
+        const timer = setTimeout(interrupt, timeoutMs);
+        scope.signal.addEventListener("abort", interrupt, { once: true });
+        scope.defer(() => { clearTimeout(timer); scope.signal.removeEventListener("abort", interrupt); return stop(); });
+        child.stdout?.on("data", (chunk: Buffer) => { if (!ended) stdout += chunk.toString(); });
+        child.stderr?.on("data", (chunk: Buffer) => { if (!ended) stderr += chunk.toString(); });
+        child.once("close", (code) => {
+          ended = true; resolveClosed(); clearTimeout(timer);
+          resolve({ stdout, stderr, code });
+        });
+        child.once("error", (error) => {
+          clearTimeout(timer); resolve({ stdout, stderr: stderr + error.message, code: null });
+        });
       });
     });
   }
@@ -215,6 +227,7 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
   async function assertSupportedCli(): Promise<string> {
     if (versionText && openCodeCliCompatibility(versionText) === "supported") return versionText;
     const result = await runBinary(["--version"], 10_000);
+    lifecycle.check();
     versionText = `${result.stdout}\n${result.stderr}`;
     const parsed = parseOpenCodeVersion(versionText);
     if (!parsed) throw new Error("Could not read the OpenCode version. Mains requires OpenCode 2.");
@@ -224,95 +237,35 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
     return versionText;
   }
 
-  async function initializeServer(next: OpenCodeAcpServer): Promise<void> {
-    try {
-      await assertSupportedCli();
-      if (closed) throw new Error("OpenCode driver is shut down");
-      const binaryPath = requireBinary();
-      await next.start(binaryPath, { HOME: os.homedir(), PATH: providerProcessPath(binaryPath) });
-      const initialized = await next.sendRequest("initialize", {
-        protocolVersion: 1,
-        clientInfo: { name: "mains", title: "Mains", version: "1.0.0" },
-        clientCapabilities: { elicitation: { form: {} } },
-      }) as { authMethods?: Array<{ id?: string; type?: string }> };
-      next.sendNotification("initialized");
-      const method = initialized.authMethods?.find((entry) => entry.type !== "terminal" && entry.id);
-      if (method?.id) {
-        await next.sendRequest("authenticate", { methodId: method.id }).catch((error) => {
-          log.warn("OpenCode authenticate did not complete:", error);
-        });
-      }
-      next.setNotificationHandler((method, params) => {
-        catalogListener?.(method, params);
-        const sessionId = (params as { sessionId?: unknown } | null)?.sessionId;
-        const owner = typeof sessionId === "string" ? activePrompts.get(sessionId) : undefined;
-        owner?.onNotification(method, params);
+  async function initializeServer(scope: OpenCodeRuntimeScope): Promise<void> {
+    await assertSupportedCli(); scope.check();
+    const binaryPath = requireBinary();
+    await scope.native.start(binaryPath, { HOME: os.homedir(), PATH: providerProcessPath(binaryPath) }, scope.signal);
+    scope.check();
+    const next = scope.connection;
+    const initialized = await next.sendRequest("initialize", {
+      protocolVersion: 1,
+      clientInfo: { name: "mains", title: "Mains", version: "1.0.0" },
+      clientCapabilities: { elicitation: { form: {} } },
+    }) as { authMethods?: Array<{ id?: string; type?: string }> };
+    scope.check(); next.sendNotification("initialized");
+    const method = initialized.authMethods?.find((entry) => entry.type !== "terminal" && entry.id);
+    if (method?.id) {
+      await next.sendRequest("authenticate", { methodId: method.id }).catch((error) => {
+        scope.check(); log.warn("OpenCode authenticate did not complete:", error);
       });
-      next.setRequestHandler((id, method, params) => {
-        const sessionId = (params as { sessionId?: unknown } | null)?.sessionId;
-        const owner = typeof sessionId === "string" ? activePrompts.get(sessionId) : undefined;
-        if (owner) owner.onRequest(id, method, params);
-        else if (method === "elicitation/create") next.respond(id, { action: "cancel" });
-        else next.respondError(id, -32000, "No active OpenCode session for this request");
-      });
-    } catch (error) {
-      await next.stop();
-      throw error;
     }
-  }
-
-  /** Discovery never receives a run's MCP bridge. OpenCode shares MCP by cwd. */
-  async function ensureServer(): Promise<OpenCodeAcpServer> {
-    if (starting) return starting;
-    if (server?.isRunning) return server;
-    const next = new OpenCodeAcpServer();
-    server = next;
-    next.setOnClose(() => {
-      if (server === next) server = null;
-    });
-    starting = initializeServer(next).then(() => next);
-    try {
-      return await starting;
-    } finally {
-      starting = null;
-    }
-  }
-
-  async function stopRuntime(runtime: OpenCodeRunRuntime): Promise<void> {
-    try {
-      await runtime.acp.stop();
-    } finally {
-      await runtime.mcp.stop();
-    }
+    scope.check();
   }
 
   async function withMcp(
     request: { runId: string; execution: { workspaceId: string | null; cwd: string | null }; mode?: ModeId },
-    acquire: (mcp: MainsMcpStdioServer, acp: OpenCodeAcpServer) => Promise<AcquiredSession>,
+    acquire: (mcp: MainsMcpStdioServer, acp: OpenCodeConnection, owner: OpenCodeRuntimeScope) => Promise<AcquiredSession>,
   ): Promise<AcquiredSession> {
-    if (closed) throw new Error("OpenCode driver is shut down");
-    const previous = runRuntimes.get(request.runId);
-    if (previous) await stopRuntime(previous);
-    runRuntimes.delete(request.runId);
-    const ctx: MainsToolContext = {
-      workspaceId: request.execution.workspaceId,
-      rootPath: request.execution.cwd,
-      runId: request.runId,
-    };
-    const mcp = new MainsMcpStdioServer(ctx, request.mode, { provider: PROVIDER_IDS.opencode });
-    // Unique names alone cannot isolate bridges: all sessions in one ACP
-    // process can see every MCP server registered for the same directory.
-    const runtime = { mcp, acp: new OpenCodeAcpServer() };
-    runRuntimes.set(request.runId, runtime);
-    try {
-      await mcp.start();
-      await initializeServer(runtime.acp);
-      return await acquire(mcp, runtime.acp);
-    } catch (error) {
-      await stopRuntime(runtime).catch(() => {});
-      if (runRuntimes.get(request.runId) === runtime) runRuntimes.delete(request.runId);
-      throw error;
-    }
+    const ctx: MainsToolContext = { workspaceId: request.execution.workspaceId, rootPath: request.execution.cwd, runId: request.runId };
+    return lifecycle.acquire(request.runId,
+      () => new MainsMcpStdioServer(ctx, request.mode, { provider: PROVIDER_IDS.opencode }),
+      (owner, mcp) => acquire(mcp, owner.connection, owner));
   }
 
   function selectedAgent(snapshot: Record<string, unknown> | null | undefined): string {
@@ -328,7 +281,7 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
   }
 
   async function applySelection(
-    acp: OpenCodeAcpServer,
+    acp: OpenCodeConnection,
     sessionId: string,
     model: string | undefined,
     agent: string,
@@ -348,37 +301,51 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
   }
 
   async function openNativeSession(
-    acp: OpenCodeAcpServer,
+    scope: OpenCodeRuntimeScope,
     method: "session/new" | "session/resume" | "session/fork",
     cwd: string,
     mcpServers: unknown[],
     sessionId?: string,
     waitForCommands = false,
   ): Promise<{ sessionId: string; configOptions?: AcpConfigOption[] }> {
-    const commands: CommandInfo[] = [];
-    let sawCommands = false;
-    catalogListener = (_method, params) => {
+    const generation = catalogGeneration;
+    const snapshots = new Map<string, CommandInfo[]>();
+    let target: string | undefined;
+    let wake: (() => void) | undefined;
+    const unlisten = scope.listen((method, params) => {
+      if (method !== "session/update") return;
+      const id = (params as { sessionId?: unknown } | null)?.sessionId;
       const update = sessionUpdateOf(params);
-      if (!update) return;
-      const next = commandsFromUpdate(update);
-      if (next.length === 0) return;
-      sawCommands = true;
-      commands.splice(0, commands.length, ...next);
-    };
+      if (typeof id !== "string" || !update) return;
+      const commands = commandsFromUpdate(update);
+      if (commands.length === 0) return;
+      snapshots.set(id, commands);
+      if (id === target) wake?.();
+    });
     try {
-      const result = await acp.sendRequest(method, {
-        cwd,
-        ...(sessionId ? { sessionId } : {}),
-        mcpServers,
-      }) as { sessionId?: string; configOptions?: AcpConfigOption[] };
-      if (waitForCommands && !sawCommands) await new Promise((resolve) => setTimeout(resolve, 400));
-      if (commands.length > 0) commandsByCwd.set(cwd, commands);
-      const id = result.sessionId || sessionId;
-      if (!id) throw new Error(`OpenCode did not return a session id from ${method}`);
-      return { sessionId: id, configOptions: result.configOptions };
-    } finally {
-      catalogListener = null;
-    }
+      const result = await scope.connection.sendRequest(method, { cwd, ...(sessionId ? { sessionId } : {}), mcpServers }) as {
+        sessionId?: string; configOptions?: AcpConfigOption[];
+      };
+      scope.check();
+      target = result.sessionId || sessionId;
+      if (!target) throw new Error(`OpenCode did not return a session id from ${method}`);
+      if (waitForCommands && !snapshots.has(target)) {
+        await new Promise<void>((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true; clearTimeout(timer); scope.signal.removeEventListener("abort", finish); resolve();
+          };
+          const timer = setTimeout(finish, 400);
+          wake = finish; scope.signal.addEventListener("abort", finish, { once: true });
+          if (scope.signal.aborted) finish();
+        });
+      }
+      scope.check();
+      const commands = snapshots.get(target);
+      if (commands?.length && generation === catalogGeneration) commandsByCwd.set(cwd, commands);
+      return { sessionId: target, configOptions: result.configOptions };
+    } finally { wake?.(); unlisten(); }
   }
 
   function projectionFor(runId: string): OpenCodeTurnProjection {
@@ -392,41 +359,36 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
     };
   }
 
-  function bindPrompt(acp: OpenCodeAcpServer, session: OpenCodeSession, onEvent: WorkRunEventHandler): { idle: () => Promise<void> } {
-    let chain = Promise.resolve();
-    const emit = (event: Parameters<WorkRunEventHandler>[0]) => {
-      chain = chain.then(() => Promise.resolve(onEvent(event))).catch((error) => {
-        log.error("Failed to project OpenCode event:", error);
-      });
-    };
-    activePrompts.set(session.sessionId, {
+  function bindPrompt(acp: OpenCodeConnection, session: OpenCodeSession, onEvent: WorkRunEventHandler): OpenCodePromptOwner {
+    const delivery: OpenCodePromptOwner = session.owner.begin(session.sessionId, {
       onNotification(method, params) {
         if (method !== "session/update") return;
         const update = sessionUpdateOf(params);
         if (!update) return;
         rememberCommands(session.cwd, update);
-        const title = update.sessionUpdate === "session_info_update"
-          ? openCodeSessionTitle(update.title)
-          : null;
-        if (title) chain = chain.then(() => adoptOpenCodeTitle(session.runId, title));
-        for (const event of projectSessionUpdate(session.projection, update)) emit(event);
+        const title = update.sessionUpdate === "session_info_update" ? openCodeSessionTitle(update.title) : null;
+        if (title) void delivery.project(() => adoptOpenCodeTitle(session.runId, title));
+        for (const event of projectSessionUpdate(session.projection, update)) void delivery.project(() => onEvent(event));
       },
       onRequest(id, method, params) {
-        void answerRequest(acp, session, id, method, params);
+        void answerRequest(acp, session, id, method, params, delivery).catch((error) => log.error("OpenCode request failed:", error));
       },
     });
-    return { idle: () => chain };
+    return delivery;
   }
 
   async function answerRequest(
-    acp: OpenCodeAcpServer,
+    acp: OpenCodeConnection,
     session: OpenCodeSession,
     id: number | string,
     method: string,
     params: unknown,
+    owner: OpenCodePromptOwner,
   ): Promise<void> {
+    const isCurrent = () => owner.running;
+    if (!isCurrent()) return;
     // JSON-RPC request ids are local to each run's ACP process.
-    const requestId = `opencode-${session.runId}-${id}`;
+    const requestId = `opencode-${session.runId}-${owner.id}-${id}`;
     if (method === "elicitation/create") {
       const form = openCodeFormRequest(params);
       if (!form) {
@@ -446,9 +408,9 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
           requestedSchema: form.schema,
           timestamp: Date.now(),
         });
-        if (acp.isRunning) acp.respond(id, decideOpenCodeForm(form.schema, result));
+        if (isCurrent() && acp.isRunning) acp.respond(id, decideOpenCodeForm(form.schema, result));
       } catch {
-        if (acp.isRunning) acp.respond(id, { action: "cancel" });
+        if (isCurrent() && acp.isRunning) acp.respond(id, { action: "cancel" });
       }
       return;
     }
@@ -477,9 +439,9 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
       const decision = !result.approved
         ? "reject_once"
         : result.answer === "acceptForSession" ? "allow_always" : "allow_once";
-      if (acp.isRunning) acp.respond(id, { outcome: { outcome: "selected", optionId: selectPermissionOption(options, decision) } });
+      if (isCurrent() && acp.isRunning) acp.respond(id, { outcome: { outcome: "selected", optionId: selectPermissionOption(options, decision) } });
     } catch {
-      if (acp.isRunning) acp.respond(id, { outcome: { outcome: "cancelled" } });
+      if (isCurrent() && acp.isRunning) acp.respond(id, { outcome: { outcome: "cancelled" } });
     }
   }
 
@@ -538,8 +500,8 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
   function probeEffort(modelIds: string[], generation: number): void {
     const missing = modelIds.filter((id) => !effortCache.has(id));
     if (missing.length === 0 || effortProbe) return;
-    effortProbe = (async () => {
-      const acp = await ensureServer();
+    effortProbe = lifecycle.shared(async (scope) => {
+      const acp = scope.connection;
       const opened = await acp.sendRequest("session/new", { cwd: os.homedir(), mcpServers: [] }) as { sessionId?: string };
       const sessionId = opened.sessionId;
       if (!sessionId) return;
@@ -551,20 +513,20 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
               configId: "model",
               value: id,
             }, 15_000) as { configOptions?: AcpConfigOption[] };
-            rememberEffort(result.configOptions, id);
+            scope.check(); rememberEffort(result.configOptions, id);
           } catch (error) {
-            log.warn(`OpenCode effort for "${id}" was not read:`, error);
+            scope.check(); log.warn(`OpenCode effort for "${id}" was not read:`, error);
           }
         }
       } finally {
-        await openedAndDiscard(acp, sessionId, os.homedir());
+        await openedAndDiscard(scope, sessionId, os.homedir());
       }
-      saveEffortCache();
+      scope.check(); saveEffortCache();
       const gained = missing.some((id) => (effortCache.get(id)?.length ?? 0) > 0);
       if (!gained || generation !== catalogGeneration || !models) return;
       models = models.map(withEffort);
       publishModels();
-    })().catch((error) => {
+    }).catch((error) => {
       log.warn("OpenCode effort probe failed:", error);
     }).finally(() => {
       effortProbe = null;
@@ -572,59 +534,51 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
   }
 
   async function catalog(cwd: string): Promise<{ models: ModelInfo[]; commands: CommandInfo[] }> {
-      const acp = await ensureServer();
-      const opened = await openNativeSession(acp, "session/new", cwd, [], undefined, true);
+    return lifecycle.shared(async (scope) => {
+      const opened = await openNativeSession(scope, "session/new", cwd, [], undefined, true);
       try {
-        rememberEffort(opened.configOptions);
+        scope.check(); rememberEffort(opened.configOptions);
         return {
           models: modelsFromConfigOptions(opened.configOptions, config.defaultModel),
           commands: commandsByCwd.get(cwd) ?? [],
         };
       } finally {
-        await openedAndDiscard(acp, opened.sessionId, cwd);
+        await openedAndDiscard(scope, opened.sessionId, cwd);
       }
+    });
   }
 
-  async function openedAndDiscard(acp: OpenCodeAcpServer, sessionId: string, cwd: string): Promise<void> {
-    await acp.sendRequest("session/delete", { sessionId, cwd }).catch(() =>
-      acp.sendRequest("session/close", { sessionId }).catch(() => {}),
+  async function openedAndDiscard(scope: OpenCodeRuntimeScope, sessionId: string, cwd: string): Promise<void> {
+    const acp = scope.native;
+    if (!acp.isRunning) return;
+    await acp.sendRequest("session/delete", { sessionId, cwd }, 3000).catch(() =>
+      acp.sendRequest("session/close", { sessionId }, 3000).catch(() => {}),
     );
   }
 
   return {
     async generateText(prompt, opts): Promise<string> {
-      if (closed) throw new Error("OpenCode driver is shut down");
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "mains-opencode-gen-"));
-      const acp = new OpenCodeAcpServer();
-      const projection = projectionFor("generateText");
-      let sessionId: string | undefined;
-      let disposing: Promise<void> | undefined;
-      const dispose = () => disposing ??= (async () => {
-        try {
-          if (sessionId && acp.isRunning) {
-            await acp.sendRequest("session/delete", { sessionId, cwd }, 3000).catch((error) => {
+      return lifecycle.temporary(async (scope) => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "mains-opencode-gen-"));
+        scope.defer(() => fs.rmSync(cwd, { recursive: true, force: true }));
+        const acp = scope.connection;
+        const projection = projectionFor("generateText");
+        let sessionId: string | undefined = undefined;
+        scope.beforeStop(async () => {
+          if (sessionId && scope.native.isRunning) {
+            await scope.native.sendRequest("session/delete", { sessionId, cwd }, 3000).catch((error) => {
               log.warn("Could not delete the OpenCode text generation session:", error);
             });
           }
-        } finally {
-          try {
-            await acp.stop();
-          } finally {
-            fs.rmSync(cwd, { recursive: true, force: true });
-          }
-        }
-      })();
-      textGenerationCleanups.add(dispose);
-      try {
-        await initializeServer(acp);
-        acp.setNotificationHandler((method, params) => {
+        });
+        scope.listen((method, params) => {
           if (method !== "session/update" || (params as { sessionId?: unknown } | null)?.sessionId !== sessionId) return;
           const update = sessionUpdateOf(params);
           if (!update || (update._meta as Record<string, unknown> | undefined)?.["opencode/child-session"]) return;
           projectSessionUpdate(projection, update);
         });
         // Background generation has no interactive approval surface.
-        acp.setRequestHandler((id, method) => {
+        scope.requests((id, method) => {
           if (method === "session/request_permission") acp.respond(id, { outcome: { outcome: "cancelled" } });
           else if (method === "elicitation/create") acp.respond(id, { action: "cancel" });
           else acp.respondError(id, -32601, `Unhandled OpenCode request ${method}`);
@@ -649,19 +603,13 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
         const text = projection.text.trim();
         if (!text) throw new Error("OpenCode generated an empty response");
         return text;
-      } finally {
-        try {
-          await dispose();
-        } finally {
-          textGenerationCleanups.delete(dispose);
-        }
-      }
+      });
     },
 
     async createSession(request): Promise<AcquiredSession> {
       const cwd = absoluteCwd(request.execution.cwd);
-      return withMcp(request, async (mcp, acp) => {
-        const opened = await openNativeSession(acp, "session/new", cwd, [mcp.mcpConfig]);
+      return withMcp(request, async (mcp, acp, owner) => {
+        const opened = await openNativeSession(owner, "session/new", cwd, [mcp.mcpConfig]);
         const model = request.model || config.defaultModel;
         await applySelection(acp, opened.sessionId, model, selectedAgent(request.configSnapshot), selectedEffort(request.configSnapshot));
         sessions.set(request.runId, opened.sessionId);
@@ -672,7 +620,7 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
           runId: request.runId,
           sessionId: opened.sessionId,
           cwd,
-          acp,
+          acp, owner,
           mcp,
           projection: projectionFor(request.runId),
         };
@@ -696,7 +644,7 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
 
     async resumeSession(request: WorkRunContinueRequest): Promise<AcquiredSession> {
       const cwd = absoluteCwd(request.execution.cwd);
-      return withMcp(request, async (mcp, acp) => {
+      return withMcp(request, async (mcp, acp, owner) => {
         let sessionId = sessions.get(request.runId);
         if (!sessionId) {
           const run = await runsRepo.findRunById(request.runId);
@@ -705,7 +653,7 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
         if (!sessionId) throw new Error(`No OpenCode session is stored for run ${request.runId}`);
         let opened: { sessionId: string };
         try {
-          opened = await openNativeSession(acp, "session/resume", cwd, [mcp.mcpConfig], sessionId);
+          opened = await openNativeSession(owner, "session/resume", cwd, [mcp.mcpConfig], sessionId);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (/\bsession\b[^\n]*(?:not found|does not exist)|\bunknown session\b/i.test(message)) {
@@ -720,7 +668,7 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
           runId: request.runId,
           sessionId: opened.sessionId,
           cwd,
-          acp,
+          acp, owner,
           mcp,
           promptContext: promptText("", {
             extraInstructions: request.extraInstructions,
@@ -745,11 +693,11 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
 
     async forkSession(request: WorkRunForkRequest): Promise<AcquiredSession> {
       const cwd = absoluteCwd(request.execution.cwd);
-      return withMcp(request, async (mcp, acp) => {
+      return withMcp(request, async (mcp, acp, owner) => {
         const sourceId = sessions.get(request.sourceRunId)
           || (await runsRepo.findRunById(request.sourceRunId))?.sessionId;
         if (!sourceId) throw new Error(`No OpenCode session is stored for run ${request.sourceRunId}`);
-        const opened = await openNativeSession(acp, "session/fork", cwd, [mcp.mcpConfig], sourceId);
+        const opened = await openNativeSession(owner, "session/fork", cwd, [mcp.mcpConfig], sourceId);
         const model = request.model || config.defaultModel;
         await applySelection(acp, opened.sessionId, model, selectedAgent(request.configSnapshot), selectedEffort(request.configSnapshot));
         sessions.set(request.runId, opened.sessionId);
@@ -757,7 +705,7 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
           runId: request.runId,
           sessionId: opened.sessionId,
           cwd,
-          acp,
+          acp, owner,
           mcp,
           projection: projectionFor(request.runId),
         };
@@ -781,16 +729,18 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
       if (signal.aborted) return { status: "canceled" };
       const acp = current.acp;
       if (!acp.isRunning) return { status: "failed", summary: "OpenCode ACP is not running" };
-      if (activePrompts.has(current.sessionId)) {
-        return { status: "failed", summary: "OpenCode session already has an active prompt" };
-      }
-      current.mcp.setEventHandler(onEvent);
-      const delivery = bindPrompt(acp, current, onEvent);
-      const cancel = () => {
+      let delivery: OpenCodePromptOwner;
+      try { delivery = bindPrompt(acp, current, onEvent); }
+      catch (error) { return { status: "failed", summary: error instanceof Error ? error.message : String(error) }; }
+      const sendCancel = () => {
         if (acp.isRunning) acp.sendNotification("session/cancel", { sessionId: current.sessionId });
       };
+      const cancel = () => { if (!delivery.signal.aborted) { delivery.cancel(); sendCancel(); } };
       signal.addEventListener("abort", cancel, { once: true });
+      if (signal.aborted) cancel();
+      let outcome!: DriverOutcome;
       try {
+        current.mcp.setEventHandler((event) => delivery.project(() => onEvent(event)));
         const result = await acp.sendRequest("session/prompt", {
           sessionId: current.sessionId,
           prompt: [
@@ -800,13 +750,14 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
               annotations: { audience: ["assistant"] },
             }] : []),
           ],
-        }, config.timeout ?? 3_600_000) as {
+        }, config.timeout ?? 3_600_000, delivery.signal) as {
           stopReason?: string;
           usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
         };
-        await delivery.idle();
-        await readOpenCodeTitle(acp, current);
-        const outcome = {
+        await delivery.drain();
+        await readOpenCodeTitle(acp, current, delivery.signal);
+        if (delivery.signal.aborted) throw delivery.signal.reason;
+        outcome = {
           ...mapStopReasonToOutcome(result.stopReason),
           stopReason: result.stopReason,
           ...(result.usage ? {
@@ -818,31 +769,45 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
         };
         const finalReport = finishOpenCodeTurn(current.projection, outcome.status === "succeeded");
         if (finalReport) await onEvent(finalReport);
-        return outcome;
       } catch (error) {
-        if (signal.aborted) return { status: "canceled" };
-        if (acp.isRunning) cancel();
-        const summary = error instanceof Error ? error.message : String(error);
-        return {
-          status: "failed",
-          summary: /auth_required|unauthorized|not authenticated/i.test(summary)
-            ? "OpenCode needs a sign-in. Run `opencode auth login` and try again."
-            : summary,
-        };
+        if (signal.aborted || delivery.signal.reason instanceof OpenCodeCanceledError) outcome = { status: "canceled" };
+        else {
+          if (!delivery.signal.aborted) delivery.cancel(error instanceof Error ? error : new Error(String(error)));
+          sendCancel();
+          const summary = error instanceof Error ? error.message : String(error);
+          outcome = {
+            status: "failed",
+            summary: /auth_required|unauthorized|not authenticated/i.test(summary)
+              ? "OpenCode needs a sign-in. Run `opencode auth login` and try again."
+              : summary,
+          };
+        }
       } finally {
-        signal.removeEventListener("abort", cancel);
-        await delivery.idle();
-        activePrompts.delete(current.sessionId);
-        current.mcp.setEventHandler(null);
-        current.projection.text = "";
-        current.projection.thought = "";
+        try {
+          try { await delivery.drain(); }
+          finally {
+            current.mcp.setEventHandler(null);
+            const previews: Array<{ source: string; streamId: string }> = [];
+            if (current.projection.text) previews.push({ source: "agent_message_streaming", streamId: `${current.projection.streamPrefix}-${current.projection.generation}` });
+            if (current.projection.thought) previews.push({ source: "agent_thought_streaming", streamId: `opencode-think-${current.runId}` });
+            current.projection.text = ""; current.projection.thought = ""; current.projection.tools.clear();
+            for (const { source, streamId } of previews) {
+              await onEvent({ type: "artifact", kind: "report", content: "", ephemeral: true, metadata: { source }, streamId });
+            }
+          }
+        } finally { signal.removeEventListener("abort", cancel); await delivery.finish(); }
       }
+      if (delivery.signal.reason instanceof OpenCodeCanceledError) return { status: "canceled" };
+      if (delivery.signal.aborted && outcome.status === "succeeded") {
+        const reason: unknown = delivery.signal.reason;
+        return { status: "failed", summary: reason instanceof Error ? reason.message : String(reason) };
+      }
+      return outcome;
     },
 
     async cleanup(session): Promise<void> {
       const current = session as OpenCodeSession;
-      await stopRuntime(current);
-      if (runRuntimes.get(current.runId)?.acp === current.acp) runRuntimes.delete(current.runId);
+      await current.owner.close();
     },
 
     async canResumeSession(runId): Promise<boolean> {
@@ -857,8 +822,9 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
       const sessionId = sessions.get(runId);
       sessions.delete(runId);
       if (sessionId) {
-        const acp = runRuntimes.get(runId)?.acp ?? await ensureServer();
-        await acp.sendRequest("session/delete", { sessionId }).catch(() => {});
+        const current = lifecycle.forRun(runId);
+        if (current) await current.connection.sendRequest("session/delete", { sessionId }).catch(() => {});
+        else await lifecycle.shared((scope) => scope.connection.sendRequest("session/delete", { sessionId })).catch(() => {});
       }
     },
 
@@ -876,19 +842,8 @@ export function createOpenCodeDriver(initial: OpenCodeAdapterConfig = {}): Provi
     },
 
     async shutdown(): Promise<void> {
-      closed = true;
+      await lifecycle.shutdown();
       sessions.clear();
-      await Promise.all([
-        ...[...runRuntimes.values()].map((runtime) => stopRuntime(runtime).catch(() => {})),
-        ...[...textGenerationCleanups].map((dispose) => dispose().catch(() => {})),
-      ]);
-      runRuntimes.clear();
-      activePrompts.clear();
-      if (server) {
-        const current = server;
-        server = null;
-        await current.stop();
-      }
     },
 
     async listModels(): Promise<ModelInfo[]> {

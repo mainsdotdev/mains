@@ -1,29 +1,20 @@
 import { closeSplashWindow, createSplashWindow } from "./splashWindow";
+import { createWindowStartupLifecycle } from "../../shared/window-lifecycle";
 
 /** Never use a previous launch's hint: renderer storage is scoped to its origin. */
 export function createOnboardingStartupState(showSplash = false) {
-  let onboarding = true;
-  let contentReady = false;
-  let splashRequested = false;
-
+  const lifecycle = createWindowStartupLifecycle(showSplash);
   return {
-    needsOnboarding: () => onboarding,
+    needsOnboarding: lifecycle.needsOnboarding,
     update(next: boolean, ready: boolean): boolean {
-      // A late boot announcement must not undo the mounted UI's decision.
-      if (contentReady && !ready) return false;
-      onboarding = next;
-      if (ready) contentReady = true;
-      if (!next && !ready && showSplash && !splashRequested) {
-        splashRequested = true;
-        createSplashWindow();
-      }
-      return true;
+      const transition = lifecycle.update(next, ready);
+      if (transition.showSplash) createSplashWindow();
+      return transition.accepted;
     },
     finish() {
-      contentReady = true;
       // Mounted React content can precede ready-to-show or native bounds
       // restoration. Keep the splash until the window's actual handoff.
-      closeSplashWindow();
+      if (lifecycle.finish()) closeSplashWindow();
     },
   };
 }

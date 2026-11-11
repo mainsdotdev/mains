@@ -25,6 +25,12 @@ afterEach(() => {
 });
 
 describe("Settings sections", () => {
+  it("exposes Atlas as a dedicated settings destination", async () => {
+    const { SETTINGS_MAIN_NAV_ITEMS, getSettingsRouteId, getSettingsSection } = await import("./settings-sections");
+    expect(SETTINGS_MAIN_NAV_ITEMS.find((item) => item.id === "atlas")?.label).toBe("Atlas");
+    expect(getSettingsRouteId("atlas")).toBe("atlas");
+    expect(getSettingsSection("atlas").label).toBe("Atlas");
+  });
   it("gives Lens its own macOS desktop Settings page", async () => {
     Object.defineProperty(window, "mainTransport", {
       configurable: true,

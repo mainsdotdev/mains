@@ -1,7 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Close, Bash } from "@/components/ui/icons";
 import { Body, Button } from "@/components/ui";
-import { BOTTOM_TERMINAL_HEIGHT } from "@/lib/layout";
+import { BOTTOM_TERMINAL_CONTENT_HEIGHT, BOTTOM_TERMINAL_HEIGHT } from "@/lib/layout";
 
 // xterm is only useful after the user opens the terminal. Keeping it behind
 // this boundary removes its parser and renderer from normal app startup.
@@ -40,7 +40,7 @@ export function TerminalSection({
         paddingTop: isOpen ? "0.3125rem" : "0px",
       }}
     >
-      <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
+      <div className="flex flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950" style={{ height: BOTTOM_TERMINAL_CONTENT_HEIGHT }}>
         <div className="flex items-center justify-between px-3 pt-3 pb-1">
           <div className="flex items-center gap-1">
             <Bash className="size-4.5 text-primary-500" />

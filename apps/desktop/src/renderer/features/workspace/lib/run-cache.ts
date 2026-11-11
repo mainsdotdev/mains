@@ -2,7 +2,7 @@
 // Run cache — the transcript hook's bookkeeping state machine
 //
 // Plain (React-free) index extracted from use-workspace-runs.ts so the LRU,
-// loaded flags and in-flight dedup are testable through their
+// loaded flags and finalization are testable through their
 // interface rather than woven through async callbacks. The hook holds one
 // stable instance and owns all data-fetching + setState; this module owns
 // only the bookkeeping and its invariants.
@@ -11,6 +11,8 @@
 // "loaded" flag is dropped too, so a re-opened run
 // fetches the latest history page again.
 // ─────────────────────────────────────────────────────────────
+
+import { createConversationFinalizationLifecycle } from "@/lib/conversation-lifecycle";
 
 /** Most-recent runs whose event/turn caches we retain; older ones are evicted. */
 export const MAX_RETAINED_RUNS = 4;
@@ -23,14 +25,10 @@ export interface RunCache {
   isLoaded(runId: string): boolean;
   markLoaded(runId: string): void;
   markFinalized(runId: string): boolean;
+  claimFinalization(runId: string): { current(): boolean } | null;
   isFinalized(runId: string): boolean;
   /** A continued or voice-delegated run gets a new terminal transition. */
   markRunning(runId: string): void;
-  /** Admit one load per run. Returns false (and queues a trailing reload) when one is already running. */
-  tryAcquireLoad(runId: string): boolean;
-  clearPending(runId: string): void;
-  hasPending(runId: string): boolean;
-  releaseLoad(runId: string): void;
   /** Reset cache contents (LRU, loaded, finalized) — mirrors the hook's clearState. */
   clear(): void;
 }
@@ -41,10 +39,7 @@ export function createRunCache(): RunCache {
   /** Runs whose first history page has loaded — absent means new or evicted. */
   const loadedRunIds = new Set<string>();
   /** Runs whose terminal transition we've already handled (prevents double-toast). */
-  const finalizedRunIds = new Set<string>();
-  /** Admits one load per run; a request mid-load queues a single trailing reload. */
-  const inFlightLoads = new Set<string>();
-  const pendingReload = new Set<string>();
+  const terminal = createConversationFinalizationLifecycle();
 
   function pruneLoaded(allowed: Set<string>): void {
     for (const id of loadedRunIds) if (!allowed.has(id)) loadedRunIds.delete(id);
@@ -76,47 +71,22 @@ export function createRunCache(): RunCache {
     },
 
     markFinalized(runId) {
-      if (finalizedRunIds.has(runId)) return false;
-      finalizedRunIds.add(runId);
-      return true;
+      return !!terminal.claim(runId);
     },
+    claimFinalization: terminal.claim,
 
     isFinalized(runId) {
-      return finalizedRunIds.has(runId);
+      return terminal.has(runId);
     },
 
     markRunning(runId) {
-      finalizedRunIds.delete(runId);
-    },
-
-    tryAcquireLoad(runId) {
-      if (inFlightLoads.has(runId)) {
-        pendingReload.add(runId); // coalesce; refresh once the in-flight load finishes
-        return false;
-      }
-      inFlightLoads.add(runId);
-      return true;
-    },
-
-    clearPending(runId) {
-      pendingReload.delete(runId);
-    },
-
-    hasPending(runId) {
-      return pendingReload.has(runId);
-    },
-
-    releaseLoad(runId) {
-      inFlightLoads.delete(runId);
-      pendingReload.delete(runId);
+      terminal.running(runId);
     },
 
     clear() {
-      // Matches the original clearState: in-flight/pending are left alone — an
-      // in-flight load self-heals via its own releaseLoad in `finally`.
       recentRunIds.length = 0;
       loadedRunIds.clear();
-      finalizedRunIds.clear();
+      terminal.clear();
     },
   };
 }

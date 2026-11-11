@@ -27,4 +27,5 @@ export type AppSettingsPatch = Partial<{
   backendId: string | null;
   commitInstructions: string;
   prInstructions: string;
+  atlasAutoTagging: string;
 }>;

@@ -87,8 +87,7 @@ export function SourceFilterButton({
   return (
     <>
       <Button
-        variant="icon"
-        iconSize="sm"
+        variant="filter"
         ref={buttonRef}
         tooltip="Filter chats"
         tooltipPosition="top"
@@ -97,7 +96,9 @@ export function SourceFilterButton({
         aria-haspopup="menu"
         aria-expanded={isOpen}
         className={
-          sourcesFiltered ? "bg-primary-100 dark:bg-primary-900" : undefined
+          isOpen || sourcesFiltered
+            ? "bg-primary/80 dark:bg-primary/10 glass-outline text-primary-900 dark:text-primary-100"
+            : undefined
         }
       >
         <Layers className="w-3.5 h-3.5 transition-colors" />

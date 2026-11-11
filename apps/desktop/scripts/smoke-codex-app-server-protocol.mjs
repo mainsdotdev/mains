@@ -41,7 +41,7 @@ function assertContains(relativePath, snippets) {
   }
 }
 
-async function smokeRuntime() {
+async function smokeRuntime(cliVersion) {
   const child = spawn(codexBinary, ["app-server"], {
     cwd: process.cwd(),
     stdio: ["pipe", "pipe", "pipe"],
@@ -65,9 +65,9 @@ async function smokeRuntime() {
     pending.delete(String(message.id));
     if (message.error) {
       waiter.reject(
-        new Error(
+        Object.assign(new Error(
           `${message.error.message} (code: ${message.error.code ?? "unknown"})`,
-        ),
+        ), { code: message.error.code }),
       );
     } else {
       waiter.resolve(message.result);
@@ -107,6 +107,7 @@ async function smokeRuntime() {
       capabilities: {
         experimentalApi: true,
         requestAttestation: false,
+        ...(compareVersions(cliVersion, "0.167.0") >= 0 ? { requiredHumanApproval: true } : {}),
       },
     });
     for (const field of [
@@ -138,6 +139,21 @@ async function smokeRuntime() {
     const models = await request("model/list", {});
     if (!Array.isArray(models?.data)) {
       throw new Error("model/list did not return data[]");
+    }
+
+    try {
+      const requirements = await request("configRequirements/read", undefined);
+      if (!requirements || !("requirements" in requirements)) throw new Error("configRequirements/read did not return requirements");
+    } catch (error) {
+      if (error.code !== -32601) throw error;
+    }
+    try {
+      const profiles = await request("permissionProfile/list", { cwd: process.cwd(), limit: 100 });
+      if (!Array.isArray(profiles?.data) || profiles.data.some((profile) => typeof profile.id !== "string" || typeof profile.allowed !== "boolean")) {
+        throw new Error("permissionProfile/list did not return permission summaries");
+      }
+    } catch (error) {
+      if (error.code !== -32601) throw error;
     }
 
     const started = await request("thread/start", {
@@ -263,6 +279,21 @@ try {
     ]);
     assertContains("v2/Account.ts", ['"type": "gcp"', "workspaceName: string | null"]);
   }
+  if (compareVersions(versionOutput, "0.167.0") >= 0) {
+    assertContains("ServerNotification.ts", [
+      '"method": "item/fileChange/patchUpdated"', '"method": "skills/changed"',
+      '"method": "model/safetyBuffering/updated"', '"method": "model/verification"',
+      '"method": "item/autoApprovalReview/started"', '"method": "item/autoApprovalReview/completed"',
+      '"method": "autoApprovalReview/strictReviewRequired"', '"method": "hook/started"', '"method": "hook/completed"',
+    ]);
+    assertContains("InitializeCapabilities.ts", ["requiredHumanApproval?: boolean"]);
+    assertContains("v2/CommandExecutionApprovalKind.ts", ['"humanCommand"']);
+    assertContains("v2/CommandExecutionRequestApprovalParams.ts", [
+      "kind: CommandExecutionApprovalKind", "availableDecisions?: Array<CommandExecutionApprovalDecision>",
+    ]);
+    assertContains("v2/UserInput.ts", ['"type": "audio", } & ({ url: string, } | { fileId: string, })']);
+    assertContains("ContentItem.ts", ['"type": "input_audio", } & ({ audio_url: string, } | { file_id: string, })']);
+  }
   assertContains("v2/McpResourceReadParams.ts", [
     "threadId?: string | null",
     "originCallId?: string | null",
@@ -280,7 +311,7 @@ try {
     "developer_instructions: string | null",
   ]);
 
-  await smokeRuntime();
+  await smokeRuntime(versionOutput);
   process.stdout.write(`Codex app-server smoke passed for ${versionOutput}.\n`);
 } finally {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });

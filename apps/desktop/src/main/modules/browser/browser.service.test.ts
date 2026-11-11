@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { EventEmitter } from "node:events";
@@ -24,6 +24,7 @@ import { runOwnerKey, workspaceBrowserExpansionKey } from "../../../shared/ui-st
 import type { BrowserSelectionPayload } from "./browser.dto";
 
 function resetInMemory() {
+  browserService.presentationLifecycle.retire();
   if (browserService.persistTimer) clearTimeout(browserService.persistTimer);
   browserService.persistTimer = null;
   if (browserService.historyPersistTimer) clearTimeout(browserService.historyPersistTimer);
@@ -57,7 +58,7 @@ describe("browserService — tabs by chat", () => {
   function liveView(record: NonNullable<ReturnType<typeof browserService.tabs.get>>, options: { audible?: boolean; dirty?: boolean } = {}) {
     const contents = Object.assign(new EventEmitter(), {
       isDestroyed: vi.fn(() => false), isCurrentlyAudible: () => !!options.audible,
-      executeJavaScript: vi.fn(async () => ({ url: record.url, x: 0, y: 500, fields: [{ selector: "#draft", value: "unsent-draft" }] })),
+      executeJavaScript: vi.fn(async (): Promise<unknown> => ({ url: record.url, x: 0, y: 500, fields: [{ selector: "#draft", value: "unsent-draft" }] })),
       isLoading: () => false, getURL: () => record.url, getTitle: () => "Page", getZoomFactor: () => 1,
       navigationHistory: { canGoBack: () => false, canGoForward: () => false, getActiveIndex: () => 0,
         getAllEntries: () => [{ url: record.url, title: "Page", pageState: "opaque-form-and-scroll-state" }] },
@@ -69,6 +70,89 @@ describe("browserService — tabs by chat", () => {
     record.view = { webContents: contents, setVisible: vi.fn() } as unknown as typeof record.view;
     return contents;
   }
+
+  it("does not let a slower tab activation replace the user's newer selection", async () => {
+    await browserService.createTab("https://example.com/a");
+    const first = browserService.activeTabId!;
+    await browserService.createTab("https://example.com/b");
+    const second = browserService.activeTabId!;
+    await browserService.createTab("https://example.com/c");
+    const third = browserService.activeTabId!;
+    browserService.activeTabId = first;
+    const contents = liveView(browserService.tabs.get(first)!);
+    let release!: (value: unknown) => void;
+    contents.executeJavaScript.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    browserService.selectMode = true;
+    const older = browserService.activateTab(second);
+    await browserService.activateTab(third);
+    release(undefined);
+    await older;
+    expect(browserService.getState().activeTabId).toBe(third);
+  });
+
+  it("retires pending activation across a conversation switch away and back", async () => {
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/a");
+    const first = browserService.activeTabId!;
+    await browserService.createTab("https://example.com/b");
+    const second = browserService.activeTabId!;
+    browserService.activeTabId = first;
+    const contents = liveView(browserService.tabs.get(first)!);
+    let release!: (value: unknown) => void;
+    contents.executeJavaScript.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    browserService.selectMode = true;
+    const activating = browserService.activateTab(second);
+    await browserService.setContext("chat-b");
+    await browserService.setContext("chat-a");
+    release(undefined); await activating;
+    expect(browserService.getState().activeTabId).toBe(first);
+  });
+
+  it("does not report activation of a tab that has already closed or moved to another conversation", async () => {
+    await browserService.createTab("https://example.com/keep");
+    const keep = browserService.activeTabId!;
+    await browserService.createTab("https://example.com/closing");
+    const closingId = browserService.activeTabId!;
+    await browserService.closeTab(closingId);
+    await expect(browserService.activateTab(closingId)).resolves.toMatchObject({ activeTabId: keep });
+    await expect(browserService.closeTab(closingId)).resolves.toMatchObject({ activeTabId: keep, tabs: [{ tabId: keep }] });
+
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/a");
+    const leftBehind = browserService.activeTabId!;
+    await browserService.setContext("chat-b");
+    await browserService.createTab("https://example.com/b");
+    const current = browserService.activeTabId!;
+    await expect(browserService.activateTab(leftBehind)).resolves.toMatchObject({
+      activeTabId: current,
+      ownerKey: "chat-b",
+    });
+  });
+
+  it("does not let a closing target retire another valid pending activation", async () => {
+    await browserService.createTab("https://example.com/current");
+    const current = browserService.activeTabId!;
+    await browserService.createTab("https://example.com/next");
+    const next = browserService.activeTabId!;
+    await browserService.createTab("https://example.com/closing");
+    const closingId = browserService.activeTabId!;
+    browserService.activeTabId = current;
+    const contents = liveView(browserService.tabs.get(current)!);
+    const closingContents = liveView(browserService.tabs.get(closingId)!);
+    closingContents.close.mockImplementation(() => {});
+    const closing = browserService.closeTab(closingId);
+    let ready!: (value: unknown) => void;
+    contents.executeJavaScript.mockImplementationOnce(() => new Promise((resolve) => { ready = resolve; }));
+    browserService.selectMode = true;
+    const activating = browserService.activateTab(next);
+    try {
+      await browserService.activateTab(closingId);
+      ready(undefined); await activating;
+      expect(browserService.getState().activeTabId).toBe(next);
+    } finally {
+      closingContents.isDestroyed.mockReturnValue(true); closingContents.emit("destroyed"); await closing;
+    }
+  });
 
   it("hibernates the oldest inactive page over the live-tab budget and keeps form state only in memory", async () => {
     const records = [];
@@ -101,6 +185,135 @@ describe("browserService — tabs by chat", () => {
     const audio = liveView(record, { audible: true });
     expect(await browserService._hibernateTab(record)).toBe(false);
     expect(audio.close).not.toHaveBeenCalled();
+  });
+
+  it("keeps the tab, active view and attachment when a page vetoes explicit close", async () => {
+    await browserService.createTab("https://example.com/unsaved");
+    const id = browserService.activeTabId!;
+    const record = browserService.tabs.get(id)!;
+    const contents = liveView(record, { dirty: true });
+    browserService.attached = true;
+    browserService.visible = true;
+    const state = await browserService.closeTab(id);
+    expect(state.activeTabId).toBe(id);
+    expect(state.tabs.map((tab) => tab.tabId)).toEqual([id]);
+    expect(browserService.tabs.get(id)).toBe(record);
+    expect(record.view?.webContents).toBe(contents);
+    expect(record.isClosing).toBe(false);
+    expect(browserService.attached).toBe(true);
+    expect(browserService.visible).toBe(true);
+    expect(contents.close).toHaveBeenCalledExactlyOnceWith({ waitForBeforeUnload: true });
+  });
+
+  it("joins repeated closes until native destruction is confirmed", async () => {
+    await browserService.createTab("https://example.com/page");
+    const id = browserService.activeTabId!;
+    const contents = liveView(browserService.tabs.get(id)!);
+    contents.close.mockImplementation(() => {});
+    const first = browserService.closeTab(id), second = browserService.closeTab(id);
+    expect(contents.close).toHaveBeenCalledOnce();
+    expect(browserService.tabs.has(id)).toBe(true);
+    contents.isDestroyed.mockReturnValue(true); contents.emit("destroyed");
+    expect((await first).tabs).toEqual([]);
+    expect((await second).tabs).toEqual([]);
+    expect(contents.close).toHaveBeenCalledOnce();
+  });
+  it("shares native close when explicit close overlaps an idle suspension", async () => {
+    await browserService.createTab("https://example.com/draft");
+    const id = browserService.activeTabId!, record = browserService.tabs.get(id)!;
+    const contents = liveView(record);
+    contents.close.mockImplementation(() => {});
+    const suspending = browserService._hibernateTab(record);
+    await vi.waitFor(() => expect(contents.close).toHaveBeenCalledOnce());
+    const closing = browserService.closeTab(id);
+    expect(contents.close).toHaveBeenCalledOnce();
+    expect(browserService.tabs.has(id)).toBe(true);
+    contents.isDestroyed.mockReturnValue(true); contents.emit("destroyed");
+    expect(await suspending).toBe(true);
+    expect((await closing).tabs).toEqual([]);
+    expect(contents.close).toHaveBeenCalledOnce();
+  });
+  it("retains a replacement view when an old native close finishes", async () => {
+    await browserService.createTab("https://example.com/page");
+    const id = browserService.activeTabId!, record = browserService.tabs.get(id)!;
+    const old = liveView(record);
+    old.close.mockImplementation(() => {});
+    const closing = browserService.closeTab(id);
+    const replacement = liveView(record);
+    old.isDestroyed.mockReturnValue(true); old.emit("destroyed");
+    expect((await closing).activeTabId).toBe(id);
+    expect(record.view?.webContents).toBe(replacement);
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect((await browserService.closeTab(id)).tabs).toEqual([]);
+  });
+
+  it("retains an unconfirmed close on timeout and allows a later retry", async () => {
+    vi.useFakeTimers();
+    try {
+      await browserService.createTab("https://example.com/page");
+      const id = browserService.activeTabId!, record = browserService.tabs.get(id)!;
+      const contents = liveView(record);
+      contents.close.mockImplementationOnce(() => {});
+      const closing = browserService.closeTab(id);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await closing).activeTabId).toBe(id);
+      expect(record.isClosing).toBe(false);
+      expect(record.view?.webContents).toBe(contents);
+      expect((await browserService.closeTab(id)).tabs).toEqual([]);
+      expect(contents.close).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not detach the new conversation when the old conversation's last tab finishes closing", async () => {
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/page");
+    const id = browserService.activeTabId!;
+    const contents = liveView(browserService.tabs.get(id)!);
+    contents.close.mockImplementation(() => {});
+    browserService.attached = true; browserService.visible = true;
+    const closing = browserService.closeTab(id);
+    await browserService.setContext("chat-b");
+    await browserService.createTab("https://example.com/new-conversation");
+    browserService.attached = true; browserService.visible = true;
+    const nextId = browserService.activeTabId;
+    contents.isDestroyed.mockReturnValue(true); contents.emit("destroyed");
+    const state = await closing;
+    expect(state.ownerKey).toBe("chat-b");
+    expect(state.activeTabId).toBe(nextId);
+    expect(browserService.attached).toBe(true);
+    expect(browserService.visible).toBe(true);
+    expect(browserService.tabs.has(id)).toBe(false);
+  });
+
+  it.each(["view", "navigation"])("discards a pending hibernation capture after its %s changes", async (change) => {
+    await browserService.createTab("https://example.com/draft");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const contents = liveView(record);
+    let captured!: (value: unknown) => void;
+    contents.executeJavaScript.mockImplementationOnce(() => new Promise((resolve) => { captured = resolve as typeof captured; }));
+    const sleeping = browserService._hibernateTab(record);
+    if (change === "view") liveView(record);
+    else vi.spyOn(contents, "getURL").mockReturnValue("https://example.com/next");
+    captured({ url: "https://example.com/draft", x: 0, y: 0, fields: [] });
+    expect(await sleeping).toBe(false);
+    expect(contents.close).not.toHaveBeenCalled();
+    expect(record.suspendedPageState).toBeNull();
+  });
+
+  it("ignores callbacks from a replaced native view", async () => {
+    await browserService.createTab("https://example.com/page");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const old = liveView(record);
+    Object.assign(old, { setWindowOpenHandler: vi.fn() });
+    browserService._wireView(record, record.view!);
+    const current = liveView(record);
+    const reset = vi.spyOn(record.deviceEmulationQueue, "reset");
+    old.emit("render-process-gone"); old.emit("destroyed");
+    old.emit("page-favicon-updated", {}, ["https://example.com/old.ico"]);
+    expect(record.view?.webContents).toBe(current);
+    expect(record.isCrashed).toBe(false);
+    expect(record.faviconUrl).toBeNull();
+    expect(reset).not.toHaveBeenCalled();
   });
 
   it("keeps an oversized draft alive and cancels sleep if its tab reactivates during capture", async () => {
@@ -194,6 +407,7 @@ describe("browserService — tabs by chat", () => {
         setWindowOpenHandler: vi.fn(),
       },
     } as unknown as Parameters<typeof browserService._wireView>[1];
+    record.view = view;
     browserService._wireView(record, view);
     browserService.visible = true;
     const send = vi.spyOn(browserService, "_sendToRenderer").mockImplementation(() => undefined);
@@ -245,6 +459,35 @@ describe("browserService — tabs by chat", () => {
     send.mockRestore();
   });
 
+  it.each(["cancel", "replacement", "conversation"])("discards a pending annotation and its screenshot after %s retirement", async (retirement) => {
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/docs");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    let finish!: (value: unknown) => void;
+    const contents = liveView(record);
+    contents.executeJavaScript.mockResolvedValue("ok");
+    Object.assign(contents, { focus: vi.fn(), capturePage: vi.fn(() => new Promise((resolve) => { finish = resolve; })) });
+    browserService.selectMode = true;
+    const send = vi.spyOn(browserService, "_sendToRenderer").mockImplementation(() => {});
+    const element = { selector: "h1", tagName: "h1", text: "Docs", styles: {},
+      rect: { x: 0, y: 0, width: 10, height: 10 }, pageRect: { x: 0, y: 0, width: 10, height: 10 },
+      scroll: { x: 0, y: 0 }, viewport: { width: 100, height: 100 }, devicePixelRatio: 1 };
+    try {
+      const capturing = browserService._handleSelection({ ...element, type: "browser_selection", url: record.url,
+        title: "Docs", elements: [element], timestamp: "2026-11-09T12:00:00Z" }, record);
+      if (retirement === "cancel") await browserService.setSelectMode(false);
+      else if (retirement === "replacement") liveView(record);
+      else {
+        await browserService.setContext("chat-b"); await browserService.setContext("chat-a");
+        await browserService.setSelectMode(true);
+      }
+      finish({ isEmpty: () => false, toPNG: () => Buffer.from("obsolete annotation") });
+      await capturing;
+      expect(send).not.toHaveBeenCalledWith(CHANNELS.browser.selection, expect.anything());
+      expect(readdirSync(join(harness.userData, "browser-captures"))).toEqual([]);
+    } finally { send.mockRestore(); }
+  });
+
   it("exits annotation mode when the active page navigates", async () => {
     await browserService.createTab("https://example.com/docs");
     const record = browserService.tabs.get(browserService.activeTabId!)!;
@@ -254,6 +497,7 @@ describe("browserService — tabs by chat", () => {
       on: (name: string, listener: (...args: unknown[]) => void) => { listeners.set(name, listener); },
       setWindowOpenHandler: vi.fn(), executeJavaScript,
     } } as unknown as Parameters<typeof browserService._wireView>[1];
+    record.view = view;
     browserService._wireView(record, view);
     browserService.selectMode = true;
     const send = vi.spyOn(browserService, "_sendToRenderer").mockImplementation(() => undefined);
@@ -264,6 +508,33 @@ describe("browserService — tabs by chat", () => {
     expect(send).toHaveBeenCalledWith(CHANNELS.browser.selectModeChanged, { enabled: false });
     expect(executeJavaScript).toHaveBeenCalledOnce();
     send.mockRestore();
+  });
+
+  it("delivers only the retry when an older screenshot finishes after the newer capture", async () => {
+    await browserService.createTab("https://example.com/docs");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const contents = liveView(record);
+    let finish!: (value: unknown) => void;
+    const image = { isEmpty: () => false, toPNG: () => Buffer.from("annotation") };
+    Object.assign(contents, { capturePage: vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; })).mockResolvedValue(image) });
+    contents.executeJavaScript.mockResolvedValue("ok");
+    browserService.selectMode = true;
+    const element = { selector: "h1", tagName: "h1", text: "Docs", styles: {},
+      rect: { x: 0, y: 0, width: 10, height: 10 }, pageRect: { x: 0, y: 0, width: 10, height: 10 },
+      scroll: { x: 0, y: 0 }, viewport: { width: 100, height: 100 }, devicePixelRatio: 1 };
+    const payload: Omit<BrowserSelectionPayload, "id"> = { ...element, type: "browser_selection", url: record.url,
+      title: "Docs", elements: [element], timestamp: "2026-11-09T12:00:00Z" };
+    const send = vi.spyOn(browserService, "_sendToRenderer").mockImplementation(() => {});
+    try {
+      const old = browserService._handleSelection({ ...payload, comment: "Old draft" }, record, "old");
+      await browserService._handleSelection({ ...payload, comment: "Retry draft" }, record, "retry");
+      finish(image); await old;
+      const selections = send.mock.calls.filter(([channel]) => channel === CHANNELS.browser.selection);
+      expect(selections).toHaveLength(1);
+      expect(selections[0][1]).toMatchObject({ comment: "Retry draft" });
+      expect(contents.executeJavaScript).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('"retry"'));
+      expect(readdirSync(join(harness.userData, "browser-captures"))).toHaveLength(1);
+    } finally { send.mockRestore(); }
   });
 
   it("focuses the guest when annotation starts so Escape works before the first selection", async () => {
@@ -287,6 +558,38 @@ describe("browserService — tabs by chat", () => {
     } finally {
       send.mockRestore();
     }
+  });
+
+  it("ignores a late inspector-enable receipt after selection mode was disabled", async () => {
+    await browserService.createTab("https://example.com/docs");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    let finish!: (value: string) => void;
+    const contents = { isDestroyed: () => false, focus: vi.fn(), executeJavaScript: vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }))
+      .mockResolvedValue("ok") };
+    record.view = { webContents: contents } as unknown as typeof record.view;
+    const enabling = browserService.setSelectMode(true);
+    await browserService.setSelectMode(false);
+    finish("installed"); await enabling;
+    expect(browserService.selectMode).toBe(false);
+    expect(contents.focus).not.toHaveBeenCalled();
+  });
+
+  it.each(["navigation", "escape"])("retires an inspector installation still awaiting its receipt on %s", async (retirement) => {
+    await browserService.createTab("https://example.com/docs");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    let finish!: (value: string) => void;
+    const contents = Object.assign(new EventEmitter(), { isDestroyed: () => false, focus: vi.fn(), setWindowOpenHandler: vi.fn(),
+      executeJavaScript: vi.fn().mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; })).mockResolvedValue("ok") });
+    const view = { webContents: contents } as any;
+    record.view = view;
+    browserService._wireView(record, view);
+    const enabling = browserService.setSelectMode(true);
+    if (retirement === "navigation") contents.emit("did-start-navigation", {}, "https://example.com/next", false, true);
+    else contents.emit("console-message", { message: '[[MAINS_BROWSER_SELECTION_V1]]{"cancel":true}' });
+    finish("installed"); await enabling;
+    expect(browserService.selectMode).toBe(false);
+    expect(contents.focus).not.toHaveBeenCalled();
   });
 
   it("remounts the selected chat's page when leaving a floating overlay", async () => {
@@ -432,6 +735,45 @@ describe("browserService — tabs by chat", () => {
       await mounting;
       expect(addChildView).not.toHaveBeenCalled();
       expect(view.setVisible).toHaveBeenCalledWith(false);
+    } finally { ensure.mockRestore(); }
+  });
+
+  it("consumes a visibility-triggered native acquisition failure and permits a later retry", async () => {
+    await browserService.createTab("https://example.com/docs");
+    browserService.attached = true;
+    browserService.host = { isDestroyed: () => false, contentView: { children: [] } } as any;
+    const ensure = vi.spyOn(browserService, "_ensureTabView").mockRejectedValue(new Error("Native view unavailable"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      browserService.setVisible(true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(warn).toHaveBeenCalledWith("[browser] failed to present view:", expect.any(Error));
+      browserService.setVisible(true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(ensure).toHaveBeenCalledTimes(2);
+    } finally { ensure.mockRestore(); warn.mockRestore(); }
+  });
+
+  it.each([false, true])("keeps obsolete mounting receipts from changing the presented view (reuse=%s)", async (reuse) => {
+    await browserService.createTab("https://example.com/docs");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    browserService.attached = browserService.visible = true;
+    const children: unknown[] = [];
+    const addChildView = vi.fn((view) => { children.push(view); });
+    browserService.host = { isDestroyed: () => false, contentView: { children, addChildView } } as unknown as typeof browserService.host;
+    const old = { setVisible: vi.fn(), setBounds: vi.fn(), webContents: { isDestroyed: () => false, isLoading: () => true } };
+    const replacement = reuse ? old : { setVisible: vi.fn(), setBounds: vi.fn(), webContents: { isDestroyed: () => false, isLoading: () => true } };
+    let ready!: (value: unknown) => void;
+    const ensure = vi.spyOn(browserService, "_ensureTabView").mockImplementationOnce(() => new Promise((resolve) => { ready = resolve as typeof ready; }))
+      .mockResolvedValue(replacement as any);
+    try {
+      const mounting = browserService._mountActiveView();
+      record.view = replacement as any;
+      await browserService._mountActiveView();
+      ready(old); await mounting;
+      expect(children).toEqual([replacement]);
+      if (!reuse) expect(old.setVisible).not.toHaveBeenCalledWith(true);
+      expect(replacement.setVisible).toHaveBeenLastCalledWith(true);
     } finally { ensure.mockRestore(); }
   });
 

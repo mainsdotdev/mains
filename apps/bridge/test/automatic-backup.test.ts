@@ -26,7 +26,9 @@ async function runtime() {
     export {BridgeOperations};
     export class AccountHub extends Base {
       seed(records){return createHubStore(this.ctx.storage).push('A','account',records)}
+      compact(){return this.store.compact()}
       futureSchema(){this.ctx.storage.sql.exec("CREATE TABLE future_schema(id TEXT)");return true}
+      futureKv(){this.ctx.storage.kv.put('future-state','not-part-of-sql-export');return true}
       track(key,bytes,uploadId){
         this.ctx.storage.sql.exec('INSERT INTO quota_chunks VALUES(?,?,?,?)',key,bytes,uploadId?0:1,uploadId?Date.now()+600000:0);
         if(uploadId)this.ctx.storage.sql.exec('INSERT INTO blob_uploads VALUES(?,?,?)',key,key.slice(65,108),uploadId);
@@ -71,6 +73,45 @@ it("encrypts backups with the public key; tampering, the wrong environment path 
   expect(() => unseal(encrypted, backupKeyPair().privateKey, key)).toThrow(/authentication/);
   encrypted[encrypted.length - 1] ^= 1;
   expect(() => unseal(encrypted, pair.privateKey, key)).toThrow(/authentication/);
+});
+
+it("invalidates an open capture when schema changes without changing any rows", async () => {
+  const { call, ops } = await runtime();
+  const snapshot = await ops.snapshotBegin("fixture");
+  const before = await call("hub", { account: "fixture", method: "state" });
+  await call("hub", { account: "fixture", method: "futureSchema" });
+  expect((await call("hub", { account: "fixture", method: "state" })).changes).toBe(before.changes);
+  expect(await ops.snapshotValid("fixture", snapshot.token)).toBe(false);
+  expect(await ops.snapshotPage("fixture", snapshot.token, "log", 0)).toMatchObject({ changed: true, rows: [], done: false });
+});
+
+it("refuses to finish a SQL capture after unsupported KV state appears", async () => {
+  const { call, ops } = await runtime();
+  const snapshot = await ops.snapshotBegin("fixture");
+  await call("hub", { account: "fixture", method: "futureKv" });
+  expect(await ops.snapshotValid("fixture", snapshot.token)).toBe(false);
+  expect(await ops.snapshotPage("fixture", snapshot.token, "log", 0)).toMatchObject({ changed: true, rows: [] });
+  await expect(ops.snapshotBegin("fixture")).rejects.toThrow();
+});
+
+it("restarts a paginated capture when compaction changes stored rows without advancing stream positions", async () => {
+  const { call, ops } = await runtime(), source = new Map<string, string>();
+  const rows = Array.from({ length: 90 }, (_, i) => record(i));
+  await call("hub", { account: "fixture", method: "seed", args: [rows] });
+  const newer = structuredClone(rows[0]); newer.header.hlc.physicalMs = 2; signFixture(newer, "fixture");
+  await call("hub", { account: "fixture", method: "seed", args: [[newer]] });
+  const positions = (await call("hub", { account: "fixture", method: "state" })).rows;
+  let compacted = false;
+  const capture = await captureAccount(ops, "fixture", async (path, bytes, table) => {
+    source.set(path, bytes);
+    if (table === "log" && !compacted) { compacted = true; await call("hub", { account: "fixture", method: "compact" }); }
+  }, "hub/compaction");
+  expect(compacted).toBe(true); expect(capture.snapshot).toContain("/1/");
+  expect((await call("hub", { account: "fixture", method: "state" })).rows).toEqual(positions);
+  const log = capture.pages.filter((page) => page.table === "log").flatMap((page) => JSON.parse(source.get(page.path)!).rows);
+  expect(log).toHaveLength(90);
+  expect(log.some((row: { values: unknown[] }) => row.values[2] === rows[0].header.rowKey &&
+    JSON.parse(String(row.values.at(-1))).header.hlc.physicalMs === 1)).toBe(false);
 });
 
 it("exports real paginated hub state without writes; restores tombstones, sequences and quota counters in an empty local hub", async () => {

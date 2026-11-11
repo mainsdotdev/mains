@@ -62,8 +62,7 @@ export function WorkspaceGroupDropdown({
   return (
     <>
       <Button
-        variant="icon"
-        iconSize="sm"
+        variant="filter"
         ref={buttonRef}
         tooltip="Sidebar view"
         tooltipPosition="top"
@@ -72,8 +71,8 @@ export function WorkspaceGroupDropdown({
         aria-haspopup="menu"
         aria-expanded={isOpen}
         className={
-          view === "chats" || grouping === "none" || sourcesFiltered
-            ? "rounded-[10px] bg-primary-200/60 text-primary-800 dark:bg-primary/10 dark:text-primary-200 dark:enabled:hover:bg-primary/15"
+          isOpen || view === "chats" || grouping === "none" || sourcesFiltered
+            ? "bg-primary/80 dark:bg-primary/10 glass-outline text-primary-900 dark:text-primary-100"
             : undefined
         }
       >

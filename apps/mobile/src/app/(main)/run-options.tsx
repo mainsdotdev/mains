@@ -1,3 +1,4 @@
+import { RunPermissionOptions } from "@/features/runs/components/run-permission-options";
 import { useLocalSearchParams } from "expo-router";
 
 import { useSession } from "@/backend/backend-session";
@@ -25,7 +26,7 @@ type ModeKey = "fastMode" | "goalMode" | "planMode";
  * that chip names is the first thing on it.
  */
 export default function RunOptionsSheet() {
-  const { providerId: param, runId: runParam } = useLocalSearchParams<{ providerId: string; runId?: string }>();
+  const { providerId: param, runId: runParam, workspacePath } = useLocalSearchParams<{ providerId: string; runId?: string; workspacePath?: string }>();
   const providerId = typeof param === "string" ? param : "";
   const runId = typeof runParam === "string" ? runParam : null;
   const session = useSession();
@@ -48,24 +49,9 @@ export default function RunOptionsSheet() {
       <SheetHeader title="Run options" />
 
       {selection.permissionOptions.length > 0 && (
-        <>
-          <SectionTitle>Permissions</SectionTitle>
-          <Card surface="sheet">
-            {selection.permissionOptions.map((option, index) => (
-              <Row
-                key={option.value}
-                first={index === 0}
-                title={option.label}
-                subtitle={option.description}
-                selected={shownPermission === option.value}
-                disabled={!selection.ready}
-                onPress={() => {
-                  if (option.value !== shownPermission) void apply({ permissionMode: option.value });
-                }}
-              />
-            ))}
-          </Card>
-        </>
+        <RunPermissionOptions key={JSON.stringify([backendId, providerId, workspacePath])} backendId={backendId} providerId={providerId} workspacePath={typeof workspacePath === "string" ? workspacePath : undefined}
+          options={selection.permissionOptions} value={shownPermission} ready={selection.ready}
+          onChange={(permissionMode) => { void apply({ permissionMode }); }} />
       )}
 
       {hasServiceTiers && (

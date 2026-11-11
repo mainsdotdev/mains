@@ -1,11 +1,16 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { installTestBackendRuntime } from "../../../../../test/backend-runtime";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkRunEvent, WorkRunEventHandler } from "../../../../../shared/adapter.types";
+import { ResourceCleanupError } from "../../../../runtime/resource-lifecycle";
 import { createCursorDriver } from "./cursor.driver";
 import { createWorkRunAdapter } from "../work-run-core";
 
-const mocks = vi.hoisted(() => ({ spawn: vi.fn(), updateRun: vi.fn(), approval: vi.fn(), bridges: [] as Array<{ isRunning: boolean }> }));
+const mocks = vi.hoisted(() => ({ spawn: vi.fn(), updateRun: vi.fn(), approval: vi.fn(), bridgeStart: vi.fn(), bridges: [] as any[] }));
 vi.mock("node:child_process", async (original) => ({
   ...await original<typeof import("node:child_process")>(), spawn: mocks.spawn,
 }));
@@ -13,12 +18,12 @@ vi.mock("../../../runs/runs.repo", () => ({ runsRepo: { updateRun: mocks.updateR
 vi.mock("../../../runs/user-input-broker", () => ({ requestToolApproval: mocks.approval, cancelPendingRequests: vi.fn() }));
 vi.mock("../mains-mcp-server", () => ({
   MainsMcpStdioServer: class {
-    isRunning = true;
+    isRunning = false;
     constructor() { mocks.bridges.push(this); }
     mcpConfig = { name: "mains", command: "fixture", args: [], env: [] };
-    async start() {}
-    async stop() { this.isRunning = false; }
-    setEventHandler() {}
+    start = vi.fn(async () => { await mocks.bridgeStart(); this.isRunning = true; });
+    stop = vi.fn(async () => { this.isRunning = false; });
+    setEventHandler = vi.fn();
   },
 }));
 
@@ -32,11 +37,16 @@ class AcpFixture extends EventEmitter {
   calls: RpcMessage[] = [];
   sessions = 0;
   failMethod?: string;
+  holdMethod?: string;
+  held: RpcMessage[] = [];
   onPrompt: (message: RpcMessage) => void = () => {};
+  onRpc?: (message: RpcMessage) => boolean;
   stdin = new Writable({ write: (chunk, _encoding, done) => {
     const message = JSON.parse(chunk.toString()) as RpcMessage;
     this.calls.push(message);
     queueMicrotask(() => {
+      if (this.onRpc?.(message)) return;
+      if (message.method === this.holdMethod) { this.held.push(message); return; }
       if (this.failMethod && message.method === this.failMethod) this.send({ id: message.id, error: { code: -32000, message: "Session creation failed" } });
       else if (message.method === "initialize") this.respond(message.id!, { authMethods: [{ id: "cursor_login" }] });
       else if (message.method === "session/new") this.respond(message.id!, { sessionId: `session-${++this.sessions}` });
@@ -60,15 +70,24 @@ const reports = (events: WorkRunEvent[]) => events.filter((event) => event.type 
 describe("Cursor ACP transcript", () => {
   let fixture: AcpFixture;
   let driver: ReturnType<typeof createCursorDriver>;
+  let temporary: string;
+  let restoreRuntime: () => void;
   beforeEach(() => {
+    temporary = fs.mkdtempSync(path.join(os.tmpdir(), "mains-cursor-"));
+    restoreRuntime = installTestBackendRuntime({ getPath: () => temporary });
     fixture = new AcpFixture();
     mocks.bridges.length = 0;
-    mocks.spawn.mockReturnValue(fixture);
+    mocks.spawn.mockReset().mockImplementation(() => { queueMicrotask(() => fixture.emit("spawn")); return fixture; });
     mocks.updateRun.mockResolvedValue(undefined);
-    mocks.approval.mockResolvedValue({ approved: true });
+    mocks.approval.mockReset().mockResolvedValue({ approved: true });
+    mocks.bridgeStart.mockReset().mockResolvedValue(undefined);
     driver = createCursorDriver({ binary: "/fixture/agent" });
   });
-  afterEach(async () => { await driver.shutdown?.(); vi.clearAllMocks(); });
+  afterEach(async () => {
+    await driver.shutdown?.(); restoreRuntime();
+    fs.rmSync(temporary, { recursive: true, force: true });
+    vi.restoreAllMocks(); vi.clearAllMocks();
+  });
 
   async function acquire(runId = "run-1") {
     return driver.createSession({ runId, accountId: "account-1", execution: { cwd: "/fixture", workspaceId: null }, goal: "hi" });
@@ -97,6 +116,323 @@ describe("Cursor ACP transcript", () => {
     const outcome = await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
     return { outcome, calls: events.filter((event) => event.type === "tool_call") };
   }
+
+  it.each(["initialize", "authenticate"])("retires pending %s instead of resurrecting a server after shutdown", async (method) => {
+    fixture.holdMethod = method;
+    const opening = acquire();
+    const settled = Promise.allSettled([opening]);
+    await vi.waitFor(() => expect(fixture.held).toHaveLength(1));
+    try {
+      await driver.shutdown!();
+      expect(fixture.exitCode).toBe(0);
+    } finally {
+      fixture.holdMethod = undefined;
+      fixture.respond(fixture.held[0].id!, { authMethods: [] });
+      await settled;
+      await driver.shutdown!();
+    }
+    expect((await settled)[0].status).toBe("rejected");
+    expect(fixture.calls.filter((call) => call.method === "session/new")).toHaveLength(0);
+    await expect(acquire("after-shutdown")).rejects.toThrow();
+  });
+
+  it("retains a failed bridge cleanup and retries it without reopening the runtime", async () => {
+    await acquire();
+    mocks.bridges[0].stop.mockRejectedValueOnce(new Error("bridge close failed"));
+    await expect(driver.shutdown!()).rejects.toThrow("failed");
+    await expect(acquire("retired")).rejects.toThrow();
+    expect(mocks.bridges).toHaveLength(1);
+    await driver.shutdown!();
+    expect(mocks.bridges[0].stop).toHaveBeenCalledTimes(2);
+    expect(fixture.exitCode).toBe(0);
+  });
+
+  it("does not execute a prepared session on a replacement ACP process", async () => {
+    const old = await acquire("old");
+    fixture.kill();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const replacement = new AcpFixture();
+    mocks.spawn.mockImplementation(() => { queueMicrotask(() => replacement.emit("spawn")); return replacement; });
+    await acquire("new");
+    replacement.onPrompt = (message) => replacement.finish(message);
+    const result = await driver.executePrompt(old.session, old.prompt, () => {}, new AbortController().signal);
+    expect(result.status).toBe("failed");
+    expect(replacement.calls.filter((call) => call.method === "session/prompt")).toHaveLength(0);
+  });
+
+  it("ignores retired process notifications when a replacement reuses the native session id", async () => {
+    await acquire("old");
+    const retired = fixture;
+    retired.kill();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const replacement = new AcpFixture();
+    mocks.spawn.mockImplementation(() => { queueMicrotask(() => replacement.emit("spawn")); return replacement; });
+    const next = await acquire("next");
+    replacement.onPrompt = (message) => {
+      retired.text(next.sessionId!, "STALE");
+      replacement.text(next.sessionId!, "current");
+      replacement.finish(message);
+    };
+    const events: WorkRunEvent[] = [];
+    await driver.executePrompt(next.session, next.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    expect(reports(events)).toEqual([expect.objectContaining({ content: "current" })]);
+  });
+
+  it("settles a canceled prompt even when Cursor never acknowledges cancellation", async () => {
+    const acquired = await acquire();
+    const controller = new AbortController();
+    const turn = driver.executePrompt(acquired.session, acquired.prompt, () => {}, controller.signal);
+    let outcome: unknown;
+    void turn.then((value) => { outcome = value; });
+    try {
+      await vi.waitFor(() => expect(fixture.calls.some((call) => call.method === "session/prompt")).toBe(true));
+      controller.abort();
+      await vi.waitFor(() => expect(outcome).toMatchObject({ status: "canceled" }));
+      expect(fixture.calls.filter((call) => call.method === "session/cancel")).toHaveLength(1);
+    } finally {
+      fixture.finish(fixture.calls.find((call) => call.method === "session/prompt")!);
+      await turn;
+    }
+  });
+
+  it("drops a captured MCP event callback after its prompt finishes", async () => {
+    const acquired = await acquire();
+    fixture.onPrompt = (message) => fixture.finish(message);
+    const events: WorkRunEvent[] = [];
+    await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    const captured = mocks.bridges[0].setEventHandler.mock.calls.find(([handler]: [unknown]) => typeof handler === "function")[0];
+    const count = events.length;
+    await captured({ type: "artifact", kind: "report", content: "stale bridge output" });
+    expect(events).toHaveLength(count);
+  });
+
+  it("retains the ACP child after the forced-kill deadline until its close event", async () => {
+    await acquire();
+    vi.useFakeTimers();
+    const kill = vi.spyOn(fixture, "kill").mockImplementation(() => true);
+    let closed = false;
+    const closing = driver.shutdown!().then(() => { closed = true; });
+    try {
+      await vi.advanceTimersByTimeAsync(600);
+      expect(kill).toHaveBeenCalled();
+      expect(closed).toBe(false);
+    } finally {
+      fixture.exitCode = 0; fixture.emit("close", 0, null);
+      await closing;
+      vi.useRealTimers();
+    }
+  });
+
+  it("joins a pending bridge start and releases its late resources without opening ACP", async () => {
+    let release!: () => void;
+    mocks.bridgeStart.mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve; }));
+    const opening = acquire();
+    const rejected = expect(opening).rejects.toThrow("shut down");
+    await vi.waitFor(() => expect(mocks.bridges[0]?.start).toHaveBeenCalledOnce());
+    let done = false;
+    const closing = driver.shutdown!().then(() => { done = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(done).toBe(false);
+    } finally { release(); await Promise.all([rejected, closing]); }
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.bridges[0].stop).toHaveBeenCalledOnce();
+    expect(mocks.bridges[0].isRunning).toBe(false);
+  });
+
+  it("retains a prepared run across failed cleanup and never lets an old handle stop its replacement bridge", async () => {
+    const first = await acquire();
+    await expect(acquire()).rejects.toThrow("already owns");
+    expect(mocks.bridges).toHaveLength(1);
+    mocks.bridges[0].stop.mockRejectedValueOnce(new Error("retry bridge cleanup"));
+    await expect(driver.cleanup!(first.session)).rejects.toThrow("retry bridge cleanup");
+    await expect(acquire()).rejects.toThrow("already owns");
+    await driver.cleanup!(first.session);
+    await acquire();
+    await driver.cleanup!(first.session);
+    expect(mocks.bridges).toHaveLength(2);
+    expect(mocks.bridges[0].stop).toHaveBeenCalledTimes(2);
+    expect(mocks.bridges[1].stop).not.toHaveBeenCalled();
+    expect(mocks.bridges[1].isRunning).toBe(true);
+  });
+
+  it("isolates repeated approval ids across process generations and discards answers after prompt retirement", async () => {
+    const answers: Array<(value: unknown) => void> = [];
+    mocks.approval.mockImplementation(() => new Promise((resolve) => { answers.push(resolve); }));
+    const first = await acquire();
+    const old = fixture;
+    const firstTurn = driver.executePrompt(first.session, first.prompt, () => {}, new AbortController().signal);
+    await vi.waitFor(() => expect(old.calls.some((call) => call.method === "session/prompt")).toBe(true));
+    const permission = (sessionId: string) => ({ id: 77, method: "session/request_permission", params: {
+      sessionId, toolCall: { kind: "execute", title: "Bash", rawInput: { command: "pwd" } }, options: [{ kind: "allow_once", optionId: "once" }],
+    } });
+    old.send(permission(first.sessionId!));
+    await vi.waitFor(() => expect(mocks.approval).toHaveBeenCalledOnce());
+    old.emit("error", new Error("crashed")); await firstTurn;
+    const replacement = new AcpFixture();
+    mocks.spawn.mockImplementation(() => { queueMicrotask(() => replacement.emit("spawn")); return replacement; });
+    const next = await acquire();
+    const turn = driver.executePrompt(next.session, next.prompt, () => {}, new AbortController().signal);
+    try {
+      await vi.waitFor(() => expect(replacement.calls.some((call) => call.method === "session/prompt")).toBe(true));
+      replacement.send(permission(next.sessionId!));
+      await vi.waitFor(() => expect(mocks.approval).toHaveBeenCalledTimes(2));
+      expect(new Set(mocks.approval.mock.calls.map(([request]) => request.requestId)).size).toBe(2);
+    } finally {
+      replacement.finish(replacement.calls.find((call) => call.method === "session/prompt")!); await turn;
+      for (const answer of answers) answer({ approved: true });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(old.calls.filter((call) => call.id === 77 && !call.method)).toHaveLength(0);
+    expect(replacement.calls.filter((call) => call.id === 77 && !call.method)).toHaveLength(0);
+  });
+
+  it("drains an admitted plan's complete pair before finishing the prompt", async () => {
+    const acquired = await acquire();
+    let release!: () => void;
+    const persisted = new Promise<void>((resolve) => { release = resolve; });
+    const events: WorkRunEvent[] = [];
+    fixture.onPrompt = (message) => {
+      fixture.send({ id: 77, method: "cursor/create_plan", params: { sessionId: acquired.sessionId, plan: "Plan content" } });
+      fixture.finish(message);
+    };
+    let finished = false;
+    const turn = driver.executePrompt(acquired.session, acquired.prompt, async (event) => {
+      events.push(event);
+      if (event.type === "tool_call" && event.toolName === "Plan" && event.metadata?.phase === "start") await persisted;
+    }, new AbortController().signal).then((result) => { finished = true; return result; });
+    try {
+      await vi.waitFor(() => expect(events.some((event) => event.type === "tool_call")).toBe(true));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+    } finally { release(); await turn; }
+    expect(events.filter((event) => event.type === "tool_call")).toMatchObject([
+      { metadata: { phase: "start" } }, { metadata: { phase: "complete" } },
+    ]);
+  });
+
+  it.each(["error", "undefined"])("fails on a rejected projection (%s) while still clearing live previews", async (kind) => {
+    const acquired = await acquire();
+    const error = kind === "error" ? new Error("projection failed") : undefined;
+    fixture.onPrompt = (message) => { fixture.text(acquired.sessionId!, "partial"); fixture.finish(message); };
+    const events: WorkRunEvent[] = [];
+    const turn = driver.executePrompt(acquired.session, acquired.prompt, (event) => {
+      events.push(event);
+      if (events.length === 1) return Promise.reject(error);
+      return undefined;
+    }, new AbortController().signal);
+    await expect(turn).rejects.toBe(error);
+    expect(events.filter((event) => event.type === "artifact" && event.ephemeral && event.content === "")).toHaveLength(2);
+    expect(mocks.bridges[0].setEventHandler).toHaveBeenLastCalledWith(null);
+  });
+
+  it.each(["stream", "final"])("joins %s output on shutdown and cannot publish a late successful outcome", async (kind) => {
+    const acquired = await acquire();
+    fixture.onPrompt = (message) => { fixture.text(acquired.sessionId!, "partial"); fixture.finish(message); };
+    let release!: () => void;
+    const writing = new Promise<void>((resolve) => { release = resolve; });
+    let waiting = false;
+    const turn = driver.executePrompt(acquired.session, acquired.prompt, async (event) => {
+      if (!waiting && event.type === "artifact" && event.kind === "report" && (kind === "stream" ? event.ephemeral : !event.ephemeral)) {
+        waiting = true; await writing;
+      }
+    }, new AbortController().signal);
+    await vi.waitFor(() => expect(waiting).toBe(true));
+    let closed = false;
+    const closing = driver.shutdown!().then(() => { closed = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      expect(mocks.bridges[0].stop).not.toHaveBeenCalled();
+    } finally { release(); await Promise.all([turn, closing]); }
+    await expect(turn).resolves.toMatchObject({ status: "canceled" });
+    expect(mocks.bridges[0].stop).toHaveBeenCalledOnce();
+  });
+
+  it("settles a command probe on shutdown without waiting for its discovery timer", async () => {
+    vi.useFakeTimers();
+    let done = false;
+    const listing = driver.listCommands!(temporary).then((result) => { done = true; return result; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.calls.some((call) => call.method === "session/new")).toBe(true);
+      await driver.shutdown!();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(done).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { await vi.advanceTimersByTimeAsync(6000); await listing; vi.useRealTimers(); }
+  });
+
+  it("keeps command discovery cached after its probe closes and retires that cache on shutdown", async () => {
+    fixture.onRpc = (message) => {
+      if (message.method !== "session/new") return false;
+      fixture.respond(message.id!, { sessionId: "commands" });
+      fixture.update("commands", { sessionUpdate: "available_commands_update", availableCommands: [{ name: "test", description: "Test command" }] });
+      return true;
+    };
+    const first = await driver.listCommands!(temporary);
+    expect(first).toMatchObject([{ name: "test" }]);
+    await expect(driver.listCommands!(temporary)).resolves.toEqual(first);
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+    await driver.shutdown!();
+    await expect(driver.listCommands!(temporary)).resolves.toEqual([]);
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+  });
+
+  it("does not persist a capability probe's partial results after shutdown retires it", async () => {
+    fixture.onRpc = (message) => {
+      if (message.method !== "session/new") return false;
+      fixture.respond(message.id!, { sessionId: "models", configOptions: [{ id: "model", category: "model", type: "select", options: [
+        { value: "first", name: "First" }, { value: "second", name: "Second" },
+      ] }] });
+      return true;
+    };
+    const probe = new AcpFixture();
+    probe.onRpc = (message) => {
+      if (message.method !== "session/set_config_option") return false;
+      if (message.params?.value === "first") probe.respond(message.id!, { configOptions: [] });
+      else probe.held.push(message);
+      return true;
+    };
+    let spawned = 0;
+    mocks.spawn.mockImplementation(() => {
+      const child = spawned++ === 0 ? fixture : probe;
+      queueMicrotask(() => child.emit("spawn")); return child;
+    });
+    await driver.listModels!();
+    await vi.waitFor(() => expect(probe.held).toHaveLength(1));
+    await driver.shutdown!();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fs.existsSync(path.join(temporary, "cursor-model-caps.json"))).toBe(false);
+    expect(probe.exitCode).toBe(0);
+  });
+
+  it.each(["initialize", "authenticate"])("releases failed %s startup and retries on a fresh child", async (method) => {
+    fixture.failMethod = method;
+    await expect(acquire()).rejects.toThrow("Session creation failed");
+    expect(fixture.exitCode).toBe(0);
+    expect(mocks.bridges[0].stop).toHaveBeenCalledOnce();
+    const replacement = new AcpFixture();
+    mocks.spawn.mockImplementation(() => { queueMicrotask(() => replacement.emit("spawn")); return replacement; });
+    await expect(acquire()).resolves.toMatchObject({ sessionId: "session-1" });
+    expect(mocks.spawn).toHaveBeenCalledTimes(2);
+    expect(mocks.bridges).toHaveLength(2);
+  });
+
+  it("exposes failed acquisition rollback for cleanup retry without losing its run claim", async () => {
+    fixture.failMethod = "session/new";
+    mocks.bridgeStart.mockImplementationOnce(async () => {
+      mocks.bridges[0].stop.mockRejectedValueOnce(new Error("rollback failed"));
+    });
+    const failure: unknown = await acquire().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ResourceCleanupError);
+    await expect(acquire()).rejects.toThrow("already owns");
+    await (failure as ResourceCleanupError).close();
+    fixture.failMethod = undefined;
+    await expect(acquire()).resolves.toBeDefined();
+    expect(mocks.bridges[0].stop).toHaveBeenCalledTimes(2);
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+  });
 
   it("marks the terminal answer as final and the text before a tool as commentary", async () => {
     const acquired = await acquire();
@@ -167,6 +503,32 @@ describe("Cursor ACP transcript", () => {
     ]);
     expect(calls[0].input).toEqual({ file_path: "/fixture/hero.tsx", offset: 10 });
     expect(calls[1].input).toEqual(calls[0].input);
+  });
+
+  it.each([
+    { kind: "read", title: "Read File", rawInput: { path: "/fixture/hero.tsx" }, toolName: "Read", input: { file_path: "/fixture/hero.tsx" } },
+    { kind: "search", title: "Grep", rawInput: { pattern: "activateTab", path: "/fixture/src" }, toolName: "Grep", input: { pattern: "activateTab", path: "/fixture/src" } },
+    { kind: "execute", title: "Run Shell Command", rawInput: { command: "npm test" }, toolName: "Bash", input: { command: "npm test" } },
+  ])("retains $kind arguments streamed in a status-less update before completion", async ({ kind, title, rawInput, toolName, input }) => {
+    // Cursor's presenter opens the card before args are ready, then sends
+    // refreshToolCall without a status. The final result omits args again.
+    const { calls } = await replayUpdates([
+      { sessionUpdate: "tool_call", toolCallId: "streamed-1", kind, title, status: "pending", rawInput: {} },
+      { sessionUpdate: "tool_call_update", toolCallId: "streamed-1", title, rawInput },
+      { sessionUpdate: "tool_call_update", toolCallId: "streamed-1", status: "in_progress" },
+      { sessionUpdate: "tool_call_update", toolCallId: "streamed-1", status: "completed", rawOutput: "ok" },
+    ]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ toolName, input, output: "ok", metadata: { phase: "complete", title, kind } });
+  });
+
+  it("keeps intermediate content and locations when a terminal update only changes status", async () => {
+    const { calls } = await replayUpdates([
+      { sessionUpdate: "tool_call", toolCallId: "read-1", kind: "read", title: "Read File", status: "pending" },
+      { sessionUpdate: "tool_call_update", toolCallId: "read-1", locations: [{ path: "/fixture/hero.tsx" }], content: [{ type: "content", content: { type: "text", text: "File contents" } }] },
+      { sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed", title: "Read hero.tsx" },
+    ]);
+    expect(calls[1]).toMatchObject({ toolName: "Read", input: { file_path: "/fixture/hero.tsx" }, output: "File contents", metadata: { title: "Read hero.tsx", kind: "read" } });
   });
 
   it("projects a native completed tool with an error result as a failed tool, allowing the agent to recover", async () => {

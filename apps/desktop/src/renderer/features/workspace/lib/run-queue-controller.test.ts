@@ -190,6 +190,32 @@ describe("local run queue delivery", () => {
     expect(h.messages()).toHaveLength(1);
   });
 
+  it("keeps an input queued when Stop arrives while its attachments are being prepared", async () => {
+    const h = harness(); const message = h.add("input"); h.state.status = "succeeded";
+    const uploads = deferred<Awaited<ReturnType<typeof h.serializeUploads>>>();
+    h.serializeUploads.mockReturnValueOnce(uploads.promise);
+    const preparing = h.controller.pump();
+    await vi.waitFor(() => expect(h.serializeUploads).toHaveBeenCalledOnce());
+
+    h.store.dispatch(pauseRunQueue({ ownerKey: h.ownerKey, reason: "Stopped" }));
+    h.state.status = "canceled";
+    h.controller.onStatus("local", "run", "canceled");
+    uploads.resolve([]);
+    await preparing;
+
+    expect(h.sends()).toHaveLength(0);
+    expect(h.messages()).toEqual([expect.objectContaining({ id: "input", status: "queued" })]);
+    expect(h.clearUploads).not.toHaveBeenCalled();
+    expect(h.store.getState().runQueue.byOwner[h.ownerKey].pauseReason).toBe("Stopped");
+    await h.controller.pump();
+    expect(h.sends()).toHaveLength(0);
+
+    await h.controller.resume(h.ownerKey);
+    expect(h.sends()).toHaveLength(1);
+    expect(h.messages()).toEqual([]);
+    expect(h.clearUploads).toHaveBeenCalledWith(message.uploadOwnerKey);
+  });
+
   it("does not deliver another backend's queue or switch transports mid-preparation", async () => {
     const h = harness(); h.add("remote-input", "remote");
     h.state.status = "succeeded";
@@ -217,7 +243,7 @@ describe("local run queue delivery", () => {
     expect(h.messages()).toEqual([]);
   });
 
-  it.each(["RPC timeout: turn/steer", "Delivery is unknown: Claude accepted the message but could not save its receipt."])("reconciles uncertain delivery without resending: %s", async (error) => {
+  it.each(["RPC timeout: turn/steer", "Delivery is unknown: Claude accepted the message but could not save its receipt.", "This message is already being sent."])("reconciles uncertain delivery without resending: %s", async (error) => {
     const h = harness(); h.add("input");
     const normal = h.invoke.getMockImplementation()!;
     h.invoke.mockImplementation((channel, args) => channel === CHANNELS.runs.steer

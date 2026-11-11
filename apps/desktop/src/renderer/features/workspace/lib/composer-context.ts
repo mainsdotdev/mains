@@ -17,6 +17,8 @@
  */
 
 import type { ReviewComment } from "@mains/contracts/review-comments";
+import type { PresentationAnnotation } from "@mains/contracts/presentation-annotations";
+import type { DocumentAnnotation } from "@mains/contracts/document-annotations";
 import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { AppshotCapture } from "../../../../shared/appshots";
 import type { BrowserSelectionElement } from "../../../../shared/browser-annotation";
@@ -89,6 +91,9 @@ export type ContextSkillItem = { kind: "skill" } & ContextSkill;
 export type ContextBrowserItem = { kind: "browser" } & ContextBrowserSelection;
 export type ContextAppshotItem = { kind: "appshot" } & AppshotCapture;
 export type ContextReviewItem = { kind: "review" } & ReviewComment;
+/** Compatibility for unsent items created before the shared document format. */
+export type ContextPresentationItem = { kind: "presentation"; screenshotData: string } & PresentationAnnotation;
+export type ContextDocumentItem = { kind: "document"; screenshotData: string } & DocumentAnnotation;
 export type ContextCodeItem = { kind: "code" } & ContextCodeSelection;
 export interface ContextMcpAppItem {
   kind: "mcp-app";
@@ -111,6 +116,8 @@ export type ContextItem =
   | ContextAppshotItem
   | ContextCodeItem
   | ContextReviewItem
+  | ContextPresentationItem
+  | ContextDocumentItem
   | ContextMcpAppItem;
 
 export type ContextKind = ContextItem["kind"];
@@ -134,6 +141,8 @@ export function contextItemKey(item: ContextItem): string {
     case "appshot":
     case "code":
     case "review":
+    case "presentation":
+    case "document":
     case "mcp-app":
       return item.id;
   }
@@ -164,7 +173,9 @@ export function withoutSubmittedContext(current: readonly ContextItem[], submitt
     item.kind === sent.kind && contextItemKey(item) === contextItemKey(sent) &&
     (item.kind !== "mcp-app" || sent.kind !== "mcp-app" || item.updateId === sent.updateId) &&
     (item.kind !== "browser" || sent.kind !== "browser" || item.comment === sent.comment) &&
-    (item.kind !== "review" || sent.kind !== "review" || item.comment === sent.comment)));
+    (item.kind !== "review" || sent.kind !== "review" || item.comment === sent.comment) &&
+    (item.kind !== "presentation" || sent.kind !== "presentation" || item.comment === sent.comment) &&
+    (item.kind !== "document" || sent.kind !== "document" || item.comment === sent.comment)));
 }
 
 /** Read-only by contract: these are views onto store state, never buffers. */
@@ -177,6 +188,7 @@ export interface GroupedContext {
   readonly appshots: readonly ContextAppshotItem[];
   readonly codeSelections: readonly ContextCodeItem[];
   readonly reviewComments: readonly ContextReviewItem[];
+  readonly documentAnnotations: readonly (ContextDocumentItem | ContextPresentationItem)[];
   readonly mcpApps: readonly ContextMcpAppItem[];
 }
 
@@ -198,6 +210,7 @@ const EMPTY_GROUPED: GroupedContext = Object.freeze({
   appshots: [],
   codeSelections: [],
   reviewComments: [],
+  documentAnnotations: [],
   mcpApps: [],
 });
 
@@ -218,6 +231,7 @@ export function groupContextItems(items: readonly ContextItem[]): GroupedContext
     appshots: [],
     codeSelections: [],
     reviewComments: [],
+    documentAnnotations: [],
   mcpApps: [],
   };
   for (const item of items) {
@@ -245,6 +259,10 @@ export function groupContextItems(items: readonly ContextItem[]): GroupedContext
         break;
       case "review":
         grouped.reviewComments.push(item);
+        break;
+      case "presentation":
+      case "document":
+        grouped.documentAnnotations.push(item);
         break;
       case "mcp-app":
         grouped.mcpApps.push(item);

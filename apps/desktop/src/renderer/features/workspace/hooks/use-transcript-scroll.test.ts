@@ -30,6 +30,73 @@ const controls = (): TranscriptHistory => ({ hasOlder: true, hasNewer: false, fo
 });
 
 describe("transcript scroll", () => {
+  it("opening a paused historical window preserves its position instead of landing at its local tail", () => {
+    const initial = events(20, 30), history = { ...controls(), following: false, historical: true, hasNewer: true };
+    const { element } = viewport(initial.map((event) => event.id));
+    element.scrollTop = 250;
+    const view = renderHook(({ messages }) => useTranscriptScroll("r", messages, true, history), { initialProps: { messages: initial } });
+    act(() => { view.result.current.container.current = element; });
+    view.rerender({ messages: [...initial] });
+    expect(element.scrollTop).toBe(250);
+    view.unmount();
+  });
+
+  it("moving down near the top cannot automatically page backward", () => {
+    const initial = events(20, 30), history = { ...controls(), hasOlder: false };
+    const { element } = viewport(initial.map((event) => event.id));
+    const view = renderHook(({ messages }) => useTranscriptScroll("r", messages, true, history), { initialProps: { messages: initial } });
+    act(() => { view.result.current.container.current = element; });
+    view.rerender({ messages: [...initial] });
+    element.scrollTop = 100; act(() => view.result.current.onScroll());
+    history.hasOlder = true;
+    element.scrollTop = 150; act(() => view.result.current.onScroll());
+    expect(history.loadOlder).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("content resize cannot chase the old page while latest is loading or after its failure", async () => {
+    const initial = events(20, 30), history = controls();
+    let fail!: (error: Error) => void, resize!: FrameRequestCallback;
+    history.loadLatest = vi.fn(() => new Promise<void>((_, reject) => { fail = reject; }));
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { resize = callback; return 1; });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    try {
+      const { element } = viewport(initial.map((event) => event.id));
+      const view = renderHook(({ messages }) => useTranscriptScroll("r", messages, true, history), { initialProps: { messages: initial } });
+      act(() => { view.result.current.container.current = element; });
+      view.rerender({ messages: [...initial] });
+      element.scrollTop = 250; act(() => view.result.current.onScroll());
+      let pending!: Promise<void>;
+      act(() => { pending = view.result.current.page("latest"); view.result.current.onResize(); resize(0); });
+      expect(element.scrollTop).toBe(250);
+      await act(async () => { fail(new Error("offline")); await pending; });
+      expect(element.scrollTop).toBe(250);
+      expect(history.setFollowing).toHaveBeenLastCalledWith(false);
+      view.unmount();
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it("a pending page in the previous conversation cannot block or unlock the replacement", async () => {
+    const initial = events(20, 30);
+    const first = controls(), second = controls();
+    let finishFirst!: () => void, finishSecond!: () => void;
+    first.loadOlder = vi.fn(() => new Promise<void>((resolve) => { finishFirst = resolve; }));
+    second.loadOlder = vi.fn(() => new Promise<void>((resolve) => { finishSecond = resolve; }));
+    const { element } = viewport(initial.map((event) => event.id));
+    const view = renderHook(({ runId, history }) => useTranscriptScroll(runId, initial, true, history),
+      { initialProps: { runId: "first", history: first } });
+    act(() => { view.result.current.container.current = element; });
+    view.rerender({ runId: "first", history: first });
+    let pendingFirst!: Promise<void>, pendingSecond!: Promise<void>;
+    act(() => { pendingFirst = view.result.current.page("older"); });
+    view.rerender({ runId: "second", history: second });
+    act(() => { pendingSecond = view.result.current.page("older"); });
+    expect(second.loadOlder).toHaveBeenCalledTimes(1);
+    await act(async () => { finishFirst(); await pendingFirst; });
+    await act(() => view.result.current.page("older"));
+    expect(second.loadOlder).toHaveBeenCalledTimes(1);
+    await act(async () => { finishSecond(); await pendingSecond; });
+    view.unmount();
+  });
   it("preserves the visible message when older rows prepend and the far end is trimmed", async () => {
     const initial = events(20, 30);
     const history = controls();

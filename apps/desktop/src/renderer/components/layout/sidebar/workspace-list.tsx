@@ -594,7 +594,8 @@ export default function WorkspacesList({
           <SidebarGroupSection
             groupKey="workspace-pinned"
             label="Pinned"
-            labelTint="text-primary-800 dark:text-primary-200"
+            labelWeight="medium"
+            labelTint="text-primary-700 dark:text-primary-300"
             count={pinnedWorkspaces.length}
           >
             {renderSortableWorkspaces(

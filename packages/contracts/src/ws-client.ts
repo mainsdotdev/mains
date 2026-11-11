@@ -1,0 +1,411 @@
+import {
+  buildSubprotocols,
+  decodeWsMessage,
+  encodeWsMessage,
+  MAX_DEVICE_MESSAGE_BYTES,
+  type ServiceResponse,
+} from "./ws-protocol";
+
+/** Shared wire client for desktop/browser and mobile adapters.
+ * Socket generations own open/close callbacks, deadlines, queued frames and
+ * pending replies. Endpoint rotation and foreground policy belong to the host.
+ */
+
+export type TransportStatus =
+  | "connected"
+  | "connecting"
+  | "reconnecting"
+  | "offline";
+
+export interface CloseInfo {
+  code?: number;
+  reason?: string;
+}
+
+/** Minimal subset of the WebSocket API {@link WsTransport} uses. */
+export interface WebSocketLike {
+  send(data: string): void;
+  close(): void;
+  readyState: number;
+  onopen: ((ev?: unknown) => void) | null;
+  onclose: ((ev?: CloseInfo) => void) | null;
+  onerror: ((ev?: unknown) => void) | null;
+  onmessage: ((ev: { data: unknown }) => void) | null;
+}
+
+const OPEN = 1;
+const CLOSED_MESSAGE = "WebSocket connection closed";
+const DISPOSED_MESSAGE = "WsTransport has been disposed";
+
+/**
+ * True for the failures where the outcome is unknown — the socket went away
+ * between send and reply. Safe to retry with the same commandId; anything else
+ * (a timeout with the socket up, a refusal) is not.
+ */
+export function isConnectionLoss(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === CLOSED_MESSAGE || error.message === DISPOSED_MESSAGE)
+  );
+}
+
+export interface WsTransportOptions {
+  /** Reject oversized frames before JSON materializes another copy. */
+  maxMessageChars?: number;
+  /** Factory for the socket; defaults to the global `WebSocket`. Injectable for tests. */
+  factory?: (url: string, protocols?: string[]) => WebSocketLike;
+  /** Device (or shared pairing) token; sent as a WS subprotocol so the backend can authorize. */
+  token?: string | null;
+  /** How long an invoke waits for its response before rejecting. Default 30s. */
+  invokeTimeoutMs?: number;
+  /** Maximum wait for the WebSocket handshake. Default 10s. */
+  connectTimeoutMs?: number;
+  /** Auto-reconnect after an unexpected close. Default true. */
+  reconnect?: boolean;
+  /** Base/max backoff for reconnect attempts. */
+  reconnectBaseMs?: number;
+  reconnectMaxMs?: number;
+  /**
+   * Inspect a close and decide whether reconnecting is pointless (e.g. the
+   * backend refused the token). A fatal close parks the transport `offline`.
+   */
+  isFatalClose?: (info: CloseInfo) => boolean;
+  /** Schedules reconnect/backoff; defaults to setTimeout. Injectable for tests. */
+  schedule?: (fn: () => void, ms: number) => void | (() => void);
+}
+
+interface PendingInvoke {
+  resolve: (result: ServiceResponse<unknown>) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+export class WsTransport {
+  readonly kind = "ws";
+  readonly url: string;
+  private readonly maxMessageChars: number;
+
+  private socket: WebSocketLike | null = null;
+  private currentStatus: TransportStatus = "offline";
+  private disposed = false;
+  private fatal = false;
+  private reconnectAttempts = 0;
+  private closeInfo: CloseInfo | null = null;
+  private socketGeneration = 0;
+  private cancelOpenTimeout: (() => void) | null = null;
+  private cancelReconnect: (() => void) | null = null;
+  private failSocket: ((info: CloseInfo, closeSocket?: boolean) => void) | null = null;
+
+  private nextId = 1;
+  private readonly pending = new Map<number, PendingInvoke>();
+  private readonly listeners = new Map<string, Set<(payload: unknown) => void>>();
+  private readonly statusListeners = new Set<(status: TransportStatus) => void>();
+  private readonly closeListeners = new Set<(info: CloseInfo, fatal: boolean) => void>();
+  /** Invoke frames queued while the socket is not yet OPEN, keyed for cancellation. */
+  private readonly outbox = new Map<number, string>();
+
+  private readonly factory: (url: string, protocols?: string[]) => WebSocketLike;
+  private readonly token: string | null;
+  private readonly invokeTimeoutMs: number;
+  private readonly connectTimeoutMs: number;
+  private reconnectEnabled: boolean;
+  private readonly reconnectBaseMs: number;
+  private readonly reconnectMaxMs: number;
+  private readonly isFatalClose: ((info: CloseInfo) => boolean) | null;
+  private readonly schedule: (fn: () => void, ms: number) => void | (() => void);
+
+  constructor(
+    url: string,
+    options: WsTransportOptions = {},
+  ) {
+    this.url = url;
+    this.maxMessageChars = options.maxMessageChars ?? MAX_DEVICE_MESSAGE_BYTES;
+    this.factory = options.factory ?? defaultFactory;
+    this.token = options.token ?? null;
+    this.invokeTimeoutMs = options.invokeTimeoutMs ?? 30_000;
+    this.connectTimeoutMs = options.connectTimeoutMs ?? 10_000;
+    this.reconnectEnabled = options.reconnect ?? true;
+    this.reconnectBaseMs = options.reconnectBaseMs ?? 500;
+    this.reconnectMaxMs = options.reconnectMaxMs ?? 10_000;
+    this.isFatalClose = options.isFatalClose ?? null;
+    this.schedule = options.schedule ?? ((fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      return () => clearTimeout(timer);
+    });
+  }
+
+  /** Open the connection. Safe to call once; reconnection is automatic. */
+  connect(): void {
+    if (this.disposed || this.fatal || this.socket) return;
+    this.cancelReconnect?.();
+    this.cancelReconnect = null;
+    this.openSocket();
+  }
+
+  /** The last close the socket reported, for diagnosing an `offline` status. */
+  get lastClose(): CloseInfo | null {
+    return this.closeInfo;
+  }
+
+  /** True once a close was judged fatal — the transport will not retry. */
+  get isFatal(): boolean {
+    return this.fatal;
+  }
+
+  /** Reconnect attempts since the last successful open. */
+  get attempts(): number {
+    return this.reconnectAttempts;
+  }
+
+  private openSocket(): void {
+    const generation = ++this.socketGeneration;
+    this.setStatus(this.reconnectAttempts > 0 ? "reconnecting" : "connecting");
+    const fail = (info: CloseInfo, closeSocket = false) => {
+      if (this.disposed || generation !== this.socketGeneration) return;
+      this.socketGeneration++;
+      this.failSocket = null;
+      this.cancelOpenTimeout?.();
+      this.cancelOpenTimeout = null;
+      const current = this.socket;
+      this.socket = null;
+      // Invalidate callbacks first: native close can be synchronous or arrive late.
+      if (closeSocket) { try { current?.close(); } catch { /* already unavailable */ } }
+      this.closeInfo = info;
+      this.failAllPending(new Error(CLOSED_MESSAGE));
+      const fatal = this.isFatalClose?.(info) ?? false;
+      if (fatal) this.fatal = true;
+      for (const listener of this.closeListeners) listener(info, fatal);
+      if (fatal) { this.setStatus("offline"); return; }
+      this.scheduleReconnect();
+    };
+    this.failSocket = fail;
+    let socket: WebSocketLike;
+    try {
+      socket = this.factory(this.url, buildSubprotocols(this.token));
+    } catch {
+      fail({ reason: "Could not open WebSocket" });
+      return;
+    }
+    this.socket = socket;
+    let opened = false;
+
+    socket.onopen = () => {
+      if (this.disposed || generation !== this.socketGeneration) return;
+      opened = true;
+      this.cancelOpenTimeout?.();
+      this.cancelOpenTimeout = null;
+      this.reconnectAttempts = 0;
+      this.closeInfo = null;
+      this.setStatus("connected");
+      const queued = [...this.outbox];
+      this.outbox.clear();
+      for (const [id, frame] of queued) {
+        if (this.disposed || generation !== this.socketGeneration) break;
+        if (this.pending.has(id)) this.sendFrame(id, frame);
+      }
+    };
+    socket.onmessage = (ev) => {
+      if (!this.disposed && generation === this.socketGeneration) this.handleMessage(ev.data);
+    };
+    socket.onerror = () => {
+      // close handler drives reconnect; nothing extra needed here.
+    };
+    socket.onclose = (ev) => fail({ code: ev?.code, reason: ev?.reason });
+    if (this.connectTimeoutMs > 0) {
+      const cancel = this.schedule(() => {
+        if (!opened) fail({ reason: "Connection timed out" }, true);
+      }, this.connectTimeoutMs);
+      this.cancelOpenTimeout = typeof cancel === "function" ? cancel : null;
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.reconnectEnabled || this.disposed || this.fatal) {
+      this.setStatus("offline");
+      return;
+    }
+    this.setStatus("reconnecting");
+    const delay = Math.min(
+      this.reconnectBaseMs * 2 ** this.reconnectAttempts,
+      this.reconnectMaxMs,
+    );
+    this.reconnectAttempts += 1;
+    const generation = this.socketGeneration;
+    this.cancelReconnect?.();
+    const cancel = this.schedule(() => {
+      this.cancelReconnect = null;
+      if (!this.disposed && !this.socket && generation === this.socketGeneration) this.openSocket();
+    }, delay);
+    this.cancelReconnect = typeof cancel === "function" ? cancel : null;
+  }
+
+  private handleMessage(data: unknown): void {
+    const frame = typeof data === "string" ? data : String(data);
+    if (frame.length > this.maxMessageChars) {
+      // The canonical wire encoder puts response kind/id first. Inspect only
+      // that tiny header, so unrelated concurrent commands retain their replies.
+      const header = /^\{"kind":"response","id":(\d+),/.exec(frame.slice(0, 128));
+      const id = header ? Number(header[1]) : null;
+      const entry = id === null ? null : this.pending.get(id);
+      if (entry && id !== null) {
+        if (entry.timer) clearTimeout(entry.timer);
+        this.pending.delete(id);
+        entry.reject(new Error("Mains returned a response exceeding the mobile data limit"));
+      }
+      return;
+    }
+    let message;
+    try {
+      message = decodeWsMessage(frame);
+    } catch {
+      return; // ignore malformed frames
+    }
+    if (message.kind === "response") {
+      const entry = this.pending.get(message.id);
+      if (!entry) return;
+      if (entry.timer) clearTimeout(entry.timer);
+      this.pending.delete(message.id);
+      entry.resolve(message.result);
+    } else if (message.kind === "event") {
+      const set = this.listeners.get(message.channel);
+      if (!set) return;
+      for (const listener of set) listener(message.payload);
+    }
+  }
+
+  invoke(
+    channel: string,
+    args: unknown[] = [],
+    options: { commandId?: string; timeoutMs?: number } = {},
+  ): Promise<ServiceResponse<unknown>> {
+    if (this.disposed) {
+      return Promise.reject(new Error(DISPOSED_MESSAGE));
+    }
+    if (this.fatal) return Promise.reject(new Error(`WebSocket connection refused: ${this.closeInfo?.reason || "authorization failed"}`));
+    const id = this.nextId++;
+    const timeoutMs = options.timeoutMs ?? this.invokeTimeoutMs;
+    return new Promise<ServiceResponse<unknown>>((resolve, reject) => {
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              this.pending.delete(id);
+              this.outbox.delete(id);
+              reject(
+                new Error(
+                  `Invoke "${channel}" timed out after ${timeoutMs}ms`,
+                ),
+              );
+            }, timeoutMs)
+          : null;
+      this.pending.set(id, { resolve, reject, timer });
+      this.sendFrame(
+        id,
+        encodeWsMessage({
+          kind: "invoke",
+          id,
+          channel,
+          args,
+          ...(options.commandId ? { commandId: options.commandId } : {}),
+        }),
+      );
+    });
+  }
+
+  private sendFrame(id: number, frame: string): void {
+    if (this.socket && this.socket.readyState === OPEN) {
+      const fail = this.failSocket;
+      try { this.socket.send(frame); }
+      catch { fail?.({ reason: "Could not send WebSocket message" }, true); }
+    } else {
+      this.outbox.set(id, frame);
+    }
+  }
+
+  subscribe(channel: string, listener: (payload: unknown) => void): () => void {
+    let set = this.listeners.get(channel);
+    if (!set) {
+      set = new Set();
+      this.listeners.set(channel, set);
+    }
+    set.add(listener);
+    return () => {
+      const current = this.listeners.get(channel);
+      if (!current) return;
+      current.delete(listener);
+      if (current.size === 0) this.listeners.delete(channel);
+    };
+  }
+
+  status(): TransportStatus {
+    return this.currentStatus;
+  }
+
+  onStatusChange(listener: (status: TransportStatus) => void): () => void {
+    this.statusListeners.add(listener);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
+  }
+
+  /** Observe every socket close (before any reconnect is scheduled). */
+  onClose(listener: (info: CloseInfo, fatal: boolean) => void): () => void {
+    this.closeListeners.add(listener);
+    return () => {
+      this.closeListeners.delete(listener);
+    };
+  }
+
+  /** Promote a verified one-shot preflight connection to persistent use. */
+  enableReconnect(): void {
+    this.reconnectEnabled = true;
+    if (!this.disposed && !this.fatal && !this.socket && this.currentStatus === "offline") this.scheduleReconnect();
+  }
+
+  /** Close the connection and stop reconnecting. */
+  dispose(): void {
+    this.disposed = true;
+    this.socketGeneration++;
+    this.failSocket = null;
+    this.cancelOpenTimeout?.();
+    this.cancelReconnect?.();
+    this.cancelOpenTimeout = this.cancelReconnect = null;
+    this.failAllPending(new Error(DISPOSED_MESSAGE));
+    const socket = this.socket;
+    this.socket = null;
+    if (socket) {
+      try {
+        socket.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.setStatus("offline");
+  }
+
+  private failAllPending(error: Error): void {
+    this.outbox.clear();
+    for (const entry of this.pending.values()) {
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.reject(error);
+    }
+    this.pending.clear();
+  }
+
+  private setStatus(status: TransportStatus): void {
+    if (this.currentStatus === status) return;
+    this.currentStatus = status;
+    for (const listener of this.statusListeners) listener(status);
+  }
+}
+
+function defaultFactory(url: string, protocols?: string[]): WebSocketLike {
+  const Ctor = (
+    globalThis as {
+      WebSocket?: new (url: string, protocols?: string[]) => WebSocketLike;
+    }
+  ).WebSocket;
+  if (!Ctor) {
+    throw new Error("WebSocket is not available in this environment");
+  }
+  return new Ctor(url, protocols);
+}

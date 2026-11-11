@@ -17,6 +17,7 @@ vi.mock("../connections", () => ({
 }));
 
 vi.mock("./sync.connection-utils", () => ({
+  captureResourceSelection: () => () => true,
   getSelectedResources: (...args: unknown[]) =>
     mockGetSelectedResources(...args),
 }));
@@ -185,7 +186,7 @@ describe("runner — fetchAllEntities", () => {
     expect(lnForResource).not.toHaveBeenCalled();
   });
 
-  it("falls back to all fetchers for an unknown provider name", async () => {
+  it("rejects an unknown provider name without fetching other integrations", async () => {
     const fn1 = vi.fn().mockResolvedValue([]);
     const fn2 = vi.fn().mockResolvedValue([]);
     fakeFetchers.push(makeFetcher("a:x", "a", { forResource: fn1 }));
@@ -196,9 +197,9 @@ describe("runner — fetchAllEntities", () => {
       { id: "r", externalId: "x", connectionId: "conn", name: "x", kind: "k", metadata: {} },
     ]);
 
-    await fetchAllEntities("totally_unknown");
-    expect(fn1).toHaveBeenCalled();
-    expect(fn2).toHaveBeenCalled();
+    await expect(fetchAllEntities("totally_unknown")).rejects.toThrow("provider");
+    expect(fn1).not.toHaveBeenCalled();
+    expect(fn2).not.toHaveBeenCalled();
   });
 
   it("passes the fetcher's defaultLimit through to fetchForResource", async () => {

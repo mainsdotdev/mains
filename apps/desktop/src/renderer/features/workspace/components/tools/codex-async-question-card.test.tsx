@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => {
   })) });
   return { send: vi.fn(), dismiss: vi.fn().mockResolvedValue(undefined), nativeRespond: vi.fn() };
 });
-vi.mock("../../lib/async-question-answers", () => ({ sendAsyncQuestionAnswers: mocks.send, dismissAsyncQuestions: mocks.dismiss }));
+vi.mock("../../lib/async-question-answers", () => ({ sendAsyncQuestionAnswers: (payload: unknown) => mocks.send(payload), dismissAsyncQuestions: (payload: unknown) => mocks.dismiss(payload) }));
 vi.mock("../../hooks", () => ({
   usePluginLogoMap: () => new Map(), renderPluginIcon: () => null, normalizeSlug: (value: string) => value,
 }));
@@ -150,17 +150,21 @@ describe("Codex async questions in the existing approval dialog", () => {
       metadata: { source: "codex_async_questions", questions, turnId: 1 } });
     const view = render(<AsyncQuestionDialogProvider ownerKey="local/run" runId="run" runStatus="running"
       turns={[{ id: 1, status: "active" }]} events={[event]}>
-      <ComposerSlot onRespond={mocks.nativeRespond} variant="codex">
+      <ComposerSlot onRespond={mocks.nativeRespond} variant="codex" dialogClassName="px-3 pb-2">
         <Input aria-label="Composer draft" defaultValue="keep me" />
       </ComposerSlot>
     </AsyncQuestionDialogProvider>);
     const draft = screen.getByRole("textbox", { name: "Composer draft", hidden: true });
     expect(draft.closest("[hidden]")).toBeTruthy();
-    expect(screen.getByRole("textbox", { name: "Custom answer" })).toBeTruthy();
+    const dialogInset = screen.getByRole("textbox", { name: "Custom answer" }).closest(".px-3.pb-2");
+    expect(dialogInset).toBeTruthy();
+    expect(dialogInset?.contains(draft)).toBe(false);
+    expect(draft.closest(".pb-2")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.getByRole("textbox", { name: "Composer draft" })).toBe(draft);
     expect((draft as HTMLInputElement).value).toBe("keep me");
     expect(draft.closest("[hidden]")).toBeNull();
+    expect(draft.closest(".pb-2")).toBeNull();
     view.unmount();
   });
 

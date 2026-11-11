@@ -1,5 +1,6 @@
-import { getConnectionWithSecrets } from "../connections";
-import { getSelectedResources } from "./sync.connection-utils";
+import { readSync } from "./sync-lifecycle";
+import { connectionSyncRevision, getConnectionWithSecrets } from "../connections";
+import { captureResourceSelection, getSelectedResources } from "./sync.connection-utils";
 import { syncRepo } from "./sync.repo";
 import { RESOURCE_FETCHERS } from "./connections";
 import type {
@@ -17,6 +18,8 @@ const CURSOR_OVERLAP_MS = 5 * 60 * 1000;
 const withOverlap = (date: Date) => new Date(date.getTime() - CURSOR_OVERLAP_MS);
 
 interface FetcherRun {
+  current?: () => boolean;
+  errors?: number;
   entities: EntityInput[];
   /** Saved only after the entities are persisted. */
   cursors: SyncCursor[];
@@ -61,15 +64,18 @@ async function runFetcher(
   limit: number,
 ): Promise<FetcherRun> {
   const connection = await getConnectionWithSecrets(fetcher.provider);
-  if (!connection) {
+  if (!connection || (connection.lease && !connection.lease.current())) {
     return { entities: [], cursors: [] };
   }
 
+  const selectionCurrent = captureResourceSelection(connection.id, fetcher.resourceKind);
+  const current = () => (!connection.lease || connection.lease.current()) && selectionCurrent();
   const resources = await getSelectedResources(
     connection.id,
     fetcher.resourceKind,
   );
 
+  if (!current()) return { entities: [], cursors: [], current };
   if (resources.length === 0) {
     if (!fetcher.fetchAll) {
       return { entities: [], cursors: [] };
@@ -81,16 +87,18 @@ async function runFetcher(
         limit,
         connectionId: connection.id,
       });
-      return { entities, cursors: [] };
+      return { entities: current() ? entities : [], cursors: [], current };
     } catch (err) {
       console.error(`[Sync] ${fetcher.id} fetchAll failed:`, err);
-      return { entities: [], cursors: [] };
+      return { entities: [], cursors: [], errors: 1 };
     }
   }
 
+  let errors = 0;
   const entities: EntityInput[] = [];
   const cursors: SyncCursor[] = [];
   for (const resource of resources) {
+    if (!current()) break;
     // Taken before the request, so a change made mid-fetch is asked for again.
     const startedAt = new Date();
     const args: ResourceFetcherArgs = {
@@ -108,6 +116,7 @@ async function runFetcher(
         entities.push(...(await fetcher.fetchForResource(args)));
       }
     } catch (err) {
+      errors++;
       // No cursor: the next run asks for this window again.
       console.error(
         `[Sync] ${fetcher.id} failed for resource ${resource.externalId}:`,
@@ -115,7 +124,7 @@ async function runFetcher(
       );
     }
   }
-  return { entities, cursors };
+  return current() ? { entities, cursors, current, errors } : { entities: [], cursors: [], current };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -124,31 +133,39 @@ async function runFetcher(
 function fetchersForProvider(provider?: string): ResourceFetcher[] {
   if (!provider) return RESOURCE_FETCHERS;
   const matching = RESOURCE_FETCHERS.filter((f) => f.provider === provider);
-  return matching.length > 0 ? matching : RESOURCE_FETCHERS;
+  if (!matching.length) throw new Error(`Unknown sync provider: ${provider}`);
+  return matching;
+}
+
+export function sourceSyncScope(provider?: string): string {
+  return JSON.stringify([...new Set(fetchersForProvider(provider).map((fetcher) => fetcher.provider))]
+    .map((id) => [id, connectionSyncRevision(id)]));
 }
 
 export async function fetchAllEntities(
   provider?: string,
 ): Promise<EntityInput[]> {
-  const fetchers = fetchersForProvider(provider);
-  const results = await Promise.allSettled(
-    fetchers.map((f) => runFetcher(f, f.defaultLimit)),
-  );
+  return readSync(async () => {
+    const fetchers = fetchersForProvider(provider);
+    const results = await Promise.allSettled(
+      fetchers.map((f) => runFetcher(f, f.defaultLimit)),
+    );
 
-  const entities: EntityInput[] = [];
-  for (let i = 0; i < results.length; i++) {
-    const result = results[i];
-    if (result.status === "fulfilled") {
-      entities.push(...result.value.entities);
-    } else {
-      console.error(`[Sync] ${fetchers[i].id} failed:`, result.reason);
+    const entities: EntityInput[] = [];
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === "fulfilled") {
+        if (!result.value.current || result.value.current()) entities.push(...result.value.entities);
+      } else {
+        console.error(`[Sync] ${fetchers[i].id} failed:`, result.reason);
+      }
     }
-  }
 
-  console.log(
-    `[Sync] Fetched ${entities.length} entities from ${fetchers.length} fetchers${provider ? ` (provider: ${provider})` : ""}`,
-  );
-  return entities;
+    console.log(
+      `[Sync] Fetched ${entities.length} entities from ${fetchers.length} fetchers${provider ? ` (provider: ${provider})` : ""}`,
+    );
+    return entities;
+  });
 }
 
 /**
@@ -158,16 +175,17 @@ export async function fetchAllEntities(
  */
 export async function* fetchEntitiesByProvider(
   provider?: string,
-): AsyncGenerator<{ provider: string; entities: EntityInput[]; cursors: SyncCursor[] }> {
+): AsyncGenerator<FetcherRun & { provider: string }> {
   const fetchers = fetchersForProvider(provider);
 
   for (const fetcher of fetchers) {
     try {
-      const { entities, cursors } = await runFetcher(fetcher, fetcher.defaultLimit);
+      const result = await runFetcher(fetcher, fetcher.defaultLimit);
       // `provider` is the fetcher id — what the cursors are keyed by.
-      yield { provider: fetcher.id, entities, cursors };
+      yield { provider: fetcher.id, ...result };
     } catch (err) {
       console.error(`[Sync] ${fetcher.id} failed:`, err);
+      yield { provider: fetcher.id, entities: [], cursors: [], errors: 1 };
     }
   }
 }
@@ -189,11 +207,15 @@ export async function listResourceStates(
   if (!connection || connection.id !== resource.connectionId) {
     throw new Error("This connection is no longer connected");
   }
-  return fetcher.listStates({
+  const selectionCurrent = captureResourceSelection(resource.connectionId, resource.kind);
+  const states = await fetcher.listStates({
     resource,
     secrets: connection.secrets,
     metadata: connection.metadata ?? {},
   });
+  connection.lease?.assertCurrent();
+  if (!selectionCurrent()) throw new Error("This resource selection changed. Refresh it and try again.");
+  return states;
 }
 
 // Re-export the registry for tests / introspection.

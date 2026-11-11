@@ -29,18 +29,6 @@ export interface FileTreeResponse {
   totalDirectories: number;
 }
 
-export interface FileContentResponse {
-  content: string;
-  size: number;
-  isBinary: boolean;
-  encoding: "utf-8" | "binary";
-  /** Disk mtime of the content read — baseline for optimistic-concurrency writes. */
-  mtimeMs?: number;
-}
-
-export interface WriteFileTextResponse {
-  size: number;
-  mtimeMs: number;
-}
+export type { FileContentResponse, WriteFileTextResponse } from "@mains/contracts/file-text";
 
 export type { ServiceResponse } from "../../../../shared/ipc-kit/service-response";

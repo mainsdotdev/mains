@@ -12,12 +12,13 @@
  *  - the 10s poll is the fallback for a dropped push, a stalled adapter, or a
  *    backgrounded renderer, and stops as soon as the run is no longer running.
  *
- * `finalizeRun` is idempotent through the run cache's finalized set — all three
- * paths can reach the same terminal status, and only the first one reports it.
+ * Read receipts and execution-scoped terminal claims live in
+ * conversation-lifecycle.ts. Only a current observation may finalize a run.
  */
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { appApi, appEvents } from "@/lib/transport";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { appApi, appEvents, getTransport, onTransportChange } from "@/lib/transport";
+import { captureConversationOwner, createConversationReadLifecycle, getConversationTransportEpoch } from "@/lib/conversation-lifecycle";
 import { toast } from "@/components/ui";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { runsApi, workspaceApi } from "@/lib/redux/api";
@@ -28,6 +29,7 @@ import { createRunStatusSyncPolicy } from "../lib/run-status-sync";
 
 export interface RunSyncDeps {
   runs: Run[];
+  scopeKey?: string | null;
   activeRunId: string | null;
   /** The run hook's bookkeeping instance — read for the finalized set. */
   cache: RunCache;
@@ -41,6 +43,7 @@ export interface RunSyncDeps {
 
 export function useRunSync({
   runs,
+  scopeKey,
   activeRunId,
   cache,
   loadRunDetails,
@@ -49,6 +52,18 @@ export function useRunSync({
 }: RunSyncDeps) {
   const dispatch = useAppDispatch();
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+
+  const [reads] = useState(createConversationReadLifecycle);
+  const epoch = useSyncExternalStore(onTransportChange, getConversationTransportEpoch, getConversationTransportEpoch);
+  const scope = JSON.stringify([scopeKey ?? null, epoch]);
+  useLayoutEffect(() => {
+    reads.bind(scope);
+    return () => reads.release();
+  }, [reads, scope]);
+  const scopeCurrent = useCallback(() => reads.bound(scope) && getConversationTransportEpoch() === epoch, [reads, scope, epoch]);
+  const beginRunRead = useCallback((id: string, skipPending = false) => reads.begin(id, getTransport(), { valid: scopeCurrent, skipPending }), [reads, scopeCurrent]);
+  const clearStreams = useRef(clearTurnStreams);
+  useLayoutEffect(() => { clearStreams.current = clearTurnStreams; }, [clearTurnStreams]);
 
   // Derive the active run's status so the effects below only rebind on actual
   // status flips, not on every `runs` refetch.
@@ -61,57 +76,60 @@ export function useRunSync({
     [runs],
   );
 
-  const finalizeRun = useCallback(async (run: Run) => {
-    if (run.status === "running" || run.status === "queued") {
-      cache.markRunning(run.id);
-      return;
-    }
-    if (cache.isFinalized(run.id)) return;
-    cache.markFinalized(run.id);
-
-    if (run.status === "failed") {
-      const lastError = run.lastError || "Run failed";
-      let isAuthError = classifyRunErrorKind(lastError) === "auth";
-      if (!isAuthError && /exited with code/i.test(lastError)) {
-        const artRes = await appApi.runs.getHistory({ runId: run.id, direction: "latest" });
-        if (artRes.success && artRes.data) {
-          isAuthError = artRes.data.artifacts.some(
-            (a: { content: any }) => classifyRunErrorKind(a.content) === "auth",
-          );
+  const finalizeRun = useCallback(async (run: Run, receipt?: () => boolean) => {
+    const owner = receipt ? null : beginRunRead(run.id);
+    const current = receipt ?? owner?.current;
+    if (!current) return;
+    let effectOwner: ReturnType<typeof captureConversationOwner> | undefined;
+    try {
+      if (!current()) return;
+      if (run.status === "running" || run.status === "queued") {
+        cache.markRunning(run.id);
+        return;
+      }
+      const terminal = cache.claimFinalization(run.id);
+      if (!terminal) return;
+      // Duplicate terminal reads may supersede this read while diagnosis is
+      // pending. The effect belongs to the execution and scope, not that read.
+      const effect = captureConversationOwner(getTransport(), scopeCurrent);
+      effectOwner = effect;
+      const accepted = () => effect.current() && terminal.current();
+      if (run.status === "failed") {
+        const lastError = run.lastError || "Run failed";
+        let isAuthError = classifyRunErrorKind(lastError) === "auth";
+        if (!isAuthError && /exited with code/i.test(lastError)) {
+          try {
+            const result = await appApi.runs.getHistory({ runId: run.id, direction: "latest" });
+            if (!accepted()) return;
+            if (result.success && result.data) {
+              isAuthError = result.data.artifacts.some((artifact) => classifyRunErrorKind(artifact.content) === "auth");
+            }
+          } catch { /* Diagnosis is optional; preserve the actual failure notification. */ }
         }
-      }
-      if (isAuthError) {
-        // The transcript renders a Sign in notice for this run — the toast
-        // just names the fix for anyone who dismisses it.
-        toast.error(
-          "Authentication expired — sign in from the session view",
-          { duration: 8000 },
-        );
-      } else {
-        toast.error(lastError, { duration: 5000 });
-      }
-    } else if (run.status === "canceled") {
-      toast.error("Run canceled");
+        const message = isAuthError ? "Authentication expired — sign in from the session view" : lastError;
+        if (accepted()) toast.error(message, { duration: isAuthError ? 8000 : 5000 });
+      } else if (run.status === "canceled" && accepted()) toast.error("Run canceled");
+      if (!accepted()) return;
+      dispatch(runsApi.util.invalidateTags(["Runs", "WorkspaceDiffs"]));
+      dispatch(workspaceApi.util.invalidateTags(["Workspaces", "Reviews", "ReviewFindings"]));
+    } finally {
+      effectOwner?.release();
+      owner?.release();
     }
-
-    dispatch(runsApi.util.invalidateTags(["Runs", "WorkspaceDiffs"]));
-    dispatch(workspaceApi.util.invalidateTags(["Workspaces"]));
-    dispatch(workspaceApi.util.invalidateTags(["Reviews"]));
-    dispatch(workspaceApi.util.invalidateTags(["ReviewFindings"]));
-  }, [cache, dispatch]);
+  }, [cache, dispatch, beginRunRead, scopeCurrent]);
 
   // Voice transcripts can persist between work turns, while the run is idle.
   // Subscribe for the selected tab throughout the conversation.
   // Debounce transcript refetches to coalesce event bursts.
   useEffect(() => {
-    if (!activeRunId) return;
+    if (!activeRunId || !scopeCurrent()) return;
 
     let refetchTimer: number | null = null;
     const scheduleRefetch = () => {
-      if (refetchTimer !== null) return;
+      if (!scopeCurrent() || refetchTimer !== null) return;
       refetchTimer = window.setTimeout(() => {
         refetchTimer = null;
-        loadRunDetails(activeRunId);
+        if (scopeCurrent()) void loadRunDetails(activeRunId);
       }, 250);
     };
 
@@ -126,18 +144,19 @@ export function useRunSync({
       offEvent();
       if (refetchTimer !== null) window.clearTimeout(refetchTimer);
     };
-  }, [activeRunId, loadRunDetails]);
+  }, [activeRunId, loadRunDetails, scopeCurrent]);
 
   // The backend recomputes and broadcasts the workspace diff after undo too.
   // Keep this listener alive when the selected run is finished, and refresh
   // the affected workspace even if another run or the editor is selected.
   useEffect(() => appEvents.runs.onDiffUpdated(({ workspaceId }) => {
+    if (!scopeCurrent()) return;
     dispatch(
       workspaceApi.util.invalidateTags([
         { type: "WorkspaceDiffs", id: workspaceId },
       ]),
     );
-  }), [dispatch]);
+  }), [dispatch, scopeCurrent]);
 
   // Run status is workspace-scoped, not tab-scoped. Keep listening while any
   // run is open, so an inactive tab cannot miss its terminal event and a
@@ -148,21 +167,19 @@ export function useRunSync({
     return appEvents.runs.onStatusChanged(async ({ runId, status }) => {
       const targetRunId = statusSyncPolicy.targetRunId(runId, status);
       if (!targetRunId) return;
-      // A short native job can finish before getById returns. Its running
-      // notification still starts a fresh terminal lifecycle in the cache.
+      const request = beginRunRead(targetRunId);
+      if (!request) return;
       if (status === "running" || status === "queued") cache.markRunning(targetRunId);
-
-      const result = await appApi.runs.getById(targetRunId);
-      if (result.success && result.data) {
+      try {
+        const result = await appApi.runs.getById(targetRunId);
+        if (!request.current() || !result.success || !result.data) return;
         onRunUpdated(result.data);
-        await finalizeRun(result.data);
-      }
-
-      // Pull the final transcript while the completion event is fresh. This
-      // makes the completed tab ready even before the user switches back.
-      void loadRunDetails(targetRunId);
+        await finalizeRun(result.data, request.current);
+        if (request.current()) void loadRunDetails(targetRunId);
+      } catch (error) { if (request.current()) console.error("Run status refresh failed:", error); }
+      finally { request.release(); }
     });
-  }, [statusSyncPolicy, cache, loadRunDetails, finalizeRun, onRunUpdated]);
+  }, [statusSyncPolicy, cache, loadRunDetails, finalizeRun, onRunUpdated, beginRunRead]);
 
   // Polling fallback for dropped pushes, stalled adapters, or backgrounded
   // renderers. 10s keeps IO low since push handles the common case.
@@ -173,41 +190,30 @@ export function useRunSync({
         pollingRef.current = null;
       }
       if (activeRunStatus === "succeeded" || activeRunStatus === "canceled" || activeRunStatus === "failed") {
-        clearTurnStreams(activeRunStatus !== "succeeded");
+        clearStreams.current(activeRunStatus !== "succeeded");
       }
       return;
     }
 
-    pollingRef.current = setInterval(async () => {
+    const timer = setInterval(async () => {
+      if (!activeRunId) return;
+      const request = beginRunRead(activeRunId, true);
+      if (!request) return;
       try {
-        if (!activeRunId) return;
-        loadRunDetails(activeRunId);
-
+        void loadRunDetails(activeRunId);
         const result = await appApi.runs.getById(activeRunId);
-        if (!result.success || !result.data) return;
-
+        if (!request.current() || !result.success || !result.data) return;
         onRunUpdated(result.data);
-
         if (result.data.status !== "running") {
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-          }
-          await finalizeRun(result.data);
+          if (pollingRef.current === timer) { clearInterval(timer); pollingRef.current = null; }
+          await finalizeRun(result.data, request.current);
         }
-      } catch (err) {
-        console.error("Polling error:", err);
-      }
+      } catch (error) { if (request.current()) console.error("Polling error:", error); }
+      finally { request.release(); }
     }, 10000);
+    pollingRef.current = timer;
+    return () => { clearInterval(timer); if (pollingRef.current === timer) pollingRef.current = null; };
+  }, [activeRunId, activeRunStatus, loadRunDetails, finalizeRun, onRunUpdated, beginRunRead]);
 
-    return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRunId, activeRunStatus, loadRunDetails, finalizeRun, onRunUpdated]);
-
-  return { finalizeRun };
+  return { finalizeRun, beginRunRead };
 }

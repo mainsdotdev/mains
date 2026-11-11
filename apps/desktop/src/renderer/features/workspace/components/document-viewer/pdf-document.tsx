@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
-import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
+import type { PDFDocumentProxy } from "pdfjs-dist";
 import { Text } from "@/components/ui";
 import { fetchLocalDocument, localDocumentUrlRevision, subscribeLocalDocumentUrls } from "@/lib/local-document-url";
 import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 import { DocumentFallback } from "./document-fallback";
+import { DocumentAnnotations } from "./document-annotations";
+import type { DocumentAnnotationSurface } from "../../lib/document-selection";
+import { createDocumentTask, documentIdentity } from "../../lib/document-lifecycle";
+import "./pdf-text-layer.css";
 
 type Status = "loading" | "ready" | "error";
 type PdfJs = typeof import("pdfjs-dist");
@@ -44,24 +48,28 @@ function loadPdfjs(): Promise<PdfJs> {
  * zoom, and only pages near the viewport hold a canvas — a long PDF keeps a
  * sized placeholder for the rest.
  */
-export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: number }) {
+export function PdfDocument({ doc, zoom, annotating = false, onExitAnnotation }: {
+  doc: DocumentViewerDoc; zoom: number; annotating?: boolean; onExitAnnotation?: () => void;
+}) {
   const revision = useSyncExternalStore(subscribeLocalDocumentUrls, localDocumentUrlRevision);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [failure, setFailure] = useState<string | undefined>();
-  const [loadedRevision, setLoadedRevision] = useState(revision);
-  if (loadedRevision !== revision) {
-    setLoadedRevision(revision);
-    setStatus("loading");
-    setFailure(undefined);
-  }
+  const identity = documentIdentity(doc, revision);
+  const [loadedIdentity, setLoadedIdentity] = useState(identity);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [firstPageSize, setFirstPageSize] = useState<PageSize | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+  const [annotationSurface, setAnnotationSurface] = useState<DocumentAnnotationSurface | null>(null);
+  if (loadedIdentity !== identity) {
+    setLoadedIdentity(identity); setStatus("loading"); setFailure(undefined);
+    setPdf(null); setFirstPageSize(null);
+  }
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    setAnnotationSurface({ root: el, viewport: el, pages: () => Array.from(el.querySelectorAll<HTMLElement>("[data-document-page]")), targets: new Map(), textSelection: true });
     const measure = () =>
       setContainerWidth(Math.max(0, el.clientWidth - CONTAINER_PADDING_PX));
     measure();
@@ -72,37 +80,39 @@ export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: numbe
 
   // Reads are scoped to the current document and backend.
   useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    let loadingTask: PDFDocumentLoadingTask | null = null;
+    const task = createDocumentTask();
 
     void (async () => {
       try {
-        const res = await fetchLocalDocument(doc.path, { signal: controller.signal });
+        const res = await fetchLocalDocument(doc.path, { signal: task.signal });
         if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
         const data = new Uint8Array(await res.arrayBuffer());
+        if (!task.current()) return;
         const pdfjs = await loadPdfjs();
-        if (cancelled) return;
-        loadingTask = pdfjs.getDocument({ data });
+        if (!task.current()) return;
+        const loadingTask = pdfjs.getDocument({ data });
+        task.own(() => loadingTask.destroy());
         const loaded = await loadingTask.promise;
+        if (!task.current()) return;
         const firstPage = await loaded.getPage(1);
-        if (cancelled) return;
+        if (!task.current()) return;
         const viewport = firstPage.getViewport({ scale: 1 });
-        setPdf(loaded);
-        setFirstPageSize({ width: viewport.width, height: viewport.height });
-        setStatus("ready");
+        task.ready(() => {
+          setPdf(loaded);
+          setFirstPageSize({ width: viewport.width, height: viewport.height });
+          setStatus("ready");
+        });
       } catch (err) {
-        if (cancelled) return;
-        console.error(`[document-viewer] failed to render pdf ${doc.path}`, err);
-        setFailure(err instanceof Error ? err.message : undefined);
-        setStatus("error");
+        task.fail(() => {
+          console.error(`[document-viewer] failed to render pdf ${doc.path}`, err);
+          setFailure(err instanceof Error ? err.message : undefined);
+          setStatus("error");
+        });
       }
     })();
 
     return () => {
-      cancelled = true;
-      controller.abort();
-      void loadingTask?.destroy();
+      task.close();
     };
   }, [revision, doc.path]);
 
@@ -141,6 +151,9 @@ export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: numbe
           </div>
         )}
       </div>
+      {annotating && status === "ready" && annotationSurface && onExitAnnotation && (
+        <DocumentAnnotations surface={annotationSurface} doc={doc} onExit={onExitAnnotation} />
+      )}
     </div>
   );
 }
@@ -182,13 +195,12 @@ function PdfPage({
       return;
     }
 
-    let cancelled = false;
-    let task: RenderTask | null = null;
+    const task = createDocumentTask();
 
     void (async () => {
       try {
         const page = await pdf.getPage(pageNumber);
-        if (cancelled) return;
+        if (!task.current()) return;
         const base = page.getViewport({ scale: 1 });
         setSize((prev) =>
           prev && prev.width === base.width && prev.height === base.height
@@ -211,23 +223,37 @@ function PdfPage({
         canvas.style.width = "100%";
         canvas.style.height = "100%";
 
-        task = page.render({
+        const pdfjs = await loadPdfjs();
+        if (!task.current()) return;
+        const renderTask = page.render({
           canvas,
           viewport,
           transform:
             outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined,
         });
-        await task.promise;
-        if (!cancelled) pageEl.replaceChildren(canvas);
+        task.own(() => renderTask.cancel());
+        const textLayer = document.createElement("div");
+        textLayer.className = "document-text-layer";
+        textLayer.style.setProperty("--total-scale-factor", String(viewport.scale * viewport.userUnit));
+        const textTask = new pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: textLayer, viewport });
+        task.own(() => textTask.cancel());
+        const textReady = textTask.render().catch((error: unknown) => {
+          if (task.current()) console.warn(`[document-viewer] PDF text unavailable on page ${pageNumber}`, error);
+        });
+        await Promise.all([renderTask.promise, textReady]);
+        task.ready(() => {
+          textTask.textDivs.forEach((node, index) => node.setAttribute("data-document-text", `page-${pageNumber}-text-${index}`));
+          pageEl.replaceChildren(canvas, textLayer);
+        });
       } catch (err) {
-        if (cancelled || (err as Error)?.name === "RenderingCancelledException") return;
-        console.error(`[document-viewer] failed to render pdf page ${pageNumber}`, err);
+        task.fail(() => {
+          if ((err as Error)?.name !== "RenderingCancelledException") console.error(`[document-viewer] failed to render pdf page ${pageNumber}`, err);
+        });
       }
     })();
 
     return () => {
-      cancelled = true;
-      task?.cancel();
+      task.close();
     };
   }, [pdf, pageNumber, scale, isNearViewport]);
 
@@ -236,7 +262,8 @@ function PdfPage({
     <div
       ref={pageRef}
       aria-label={`Page ${pageNumber}`}
-      className="shrink-0 overflow-hidden rounded-sm bg-white shadow-sm"
+      data-document-page={pageNumber}
+      className="relative shrink-0 overflow-hidden rounded-sm bg-primary shadow-sm"
       style={{ width: width * scale, height: height * scale }}
     />
   );

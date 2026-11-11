@@ -87,18 +87,19 @@ export const automationsRepo = {
     db.delete(automations).where(eq(automations.id, id)).run();
   },
 
-  markRunCompleted(id: string, error?: string) {
+  markRunCompleted(id: string, error?: string, expectedNextRunAt?: Date | null) {
     const db = getDb();
     const automation = this.findById(id);
     if (!automation) return;
 
     const now = new Date();
     const nextRunAt = new Date(now.getTime() + automation.intervalMinutes * 60_000);
+    const sameSchedule = expectedNextRunAt === undefined || automation.nextRunAt?.getTime() === expectedNextRunAt?.getTime();
 
     db.update(automations)
       .set({
         lastRunAt: now,
-        nextRunAt,
+        nextRunAt: sameSchedule ? nextRunAt : undefined,
         lastError: error ?? null,
         consecutiveErrors: error ? automation.consecutiveErrors + 1 : 0,
         updatedAt: sql`(unixepoch())`,

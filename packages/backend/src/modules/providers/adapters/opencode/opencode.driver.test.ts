@@ -7,8 +7,10 @@ import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcquiredSession, WorkRunEvent, WorkRunRequest } from "../../../../../shared/adapter.types";
 import type { ToolApprovalRequest, ToolApprovalResponse } from "../../../runs/runs.dto";
-import type { MainsMcpStdioServer } from "../mains-mcp-server";
+import { MainsMcpStdioServer } from "../mains-mcp-server";
 import { createWorkRunAdapter } from "../work-run-core";
+import { ResourceCleanupError } from "../../../../runtime/resource-lifecycle";
+import { installTestBackendRuntime } from "../../../../../test/backend-runtime";
 import { createOpenCodeDriver } from "./opencode.driver";
 
 const mocks = vi.hoisted(() => ({
@@ -41,6 +43,11 @@ class AcpFixture extends EventEmitter {
   serversByCwd = new Map<string, Map<string, McpConfig>>();
   prompts = new Map<string, number | string>();
   onPrompt?: (message: RpcMessage) => void;
+  holdMethod?: string;
+  held: RpcMessage[] = [];
+  authMethods: Array<{ id: string; type: string }> = [];
+  commandName = "compact";
+  fixedSessionId?: string;
   failMethod?: string;
   failureMessage?: string;
   stdin = new Writable({ write: (chunk, _encoding, done) => {
@@ -55,16 +62,17 @@ class AcpFixture extends EventEmitter {
   private handle(message: RpcMessage) {
     if (message.id === undefined || !message.method) return;
     const params = message.params ?? {};
+    if (message.method === this.holdMethod) { this.held.push(message); return; }
     if (message.method === this.failMethod) {
       this.stdout.write(JSON.stringify({ id: message.id, error: { code: -32000, message: this.failureMessage ?? "Acquisition failed" } }) + "\n");
       return;
     }
-    if (message.method === "initialize") this.respond(message.id, { authMethods: [] });
+    if (message.method === "initialize") this.respond(message.id, { authMethods: this.authMethods });
     else if (["session/new", "session/resume", "session/fork"].includes(message.method!)) {
       const cwd = params.cwd as string;
       const sessionId = message.method === "session/resume"
         ? params.sessionId as string
-        : `session-${this.nativeSessions.size + 1}`;
+        : this.fixedSessionId ?? `session-${this.nativeSessions.size + 1}`;
       this.nativeSessions.set(sessionId, cwd);
       this.sessions.set(sessionId, cwd);
       const servers = this.serversByCwd.get(cwd) ?? new Map<string, McpConfig>();
@@ -72,7 +80,7 @@ class AcpFixture extends EventEmitter {
       this.serversByCwd.set(cwd, servers);
       this.stdout.write(JSON.stringify({
         method: "session/update", params: { sessionId, update: {
-          sessionUpdate: "available_commands_update", availableCommands: [{ name: "compact" }],
+          sessionUpdate: "available_commands_update", availableCommands: [{ name: this.commandName }],
         } },
       }) + "\n");
       this.respond(message.id, { sessionId });
@@ -135,6 +143,13 @@ describe("OpenCode driver", () => {
   let directory: string;
   let driver: ReturnType<typeof createOpenCodeDriver>;
   let nativeSessions: Map<string, string>;
+  let restoreRuntime: () => void;
+  let holdVersion = false;
+  let fixedSessionId: string | undefined;
+  let holdMethod: string | undefined;
+  let authenticate = false;
+  let distinctCommands = false;
+  const controls: AcpFixture[] = [];
   let failMethod: string | undefined;
   let failureMessage: string | undefined;
   let onPrompt: ((process: AcpFixture, message: RpcMessage) => void) | undefined;
@@ -143,6 +158,8 @@ describe("OpenCode driver", () => {
 
   beforeEach(() => {
     directory = fs.mkdtempSync(path.join(os.tmpdir(), "mains-opencode-isolation-"));
+    restoreRuntime = installTestBackendRuntime({ getPath: () => directory });
+    holdVersion = false; fixedSessionId = undefined; holdMethod = undefined; authenticate = false; distinctCommands = false; controls.length = 0;
     nativeSessions = new Map();
     processes.length = 0;
     failMethod = undefined;
@@ -150,13 +167,19 @@ describe("OpenCode driver", () => {
     onPrompt = undefined;
     mocks.spawn.mockImplementation((_binary, args: string[]) => {
       const child = new AcpFixture(nativeSessions);
+      if (distinctCommands) child.commandName = `cmd-${processes.length + 1}`;
+      child.fixedSessionId = fixedSessionId; child.holdMethod = holdMethod;
+      if (authenticate) child.authMethods = [{ id: "fixture_auth", type: "agent" }];
       child.failMethod = failMethod;
       child.failureMessage = failureMessage;
       child.onPrompt = (message) => onPrompt?.(child, message);
-      if (args[0] === "--version") queueMicrotask(() => {
-        child.stdout.write("opencode v2.2.5\n"); child.emit("close", 0);
-      });
-      else processes.push(child);
+      if (args[0] === "--version") {
+        controls.push(child);
+        if (!holdVersion) queueMicrotask(() => {
+          child.stdout.write("opencode v2.2.5\n"); child.exitCode = 0; child.emit("close", 0);
+        });
+      }
+      else { processes.push(child); queueMicrotask(() => child.emit("spawn")); }
       return child;
     });
     mocks.dispatch.mockImplementation(async (_tool, _args, ctx) => ({ content: [{ type: "text", text: ctx.runId }] }));
@@ -174,6 +197,7 @@ describe("OpenCode driver", () => {
     }
     for (const script of bridgeScripts) expect(fs.existsSync(script)).toBe(false);
     bridgeScripts.clear();
+    restoreRuntime();
     fs.rmSync(directory, { recursive: true, force: true });
     vi.clearAllMocks();
     vi.useRealTimers();
@@ -188,6 +212,296 @@ describe("OpenCode driver", () => {
   function execute(acquired: AcquiredSession, events: WorkRunEvent[]) {
     return driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
   }
+
+  it("retains failed bridge cleanup through shutdown and retries only the unfinished release", async () => {
+    await driver.createSession(request("run-a"));
+    const original = MainsMcpStdioServer.prototype.stop;
+    const stop = vi.spyOn(MainsMcpStdioServer.prototype, "stop").mockRejectedValueOnce(new Error("bridge cleanup failed"));
+    try {
+      await expect(driver.shutdown!()).rejects.toThrow("failed");
+      await expect(driver.createSession(request("retired"))).rejects.toThrow("shut down");
+      await driver.shutdown!();
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(processes[0].exitCode).toBe(0);
+    } finally {
+      const bridge = stop.mock.contexts[0] as MainsMcpStdioServer | undefined;
+      stop.mockRestore(); if (bridge) await original.call(bridge);
+    }
+  });
+
+  it("retires the CLI compatibility probe during shutdown before any ACP process can start", async () => {
+    holdVersion = true;
+    const opening = driver.createSession(request("run-a"));
+    const result = Promise.allSettled([opening]);
+    await vi.waitFor(() => expect(controls).toHaveLength(1));
+    const closing = driver.shutdown!();
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(controls[0].exitCode).toBe(0);
+    } finally {
+      controls[0].stdout.write("opencode v2.2.5\n"); controls[0].emit("close", 0);
+      await Promise.all([closing, result]);
+    }
+    expect((await result)[0].status).toBe("rejected");
+    expect(processes).toHaveLength(0);
+  });
+
+  it("routes identical native session ids by their owning process", async () => {
+    fixedSessionId = "same-native-id";
+    const first = await driver.createSession(request("run-a"));
+    const second = await driver.createSession(request("run-b"));
+    expect(first.sessionId).toBe(second.sessionId);
+    const a = processes[0], b = processes[1];
+    const eventsA: WorkRunEvent[] = [], eventsB: WorkRunEvent[] = [];
+    const turnA = execute(first, eventsA), turnB = execute(second, eventsB);
+    await vi.waitFor(() => { expect(a.prompts.size).toBe(1); expect(b.prompts.size).toBe(1); });
+    a.update(first.sessionId!, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "first" } });
+    b.update(second.sessionId!, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "second" } });
+    a.finish(first.sessionId!); b.finish(second.sessionId!);
+    await Promise.all([turnA, turnB]);
+    const reports = (events: WorkRunEvent[]) => events.filter((event) => event.type === "artifact" && event.kind === "report" && !event.ephemeral);
+    expect(reports(eventsA)).toMatchObject([{ content: "first" }]);
+    expect(reports(eventsB)).toMatchObject([{ content: "second" }]);
+  });
+
+  it.each(["session/prompt", "session/list"])("settles caller cancellation while %s never replies", async (method) => {
+    const run = await driver.createSession(request("run-a"));
+    const process = owner(run);
+    if (method === "session/list") { process.holdMethod = method; process.onPrompt = () => process.finish(run.sessionId!); }
+    const controller = new AbortController();
+    let outcome: unknown;
+    const turn = driver.executePrompt(run.session, run.prompt, () => {}, controller.signal).then((value) => { outcome = value; return value; });
+    try {
+      await vi.waitFor(() => expect(method === "session/list" ? process.held.length : process.prompts.size).toBe(1));
+      controller.abort();
+      await vi.waitFor(() => expect(outcome).toMatchObject({ status: "canceled" }));
+      expect(process.calls.filter((call) => call.method === "session/cancel")).toHaveLength(1);
+    } finally {
+      for (const held of process.held) process.respond(held.id!, { sessions: [] });
+      process.finish(run.sessionId!); await turn;
+    }
+  });
+
+  it.each(["initialize", "authenticate", "session/new"])("joins shutdown during %s and rejects its late result", async (method) => {
+    holdMethod = method; authenticate = method === "authenticate";
+    const opening = driver.createSession(request("run-a"));
+    const result = Promise.allSettled([opening]);
+    await vi.waitFor(() => expect(processes[0]?.held.length).toBe(1));
+    await driver.shutdown!();
+    expect((await result)[0].status).toBe("rejected");
+    const process = processes[0];
+    process.respond(process.held[0].id!, { sessionId: "late", authMethods: [] });
+    await expect(driver.createSession(request("after-close"))).rejects.toThrow("shut down");
+    expect(process.exitCode).toBe(0);
+    expect(processes).toHaveLength(1);
+  });
+
+  it("does not replace a prepared run or forget it after failed cleanup", async () => {
+    const first = await driver.createSession(request("run-a"));
+    await expect(driver.createSession(request("run-a"))).rejects.toThrow("already owns");
+    const stop = vi.spyOn(MainsMcpStdioServer.prototype, "stop").mockRejectedValueOnce(new Error("retry cleanup"));
+    try {
+      await expect(driver.cleanup!(first.session)).rejects.toThrow("cleanup failed");
+      await expect(driver.createSession(request("run-a"))).rejects.toThrow("already owns");
+      await driver.cleanup!(first.session);
+      const next = await driver.createSession(request("run-a"));
+      const nextOwner = owner(next);
+      await driver.cleanup!(first.session);
+      expect(nextOwner.exitCode).toBeNull();
+      expect(processes).toHaveLength(2);
+    } finally { stop.mockRestore(); }
+  });
+
+  it("discards a captured bridge callback after its prompt finishes", async () => {
+    const listener = vi.spyOn(MainsMcpStdioServer.prototype, "setEventHandler");
+    try {
+      const run = await driver.createSession(request("run-a"));
+      onPrompt = (process) => process.finish(run.sessionId!);
+      const events: WorkRunEvent[] = [];
+      await execute(run, events);
+      const callback = listener.mock.calls.find(([handler]) => handler !== null)![0]!;
+      const count = events.length;
+      await callback({ type: "artifact", kind: "report", content: "stale" });
+      expect(events).toHaveLength(count);
+    } finally { listener.mockRestore(); }
+  });
+
+  it.each(["error", "undefined"])("fails a rejected projection (%s) and clears unfinished previews", async (kind) => {
+    const run = await driver.createSession(request("run-a"));
+    const failure = kind === "error" ? new Error("write failed") : undefined;
+    onPrompt = (process) => {
+      process.update(run.sessionId!, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "partial" } });
+      process.update(run.sessionId!, { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking" } });
+      process.finish(run.sessionId!);
+    };
+    const events: WorkRunEvent[] = [];
+    const turn = driver.executePrompt(run.session, run.prompt, (event) => {
+      events.push(event);
+      if (events.length === 1) return Promise.reject(failure);
+      return undefined;
+    }, new AbortController().signal);
+    await expect(turn).rejects.toBe(failure);
+    expect(events.filter((event) => event.type === "artifact" && event.ephemeral && event.content === "")).toHaveLength(2);
+  });
+
+  it("correlates concurrent command snapshots with the process and session that requested them", async () => {
+    distinctCommands = true;
+    const a = path.join(directory, "a"), b = path.join(directory, "b");
+    fs.mkdirSync(a); fs.mkdirSync(b);
+    await Promise.all([
+      driver.createSession({ ...request("run-a"), execution: { cwd: a, workspaceId: null } }),
+      driver.createSession({ ...request("run-b"), execution: { cwd: b, workspaceId: null } }),
+    ]);
+    await expect(driver.listCommands!(a)).resolves.toMatchObject([{ name: "cmd-1" }]);
+    await expect(driver.listCommands!(b)).resolves.toMatchObject([{ name: "cmd-2" }]);
+    expect(processes).toHaveLength(2);
+  });
+
+  it.each([
+    ["stream", "shutdown"], ["final", "shutdown"], ["stream", "crash"], ["final", "crash"],
+  ])("joins %s writes during %s and fences a late successful outcome", async (kind, reason) => {
+    const run = await driver.createSession(request("run-a"));
+    const process = owner(run);
+    onPrompt = () => {
+      process.update(run.sessionId!, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "reply" } });
+      process.finish(run.sessionId!);
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let waiting = false;
+    const turn = driver.executePrompt(run.session, run.prompt, async (event) => {
+      if (!waiting && event.type === "artifact" && event.kind === "report" && (kind === "stream" ? event.ephemeral : !event.ephemeral)) {
+        waiting = true; await gate;
+      }
+    }, new AbortController().signal);
+    await vi.waitFor(() => expect(waiting).toBe(true));
+    const stop = vi.spyOn(MainsMcpStdioServer.prototype, "stop");
+    let closing: Promise<void>;
+    if (reason === "crash") {
+      process.emit("error", new Error("process crashed"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      closing = driver.cleanup!(run.session);
+    } else closing = driver.shutdown!();
+    let closed = false; void closing.then(() => { closed = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      expect(process.exitCode).toBe(0);
+      expect(stop).not.toHaveBeenCalled();
+    } finally { release(); await Promise.all([turn, closing]); stop.mockRestore(); }
+    await expect(turn).resolves.toMatchObject({ status: reason === "shutdown" ? "canceled" : "failed" });
+  });
+
+  it.each(["session/request_permission", "elicitation/create"])("isolates repeated %s ids across prompts and drops retired answers", async (method) => {
+    const answers: Array<(response: ToolApprovalResponse) => void> = [];
+    mocks.approval.mockImplementation(() => new Promise((resolve) => { answers.push(resolve); }));
+    const first = await driver.createSession(request("run-a"));
+    const a = owner(first);
+    const turnA = execute(first, []);
+    await vi.waitFor(() => expect(a.prompts.size).toBe(1));
+    a.ask(first.sessionId!, method);
+    await vi.waitFor(() => expect(answers).toHaveLength(1));
+    a.finish(first.sessionId!); await turnA;
+    await driver.cleanup!(first.session);
+    const next = await driver.resumeSession!({ ...request("run-a"), message: "Continue" });
+    const b = owner(next);
+    const turnB = execute(next, []);
+    try {
+      await vi.waitFor(() => expect(b.prompts.size).toBe(1));
+      b.ask(next.sessionId!, method);
+      await vi.waitFor(() => expect(answers).toHaveLength(2));
+      expect(new Set(mocks.approval.mock.calls.map(([request]) => request.requestId)).size).toBe(2);
+    } finally {
+      b.finish(next.sessionId!); await turnB;
+      for (const answer of answers) answer({ requestId: "fixture", approved: true });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(a.calls.some((call) => call.id === "approval-1")).toBe(false);
+    expect(b.calls.some((call) => call.id === "approval-1")).toBe(false);
+  });
+
+  it("retains failed startup rollback for explicit cleanup before acquiring the run again", async () => {
+    failMethod = "initialize";
+    const stop = vi.spyOn(MainsMcpStdioServer.prototype, "stop").mockRejectedValueOnce(new Error("rollback failed"));
+    try {
+      const failure: unknown = await driver.createSession(request("run-a")).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ResourceCleanupError);
+      await expect(driver.createSession(request("run-a"))).rejects.toThrow("already owns");
+      await (failure as ResourceCleanupError).close();
+      failMethod = undefined;
+      await expect(driver.createSession(request("run-a"))).resolves.toBeDefined();
+      expect(processes).toHaveLength(2);
+    } finally { stop.mockRestore(); }
+  });
+
+  it("joins a late bridge start before cleaning it and never starts ACP after shutdown", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const original = MainsMcpStdioServer.prototype.start;
+    const start = vi.spyOn(MainsMcpStdioServer.prototype, "start").mockImplementationOnce(function(this: MainsMcpStdioServer) {
+      return original.call(this).then(() => gate);
+    });
+    const opening = driver.createSession(request("run-a"));
+    const result = Promise.allSettled([opening]);
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+    let done = false;
+    const closing = driver.shutdown!().then(() => { done = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(done).toBe(false);
+    } finally { release(); await Promise.all([result, closing]); start.mockRestore(); }
+    expect((await result)[0].status).toBe("rejected");
+    expect(processes).toHaveLength(0);
+  });
+
+  it.each(["initialize", "session/new"])("joins a temporary generation during %s on shutdown", async (method) => {
+    holdMethod = method;
+    const generation = driver.generateText!("Write a commit");
+    const rejected = expect(generation).rejects.toThrow();
+    await vi.waitFor(() => expect(processes[0]?.held.length).toBe(1));
+    const cwd = processes[0].calls.find((call) => call.method === "session/new")?.params?.cwd as string | undefined;
+    await driver.shutdown!(); await rejected;
+    expect(processes[0].exitCode).toBe(0);
+    if (cwd) expect(fs.existsSync(cwd)).toBe(false);
+  });
+
+  it("keeps a generation's cwd after a failed kill and retries without repeating session deletion", async () => {
+    let kill: ReturnType<typeof vi.spyOn> | undefined;
+    onPrompt = (process, message) => {
+      const sessionId = message.params!.sessionId as string;
+      process.update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "generated" } });
+      kill = vi.spyOn(process, "kill").mockImplementationOnce(() => { throw new Error("kill failed"); });
+      process.finish(sessionId);
+    };
+    try {
+      await expect(driver.generateText!("Write a commit")).rejects.toThrow("cleanup failed");
+      const process = processes[0];
+      const cwd = process.calls.find((call) => call.method === "session/new")!.params!.cwd as string;
+      expect(process.exitCode).toBeNull();
+      expect(fs.existsSync(cwd)).toBe(true);
+      await driver.shutdown!();
+      expect(process.exitCode).toBe(0);
+      expect(fs.existsSync(cwd)).toBe(false);
+      expect(process.calls.filter((call) => call.method === "session/delete")).toHaveLength(1);
+      expect(kill).toHaveBeenCalledTimes(2);
+    } finally { kill?.mockRestore(); }
+  });
+
+  it("rejects generation success when shutdown starts while native session deletion is pending", async () => {
+    onPrompt = (process, message) => {
+      const sessionId = message.params!.sessionId as string;
+      process.holdMethod = "session/delete";
+      process.update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "generated" } });
+      process.finish(sessionId);
+    };
+    const generation = driver.generateText!("Write a commit");
+    const result = Promise.allSettled([generation]);
+    await vi.waitFor(() => expect(processes[0]?.held.length).toBe(1));
+    const closing = driver.shutdown!();
+    processes[0].respond(processes[0].held[0].id!, {});
+    await Promise.all([closing, result]);
+    expect((await result)[0].status).toBe("rejected");
+  });
 
   it.each(["create", "resume", "fork"] as const)("isolates %s from another active run in the same directory", async (method) => {
     let first = await driver.createSession(request("run-a"));
@@ -290,11 +604,11 @@ describe("OpenCode driver", () => {
       await new Promise((resolve) => setImmediate(resolve));
 
       expect(mocks.approval).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        requestId: "opencode-run-a-approval-1", runId: "run-a", kind: "tool_approval",
+        requestId: expect.stringMatching(/^opencode-run-a-.+-approval-1$/), runId: "run-a", kind: "tool_approval",
         toolName: toolCall.title ?? "OpenCode", toolInput: toolCall.rawInput,
       }));
       expect(process.calls.some((call) => call.id === "approval-1")).toBe(false);
-      decide({ requestId: "opencode-run-a-approval-1", approved: false });
+      decide({ requestId: mocks.approval.mock.calls[0][0].requestId, approved: false });
       await vi.waitFor(() => expect(process.calls.find((call) => call.id === "approval-1")?.result).toEqual({
         outcome: { outcome: "selected", optionId: "reject" },
       }));
@@ -315,7 +629,7 @@ describe("OpenCode driver", () => {
       await new Promise((resolve) => setImmediate(resolve));
       expect(mocks.approval).toHaveBeenCalledOnce();
       expect(process.calls.some((call) => call.id === "approval-1")).toBe(false);
-      decide({ requestId: "opencode-run-a-approval-1", approved: true, answer });
+      decide({ requestId: mocks.approval.mock.calls[0][0].requestId, approved: true, answer });
       await vi.waitFor(() => expect(process.calls.find((call) => call.id === "approval-1")?.result).toEqual({
         outcome: { outcome: "selected", optionId: expected },
       }));
@@ -358,7 +672,7 @@ describe("OpenCode driver", () => {
     process.ask(run.sessionId!, method);
     await vi.waitFor(() => expect(mocks.approval).toHaveBeenCalledOnce());
     await driver.shutdown?.();
-    await expect(turn).resolves.toMatchObject({ status: "failed" });
+    await expect(turn).resolves.toMatchObject({ status: "canceled" });
     respond({ requestId: "ignored", approved: true, answer: '{"choice":"yes"}' });
     await new Promise((resolve) => setImmediate(resolve));
     expect(process.calls.some((call) => call.id === "approval-1")).toBe(false);

@@ -1,69 +1,23 @@
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
-
-const SPEECH_LANG = "en-US";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import { createDictationLifecycle } from "@/lib/speech-lifecycle";
 
 export function useSpeechRecognition(onTranscript: (text: string) => void) {
   const [isRecording, setIsRecording] = useState(false);
-  const recognitionRef = useRef<any>(null);
-
-  // Latest-callback ref: lets the SDK callback fire the most recent
-  // `onTranscript` without tearing down + rebuilding the SpeechRecognition
-  // instance on every render (which would also kill any in-flight session
-  // if the caller doesn't memoize the handler).
+  const owner = useRef<ReturnType<typeof createDictationLifecycle> | null>(null);
   const onTranscriptRef = useRef(onTranscript);
-  useLayoutEffect(() => {
-    onTranscriptRef.current = onTranscript;
-  });
+  useLayoutEffect(() => { onTranscriptRef.current = onTranscript; });
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (
-      !("webkitSpeechRecognition" in window) &&
-      !("SpeechRecognition" in window)
-    ) {
-      return;
-    }
-
-    const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognitionRef.current = recognition;
-
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = SPEECH_LANG;
-
-    recognition.onstart = () => setIsRecording(true);
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      onTranscriptRef.current(transcript);
-    };
-    recognition.onend = () => setIsRecording(false);
-    recognition.onerror = () => setIsRecording(false);
-
-    return () => {
-      try {
-        recognition.stop();
-      } catch {
-        /* noop */
-      }
-      recognitionRef.current = null;
-    };
+    const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!Recognition) return;
+    const lifecycle = createDictationLifecycle(() => new Recognition(), {
+      transcript: (text) => onTranscriptRef.current(text), recording: setIsRecording,
+      error: (error) => console.error("Speech recognition error:", error),
+    });
+    owner.current = lifecycle;
+    return () => { lifecycle.close(); if (owner.current === lifecycle) owner.current = null; };
   }, []);
-
-  const toggle = () => {
-    if (!recognitionRef.current) return;
-    if (isRecording) {
-      recognitionRef.current.stop();
-    } else {
-      try {
-        recognitionRef.current.start();
-      } catch (error) {
-        console.error("Speech recognition error:", error);
-      }
-    }
-  };
-
+  const toggle = useCallback(() => owner.current?.toggle(), []);
   return { isRecording, toggle };
 }

@@ -1,6 +1,6 @@
 import { ComponentType, SVGProps } from "react";
 import * as Icons from "@/components/ui/icons/space";
-import { Codex, Cursor, MainsStroke, OpenCode, Palm } from "@/components/ui/icons";
+import { Codex, Cursor, MainsStroke, OpenCode, Palm, Slash, Sparkles } from "@/components/ui/icons";
 
 export type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -31,6 +31,8 @@ export const iconRegistry: Record<string, IconComponent> = {
   bicycle: Icons.Bicycle,
   bag: Icons.Bag,
   box: Icons.Box,
+  slash: Slash,
+  sparkles: Sparkles,
   bug: Icons.Bug,
   cat: Icons.Cat,
   chefhat: Icons.Chefhat,

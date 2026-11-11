@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginListResponse, SkillInfo } from "@/lib/redux/api/providersApi";
-import workspaceReducer, { addContextItem, setComposerContextKey } from "@/lib/redux/slices/workspaceSlice";
-import { clearTransientUploads } from "@/features/workspace/hooks/use-transient-uploads";
+import workspaceReducer, { addContextItem, setComposerContextKey, setConversationSettings, setDraftText } from "@/lib/redux/slices/workspaceSlice";
+import { toastStore } from "@/components/ui";
+import { clearTransientUploads, getTransientUploadsForOwner, setTransientUploadsForOwner } from "@/features/workspace/hooks/use-transient-uploads";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import AtlasImageCreator from "./atlas-image-creator";
 
@@ -20,7 +21,8 @@ const mocks = vi.hoisted(() => ({
   ],
   installed: undefined as PluginListResponse | undefined, catalog: undefined as PluginListResponse | undefined,
   skills: [] as SkillInfo[],
-  skillsLoading: false, skillsError: false, refreshSkills: vi.fn(),
+  skillsLoading: false, skillsFetching: false, skillsError: false, refreshSkills: vi.fn(),
+  spacesError: false,
   settings: { defaultModel: "test-model", config: { modelReasoningEffort: "medium", serviceTier: "" } },
   models: [{ id: "test-model", displayName: "Test Model", supportedEffortLevels: ["low", "medium", "high"] }],
   runMode: "work", runStatus: "succeeded", transport: "backend", error: null as string | null, empty: [],
@@ -28,7 +30,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/redux", () => ({ store: { getState: () => mocks.getState() } }));
 vi.mock("@/lib/redux/api", () => ({
   useGetAppSettingsQuery: () => ({ data: { activeSpaceId: "claude-chat" }, isLoading: false }),
-  useGetSpacesQuery: () => ({ data: mocks.spaces, isLoading: false }),
+  useGetSpacesQuery: () => ({ data: mocks.spaces, isLoading: false, error: mocks.spacesError, refetch: vi.fn() }),
   useCreateSpaceMutation: () => [mocks.create],
   useGetRunByIdQuery: (id: string) => ({ data: id ? {
     id, accountId: "account", providerId: "codex", mode: mocks.runMode, spaceId: "codex-chat", collectionId: "project",
@@ -42,7 +44,7 @@ vi.mock("@/lib/redux/api/providersApi", () => ({
   useGetProviderByIdQuery: () => ({ data: mocks.settings }),
   useGetProviderModelsQuery: () => ({ data: mocks.models }),
   useGetProviderCommandsQuery: () => ({ data: mocks.empty }),
-  useGetProviderSkillsQuery: () => ({ data: mocks.skills, isLoading: mocks.skillsLoading, error: mocks.skillsError, refetch: mocks.refreshSkills }),
+  useGetProviderSkillsQuery: () => ({ data: mocks.skills, isLoading: mocks.skillsLoading, isFetching: mocks.skillsFetching, error: mocks.skillsError, refetch: mocks.refreshSkills }),
 }));
 vi.mock("@/features/workspace/hooks/use-workspace-runs", () => ({
   useWorkspaceRuns: (_workspace: unknown, provider: string, mode: string, runId: string, _prefetch: unknown, selection: unknown) => {
@@ -54,7 +56,7 @@ vi.mock("@/features/workspace/hooks/use-workspace-runs", () => ({
       isLoading: false, error: mocks.error, executeRun: mocks.execute, continueRun: mocks.continue };
   },
 }));
-vi.mock("@/lib/transport", () => ({ getTransport: () => mocks.transport, appEvents: { providers: { onModelsUpdated: () => () => {} } } }));
+vi.mock("@/lib/transport", () => ({ onTransportChange: () => () => {}, getTransport: () => mocks.transport, appEvents: { providers: { onModelsUpdated: () => () => {} } } }));
 vi.mock("@/features/workspace/lib/conversation-settings-writer", () => ({
   persistConversationSettings: (...args: unknown[]) => mocks.invoke(...args),
   waitForConversationSettings: async () => {},
@@ -89,11 +91,11 @@ function setup(initial = "/atlas/images/new?project=project") {
   mocks.getState.mockImplementation(() => store.getState());
   store.dispatch(setComposerContextKey("other-draft"));
   store.dispatch(addContextItem({ kind: "skill", name: "keep-this" }));
-  const result = render(<Provider store={store}><MemoryRouter initialEntries={[initial]}><Location /><Routes>
+  const result = render(<StrictMode><Provider store={store}><MemoryRouter initialEntries={[initial]}><Location /><Routes>
     <Route path="/atlas/images/new" element={<AtlasImageCreator accountId="account" collectionId="project" />} />
     <Route path="/atlas/images/runs/:id" element={<AtlasImageCreator accountId="account" collectionId="project" runId="image-run" />} />
     <Route path="/plugins" element={<div>Plugin catalog</div>} />
-  </Routes></MemoryRouter></Provider>);
+  </Routes></MemoryRouter></Provider></StrictMode>);
   const owner = store.getState().workspace.composerContextKey;
   owners.add(owner);
   return { ...result, store, owner };
@@ -104,21 +106,173 @@ function typePrompt(value: string) {
 }
 beforeEach(() => {
   vi.clearAllMocks(); mocks.transport = "backend"; mocks.runMode = "work"; mocks.error = null;
+  mocks.spacesError = false;
   mocks.spaces = [
     { id: "claude-chat", accountId: "account", name: "Claude", mode: "chat", providerId: "claude_code" },
     { id: "codex-chat", accountId: "account", name: "Codex", mode: "chat", providerId: "codex" },
   ];
   mocks.installed = list(); mocks.catalog = list();
-  mocks.skills = [imagegen]; mocks.skillsLoading = false; mocks.skillsError = false;
+  mocks.skills = [imagegen]; mocks.skillsLoading = false; mocks.skillsFetching = false; mocks.skillsError = false;
   mocks.execute.mockResolvedValue("image-run"); mocks.continue.mockResolvedValue(true); mocks.invoke.mockResolvedValue(undefined);
+  mocks.runStatus = "succeeded";
+  mocks.abort.mockImplementation(() => ({ unwrap: async () => {} }));
   mocks.create.mockImplementation(() => ({ unwrap: async () => ({ ...mocks.spaces[0], id: "new-codex", providerId: "codex", mode: "work" }) }));
   mocks.serialize.mockResolvedValue([{ type: "image", name: "photo.png", content: "base64" }]);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: vi.fn(() => "blob:photo"), revokeObjectURL: vi.fn() }));
 });
-afterEach(() => { cleanup(); for (const owner of owners) clearTransientUploads(owner); owners.clear(); });
+afterEach(() => { cleanup(); for (const owner of owners) clearTransientUploads(owner); owners.clear(); toastStore.dismissAll(); });
 
 describe("Atlas image creator", () => {
+  it("waits for a skill refresh without claiming the cached enabled skill is disabled", () => {
+    mocks.skillsFetching = true;
+    setup(); typePrompt("Keep this idea");
+    expect(screen.getByText("Checking Image Gen skill…")).toBeTruthy();
+    expect(screen.queryByText("Enable the Image Gen skill in Codex, then refresh.")).toBeNull();
+    expect((screen.getByRole("button", { name: "Create image" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it("does not let a cancelled preparation finish or unlock its replacement", async () => {
+    const complete: ((value: unknown) => void)[] = [];
+    mocks.serialize.mockImplementation(() => new Promise((resolve) => { complete.push(resolve); }));
+    setup(); typePrompt("First idea");
+    fireEvent.change(screen.getByLabelText("Upload images"), { target: { files: [new File(["pixels"], "photo.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel preparation" }));
+    typePrompt("Second idea"); fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    expect(complete).toHaveLength(2);
+    await act(async () => { complete[0]([]); });
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Cancel preparation" })).toBeTruthy();
+    await act(async () => { complete[1]([]); });
+    await waitFor(() => expect(mocks.execute).toHaveBeenCalledOnce());
+    expect(mocks.execute.mock.calls[0][0]).toBe("$imagegen Second idea");
+  });
+  it("preserves input after a serialization failure and permits explicit retry", async () => {
+    mocks.serialize.mockRejectedValueOnce(new Error("Could not read photo"));
+    const { store, owner } = setup(); typePrompt("Keep my photo idea");
+    fireEvent.change(screen.getByLabelText("Upload images"), { target: { files: [new File(["pixels"], "photo.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    await waitFor(() => expect(toastStore.getSnapshot().some((toast) => toast.message === "Could not read photo")).toBe(true));
+    expect(mocks.execute).not.toHaveBeenCalled(); expect(store.getState().workspace.draftTextByKey[owner]).toBe("Keep my photo idea");
+    expect(screen.getByRole("img", { name: "photo.png" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    await waitFor(() => expect(mocks.execute).toHaveBeenCalledOnce());
+  });
+  it("consumes only the accepted follow-up snapshot, retaining later text, photos and context", async () => {
+    let accept!: (result: boolean) => void;
+    mocks.continue.mockImplementation(() => new Promise<boolean>((resolve) => { accept = resolve; }));
+    const { store, owner } = setup("/atlas/images/runs/image-run"); typePrompt("Original idea");
+    act(() => store.dispatch(addContextItem({ kind: "skill", name: "submitted-context" })));
+    fireEvent.change(screen.getByLabelText("Upload images"), { target: { files: [new File(["pixels"], "photo.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    await waitFor(() => expect(mocks.continue).toHaveBeenCalledOnce());
+    act(() => {
+      const files = getTransientUploadsForOwner(owner);
+      setTransientUploadsForOwner(owner, [...files, { ...files[0], file: new File(["next"], "later.png", { type: "image/png" }), preview: "blob:later" }]);
+      store.dispatch(setDraftText({ key: owner, text: "Next idea" }));
+      store.dispatch(addContextItem({ kind: "skill", name: "later-context" }));
+    });
+    await act(async () => { accept(true); });
+    expect(store.getState().workspace.draftTextByKey[owner]).toBe("Next idea");
+    expect(screen.queryByRole("img", { name: "photo.png" })).toBeNull();
+    expect(screen.getByRole("img", { name: "later.png" })).toBeTruthy();
+    const remaining = store.getState().workspace.contextItems.map((item) => item.kind === "skill" ? item.name : "");
+    expect(remaining).toContain("later-context"); expect(remaining).not.toContain("submitted-context");
+  });
+  it("retries a failed stop but does not replay a confirmed stop while status lags", async () => {
+    mocks.runStatus = "running";
+    mocks.abort.mockImplementationOnce(() => ({ unwrap: async () => { throw new Error("Stop rejected"); } }));
+    setup("/atlas/images/runs/image-run");
+    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+    await waitFor(() => expect(toastStore.getSnapshot().some((toast) => toast.message === "Stop rejected")).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+    expect(mocks.abort).toHaveBeenCalledTimes(2);
+  });
+  it("does not submit a replaced skill path captured before attachment preparation", async () => {
+    let finish!: (value: unknown) => void;
+    mocks.serialize.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const { store, owner } = setup(); typePrompt("A mountain");
+    fireEvent.change(screen.getByLabelText("Upload images"), { target: { files: [new File(["pixels"], "photo.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    await waitFor(() => expect(mocks.serialize).toHaveBeenCalledOnce());
+    mocks.skills = [{ ...imagegen, path: "/new/skill/SKILL.md" }];
+    act(() => store.dispatch(setDraftText({ key: owner, text: "A mountain, revised" })));
+    await act(async () => { finish([{ type: "image", name: "photo.png", content: "base64" }]); });
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(screen.getByRole("img", { name: "photo.png" })).toBeTruthy();
+  });
+  it("does not publish a late settings handoff failure after leaving the creator", async () => {
+    let accept!: (id: string) => void, fail!: (error: unknown) => void;
+    mocks.execute.mockImplementation(() => new Promise<string>((resolve) => { accept = resolve; }));
+    mocks.invoke.mockImplementation(() => new Promise((_, reject) => { fail = reject; }));
+    const { store, owner } = setup(); typePrompt("A mountain");
+    fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    await waitFor(() => expect(mocks.execute).toHaveBeenCalledOnce());
+    act(() => store.dispatch(setConversationSettings({ key: owner, settings: { model: "changed-model", config: {} } })));
+    await act(async () => { accept("image-run"); });
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Leave creator" }));
+    await act(async () => { fail(new Error("Late settings failure")); });
+    expect(toastStore.getSnapshot()).toHaveLength(0);
+    expect(screen.getByTestId("url").textContent).toBe("/plugins");
+    expect(store.getState().workspace.draftTextByKey[owner]).toBe("A mountain");
+  });
+  it("checks skill readiness again after asynchronous attachment preparation", async () => {
+    let finish!: (value: unknown) => void;
+    mocks.serialize.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const { store, owner } = setup(); typePrompt("Keep my idea");
+    fireEvent.change(screen.getByLabelText("Upload images"), { target: { files: [new File(["pixels"], "photo.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    await waitFor(() => expect(mocks.serialize).toHaveBeenCalledOnce());
+    mocks.skillsError = true;
+    act(() => store.dispatch(setDraftText({ key: owner, text: "Keep my idea, revised" })));
+    await act(async () => { finish([{ type: "image", name: "photo.png", content: "base64" }]); });
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(store.getState().workspace.draftTextByKey[owner]).toBe("Keep my idea, revised");
+    expect(screen.getByRole("img", { name: "photo.png" })).toBeTruthy();
+  });
+  it("does not create a replacement space when space discovery failed", async () => {
+    mocks.spaces = [mocks.spaces[0]]; mocks.spacesError = true;
+    setup();
+    expect(screen.getByRole("alert").textContent).toContain("Could not load your spaces");
+    await act(async () => {});
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+  it("cancels preparation without starting a run or consuming the prompt and photo", async () => {
+    let finish!: (value: unknown) => void;
+    mocks.serialize.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const { store, owner } = setup(); typePrompt("Keep my idea");
+    fireEvent.change(screen.getByLabelText("Upload images"), { target: { files: [new File(["pixels"], "photo.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "Create image" }));
+    await waitFor(() => expect(mocks.serialize).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel preparation" }));
+    await act(async () => { finish([{ type: "image", name: "photo.png", content: "base64" }]); });
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(store.getState().workspace.draftTextByKey[owner]).toBe("Keep my idea");
+    expect(screen.getByRole("img", { name: "photo.png" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Create image" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+  it("does not submit using cached skills after skill discovery failed", () => {
+    mocks.skillsError = true;
+    setup(); typePrompt("Keep this image idea");
+    expect((screen.getByRole("button", { name: "Create image" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Could not check Codex skills.")).toBeTruthy();
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it("sends one stop request before React commits repeated clicks", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    mocks.abort.mockImplementation(() => ({ unwrap: () => pending }));
+    mocks.runStatus = "running";
+    setup("/atlas/images/runs/image-run");
+    const stop = screen.getByRole("button", { name: "Stop run" });
+    act(() => { fireEvent.click(stop); fireEvent.click(stop); });
+    expect(mocks.abort).toHaveBeenCalledOnce();
+    await act(async () => { finish(); });
+  });
   it("detects the installed Image Gen skill when no Image Gen plugin exists", () => {
     mocks.installed = list(); mocks.catalog = list();
     mocks.skills = [imagegen];
@@ -135,7 +289,7 @@ describe("Atlas image creator", () => {
     const { store } = setup();
     expect(mocks.provider).toHaveBeenLastCalledWith("codex");
     expect(mocks.mode).toHaveBeenLastCalledWith("work");
-    expect(mocks.selection).toEqual({ selection: "local" });
+    expect(mocks.selection).toEqual(expect.objectContaining({ selection: "local", operationIsCurrent: expect.any(Function) }));
     expect(screen.getByTestId("saved-mode").textContent).toBe("chat");
     expect(store.getState().workspace.contextItems).toEqual([expect.objectContaining({ name: "imagegen", scope: "system", path: imagegen.path, mentionPath: undefined })]);
     expect(screen.getByRole("textbox", { name: "Image prompt" }).textContent).toContain("Image Gen");

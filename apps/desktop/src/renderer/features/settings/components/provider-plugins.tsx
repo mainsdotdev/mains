@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, Fragment } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, Fragment } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Heading2,
@@ -8,7 +8,6 @@ import {
   Text,
   Button,
   CopyButton,
-  toast,
   AsciiSpinner,
   Input,
   Select,
@@ -16,12 +15,7 @@ import {
   HorizontalFadeScroller,
 } from "@/components/ui";
 import {
-  useGetProviderPluginsQuery,
   useReadProviderPluginQuery,
-  useInstallProviderPluginMutation,
-  useUninstallProviderPluginMutation,
-  useSetProviderPluginEnabledMutation,
-  useUpdateProviderPluginMutation,
 } from "@/lib/redux/api";
 import type {
   ConnectorMcpServerInfo,
@@ -34,6 +28,8 @@ import { getPluginInstallBlockReason } from "../../../../shared/plugin-install-a
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { appEvents } from "@/lib/transport/events";
+import { usePluginMutations } from "../hooks/use-plugin-mutations";
+import { usePluginCatalog } from "../hooks/use-plugin-catalog";
 import { useConnectorOAuth } from "../hooks/use-connector-oauth";
 import {
   Search,
@@ -477,6 +473,7 @@ function PluginDetail({
   onUpdate,
   installScope,
   onScopeChange,
+  isBusy,
   isInstalling,
   isToggling,
   isUpdating,
@@ -491,6 +488,7 @@ function PluginDetail({
   onUpdate: () => void;
   installScope: PluginScope;
   onScopeChange: (scope: PluginScope) => void;
+  isBusy: boolean;
   isInstalling: boolean;
   isToggling: boolean;
   isUpdating: boolean;
@@ -616,7 +614,7 @@ function PluginDetail({
                   )}
                   <Button
                     onClick={onInstall}
-                    disabled={isInstalling || Boolean(installBlockReason)}
+                    disabled={isBusy || Boolean(installBlockReason)}
                     title={installBlockReason ?? undefined}
                     variant="primary"
                   >
@@ -632,7 +630,7 @@ function PluginDetail({
               ) : (
                 <>
                   {plugin.updateAvailable && (
-                    <Button onClick={onUpdate} disabled={isUpdating} variant="primary">
+                    <Button onClick={onUpdate} disabled={isBusy} variant="primary">
                       {isUpdating ? (
                         <div className="px-1.5">
                           <AsciiSpinner variant="null" />
@@ -643,7 +641,7 @@ function PluginDetail({
                     </Button>
                   )}
                   {supportsEnableToggle && (
-                    <Button onClick={onToggleEnabled} disabled={isToggling} variant="secondary">
+                    <Button onClick={onToggleEnabled} disabled={isBusy} variant="secondary">
                       {isToggling ? (
                         <div className="px-1.5">
                           <AsciiSpinner variant="null" />
@@ -655,7 +653,7 @@ function PluginDetail({
                       )}
                     </Button>
                   )}
-                  <Button onClick={onUninstall} disabled={isInstalling} variant="secondary">
+                  <Button onClick={onUninstall} disabled={isBusy} variant="secondary">
                     {isInstalling ? (
                       <div className="px-1.5">
                         <AsciiSpinner variant="null" />
@@ -1022,6 +1020,8 @@ const FEATURED_PLUGIN_NAMES = [
   "chrome",
   "computer-use"
 ];
+const PLUGIN_PAGE_SIZE = 24;
+const PLUGIN_HIGHLIGHT_LIMIT = 6;
 
 // ── Main Component ──
 
@@ -1030,7 +1030,7 @@ function ProviderPluginCatalog({
   selectedPluginId,
   onSelectPlugin,
 }: {
-  providerId?: string;
+  providerId: string;
   selectedPluginId: string | null;
   onSelectPlugin: (pluginId: string | null) => void;
 }) {
@@ -1038,28 +1038,26 @@ function ProviderPluginCatalog({
     data: pluginData,
     isLoading,
     error,
-  } = useGetProviderPluginsQuery(providerId, {
-    refetchOnFocus: false,
-    refetchOnReconnect: false,
-  });
-  const [installPlugin, { isLoading: isInstalling }] =
-    useInstallProviderPluginMutation();
-  const [uninstallPlugin, { isLoading: isUninstalling }] =
-    useUninstallProviderPluginMutation();
-  const [setPluginEnabled, { isLoading: isToggling }] =
-    useSetProviderPluginEnabledMutation();
-  const [updatePlugin, { isLoading: isUpdating }] =
-    useUpdateProviderPluginMutation();
+  } = usePluginCatalog(providerId);
+  const mutations = usePluginMutations(providerId);
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [installScope, setInstallScope] = useState<PluginScope>("user");
+  const [page, setPage] = useState(1);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const changeSearch = (value: string) => { setSearch(value); setPage(1); };
 
-  // Flatten all plugins from all marketplaces (only OpenAI plugins for now)
+  // Native catalogs can repeat an identity across marketplace entries. Keep
+  // the same first entry used by detail lookup, with one shelf item/card per id.
   const allPlugins = useMemo(() => {
-    if (!pluginData) return [];
-    return pluginData.marketplaces.flatMap((mp) => mp.plugins);
-    //.filter((p) => p.interface?.developerName === "OpenAI" || p.interface?.developerName === "Vercel Labs" );
+    const plugins = new Map<string, PluginInfo>();
+    for (const marketplace of pluginData?.marketplaces ?? []) {
+      for (const plugin of marketplace.plugins) {
+        if (!plugins.has(plugin.id)) plugins.set(plugin.id, plugin);
+      }
+    }
+    return Array.from(plugins.values());
   }, [pluginData]);
 
   // `plugin/installed` can retain legacy marketplace entries after they have
@@ -1133,7 +1131,8 @@ function ProviderPluginCatalog({
     () =>
       filteredPlugins
         .filter((p) => featuredRank.has(p.id))
-        .sort((a, b) => featuredRank.get(a.id)! - featuredRank.get(b.id)!),
+        .sort((a, b) => featuredRank.get(a.id)! - featuredRank.get(b.id)!)
+        .slice(0, PLUGIN_HIGHLIGHT_LIMIT),
     [filteredPlugins, featuredRank],
   );
   const popular = useMemo(() => {
@@ -1141,13 +1140,13 @@ function ProviderPluginCatalog({
     return [...filteredPlugins]
       .filter((p) => (p.installs ?? 0) > 0)
       .sort((a, b) => (b.installs ?? 0) - (a.installs ?? 0))
-      .slice(0, 6);
+      .slice(0, PLUGIN_HIGHLIGHT_LIMIT);
   }, [filteredPlugins, featuredRank]);
   const highlight = featured.length ? featured : popular;
   const highlightLabel = featured.length ? "Featured" : "Popular";
   const highlightIds = useMemo(() => new Set(highlight.map((p) => p.id)), [highlight]);
 
-  const grouped = useMemo(() => {
+  const catalogPlugins = useMemo(() => {
     const groups = new Map<string, PluginInfo[]>();
     for (const p of filteredPlugins) {
       if (highlightIds.has(p.id) && !categoryFilter) continue;
@@ -1156,8 +1155,28 @@ function ProviderPluginCatalog({
       list.push(p);
       groups.set(cat, list);
     }
-    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
+    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b))
+      .flatMap(([, plugins]) => plugins);
   }, [filteredPlugins, highlightIds, categoryFilter]);
+
+  const pageCount = Math.max(1, Math.ceil(catalogPlugins.length / PLUGIN_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  if (page !== currentPage) setPage(currentPage);
+  const grouped = useMemo(() => {
+    const groups = new Map<string, PluginInfo[]>();
+    const start = (currentPage - 1) * PLUGIN_PAGE_SIZE;
+    for (const plugin of catalogPlugins.slice(start, start + PLUGIN_PAGE_SIZE)) {
+      const category = plugin.interface?.category || "Other";
+      const plugins = groups.get(category) ?? [];
+      plugins.push(plugin);
+      groups.set(category, plugins);
+    }
+    return Array.from(groups.entries());
+  }, [catalogPlugins, currentPage]);
+  const changePage = (next: number) => {
+    setPage(next);
+    resultsRef.current?.scrollIntoView?.({ block: "start" });
+  };
 
   const selectedPlugin = useMemo(
     () => allPlugins.find((p) => p.id === selectedPluginId) ?? null,
@@ -1175,67 +1194,10 @@ function ProviderPluginCatalog({
     return "";
   }, [selectedPluginId, pluginData]);
 
-  const [actionInFlight, setActionInFlight] = useState<string | null>(null);
-
-  const handleInstall = useCallback(
-    async (pluginId: string) => {
-      setActionInFlight(pluginId);
-      try {
-        await installPlugin({ providerId, pluginId, scope: installScope }).unwrap();
-        toast.success("Plugin installed");
-      } catch (err: any) {
-        toast.error(extractErrorMessage(err, "Failed to install plugin"));
-      } finally {
-        setActionInFlight(null);
-      }
-    },
-    [installPlugin, providerId, installScope],
-  );
-
-  const handleUninstall = useCallback(
-    async (pluginId: string) => {
-      setActionInFlight(pluginId);
-      try {
-        await uninstallPlugin({ providerId, pluginId }).unwrap();
-        toast.success("Plugin uninstalled");
-      } catch (err: any) {
-        toast.error(extractErrorMessage(err, "Failed to uninstall plugin"));
-      } finally {
-        setActionInFlight(null);
-      }
-    },
-    [uninstallPlugin, providerId],
-  );
-
-  const handleToggleEnabled = useCallback(
-    async (pluginId: string, enabled: boolean) => {
-      setActionInFlight(pluginId);
-      try {
-        await setPluginEnabled({ providerId, pluginId, enabled }).unwrap();
-        toast.success(enabled ? "Plugin enabled" : "Plugin disabled");
-      } catch (err: any) {
-        toast.error(extractErrorMessage(err, "Failed to update plugin"));
-      } finally {
-        setActionInFlight(null);
-      }
-    },
-    [setPluginEnabled, providerId],
-  );
-
-  const handleUpdate = useCallback(
-    async (pluginId: string) => {
-      setActionInFlight(pluginId);
-      try {
-        await updatePlugin({ providerId, pluginId }).unwrap();
-        toast.success("Plugin updated");
-      } catch (err: any) {
-        toast.error(extractErrorMessage(err, "Failed to update plugin"));
-      } finally {
-        setActionInFlight(null);
-      }
-    },
-    [updatePlugin, providerId],
-  );
+  const handleInstall = (pluginId: string) => mutations.perform({ type: "install", pluginId, scope: installScope });
+  const handleUninstall = (pluginId: string) => mutations.perform({ type: "uninstall", pluginId });
+  const handleToggleEnabled = (pluginId: string, enabled: boolean) => mutations.perform({ type: "setEnabled", pluginId, enabled });
+  const handleUpdate = (pluginId: string) => mutations.perform({ type: "update", pluginId });
 
   if (isLoading) {
     return (
@@ -1265,6 +1227,7 @@ function ProviderPluginCatalog({
 
   // Detail view
   if (selectedPlugin) {
+    const pending = mutations.pending(selectedPlugin.id)?.type;
     return (
       <PluginDetail
         plugin={selectedPlugin}
@@ -1277,12 +1240,10 @@ function ProviderPluginCatalog({
         onUpdate={() => handleUpdate(selectedPlugin.id)}
         installScope={installScope}
         onScopeChange={setInstallScope}
-        isInstalling={
-          (isInstalling || isUninstalling) &&
-          actionInFlight === selectedPlugin.id
-        }
-        isToggling={isToggling && actionInFlight === selectedPlugin.id}
-        isUpdating={isUpdating && actionInFlight === selectedPlugin.id}
+        isBusy={Boolean(pending)}
+        isInstalling={pending === "install" || pending === "uninstall"}
+        isToggling={pending === "setEnabled"}
+        isUpdating={pending === "update"}
       />
     );
   }
@@ -1304,7 +1265,7 @@ function ProviderPluginCatalog({
         >
           <SegmentedTabs
             value={categoryFilter ?? ""}
-            onChange={(next) => setCategoryFilter(next || null)}
+            onChange={(next) => { setCategoryFilter(next || null); setPage(1); }}
             options={categoryOptions}
             variant="plain"
             semantics="radiogroup"
@@ -1316,13 +1277,13 @@ function ProviderPluginCatalog({
           <Input
             type="text"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => changeSearch(e.target.value)}
             onKeyDown={(e) => {
               // Escape clears the filter rather than bubbling out of the page.
               if (e.key === "Escape" && search) {
                 e.preventDefault();
                 e.stopPropagation();
-                setSearch("");
+                changeSearch("");
               }
             }}
             placeholder="Search plugins..."
@@ -1332,7 +1293,7 @@ function ProviderPluginCatalog({
           {search && (
             <Button
               variant="icon" iconSize="sm"
-              onClick={() => setSearch("")}
+              onClick={() => changeSearch("")}
               title="Clear search"
               aria-label="Clear search"
               className="absolute right-1.5 top-1/2 -translate-y-1/2"
@@ -1358,9 +1319,7 @@ function ProviderPluginCatalog({
                   onSelect={() => onSelectPlugin(p.id)}
                   onInstall={() => handleInstall(p.id)}
                   onUninstall={() => handleUninstall(p.id)}
-                  isInstalling={
-                    (isInstalling || isUninstalling) && actionInFlight === p.id
-                  }
+                  isInstalling={Boolean(mutations.pending(p.id))}
                 />
               </div>
             ))}
@@ -1369,27 +1328,39 @@ function ProviderPluginCatalog({
       )}
 
       {/* Grouped by category */}
-      {grouped.map(([category, plugins]) => (
-        <div key={category} className="mb-12">
-          <Body weight="medium" className="mb-3">
-            {formatCategory(category)}
-          </Body>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-8">
-            {plugins.map((p) => (
-              <PluginCard
-                key={p.id}
-                plugin={p}
-                onSelect={() => onSelectPlugin(p.id)}
-                onInstall={() => handleInstall(p.id)}
-                onUninstall={() => handleUninstall(p.id)}
-                isInstalling={
-                  (isInstalling || isUninstalling) && actionInFlight === p.id
-                }
-              />
-            ))}
+      <div ref={resultsRef}>
+        {grouped.map(([category, plugins]) => (
+          <div key={category} className="mb-12">
+            <Body weight="medium" className="mb-3">
+              {formatCategory(category)}
+            </Body>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-8">
+              {plugins.map((p) => (
+                <PluginCard
+                  key={p.id}
+                  plugin={p}
+                  onSelect={() => onSelectPlugin(p.id)}
+                  onInstall={() => handleInstall(p.id)}
+                  onUninstall={() => handleUninstall(p.id)}
+                  isInstalling={Boolean(mutations.pending(p.id))}
+                />
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+
+        {pageCount > 1 && (
+          <nav aria-label="Plugin pagination" className="flex flex-wrap items-center justify-between gap-4">
+            <Text size="s" tone="subtle" role="status" aria-live="polite">
+              {(currentPage - 1) * PLUGIN_PAGE_SIZE + 1}–{Math.min(currentPage * PLUGIN_PAGE_SIZE, catalogPlugins.length)} of {catalogPlugins.length} · Page {currentPage} of {pageCount}
+            </Text>
+            <div className="flex items-center gap-2">
+              <Button variant="primary" disabled={currentPage === 1} onClick={() => changePage(currentPage - 1)}>Previous</Button>
+              <Button variant="primary" disabled={currentPage === pageCount} onClick={() => changePage(currentPage + 1)}>Next</Button>
+            </div>
+          </nav>
+        )}
+      </div>
 
       {filteredPlugins.length === 0 && (
         <div className="text-center py-12">
@@ -1415,6 +1386,7 @@ export default function ProviderPlugins({
     });
   }, [setSearchParams]);
   return <ProviderPluginCatalog
+    key={providerId}
     providerId={providerId}
     selectedPluginId={searchParams.get("plugin")}
     onSelectPlugin={onSelectPlugin}

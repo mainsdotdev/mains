@@ -1,5 +1,6 @@
 import { SILENT_VOICE_LEVELS, type VoiceAudioLevels } from "../../workspace/lib/realtime-voice-audio";
 import { followVoiceLevel, speechLevel } from "../../workspace/lib/voice-audio-levels";
+import { releaseSpeechResources } from "@/lib/speech-lifecycle";
 
 export interface VoicePreviewAudioMeter {
   read(timeMs: number): VoiceAudioLevels;
@@ -27,11 +28,10 @@ export function createVoicePreviewAudioMeter(
   function dispose() {
     if (disposed) return;
     disposed = true;
-    source?.disconnect();
-    analyser?.disconnect();
-    analyser = samples = undefined;
+    const previousSource = source, previousAnalyser = analyser;
+    source = analyser = samples = undefined;
     levels.output = 0;
-    void context.close().catch(() => {});
+    releaseSpeechResources(() => previousSource?.disconnect(), () => previousAnalyser?.disconnect(), () => context.close());
   }
 
   function attach() {
@@ -46,19 +46,21 @@ export function createVoicePreviewAudioMeter(
       source.connect(context.destination);
       source.connect(analyser);
     } catch {
-      analyser?.disconnect();
+      releaseSpeechResources(() => analyser?.disconnect());
       analyser = samples = undefined;
       // If a source is already routed, keep its speaker path alive until stop.
       if (!source) dispose();
     }
   }
 
-  if (context.state === "suspended") {
-    // Start resume in the user gesture, and only reroute sound once it succeeds.
-    void context.resume().then(attach).catch(dispose);
-  } else {
-    attach();
-  }
+  try {
+    if (context.state === "suspended") {
+      // Start resume in the user gesture, and only reroute sound once it succeeds.
+      void context.resume().then(attach).catch(dispose);
+    } else {
+      attach();
+    }
+  } catch { dispose(); }
 
   return {
     read(timeMs) {

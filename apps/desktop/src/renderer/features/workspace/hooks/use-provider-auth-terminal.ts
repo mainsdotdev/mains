@@ -1,4 +1,5 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
+import { onTransportChange } from "@/lib/transport/registry";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import {
   closeProviderAuthTerminal,
@@ -16,6 +17,7 @@ export function useProviderAuthTerminal() {
   const session = useAppSelector(
     (state) => state.workspace.providerAuthTerminal,
   );
+  useEffect(() => onTransportChange(() => { dispatch(closeProviderAuthTerminal()); }), [dispatch]);
 
   const open = useCallback(
     (providerId: string, command: string) => {
@@ -25,12 +27,12 @@ export function useProviderAuthTerminal() {
   );
 
   const markCommandSent = useCallback(() => {
-    dispatch(markProviderAuthCommandSent());
-  }, [dispatch]);
+    dispatch(markProviderAuthCommandSent(session?.id));
+  }, [dispatch, session?.id]);
 
   const close = useCallback(() => {
-    dispatch(closeProviderAuthTerminal());
-  }, [dispatch]);
+    if (session) dispatch(closeProviderAuthTerminal(session.id));
+  }, [dispatch, session]);
 
   return { session, open, markCommandSent, close };
 }

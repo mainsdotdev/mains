@@ -77,6 +77,28 @@ describe("TurnChangesCard", () => {
     resetTransport();
   });
 
+  it("keeps Review available but disables Undo for unverified legacy ownership", () => {
+    const { invoke } = renderCard();
+    const undo = screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement;
+    expect(undo.disabled).toBe(true);
+    expect(undo.title).toMatch(/cannot be safely attributed/);
+    fireEvent.click(undo);
+    expect(invoke).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Review" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("enables Undo for changes with verified exclusive ownership", () => {
+    renderCard(undefined, { ...changes, files: changes.files.map((file) => ({ ...file, shared: false })) });
+    expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("disables Undo when a parallel run may have written a file", () => {
+    renderCard(undefined, { ...changes, files: changes.files.map((file) => ({ ...file, shared: true })) });
+    const undo = screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement;
+    expect(undo.disabled).toBe(true);
+    expect(undo.title).toMatch(/parallel run/);
+  });
+
   it("keeps long file lists compact until expanded or reviewed", () => {
     const manyChanges: RunTurnChanges = {
       ...changes,

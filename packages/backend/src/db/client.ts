@@ -1,13 +1,15 @@
+import { createResourceLifecycle, type ResourceScope } from "../runtime/resource-lifecycle";
 import { getLocalBackendId } from "./backend-identity";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { migrateDatabase } from "./migrate";
 import crypto from "node:crypto";
 import path from "path";
 import fs from "fs";
 import { getBackendRuntime } from "../runtime/backend-runtime";
 import {
   acquireDatabaseOwnership,
+  databaseOwnershipPath,
   type DatabaseOwnership,
 } from "./database-ownership";
 import * as schema from "./schema";
@@ -27,8 +29,7 @@ class DatabaseClient {
   private db: DatabaseInstance | null = null;
   private sqlite: SQLiteInstance | null = null;
   private dbPath: string | null = null;
-  private isInitialized = false;
-  private initializePromise: Promise<DatabaseInitResult> | null = null;
+  private readonly lifecycle = createResourceLifecycle<DatabaseInitResult>("Database");
   private ownership: DatabaseOwnership | null = null;
 
   private constructor() {}
@@ -49,79 +50,35 @@ class DatabaseClient {
   async initialize(
     config?: Partial<DatabaseConfig>,
   ): Promise<DatabaseInitResult> {
-    if (this.isInitialized && this.db && this.sqlite) {
-      console.log("Database already initialized");
-      return {
-        db: this.db,
-        sqlite: this.sqlite,
-        extensions: [],
-      };
-    }
-
-    // Prevent concurrent initialization
-    if (this.initializePromise) {
-      return this.initializePromise;
-    }
-
-    this.initializePromise = this.doInitialize(config);
-    try {
-      return await this.initializePromise;
-    } finally {
-      this.initializePromise = null;
-    }
+    const url = config?.url || this.getDefaultDatabasePath();
+    return this.lifecycle.start((scope) => this.doInitialize(scope, { ...config, url }), databaseOwnershipPath(url));
   }
 
-  private async doInitialize(
-    config?: Partial<DatabaseConfig>,
-  ): Promise<DatabaseInitResult> {
+  private async doInitialize(scope: ResourceScope, config?: Partial<DatabaseConfig>): Promise<DatabaseInitResult> {
     await getBackendRuntime().whenReady();
-
-    try {
-      // Determine database path
-      this.dbPath = config?.url || this.getDefaultDatabasePath();
-
-      // Ensure directory exists
-      this.ensureDirectoryExists(this.dbPath);
-
-      const runtime = getBackendRuntime();
-      this.ownership = acquireDatabaseOwnership(
-        this.dbPath,
-        runtime.kind === "electron" ? "Mains Desktop" : "Mains CLI",
-      );
-
-      // Create SQLite instance
-      this.sqlite = new Database(this.dbPath, {});
-
-      // Configure database
-      this.configureDatabase(config);
-
-      // Create Drizzle instance
-      this.db = drizzle(this.sqlite, { schema });
-
-      // Run migrations
-      this.runMigrations();
-
-      // Load extensions (if needed)
-      const extensions = this.loadExtensions();
-
-      // Seed initial data
-      await this.seedInitialData();
-      getLocalBackendId(this.db);
-
-      this.isInitialized = true;
-
-      console.log("Database initialized successfully");
-
-      return {
-        db: this.db,
-        sqlite: this.sqlite,
-        extensions,
-      };
-    } catch (error) {
-      console.error("Failed to initialize database:", error);
-      await this.close().catch(() => {});
-      throw error;
-    }
+    scope.assertActive();
+    this.dbPath = config?.url || this.getDefaultDatabasePath();
+    scope.defer(() => { this.cleanup(); });
+    this.ensureDirectoryExists(this.dbPath);
+    const runtime = getBackendRuntime();
+    this.ownership = acquireDatabaseOwnership(this.dbPath, runtime.kind === "electron" ? "Mains Desktop" : "Mains CLI");
+    this.sqlite = new Database(this.dbPath, {});
+    scope.defer(() => {
+      if (!this.sqlite?.open) return;
+      try { this.sqlite.pragma("wal_checkpoint(TRUNCATE)"); }
+      catch (error) { console.warn("Database checkpoint failed; attempting close:", error); }
+      this.sqlite.close();
+      console.log("Database connection closed");
+    });
+    this.configureDatabase(config);
+    this.db = drizzle(this.sqlite, { schema });
+    this.runMigrations();
+    const extensions = this.loadExtensions();
+    await this.seedInitialData();
+    scope.assertActive();
+    getLocalBackendId(this.db);
+    console.log("Database initialized successfully");
+    return { db: this.db, sqlite: this.sqlite, extensions };
   }
 
   /**
@@ -243,7 +200,7 @@ class DatabaseClient {
 
       try {
         console.log("Running migrations...");
-        migrate(this.db, { migrationsFolder });
+        migrateDatabase(this.db, this.sqlite!, migrationsFolder);
         console.log("Migrations completed");
 
         // Remove backup after success
@@ -474,7 +431,7 @@ class DatabaseClient {
    * Get Drizzle database instance
    */
   getDb(): DatabaseInstance {
-    if (!this.db) {
+    if (!this.lifecycle.ready || !this.db) {
       throw new Error("Database not initialized. Call initialize() first.");
     }
     return this.db;
@@ -484,7 +441,7 @@ class DatabaseClient {
    * Get raw SQLite instance
    */
   getSqlite(): SQLiteInstance {
-    if (!this.sqlite) {
+    if (!this.lifecycle.ready || !this.sqlite) {
       throw new Error("Database not initialized. Call initialize() first.");
     }
     return this.sqlite;
@@ -501,7 +458,7 @@ class DatabaseClient {
    * Check if database is initialized
    */
   isReady(): boolean {
-    return this.isInitialized && this.db !== null && this.sqlite !== null;
+    return this.lifecycle.ready && this.db !== null && this.sqlite !== null;
   }
 
   /**
@@ -606,19 +563,8 @@ class DatabaseClient {
   /**
    * Close database connection
    */
-  async close(): Promise<void> {
-    if (this.sqlite) {
-      try {
-        // Checkpoint WAL before closing
-        this.sqlite.pragma("wal_checkpoint(TRUNCATE)");
-        this.sqlite.close();
-        console.log("Database connection closed");
-      } catch (error) {
-        console.error("Error closing database:", error);
-      }
-    }
-
-    this.cleanup();
+  close(): Promise<void> {
+    return this.lifecycle.close();
   }
 
   /**
@@ -630,8 +576,6 @@ class DatabaseClient {
     this.db = null;
     this.sqlite = null;
     this.dbPath = null;
-    this.isInitialized = false;
-    this.initializePromise = null;
   }
 
   /**

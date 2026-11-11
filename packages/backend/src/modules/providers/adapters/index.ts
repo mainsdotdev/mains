@@ -102,6 +102,7 @@ export {
   installPluginForProvider,
   uninstallPluginForProvider,
   setPluginEnabledForProvider,
+  getCodexPermissionsForProvider,
   getCodexMemorySettingsForProvider,
   setCodexMemorySettingForProvider,
   resetCodexMemoriesForProvider,

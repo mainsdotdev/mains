@@ -27,9 +27,11 @@ describe("appEvents", () => {
     const offs = [
       appEvents.runs.onStreamingEvent(cb),
       appEvents.runs.onContextUsage(cb),
+      appEvents.runs.onPullRequestCreated(cb),
       appEvents.runs.onToolApprovalRequest(cb),
       appEvents.runs.onToolApprovalResolved(cb),
       appEvents.providers.onModelsUpdated(cb),
+      appEvents.providers.onSkillsUpdated(cb),
       appEvents.workspace.onScriptComplete(cb),
       appEvents.workspace.onGitStateChanged(cb),
       appEvents.terminal.onData(cb),
@@ -38,9 +40,11 @@ describe("appEvents", () => {
     const subscribe = t.subscribe as ReturnType<typeof vi.fn>;
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.ephemeralEvent, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.contextUsage, cb);
+    expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.pullRequestCreated, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.toolApprovalRequest, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.runs.toolApprovalResolved, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.providers.modelsUpdated, cb);
+    expect(subscribe).toHaveBeenCalledWith(CHANNELS.providers.skillsUpdated, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.workspace.scriptComplete, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.workspace.gitStateChanged, cb);
     expect(subscribe).toHaveBeenCalledWith(CHANNELS.terminal.data, cb);

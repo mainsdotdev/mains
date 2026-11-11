@@ -62,6 +62,7 @@ import { useWindowRequests } from "./hooks/use-window-requests";
 import { useAppSettingsEvents } from "./hooks/use-app-settings-events";
 import { useOnboardingWindow } from "./features/onboarding/hooks/use-onboarding-window";
 import { useBridgeStatus } from "./features/bridge/hooks/use-bridge";
+import { useCreatedPullRequests } from "./features/pull-requests/hooks/use-created-pull-requests";
 import { useGetRunByIdQuery, useGetWorkspaceQuery, useListWorkspacesQuery } from "./lib/redux/api";
 import {
   KeyboardShortcutsProvider,
@@ -119,6 +120,7 @@ function AppContent() {
   useAppTheme();
   useAppshots();
   useRunMessageQueueController();
+  useCreatedPullRequests();
   useWindowRequests();
   useAppSettingsEvents();
   const location = useLocation();

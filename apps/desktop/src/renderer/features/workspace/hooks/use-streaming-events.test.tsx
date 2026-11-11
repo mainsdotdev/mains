@@ -3,7 +3,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "@mains/contracts/channels";
 import { ok } from "@mains/contracts/service-response";
-import { resetTransport, setTransport } from "@/lib/transport";
+import { getTransport, resetTransport, setTransport } from "@/lib/transport";
 import { useStreamingEvents } from "./use-streaming-events";
 
 let frames: Map<number, FrameRequestCallback>;
@@ -40,6 +40,25 @@ function frame() {
 }
 
 describe("live voice chat streams", () => {
+  it("clears the old backend's previews and acknowledgements even when the run id is unchanged", () => {
+    const view = renderHook(() => useStreamingEvents("run", new Set<string>()));
+    snapshot("old-live", "Old backend", false); frame();
+    const old = getTransport();
+    act(() => { setTransport({ ...old }); });
+    expect(view.result.current.streamingEvents).toEqual([]);
+    snapshot("new-live", "New backend", false); frame();
+    expect(view.result.current.streamingEvents.map((event) => event.content)).toEqual(["New backend"]);
+  });
+  it("does not resurrect an acknowledged message when its row leaves the loaded history window", () => {
+    const view = renderHook(({ persisted }) => useStreamingEvents("run", persisted), {
+      initialProps: { persisted: new Set<string>() },
+    });
+    snapshot("acknowledged", "Saved reply", false); frame();
+    view.rerender({ persisted: new Set(["acknowledged"]) });
+    view.rerender({ persisted: new Set<string>() });
+    snapshot("acknowledged", "Late saved reply", false); frame();
+    expect(view.result.current.streamingEvents).toEqual([]);
+  });
   it("replaces snapshots once per frame and retains the beginning of a spoken message", () => {
     const view = renderHook(() => useStreamingEvents("run", new Set<string>()));
     snapshot("speech", "Hel");

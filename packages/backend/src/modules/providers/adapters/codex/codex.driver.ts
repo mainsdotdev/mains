@@ -30,14 +30,15 @@ import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
 import type { McpServerOauthLoginCompletedNotification } from "./codex-app-server-protocol/generated/v2/McpServerOauthLoginCompletedNotification";
 import { getBackendRuntime } from "../../../../runtime/backend-runtime";
+import type { ResourceScope } from "../../../../runtime/resource-lifecycle";
+import { createCodexServerLifecycle } from "./codex-server-lifecycle";
+import { createCodexGoalLifecycle } from "./codex-goal-lifecycle";
+export { relativizeGoalMentions } from "../../../../../shared/provider-goal-lifecycle";
 import type {
   CliUpdateResult,
   AccountInfo,
   CodexAdapterConfig,
   DriverOutcome,
-  GoalInfo,
-  GoalMutationOrigin,
-  GoalSetParams,
   ProviderDriver,
   RateLimitInfo,
   WorkRunContextItem,
@@ -84,7 +85,7 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.166.0";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.167.0";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
 
@@ -109,10 +110,6 @@ function compareCodexVersions(left: string, right: string): number | null {
 // ─────────────────────────────────────────────────────────────
 // Thread item types (mirroring SDK types for event mapping)
 // ─────────────────────────────────────────────────────────────
-
-type CodexGoalStatus = NonNullable<
-  CodexAppServerParams<"thread/goal/set">["status"]
->;
 
 // ─────────────────────────────────────────────────────────────
 // Codex review text parser
@@ -269,86 +266,6 @@ function broadcastRateLimits(providerId: string, rateLimits: RateLimitInfo | nul
   emit(CHANNELS.providers.rateLimitsUpdated, { providerId, rateLimits });
 }
 
-/**
- * Map a raw Codex goal object (from `thread/goal/*` results or the
- * `thread/goal/updated` notification — identical wire shape) into `GoalInfo`.
- */
-function mapGoalSnapshot(raw: Record<string, unknown> | null | undefined): GoalInfo | null {
-  if (!raw || typeof raw !== "object") return null;
-  const threadId = raw.threadId as string | undefined;
-  if (!threadId) return null;
-  return {
-    threadId,
-    objective: (raw.objective as string) ?? "",
-    status: (raw.status as string) ?? "active",
-    tokenBudget: raw.tokenBudget as number | undefined,
-    tokensUsed: raw.tokensUsed as number | undefined,
-    timeUsedSeconds: raw.timeUsedSeconds as number | undefined,
-    createdAt: raw.createdAt as number | undefined,
-    updatedAt: raw.updatedAt as number | undefined,
-  };
-}
-
-/**
- * Push a goal change to every live renderer window. `goal === null` signals the
- * goal was cleared. Carries `runId` so the renderer can match it to the active
- * run's card. Mirrors {@link broadcastRateLimits}.
- */
-function broadcastGoal(providerId: string, runId: string | null, goal: GoalInfo | null): void {
-  emit(CHANNELS.providers.goalUpdated, { providerId, runId, goal }, runId ? { runId } : undefined);
-}
-
-/**
- * Make `@<absolute path>` file mentions in a goal objective relative to the
- * workspace root, so the goal reads `@src/foo.ts` instead of the long worktree
- * prefix (e.g. ~/Library/Application Support/mains/worktrees/…). Relative paths
- * are also more useful to the agent, which runs with cwd = rootPath. Mentions
- * pointing outside the workspace are left untouched.
- */
-export function relativizeGoalMentions(goal: string, rootPath: string | undefined): string {
-  if (!rootPath || !goal) return goal;
-  // Literal replace (not regex) so roots containing spaces — e.g. macOS
-  // "Application Support" in the worktree path — are matched correctly.
-  const root = rootPath.endsWith("/") ? rootPath : rootPath + "/";
-  return goal.split("@" + root).join("@");
-}
-
-/**
- * Register a run's prompt as the thread's goal when goal mode is on.
- *
- * - New threads (`createSession`) pass `overwrite=true` — the first prompt IS
- *   the goal, set it unconditionally.
- * - Continue / fork pass `overwrite=false` — a goal is thread-scoped and meant
- *   to persist across turns, so we must NOT clobber an in-progress goal with
- *   every follow-up. We only (re)set when there's no goal yet or the previous
- *   one already completed; an active/paused/blocked goal is left as-is for the
- *   new turn to keep pursuing.
- */
-async function maybeSetThreadGoal(
-  server: CodexAppServer,
-  threadId: string | undefined,
-  goalMode: boolean,
-  rawObjective: string | undefined,
-  rootPath: string | undefined,
-  overwrite: boolean,
-): Promise<void> {
-  if (!goalMode || !threadId || !rawObjective?.trim()) return;
-  if (!overwrite) {
-    try {
-      const existing = await server.sendRequest("thread/goal/get", {
-        threadId,
-      });
-      if (existing.goal && existing.goal.status !== "complete") return;
-    } catch {
-      /* no goal / get failed — fall through and set */
-    }
-  }
-  const objective = relativizeGoalMentions(rawObjective, rootPath);
-  await server
-    .sendRequest("thread/goal/set", { threadId, objective, origin: "automatic" })
-    .catch((err) => logWarn("thread/goal/set failed:", err instanceof Error ? err.message : err));
-}
-
 // ─────────────────────────────────────────────────────────────
 // Adapter factory
 // ─────────────────────────────────────────────────────────────
@@ -416,7 +333,7 @@ export function mapPersistedCodexSubAgents(
  */
 export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   let appServer: CodexAppServer | null = null;
-  let appServerStartPromise: Promise<CodexAppServer> | null = null;
+  const serverLifecycle = createCodexServerLifecycle(() => appServer?.isRunning ?? false);
   let codexVersionPromise: Promise<string | null> | null = null;
   let codexCompatibilityPromise: Promise<void> | null = null;
   const mcpThreadResumePromises = new Map<string, Promise<void>>();
@@ -427,6 +344,13 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     getDefaultModel: () => config.defaultModel,
     onReviewCompleted: persistCodexReviewFindings,
     logger: codexLogger,
+  });
+  const goals = createCodexGoalLifecycle({
+    ensureServer: () => ensureServer(), getRunningServer,
+    resolveThread: async (runId) => runCoordinator.getSessionThread(runId) ?? (await runsRepo.findRunById(runId))?.sessionId ?? undefined,
+    findRunId: (threadId) => runCoordinator.findRunIdForThread(threadId),
+    publish: (runId, goal) => emit(CHANNELS.providers.goalUpdated, { providerId: PROVIDER_IDS.codex, runId, goal }, { runId }),
+    warn: logWarn, error: logError, unavailable: isCodexUnavailableThreadError,
   });
   const sessionAcquisition = createCodexSessionAcquisition({
     config,
@@ -442,7 +366,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     persistSession: async (runId, threadId) => {
       await runsRepo.updateRun(runId, { sessionId: threadId });
     },
-    establishGoal: maybeSetThreadGoal,
+    establishGoal: goals.establish,
     resolveModel: resolveRunModel,
     resolveDefaultModel: catalogDefaultModel,
     logger: codexLogger,
@@ -455,8 +379,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   const capabilities = createCodexCapabilities({
     getDefaultModel: () => config.defaultModel,
     ensureServer: (cwd) => ensureServer(cwd),
-    getRunningServer: () =>
-      appServer?.isRunning ? appServer : null,
+    getRunningServer,
     getCliHealth: () => getCodexCliHealth(),
     logger: codexLogger,
   });
@@ -678,7 +601,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   // Ensure app-server is running
   // ─────────────────────────────────────────────────────────────
 
-  async function startServer(cwd?: string): Promise<CodexAppServer> {
+  async function startServer(scope: ResourceScope, cwd?: string): Promise<CodexAppServer> {
+    await ensureCompatibleCodexVersion();
+    scope.assertActive();
     const binaryPath = findCodexBinary();
     const spawnCwd = cwd ?? os.homedir();
     logInfo(`Starting app-server: ${binaryPath} app-server (cwd: ${spawnCwd}, HOME=${process.env.HOME}, homedir=${os.homedir()})`);
@@ -686,22 +611,37 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     const server = new CodexAppServer(codexLogger);
     const env = buildCodexEnv(binaryPath);
 
-    await server.start(binaryPath, spawnCwd, env);
-    appServer = server;
-    runCoordinator.installDispatcher(server);
-
+    // Register ownership before the first await. Abort settles an in-flight
+    // handshake; rollback still waits for the actual child close.
+    const cancel = () => { void server.stop(); };
+    scope.signal.addEventListener("abort", cancel, { once: true });
+    scope.defer(async () => {
+      scope.signal.removeEventListener("abort", cancel);
+      await server.stop();
+      if (appServer === server) appServer = null;
+    });
     server.setOnClose(() => {
-      if (appServer === server) {
-        appServer = null;
+      if (appServer !== server) return;
+      appServer = null;
+      if (serverLifecycle.ready) {
+        void serverLifecycle.retire().catch((error) => logError("App-server cleanup failed:", error));
       }
       mcpThreadResumePromises.clear();
       mcpApps.clear();
       capabilities.onServerClosed();
+      goals.serverClosed();
       realtime.serverClosed();
       runCoordinator.handleServerClose();
     });
 
+    await server.start(binaryPath, spawnCwd, env);
+    scope.assertActive();
+    appServer = server;
+    runCoordinator.installDispatcher(server);
+
     // Handshake: initialize → initialized (required before any other RPC)
+    const cliVersion = await getCodexVersion();
+    scope.assertActive();
     const initializeResponse = await server.sendRequest("initialize", {
       clientInfo: {
         name: "mains",
@@ -711,10 +651,14 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       capabilities: {
         experimentalApi: true,
         requestAttestation: false,
+        ...(cliVersion && (compareCodexVersions(cliVersion, "0.167.0") ?? -1) >= 0
+          ? { requiredHumanApproval: true }
+          : {}),
         mcpServerOpenaiFormElicitation: true,
         extensions: { "openai/form": {} },
       },
     });
+    scope.assertActive();
     if (
       typeof initializeResponse.userAgent !== "string" ||
       typeof initializeResponse.codexHome !== "string" ||
@@ -731,6 +675,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     // (e.g. thread/name/updated for auto-generated titles)
     server.setBackgroundHandler((method, params) => {
       realtime.handleNotification(method, params);
+      if (method === "skills/changed") {
+        emit(CHANNELS.providers.skillsUpdated, { providerId: PROVIDER_IDS.codex });
+      }
       if (method === "thread/name/updated" || method === "thread/nameUpdated") {
         const p = params as Record<string, unknown> | undefined;
         const threadName = p?.threadName as string | undefined;
@@ -782,27 +729,8 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         emit(CHANNELS.providers.connectorsUpdated, update);
       }
 
-      // Live goal updates — push to the renderer so the goal card above the
-      // input reflects status/usage as Codex tracks the objective. Thread-
-      // scoped, so we reverse-map threadId → runId for the card to match.
-      if (method === "thread/goal/updated") {
-        const p = params as Record<string, unknown> | undefined;
-        const goal = mapGoalSnapshot(p?.goal as Record<string, unknown> | undefined);
-        const threadId = (p?.threadId ?? goal?.threadId) as string | undefined;
-        broadcastGoal(
-          PROVIDER_IDS.codex,
-          runCoordinator.findRunIdForThread(threadId),
-          goal,
-        );
-      }
-      if (method === "thread/goal/cleared") {
-        const p = params as Record<string, unknown> | undefined;
-        const threadId = p?.threadId as string | undefined;
-        broadcastGoal(
-          PROVIDER_IDS.codex,
-          runCoordinator.findRunIdForThread(threadId),
-          null,
-        );
+      if (method === "thread/goal/updated" || method === "thread/goal/cleared") {
+        goals.notification(server, method, params);
       }
     });
 
@@ -810,30 +738,13 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     return server;
   }
 
-  async function ensureServer(cwd?: string): Promise<CodexAppServer> {
-    if (appServer?.isRunning) return appServer;
-    if (appServerStartPromise) return appServerStartPromise;
+  // Every read of an existing transport uses the same readiness rule.
+  function getRunningServer(): CodexAppServer | null {
+    return serverLifecycle.ready && appServer?.isRunning ? appServer : null;
+  }
 
-    const startPromise = ensureCompatibleCodexVersion().then(() =>
-      startServer(cwd),
-    );
-    appServerStartPromise = startPromise;
-    try {
-      return await startPromise;
-    } catch (error) {
-      const failedServer = appServer;
-      if (failedServer) {
-        await failedServer.stop().catch(() => undefined);
-        if (appServer === failedServer) {
-          appServer = null;
-        }
-      }
-      throw error;
-    } finally {
-      if (appServerStartPromise === startPromise) {
-        appServerStartPromise = null;
-      }
-    }
+  function ensureServer(cwd?: string): Promise<CodexAppServer> {
+    return serverLifecycle.start((scope) => startServer(scope, cwd));
   }
 
   async function findThreadIdForRun(runId: string): Promise<string | null> {
@@ -893,9 +804,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     reviewSession: sessionAcquisition.reviewSession,
     startRealtime: realtime.start,
     stopRealtime: realtime.stop,
-    abortNativeRun: (runId) => runCoordinator.abortNativeRun(appServer, runId),
+    abortNativeRun: (runId) => runCoordinator.abortNativeRun(getRunningServer(), runId),
 
-    steerRun: (request) => runCoordinator.steerRun(appServer, request),
+    steerRun: (request) => runCoordinator.steerRun(getRunningServer(), request),
 
     async getInputStatus(runId, clientUserMessageId, sessionId) {
       const threadId = runCoordinator.getSessionThread(runId) ?? sessionId;
@@ -927,7 +838,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       signal,
     ): Promise<DriverOutcome> {
       return runCoordinator.executeTurn(
-        appServer,
+        getRunningServer(),
         sessionParam as CodexRunSession,
         onEvent,
         signal,
@@ -937,7 +848,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     async cleanup(sessionParam): Promise<void> {
       const session = sessionParam as CodexRunSession;
       await runCoordinator.cleanupRun(
-        appServer,
+        getRunningServer(),
         session.runId,
       );
     },
@@ -1069,14 +980,12 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
 
     async shutdown(): Promise<void> {
       realtime.serverClosed();
-      runCoordinator.shutdown();
+      const closingStatuses = runCoordinator.shutdown();
       capabilities.shutdown();
+      goals.shutdown();
       mcpApps.clear();
 
-      if (appServer) {
-        await appServer.stop();
-        appServer = null;
-      }
+      await Promise.all([serverLifecycle.close(), closingStatuses]);
 
       logInfo("Shutdown complete");
     },
@@ -1096,6 +1005,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     getRateLimits: capabilities.getRateLimits,
+    getCodexPermissions: capabilities.getCodexPermissions,
     getCodexMemorySettings: capabilities.getCodexMemorySettings,
     setCodexMemorySetting: capabilities.setCodexMemorySetting,
     resetCodexMemories: capabilities.resetCodexMemories,
@@ -1103,87 +1013,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     consumeRateLimitResetCredit:
       capabilities.consumeRateLimitResetCredit,
 
-    // ── Thread goal controls (Codex `thread/goal/*`) ──
-    // threadId is resolved from the coordinator, falling back to the
-    // run's persisted sessionId (survives an app restart). We also broadcast the
-    // result directly so the caller's card converges even if the matching
-    // `thread/goal/updated` notification races or is missed.
-
-    async setGoal(runId: string, params: GoalSetParams): Promise<GoalInfo | null> {
-      try {
-        const threadId =
-          runCoordinator.getSessionThread(runId) ??
-          (await runsRepo.findRunById(runId))?.sessionId ??
-          undefined;
-        if (!threadId) {
-          logWarn(`setGoal: no thread for run ${runId}`);
-          return null;
-        }
-        const server = await ensureServer();
-        const goalParams: CodexAppServerParams<"thread/goal/set"> = {
-          threadId,
-          origin: params.origin ?? "user",
-          ...(params.objective !== undefined ? { objective: params.objective } : {}),
-          ...(params.status !== undefined
-            ? { status: params.status as CodexGoalStatus }
-            : {}),
-          ...(params.tokenBudget !== undefined ? { tokenBudget: params.tokenBudget } : {}),
-        };
-        const result = await server.sendRequest(
-          "thread/goal/set",
-          goalParams,
-        );
-        const goal = mapGoalSnapshot(
-          result.goal as unknown as Record<string, unknown>,
-        );
-        broadcastGoal(PROVIDER_IDS.codex, runId, goal);
-        return goal;
-      } catch (error) {
-        logError("setGoal failed:", error);
-        return null;
-      }
-    },
-
-    async getGoal(runId: string): Promise<GoalInfo | null> {
-      try {
-        const threadId =
-          runCoordinator.getSessionThread(runId) ??
-          (await runsRepo.findRunById(runId))?.sessionId ??
-          undefined;
-        if (!threadId || !appServer?.isRunning) return null;
-        const result = await appServer.sendRequest("thread/goal/get", {
-          threadId,
-        });
-        return mapGoalSnapshot(
-          result.goal as unknown as Record<string, unknown> | undefined,
-        );
-      } catch (error) {
-        if (isCodexUnavailableThreadError(error)) return null;
-        logError("getGoal failed:", error);
-        return null;
-      }
-    },
-
-    async clearGoal(runId: string, origin?: GoalMutationOrigin): Promise<boolean> {
-      try {
-        const threadId =
-          runCoordinator.getSessionThread(runId) ??
-          (await runsRepo.findRunById(runId))?.sessionId ??
-          undefined;
-        if (!threadId) return false;
-        const server = await ensureServer();
-        const result = await server.sendRequest("thread/goal/clear", {
-          threadId,
-          origin: origin ?? "user",
-        });
-        const cleared = result.cleared;
-        if (cleared) broadcastGoal(PROVIDER_IDS.codex, runId, null);
-        return cleared;
-      } catch (error) {
-        logError("clearGoal failed:", error);
-        return false;
-      }
-    },
+    setGoal: goals.set,
+    getGoal: goals.get,
+    clearGoal: goals.clear,
 
     listSkills: capabilities.listSkills,
 

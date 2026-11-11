@@ -27,6 +27,74 @@ function client(url: string, extra: Partial<Parameters<typeof createBridgeWebSoc
 const emptyPage = { type: "records", stream: "account", records: [], next: 0, hasMore: false };
 
 describe("Bridge WebSocket failure handling", () => {
+  it("recovers from credential acquisition failure without retaining a broken connecting owner", async () => {
+    let connections = 0;
+    const url = await server((socket) => {
+      connections++;
+      socket.on("message", (data) => socket.send(JSON.stringify({ requestId: JSON.parse(data.toString()).requestId, message: emptyPage })));
+    });
+    const transport = client(url, { token: vi.fn().mockRejectedValueOnce(new Error("Credentials offline")).mockReturnValue("test-only") });
+    await expect(transport.pull("account", 0, 10)).rejects.toThrow("Credentials offline");
+    await expect(transport.pull("account", 0, 10)).resolves.toMatchObject({ next: 0 });
+    expect(connections).toBe(1);
+  });
+
+  it("rejects every lost RPC and restores watched subscriptions on the replacement socket", async () => {
+    let connections = 0, pending = 0;
+    const restored: unknown[] = [];
+    const url = await server((socket) => {
+      const current = ++connections;
+      socket.on("message", (data) => {
+        const { requestId, message } = JSON.parse(data.toString());
+        if (message.type === "subscribe") {
+          if (current === 2) restored.push(message.streams);
+          socket.send(JSON.stringify({ requestId, message: { type: "subscribed", streams: message.streams } }));
+        } else if (current === 1) { if (++pending === 2) socket.close(1011, "Reset"); }
+        else socket.send(JSON.stringify({ requestId, message: emptyPage }));
+      });
+    });
+    const transport = client(url);
+    await transport.subscribe(["account", "run:r"]);
+    const result = await Promise.allSettled([transport.pull("account", 0, 10), transport.pull("account", 0, 10)]);
+    expect(result.map((entry) => entry.status)).toEqual(["rejected", "rejected"]);
+    await expect(transport.pull("account", 0, 10)).resolves.toMatchObject({ next: 0 });
+    expect(restored).toEqual([["account", "run:r"]]);
+  });
+
+  it("retires token waiters immediately and reconnects without waiting for the old credential read", async () => {
+    let release!: (token: string) => void, rejected = false, connections = 0;
+    const token = vi.fn().mockImplementationOnce(() => new Promise<string>((resolve) => { release = resolve; })).mockReturnValue("test-only");
+    const url = await server((socket) => {
+      connections++;
+      socket.on("message", (data) => socket.send(JSON.stringify({ requestId: JSON.parse(data.toString()).requestId, message: emptyPage })));
+    });
+    const transport = client(url, { token });
+    const old = transport.pull("account", 0, 10).catch(() => { rejected = true; });
+    try {
+      await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+      transport.disconnect();
+      await expect(transport.pull("account", 0, 10)).resolves.toMatchObject({ next: 0 });
+      expect(rejected).toBe(true);
+      expect(connections).toBe(1);
+    } finally { release("old-token"); await old; }
+  });
+
+  it("shares connection acquisition with a request started by its connecting notification", async () => {
+    let connections = 0, nested: Promise<unknown> | undefined, entering = false;
+    const url = await server((socket) => {
+      connections++;
+      socket.on("message", (data) => socket.send(JSON.stringify({ requestId: JSON.parse(data.toString()).requestId, message: emptyPage })));
+    });
+    const transport = client(url, { requestTimeoutMs: 150, onStatusChange(status) {
+      if (status === "connecting" && !entering) { entering = true; nested = transport.pull("account", 0, 10); }
+    } });
+    const first = transport.pull("account", 0, 10);
+    // Observe both failures immediately so a broken acquisition cannot escape as an unhandled rejection.
+    const results = await Promise.allSettled([first, Promise.resolve().then(() => nested)]);
+    expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+    expect(connections).toBe(1);
+  });
+
   it("keeps an idle socket alive with protocol pings without any extra application requests", async () => {
     let pings = 0, requests = 0;
     const statuses: string[] = [];
@@ -141,6 +209,7 @@ describe("Bridge WebSocket failure handling", () => {
     let release!: (token: string) => void;
     const transport = client("ws://127.0.0.1:1/v1/log", { token: () => new Promise((resolve) => { release = resolve; }) });
     const result = expect(transport.pull("account", 0, 10)).rejects.toThrow("closed");
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     transport.close(); release("late-token"); await result;
   });
   it("requires encrypted transport outside loopback and keeps credentials out of URLs", () => {

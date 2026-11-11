@@ -1,4 +1,6 @@
 import { readReviewComments } from "@mains/contracts/review-comments";
+import { presentationAnnotationAttachmentName, readPresentationAnnotations } from "@mains/contracts/presentation-annotations";
+import { documentAnnotationAttachmentName, readDocumentAnnotations } from "@mains/contracts/document-annotations";
 import type { ProviderTurnLineage } from "@mains/contracts/realtime";
 import type { AsyncQuestionReply } from "@mains/contracts/async-questions";
 import { providerTurnLineageMetadata } from "../../../../shared/provider-turn-lineage";
@@ -569,6 +571,18 @@ export async function emitUserPromptArtifact(
   },
 ): Promise<void> {
   const reviewComments = readReviewComments((options?.context ?? []).flatMap(({ metadata }) => metadata?.source === "review" ? [metadata] : []));
+  const documentAnnotations = readDocumentAnnotations((options?.context ?? []).flatMap(({ metadata }) => metadata?.source === "document" ? [metadata] : []))
+    .map((annotation) => {
+      const name = documentAnnotationAttachmentName(annotation);
+      const legacyName = annotation.documentType === "pptx" ? presentationAnnotationAttachmentName({ id: annotation.id, slideNumber: annotation.pageNumber }) : null;
+      const screenshot = [...options?.attachments ?? []].reverse().find((file) => file.type === "image" && (file.name === name || file.name === legacyName));
+      return { ...annotation, ...(screenshot?.attachmentId ? { screenshotAttachmentId: screenshot.attachmentId } : {}) };
+    });
+  const presentationAnnotations = readPresentationAnnotations((options?.context ?? []).flatMap(({ metadata }) => metadata?.source === "presentation" ? [metadata] : []))
+    .map((annotation) => {
+      const screenshot = [...options?.attachments ?? []].reverse().find((file) => file.type === "image" && file.name === presentationAnnotationAttachmentName(annotation));
+      return { ...annotation, ...(screenshot?.attachmentId ? { screenshotAttachmentId: screenshot.attachmentId } : {}) };
+    });
   const browserAnnotations: BrowserAnnotation[] = (options?.context ?? []).flatMap(({ metadata, ref }, index) => {
     if (metadata?.source !== "browser" || !Array.isArray(metadata.elements)) return [];
     const elements = metadata.elements.flatMap((element) => {
@@ -612,6 +626,8 @@ export async function emitUserPromptArtifact(
       ...(options?.delivery ? { delivery: options.delivery } : {}),
       ...(browserAnnotations.length ? { browserAnnotations } : {}),
       ...(reviewComments.length ? { reviewComments } : {}),
+      ...(presentationAnnotations.length ? { presentationAnnotations } : {}),
+      ...(documentAnnotations.length ? { documentAnnotations } : {}),
       attachments: options?.attachments?.map(({ attachmentId, name, type, mimeType, byteSize }) => ({
         attachmentId, name, type, mimeType, byteSize,
       })),

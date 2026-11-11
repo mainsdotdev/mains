@@ -1,4 +1,5 @@
 import { assertOwnedRecord } from "../bridge";
+import { createSchedulerLifecycle } from "../../runtime/scheduler-lifecycle";
 import { automationsRepo } from "./automations.repo";
 import { syncService } from "../sync/sync.service";
 import type {
@@ -54,37 +55,28 @@ const actionHandlers: Record<string, ActionHandler> = {
 // ─────────────────────────────────────────────────────────────
 // Scheduler — in-memory timer manager
 // ─────────────────────────────────────────────────────────────
-const timers = new Map<string, NodeJS.Timeout>();
+const lifecycle = createSchedulerLifecycle<AutomationRun>();
 
 function scheduleNext(automation: Automation) {
   // Clear existing timer
-  const existing = timers.get(automation.id);
-  if (existing) clearTimeout(existing);
+  lifecycle.cancel(automation.id);
 
-  if (!automation.isActive) return;
+  if (!lifecycle.running || !automation.isActive) return;
 
   const now = Date.now();
   const nextRun = automation.nextRunAt
     ? new Date(automation.nextRunAt).getTime()
     : now + automation.intervalMinutes * 60_000;
 
-  const delay = Math.max(0, nextRun - now);
-
-  const timer = setTimeout(() => {
+  lifecycle.schedule(automation.id, nextRun, () => {
     automationsService.executeAutomation(automation.id).catch((err) => {
       console.error(`Automation ${automation.id} failed:`, err);
     });
-  }, delay);
-
-  timers.set(automation.id, timer);
+  });
 }
 
 function cancelTimer(automationId: string) {
-  const timer = timers.get(automationId);
-  if (timer) {
-    clearTimeout(timer);
-    timers.delete(automationId);
-  }
+  lifecycle.cancel(automationId);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -97,6 +89,7 @@ export const automationsService = {
   // ── Lifecycle ──
 
   start() {
+    if (!lifecycle.start()) return;
     const active = automationsRepo.findActive();
     console.log(`Automations: scheduling ${active.length} active automation(s)`);
     for (const a of active) {
@@ -105,10 +98,7 @@ export const automationsService = {
   },
 
   stop() {
-    for (const [id] of timers) {
-      cancelTimer(id);
-    }
-    timers.clear();
+    return lifecycle.stop();
   },
 
   // ── CRUD ──
@@ -149,6 +139,7 @@ export const automationsService = {
       throw new Error("Automation not found");
     }
 
+    lifecycle.invalidate(id);
     // Reschedule or cancel
     if (automation.isActive) {
       scheduleNext(automation);
@@ -163,47 +154,45 @@ export const automationsService = {
     assertOwnedRecord("automations", id);
     cancelTimer(id);
     automationsRepo.delete(id);
+    lifecycle.invalidate(id);
   },
 
   // ── Execution ──
 
   async executeAutomation(id: string): Promise<AutomationRun | null> {
-    assertOwnedRecord("automations", id);
-    const automation = automationsRepo.findById(id);
-    if (!automation) {
-      throw new Error("Automation not found");
-    }
+    return lifecycle.run(id, async () => {
+      assertOwnedRecord("automations", id);
+      const automation = automationsRepo.findById(id);
+      if (!automation) {
+        throw new Error("Automation not found");
+      }
 
-    const handler = actionHandlers[automation.action];
-    if (!handler) {
-      throw new Error(`No handler for action: ${automation.action}`);
-    }
+      const handler = actionHandlers[automation.action];
+      if (!handler) {
+        throw new Error(`No handler for action: ${automation.action}`);
+      }
 
-    const runId = automationsRepo.createRun(id);
+      const runId = automationsRepo.createRun(id);
 
-    try {
-      const result = await handler(automation.config);
-      automationsRepo.completeRun(runId, "success", result ?? undefined);
-      automationsRepo.markRunCompleted(id);
+      try {
+        const result = await handler(automation.config);
+        automationsRepo.completeRun(runId, "success", result ?? undefined);
+        automationsRepo.markRunCompleted(id, undefined, automation.nextRunAt);
 
-      // Schedule next run
+        const runs = automationsRepo.getRunsByAutomation(id, 1);
+        return runs[0] ?? null;
+      } catch (err: any) {
+        const errorMsg = err.message || "Unknown error";
+        automationsRepo.completeRun(runId, "error", undefined, errorMsg);
+        automationsRepo.markRunCompleted(id, errorMsg, automation.nextRunAt);
+
+        const runs = automationsRepo.getRunsByAutomation(id, 1);
+        return runs[0] ?? null;
+      }
+    }, () => {
       const updated = automationsRepo.findById(id);
       if (updated) scheduleNext(updated);
-
-      const runs = automationsRepo.getRunsByAutomation(id, 1);
-      return runs[0] ?? null;
-    } catch (err: any) {
-      const errorMsg = err.message || "Unknown error";
-      automationsRepo.completeRun(runId, "error", undefined, errorMsg);
-      automationsRepo.markRunCompleted(id, errorMsg);
-
-      // Schedule next run even on error
-      const updated = automationsRepo.findById(id);
-      if (updated) scheduleNext(updated);
-
-      const runs = automationsRepo.getRunsByAutomation(id, 1);
-      return runs[0] ?? null;
-    }
+    });
   },
 
   // ── Run History ──

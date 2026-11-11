@@ -38,6 +38,8 @@ export interface ConversationQueue {
   runStatus: RunStatus;
   pauseReason?: string;
   resumeRequested?: boolean;
+  /** Invalidates preparation already in flight when delivery is paused. */
+  deliveryRevision?: number;
   editingId?: string;
   draftBackup?: QueueDraftBackup;
   draftRevision?: number;
@@ -45,6 +47,22 @@ export interface ConversationQueue {
 
 export interface RunQueueState { byOwner: Record<string, ConversationQueue> }
 const initialState: RunQueueState = { byOwner: {} };
+
+/** Shared by the reducer and async consumer, including its final pre-send check. */
+export function canStartRunMessage(queue: ConversationQueue | undefined, id: string, delivery: "queue" | "steer"): boolean {
+  if (!queue || queue.messages.some((message) => message.status === "sending")) return false;
+  if (queue.messages.find((message) => message.id === id)?.status !== "queued") return false;
+  return delivery === "steer" || queue.messages[0]?.id === id && (!queue.pauseReason || !!queue.resumeRequested);
+}
+
+export function canSubmitRunMessage(queue: ConversationQueue | undefined, id: string, preparationRevision: number): boolean {
+  return !!queue && (queue.deliveryRevision ?? 0) === preparationRevision &&
+    queue.messages.find((message) => message.id === id)?.status === "sending";
+}
+
+export function canContinueRunQueue(status: RunStatus, resumeRequested = false): boolean {
+  return status === "succeeded" || resumeRequested && (status === "failed" || status === "canceled");
+}
 
 const runQueueSlice = createSlice({
   name: "runQueue",
@@ -82,12 +100,17 @@ const runQueueSlice = createSlice({
       if (!queue) return;
       queue.runStatus = payload.status;
       if (payload.status === "failed" || payload.status === "canceled") {
+        queue.deliveryRevision = (queue.deliveryRevision ?? 0) + 1;
         queue.pauseReason ??= payload.status === "canceled" ? "Run stopped. Queued messages are paused." : "Run failed. Queued messages are paused.";
       }
     },
     pauseRunQueue(state, { payload }: PayloadAction<{ ownerKey: string; reason: string }>) {
       const queue = state.byOwner[payload.ownerKey];
-      if (queue) { queue.pauseReason = payload.reason; queue.resumeRequested = false; }
+      if (queue) {
+        queue.pauseReason = payload.reason;
+        queue.resumeRequested = false;
+        queue.deliveryRevision = (queue.deliveryRevision ?? 0) + 1;
+      }
     },
     resumeRunQueue(state, { payload }: PayloadAction<string>) {
       const queue = state.byOwner[payload];
@@ -101,7 +124,7 @@ const runQueueSlice = createSlice({
     markRunMessageSending(state, { payload }: PayloadAction<{ ownerKey: string; id: string; delivery: "queue" | "steer" }>) {
       const queue = state.byOwner[payload.ownerKey];
       const message = queue?.messages.find((entry) => entry.id === payload.id);
-      if (!queue || !message || message.status !== "queued" || queue.messages.some((entry) => entry.status === "sending")) return;
+      if (!queue || !message || !canStartRunMessage(queue, payload.id, payload.delivery)) return;
       message.status = "sending";
       message.delivery = payload.delivery;
       delete message.error;

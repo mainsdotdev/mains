@@ -1,16 +1,20 @@
 import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
-import { mcpAppCompatibility } from "@/lib/mcp-app-extensions";
+import { mcpAppCompatibility, mcpAppLaunchIssue } from "@/lib/mcp-app-extensions";
 import { McpAppDisplay } from "./tools/mcp-app-display";
+import { McpAppUnavailable } from "./mcp-app-unavailable";
 
 /** The document stays mounted while the surrounding panel changes size. */
 export function McpAppWorkspace({ registerBeforeSuspend }: { registerBeforeSuspend?: (callback: () => Promise<void>) => () => void }) {
   const panel = useMcpAppPanel();
   if (!panel?.document) return null;
   const document = panel.document;
+  const issue = mcpAppLaunchIssue(document.app);
+  if (issue) return <McpAppUnavailable app={document.app} issue={issue} providerId={panel.scope?.providerId} />;
   return <McpAppDisplay
     sessionId={document.sessionId}
     resourceRunId={document.resourceRunId}
     runId={panel.runId}
+    conversationKey={panel.ownerKey ?? undefined}
     presentation="page"
     panelDisplayMode={panel.isExpanded ? "fullscreen" : "inline"}
     onDisplayModeChange={(mode) => {

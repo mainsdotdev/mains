@@ -47,19 +47,6 @@ describe("run cache — completion", () => {
   });
 });
 
-describe("run cache — in-flight dedup", () => {
-  it("admits one load and coalesces a concurrent request into a pending reload", () => {
-    const cache = createRunCache();
-    expect(cache.tryAcquireLoad("r")).toBe(true); // acquired
-    expect(cache.tryAcquireLoad("r")).toBe(false); // already running → queued
-    expect(cache.hasPending("r")).toBe(true);
-    cache.clearPending("r");
-    expect(cache.hasPending("r")).toBe(false);
-    cache.releaseLoad("r");
-    expect(cache.tryAcquireLoad("r")).toBe(true); // free again
-  });
-});
-
 describe("run cache — finalized + forget + clear", () => {
   it("marks a run finalized exactly once", () => {
     const cache = createRunCache();

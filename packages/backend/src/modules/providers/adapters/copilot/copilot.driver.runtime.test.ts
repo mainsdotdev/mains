@@ -144,6 +144,24 @@ printf 'ok\\n'
     expect(sdk.clients).toHaveLength(1);
   });
 
+  it("shares a pending model refresh without opening or stopping another client", async () => {
+    const current = driver();
+    await current.listModels!();
+    const client = sdk.clients[0];
+    current.invalidateCatalogs?.();
+    let finish!: (value: { models: Array<{ id: string }> }) => void;
+    client.rpc.models.list.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const first = current.listModels!(), second = current.listModels!();
+    try {
+      await vi.waitFor(() => expect(client.rpc.models.list.mock.calls.length).toBeGreaterThan(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(client.rpc.models.list).toHaveBeenCalledTimes(2);
+    } finally { finish({ models: [{ id: "refreshed" }] }); }
+    expect(await first).toEqual(await second);
+    expect(client.stop).not.toHaveBeenCalled();
+    expect(sdk.clients).toHaveLength(1);
+  });
+
   it.each([undefined, false, true])("forwards the provider token and preserves explicit login choice (%s)", async (useLoggedInUser) => {
     await configuredDriver({ githubToken: "test-provider-token", useLoggedInUser }).getAccountInfo!();
     expect(sdk.clients[0].options.gitHubToken).toBe("test-provider-token");

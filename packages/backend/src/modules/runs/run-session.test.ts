@@ -68,7 +68,8 @@ vi.mock("../git/git.service", () => ({
   },
 }));
 
-vi.mock("../workspace", () => ({
+vi.mock("../workspace", async () => ({
+  ...await vi.importActual("../workspace/workspace-diff-lifecycle"),
   workspaceService: {
     getDiffByRun: vi.fn().mockResolvedValue(null),
   },
@@ -83,6 +84,7 @@ import { createWorkAdapter, couldModifyFiles } from "../providers/adapters";
 import { gitService } from "../git/git.service";
 import { APP_WRITER, worktreeWrites } from "../git";
 import { registerEventSink } from "../../ipc-kit/event-bus";
+import { CHANNELS } from "@mains/contracts/channels";
 import {
   createClaudePermissionModeRef,
   mapSDKMessage,
@@ -151,6 +153,51 @@ describe("RunSession", () => {
   // ─────────────────────────────────────────────────────────────
   // Construction
   // ─────────────────────────────────────────────────────────────
+  it("announces a live PR creation once, after saving its tool result", async () => {
+    const created: unknown[] = [];
+    const off = registerEventSink({ kind: "test-pr", send(channel, payload) {
+      if (channel === CHANNELS.runs.pullRequestCreated) created.push(payload);
+    } });
+    try {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "Bash", input: { command: "gh pr create --body-file /tmp/pr.md" }, metadata: { phase: "start", toolCallId: "create-pr" } });
+      const result = { type: "tool_call" as const, toolName: "Bash", output: { stdout: "https://github.com/acme/widget/pull/176" }, metadata: { phase: "complete", toolCallId: "create-pr" } };
+      await session.project(result);
+      await session.project(result);
+      const calls = await runsRepo.findToolCallsByRun("r1");
+      expect(calls[0].status).toBe("done");
+      expect(created).toEqual([{ runId: "r1", workspaceId: "w1", mode: "developer", toolCallId: calls[0].id, url: "https://github.com/acme/widget/pull/176" }]);
+    } finally { off(); }
+  });
+
+  it("keeps the creating run's original Work ownership without a workspace", async () => {
+    createRun(db, { id: "work-run", workspaceId: null, mode: "work", accountId: "default", providerId: "copilot_cli", status: "running" });
+    const created: any[] = [];
+    const off = registerEventSink({ kind: "test-pr", send(channel, payload) { if (channel === CHANNELS.runs.pullRequestCreated) created.push(payload); } });
+    try {
+      const session = makeSession({ runId: "work-run", execution: { workspaceId: null, cwd: "/tmp/work" } });
+      await session.project({ type: "tool_call", toolName: "bash", input: { command: "gh pr create" }, metadata: { phase: "start", toolCallId: "work-pr" } });
+      await session.project({ type: "tool_call", toolName: "bash", output: "https://github.com/acme/widget/pull/176", metadata: { phase: "end", toolCallId: "work-pr", success: true } });
+      expect(created).toEqual([expect.objectContaining({ runId: "work-run", workspaceId: null, mode: "work" })]);
+    } finally { off(); }
+  });
+
+  it("does not announce a PR from prose, historical completions, failed creates or parallel reads", async () => {
+    const created: unknown[] = [];
+    const off = registerEventSink({ kind: "test-pr", send(channel, payload) { if (channel === CHANNELS.runs.pullRequestCreated) created.push(payload); } });
+    try {
+      const session = makeSession();
+      const url = "https://github.com/acme/widget/pull/176";
+      await session.project({ type: "artifact", kind: "report", content: "Existing PR: " + url });
+      await session.project({ type: "tool_call", toolName: "Bash", input: { command: "gh pr create" }, output: url, metadata: { phase: "complete", toolCallId: "historical" } });
+      await session.project({ type: "tool_call", toolName: "Bash", input: { command: "gh pr create" }, metadata: { phase: "start", toolCallId: "failed-pr" } });
+      await session.project({ type: "tool_call", toolName: "Bash", input: { command: "gh pr view 176" }, metadata: { phase: "start", toolCallId: "read-pr" } });
+      await session.project({ type: "tool_call", toolName: "Bash", output: url, metadata: { phase: "complete", toolCallId: "read-pr" } });
+      await session.project({ type: "tool_call", toolName: "Bash", output: url, error: "Already exists", metadata: { phase: "complete", toolCallId: "failed-pr", exitCode: 1 } });
+      expect(created).toEqual([]);
+    } finally { off(); }
+  });
+
   it("snapshots selected outputs once after the turn is committed, before finalization returns", async () => {
     const onTurnClosed = vi.fn(async (id: string) => {
       expect(id).toBe("r1");
@@ -316,6 +363,74 @@ describe("RunSession", () => {
     await session.finalize({ status: "succeeded" });
   });
 
+  it("reuses an accepted input's turn when its artifact write is retried", async () => {
+    const session = makeSession();
+    await session.project({ type: "artifact", kind: "user-prompt", content: "initial" });
+    const input = { type: "artifact" as const, kind: "user-prompt", content: "Accepted follow-up",
+      metadata: { delivery: "queue", clientUserMessageId: "retry-input", providerTurnId: "native-next" } };
+    const insert = vi.spyOn(runsRepo, "insertArtifact").mockRejectedValueOnce(new Error("Disk temporarily unavailable"));
+    try {
+      await expect(session.project(input)).rejects.toThrow("Disk temporarily unavailable");
+      await session.project(input);
+      const turns = await runsRepo.findTurnsByRun("r1");
+      expect(turns).toHaveLength(2);
+      expect(turns.map((turn) => turn.turnIndex)).toEqual([0, 1]);
+      expect((await runsRepo.findArtifactsByRun("r1")).filter((artifact) => artifact.metadata?.clientUserMessageId === "retry-input"))
+        .toEqual([expect.objectContaining({ metadata: expect.objectContaining({ turnId: turns[1].id }) })]);
+    } finally { insert.mockRestore(); await session.finalize({ status: "succeeded" }); }
+  });
+
+  it("does not acknowledge queued input against the old turn when the new turn cannot be saved", async () => {
+    const session = makeSession();
+    await session.project({ type: "artifact", kind: "user-prompt", content: "initial" });
+    const insert = vi.spyOn(runsRepo, "insertTurn").mockRejectedValueOnce(new Error("Turn storage unavailable"));
+    const input = { type: "artifact" as const, kind: "user-prompt", content: "Follow-up",
+      metadata: { delivery: "queue", clientUserMessageId: "unsaved-turn" } };
+    try {
+      await expect(session.project(input)).rejects.toThrow("Turn storage unavailable");
+      expect(await runsRepo.findInputArtifact("r1", "unsaved-turn")).toBeNull();
+      await session.project(input);
+      const turns = await runsRepo.findTurnsByRun("r1");
+      expect(turns.map((turn) => turn.turnIndex)).toEqual([0, 1]);
+      expect((await runsRepo.findInputArtifact("r1", "unsaved-turn"))?.metadata?.turnId).toBe(turns[1].id);
+    } finally { insert.mockRestore(); await session.finalize({ status: "succeeded" }); }
+  });
+
+  it("retains the current turn when closing it fails before a queued boundary", async () => {
+    const session = makeSession();
+    await session.project({ type: "artifact", kind: "user-prompt", content: "initial" });
+    const update = vi.spyOn(runsRepo, "updateTurn").mockRejectedValueOnce(new Error("Cannot close turn"));
+    const input = { type: "artifact" as const, kind: "user-prompt", content: "Follow-up",
+      metadata: { delivery: "queue", clientUserMessageId: "blocked-boundary" } };
+    try {
+      await expect(session.project(input)).rejects.toThrow("Cannot close turn");
+      expect(await runsRepo.findTurnsByRun("r1")).toHaveLength(1);
+      expect(await runsRepo.findInputArtifact("r1", "blocked-boundary")).toBeNull();
+      await session.project(input);
+      const turns = await runsRepo.findTurnsByRun("r1");
+      expect(turns).toHaveLength(2);
+      expect(turns[0].status).toBe("completed");
+    } finally { update.mockRestore(); await session.finalize({ status: "succeeded" }); }
+  });
+
+  it("keeps a recovered input's model on its original turn after a later boundary", async () => {
+    const session = makeSession();
+    await session.project({ type: "artifact", kind: "user-prompt", content: "initial" });
+    const original = { type: "artifact" as const, kind: "user-prompt", content: "First follow-up",
+      metadata: { delivery: "queue", clientUserMessageId: "recover-old", model: "original-model" } };
+    const insert = vi.spyOn(runsRepo, "insertArtifact").mockRejectedValueOnce(new Error("Cannot save prompt"));
+    try {
+      await expect(session.project(original)).rejects.toThrow("Cannot save prompt");
+      await session.project({ ...original, content: "Next follow-up",
+        metadata: { delivery: "queue", clientUserMessageId: "newer", model: "next-model" } });
+      await session.project(original);
+      const turns = await runsRepo.findTurnsByRun("r1");
+      expect(turns).toHaveLength(3);
+      expect(turns[1].model).toBe("original-model");
+      expect(turns[2].model).toBe("next-model");
+    } finally { insert.mockRestore(); await session.finalize({ status: "succeeded" }); }
+  });
+
   it("persists steer input inside the current turn without a new Git boundary", async () => {
     const session = makeSession({ initialPromptContent: "original" });
     await flushBackground();
@@ -377,6 +492,48 @@ describe("RunSession", () => {
   });
 
   describe("construction", () => {
+    it("settles unfinished tools even when the final turn close fails", async () => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "Bash", input: { command: "work" },
+        metadata: { phase: "start", toolCallId: "unfinished-at-close" } });
+      const update = vi.spyOn(runsRepo, "updateTurn").mockRejectedValueOnce(new Error("Cannot close final turn"));
+      try {
+        await session.finalize({ status: "canceled" });
+        const [tool] = await runsRepo.findToolCallsByRun("r1");
+        expect(tool.status).toBe("error");
+        expect(session.phase).toBe("closed");
+      } finally { update.mockRestore(); }
+    });
+
+    it("prepares the initial turn barrier before publishing the live session", async () => {
+      let projection: Promise<void> | undefined;
+      const off = registerEventSink({ kind: "initial-turn-observer", send(channel, payload) {
+        if (channel === CHANNELS.runs.statusChanged && (payload as { status: string }).status === "running") {
+          projection = runSessionRegistry.get("r1")?.project({ type: "plan_update", providerTurnId: "native-first",
+            steps: [{ step: "Observe the initial turn", status: "in_progress" }] });
+        }
+      } });
+      const session = makeSession();
+      try {
+        expect(projection).toBeDefined(); await projection;
+        const turns = await runsRepo.findTurnsByRun("r1");
+        expect(turns).toHaveLength(1);
+        expect(turns[0].metadata?.codexPlan).toMatchObject({ providerTurnId: "native-first" });
+      } finally { off(); await session.finalize({ status: "succeeded" }); }
+    });
+
+    it("closes an acquired turn even when initial metadata persistence failed", async () => {
+      const metadata = vi.spyOn(runsRepo, "patchTurnMetadata").mockRejectedValueOnce(new Error("Cannot save native turn identity"));
+      const session = makeSession({ initialProviderTurnId: "native-initial" });
+      try {
+        await expect(session.project({ type: "artifact", kind: "user-prompt", content: "initial" })).rejects.toThrow("Cannot save native turn identity");
+        await session.finalize({ status: "failed" });
+        const turns = await runsRepo.findTurnsByRun("r1");
+        expect(turns).toHaveLength(1);
+        expect(turns[0]).toMatchObject({ status: "completed", endedAt: expect.any(Date) });
+      } finally { metadata.mockRestore(); await session.finalize({ status: "failed" }); }
+    });
+
     it("registers itself in the registry", () => {
       const session = makeSession();
       expect(runSessionRegistry.get("r1")).toBe(session);
@@ -806,6 +963,29 @@ describe("RunSession", () => {
   // project — tool_call events
   // ─────────────────────────────────────────────────────────────
   describe("project — tool_call events", () => {
+    it("projects concurrent duplicate starts and their completion into one terminal row", async () => {
+      const session = makeSession();
+      const start = { type: "tool_call" as const, toolName: "Read", input: { path: "a.ts" },
+        metadata: { phase: "start", toolCallId: "duplicate-start" } };
+      await Promise.all([session.project(start), session.project(start), session.project({
+        ...start, output: { content: "saved result" }, metadata: { ...start.metadata, phase: "end" },
+      })]);
+      const calls = await runsRepo.findToolCallsByRun("r1");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ status: "done", output: { content: "saved result" } });
+    });
+    it("retries a failed result write without losing the running call or closing a sibling", async () => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "Read", metadata: { phase: "start", toolCallId: "retry-result" } });
+      const write = vi.spyOn(runsRepo, "updateToolCall").mockRejectedValueOnce(new Error("Database busy"));
+      const completion = { type: "tool_call" as const, toolName: "Read", output: { content: "recovered" },
+        metadata: { phase: "end", toolCallId: "retry-result" } };
+      try {
+        await expect(session.project(completion)).rejects.toThrow("Database busy");
+        await session.project(completion);
+        expect((await runsRepo.findToolCallsByRun("r1"))[0]).toMatchObject({ status: "done", output: { content: "recovered" } });
+      } finally { write.mockRestore(); }
+    });
     it.each([false, true])(
       "retains omitted MCP results and text after a database read, app=%s",
       async (hasApp) => {
@@ -1248,6 +1428,111 @@ describe("RunSession", () => {
   // round-tripping: the spawning call's provider id and the child's link to
   // it. Projected through the real repo into the real (in-memory) DB.
   describe("project — subagent parent linkage", () => {
+    it("persists independent MCP task outcomes and files after their tool acknowledgements", async () => {
+      const session = makeSession();
+      const cs = { runId: "r1", state: { hasAssistantContent: false }, toolCallIndex: new Map(), taskIndex: new Map(),
+        permissionMode: createClaudePermissionModeRef("default") } as any;
+      const project = async (message: Record<string, unknown>) => {
+        for (const event of mapSDKMessage({ session_id: "sdk", uuid: "u", parent_tool_use_id: null, ...message } as any, cs))
+          await session.project(event);
+      };
+      await project({ type: "assistant", message: { role: "assistant", content: ["one", "two"].map((id) => (
+        { type: "tool_use", id, name: "mcp__reports__export", input: { id } }
+      )) } });
+      for (const id of ["one", "two"]) {
+        await project({ type: "system", subtype: "task_started", task_id: `task-${id}`, run_id: "001",
+          tool_use_id: id, task_type: "mcp_task", description: `Export ${id}` });
+        await project({ type: "user", message: { role: "user", content: [
+          { type: "tool_result", tool_use_id: id, content: "Running in background" },
+        ] } });
+      }
+      await project({ type: "system", subtype: "task_progress", task_id: "task-one", run_id: "001", summary: "Writing rows" });
+      const pending = await runsRepo.findToolCallsByRun("r1");
+      expect(pending).toHaveLength(2);
+      expect(pending[0].metadata?.task).toMatchObject({ taskType: "mcp_task", status: "running", summary: "Writing rows" });
+      const resourceLinks = [{ uri: "https://example.test/one.csv", name: "Export one", mimeType: "text/csv" }];
+      await project({ type: "system", subtype: "task_updated", task_id: "task-one", run_id: "001", patch: { status: "completed" } });
+      await project({ type: "system", subtype: "task_notification", task_id: "task-one", run_id: "001", status: "completed",
+        summary: "Exported 3 rows", output_file: "/tmp/one.output", resource_links: resourceLinks });
+      await project({ type: "system", subtype: "task_notification", task_id: "task-two", run_id: "001", status: "failed",
+        summary: "Service unavailable" });
+      await session.finalize({ status: "succeeded" });
+      const calls = await runsRepo.findToolCallsByRun("r1");
+      expect(calls[0].metadata?.task).toMatchObject({ taskId: "task-one", status: "completed", summary: "Exported 3 rows",
+        outputFile: "/tmp/one.output", resourceLinks });
+      expect(calls[1].metadata?.task).toMatchObject({ taskId: "task-two", status: "failed", error: "Service unavailable" });
+      expect(calls.every((call) => !call.metadata?.subagent)).toBe(true);
+    });
+
+    it.each(["succeeded", "failed", "canceled"] as const)("does not infer MCP task success when its observer ends with %s", async (status) => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "mcp__reports__export", metadata: { phase: "start", toolCallId: "export" } });
+      await session.project({ type: "task", phase: "started", taskId: "report", toolCallId: "export", taskType: "mcp_task",
+        providerRunId: "001", status: "running", isBackgrounded: true, backgroundActive: true });
+      await session.finalize({ status });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({
+        taskId: "report", status: "stopped", backgroundActive: false,
+      });
+    });
+
+    it("clears a previous MCP execution's resource links when it resumes", async () => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "mcp__reports__export", metadata: { phase: "start", toolCallId: "export" } });
+      const task = { type: "task" as const, taskId: "report", toolCallId: "export", taskType: "mcp_task" };
+      await session.project({ ...task, phase: "completed", providerRunId: "001", status: "completed",
+        resourceLinks: [{ uri: "https://example.test/old.csv", name: "Old" }] });
+      await session.project({ ...task, phase: "started", providerRunId: "002", status: "running" });
+      await session.project({ ...task, phase: "completed", providerRunId: "001", status: "completed",
+        resourceLinks: [{ uri: "https://example.test/old.csv", name: "Late old result" }] });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({ providerRunId: "002", status: "running" });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).not.toHaveProperty("resourceLinks");
+    });
+
+    it.each([undefined, "002"])("does not reopen a settled subagent with execution %s from a late running event", async (providerRunId) => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "Agent", metadata: { phase: "start", toolCallId: "late-running" } });
+      const agent = { type: "subagent" as const, agentType: "Explore", parentToolUseId: "late-running", providerRunId };
+      await session.project({ ...agent, phase: "completed", result: "Finished" });
+      await session.project({ ...agent, phase: "running" });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.subagent).toMatchObject({ phase: "completed", result: "Finished" });
+    });
+    it("reopens task metadata for a new execution even when its subagent event arrived first", async () => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "Agent", metadata: { phase: "start", toolCallId: "crossed-resume" } });
+      await session.project({ type: "task", phase: "completed", toolCallId: "crossed-resume", taskId: "agent",
+        providerRunId: "002", status: "failed", error: "Old failure" });
+      await session.project({ type: "subagent", phase: "running", agentType: "Explore", parentToolUseId: "crossed-resume", providerRunId: "003" });
+      expect(((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task as Record<string, unknown>)?.error).toBeUndefined();
+      await session.project({ type: "task", phase: "started", toolCallId: "crossed-resume", taskId: "agent",
+        providerRunId: "003", status: "running" });
+      const task = (await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task as Record<string, unknown>;
+      expect(task).toMatchObject({ phase: "started", status: "running", providerRunId: "003" });
+      expect(task.error).toBeUndefined();
+    });
+    it("keeps a resumed subagent's execution when its previous result arrives late", async () => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "Agent", metadata: { phase: "start", toolCallId: "resumed-agent" } });
+      await session.project({ type: "subagent", phase: "failed", agentType: "Explore", parentToolUseId: "resumed-agent",
+        providerRunId: "002", error: "Previous failure" });
+      await session.project({ type: "subagent", phase: "running", agentType: "Explore", parentToolUseId: "resumed-agent", providerRunId: "003" });
+      await session.project({ type: "subagent", phase: "completed", agentType: "Explore", parentToolUseId: "resumed-agent",
+        providerRunId: "002", result: "Late previous result" });
+      const state = (await runsRepo.findToolCallsByRun("r1"))[0].metadata?.subagent as Record<string, unknown>;
+      expect(state).toMatchObject({ phase: "running", providerRunId: "003" });
+      expect(state.error).toBeUndefined(); expect(state.result).toBeUndefined();
+    });
+    it("does not reopen a completed native task when a late running update arrives", async () => {
+      const session = makeSession();
+      await session.project({ type: "tool_call", toolName: "Agent", metadata: { phase: "start", toolCallId: "settled-task" } });
+      await session.project({ type: "task", phase: "completed", toolCallId: "settled-task", taskId: "agent", providerRunId: "002",
+        status: "completed", summary: "Finished", usage: { totalTokens: 42 } });
+      await session.project({ type: "task", phase: "updated", toolCallId: "settled-task", taskId: "agent", providerRunId: "002",
+        status: "running", backgroundActive: false, summary: "Stale progress", error: "Stale error" });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({
+        phase: "completed", status: "completed", summary: "Finished", usage: { totalTokens: 42 }, backgroundActive: false,
+      });
+      expect(((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task as Record<string, unknown>).error).toBeUndefined();
+    });
     it("persists native task hierarchy and links child reports to their immediate agent", async () => {
       const session = makeSession();
       await flushBackground();
@@ -1548,6 +1833,20 @@ describe("RunSession", () => {
   });
 
   describe("project — artifact events", () => {
+    it("keeps a new streamed answer in its queued turn while the prompt boundary is still preparing", async () => {
+      const session = makeSession();
+      await flushBackground();
+      const queued = session.project({ type: "artifact", kind: "user-prompt", content: "Follow up",
+        metadata: { source: "user", delivery: "queue", clientUserMessageId: "next-stream-turn" } });
+      await session.project({ type: "artifact", kind: "report", content: "New answer", ephemeral: true,
+        streamId: "next-turn-stream", metadata: { source: "agent_message_streaming" } });
+      await queued;
+      await session.project({ type: "artifact", kind: "report", content: "New answer", streamId: "next-turn-stream" });
+      const turns = await runsRepo.findTurnsByRun("r1");
+      const answer = (await runsRepo.findArtifactsByRun("r1")).find((artifact) => artifact.content === "New answer");
+      expect(turns).toHaveLength(2);
+      expect(answer?.metadata?.turnId).toBe(turns.at(-1)!.id);
+    });
     it("inserts an artifact for non-ephemeral events", async () => {
       const session = makeSession();
       await flushBackground();
@@ -1597,6 +1896,8 @@ describe("RunSession", () => {
       const turns = await runsRepo.findTurnsByRun("r1");
       const indexes = turns.map((t) => t.turnIndex).sort();
       expect(indexes).toEqual([0, 1]);
+      const prompt = (await runsRepo.findArtifactsByRun("r1")).find((artifact) => artifact.content === "follow-up question");
+      expect(prompt?.metadata?.turnId).toBe(turns[1].id);
     });
 
     it("stores the resolved model on the active turn", async () => {
@@ -1875,6 +2176,39 @@ describe("RunSession", () => {
   // finalize
   // ─────────────────────────────────────────────────────────────
   describe("finalize", () => {
+    it("recovers the full final report after its database write fails", async () => {
+      const session = makeSession();
+      await session.project({ type: "artifact", kind: "report", ephemeral: true, streamId: "failed-report",
+        content: "Partial", metadata: { source: "agent_message_streaming" } });
+      const insert = vi.spyOn(runsRepo, "insertArtifact").mockRejectedValueOnce(new Error("Database busy"));
+      try {
+        await expect(session.project({ type: "artifact", kind: "report", streamId: "failed-report", content: "Complete final answer" })).rejects.toThrow("Database busy");
+        await session.finalize({ status: "failed" });
+        expect((await runsRepo.findArtifactsByRun("r1")).map((artifact) => artifact.content)).toEqual(["Complete final answer"]);
+      } finally { insert.mockRestore(); }
+    });
+    it("does not retire a replacement stream when a duplicate previous final report arrives", async () => {
+      const session = makeSession();
+      const live = { type: "artifact" as const, kind: "report", streamId: "reused-final", ephemeral: true,
+        metadata: { source: "agent_message_streaming" } };
+      await session.project({ ...live, content: "First answer" });
+      const final = { type: "artifact" as const, kind: "report", streamId: live.streamId, content: "First answer" };
+      await session.project(final);
+      await session.project({ ...live, content: "Second answer" });
+      await session.project(final);
+      await session.finalize({ status: "canceled" });
+      expect((await runsRepo.findArtifactsByRun("r1")).map((artifact) => artifact.content)).toEqual(["First answer", "Second answer"]);
+    });
+    it("persists an identified final report once when the provider repeats completion", async () => {
+      const session = makeSession();
+      await session.project({ type: "artifact", kind: "report", ephemeral: true, streamId: "report-once",
+        content: "Final answer", metadata: { source: "agent_message_streaming" } });
+      const final = { type: "artifact" as const, kind: "report", streamId: "report-once", content: "Final answer" };
+      await Promise.all([session.project(final), session.project(final)]);
+      await session.project(final);
+      const reports = (await runsRepo.findArtifactsByRun("r1")).filter((artifact) => artifact.kind === "report");
+      expect(reports).toHaveLength(1);
+    });
     it("preserves a reported zero USD cost and zero tokens on the completed turn", async () => {
       const session = makeSession();
       await flushBackground();
@@ -1918,6 +2252,7 @@ describe("RunSession", () => {
           fileChangeBuffers: new Map(),
           fileChangeItems: new Map(),
           commandOutputBuffers: new Map(),
+          reasoningBuffers: new Map(),
           emittedImagePaths: new Set(),
           emittedDocPaths: new Set(),
           emittedVisualizationKeys: new Set(),
@@ -2173,6 +2508,28 @@ describe("RunSession", () => {
         insert.mockRestore();
       }
     });
+    it("retains a new message when a reused native stream id arrives during the previous final write", async () => {
+      const session = makeSession();
+      await flushBackground();
+      const live = { type: "artifact" as const, kind: "report", ephemeral: true, streamId: "reused-inflight",
+        metadata: { source: "agent_message_streaming" } };
+      await session.project({ ...live, content: "First answer" });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const original = runsRepo.insertArtifact.bind(runsRepo);
+      const insert = vi.spyOn(runsRepo, "insertArtifact").mockImplementationOnce(async (input) => { await gate; return original(input); });
+      const final = session.project({ type: "artifact", kind: "report", streamId: live.streamId,
+        content: "First answer", metadata: { source: "assistant.message" } });
+      try {
+        await vi.waitFor(() => expect(insert).toHaveBeenCalledTimes(1));
+        await session.project({ ...live, content: "Second answer" });
+        release(); await final;
+        await session.finalize({ status: "canceled" });
+        const reports = (await runsRepo.findArtifactsByRun("r1")).filter((artifact) => artifact.kind === "report");
+        expect(reports.map((artifact) => artifact.content)).toEqual(["First answer", "Second answer"]);
+        expect(reports[0].metadata?.streamId).not.toBe(reports[1].metadata?.streamId);
+      } finally { release(); await final; insert.mockRestore(); }
+    });
 
     it("updates run status to the result status", async () => {
       const session = makeSession();
@@ -2217,6 +2574,40 @@ describe("RunSession", () => {
 
       await session.finalize({ status: "succeeded" });
       expect(runSessionRegistry.get("r1")).toBeUndefined();
+    });
+
+    it("drains an accepted tool event before publishing completion and releasing its session", async () => {
+      const session = makeSession();
+      await flushBackground();
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      const original = runsRepo.insertToolCall.bind(runsRepo);
+      const insert = vi.spyOn(runsRepo, "insertToolCall").mockImplementation(async (payload) => {
+        entered();
+        await gate;
+        return original(payload);
+      });
+      const writing = session.project({ type: "tool_call", toolName: "Bash",
+        metadata: { phase: "start", toolCallId: "pending-write" } });
+      await started;
+      const closing = session.finalize({ status: "succeeded" });
+      try {
+        await flushBackground();
+        expect((await runsRepo.findRunById("r1"))?.status).toBe("running");
+        expect(runSessionRegistry.get("r1")).toBe(session);
+        release();
+        await Promise.all([writing, closing]);
+        expect(await runsRepo.findToolCallsByRun("r1")).toEqual([
+          expect.objectContaining({ status: "done" }),
+        ]);
+        expect(runSessionRegistry.get("r1")).toBeUndefined();
+      } finally {
+        release();
+        await Promise.all([writing, closing]);
+        insert.mockRestore();
+      }
     });
 
     it("closes orphaned tool calls as done on succeeded finalize", async () => {
@@ -2476,6 +2867,42 @@ describe("RunSession", () => {
   // abort
   // ─────────────────────────────────────────────────────────────
   describe("abort", () => {
+    it("keeps Stop authoritative when a provider emits late events and reports success", async () => {
+      vi.mocked(createWorkAdapter).mockReturnValue({ abortRun: vi.fn().mockResolvedValue(undefined) } as any);
+      const session = makeSession();
+      await flushBackground();
+
+      await session.abort();
+      await session.project({ type: "artifact", kind: "report", content: "Late provider response" });
+      await session.finalize({ status: "succeeded" });
+
+      expect((await runsRepo.findRunById("r1"))?.status).toBe("canceled");
+      expect(await runsRepo.findArtifactsByRun("r1")).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ content: "Late provider response" })]),
+      );
+      expect(runSessionRegistry.get("r1")).toBeUndefined();
+    });
+
+    it("retains a native acceptance receipt arriving during Stop without accepting more output", async () => {
+      vi.mocked(createWorkAdapter).mockReturnValue({ abortRun: vi.fn().mockResolvedValue(undefined) } as any);
+      const session = makeSession();
+      await flushBackground();
+      await session.abort();
+      const receipt = { type: "artifact" as const, kind: "user-prompt", content: "Already accepted guidance",
+        metadata: { clientUserMessageId: "accepted-before-stop", providerTurnId: "native-turn", delivery: "steer" } };
+
+      await session.project(receipt);
+      await session.project(receipt);
+      await session.project({ type: "artifact", kind: "report", content: "Late response" });
+      await session.finalize({ status: "succeeded" });
+
+      expect(await runsRepo.findArtifactsByRun("r1")).toEqual([
+        expect.objectContaining({ content: receipt.content, metadata: expect.objectContaining(receipt.metadata) }),
+      ]);
+      expect(await runsRepo.findTurnsByRun("r1")).toHaveLength(1);
+      expect((await runsRepo.findRunById("r1"))?.status).toBe("canceled");
+    });
+
     it("calls adapter.abortRun", async () => {
       const abortRun = vi.fn().mockResolvedValue(undefined);
       vi.mocked(createWorkAdapter).mockReturnValue({ abortRun } as any);

@@ -206,3 +206,14 @@ test("upgrading keeps cached chats and workspaces local until a snapshot names t
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, MIGRATIONS.length);
   } finally { db.close(); }
 });
+test("approval incarnation migration preserves pending requests from earlier phones", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    seedVersion(db, 21);
+    db.exec("INSERT INTO pending_approvals (backend_id,request_id,run_id,kind,tool_name,requested_at,expires_at) VALUES ('mac','permission','run','tool_approval','Bash',1,2)");
+    migrateDatabase(migrationDatabase(db));
+    assert.equal(db.prepare("SELECT approval_token FROM pending_approvals").get().approval_token, null);
+    db.exec("UPDATE pending_approvals SET approval_token = 'fresh-token'");
+    assert.equal(db.prepare("SELECT approval_token FROM pending_approvals").get().approval_token, "fresh-token");
+  } finally { db.close(); }
+});

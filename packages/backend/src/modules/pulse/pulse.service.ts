@@ -1,4 +1,5 @@
 import { assertOwnedRecord } from "../bridge";
+import { createSchedulerLifecycle } from "../../runtime/scheduler-lifecycle";
 import { pulseRepo } from "./pulse.repo";
 import { validateCreate, validateUpdate } from "./pulse.validation";
 import { runsService } from "../runs/runs.service";
@@ -102,25 +103,21 @@ export function computeNextRunAt(spec: ScheduleSpec, from: Date): Date {
 // In-memory single-timer scheduler
 // ─────────────────────────────────────────────────────────────
 
-let nextTimer: NodeJS.Timeout | null = null;
-let started = false;
+const lifecycle = createSchedulerLifecycle<Pulse>();
 
 function clearNextTimer() {
-  if (nextTimer) {
-    clearTimeout(nextTimer);
-    nextTimer = null;
-  }
+  lifecycle.cancel("next");
 }
 
 function scheduleNext() {
   clearNextTimer();
+  if (!lifecycle.running) return;
   const next = pulseRepo.findNextScheduled();
   if (!next || !next.nextRunAt) return;
 
-  const delay = Math.max(0, new Date(next.nextRunAt).getTime() - Date.now());
-  nextTimer = setTimeout(() => {
+  lifecycle.schedule("next", Math.max(new Date(next.nextRunAt).getTime(), lifecycle.retryAt(next.id)), () => {
     pulseService.tick().catch((err) => console.error("[Pulse] tick failed:", err));
-  }, delay);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -133,8 +130,7 @@ function scheduleNext() {
 
 export const pulseService = {
   start(): void {
-    if (started) return;
-    started = true;
+    if (!lifecycle.start()) return;
 
     // Catch-up: any active pulse with nextRunAt in the past — fire once,
     // then re-schedule normally.
@@ -151,9 +147,9 @@ export const pulseService = {
     scheduleNext();
   },
 
-  stop(): void {
+  stop(): Promise<void> {
     clearNextTimer();
-    started = false;
+    return lifecycle.stop();
   },
 
   // ── CRUD ──
@@ -214,6 +210,7 @@ export const pulseService = {
       : undefined;
 
     const pulse = pulseRepo.update(id, input, nextRunAt);
+    lifecycle.invalidate(id);
     scheduleNext();
     return pulse ?? null;
   },
@@ -221,6 +218,7 @@ export const pulseService = {
   delete(id: string): void {
     assertOwnedRecord("pulses", id);
     pulseRepo.delete(id);
+    lifecycle.invalidate(id);
     scheduleNext();
   },
 
@@ -231,70 +229,76 @@ export const pulseService = {
   // ── Execution ──
 
   async executePulse(id: string): Promise<Pulse | null> {
-    assertOwnedRecord("pulses", id);
-    const pulse = pulseRepo.findById(id);
-    if (!pulse) throw new Error("Pulse not found");
+    return lifecycle.run(id, async (current) => {
+      assertOwnedRecord("pulses", id);
+      const pulse = pulseRepo.findById(id);
+      if (!pulse) throw new Error("Pulse not found");
 
-    const now = new Date();
-    const nextRunAt = computeNextRunAt(pulse, now);
+      const now = new Date();
+      const nextRunAt = computeNextRunAt(pulse, now);
 
-    // Claim the pulse synchronously BEFORE awaiting anything so that a
-    // concurrent scheduleNext()/tick() pass cannot see it as still due
-    // and fire a duplicate run. (See: catch-up race in start().)
-    pulseRepo.claimNextRun(id, nextRunAt);
+      // Claim the pulse synchronously BEFORE awaiting anything so that a
+      // concurrent scheduleNext()/tick() pass cannot see it as still due
+      // and fire a duplicate run. (See: catch-up race in start().)
+      pulseRepo.claimNextRun(id, nextRunAt);
 
-    try {
-      const settings = await appSettingsService.getSettings();
-      const configSnapshot = buildConfigSnapshot(pulse.providerId, pulse);
-      // The run must execute under a space of the pulse's own mode — a work
-      // digest must not inherit the developer harness (or vice versa). Prefer
-      // the active space when it matches, else any live space of that pair.
-      const spaces = await spaceService.getAll();
-      const activeSpace = settings.activeSpaceId
-        ? spaces.find((space) => space.id === settings.activeSpaceId)
-        : undefined;
-      const matchesPulse = (space: (typeof spaces)[number]) =>
-        space.providerId === pulse.providerId &&
-        space.mode === pulse.mode &&
-        !space.isArchived;
-      const runSpace =
-        activeSpace && matchesPulse(activeSpace)
-          ? activeSpace
-          : spaces.find(matchesPulse);
-      if (!runSpace) {
-        throw new Error(
-          `No ${pulse.mode} space is available for provider "${pulse.providerId}"`,
-        );
+      let launched = false;
+      try {
+        const settings = await appSettingsService.getSettings();
+        if (!current()) return null;
+        const configSnapshot = buildConfigSnapshot(pulse.providerId, pulse);
+        // The run must execute under a space of the pulse's own mode — a work
+        // digest must not inherit the developer harness (or vice versa). Prefer
+        // the active space when it matches, else any live space of that pair.
+        const spaces = await spaceService.getAll();
+        if (!current()) return null;
+        const activeSpace = settings.activeSpaceId
+          ? spaces.find((space) => space.id === settings.activeSpaceId)
+          : undefined;
+        const matchesPulse = (space: (typeof spaces)[number]) =>
+          space.providerId === pulse.providerId &&
+          space.mode === pulse.mode &&
+          !space.isArchived;
+        const runSpace =
+          activeSpace && matchesPulse(activeSpace)
+            ? activeSpace
+            : spaces.find(matchesPulse);
+        if (!runSpace) {
+          throw new Error(
+            `No ${pulse.mode} space is available for provider "${pulse.providerId}"`,
+          );
+        }
+
+        launched = true;
+        const result = await runsService.executeRun({
+          accountId: pulse.accountId,
+          // Developer pulses run in their workspace; work/chat pulses run
+          // workspace-less (managed execution dir) with an optional collection,
+          // whose sources travel into the run like any collection chat.
+          workspaceId: pulse.workspaceId ?? undefined,
+          collectionId: pulse.collectionId ?? undefined,
+          spaceId: runSpace.id,
+          providerId: pulse.providerId,
+          model: pulse.model,
+          goal: pulse.prompt,
+          configSnapshot,
+        });
+
+        pulseRepo.markRun(id, {
+          lastRunAt: now,
+          nextRunAt: current() ? nextRunAt : undefined,
+          lastRunId: result.runId,
+          lastError: null,
+        });
+        return pulseRepo.findById(id) ?? null;
+      } catch (err: any) {
+        const message = err?.message ?? String(err);
+        pulseRepo.markRun(id, { lastRunAt: now, nextRunAt: current() ? nextRunAt : undefined, lastError: message });
+        throw err instanceof Error ? err : new Error(message);
+      } finally {
+        if (!launched && !current()) pulseRepo.releaseClaim(id, nextRunAt, pulse.nextRunAt);
       }
-
-      const result = await runsService.executeRun({
-        accountId: pulse.accountId,
-        // Developer pulses run in their workspace; work/chat pulses run
-        // workspace-less (managed execution dir) with an optional collection,
-        // whose sources travel into the run like any collection chat.
-        workspaceId: pulse.workspaceId ?? undefined,
-        collectionId: pulse.collectionId ?? undefined,
-        spaceId: runSpace.id,
-        providerId: pulse.providerId,
-        model: pulse.model,
-        goal: pulse.prompt,
-        configSnapshot,
-      });
-
-      pulseRepo.markRun(id, {
-        lastRunAt: now,
-        nextRunAt,
-        lastRunId: result.runId,
-        lastError: null,
-      });
-      scheduleNext();
-      return pulseRepo.findById(id) ?? null;
-    } catch (err: any) {
-      const message = err?.message ?? String(err);
-      pulseRepo.markRun(id, { lastRunAt: now, nextRunAt, lastError: message });
-      scheduleNext();
-      throw err instanceof Error ? err : new Error(message);
-    }
+    }, scheduleNext);
   },
 
   async runNow(id: string): Promise<Pulse | null> {
@@ -302,8 +306,13 @@ export const pulseService = {
   },
 
   async tick(): Promise<void> {
+    const current = lifecycle.capture();
+    if (!current()) return;
     const due = pulseRepo.findDueActive(new Date());
     for (const pulse of due) {
+      if (!current()) return;
+      const latest = pulseRepo.findById(pulse.id);
+      if (!latest?.isActive || !latest.nextRunAt || latest.nextRunAt.getTime() > Date.now()) continue;
       // One failing pulse must not starve the rest of the due list; the
       // failure is already recorded on the row (lastError) by executePulse.
       try {

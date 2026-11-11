@@ -1,3 +1,4 @@
+import { codexPermissionValue, codexBuiltinSandboxMode } from "@mains/contracts/codex-permissions";
 import { EFFORT_LEVELS } from "@mains/contracts/runs";
 import type { ModelServiceTier } from "@mains/contracts/run-settings";
 
@@ -105,7 +106,8 @@ export function permissionModesFor(providerId: string): PermissionModeOption[] {
 }
 
 export function permissionShortLabel(providerId: string, value: string): string {
-  return permissionModesFor(providerId).find((m) => m.value === value)?.shortLabel ?? value;
+  const mode = providerId === "codex" ? codexBuiltinSandboxMode(value) ?? value : value;
+  return permissionModesFor(providerId).find((m) => m.value === mode)?.shortLabel ?? (providerId === "codex" && value.startsWith("profile:") ? value.slice(8) : value);
 }
 
 /** Goal mode and the plan *toggle* are Codex's; elsewhere plan is a permission mode. */
@@ -134,7 +136,7 @@ export function runSettingsFromConfig(
   const str = (value: unknown) => (typeof value === "string" ? value : "");
   const effort = effortFromConfig(providerId, config);
   const permissionKey = PERMISSION_KEYS[providerId];
-  const permissionMode = (permissionKey && str(c[permissionKey])) || PERMISSION_DEFAULTS[providerId] || "";
+  const permissionMode = providerId === "codex" ? codexPermissionValue(c) : (permissionKey && str(c[permissionKey])) || PERMISSION_DEFAULTS[providerId] || "";
   const fastMode =
     providerId === "codex" ? ["fast", "priority", "ultrafast"].includes(str(c.serviceTier)) : c.fastMode === true;
   return {

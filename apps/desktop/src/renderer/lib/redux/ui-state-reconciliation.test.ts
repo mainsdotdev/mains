@@ -1,11 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "@mains/contracts/channels";
 import { runOwnerKey } from "../../../shared/ui-state-keys";
 import type { AppDispatch, RootState } from "./index";
 import type { Transport } from "../transport";
 
-const harness = vi.hoisted(() => ({ transport: null as Transport | null }));
-vi.mock("../transport", () => ({ getTransport: () => harness.transport }));
+import { setTransport, resetTransport } from "../transport";
+afterEach(resetTransport);
+function connect(invoke: Transport["invoke"]): Transport {
+  const transport: Transport = { kind: "test", invoke, status: () => "connected", subscribe: () => () => {}, onStatusChange: () => () => {} };
+  setTransport(transport); return transport;
+}
 
 import { collectUiContextCandidates, reconcilePersistedUiState } from "./ui-state-reconciliation";
 
@@ -36,13 +40,61 @@ function savedState(): RootState {
 }
 
 describe("persisted UI reconciliation", () => {
+  it("does not let an already-aborted reconciliation retire a valid pending pass", async () => {
+    let finish!: (value: { success: true; data: null }) => void;
+    const lookup = new Promise<{ success: true; data: null }>((resolve) => { finish = resolve; });
+    const transport = connect(vi.fn(() => lookup));
+    const dispatch = vi.fn() as unknown as AppDispatch;
+    const first = reconcilePersistedUiState(dispatch, savedState, transport, "local");
+    const controller = new AbortController(); controller.abort();
+    await reconcilePersistedUiState(dispatch, savedState, transport, "local", controller.signal);
+    finish({ success: true, data: null }); await first;
+    expect(dispatch).toHaveBeenCalledWith({ type: "workspace/forgetRunUiState", payload: { backendId: "local", runId: "run-a" } });
+  });
+  it("keeps drafts when a lookup crosses disconnect and reconnect on the same transport", async () => {
+    let finish!: (value: { success: true; data: null }) => void;
+    const lookup = new Promise<{ success: true; data: null }>((resolve) => { finish = resolve; });
+    let status: "connected" | "offline" = "connected";
+    const listeners = new Set<(status: "connected" | "offline") => void>();
+    const transport: Transport = { kind: "test", invoke: vi.fn(() => lookup), subscribe: () => () => {}, status: () => status,
+      onStatusChange: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+    setTransport(transport);
+    const dispatch = vi.fn() as unknown as AppDispatch;
+    const checking = reconcilePersistedUiState(dispatch, savedState, transport, "local");
+    status = "offline"; for (const listener of [...listeners]) listener(status);
+    status = "connected"; for (const listener of [...listeners]) listener(status);
+    finish({ success: true, data: null }); await checking;
+    expect(dispatch).not.toHaveBeenCalled(); expect(listeners.size).toBe(0);
+  });
+  it("ignores an old missing-record result after a newer reconciliation found the record", async () => {
+    let finish!: (value: { success: true; data: null }) => void, reads = 0;
+    const lookup = new Promise<{ success: true; data: null }>((resolve) => { finish = resolve; });
+    const transport = connect(vi.fn(async (_channel, args) => {
+      if (args?.[0] === "run-a" && ++reads === 1) return lookup;
+      return { success: true as const, data: { id: args?.[0] } };
+    }));
+    const dispatch = vi.fn() as unknown as AppDispatch;
+    const first = reconcilePersistedUiState(dispatch, savedState, transport, "local");
+    await reconcilePersistedUiState(dispatch, savedState, transport, "local");
+    finish({ success: true, data: null }); await first;
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it("retires deletion receipts after a transport swap away and back", async () => {
+    let finish!: (value: { success: true; data: null }) => void;
+    const lookup = new Promise<{ success: true; data: null }>((resolve) => { finish = resolve; });
+    const transport = connect(vi.fn(() => lookup)), dispatch = vi.fn() as unknown as AppDispatch;
+    const checking = reconcilePersistedUiState(dispatch, savedState, transport, "local");
+    connect(vi.fn(async () => ({ success: true as const, data: null })));
+    setTransport(transport);
+    finish({ success: true, data: null }); await checking;
+    expect(dispatch).not.toHaveBeenCalled();
+  });
   it("checks and clears a queued conversation even after its tab was closed", async () => {
     const state = savedState();
     const ownerKey = runOwnerKey("local", "closed-run");
     state.runQueue = { byOwner: { [ownerKey]: { backendId: "local", runId: "closed-run", runStatus: "running", mode: "queue", messages: [] } } };
     const invoke = vi.fn(async (_channel: string, args?: unknown[]) => ({ success: true as const, data: args?.[0] === "closed-run" ? null : { id: args?.[0] } }));
-    const transport = { invoke, status: () => "connected" } as unknown as Transport;
-    harness.transport = transport;
+    const transport = connect(invoke);
     const dispatch = vi.fn() as unknown as AppDispatch;
     await reconcilePersistedUiState(dispatch, () => state, transport, "local");
     expect(invoke).toHaveBeenCalledWith(CHANNELS.runs.getById, ["closed-run"]);
@@ -73,8 +125,7 @@ describe("persisted UI reconciliation", () => {
       }
       return { success: true as const, data: { id: args?.[0] } };
     });
-    const transport = { invoke, status: () => "connected" } as unknown as Transport;
-    harness.transport = transport;
+    const transport = connect(invoke);
     const dispatch = vi.fn() as unknown as AppDispatch;
     const state = savedState();
 
@@ -94,11 +145,7 @@ describe("persisted UI reconciliation", () => {
     const lookup = new Promise<{ success: true; data: null }>((resolve) => {
       finishLookup = resolve;
     });
-    const transport = {
-      invoke: vi.fn(() => lookup),
-      status: () => "connected",
-    } as unknown as Transport;
-    harness.transport = transport;
+    const transport = connect(vi.fn(() => lookup));
     const dispatch = vi.fn() as unknown as AppDispatch;
     const controller = new AbortController();
 

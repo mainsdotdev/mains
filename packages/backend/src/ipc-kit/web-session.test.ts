@@ -6,6 +6,62 @@ function codeFrom(link: string): string {
 }
 
 describe("web session manager", () => {
+  it("revokes a session lease and its image credential together at the capacity boundary", () => {
+    const manager = createWebSessionManager();
+    const origin = "https://mains.example";
+    const login = () => manager.exchange(codeFrom(manager.createLogin(origin).link), origin)!;
+    const first = login();
+    const lease = manager.authorizeSession(first.sessionToken, origin)!;
+    for (let index = 1; index < 128; index++) login();
+    expect(lease.current()).toBe(true);
+    const latest = login();
+    expect(lease.current()).toBe(false);
+    expect(lease.signal.aborted).toBe(true);
+    expect(manager.verifySession(first.sessionToken, origin)).toBeNull();
+    expect(manager.verifyImageSession(first.imageToken, origin)).toBe(false);
+    expect(manager.verifySession(latest.sessionToken, origin)).not.toBeNull();
+    expect(manager.verifyImageSession(latest.imageToken, origin)).toBe(true);
+  });
+
+  it("clears pending links, active leases and image access while permitting a fresh login", () => {
+    const manager = createWebSessionManager();
+    const origin = "https://mains.example";
+    const pending = codeFrom(manager.createLogin(origin).link);
+    const active = manager.exchange(codeFrom(manager.createLogin(origin).link), origin)!;
+    const lease = manager.authorizeSession(active.sessionToken, origin)!;
+    manager.clear(); manager.clear();
+    expect(manager.exchange(pending, origin)).toBeNull();
+    expect(lease.signal.aborted).toBe(true);
+    expect(lease.current()).toBe(false);
+    expect(manager.verifySession(active.sessionToken, origin)).toBeNull();
+    expect(manager.verifyImageSession(active.imageToken, origin)).toBe(false);
+    expect(manager.exchange(codeFrom(manager.createLogin(origin).link), origin)).not.toBeNull();
+  });
+
+  it("checks the exact session deadline for established leases without relying on a timer", () => {
+    let now = 1_000;
+    const manager = createWebSessionManager({ now: () => now, sessionTtlMs: 100 });
+    const origin = "https://mains.example";
+    const active = manager.exchange(codeFrom(manager.createLogin(origin).link), origin)!;
+    const lease = manager.authorizeSession(active.sessionToken, origin)!;
+    now += 99;
+    expect(lease.current()).toBe(true);
+    now++;
+    expect(lease.current()).toBe(false);
+    expect(lease.signal.aborted).toBe(true);
+    expect(manager.verifyImageSession(active.imageToken, origin)).toBe(false);
+  });
+
+  it("bounds pending links and keeps the image and socket credentials in separate scopes", () => {
+    const manager = createWebSessionManager();
+    const origin = "https://mains.example";
+    const codes = Array.from({ length: 33 }, () => codeFrom(manager.createLogin(origin).link));
+    expect(manager.exchange(codes[0], origin)).toBeNull();
+    const active = manager.exchange(codes[1], origin)!;
+    expect(manager.verifySession(active.imageToken, origin)).toBeNull();
+    expect(manager.verifyImageSession(active.sessionToken, origin)).toBe(false);
+    expect(manager.exchange(codes[32], origin)).not.toBeNull();
+  });
   it("exchanges an origin-bound login code exactly once", () => {
     let now = 1_000;
     const manager = createWebSessionManager({ now: () => now });
