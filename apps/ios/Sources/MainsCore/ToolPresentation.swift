@@ -40,10 +40,17 @@ public struct ToolPresentation: Sendable {
         .init(name: "Task", verb: "Ran subagent", active: "Running subagent", symbol: "person.crop.square", kind: .task, aliases: ["task", "agent", "workflow", "sendmessage", "send_message"]),
         .init(name: "SQL", verb: "SQL", active: "Querying", symbol: "tablecells", kind: .generic, aliases: ["sql"]),
     ]
+    static func header(for name: String) -> (name: String, symbol: String) {
+        let definition = definition(for: name.lowercased())
+        return (definition?.name ?? friendlyName(name), definition?.symbol ?? "puzzlepiece.extension")
+    }
+    private static func definition(for lower: String) -> Definition? {
+        lower.hasPrefix("mcp__") ? nil : Self.definitions.first { $0.aliases.contains(lower) }
+            ?? Self.definitions.first { $0.aliases.contains { $0.count >= 4 && lower.contains($0) } }
+    }
     public init(_ call: ToolCall) {
         let lower = call.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let builtin = lower.hasPrefix("mcp__") ? nil : Self.definitions.first { $0.aliases.contains(lower) }
-            ?? Self.definitions.first { $0.aliases.contains { $0.count >= 4 && lower.contains($0) } }
+        let builtin = Self.definition(for: lower)
         let params = Self.unwrap(call.input ?? .null)
         let output = Self.unwrap(call.output ?? .null)
         running = ["running", "queued"].contains(call.status)

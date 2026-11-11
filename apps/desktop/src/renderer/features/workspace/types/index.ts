@@ -33,6 +33,7 @@ export interface Run {
 export interface ToolCall {
   id: number;
   runId: string;
+  providerId?: string | null;
   toolId?: string;
   toolName: string;
   toolCallId?: string;

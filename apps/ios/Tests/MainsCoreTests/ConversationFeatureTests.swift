@@ -92,4 +92,6 @@ extension SessionIntegrationTests {
     #expect(sections.last?.label == "1 message · 1 tool call")
     #expect(sections.last?.breakout.map(\.id) == ["error"])
     #expect(sections.last?.last.map(\.id) == ["answer"])
+    #expect(sections.last?.displayedRows(expanded: true).map(\.id) == ["first", "tool", "error", "answer"])
+    #expect(sections.last?.displayedRows(expanded: false).map(\.id) == ["error", "answer"])
 }

@@ -12,8 +12,14 @@ struct MessageComposer: View {
     let model: () -> Void
     let options: () -> Void
     let send: () -> Void
-    @FocusState private var focused: Bool
+    @State private var focused = false
     @State private var file = false
+    @State private var pluginsOpen = false
+    @State private var contextPresentationID = UUID()
+    @State private var composerFrame = CGRect.zero
+    @State private var panelScope: ContextScope?
+    private var contextScope: ContextScope { context.contextScope(session) }
+    private var trigger: ContextTriggerMatch? { focused && !attachmentsOpen ? ContextMentions.detect(draft.text) : nil }
     @State private var attachmentsOpen = false
     @State private var attachmentPresentationID = UUID()
     @State private var panelOwner = 0
@@ -46,10 +52,10 @@ struct MessageComposer: View {
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { draft.attachments.removeAll { $0.id == id } }
                 }.padding(.horizontal, 8).padding(.top, 6)
             }
-            TextField(context.runID == nil ? "Start a run in \(context.name)" : "Continue this run…", text: $draft.text, axis: .vertical)
-                .font(.body).lineLimit(1...6).focused($focused)
+            ContextTextEditor(text: $draft.text, skills: $draft.contextSkills, scope: contextScope, focused: $focused,
+                placeholder: context.runID == nil ? "Start a run in \(context.name)" : "Continue this run…",
+                identifier: context.runID == nil ? "homeMessageInput" : "messageInput")
                 .padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 3)
-                .accessibilityIdentifier(context.runID == nil ? "homeMessageInput" : "messageInput")
             HStack(spacing: 6) {
                 Button(action: openAttachments) {
                     Image(systemName: "plus").font(.system(size: 24, weight: .light)).frame(width: 44, height: 44)
@@ -101,9 +107,16 @@ struct MessageComposer: View {
             .buttonStyle(.plain)
         }
         .padding(8).modifier(GlassSurface(radius: 34, interactive: false)).padding(.horizontal, 12)
+        .background(GeometryReader { geometry in
+            Color.clear.onAppear { composerFrame = geometry.frame(in: .global) }
+                .onChange(of: geometry.frame(in: .global)) { _, frame in composerFrame = frame }
+        })
+        .contextPicker(pickerRequest)
+        .onChange(of: draft.text) { _, _ in draft.reconcileContext() }
+        .onChange(of: contextScope, initial: true) { _, scope in draft.synchronizeContext(scope); pluginsOpen = false }
         .attachmentOverlay(isPresented: attachmentsOpen, id: attachmentPresentationID, accent: Provider.accent(context.providerId),
                            maxCount: 5 - draft.attachments.count, maxBytes: remainingBytes, add: addFromPanel, close: closeAttachments)
-        .onChange(of: session.ownership) { _, _ in attachmentsOpen = false; file = false }
+        .onChange(of: session.ownership) { _, _ in attachmentsOpen = false; file = false; pluginsOpen = false }
         .fileImporter(isPresented: $file, allowedContentTypes: [.data]) { result in
             do {
                 let url = try result.get()
@@ -121,23 +134,48 @@ struct MessageComposer: View {
             Button("OK", role: .cancel) { attachmentError = nil }
         } message: { Text(attachmentError ?? "") }
     }
+    private var pickerRequest: ContextPickerRequest? {
+        guard session.isConnected, !draft.isSending, !attachmentsOpen, trigger != nil || pluginsOpen else { return nil }
+        let scope = contextScope, owner = session.ownership
+        return ContextPickerRequest(id: contextPresentationID, frame: composerFrame, session: session, scope: scope, owner: owner,
+            trigger: trigger?.trigger, query: trigger?.filter ?? "", pluginsOnly: trigger == nil && pluginsOpen,
+            pickSkill: { skill in
+                guard owner == session.ownership, scope == contextScope, !draft.isSending else { return }
+                draft.insert(skill, scope: scope); pluginsOpen = false; focused = true
+            }, pickCommand: { command in
+                guard owner == session.ownership, scope == contextScope, !draft.isSending else { return }
+                draft.text = ContextMentions.replacingTrigger(in: draft.text, with: "/" + command.name)
+                pluginsOpen = false; focused = true
+            }, close: {
+                guard owner == session.ownership, scope == contextScope else { return }
+                if ContextMentions.detect(draft.text) != nil { draft.text = ContextMentions.replacingTrigger(in: draft.text, with: "") }
+                pluginsOpen = false
+            })
+    }
     private var remainingBytes: Int {
         min(2 * 1024 * 1024, max(0, (2_800_000 - draft.attachments.reduce(0) { $0 + $1.data.utf8.count }) / 4 * 3))
     }
     private func openAttachments() {
-        guard draft.attachments.count < 5, remainingBytes > 0 else {
-            attachmentError = "Attach up to 5 files, totalling 2 MB or less."; return
-        }
+        pluginsOpen = false; panelScope = contextScope
         focused = false; panelOwner = session.ownership; attachmentPresentationID = UUID(); attachmentsOpen = true
     }
     private func addFromPanel(_ attachments: [PromptAttachment]) throws {
         guard panelOwner == session.ownership, !draft.isSending else { throw MainsError.changedBackend }
         try add(attachments)
     }
-    private func closeAttachments(_ id: UUID, showFiles: Bool) {
+    private func closeAttachments(_ id: UUID, destination: AttachmentDestination) {
         guard attachmentPresentationID == id, attachmentsOpen else { return }
         attachmentsOpen = false
-        if showFiles { DispatchQueue.main.async { openFilesFromPanel() } }
+        guard panelOwner == session.ownership, panelScope == contextScope else { return }
+        switch destination {
+        case .none: break
+        case .files: DispatchQueue.main.async { openFilesFromPanel() }
+        case .plugins:
+            DispatchQueue.main.async {
+                guard panelOwner == session.ownership, panelScope == contextScope else { return }
+                pluginsOpen = true; focused = true
+            }
+        }
     }
     private func openFilesFromPanel() {
         guard panelOwner == session.ownership else { return }

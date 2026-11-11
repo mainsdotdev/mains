@@ -129,6 +129,24 @@ private struct HomeComposerArea: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
                 .accessibilityIdentifier("demoSuggestedPrompt")
+                Button {
+                    draft.text = DemoBackend.decisionPrompt
+                } label: {
+                    Label("Try approvals and questions", systemImage: "hand.raised").font(.footnote.weight(.medium))
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
+                .accessibilityIdentifier("demoDecisionsPrompt")
+                if space.mode != "chat" {
+                    Button {
+                        draft.text = DemoBackend.changesPrompt
+                    } label: {
+                        Label("Try file changes", systemImage: "doc.badge.plus").font(.footnote.weight(.medium))
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).padding(.horizontal, 16)
+                    .accessibilityIdentifier("demoChangesPrompt")
+                }
             }
             if uncertain, let pending = session.pendingMessage {
                 ChatNotice(title: "Delivery unconfirmed", message: "“\(pending.text.prefix(160))”\nCheck this message before starting another conversation.", symbol: "exclamationmark.circle", warning: true) {
@@ -145,6 +163,7 @@ private struct HomeComposerArea: View {
                 }
             } else if let failure = draft.failure {
                 ChatNotice(title: draft.failureTitle, message: failure, symbol: "exclamationmark.circle", warning: true) {
+                    if !targetReady { Button("Choose a workspace") { targetSheet = true }.accessibilityIdentifier("chooseRequiredWorkspace") }
                     if let unsent = draft.unsentText {
                         Button("Copy unsent message") { UIPasteboard.general.string = unsent }
                         if !draft.unsentAttachments.isEmpty { Button("Use failed message and files") { draft.restoreUnsent() } }
@@ -166,9 +185,12 @@ private struct HomeComposerArea: View {
             }
             .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 20))
             .disabled(!ready).padding(.horizontal, 16).accessibilityIdentifier("chooseTarget")
-            MessageComposer(session: session, context: ComposerContext(space: space), draft: draft, canSend: ready && targetReady,
+            MessageComposer(session: session, context: ComposerContext(space: space), draft: draft, canSend: ready,
                          model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend)
         }.padding(.bottom, 8)
+        .onChange(of: targetReady) { _, ready in
+            if ready, draft.failureTitle == "Workspace required" { draft.dismissFailure() }
+        }
         .sheet(item: $consent) { context in
             ConsentView(context: context) {
                 guard context.backendID == session.pairing?.descriptor.backendId, context.providerID == space.providerId else { return }
@@ -178,27 +200,33 @@ private struct HomeComposerArea: View {
         }
     }
     private func prepareSend() {
-        guard ready, targetReady, let backendID = session.pairing?.descriptor.backendId else { return }
+        guard ready, let backendID = session.pairing?.descriptor.backendId else { return }
+        guard validateTarget() else { return }
         if !session.hasConsent(providerID: space.providerId) { consent = ConsentContext(backendID: backendID, providerID: space.providerId, isDemo: session.isDemo) }
         else { Task { await send() } }
     }
     private func send() async {
-        guard ready, targetReady, session.selectedSpaceID == space.id, let submission = draft.begin() else { return }
+        guard ready, session.selectedSpaceID == space.id, validateTarget(), let submission = draft.begin() else { return }
         let owner = session.pairing?.deviceId
         let target = target
         let settings = session.settings(for: space)
         do {
             let id = try await session.send(submission.text, spaceID: space.id, workspaceID: target.workspaceID,
-                collectionID: collection?.id, settings: settings, attachments: submission.attachments)
+                collectionID: collection?.id, settings: settings, attachments: submission.attachments, contextSkills: submission.contextSkills, contextScope: submission.contextScope)
             guard owner == session.pairing?.deviceId else { return }
             draft.accept(submission)
             if session.selectedSpaceID == space.id {
-                session.draft(for: id).text = draft.text; draft.text = ""
+                draft.transfer(to: session.draft(for: id))
                 onCreated(id)
             }
         } catch {
             guard owner == session.pairing?.deviceId else { return }
             draft.reject(submission, message: error.localizedDescription, uncertain: uncertain)
         }
+    }
+    private func validateTarget() -> Bool {
+        guard !targetReady else { return true }
+        draft.showFailure(workspace == nil ? "Choose a workspace before sending a message in Code mode." : "This workspace’s folder is unavailable on your computer. Choose another workspace or restore the folder.", title: "Workspace required")
+        return false
     }
 }

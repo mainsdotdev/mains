@@ -12,12 +12,13 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { markdownComponents } from "@/components/markdown-components";
-import { Box, Close, FileIconComponent } from "@/components/ui/icons";
+import { Box, Close, FileIconComponent, Sparkles } from "@/components/ui/icons";
 import { applySignedSrc } from "@/lib/local-image-url";
 import { useIsMobile, isWeb } from "@/lib/platform";
 import Text from "../text";
 
-const sparklesIconMarkup = renderToStaticMarkup(<Box className="size-3.5 shrink-0" />);
+const sparklesIconMarkup = renderToStaticMarkup(<Sparkles className="size-3.5 shrink-0" />);
+const pluginIconMarkup = renderToStaticMarkup(<Box className="size-3.5 shrink-0" />);
 
 export interface RichSkillChipData {
   name: string;
@@ -27,6 +28,7 @@ export interface RichSkillChipData {
   iconSmall?: string;
   iconLarge?: string;
   brandColor?: string;
+  scope?: string;
   /** Serialized prompt token. Mac apps use @Name; skills use $name. */
   token?: string;
 }
@@ -282,6 +284,7 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   // Icon slot is always present (even as an empty 14×14 spacer) so chip width/height stay stable.
   const { iconSlot, glyph } = createChipIconSlot(labelText);
   const iconPath = skill.iconLarge || skill.iconSmall;
+  const fallbackIconMarkup = ["plugin", "mac", "mac_app", "computer"].includes((skill.scope || "").toLowerCase()) ? pluginIconMarkup : sparklesIconMarkup;
   if (iconPath) {
     const img = document.createElement("img");
     img.alt = "";
@@ -291,13 +294,13 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
     }
     img.draggable = false;
     img.onerror = () => {
-      // Swap to the Sparkles placeholder so a missing asset doesn't render a broken-image glyph.
-      glyph.innerHTML = sparklesIconMarkup;
+      // Keep the context type recognizable when supplied artwork is unavailable.
+      glyph.innerHTML = fallbackIconMarkup;
     };
     glyph.appendChild(img);
     applySignedSrc(img, iconPath);
   } else {
-    glyph.innerHTML = sparklesIconMarkup;
+    glyph.innerHTML = fallbackIconMarkup;
   }
   chip.appendChild(iconSlot);
   appendChipLabel(chip, labelText);

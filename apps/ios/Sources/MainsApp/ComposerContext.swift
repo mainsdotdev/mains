@@ -8,16 +8,16 @@ struct ComposerContext {
     let spaceID: String?
     let runID: String?
     let workspaceID: String?
-    init(space: Space) {
+    init(space: Space, runID: String? = nil) {
         providerId = space.providerId; mode = space.mode; name = space.name
-        spaceID = space.id; runID = nil; workspaceID = nil
+        spaceID = space.id; self.runID = runID; workspaceID = nil
     }
     init(run: Conversation) {
         providerId = run.providerId; mode = run.mode; name = Provider.name(run.providerId)
         spaceID = nil; runID = run.id; workspaceID = run.workspaceId
     }
     @MainActor func settings(_ session: BackendSession) -> ComposerSettings {
-        if let runID { return session.settings(forRunID: runID) ?? ComposerSettings() }
+        if let runID, let settings = session.settings(forRunID: runID) { return settings }
         if let space = session.spaces.first(where: { $0.id == spaceID }) { return session.settings(for: space) }
         return ComposerSettings()
     }
@@ -45,6 +45,9 @@ struct ComposerContext {
     @MainActor func commit(_ settings: ComposerSettings, session: BackendSession) async throws {
         if let runID { try await session.updateConversationSettings(settings, runID: runID) }
         else if let spaceID { session.setSettings(settings, spaceID: spaceID) }
+    }
+    @MainActor func contextScope(_ session: BackendSession) -> ContextScope {
+        session.contextScope(providerID: providerId, workspaceID: runID != nil || mode == "developer" ? workspace(session) : nil)
     }
     @MainActor func workspace(_ session: BackendSession) -> String? {
         workspaceID ?? spaceID.flatMap { session.homeTargets[$0]?.workspaceID }

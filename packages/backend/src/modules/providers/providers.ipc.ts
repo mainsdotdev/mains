@@ -3,6 +3,7 @@ import { handle } from "../../ipc-kit/handle";
 import type { IpcInvokeContext } from "../../ipc-kit/handler-registry";
 import { ok, fail } from "@mains/contracts/service-response";
 import { providersService, providerForPairedDevice } from "./providers.service";
+import { skillsForPairedDevice } from "./providers.device-projection";
 import type {
   CreateProviderPayload,
   UpdateProviderPayload,
@@ -103,10 +104,11 @@ export function registerProvidersIpc(): void {
     handle((id: string, workspacePath?: string) => providersService.getCommands(id, workspacePath)),
   );
 
-  ipcMain.handle(
-    CHANNELS.providers.getSkills,
-    handle((id: string, workspacePath?: string) => providersService.getSkills(id, workspacePath)),
-  );
+  const getSkills = handle((id: string, workspacePath?: string) => providersService.getSkills(id, workspacePath));
+  ipcMain.handle(CHANNELS.providers.getSkills, async (ctx: IpcInvokeContext, id: string, workspacePath?: string) => {
+    const result = await getSkills(ctx, id, workspacePath);
+    return result.success && ctx?.deviceId ? ok(skillsForPairedDevice(result.data)) : result;
+  });
 
   ipcMain.handle(
     CHANNELS.providers.getRateLimits,

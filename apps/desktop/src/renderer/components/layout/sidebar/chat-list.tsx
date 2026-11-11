@@ -21,7 +21,6 @@ import {
   setChatListSourceVisible,
 } from "@/lib/redux/slices/appSettingsSlice";
 import { SourceFilterButton } from "./source-filter-menu";
-import type { BridgeBackendInfo } from "@mains/contracts/bridge";
 import { useBridgeStatus } from "@/features/bridge/hooks/use-bridge";
 import { bridgeBackend } from "@/features/bridge/lib/backends";
 import {
@@ -277,7 +276,8 @@ export function SidebarChatList({
     }
   };
 
-  const renderChat = (run: RecentRun, device: BridgeBackendInfo | undefined = run.isReplica ? bridgeBackend(bridgeStatus, run.ownerBackendId) : undefined) => {
+  const renderChat = (run: RecentRun, inProject = false) => {
+    const device = run.isReplica ? bridgeBackend(bridgeStatus, run.ownerBackendId) : undefined;
     const provider = getProviderVariantById(run.providerId);
     const linkedPageId = run.configSnapshot?.atlasPageId;
     const pageId = typeof linkedPageId === "string" ? linkedPageId.trim() : "";
@@ -285,6 +285,7 @@ export function SidebarChatList({
     return <ChatItem
       key={run.id}
       run={run}
+      inProject={inProject}
       device={device}
       variant={provider?.variant ?? "null"}
       isActive={activeTab === run.id}
@@ -389,7 +390,7 @@ export function SidebarChatList({
                     >
                       <div className="flex flex-col space-y-0.5">
                         {collectionRuns.length > 0 ? (
-                          collectionRuns.map((run) => renderChat(run))
+                          collectionRuns.map((run) => renderChat(run, true))
                         ) : (
                           <div className={`flex items-center ${SIDEBAR_PROJECT_CHILD_ROW_CLASS}`}>
                             <Text as="span" size="xxs" tone="muted">

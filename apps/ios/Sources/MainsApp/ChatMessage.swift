@@ -13,10 +13,18 @@ struct ChatMessage: View {
         VStack(alignment: row.kind == .prompt ? .trailing : .leading, spacing: 10) {
             switch row.kind {
             case .prompt:
-                if !row.media.isEmpty { ChatMediaGallery(session: session, media: row.media, prompt: true) }
-                if !row.text.isEmpty { PromptBubble(text: row.text, providerID: providerID).accessibilityIdentifier(row.id) }
+                if !row.pendingAttachments.isEmpty { PendingPromptAttachments(attachments: row.pendingAttachments) }
+                else if !row.media.isEmpty { ChatMediaGallery(session: session, media: row.media, prompt: true) }
+                if !row.text.isEmpty { PromptBubble(text: row.text, skills: row.contextSkills, providerID: providerID).accessibilityIdentifier(row.id) }
+                if let delivery = row.delivery {
+                    HStack(spacing: 6) {
+                        if delivery == .sending { ProgressView().controlSize(.mini) }
+                        if delivery == .uncertain { Image(systemName: "exclamationmark.circle") }
+                        Text(delivery == .uncertain ? "Delivery unconfirmed" : delivery == .accepted ? "Sent" : "Sending…")
+                    }.font(.caption).foregroundStyle(.secondary).frame(height: 18).padding(.trailing, 4)
+                }
             case .response:
-                ChatMessageBody(text: row.text).accessibilityIdentifier(row.live ? "liveMessage" : row.id)
+                ChatMessageBody(text: row.text).equatable().accessibilityIdentifier(row.live ? "liveMessage" : row.id)
             case .notice:
                 Label(row.text, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
             case .media: ChatMediaGallery(session: session, media: row.media)
@@ -36,9 +44,10 @@ struct ChatMessage: View {
 
 private struct PromptBubble: View {
     let text: String
+    let skills: [ContextSkill]
     let providerID: String
     var body: some View {
-        Text(text).textSelection(.enabled).font(.body).lineSpacing(3)
+        InlineContextText(text: text, skills: skills).textSelection(.enabled).font(.body).lineSpacing(3)
             .padding(.horizontal, 16).padding(.vertical, 12)
             .foregroundStyle(.white)
             .background(Provider.accent(providerID), in: .rect(cornerRadius: 22))
@@ -46,25 +55,10 @@ private struct PromptBubble: View {
     }
 }
 
-struct PendingPrompt: View {
-    let pending: PendingMessage
-    let providerID: String
-    var body: some View {
-        VStack(alignment: .trailing, spacing: 7) {
-            if !pending.attachments.isEmpty { PendingPromptAttachments(attachments: pending.attachments) }
-            PromptBubble(text: pending.text, providerID: providerID)
-            HStack(spacing: 6) {
-                if pending.status == .sending { ProgressView().controlSize(.mini) }
-                if pending.status == .uncertain { Image(systemName: "exclamationmark.circle") }
-                Text(pending.status == .uncertain ? "Delivery unconfirmed" : pending.status == .accepted ? "Sent" : "Sending…")
-            }.font(.caption).foregroundStyle(.secondary).padding(.trailing, 4)
-        }.frame(maxWidth: .infinity, alignment: .trailing)
-    }
-}
-
-/// Selectable native prose and fenced code; remote images and HTML remain outside this slice.
-struct ChatMessageBody: View {
+/// Selectable native Markdown; raw HTML and mathematical typesetting remain outside this slice.
+struct ChatMessageBody: View, Equatable {
     let text: String
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(Array(MessageBlock.parse(text).enumerated()), id: \.offset) { _, block in
@@ -76,18 +70,68 @@ struct ChatMessageBody: View {
                         Text(marker).foregroundStyle(.secondary).frame(minWidth: 12, alignment: .trailing)
                         prose(value).frame(maxWidth: .infinity, alignment: .leading)
                     }.padding(.leading, 12 + CGFloat(depth) * 12)
+                case .task(let checked, let value, let depth):
+                    HStack(alignment: .firstTextBaseline, spacing: 9) {
+                        Image(systemName: checked ? "checkmark.square" : "square").foregroundStyle(.secondary)
+                            .accessibilityLabel(checked ? "Completed" : "Not completed")
+                        prose(value).frame(maxWidth: .infinity, alignment: .leading)
+                    }.padding(.leading, 12 + CGFloat(depth) * 12)
                 case .quote(let value):
-                    HStack(spacing: 12) { Rectangle().fill(.secondary.opacity(0.3)).frame(width: 3); prose(value).foregroundStyle(.secondary) }
+                    HStack(spacing: 12) { Rectangle().fill(.secondary.opacity(0.3)).frame(width: 3); AnyView(ChatMessageBody(text: value)).foregroundStyle(.secondary) }
                         .fixedSize(horizontal: false, vertical: true)
                 case .code(let language, let value): CodeBlock(language: language, code: value)
+                case .table(let table): MarkdownTable(table: table)
                 case .rule: Divider()
                 }
             }
-        }.font(.body).tint(.blue)
+        }.font(.body).tint(.blue).accessibilityElement(children: .contain)
     }
     private func prose(_ source: String) -> some View {
         let rendered = (try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(source)
         return Text(rendered).lineSpacing(4).textSelection(.enabled)
+    }
+}
+
+private struct MarkdownTable: View {
+    let table: MessageTable
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var widths: [CGFloat] {
+        let font = UIFont.preferredFont(forTextStyle: .body)
+        return table.header.indices.map { column in
+            let values = [table.header[column]] + table.rows.prefix(40).map { $0[column] }
+            let longest = values.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 80
+            return min(260, max(86, longest + 24))
+        }
+    }
+    var body: some View {
+        let widths = widths
+        ScrollView(.horizontal) {
+            VStack(spacing: 0) {
+                row(table.header, widths: widths, header: true)
+                    .background(Color.primary.opacity(0.04))
+                ForEach(table.rows.indices, id: \.self) { index in
+                    Divider()
+                    row(table.rows[index], widths: widths)
+                }
+            }.fixedSize(horizontal: true, vertical: true)
+        }
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
+        .clipShape(.rect(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.08)) }
+        .accessibilityElement(children: .contain).accessibilityIdentifier("markdownTable")
+    }
+    private func row(_ cells: [String], widths: [CGFloat], header: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(table.header.indices, id: \.self) { column in
+                let alignment: Alignment = table.alignments[column] == .center ? .center : table.alignments[column] == .trailing ? .trailing : .leading
+                let value = (try? AttributedString(markdown: cells[column], options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(cells[column])
+                Text(value).fontWeight(header ? .semibold : .regular).lineSpacing(4).textSelection(.enabled)
+                    .multilineTextAlignment(table.alignments[column] == .center ? .center : table.alignments[column] == .trailing ? .trailing : .leading)
+                    .frame(width: max(1, widths[column] - 24), alignment: alignment)
+                    .fixedSize(horizontal: false, vertical: true).padding(12)
+                    .accessibilityAddTraits(header ? .isHeader : [])
+            }
+        }
     }
 }
 
@@ -130,6 +174,7 @@ struct ChatNotice<Actions: View>: View {
     let message: String
     let symbol: String
     let warning: Bool
+    var horizontalInset: CGFloat = 16
     @ViewBuilder var actions: () -> Actions
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -143,6 +188,6 @@ struct ChatNotice<Actions: View>: View {
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
-        .padding(.horizontal, 16)
+        .padding(.horizontal, horizontalInset)
     }
 }

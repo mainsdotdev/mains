@@ -31,6 +31,7 @@ public enum JSONValue: Codable, Equatable, Sendable {
     public var bool: Bool { if case .bool(let v) = self { v } else { false } }
     public var number: Double? { if case .number(let v) = self { v } else { nil } }
     public var array: [JSONValue] { if case .array(let v) = self { v } else { [] } }
+    var objectValue: [String: JSONValue] { if case .object(let value) = self { value } else { [:] } }
     public func decode<T: Decodable>(_ type: T.Type) throws -> T {
         try Wire.decoder().decode(type, from: JSONEncoder().encode(self))
     }

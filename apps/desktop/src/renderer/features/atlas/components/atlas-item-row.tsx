@@ -46,8 +46,10 @@ export function AtlasItemRow({ entry, menu, onOpen, onTag, onSource, sourceLabel
             <>
               <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(src)} className="size-full object-cover" />
               {entry.kind === "page" && <>
-                <span className="absolute inset-0 bg-primary-950/15" />
-                <AtlasPageIcon icon={entry.saved?.metadata?.icon} className="absolute left-1/2 top-1/2 size-6 -translate-x-1/2 -translate-y-1/2 drop-shadow-sm" />
+                <span className="absolute inset-0 bg-primary-950/10" />
+                <span className="absolute left-1/2 top-1/2 flex size-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-lg bg-primary/85 shadow-sm ring-1 ring-primary-950/5 backdrop-blur-md dark:bg-primary-950/80 dark:ring-primary/10">
+                  <AtlasPageIcon icon={entry.saved?.metadata?.icon} className="size-5 text-xl text-accent" />
+                </span>
               </>}
             </>
           ) : entry.kind === "page" ? (

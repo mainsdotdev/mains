@@ -8,6 +8,20 @@ import ImageIO
 #endif
 @testable import MainsCore
 
+@Test @MainActor func outputPresenceFollowsEmptyPagesAndRejectsStuckCursors() async throws {
+    let file = RunOutput(artifactId: 3, runId: "run", name: "report.pdf", mimeType: "application/pdf", byteSize: 20, version: "v1", previewType: "native")
+    var offsets: [Int] = []
+    let present = try await RunOutputsPage.containsOutput { offset in
+        offsets.append(offset)
+        return offset == 0 ? RunOutputsPage(items: [], nextOffset: 100) : RunOutputsPage(items: [file], nextOffset: nil)
+    }
+    #expect(present && offsets == [0, 100])
+    #expect(try await !RunOutputsPage.containsOutput { _ in RunOutputsPage(items: [], nextOffset: nil) })
+    await #expect(throws: MainsError.self) {
+        try await RunOutputsPage.containsOutput { offset in RunOutputsPage(items: [], nextOffset: offset) }
+    }
+}
+
 @Test func transcriptKeepsAttachmentReferencesAndBreaksMediaOutOfCollapsedWork() throws {
     let at = Date(timeIntervalSince1970: 100)
     let attachments: JSONValue = .object(["attachments": .array([

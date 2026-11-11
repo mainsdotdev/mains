@@ -1,10 +1,6 @@
 import Foundation
 import CryptoKit
 
-extension JSONValue {
-    var demoObject: [String: JSONValue] { if case .object(let row) = self { row } else { [:] } }
-}
-
 /// An on-device counterpart to the same channels used by a real computer.
 /// Imported files, new runs, command receipts and replay progress are memory-only.
 @MainActor
@@ -12,6 +8,8 @@ final class DemoBackend {
     static let backendID = "demo-mac"
     static let endpoint = URL(string: "demo://on-this-phone")!
     static let tourID = "demo-native-tour"
+    static let decisionPrompt = "Walk me through approvals and questions"
+    static let changesPrompt = "Show sample file changes and diffs"
     static let pdfAttachmentID = String(repeating: "d", count: 64)
     static let imageAttachmentID = String(repeating: "e", count: 64)
 
@@ -20,6 +18,7 @@ final class DemoBackend {
     private var artifacts: [String: [[String: JSONValue]]]
     private var tools: [String: [[String: JSONValue]]]
     private var turns: [String: [[String: JSONValue]]]
+    private var patches: [String: [Int: String]] = [:]
     private var spaces: [[String: JSONValue]]
     private var images: [Int: JSONValue] = [:]
     private var attachments: [String: DemoFile] = [:]
@@ -27,15 +26,20 @@ final class DemoBackend {
     private var nextID = 10_000_000
     private let stepDelay: Duration
     private let streamDelay: Duration
+    private let decisionLifetime: TimeInterval
+    private var approvals: [String: JSONValue] = [:]
+    private var approvalTimers: [String: Task<Void, Never>] = [:]
     private var owner: UUID?
     private var emit: ((String, JSONValue) -> Void)?
     private var tasks: [String: Task<Void, Never>] = [:]
-    private enum Step { case text(String), tool(String, JSONValue, JSONValue), finish }
+    private enum Step { case text(String), thinking(String), tool(String, JSONValue, JSONValue), approval(JSONValue), questions, changes, finish }
     private struct Replay {
         let steps: [Step]
         var index = 0
         var count = 0
         var streamID = UUID().uuidString
+        var waiting = false
+        var activeToolID: Int?
     }
     private var replays: [String: Replay] = [:]
     private struct Receipt {
@@ -44,7 +48,8 @@ final class DemoBackend {
         let result: Result<JSONValue, MainsError>
     }
     private var receipts: [String: Receipt] = [:]
-    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:abort", "space:update", "runs:updateConversationSettings"]
+    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:abort", "space:update", "runs:updateConversationSettings",
+        "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions"]
 
     var pairing: PairedBackend {
         PairedBackend(descriptor: BackendDescriptor(backendId: Self.backendID, name: "Demo Mac",
@@ -56,7 +61,7 @@ final class DemoBackend {
         seed["workspaces"].array.first { $0["name"].string == "mains" }?["id"].string
     }
 
-    init(stepDelay: Duration = .milliseconds(450), streamDelay: Duration = .milliseconds(35)) throws {
+    init(stepDelay: Duration = .milliseconds(450), streamDelay: Duration = .milliseconds(35), decisionLifetime: TimeInterval = 300) throws {
         #if SWIFT_PACKAGE
         let bundle = Bundle.module
         #else
@@ -91,15 +96,15 @@ final class DemoBackend {
             }
         }
         let data = rebase(source)
-        seed = data; runs = data["runs"].array.map(\.demoObject); spaces = data["spaces"].array.map(\.demoObject)
-        artifacts = data["artifacts"].demoObject.mapValues { $0.array.map(\.demoObject) }
-        tools = data["toolCalls"].demoObject.mapValues { $0.array.map(\.demoObject) }
-        turns = data["turns"].demoObject.mapValues { $0.array.map(\.demoObject) }
-        self.stepDelay = stepDelay; self.streamDelay = streamDelay
-        for (id, image) in data["images"].demoObject { if let id = Int(id) { images[id] = image } }
+        seed = data; runs = data["runs"].array.map(\.objectValue); spaces = data["spaces"].array.map(\.objectValue)
+        artifacts = data["artifacts"].objectValue.mapValues { $0.array.map(\.objectValue) }
+        tools = data["toolCalls"].objectValue.mapValues { $0.array.map(\.objectValue) }
+        turns = data["turns"].objectValue.mapValues { $0.array.map(\.objectValue) }
+        self.stepDelay = stepDelay; self.streamDelay = streamDelay; self.decisionLifetime = decisionLifetime
+        for (id, image) in data["images"].objectValue { if let id = Int(id) { images[id] = image } }
         for runID in artifacts.keys {
             if let index = artifacts[runID]?.firstIndex(where: { $0["kind"]?.string == "user-prompt" }) {
-                var metadata = artifacts[runID]![index]["metadata"]?.demoObject ?? [:]
+                var metadata = artifacts[runID]![index]["metadata"]?.objectValue ?? [:]
                 metadata["attachments"] = .array([attachmentMetadata(Self.pdfAttachmentID, file: .pdf)])
                 artifacts[runID]![index]["metadata"] = .object(metadata)
             }
@@ -110,17 +115,21 @@ final class DemoBackend {
     func attach(owner: UUID, emit: @escaping (String, JSONValue) -> Void) {
         for task in tasks.values { task.cancel() }
         tasks = [:]; self.owner = owner; self.emit = emit
+        expireApprovals()
+        for request in approvals.values { armExpiry(request) }
         for runID in replays.keys { resume(runID) }
     }
     func detach(owner: UUID) {
         guard self.owner == owner else { return }
         self.owner = nil; emit = nil
         for task in tasks.values { task.cancel() }
+        for timer in approvalTimers.values { timer.cancel() }; approvalTimers = [:]
         tasks = [:] // Progress is retained; foreground resumes the same replay.
     }
     func shutdown() {
         for task in tasks.values { task.cancel() }
-        tasks = [:]; replays = [:]; emit = nil; owner = nil
+        tasks = [:]; replays = [:]; emit = nil; owner = nil; patches = [:]
+        for timer in approvalTimers.values { timer.cancel() }; approvalTimers = [:]; approvals = [:]
         attachments = [:]; attachmentBytes = 0
     }
 
@@ -155,13 +164,28 @@ final class DemoBackend {
             return seed[key]
         case "providers:getEnabled": return seed["providers"]
         case "providers:getModels": return seed["models"][first.string ?? ""]
+        case "providers:getSkills":
+            guard seed["providers"].array.contains(where: { $0["id"].string == first.string }) else { throw MainsError.server("Choose a demo provider.") }
+            return .object(["skills": .array(DemoContext.skills(workspace: args.dropFirst().first?.string != nil))])
+        case "providers:getCommands": return .array(DemoContext.commands)
         case "providers:getCodexPermissions":
             return .object(["profilesSupported": .bool(false), "profiles": .array([]), "requiresNamedProfile": .bool(false),
                             "allowedSandboxModes": .array(["read-only","workspace-write","danger-full-access"].map(JSONValue.string))])
         case "runs:getAll":
             return .array(runs.sorted { time($0, "updatedAt") > time($1, "updatedAt") }.prefix(100).map(JSONValue.object))
         case "runs:getById": return runs.first { $0["id"]?.string == runID }.map(JSONValue.object) ?? .null
-        case "runs:listPendingApprovals": return .array([]) // No unsupported approval/plugin flow is advertised.
+        case "runs:listPendingApprovals":
+            expireApprovals()
+            return .array(approvals.values.filter { runID.isEmpty || $0["runId"].string == runID }.sorted { ($0["timestamp"].number ?? 0) < ($1["timestamp"].number ?? 0) })
+        case "runs:toolApprovalResponse": return try respondToApproval(first)
+        case "runs:answerAsyncQuestions": return try answerQuestions(first)
+        case "runs:dismissAsyncQuestions":
+            try requireRun(runID)
+            guard let index = artifacts[runID]?.firstIndex(where: { $0["id"]?.number == first["artifactId"].number && $0["metadata"]?["source"].string == "codex_async_questions" }) else { throw MainsError.server("These demo questions are unavailable.") }
+            var metadata = artifacts[runID]![index]["metadata"]?.objectValue ?? [:]
+            metadata["asyncQuestionState"] = .object(["dismissed": .bool(true)])
+            artifacts[runID]![index]["metadata"] = .object(metadata); push("runs:eventPersisted", ["runId": .string(runID)])
+            return .null
         case "runs:getHistory": try requireRun(runID); return try history(first)
         case "runs:readHistoryContent": try requireRun(runID); return try content(first)
         case "space:update":
@@ -173,7 +197,7 @@ final class DemoBackend {
         case "runs:updateConversationSettings":
             guard args.count > 1, let index = runs.firstIndex(where: { $0["id"]?.string == runID }) else { throw MainsError.invalidReply }
             let settings = try args[1].decode(ComposerSettings.self)
-            var config = runs[index]["configSnapshot"]?.demoObject ?? [:]
+            var config = runs[index]["configSnapshot"]?.objectValue ?? [:]
             config["conversationSettings"] = try .encode(settings)
             runs[index]["configSnapshot"] = .object(config); runs[index]["model"] = .string(settings.model)
             push("runs:updated", ["runId": .string(runID)])
@@ -182,14 +206,14 @@ final class DemoBackend {
         case "runs:continue":
             try requireRun(runID)
             guard !isRunning(runID) else { throw MainsError.server("Wait for the demo reply, or stop it first.") }
-            try start(runID, prompt: first["message"].string ?? "", files: first["attachments"].array)
+            try start(runID, prompt: first["message"].string ?? "", files: first["attachments"].array, promptMetadata: ["skills": first["contextSkills"]])
             return .object(["runId": .string(runID), "resumed": .bool(true)])
         case "runs:abort":
             try requireRun(runID); finish(runID, status: "canceled")
             return .null
         case "runs:listOutputs":
             try requireRun(runID)
-            let items: [JSONValue] = [DemoFile.pdf.descriptor(runID: runID, artifactID: -9001), DemoFile.notes.descriptor(runID: runID, artifactID: -9002)]
+            let items: [JSONValue] = runID == Self.tourID ? [DemoFile.pdf.descriptor(runID: runID, artifactID: -9001), DemoFile.notes.descriptor(runID: runID, artifactID: -9002)] : []
             let requested = first["artifactId"].number
             return .object(["items": .array((first["offset"].number ?? 0) > 0 ? [] : items.filter { requested == nil || $0["artifactId"].number == requested }), "nextOffset": .null])
         case "runs:readOutputFile":
@@ -233,13 +257,13 @@ final class DemoBackend {
             "lastError": .null, "createdAt": Self.now, "updatedAt": Self.now,
         ]
         runs.append(run); artifacts[id] = []; tools[id] = []; turns[id] = []
-        do { try start(id, prompt: payload["goal"].string ?? "", files: payload["attachments"].array) }
+        do { try start(id, prompt: payload["goal"].string ?? "", files: payload["attachments"].array, promptMetadata: ["skills": payload["contextSkills"]]) }
         catch { runs.removeAll { $0["id"]?.string == id }; artifacts[id] = nil; tools[id] = nil; turns[id] = nil; throw error }
         trimRuns()
         return .object(["runId": .string(id)])
     }
 
-    private func start(_ runID: String, prompt: String, files: [JSONValue]) throws {
+    private func start(_ runID: String, prompt: String, files: [JSONValue], promptMetadata: [String: JSONValue] = [:]) throws {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, prompt.count <= 32_000 else {
             throw MainsError.server("Write a demo message under 32,000 characters.")
         }
@@ -262,37 +286,81 @@ final class DemoBackend {
             attachments[runID + ":" + file.version] = file; references.append(attachmentMetadata(file.version, file: file))
         }
         attachmentBytes += bytes
-        append(runID, kind: "user-prompt", text: prompt, metadata: ["source": .string("user"), "attachments": .array(references)])
+        append(runID, kind: "user-prompt", text: prompt, metadata: promptMetadata.merging(["source": .string("user"), "attachments": .array(references)]) { existing, _ in existing })
         if let index = runs.firstIndex(where: { $0["id"]?.string == runID }) {
             runs[index]["status"] = .string("running"); runs[index]["updatedAt"] = Self.now; runs[index]["endedAt"] = .null
             let count = turns[runID]?.count ?? 0
-            turns[runID, default: []].append(["id": .number(Double(takeID())), "turnIndex": .number(Double(count + 1)),
-                "status": .string("running"), "model": runs[index]["model"] ?? .null, "startedAt": Self.now])
+            turns[runID, default: []].append(["id": .number(Double(takeID())), "turnIndex": .number(Double(count)),
+                "status": .string("active"), "model": runs[index]["model"] ?? .null, "startedAt": Self.now, "createdAt": Self.now])
         }
-        replays[runID] = Replay(steps: scenario(prompt, hasAttachments: !uploaded.isEmpty))
+        let contextNames = promptMetadata["skills"]?.array.compactMap { $0["displayName"].string ?? $0["name"].string } ?? []
+        let steps: [Step]
+        if !contextNames.isEmpty || prompt.hasPrefix("/review") {
+            steps = [.text("## Demo context received\n\n" + (contextNames.isEmpty ? "The /review command is included in your message." : "Selected context: **" + contextNames.joined(separator: ", ") + "**.") + "\n\nThe composer sent the canonical skill names and their metadata with this request. This is a prepared on-device demonstration; no plugin, command or AI service was executed."), .finish]
+        } else {
+            steps = scenario(prompt, hasAttachments: !uploaded.isEmpty, mode: runs.first { $0["id"]?.string == runID }?["mode"]?.string ?? "chat")
+        }
+        replays[runID] = Replay(steps: steps)
         push("runs:statusChanged", ["runId": .string(runID), "status": .string("running")]); resume(runID)
     }
 
-    private func scenario(_ prompt: String, hasAttachments: Bool) -> [Step] {
+    private func scenario(_ prompt: String, hasAttachments: Bool, mode: String) -> [Step] {
+        if prompt.localizedCaseInsensitiveContains("Markdown formatting") {
+            return [.text("""
+            ## Markdown formatting
+
+            This **prepared demo** includes *emphasis*, ~~removed text~~, `inline code` and a [link](https://mains.dev).
+
+            | Time | From | Email |
+            |:---|:---|:---|
+            | 08:22 | Google Play | [Terms of Service updates](https://example.com/terms) |
+            | 08:03 | Reflect Studio | **Extra 11% discount** at checkout. |
+
+            - [x] Completed task
+            - [ ] Next task
+
+            > A multi-line quote
+            > with **formatted text**.
+
+            ```swift
+            let demo = "On this iPhone"
+            ```
+            """), .finish]
+        }
+        if mode != "chat", prompt.localizedCaseInsensitiveContains("file changes") || prompt.localizedCaseInsensitiveContains("dosya değişiklik") {
+            return [
+                .text("I’ll show a prepared patch with modified, added, renamed and binary files. No files on your computer or phone are changed."),
+                .tool("Edit", .object(["file_path": .string("/Demo/mains/Sources/Greeting.swift"), "old_string": .string("Hello"), "new_string": .string("Hello from Mains")]), .string("Sample edit prepared.")),
+                .changes,
+                .text("## Sample changes ready\n\nOpen a file in **Edited 4 files** below. **Review.md** has multiple diff pages, **guide.md** was renamed, and **sample.png** shows the binary-file notice. These are bundled examples, not real file changes."),
+                .finish,
+            ]
+        }
+        if prompt.localizedCaseInsensitiveContains("approvals and questions") || prompt.localizedCaseInsensitiveContains("onay ve soru") {
+            return decisionScenario()
+        }
         let request = String(prompt.replacingOccurrences(of: "\n", with: " ").prefix(90))
         let issue = ["bug","error","crash","stuck","hata","sorun"].contains { prompt.localizedCaseInsensitiveContains($0) }
         return [
+            .thinking("Reviewing the sample workspace"),
             .text("I’ll \(issue ? "trace the issue" : "review your request") using the bundled sample workspace. This is a simulated demo: your message and files stay on this iPhone."),
             .tool("Glob", .object(["pattern": .string("Sources/**/*.swift")]), .string("Sources/MainsApp/HomeView.swift\nSources/MainsCore/BackendSession.swift")),
             .tool("Read", .object(["file_path": .string("/Demo/mains/Sources/MainsCore/BackendSession.swift")]),
                   .string("The session connects the sidebar, composer, bounded history and live messages.")),
+            .thinking("Preparing the sample result"),
             .text("## Demo result\n\nFor **\(request)**, the sample workspace shows how Mains keeps conversations, model settings and tool activity together.\n\n- **\(issue ? "Investigation" : "Review"):** inspected bundled sample files.\n- **Privacy:** no computer, external account or AI service was contacted.\n\(hasAttachments ? "- **Attachments:** your files are available in this conversation for on-device preview.\n" : "")\nYou can continue this conversation, change providers, or open the sample image and PDF in **Explore Mains**. This is a prepared demonstration, not an AI-generated answer."),
             .finish,
         ]
     }
 
     private func resume(_ runID: String) {
-        guard emit != nil, tasks[runID] == nil, replays[runID] != nil else { return }
+        guard emit != nil, tasks[runID] == nil, let replay = replays[runID], !replay.waiting else { return }
         tasks[runID] = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, let replay = self.replays[runID], replay.index < replay.steps.count else { return }
                 let delay: Duration
-                if case .text = replay.steps[replay.index] { delay = self.streamDelay } else { delay = self.stepDelay }
+                if case .text = replay.steps[replay.index] { delay = self.streamDelay }
+                else { delay = replay.activeToolID != nil || replay.count > 0 ? self.stepDelay * 2 : self.stepDelay }
                 do { try await Task.sleep(for: delay) } catch { return }
                 guard !Task.isCancelled, self.emit != nil, self.isRunning(runID) else { return }
                 self.advance(runID)
@@ -302,6 +370,15 @@ final class DemoBackend {
     private func advance(_ runID: String) {
         guard var replay = replays[runID], replay.index < replay.steps.count else { return }
         switch replay.steps[replay.index] {
+        case .thinking(let text):
+            let provider = runs.first { $0["id"]?.string == runID }?["providerId"]?.string
+            push("runs:ephemeralEvent", ["runId": .string(runID), "event": .object([
+                "type": .string("artifact"), "kind": .string(provider == "claude_code" ? "report" : "thinking"),
+                "streamId": .string("demo-thinking-" + replay.streamID), "content": .string(replay.count == 0 ? text : ""),
+                "metadata": .object(["source": .string(provider == "copilot_cli" ? "assistant.reasoning_delta" : "agent_thinking_streaming")]),
+            ])])
+            if replay.count == 0 { replay.count = 1 }
+            else { replay.count = 0; replay.index += 1; replay.streamID = UUID().uuidString }
         case .text(let text):
             replay.count = min(text.count, replay.count + 24)
             let final = replay.count == text.count
@@ -315,21 +392,152 @@ final class DemoBackend {
                 replay.index += 1; replay.count = 0; replay.streamID = UUID().uuidString
             }
         case .tool(let name, let input, let output):
-            tools[runID, default: []].append(["id": .number(Double(takeID())), "runId": .string(runID),
-                "toolName": .string(name), "status": .string("done"), "input": input, "output": output,
-                "createdAt": Self.now, "startedAt": Self.now, "endedAt": Self.now, "error": .null])
-            push("runs:eventPersisted", ["runId": .string(runID)]); replay.index += 1
+            if let id = replay.activeToolID, let index = tools[runID]?.firstIndex(where: { $0["id"]?.number == Double(id) }) {
+                tools[runID]![index]["status"] = .string("done"); tools[runID]![index]["output"] = output; tools[runID]![index]["endedAt"] = Self.now
+                replay.activeToolID = nil; replay.index += 1
+            } else {
+                let id = takeID(); replay.activeToolID = id
+                tools[runID, default: []].append(["id": .number(Double(id)), "runId": .string(runID),
+                    "toolName": .string(name), "status": .string("running"), "input": input, "output": .null,
+                    "createdAt": Self.now, "startedAt": Self.now, "endedAt": .null, "error": .null])
+            }
+            push("runs:eventPersisted", ["runId": .string(runID)])
+        case .approval(let template):
+            let id = UUID().uuidString, token = UUID().uuidString
+            let request = JSONValue.object(template.objectValue.merging([
+                "requestId": .string(id), "approvalToken": .string(token), "runId": .string(runID),
+                "timestamp": Self.now, "expiresAt": .number((Date().timeIntervalSince1970 + decisionLifetime) * 1000),
+            ]) { _, next in next })
+            approvals[id] = request; replay.waiting = true; replay.index += 1
+            replays[runID] = replay; tasks.removeValue(forKey: runID)?.cancel()
+            armExpiry(request); push("runs:toolApprovalRequest", request.objectValue); return
+        case .questions:
+            append(runID, kind: "report", text: "Choose the next step in the question card below.", metadata: [
+                "source": .string("codex_async_questions"), "questions": .array([
+                    .object(["title": .string("What should we focus on next?"), "options": .array([.string("Interface"), .string("Functionality")])]),
+                    .object(["title": .string("Any details to keep in mind?"), "options": .null]),
+                ]),
+            ])
+            finish(runID, status: "succeeded"); return
+        case .changes:
+            if let turnID = turns[runID]?.last?["id"]?.number { installChanges(runID, turnID: Int(turnID)) }
+            replay.index += 1
         case .finish: finish(runID, status: "succeeded"); return
         }
         replays[runID] = replay
     }
     private func finish(_ runID: String, status: String) {
         tasks.removeValue(forKey: runID)?.cancel(); replays[runID] = nil
+        for index in tools[runID]?.indices ?? 0..<0 where ["running", "queued"].contains(tools[runID]![index]["status"]?.string ?? "") {
+            tools[runID]![index]["status"] = .string(status == "succeeded" ? "done" : "canceled")
+            tools[runID]![index]["endedAt"] = Self.now
+        }
+        for request in approvals.values.filter({ $0["runId"].string == runID }) {
+            if let id = request["requestId"].string {
+                approvals[id] = nil; approvalTimers.removeValue(forKey: id)?.cancel()
+                push("runs:toolApprovalResolved", ["requestId": .string(id), "approvalToken": request["approvalToken"]])
+            }
+        }
         if let index = runs.firstIndex(where: { $0["id"]?.string == runID }) {
             runs[index]["status"] = .string(status); runs[index]["updatedAt"] = Self.now; runs[index]["endedAt"] = Self.now
         }
-        if let last = turns[runID]?.indices.last { turns[runID]![last]["status"] = .string(status == "succeeded" ? "completed" : "canceled") }
+        if let last = turns[runID]?.indices.last {
+            turns[runID]![last]["status"] = .string(status == "succeeded" ? "completed" : "canceled")
+            turns[runID]![last]["endedAt"] = Self.now
+        }
         push("runs:statusChanged", ["runId": .string(runID), "status": .string(status)])
+    }
+
+    private func decisionScenario() -> [Step] {
+        [
+            .text("This walkthrough uses the same approval and question cards as a paired computer. Nothing leaves this iPhone, and no command or external service is used."),
+            .approval(.object(["kind": .string("tool_approval"), "toolName": .string("Bash"), "toolInput": .object([
+                "message": .string("Allow this sample workspace check?"), "command": .string("/bin/zsh -lc \"swift test\""),
+                "cwd": .string("/Demo/mains"), "environmentId": .string("local"),
+                "commandActions": .array([.object(["command": .string("swift test"), "type": .string("unknown")])]),
+                "_meta": .object(["subtitle": .string("A simulated command; no process will start."), "riskLevel": .string("low")]),
+            ])])),
+            .approval(.object(["kind": .string("ask_user"), "toolName": .string("AskUserQuestion"), "header": .string("Choose a review style"),
+                "question": .string("Which sample result would you like?"), "multiSelect": .bool(true), "isOther": .bool(true),
+                "options": .array([.object(["label": .string("Review only"), "description": .string("Inspect the bundled sample.")]),
+                                   .object(["label": .string("Make a plan"), "description": .string("Show suggested next steps.")])])])),
+            .approval(.object(["kind": .string("elicitation"), "toolName": .string("Demo form"), "header": .string("Sample project details"),
+                "elicitationMode": .string("form"), "requestedSchema": .object([
+                    "type": .string("object"), "required": .array([.string("project")]), "properties": .object([
+                        "project": .object(["type": .string("string"), "title": .string("Project name"), "minLength": .number(2)]),
+                        "notifications": .object(["type": .string("boolean"), "title": .string("Send sample notifications"), "default": .bool(false)]),
+                        "priority": .object(["type": .string("string"), "title": .string("Priority"), "enum": .array([.string("normal"), .string("high")]), "default": .string("normal")]),
+                    ]),
+                ])])),
+            .approval(.object(["kind": .string("elicitation"), "toolName": .string("Demo connection"), "header": .string("Connect a sample service"),
+                "elicitationMode": .string("url"), "url": .string("https://example.com/demo-connect"),
+                "description": .string("In Demo Mode this opens an on-device explanation instead of a browser.")])),
+            .questions,
+        ]
+    }
+
+    private func respondToApproval(_ payload: JSONValue) throws -> JSONValue {
+        guard let id = payload["requestId"].string, let request = approvals[id], request["approvalToken"] == payload["approvalToken"],
+              let runID = request["runId"].string, (request["expiresAt"].number ?? 0) > Date().timeIntervalSince1970 * 1000,
+              isRunning(runID) else { throw MainsError.server("This demo request expired or has already been answered.") }
+        let approval = try request.decode(PendingApproval.self)
+        if payload["approved"].bool {
+            if approval.kind == "ask_user", (payload["answer"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw MainsError.server("Choose an answer first.") }
+            if approval.isForm {
+                guard let text = payload["answer"].string, let bytes = text.data(using: .utf8), let content = try? JSONDecoder().decode(JSONValue.self, from: bytes),
+                      ElicitationForm(schema: approval.requestedSchema).validate(content).isEmpty else { throw MainsError.server("Complete the sample form.") }
+            }
+        }
+        resolveApproval(request, message: payload["approved"].bool
+            ? (approval.kind == "tool_approval" ? "Sample command approved. No command was executed." : approval.isForm ? "Sample form submitted on this iPhone." : "Your sample answer was received.")
+            : "Sample request declined. No action was taken.")
+        return .null
+    }
+
+    private func resolveApproval(_ request: JSONValue, message: String) {
+        guard let id = request["requestId"].string, let runID = request["runId"].string else { return }
+        approvals[id] = nil; approvalTimers.removeValue(forKey: id)?.cancel()
+        push("runs:toolApprovalResolved", ["requestId": .string(id), "approvalToken": request["approvalToken"]])
+        append(runID, kind: "report", text: message, metadata: [:])
+        if replays[runID] != nil { replays[runID]!.waiting = false; resume(runID) }
+    }
+
+    private func armExpiry(_ request: JSONValue) {
+        guard let id = request["requestId"].string, let expiry = request["expiresAt"].number else { return }
+        approvalTimers[id]?.cancel()
+        approvalTimers[id] = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(max(0, expiry / 1000 - Date().timeIntervalSince1970))) } catch { return }
+            self?.expireApprovals()
+        }
+    }
+    private func expireApprovals() {
+        for request in approvals.values.filter({ ($0["expiresAt"].number ?? 0) <= Date().timeIntervalSince1970 * 1000 }) {
+            resolveApproval(request, message: "The sample request expired without an answer. No action was taken.")
+        }
+    }
+
+    private func answerQuestions(_ payload: JSONValue) throws -> JSONValue {
+        let runID = payload["runId"].string ?? ""
+        try requireRun(runID)
+        guard let index = artifacts[runID]?.firstIndex(where: { $0["id"]?.number == payload["artifactId"].number && $0["metadata"]?["source"].string == "codex_async_questions" }) else {
+            throw MainsError.server("These sample questions are unavailable.")
+        }
+        var metadata = artifacts[runID]![index]["metadata"]?.objectValue ?? [:]
+        if let answer = metadata["asyncQuestionAnswer"] { return .object(["accepted": .bool(true), "answer": answer]) }
+        if payload["checkOnly"].bool { return .object(["accepted": .bool(false)]) }
+        let allArtifacts = try JSONValue.array((artifacts[runID] ?? []).map(JSONValue.object)).decode([Artifact].self)
+        guard let pending = PendingAsyncQuestions.latest(in: allArtifacts), Double(pending.artifactID) == payload["artifactId"].number,
+              !isRunning(runID) else { throw MainsError.server("These sample questions have already moved on.") }
+        let answers = payload["answers"].array.compactMap(\.string).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard answers.count == pending.questions.count, answers.allSatisfy({ !$0.isEmpty }) else { throw MainsError.server("Answer every sample question.") }
+        let reply: JSONValue = .object(["artifactId": .number(Double(pending.artifactID)), "answers": .array(answers.map(JSONValue.string))])
+        let messageID = "codex-async-answer-\(pending.artifactID)"
+        var answer = reply.objectValue; answer["clientUserMessageId"] = .string(messageID)
+        let prompt = zip(pending.questions, answers).map { "\($0.0.title)\n\n\($0.1)" }.joined(separator: "\n\n---\n\n")
+        try start(runID, prompt: prompt, files: [], promptMetadata: ["clientUserMessageId": .string(messageID), "asyncQuestionReply": reply])
+        metadata["asyncQuestionAnswer"] = .object(answer); artifacts[runID]![index]["metadata"] = .object(metadata)
+        push("runs:eventPersisted", ["runId": .string(runID)])
+        return .object(["accepted": .bool(true), "answer": .object(answer)])
     }
 
     private func append(_ runID: String, kind: String, text: String, metadata: [String: JSONValue]) {
@@ -368,7 +576,7 @@ final class DemoBackend {
             guard let index = runs.indices.filter({ runs[$0]["id"]?.string != Self.tourID && runs[$0]["status"]?.string != "running" })
                 .min(by: { time(runs[$0], "updatedAt") < time(runs[$1], "updatedAt") }),
                   let id = runs[index]["id"]?.string else { return }
-            runs.remove(at: index); artifacts[id] = nil; tools[id] = nil; turns[id] = nil
+            runs.remove(at: index); artifacts[id] = nil; tools[id] = nil; turns[id] = nil; patches[id] = nil
             let keys = attachments.keys.filter { $0.hasPrefix(id + ":") }
             for key in keys { if let file = attachments.removeValue(forKey: key) { attachmentBytes -= file.bytes.count } }
         }
@@ -402,7 +610,16 @@ final class DemoBackend {
         }
         tools[Self.tourID] = [["id": .number(9_000_002), "toolName": .string("Read"), "status": .string("done"), "createdAt": .number(at + 50),
             "input": .object(["file_path": .string("/Demo/mains/demo-notes.md")]), "output": .string(String(decoding: DemoFile.notes.bytes, as: UTF8.self))]]
-        turns[Self.tourID] = [["id": .number(9_000_001), "status": .string("completed"), "model": .string("gpt-6.1-sol"), "turnIndex": .number(1)]]
+        turns[Self.tourID] = [["id": .number(9_000_001), "status": .string("completed"), "model": .string("gpt-6.1-sol"), "turnIndex": .number(0),
+                              "startedAt": .number(at), "createdAt": .number(at), "endedAt": .number(at + 300)]]
+        installChanges(Self.tourID, turnID: 9_000_001)
+    }
+
+    private func installChanges(_ runID: String, turnID: Int) {
+        guard let index = turns[runID]?.firstIndex(where: { $0["id"]?.number == Double(turnID) }) else { return }
+        turns[runID]![index]["changes"] = DemoTurnChanges.summary(turnID: turnID)
+        patches[runID, default: [:]][turnID] = DemoTurnChanges.patch
+        push("runs:diffUpdated", ["runId": .string(runID)])
     }
 
     private struct Key: Comparable {
@@ -427,11 +644,15 @@ final class DemoBackend {
         var lower: Key?, upper: Key?
         switch direction {
         case "older":
-            let eligible = anchors.filter { key in cursor.map { key < $0 } ?? true }
-            lower = eligible.suffix(3).first; upper = cursor
+            let seek = cursor.flatMap { cursor in anchors.firstIndex { $0 >= cursor } } ?? anchors.count
+            let start = max(0, seek - 3), end = min(anchors.count, start + 9)
+            lower = anchors.indices.contains(start) ? anchors[start] : nil
+            upper = anchors.indices.contains(end) ? anchors[end] : nil
         case "newer":
-            let eligible = anchors.filter { key in cursor.map { key >= $0 } ?? true }
-            lower = eligible.first; upper = eligible.count > 3 ? eligible[3] : nil
+            let seek = cursor.flatMap { cursor in anchors.firstIndex { $0 >= cursor } } ?? anchors.count
+            let end = min(anchors.count, seek + 3), start = max(0, end - 9)
+            lower = anchors.indices.contains(start) ? anchors[start] : nil
+            upper = anchors.indices.contains(end) ? anchors[end] : nil
         case "refresh": lower = cursor ?? anchors.suffix(3).first; upper = Key(request["end"])
         default: lower = anchors.suffix(3).first
         }
@@ -440,7 +661,7 @@ final class DemoBackend {
             var item = row
             if let text = row["content"]?.string, text.count > 8000 {
                 item["content"] = .string(String(text.prefix(4000)))
-                var meta = item["metadata"]?.demoObject ?? [:]; meta["mobileContentDeferred"] = .bool(true); item["metadata"] = .object(meta)
+                var meta = item["metadata"]?.objectValue ?? [:]; meta["mobileContentDeferred"] = .bool(true); item["metadata"] = .object(meta)
             }
             return .object(item)
         }
@@ -468,7 +689,10 @@ final class DemoBackend {
         let runID = request["runId"].string ?? "", source = request["source"].string ?? ""
         guard let id = request["id"].number else { throw MainsError.invalidReply }
         let value: JSONValue
-        if source == "artifact" { value = artifacts[runID]?.first { $0["id"]?.number == id }?["content"] ?? .null }
+        if source == "turn-diff", id > 0, id < Double(Int.max), id.rounded() == id {
+            value = patches[runID]?[Int(id)].map(JSONValue.string) ?? .null
+        }
+        else if source == "artifact" { value = artifacts[runID]?.first { $0["id"]?.number == id }?["content"] ?? .null }
         else if ["tool-input","tool-output"].contains(source) {
             value = tools[runID]?.first { $0["id"]?.number == id }?[source == "tool-input" ? "input" : "output"] ?? .null
         } else { throw MainsError.invalidReply }

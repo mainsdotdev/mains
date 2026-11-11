@@ -505,6 +505,32 @@ describe("Cursor ACP transcript", () => {
     expect(calls[1].input).toEqual(calls[0].input);
   });
 
+  it.each([
+    { kind: "read", title: "Read File", rawInput: { path: "/fixture/hero.tsx" }, toolName: "Read", input: { file_path: "/fixture/hero.tsx" } },
+    { kind: "search", title: "Grep", rawInput: { pattern: "activateTab", path: "/fixture/src" }, toolName: "Grep", input: { pattern: "activateTab", path: "/fixture/src" } },
+    { kind: "execute", title: "Run Shell Command", rawInput: { command: "npm test" }, toolName: "Bash", input: { command: "npm test" } },
+  ])("retains $kind arguments streamed in a status-less update before completion", async ({ kind, title, rawInput, toolName, input }) => {
+    // Cursor's presenter opens the card before args are ready, then sends
+    // refreshToolCall without a status. The final result omits args again.
+    const { calls } = await replayUpdates([
+      { sessionUpdate: "tool_call", toolCallId: "streamed-1", kind, title, status: "pending", rawInput: {} },
+      { sessionUpdate: "tool_call_update", toolCallId: "streamed-1", title, rawInput },
+      { sessionUpdate: "tool_call_update", toolCallId: "streamed-1", status: "in_progress" },
+      { sessionUpdate: "tool_call_update", toolCallId: "streamed-1", status: "completed", rawOutput: "ok" },
+    ]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ toolName, input, output: "ok", metadata: { phase: "complete", title, kind } });
+  });
+
+  it("keeps intermediate content and locations when a terminal update only changes status", async () => {
+    const { calls } = await replayUpdates([
+      { sessionUpdate: "tool_call", toolCallId: "read-1", kind: "read", title: "Read File", status: "pending" },
+      { sessionUpdate: "tool_call_update", toolCallId: "read-1", locations: [{ path: "/fixture/hero.tsx" }], content: [{ type: "content", content: { type: "text", text: "File contents" } }] },
+      { sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed", title: "Read hero.tsx" },
+    ]);
+    expect(calls[1]).toMatchObject({ toolName: "Read", input: { file_path: "/fixture/hero.tsx" }, output: "File contents", metadata: { title: "Read hero.tsx", kind: "read" } });
+  });
+
   it("projects a native completed tool with an error result as a failed tool, allowing the agent to recover", async () => {
     const error = 'Built-in tool "AskQuestion" not found in namespace "cursor".';
     const { calls, outcome } = await replayUpdates([

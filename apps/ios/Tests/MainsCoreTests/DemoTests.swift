@@ -94,6 +94,7 @@ struct DemoTests {
         #expect(pdfBytes == DemoFile.pdf.bytes && pdfBytes.starts(with: Data("%PDF-".utf8)))
         let outputs = try await session.listOutputs(DemoBackend.tourID)
         #expect(outputs.items.count == 2)
+        #expect(try await session.hasOutputs(DemoBackend.tourID))
         let notes = try #require(outputs.items.first { $0.name == "demo-notes.md" })
         #expect(String(decoding: try await session.downloadOutput(notes), as: UTF8.self).hasPrefix("# Mains demo notes"))
 
@@ -106,6 +107,7 @@ struct DemoTests {
             ])
         await session.selectConversation(id)
         let media = session.transcript.rows.flatMap(\.media)
+        #expect(try await !session.hasOutputs(id), "Prompt attachments are not generated outputs.")
         let importedImage = try #require(media.first { $0.name == "sample.jpg" })
         let importedPDF = try #require(media.first { $0.name == "sample.pdf" })
         #expect(try await session.readImage(importedImage).data == imageBytes)
@@ -114,6 +116,7 @@ struct DemoTests {
         try await eventually { session.conversations.first { $0.id == id }?.isActive == true }
         try await session.stop(id)
         try await eventually { session.conversations.first { $0.id == id }?.status == "canceled" }
+        #expect(try await !session.hasOutputs(id))
     }
 
     @Test @MainActor func backgroundPausesReplayAndOldConnectionsCannotDetachTheNewOne() async throws {
@@ -143,14 +146,14 @@ struct DemoTests {
         #expect(page.artifacts.filter { $0.kind == "user-prompt" }.count == 1)
     }
 
-    @Test @MainActor func historyStaysBoundedAndPagesWithoutOverlappingPrompts() async throws {
+    @Test @MainActor func historyPagesRetainOverlapAndStayBoundedLikeDesktop() async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let transport = DemoTransport(backend: backend)
         try transport.open(endpoint: DemoBackend.endpoint, token: "")
         defer { transport.close(); backend.shutdown() }
         let result = try await transport.invoke("runs:execute", args: [try startPayload(backend, text: "Demo message 1")], commandId: "history-1")
         let id = try #require(result["runId"].string)
-        for index in 1...7 {
+        for index in 1...13 {
             if index > 1 {
                 _ = try await transport.invoke("runs:continue", args: [.object(["runId": .string(id), "message": .string("Demo message \(index)")])], commandId: "history-\(index)")
             }
@@ -161,16 +164,27 @@ struct DemoTests {
         let latest = try backend.invoke("runs:getHistory", args: [historyRequest(id)]).decode(HistoryPage.self)
         #expect(latest.hasOlder && !latest.hasNewer)
         #expect(latest.artifacts.filter { $0.kind == "user-prompt" }.count == 3)
-        var olderRequest = historyRequest(id).demoObject
+        var olderRequest = historyRequest(id).objectValue
         olderRequest["direction"] = .string("older"); olderRequest["cursor"] = try .encode(#require(latest.start))
-        let older = try backend.invoke("runs:getHistory", args: [.object(olderRequest)]).decode(HistoryPage.self)
+        var older = try backend.invoke("runs:getHistory", args: [.object(olderRequest)]).decode(HistoryPage.self)
+        let latestIDs = Set(latest.artifacts.map(\.id))
+        #expect(latestIDs.isSubset(of: Set(older.artifacts.map(\.id))))
+        for _ in 0..<2 {
+            olderRequest["cursor"] = try .encode(#require(older.start))
+            older = try backend.invoke("runs:getHistory", args: [.object(olderRequest)]).decode(HistoryPage.self)
+            #expect(older.artifacts.filter { $0.kind == "user-prompt" }.count <= 9)
+        }
         #expect(older.hasOlder && older.hasNewer)
-        let olderIDs = Set(older.artifacts.map(\.id)), latestIDs = Set(latest.artifacts.map(\.id))
-        #expect(olderIDs.isDisjoint(with: latestIDs))
-        var frozenRequest = historyRequest(id).demoObject
+        var frozenRequest = historyRequest(id).objectValue
         frozenRequest["direction"] = .string("refresh")
         frozenRequest["cursor"] = try .encode(#require(older.start)); frozenRequest["end"] = try .encode(#require(older.end))
         #expect(try backend.invoke("runs:getHistory", args: [.object(frozenRequest)]).decode(HistoryPage.self) == older)
+        var newerRequest = historyRequest(id).objectValue
+        newerRequest["direction"] = .string("newer"); newerRequest["cursor"] = try .encode(#require(older.end))
+        let newer = try backend.invoke("runs:getHistory", args: [.object(newerRequest)]).decode(HistoryPage.self)
+        #expect(!newer.hasNewer)
+        #expect(latestIDs.isSubset(of: Set(newer.artifacts.map(\.id))))
+        #expect(newer.artifacts.filter { $0.kind == "user-prompt" }.count == 9)
     }
 
     @Test @MainActor func restoreStartsFreshDemoAndExitFencesItsPendingWork() async throws {

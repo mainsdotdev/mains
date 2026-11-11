@@ -55,7 +55,9 @@ struct ConsentView: View {
                         category("Skills and instructions you attach")
                         Divider().padding(.horizontal, 16)
                         category("Files and tool results the agent uses")
-                    }.background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 20))
+                    }
+                    .background(Color(.tertiarySystemBackground), in: .rect(cornerRadius: 20))
+                    .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(.primary.opacity(0.08)) }
 
                     Text(context.isDemo ? "This choice applies only to Demo Mode. Mains asks separately before sharing data with a provider on a paired computer." : "\(recipientDetail) Mains sends nothing until you choose Allow & Send.")
                         .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8)

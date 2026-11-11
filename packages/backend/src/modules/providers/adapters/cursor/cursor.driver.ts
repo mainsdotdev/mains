@@ -70,6 +70,15 @@ import type { MainsToolContext } from "../mains-tools.core";
 // Per-run session state (handed back to Core as the opaque `session`)
 // ─────────────────────────────────────────────────────────────
 
+interface CursorToolCall {
+  title?: string;
+  kind?: string;
+  rawInput?: Record<string, unknown>;
+  locations?: Array<{ path?: string; line?: number }>;
+  content?: Array<Record<string, unknown>>;
+  rawOutput?: unknown;
+}
+
 interface CursorSession {
   runId: string;
   sessionId: string;
@@ -83,10 +92,10 @@ interface CursorSession {
   /**
    * ACP `tool_call_update` notifications are deltas — only changed fields
    * are present (per spec: "All fields except toolCallId are optional in
-   * updates"). We cache the start payload here so the complete branch can
-   * restore toolName/input when those fields aren't re-sent.
+   * updates"). Cursor streams arguments in status-less updates after opening
+   * an empty card. Retain every delta until the terminal event arrives.
    */
-  toolCallCache: Map<string, { toolName: string; input: Record<string, unknown> }>;
+  toolCallCache: Map<string, CursorToolCall>;
   /**
    * Tool call IDs we deliberately skipped (e.g. cursor extension TODOs,
    * create_plan, MCP). Their `tool_call_update` deltas must also be skipped,
@@ -912,7 +921,10 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
 
         if (status === "pending" || status === "in_progress") {
           if (toolCallId) {
-            cs.toolCallCache.set(toolCallId, { toolName, input: normalizedInput });
+            cs.toolCallCache.set(toolCallId, {
+              title, kind, rawInput, locations,
+              content: update.content as CursorToolCall["content"], rawOutput: update.rawOutput,
+            });
           }
           cs.agentThoughtBuffer = "";
           events.push({
@@ -936,15 +948,16 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
 
       case "tool_call_update": {
         const toolCallId = update.toolCallId as string | undefined;
-        const title = update.title as string | undefined;
-        const kind = update.kind as string | undefined;
+        const cached = toolCallId ? cs.toolCallCache.get(toolCallId) : undefined;
+        const title = update.title as string | undefined ?? cached?.title;
+        const kind = update.kind as string | undefined ?? cached?.kind;
         const status = update.status as string | undefined;
-        const rawOutput = update.rawOutput as unknown;
-        const rawInput = update.rawInput as Record<string, unknown> | undefined;
-        const locations = update.locations as
-          | Array<{ path?: string; line?: number }>
-          | undefined;
-        const content = update.content as Array<Record<string, unknown>> | undefined;
+        const rawOutput = update.rawOutput ?? cached?.rawOutput;
+        const rawInput = update.rawInput != null
+          ? { ...cached?.rawInput, ...update.rawInput as Record<string, unknown> }
+          : cached?.rawInput;
+        const locations = update.locations as CursorToolCall["locations"] ?? cached?.locations;
+        const content = update.content as CursorToolCall["content"] ?? cached?.content;
 
         // Skip deltas for tool calls whose start was deliberately suppressed
         // (TODOs handled via extension, create_plan, MCP). Title/kind may be
@@ -964,8 +977,13 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           locations,
         );
 
+        if (toolCallId) {
+          cs.toolCallCache.set(toolCallId, {
+            title, kind, rawInput, locations, content, rawOutput,
+          });
+        }
+
         if (status === "completed" || status === "failed") {
-          const cached = toolCallId ? cs.toolCallCache.get(toolCallId) : undefined;
           const diffBlock = content?.find((c) => c.type === "diff");
           if (diffBlock) {
             if (typeof diffBlock.path === "string") normalizedInput.file_path = diffBlock.path;
@@ -974,24 +992,6 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
             if (typeof diffBlock.newText === "string")
               normalizedInput.new_string = diffBlock.newText;
           }
-
-          // ACP `tool_call_update` is a delta — only changed fields are
-          // re-sent. If none of the input-bearing fields are present, leave
-          // `input` undefined so the start-time value is preserved in DB.
-          const hasInputDelta =
-            rawInput !== undefined ||
-            title !== undefined ||
-            kind !== undefined ||
-            locations?.[0]?.path !== undefined ||
-            diffBlock !== undefined;
-          const finalInput = hasInputDelta
-            ? { ...(cached?.input ?? {}), ...normalizedInput }
-            : undefined;
-          // Likewise restore toolName from cache when delta omits kind/title.
-          const finalToolName =
-            kind !== undefined || title !== undefined
-              ? toolName
-              : (cached?.toolName ?? toolName);
 
           let outputText: unknown;
           if (content && content.length > 0) {
@@ -1025,15 +1025,15 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
 
           events.push({
             type: "tool_call",
-            toolName: finalToolName,
-            input: finalInput,
+            toolName,
+            input: normalizedInput,
             output: outputText,
             error,
             endedAt: ts,
             metadata: {
               phase: "complete",
               toolCallId,
-              title: title ?? cached?.toolName,
+              title,
               kind,
             },
           });

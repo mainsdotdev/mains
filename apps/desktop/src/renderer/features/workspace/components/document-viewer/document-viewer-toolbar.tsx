@@ -19,12 +19,13 @@ interface DocumentViewerToolbarProps {
   onToggleAnnotating?: () => void;
 }
 
-/** Document actions sit below the title tab, inside the content surface. */
+/** Text actions float over the content; rendered pages keep their toolbar. */
 export function DocumentViewerToolbar({ doc, zoom, onZoomChange, isSaving, onSaveCopy, annotating, onToggleAnnotating }: DocumentViewerToolbarProps) {
   const changeZoom = (step: number) => onZoomChange(clamp(+(zoom + step).toFixed(2), ZOOM_MIN, ZOOM_MAX));
 
   return (
-    <PreviewToolbar aria-label="Document tools">
+    <PreviewToolbar aria-label="Document tools"
+      className={doc && isTextDocType(doc.docType) ? "absolute right-2 top-2 z-10 h-auto border-0 bg-transparent p-0 dark:bg-transparent" : undefined}>
       {onToggleAnnotating && <Button onClick={onToggleAnnotating}
         tooltip={annotating ? "Exit edit request mode" : "Request edits"} tooltipPosition="bottom"
         aria-pressed={!!annotating}

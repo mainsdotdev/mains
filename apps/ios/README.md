@@ -1,7 +1,9 @@
 # Mains for iPhone
 
-An independent SwiftUI client for the existing Mains backend. Requires iOS 18+
-and Xcode 26+ with Swift 6. No third-party iOS runtime dependencies.
+An independent SwiftUI client for the existing Mains backend. Requires iOS 26+
+and Xcode 26+ with Swift 6. Controls and the composer use native Liquid Glass;
+the system Reduce Transparency preference retains an opaque accessible surface.
+No third-party iOS runtime dependencies.
 `apps/mobile` remains the separate Expo/React Native app for iOS and Android.
 
 ## Run
@@ -49,8 +51,48 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   or provider consents. A saved real pairing always takes priority. Replay pauses
   in the background and resumes on foreground, including without network access.
   Settings offers Exit Demo Mode or pairing a real computer. Demo disclosures use
-  Continue Demo and never authorize real sharing. Plugin and approval flows are
-  intentionally absent until native iOS supports them.
+  Continue Demo and never authorize real sharing. The home suggestion **Try
+  approvals and questions** starts a walkthrough of tool consent, a multiple-choice
+  question, a validated form, a local sample connection link, and Codex async
+  questions. Replies use the same session channels as a real backend. Demo links
+  stay on-device; expiry and decline do not execute an action. Demo also supplies
+  plugin, skill and command examples; sending selected context produces a prepared
+  acknowledgement without invoking a plugin or external service.
+- The shared home/conversation composer supports **+ → Plugins** and trailing
+  **@**, **/** and **$** context triggers. The inline picker keeps the keyboard open,
+  groups plugins, Mac apps, skills and commands, and filters by title/description.
+  `$` searches skills only; commands insert `/name`. Selected context appears as
+  atomic icon/name tokens inside the editable text and sent prompts. Backspace removes
+  one mention at a time; copying/pasting uses readable plain text, and undo stays
+  scoped to the provider/workspace. Selections follow text edits and send canonical
+  `$name` mentions plus `contextSkills` on execute/continue. Catalogues load lazily for the current provider/workspace,
+  refresh on `providers:skillsUpdated`, retain successful sources on partial failure,
+  and never enter the disk snapshot. Provider/workspace changes remove stale selections.
+  Computer-local icon/skill paths are metadata only; artwork accepts data or HTTPS URLs.
+  Paired discovery limits optional artwork and avoids sending both icon sizes;
+  skills use the desktop Sparkles icon by default; commands use Slash, and plugins
+  without usable artwork use Box. The same defaults appear in inline mentions.
+- In-conversation decision cards match the React Native flows: allow/deny (including
+  Codex's explicit Allow for this run), option/custom/secret question answers,
+  flat MCP schema forms with defaults and field validation, HTTP(S) URL elicitation,
+  and step-by-step Codex async answers/dismissal. Request incarnation tokens, expiry,
+  pairing ownership and viewed-run checks reject stale decisions. Unknown approval
+  deliveries can only check the original receipt; unknown Codex answers use
+  `checkOnly`, never a fresh answer. Authoritative resolution retires the card.
+  Decisions and secret drafts are memory-only; replicas remain read-only.
+  Tool approvals use desktop-style shell/directory and file-diff previews, bounded
+  scrollable content, compact Cancel/Allow actions, and curated connector fields.
+- Completed Code/Work turns show a read-only changed-files card outside folded
+  messages, with additions/deletions, shared/binary/renamed files, and a compact
+  expandable list. Selecting a file opens a native diff page with numbered,
+  wrapped rows and word emphasis. Previous/Next keeps only one bounded page;
+  stored patches are read through `runs:readHistoryContent` (`turn-diff`) on demand,
+  never loaded into the snapshot cache. Historical cutoffs, unavailable/truncated
+  changes and undone changes follow Expo. `runs:diffUpdated` refreshes the summary.
+  Diff reads are fenced by computer ownership, connection and conversation;
+  returning preserves the transcript position. Demo's **Try file changes** replays
+  a prepared patch; **Explore Mains** also includes modified, paged added,
+  renamed and binary samples. No real files are changed.
 - A sliding sidebar with provider/space discs, Code workspaces and branch
   information, and Work/Chat project groups and recent conversations.
 - Code / Work / Chat tabs sit under the Mains title in the sidebar. Selection
@@ -95,6 +137,8 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   A late snapshot cannot overwrite a confirmed save. Unknown saves retain their
   original command identity for Check settings and block fresh settings/sends.
   Selection preferences survive through disposable cache.
+- Code messages without an available local workspace show a Workspace required
+  notice with a chooser shortcut and keep the draft intact.
 - Photos, Files and device Camera attachments in both composers (up to five,
   2 MB total). Attachment bytes stay in memory while composing and sending.
 - The + menu grows from its composer button. Camera and Photos grow out of that
@@ -108,8 +152,22 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   attachment budget; file imports retain their data. The composer shows fixed
   104-point square image previews in one horizontal strip and documents separately.
 - Text continuation, stop, cumulative live replies and durable stream acknowledgement.
+- Running status follows the foreground tool or the provider’s current thinking preview,
+  with a provider-coloured square loader and text shimmer. Streaming assistant prose
+  and visible running tool rows suppress duplicate footer indicators. Live thinking
+  stays bounded in memory, outside messages and the disk cache. Reduce Motion uses
+  static feedback, and inactive scenes pause animations. Demo sample requests include
+  thinking snapshots and running/completed tool transitions.
+- Stable message identity across send acknowledgements and streaming finalization.
+  The bounded transcript is measured eagerly, uses one scroll controller, and keeps
+  observed execution details open after completion. Reopened history starts compact.
+  Image previews reserve their layout before loading and decode only while visible.
 - Per-computer/provider AI data-sharing consent before sending.
-- Bounded mobile history, earlier/newer pages and chunked full-message reading.
+- Bounded mobile history with automatic directional edge paging and chunked full-message reading.
+  The top retains an earlier-message fallback; newer messages load at the bottom without
+  a load-more row. Overlapping pages preserve the visible row’s offset, and the arrow
+  requests the latest page before resuming live-follow. Demo uses the same overlapping
+  window behavior with smaller sample pages.
 - Foreground/network recovery, endpoint rotation, 30-second visible recovery budget
   and slower silent probes. No retry timers or sockets while offline/backgrounded.
 - Stable command identities across reconnects. Timeout/refusal does not
@@ -119,7 +177,8 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
 - Up to 100 conversation descriptors and four bounded history pages in a
   disposable cache. Live text is memory-only. Losing the cache simply refetches.
 - System typography, Dynamic Type, native navigation/sheets, selectable inline
-  Markdown, headings, lists, quotes and fenced code, interactive keyboard dismissal
+  Markdown, headings, ordered/nested/task lists, quotes, horizontally scrollable GFM tables
+  and fenced code, interactive keyboard dismissal
   and a latest-message control.
 - Folded intermediate assistant/tool work, with the final answer always visible;
   active turns stay expanded and errors stay outside the fold.
@@ -151,8 +210,8 @@ are protected and removed when the viewer closes. Older attachments without a
 durable reference remain visible with an unavailable-preview label.
 
 Messages to active turns currently require waiting or stopping; mid-turn steer
-is not implemented. Approval/question replies, plugins, rich Markdown tables
-and math remain on the computer or Expo app.
+is not implemented. Mathematical typesetting and raw HTML remain on the computer or Expo app.
+In Demo Mode, send “Show Markdown formatting” to explore the native formatting sample.
 
 ## Validate
 

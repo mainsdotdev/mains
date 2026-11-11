@@ -32,12 +32,8 @@ struct GlassSurface: ViewModifier {
         if reduceTransparency {
             content.background(Color(.secondarySystemBackground), in: .rect(cornerRadius: radius))
                 .overlay { RoundedRectangle(cornerRadius: radius).strokeBorder(.primary.opacity(0.12)) }
-        } else if #available(iOS 26.0, *) {
-            content.glassEffect(.regular.tint(tint).interactive(interactive), in: .rect(cornerRadius: radius))
         } else {
-            content.background(.regularMaterial, in: .rect(cornerRadius: radius))
-                .background(tint, in: .rect(cornerRadius: radius))
-                .overlay { RoundedRectangle(cornerRadius: radius).strokeBorder(.primary.opacity(0.10)) }
+            content.glassEffect(.regular.tint(tint).interactive(interactive), in: .rect(cornerRadius: radius))
         }
     }
 }

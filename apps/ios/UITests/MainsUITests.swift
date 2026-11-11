@@ -3,6 +3,271 @@ import XCTest
 /// Run alongside scripts/mock-backend.mjs. No AI provider or real workspace is contacted.
 @MainActor
 final class MainsUITests: XCTestCase {
+    func testTranscriptPagesAutomaticallyAndKeepsReadingPositionDuringRefresh() async throws {
+        try await assertAutomaticTranscriptPaging(code: "ios-test-paging")
+    }
+
+    func testTranscriptPagesAcrossDisjointMobileWindows() async throws {
+        try await assertAutomaticTranscriptPaging(code: "ios-test-paging-disjoint")
+    }
+
+    private func assertAutomaticTranscriptPaging(code: String) async throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        let conversation = pairFixture(app, code: code)
+        conversation.tap()
+        let transcript = app.scrollViews["conversationTranscript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["Load newer messages"].exists)
+        func directions() async throws -> [String] {
+            let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:18787/observations")!)
+            let requests = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+            return requests.compactMap { request in
+                guard request["channel"] as? String == "runs:getHistory",
+                      let input = (request["args"] as? [[String: Any]])?.first else { return nil }
+                return input["direction"] as? String
+            }
+        }
+        for _ in 0..<10 {
+            transcript.swipeDown()
+            if try await directions().filter({ $0 == "older" }).count >= 3 { break }
+        }
+        let olderCount = try await directions().filter { $0 == "older" }.count
+        XCTAssertGreaterThanOrEqual(olderCount, 3)
+        let latest = app.buttons["jumpToLatest"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        let anchor = try XCTUnwrap(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Earlier note")).allElementsBoundByIndex.first { $0.isHittable })
+        let before = anchor.frame.minY
+        let refreshes = try await directions().filter { $0 == "refresh" }.count
+        var append = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/append-history")!)
+        append.httpMethod = "POST"
+        _ = try await URLSession.shared.data(for: append)
+        for _ in 0..<40 {
+            if try await directions().filter({ $0 == "refresh" }).count > refreshes { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(anchor.frame.minY, before, accuracy: 8)
+        XCTAssertFalse(app.staticTexts["The latest response arrived."].isHittable)
+        for _ in 0..<14 {
+            // The scroll view extends beneath the composer. Start in visible prose,
+            // away from both its controls and the centered latest arrow.
+            transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.65))
+                .press(forDuration: 0.05, thenDragTo: transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.25)))
+            if try await directions().contains("newer") { break }
+        }
+        let loadedNewer = try await directions().contains("newer")
+        if !loadedNewer { print("PAGING FAILURE HIERARCHY\n" + app.debugDescription) }
+        XCTAssertTrue(loadedNewer)
+        if !latest.exists { transcript.swipeDown() }
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        latest.tap()
+        XCTAssertTrue(app.staticTexts["The latest response arrived."].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["The latest response arrived."].isHittable)
+        XCTAssertFalse(app.buttons["Load newer messages"].exists)
+        forgetFixture(app)
+    }
+
+    func testDemoLiveActivityTransitionsFromThinkingThroughToolsToFinished() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        prepareUnpaired(app); app.buttons["startDemo"].tap()
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap(); input.typeText("Review the sample workspace")
+        app.buttons["startConversation"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        XCTAssertTrue(consent.waitForExistence(timeout: 5)); consent.tap()
+        let activity = app.descendants(matching: .any).matching(identifier: "agentActivity").firstMatch
+        XCTAssertTrue(activity.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Working on your computer…"].exists)
+        XCTAssertFalse(app.staticTexts["Responding…"].exists)
+        let tool = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "toolCall-")).firstMatch
+        XCTAssertTrue(tool.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Demo result"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["stopReply"].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(activity.waitForNonExistence(timeout: 5))
+    }
+
+    func testMissingWorkspaceExplainsSendAndKeepsTheDraft() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["sidebarMode-developer"].tap()
+        app.buttons["closeSidebar"].tap()
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(app.buttons["chooseTarget"].label.contains("Choose a workspace"))
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap(); input.typeText("Keep this request")
+        let send = app.buttons["startConversation"]
+        XCTAssertTrue(send.isEnabled); send.tap()
+        XCTAssertTrue(app.staticTexts["Workspace required"].waitForExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, "Keep this request")
+        XCTAssertFalse(app.buttons["allowDataSharing"].exists)
+        app.buttons["chooseRequiredWorkspace"].tap()
+        let target = app.buttons["target-fixture-workspace"]
+        XCTAssertTrue(target.waitForExistence(timeout: 5)); target.tap()
+        XCTAssertEqual(input.value as? String, "Keep this request")
+        send.tap()
+        XCTAssertTrue(app.buttons["allowDataSharing"].waitForExistence(timeout: 5))
+        app.buttons["allowDataSharing"].tap()
+        XCTAssertTrue(app.staticTexts["Native reply delivered."].waitForExistence(timeout: 15))
+    }
+
+    func testDemoContextPickerKeepsKeyboardAndSendsSelections() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        prepareUnpaired(app); app.buttons["startDemo"].tap()
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap(); input.typeText("$demo-wr")
+        let writing = app.buttons["context-skill-demo-writing"]
+        XCTAssertTrue(writing.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["contextSection-Skills"].exists)
+        XCTAssertTrue(writing.label.contains("User"))
+        XCTAssertTrue(writing.label.contains("Make the sample response clear and concise."))
+        writing.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.exists, "Picking context must keep the composer keyboard.")
+        XCTAssertEqual(input.value as? String, "Clear writing ")
+        XCTAssertFalse(app.buttons["removeContext-demo-writing"].exists, "Context belongs inside the text, without a duplicate chip row.")
+        input.typeText(XCUIKeyboardKey.delete.rawValue + XCUIKeyboardKey.delete.rawValue)
+        XCTAssertEqual(input.value as? String, "")
+        input.typeText("/rev")
+        let review = app.buttons["context-command-review"]
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["contextSection-Commands"].exists)
+        XCTAssertTrue(review.label.contains("Command"))
+        XCTAssertTrue(review.label.contains("Try a prepared workspace review."))
+        review.tap()
+        XCTAssertTrue((input.value as? String)?.contains("/review") == true)
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        app.buttons["addAttachment"].tap()
+        let plugins = app.buttons["choosePlugins"]
+        XCTAssertTrue(plugins.waitForExistence(timeout: 5))
+        let menu = app.descendants(matching: .any).matching(identifier: "attachmentMenu").firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        XCTAssertEqual(menu.value as? String, "Open")
+        plugins.tap()
+        let planning = app.buttons["context-skill-demo-planning"]
+        XCTAssertTrue(planning.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["contextSection-Plugins"].exists)
+        XCTAssertTrue(planning.label.contains("Plugin"))
+        XCTAssertTrue(planning.label.contains("Plan a small change using bundled sample guidance."))
+        planning.tap()
+        XCTAssertEqual(input.value as? String, "/review Planning ")
+        input.typeText("Review this")
+        XCTAssertEqual(input.value as? String, "/review Planning Review this")
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        app.buttons["startConversation"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        XCTAssertTrue(consent.waitForExistence(timeout: 5)); consent.tap()
+        XCTAssertTrue(app.staticTexts["Demo context received"].waitForExistence(timeout: 15))
+        let message = app.textViews["messageInput"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5)); message.tap(); message.typeText("@demo-wr")
+        XCTAssertTrue(writing.waitForExistence(timeout: 10)); writing.tap()
+        app.buttons["sendMessage"].tap()
+        XCTAssertEqual(message.value as? String, "")
+        XCTAssertTrue(app.buttons["sendMessage"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["stopReply"].waitForNonExistence(timeout: 10))
+        message.tap(); message.typeText("Show Markdown formatting")
+        app.buttons["sendMessage"].tap()
+        XCTAssertTrue(app.staticTexts["Markdown formatting"].waitForExistence(timeout: 15))
+        let table = app.descendants(matching: .any).matching(identifier: "markdownTable").firstMatch
+        XCTAssertTrue(table.waitForExistence(timeout: 10))
+        XCTAssertTrue(table.staticTexts["Time"].exists)
+        XCTAssertTrue(table.staticTexts["Google Play"].exists)
+    }
+
+    func testDemoChangedFilesDiffPagingAndReturn() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        prepareUnpaired(app); app.buttons["startDemo"].tap()
+        openSidebar(app); app.buttons["Search"].tap()
+        let search = app.textFields["globalSearchInput"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("Explore Mains")
+        let tour = app.buttons["search-run-demo-native-tour"]
+        XCTAssertTrue(tour.waitForExistence(timeout: 10)); tour.tap()
+        let swift = app.buttons["turnFile-9000001-Sources/Greeting.swift"]
+        XCTAssertTrue(swift.waitForExistence(timeout: 10)); scrollTo(swift, in: app); swift.tap()
+        XCTAssertTrue(app.scrollViews["fileDiffContent"].waitForExistence(timeout: 5))
+        let added = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Added, line 2: ")).firstMatch
+        XCTAssertTrue(added.waitForExistence(timeout: 10))
+        app.buttons["closeFileDiff"].tap()
+        let review = app.buttons["turnFile-9000001-Docs/Review.md"]
+        XCTAssertTrue(review.waitForExistence(timeout: 5)); review.tap()
+        let next = app.buttons["nextDiffPart"]
+        XCTAssertTrue(next.waitForExistence(timeout: 10)); XCTAssertTrue(next.isEnabled); next.tap()
+        XCTAssertTrue(app.staticTexts["Part 2"].waitForExistence(timeout: 10))
+        let previous = app.buttons["previousDiffPart"]
+        XCTAssertTrue(previous.isEnabled); previous.tap()
+        XCTAssertTrue(app.staticTexts["Part 1"].waitForExistence(timeout: 10))
+        app.buttons["closeFileDiff"].tap()
+        XCTAssertFalse(app.buttons["demoChangesPrompt"].exists, "Back must return to the conversation, not home.")
+        let expand = app.buttons["expandTurnChanges-9000001"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 5)); scrollTo(expand, in: app); expand.tap()
+        XCTAssertEqual(expand.value as? String, "Expanded")
+        let rename = app.buttons["turnFile-9000001-Docs/guide.md"]
+        scrollTo(rename, in: app); rename.tap()
+        XCTAssertTrue(app.staticTexts["No line changes. The file was renamed or its metadata changed."].waitForExistence(timeout: 10))
+        app.buttons["closeFileDiff"].tap()
+        let binary = app.buttons["turnFile-9000001-Assets/sample.png"]
+        scrollTo(binary, in: app); binary.tap()
+        XCTAssertTrue(app.staticTexts["Binary file changes can be viewed on desktop."].waitForExistence(timeout: 10))
+        app.buttons["closeFileDiff"].tap()
+        XCTAssertTrue(binary.waitForExistence(timeout: 5), "Returning keeps the same conversation and expanded file list.")
+        app.buttons["newConversation"].tap()
+        openSidebar(app); app.buttons["openSettings"].tap()
+        let exit = app.buttons["exitDemo"]; scrollTo(exit, in: app); exit.tap()
+        XCTAssertTrue(app.buttons["startDemo"].waitForExistence(timeout: 5))
+    }
+
+    func testDemoApprovalAndQuestionCards() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        let sample = app.buttons["demoDecisionsPrompt"]
+        XCTAssertTrue(sample.waitForExistence(timeout: 10)); sample.tap()
+        app.buttons["startConversation"].tap()
+        let consent = app.buttons["allowDataSharing"]
+        XCTAssertTrue(consent.waitForExistence(timeout: 5)); consent.tap()
+        let allow = app.buttons["approvalAllow"]
+        XCTAssertTrue(allow.waitForExistence(timeout: 15)); scrollTo(allow, in: app)
+        let grant = app.buttons["allowForRun"]
+        scrollTo(grant, in: app); XCTAssertTrue(grant.isHittable); grant.tap()
+        allow.tap()
+
+        let option = app.buttons["decisionOption-Review only"]
+        XCTAssertTrue(option.waitForExistence(timeout: 10)); scrollTo(option, in: app); option.tap()
+        app.buttons["questionSend"].tap()
+        let submit = app.buttons["formSubmit"]
+        XCTAssertTrue(submit.waitForExistence(timeout: 10)); scrollTo(submit, in: app); submit.tap()
+        XCTAssertTrue(app.staticTexts["formError-project"].waitForExistence(timeout: 5))
+        let project = app.textFields["form-project"]
+        let transcript = app.scrollViews["conversationTranscript"]
+        for _ in 0..<5 where !project.isHittable { transcript.swipeDown() }
+        XCTAssertTrue(project.isHittable); project.tap(); project.typeText("Native demo")
+        XCTAssertEqual(project.value as? String, "Native demo")
+        let done = app.buttons["dismissDecisionKeyboard"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5)); done.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        scrollTo(submit, in: app); submit.tap()
+        let link = app.buttons["linkAccept"]
+        XCTAssertTrue(link.waitForExistence(timeout: 10)); scrollTo(link, in: app); link.tap()
+        XCTAssertTrue(app.buttons["acceptDemoLink"].waitForExistence(timeout: 5)); app.buttons["acceptDemoLink"].tap()
+
+        let next = app.buttons["asyncNext"]
+        XCTAssertTrue(next.waitForExistence(timeout: 10))
+        let focus = app.buttons["decisionOption-Functionality"]
+        scrollTo(focus, in: app); focus.tap(); next.tap()
+        let detail = app.textFields["Your answer"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 5)); detail.tap(); detail.typeText("Keep it native")
+        scrollTo(next, in: app); next.tap()
+        XCTAssertTrue(next.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Demo result"].waitForExistence(timeout: 15))
+        app.buttons["newConversation"].tap()
+        openSidebar(app); app.buttons["openSettings"].tap()
+        let exit = app.buttons["exitDemo"]
+        scrollTo(exit, in: app); exit.tap()
+        XCTAssertTrue(app.buttons["startDemo"].waitForExistence(timeout: 5))
+    }
+
     /// Runs entirely on-device; no mock server or external service is required.
     func testDemoModeEntryReplayMediaAndExit() throws {
         continueAfterFailure = false
@@ -34,7 +299,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["outputPreview"].waitForExistence(timeout: 10))
         app.buttons["Close preview"].tap()
 
-        let input = app.textFields["messageInput"]
+        let input = app.textViews["messageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap(); input.typeText("Review this demo workspace")
         app.buttons["sendMessage"].tap()
         let allow = app.buttons["allowDataSharing"]
@@ -154,7 +419,7 @@ final class MainsUITests: XCTestCase {
         launcher.tap()
         let menu = app.descendants(matching: .any).matching(identifier: "attachmentMenu").firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
-        func menuBounds() -> CGRect { app.buttons["Camera"].frame.union(app.buttons["Files"].frame) }
+        func menuBounds() -> CGRect { app.buttons["Camera"].frame.union(app.buttons["choosePlugins"].frame) }
         let menuFrame = menuBounds()
         XCTAssertLessThanOrEqual(menuFrame.maxY, origin.maxY + 16)
         XCTAssertGreaterThan(menuFrame.maxY, origin.maxY - 32)
@@ -182,7 +447,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
         XCTAssertTrue(launcher.isHittable)
         openSidebar(app); app.buttons["conversation-fixture-run"].tap()
-        XCTAssertTrue(app.textFields["messageInput"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 5))
         launcher.tap(); app.buttons["Photos"].tap()
         app.buttons["attachmentPanelBack"].tap()
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
@@ -197,7 +462,7 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         _ = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
-        let input = app.textFields["homeMessageInput"]
+        let input = app.textViews["homeMessageInput"]
         input.tap(); input.typeText("Draft with photos")
         app.buttons["addAttachment"].tap(); app.buttons["Photos"].tap()
         let panel = app.descendants(matching: .any).matching(identifier: "attachmentPhotosPanel").firstMatch
@@ -227,7 +492,7 @@ final class MainsUITests: XCTestCase {
         app.buttons["startConversation"].tap()
         let allow = app.buttons["allowDataSharing"]
         XCTAssertTrue(allow.waitForExistence(timeout: 5)); allow.tap()
-        XCTAssertTrue(app.textFields["messageInput"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 10))
         let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:18787/observations")!)
         let calls = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
         let execute = try XCTUnwrap(calls.last { $0["channel"] as? String == "runs:execute" })
@@ -252,7 +517,7 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         let conversation = pairFixture(app, code: "ios-test")
         conversation.tap()
-        let input = app.textFields["messageInput"]
+        let input = app.textViews["messageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("Allow this fixture for the settings check")
         app.buttons["sendMessage"].tap()
@@ -312,7 +577,7 @@ final class MainsUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 5), .completed)
         }
 
-        let input = app.textFields["homeMessageInput"]
+        let input = app.textViews["homeMessageInput"]
         input.tap(); input.typeText("Keep this keyboard draft")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         app.buttons["chooseModel"].tap()
@@ -348,13 +613,13 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         let conversation = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
-        let home = app.textFields["homeMessageInput"]
+        let home = app.textViews["homeMessageInput"]
         home.tap(); home.typeText("A short keyboard draft")
         assertComposerAboveKeyboard(app, sendID: "startConversation")
         home.typeText("\nAnother line\nA third line")
         assertComposerAboveKeyboard(app, sendID: "startConversation")
         openSidebar(app); conversation.tap()
-        let input = app.textFields["messageInput"]
+        let input = app.textViews["messageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("A conversation keyboard draft")
         assertComposerAboveKeyboard(app, sendID: "sendMessage")
@@ -383,7 +648,7 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         let conversation = pairFixture(app, code: "ios-test")
         conversation.tap()
-        let input = app.textFields["messageInput"]
+        let input = app.textViews["messageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 10))
         let message = "Send only after explicit consent"
         input.tap(); input.typeText(message)
@@ -423,7 +688,7 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         _ = pairFixture(app, code: "ios-test-home")
         app.buttons["space-fixture-claude"].tap()
-        let input = app.textFields["homeMessageInput"]
+        let input = app.textViews["homeMessageInput"]
         input.tap(); input.typeText("Keep this draft through repeated opening")
         let keyboard = app.keyboards.firstMatch
         let launcher = app.buttons["chooseModel"]
@@ -462,7 +727,7 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         let conversation = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
-        let input = app.textFields["homeMessageInput"]
+        let input = app.textViews["homeMessageInput"]
         input.tap(); input.typeText("Keep my keyboard draft")
         assertKeyboardVisible(app)
         app.buttons["chooseModel"].tap()
@@ -475,7 +740,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "Keep my keyboard draft")
         assertKeyboardVisible(app)
         openSidebar(app); conversation.tap()
-        let message = app.textFields["messageInput"]
+        let message = app.textViews["messageInput"]
         XCTAssertTrue(message.waitForExistence(timeout: 5))
         message.tap(); message.typeText("Keep my conversation keyboard")
         assertKeyboardVisible(app)
@@ -508,7 +773,7 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         _ = pairFixture(app, code: "ios-test-home")
         app.buttons["space-fixture-claude"].tap()
-        let draft = app.textFields["homeMessageInput"]
+        let draft = app.textViews["homeMessageInput"]
         draft.tap(); draft.typeText("Keep this draft")
         app.buttons["chooseModel"].tap()
         XCTAssertTrue(app.buttons["selectModel"].waitForExistence(timeout: 5))
@@ -614,7 +879,7 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         _ = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
-        let input = app.textFields["homeMessageInput"]
+        let input = app.textViews["homeMessageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("Keep this draft")
         let pill = app.buttons["connectionPill"]
@@ -678,7 +943,7 @@ final class MainsUITests: XCTestCase {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         app.buttons["newConversation"].tap()
-        XCTAssertTrue(app.textFields["homeMessageInput"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["chooseTarget"].label.contains("mains"))
         openSidebar(app)
         XCTAssertTrue(app.buttons["sidebarMode-developer"].isSelected)
@@ -726,7 +991,7 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Native conversation – output preview")
         app.buttons["Close preview"].tap(); app.buttons["Close"].tap()
         app.buttons["conversationOptions"].tap(); app.buttons["Sync now"].tap()
-        let input = app.textFields["messageInput"]
+        let input = app.textViews["messageInput"]
         input.tap(); input.typeText("Use the conversation’s saved settings")
         app.buttons["sendMessage"].tap()
         if app.buttons["allowDataSharing"].waitForExistence(timeout: 3) { app.buttons["allowDataSharing"].tap() }
@@ -741,7 +1006,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(config["modelReasoningEffort"] as? String, "xhigh")
         XCTAssertEqual(config["sandboxMode"] as? String, "read-only")
         app.buttons["newConversation"].tap()
-        XCTAssertTrue(app.textFields["homeMessageInput"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 5))
         openSidebar(app)
         XCTAssertTrue(app.buttons["sidebarMode-chat"].isSelected)
         app.buttons["closeSidebar"].tap()
@@ -755,7 +1020,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Projects"].exists)
         attachScreenshot(app, name: "Native sidebar – projects")
         app.buttons["space-fixture-claude"].tap()
-        XCTAssertTrue(app.textFields["homeMessageInput"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["modeSwitcher"].exists)
         XCTAssertFalse(app.buttons["startConversation"].isEnabled)
         openSidebar(app)
@@ -814,7 +1079,7 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Native run options")
         app.buttons["Close"].tap()
 
-        let input = app.textFields["homeMessageInput"]
+        let input = app.textViews["homeMessageInput"]
         input.tap(); input.typeText("Build from the native composer")
         app.buttons["startConversation"].tap()
         if app.buttons["allowDataSharing"].waitForExistence(timeout: 3) { app.buttons["allowDataSharing"].tap() }
@@ -860,7 +1125,7 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         let conversation = pairFixture(app, code: "ios-test-chat")
         conversation.tap()
-        let message = app.textFields["messageInput"]
+        let message = app.textViews["messageInput"]
         XCTAssertTrue(message.waitForExistence(timeout: 10))
         message.tap(); message.typeText("Refuse this message")
         app.buttons["sendMessage"].tap()
@@ -928,7 +1193,7 @@ final class MainsUITests: XCTestCase {
         conversation.tap()
         XCTAssertTrue(app.staticTexts["Hello from the computer."].waitForExistence(timeout: 10))
 
-        let message = app.textFields["messageInput"]
+        let message = app.textViews["messageInput"]
         XCTAssertTrue(message.waitForExistence(timeout: 5))
         message.tap()
         message.typeText("Hello from native iOS")
@@ -953,7 +1218,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Native reply delivered."].waitForExistence(timeout: 10))
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let newMessage = app.textFields["homeMessageInput"]
+        let newMessage = app.textViews["homeMessageInput"]
         XCTAssertTrue(newMessage.waitForExistence(timeout: 5))
         newMessage.tap()
         newMessage.typeText("Start a native conversation")

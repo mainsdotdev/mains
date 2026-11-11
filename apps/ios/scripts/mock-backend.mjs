@@ -12,14 +12,21 @@ const descriptor = { backendId: 'ios-fixture', name: 'Test Mac', appVersion: '0.
   capabilities: ['runs', 'space', 'workspace'], serverTime: new Date().toISOString() };
 const connections = new Set(), receipts = new Map(), observations = [];
 const timers = new Set(), replies = new Map();
+const pendingDecisions = new Map();
+const storedTurns = new Map(), storedDiffs = new Map();
 let acceptsConnections = true;
 let holdSnapshot = 0;
+let contextDelayMs = 0, contextInvalidRows = false;
+let pagedHistory = false;
+let disjointHistory = false;
 let artifacts, runs, nextID, spaces, tools;
-function reset(longHistory = false, home = false, design = false, workspaceList = false, media = false) {
+function reset(longHistory = false, home = false, design = false, workspaceList = false, media = false, paging = false, disjoint = false) {
   for (const timer of timers) clearTimeout(timer);
   timers.clear(); replies.clear(); acceptsConnections = true;
-  holdSnapshot = 0;
-  receipts.clear(); observations.length = 0; nextID = 10;
+  holdSnapshot = 0; contextDelayMs = 0; contextInvalidRows = false;
+  pagedHistory = paging;
+  disjointHistory = disjoint;
+  receipts.clear(); pendingDecisions.clear(); storedTurns.clear(); storedDiffs.clear(); observations.length = 0; nextID = 10;
   tools = new Map();
   spaces = [{ id: 'fixture-space', name: 'Codex', providerId: 'codex', icon: 'icon:codex', mode: 'chat', model: null, isArchived: false },
     { id: 'fixture-code', name: 'Code', providerId: 'codex', icon: 'icon:codex', mode: 'developer', model: null, isArchived: false }];
@@ -45,14 +52,14 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   }
   if (longHistory) {
     const items = [];
-    for (let index = 0; index < 12; index++) {
+    for (let index = 0; index < (paging ? 24 : 12); index++) {
       const at = new Date(date.getTime() + index * 2000);
       items.push({ id: index * 2 + 1, runId: 'fixture-run', kind: 'user-prompt', content: `Earlier note ${index + 1}: How should we approach the next iteration?`, metadata: { source: 'user' }, createdAt: at });
       items.push({ id: index * 2 + 2, runId: 'fixture-run', kind: 'report', content: index === 11
         ? 'Let’s build one complete experience at a time.\n\n**Start with the conversation.** Keep the input responsive, make delivery clear, and let people read at their own pace.\n\n```swift\nlet nextStep = "Build, use, refine"\n```\n\nThen bring the same care to the next feature.'
         : 'Keep the scope focused on one useful flow. Design its states together with the behavior, then try it on a real device.\n\nSmall, complete steps are easier to evaluate and keep moving.', metadata: { streamId: `earlier-${index}` }, createdAt: new Date(at.getTime() + 1000) });
     }
-    artifacts.set('fixture-run', items); nextID = 40;
+    artifacts.set('fixture-run', items); nextID = paging ? 60 : 40;
   }
   if (design) {
     runs[0].title = 'Summarize this article';
@@ -163,6 +170,45 @@ const server = http.createServer(async (request, response) => {
   const parts = []; for await (const part of request) parts.push(part);
   response.setHeader('Content-Type', 'application/json');
   if (request.url === '/observations') { response.end(JSON.stringify(observations)); return; }
+  if (request.method === 'POST' && request.url === '/test/append-history') {
+    const at = new Date();
+    artifacts.get('fixture-run').push(
+      { id: nextID++, runId: 'fixture-run', kind: 'user-prompt', content: 'A new message while reading', metadata: { source: 'user' }, createdAt: at },
+      { id: nextID++, runId: 'fixture-run', kind: 'report', content: 'The latest response arrived.', metadata: {}, createdAt: new Date(at.getTime() + 1) });
+    event(CHANNELS.runs.eventPersisted, 'fixture-run');
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/turn-changes') {
+    const run = runs.find(value => value.id === 'fixture-run');
+    run.mode = 'developer';
+    storedTurns.set(run.id, [{ id: 91, runId: run.id, turnIndex: 0, status: 'completed', model: null,
+      startedAt: run.createdAt, createdAt: run.createdAt, endedAt: artifacts.get(run.id).at(-1).createdAt,
+      changes: { id: 'fixture-change-91', files: [{ path: 'src/café.swift', oldPath: undefined, status: 'modified', additions: 2, deletions: 1, binary: false }],
+        fileCount: 5, additions: 2, deletions: 1, truncated: true, undoneAt: new Date() } }]);
+    storedDiffs.set(`${run.id}:91`, 'diff --git a/src/café.swift b/src/café.swift\n@@ -1 +1,2 @@\n-old\n+café 👋\n+new é\n');
+    event(CHANNELS.runs.diffUpdated, run.id);
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/decisions') {
+    const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    if (body.questions) {
+      artifacts.get('fixture-run').push({ id: nextID++, runId: 'fixture-run', kind: 'report', content: 'Choose the next step.', createdAt: new Date(),
+        metadata: { source: 'codex_async_questions', questions: [{ title: 'What next?', options: ['Review', 'Plan'] }] } });
+      event(CHANNELS.runs.eventPersisted, 'fixture-run');
+    } else {
+      const value = { requestId: 'fixture-decision', approvalToken: 'fixture-incarnation', runId: 'fixture-run', kind: 'ask_user',
+        toolName: 'AskUserQuestion', header: 'Fixture question', question: 'Choose an approach', options: [{ label: 'Review', description: undefined }],
+        isOther: true, isSecret: true, toolInput: { message: 'pending-input-must-not-cache' }, timestamp: Date.now(), expiresAt: Date.now() + 300000 };
+      pendingDecisions.set(value.requestId, value); event(CHANNELS.runs.toolApprovalRequest, 'fixture-run', value);
+    }
+    response.end('{}'); return;
+  }
+  if (request.method === 'POST' && request.url === '/test/context') {
+    const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    contextDelayMs = Math.min(15000, Math.max(0, Number(body.delayMs ?? 0)));
+    contextInvalidRows = body.invalidRows === true;
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/hold-snapshot') {
     const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
     holdSnapshot = Math.min(15000, Math.max(0, Number(body.durationMs ?? 700)));
@@ -176,10 +222,11 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === 'POST' && request.url === '/pair') {
     const body = JSON.parse(Buffer.concat(parts).toString());
-    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
+    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
       response.writeHead(403); response.end(JSON.stringify({ error: 'Invalid pairing code' })); return;
     }
-    reset(body.code === 'ios-test-chat', body.code === 'ios-test-home', body.code === 'ios-test-design', body.code === 'ios-test-workspace', body.code === 'ios-test-media');
+    const paging = body.code.startsWith('ios-test-paging');
+    reset(body.code === 'ios-test-chat' || paging, body.code === 'ios-test-home', body.code === 'ios-test-design', body.code === 'ios-test-workspace', body.code === 'ios-test-media', paging, body.code === 'ios-test-paging-disjoint');
     response.end(JSON.stringify({ deviceId: 'fixture-phone', deviceToken: 'fixture-device-token', backend: descriptor })); return;
   }
   response.writeHead(404); response.end('{}');
@@ -231,6 +278,20 @@ wss.on('connection', socket => {
         }
         case CHANNELS.projects.list: result = [{ id: 'fixture-project', name: 'Mains', icon: 'icon:folder' }]; break;
         case CHANNELS.providers.getEnabled: result = ['codex', 'claude_code', 'copilot_cli', 'cursor'].map(id => ({ id, config: { modelReasoningEffort: 'medium', effortLevel: 'medium', permissionMode: id === 'claude_code' ? 'auto' : 'default', sandboxMode: 'workspace-write' } })); break;
+        case CHANNELS.providers.getSkills:
+          result = { skills: [
+            { name: 'fixture-review', displayName: 'Fixture review', scope: args[1] ? 'project' : 'user', path: args[1] ? args[1] + '/.agents/skills/review/SKILL.md' : undefined, description: undefined, userInvokable: true },
+            { name: 'hidden-context', userInvokable: false },
+            ...(contextInvalidRows ? [{ name: '' }, { description: 'Missing a name' }, null] : []),
+          ] };
+          if (contextDelayMs) {
+            const delayed = result;
+            later(contextDelayMs, () => { if (socket.readyState === WebSocket.OPEN) send(socket, { kind: 'response', id, result: { success: true, data: delayed } }); });
+            return;
+          }
+          break;
+        case CHANNELS.providers.getCommands:
+          result = [{ name: 'review', description: undefined, argumentHint: '[focus]', userFacing: true }, { name: 'internal', userFacing: false }]; break;
         case CHANNELS.providers.getModels:
           // Claude's SDK projection retains optional keys whose values are undefined.
           // The real wire codec tags those values rather than dropping the keys.
@@ -284,20 +345,86 @@ wss.on('connection', socket => {
           result = { base64: pdfBytes.subarray(input.offset, end).toString('base64'), offset: input.offset, nextOffset: end < pdfBytes.length ? end : null, byteSize: pdfBytes.length, version: outputVersion }; break;
         }
         case CHANNELS.runs.readHistoryContent: {
+          if (args[0].source === 'turn-diff') {
+            const { runId, id, offset = 0 } = args[0], patch = storedDiffs.get(`${runId}:${id}`);
+            if (typeof patch !== 'string' || !Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid turn diff reference');
+            const chars = Array.from(patch), end = Math.min(chars.length, offset + 41);
+            if (offset > chars.length) throw new Error('Invalid turn diff offset');
+            result = { text: chars.slice(offset, end).join(''), offset, nextOffset: end < chars.length ? end : null, totalChars: chars.length }; break;
+          }
           if (args[0].runId !== 'fixture-run' || args[0].source !== 'tool-output' || args[0].id !== 7) throw new Error('Invalid history content reference');
           result = { text: 'Full tool output', offset: 0, nextOffset: null, totalChars: 16 }; break;
         }
         case CHANNELS.providers.getCodexPermissions: result = { profilesSupported: true, profiles: [{ id: 'review', description: 'Managed review profile', allowed: true }], allowedSandboxModes: ['read-only', 'workspace-write'], allowedApprovalPolicies: null, requiresNamedProfile: false }; break;
         case CHANNELS.runs.getById: result = runs.find(run => run.id === args[0]) ?? null; break;
-        case CHANNELS.runs.listPendingApprovals: result = []; break;
+        case CHANNELS.runs.listPendingApprovals: result = [...pendingDecisions.values()].filter(value => !args[0] || value.runId === args[0]); break;
+        case CHANNELS.runs.toolApprovalResponse: {
+          const input = args[0], pending = pendingDecisions.get(input.requestId);
+          if (!commandId || !pending || pending.approvalToken !== input.approvalToken) throw new Error('Stale decision identity');
+          if (typeof input.approved !== 'boolean' || input.approved && !input.answer) throw new Error('Missing decision answer');
+          pendingDecisions.delete(input.requestId); result = null;
+          receipts.set(commandId, { success: true, data: result });
+          broadcast(CHANNELS.runs.toolApprovalResolved, { requestId: input.requestId, approvalToken: input.approvalToken }); break;
+        }
+        case CHANNELS.runs.answerAsyncQuestions:
+        case CHANNELS.runs.dismissAsyncQuestions: {
+          const input = args[0];
+          const artifact = artifacts.get(input.runId)?.find(item => item.id === input.artifactId && item.metadata?.source === 'codex_async_questions');
+          if (!commandId || input.accountId !== 'fixture-account' || !artifact) throw new Error('Invalid question ownership');
+          if (channel === CHANNELS.runs.dismissAsyncQuestions) { artifact.metadata.asyncQuestionState = { dismissed: true }; result = null; }
+          else if (artifact.metadata.asyncQuestionAnswer) { result = { accepted: true, answer: artifact.metadata.asyncQuestionAnswer }; }
+          else if (input.checkOnly) { result = { accepted: false }; }
+          else {
+            if (input.answers?.length !== 1 || !input.answers[0]?.trim()) throw new Error('Missing answer');
+            const answer = { artifactId: artifact.id, answers: input.answers, clientUserMessageId: `codex-async-answer-${artifact.id}` };
+            artifact.metadata.asyncQuestionAnswer = answer;
+            artifacts.get(input.runId).push({ id: nextID++, runId: input.runId, kind: 'user-prompt', content: input.answers[0], createdAt: new Date(),
+              metadata: { clientUserMessageId: answer.clientUserMessageId, asyncQuestionReply: { artifactId: artifact.id, answers: input.answers } } });
+            result = { accepted: true, answer };
+          }
+          receipts.set(commandId, { success: true, data: result }); event(CHANNELS.runs.eventPersisted, input.runId); break;
+        }
         case CHANNELS.runs.getHistory: {
           if (args[0].profile !== 'mobile') throw new Error('Missing bounded mobile profile');
           const all = artifacts.get(args[0].runId) ?? [];
+          if (disjointHistory) {
+            // Mobile pages may split a long prompt at their row/byte cap and have no overlap.
+            const key = row => ({ timestamp: row.createdAt.getTime(), source: 'artifact', id: row.id });
+            const compare = (a, b) => a.timestamp - b.timestamp || a.id - b.id;
+            const input = args[0], newer = input.direction === 'newer';
+            const lower = newer || input.direction === 'refresh' ? input.cursor : null;
+            const upper = input.direction === 'older' ? input.cursor : input.direction === 'refresh' ? input.end : null;
+            const eligible = all.filter(row => (!lower || compare(key(row), lower) >= 0) && (!upper || compare(key(row), upper) < 0));
+            const selected = newer ? eligible.slice(0, 6) : eligible.slice(-6);
+            const end = newer && selected.at(-1)?.id !== all.at(-1)?.id ? { ...key(selected.at(-1)), id: selected.at(-1).id + 1 } : upper ?? null;
+            const start = selected.length ? key(selected[0]) : null;
+            result = { artifacts: selected, toolCalls: [], turns: [], start, end, last: all.length ? key(all.at(-1)) : null,
+              hasOlder: !!start && start.id !== all[0]?.id, hasNewer: !!end && all.some(row => compare(key(row), end) >= 0) };
+            break;
+          }
+          if (pagedHistory) {
+            const key = row => ({ timestamp: row.createdAt.getTime(), source: 'artifact', id: row.id });
+            const compare = (a, b) => a.timestamp - b.timestamp || a.id - b.id;
+            const anchors = all.filter(row => row.kind === 'user-prompt').map(key);
+            const input = args[0], seek = cursor => {
+              const index = anchors.findIndex(anchor => compare(anchor, cursor) >= 0);
+              return index < 0 ? anchors.length : index;
+            };
+            let start = Math.max(0, anchors.length - 3), end = anchors.length, upper = null;
+            if (input.direction === 'older') { start = Math.max(0, seek(input.cursor) - 3); end = Math.min(anchors.length, start + 9); upper = anchors[end] ?? null; }
+            if (input.direction === 'newer') { end = Math.min(anchors.length, seek(input.cursor) + 3); start = Math.max(0, end - 9); upper = anchors[end] ?? null; }
+            if (input.direction === 'refresh') { start = input.cursor ? seek(input.cursor) : start; upper = input.end ?? null; }
+            const lower = anchors[start] ?? null;
+            const selected = all.filter(row => (!lower || compare(key(row), lower) >= 0) && (!upper || compare(key(row), upper) < 0));
+            result = { artifacts: selected, toolCalls: [], turns: [], start: lower, end: upper, last: all.length ? key(all.at(-1)) : null,
+              hasOlder: start > 0, hasNewer: !!upper && all.some(row => compare(key(row), upper) >= 0) };
+            break;
+          }
           const lower = args[0].direction === 'refresh' ? args[0].cursor : null;
           const upper = args[0].direction === 'refresh' ? args[0].end : null;
           const compare = (item, cursor) => item.createdAt.getTime() - cursor.timestamp || item.id - cursor.id;
           const items = all.filter(item => (!lower || compare(item, lower) >= 0) && (!upper || compare(item, upper) < 0)).slice(-200);
-          result = { artifacts: items, toolCalls: tools.get(args[0].runId) ?? [], turns: [], start: items.length ? { timestamp: items[0].createdAt.getTime(), source: 'artifact', id: items[0].id } : null,
+          result = { artifacts: items, toolCalls: tools.get(args[0].runId) ?? [], turns: storedTurns.get(args[0].runId) ?? [], start: items.length ? { timestamp: items[0].createdAt.getTime(), source: 'artifact', id: items[0].id } : null,
             end: upper ?? null, last: items.length ? { timestamp: items.at(-1).createdAt.getTime(), source: 'artifact', id: items.at(-1).id } : null,
             hasOlder: items.length > 0 && items[0].id !== all[0]?.id, hasNewer: !!upper && all.some(item => compare(item, upper) >= 0) };
           break;

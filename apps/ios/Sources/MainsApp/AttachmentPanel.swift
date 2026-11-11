@@ -10,7 +10,7 @@ struct AttachmentPanel: View {
     let maxCount: Int
     let maxBytes: Int
     let add: ([PromptAttachment]) throws -> Void
-    let close: (Bool) -> Void
+    let close: (AttachmentDestination) -> Void
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -18,6 +18,8 @@ struct AttachmentPanel: View {
     @State private var revealed = false
     @State private var appeared = false
     @State private var closing = false
+    @State private var closeDelivered = false
+    @State private var closeTask: Task<Void, Never>?
     @State private var camera = AttachmentCamera()
     @State private var library = AttachmentPhotoLibrary()
     @State private var selected: [String] = []
@@ -37,7 +39,7 @@ struct AttachmentPanel: View {
                 : sourceFrame.offsetBy(dx: -frame.minX, dy: -frame.minY)
             let menuWidth = max(1, min(248.0, geometry.size.width - 24))
             let menuFrame = CGRect(x: min(max(12, origin.minX - 12), geometry.size.width - menuWidth - 12),
-                                   y: max(12, min(geometry.size.height, origin.maxY) - 192), width: menuWidth, height: 192)
+                                   y: max(12, min(geometry.size.height, origin.maxY) - 248), width: menuWidth, height: 248)
             let mediaWidth = max(1, geometry.size.width - 24)
             let mediaHeight = min(mediaWidth * 1.32, max(1, geometry.size.height - 20))
             let mediaFrame = CGRect(x: 12, y: geometry.size.height - mediaHeight, width: mediaWidth, height: mediaHeight)
@@ -67,16 +69,15 @@ struct AttachmentPanel: View {
             else { camera.stop() }
             if mode == .photos && scenePhase == .active { await library.load() }
         }
-        .onAppear {
+        .task {
             visible = true
             guard !appeared else { return }
+            await Task.yield()
+            guard !Task.isCancelled, !closing else { return }
             appeared = true
-            DispatchQueue.main.async {
-                guard !closing else { return }
-                withAnimation(transition) { revealed = true }
-            }
+            withAnimation(transition) { revealed = true }
         }
-        .onDisappear { visible = false; importGeneration += 1; camera.stop(); importTask?.cancel() }
+        .onDisappear { visible = false; closeTask?.cancel(); importGeneration += 1; camera.stop(); importTask?.cancel() }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { importGeneration += 1; importTask?.cancel(); importing = false }
         }
@@ -103,13 +104,17 @@ struct AttachmentPanel: View {
                 Button { selectMode(source) } label: {
                     menuRow(source == .camera ? "Camera" : "Photos", symbol: source == .camera ? "camera" : "photo")
                 }
+                .disabled(maxCount <= 0 || maxBytes <= 0)
                 .accessibilityLabel(source == .camera ? "Camera" : "Photos")
             }
-            Button { requestClose(showFiles: true) } label: { menuRow("Files", symbol: "paperclip") }
-                .accessibilityLabel("Files")
+            Button { requestClose(destination: .files) } label: { menuRow("Files", symbol: "paperclip") }
+                .disabled(maxCount <= 0 || maxBytes <= 0).accessibilityLabel("Files")
+            Button { requestClose(destination: .plugins) } label: { menuRow("Plugins", symbol: "puzzlepiece.extension") }
+                .accessibilityIdentifier("choosePlugins")
         }
         .padding(12).buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 28, interactive: false))
         .accessibilityElement(children: .contain).accessibilityLabel("Attachments").accessibilityIdentifier("attachmentMenu")
+        .accessibilityValue(closing ? "Closing" : revealed ? "Open" : "Opening")
     }
     private func menuRow(_ title: String, symbol: String) -> some View {
         HStack(spacing: 14) {
@@ -120,12 +125,23 @@ struct AttachmentPanel: View {
             Spacer(minLength: 0)
         }.frame(maxWidth: .infinity, minHeight: 56).contentShape(.rect)
     }
-    private func requestClose(showFiles: Bool = false) {
+    private func requestClose(destination: AttachmentDestination = .none) {
         guard !closing else { return }
         closing = true; importGeneration += 1; importTask?.cancel(); camera.stop()
+        // Glass can retire the animation's completion transaction while the keyboard
+        // changes its source frame. Keep a bounded, cancellable completion fallback.
+        closeTask = Task {
+            do { try await Task.sleep(for: .milliseconds(reduceMotion ? 120 : 400)) } catch { return }
+            completeClose(destination)
+        }
         withAnimation(transition, completionCriteria: .logicallyComplete) {
             revealed = false
-        } completion: { close(showFiles) }
+        } completion: { completeClose(destination) }
+    }
+    private func completeClose(_ destination: AttachmentDestination) {
+        guard visible, closing, !closeDelivered else { return }
+        closeDelivered = true; closeTask?.cancel(); closeTask = nil
+        close(destination)
     }
     private func selectMode(_ next: Mode) {
         withAnimation(reduceMotion ? nil : transition) { mode = next }

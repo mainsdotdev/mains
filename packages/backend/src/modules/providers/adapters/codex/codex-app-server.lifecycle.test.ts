@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { PassThrough } from "node:stream";
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnProvider, killProviderProcess } from "../provider-process";
 import { CodexAppServer } from "./codex-app-server.client";
@@ -155,6 +156,47 @@ describe("Codex process / JSON-RPC lifecycle", () => {
     child.stdout.emit("data", bytes.subarray(bytes.length - 1));
     await expect(response).resolves.toEqual(result);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("settles a plugin catalog larger than 32 MiB and keeps later RPCs responsive", async () => {
+    const server = createServer();
+    const child = await start(server);
+    let outcome = "pending";
+    const catalog = server.sendRequest("plugin/list", {}).then(
+      () => { outcome = "resolved"; }, () => { outcome = "rejected"; },
+    );
+    const { id } = JSON.parse(child.stdin.read().toString());
+    const bytes = Buffer.from(JSON.stringify({ id, result: { marketplaces: [], padding: "x".repeat(33 * 1024 * 1024) } }));
+    for (let offset = 0; offset < bytes.length; offset += 1024 * 1024) {
+      child.stdout.emit("data", bytes.subarray(offset, offset + 1024 * 1024));
+    }
+    // Correlation clears the deadline synchronously when the frame arrives.
+    expect(vi.getTimerCount()).toBe(0);
+    await catalog;
+    expect(outcome).toBe("resolved");
+
+    const account = server.sendRequest("account/read", {});
+    const next = JSON.parse(child.stdin.read().toString());
+    child.stdout.emit("data", Buffer.from(JSON.stringify({ id: next.id, result: { requiresOpenaiAuth: false } })));
+    await expect(account).resolves.toMatchObject({ requiresOpenaiAuth: false });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("frames a fragmented 4 MiB catalog within the backend responsiveness budget", async () => {
+    const server = createServer();
+    const child = await start(server);
+    const catalog = server.sendRequest("plugin/list", {});
+    const { id } = JSON.parse(child.stdin.read().toString());
+    const bytes = Buffer.from(JSON.stringify({ id, result: { marketplaces: [], padding: "x".repeat(4 * 1024 * 1024) } }));
+    const startedAt = performance.now();
+    for (let offset = 0; offset < bytes.length; offset += 8192) {
+      child.stdout.emit("data", bytes.subarray(offset, offset + 8192));
+    }
+    const elapsedMs = performance.now() - startedAt;
+    await catalog;
+    // Generous enough for slow CI; rescanning every accumulated prefix costs
+    // hundreds of times more work than scanning each incoming chunk once.
+    expect(elapsedMs).toBeLessThan(1000);
   });
 
   it("coalesces starts, cancels startup on stop and fences a late spawn", async () => {

@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { createCodexJsonStream } from "./codex-json-stream";
 import { spawnProvider as spawn, killProviderProcess } from "../provider-process";
 import {
   createLogger,
@@ -60,7 +61,7 @@ interface ProcessSession {
   startError?: Error;
   killTimer?: ReturnType<typeof setTimeout>;
   pending: Map<number | string, PendingRequest>;
-  jsonBuffer: string;
+  jsonStream: ReturnType<typeof createCodexJsonStream>;
   decoder: StringDecoder;
 }
 
@@ -151,7 +152,7 @@ export class CodexAppServer {
     const session: ProcessSession = {
       child, phase: "starting", started, resolveStarted, rejectStarted,
       closed, resolveClosed,
-      pending: new Map(), jsonBuffer: "", decoder: new StringDecoder("utf8"),
+      pending: new Map(), jsonStream: createCodexJsonStream(), decoder: new StringDecoder("utf8"),
     };
     this.process = session;
     child.once("spawn", () => {
@@ -161,11 +162,15 @@ export class CodexAppServer {
     });
     child.stdout?.on("data", (chunk: Buffer) => {
       if (!this.isCurrent(session)) return;
-      session.jsonBuffer += session.decoder.write(chunk);
-      this.drainJsonBuffer(session);
-      if (session.jsonBuffer.length > 32 * 1024 * 1024) {
-        this.logger.error(`jsonBuffer exceeded 32MB (${session.jsonBuffer.length} bytes), resetting`);
-        session.jsonBuffer = "";
+      try {
+        for (const message of session.jsonStream.push(session.decoder.write(chunk))) {
+          if (!this.isCurrent(session)) break;
+          this.handleMessage(session, message);
+        }
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        this.logger.error(failure.message);
+        void this.stopSession(session, failure);
       }
     });
     child.stderr?.resume();
@@ -175,7 +180,7 @@ export class CodexAppServer {
       clearTimeout(session.killTimer);
       this.rejectPending(session, error);
       session.rejectStarted(error);
-      session.jsonBuffer = "";
+      session.jsonStream.clear();
       session.resolveClosed();
       if (this.process !== session) return;
       this.process = null;
@@ -306,7 +311,7 @@ export class CodexAppServer {
     session.phase = "stopping";
     session.startError = error;
     this.rejectPending(session, error);
-    session.jsonBuffer = "";
+    session.jsonStream.clear();
     session.killTimer = setTimeout(() => killProviderProcess(session.child), 3000);
     try { session.child.stdin?.end(); }
     catch { killProviderProcess(session.child); }
@@ -379,69 +384,6 @@ export class CodexAppServer {
     if (isServerNotification(message)) {
       this.notificationHandler?.(message.method, message.params);
       this.backgroundHandler?.(message.method, message.params);
-    }
-  }
-
-  /**
-   * Extract complete JSON objects from stdout without relying on line
-   * boundaries. Some app-server payloads can span multiple chunks or lines.
-   */
-  private drainJsonBuffer(session: ProcessSession): void {
-    while (this.isCurrent(session) && session.jsonBuffer.length > 0) {
-      const trimStart = session.jsonBuffer.search(/\S/);
-      if (trimStart === -1) {
-        session.jsonBuffer = "";
-        return;
-      }
-      if (trimStart > 0) {
-        session.jsonBuffer = session.jsonBuffer.slice(trimStart);
-      }
-
-      if (session.jsonBuffer[0] !== "{") {
-        const nextBrace = session.jsonBuffer.indexOf("{", 1);
-        if (nextBrace === -1) {
-          session.jsonBuffer = "";
-          return;
-        }
-        session.jsonBuffer = session.jsonBuffer.slice(nextBrace);
-        continue;
-      }
-
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      let endIndex = -1;
-
-      for (let index = 0; index < session.jsonBuffer.length; index += 1) {
-        const character = session.jsonBuffer[index];
-        if (escaped) {
-          escaped = false;
-          continue;
-        }
-        if (character === "\\") {
-          if (inString) escaped = true;
-          continue;
-        }
-        if (character === '"') {
-          inString = !inString;
-          continue;
-        }
-        if (inString) continue;
-        if (character === "{") depth += 1;
-        else if (character === "}") {
-          depth -= 1;
-          if (depth === 0) {
-            endIndex = index;
-            break;
-          }
-        }
-      }
-
-      if (endIndex === -1) return;
-
-      const rawMessage = session.jsonBuffer.slice(0, endIndex + 1);
-      session.jsonBuffer = session.jsonBuffer.slice(endIndex + 1);
-      this.handleMessage(session, rawMessage);
     }
   }
 

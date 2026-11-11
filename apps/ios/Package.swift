@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "MainsCore",
-    platforms: [.iOS(.v18), .macOS(.v14)],
+    platforms: [.iOS("26.0"), .macOS(.v14)],
     products: [.library(name: "MainsCore", targets: ["MainsCore"])],
     targets: [
         .target(name: "MainsCore", resources: [.copy("Resources/DemoSnapshot.json")]),

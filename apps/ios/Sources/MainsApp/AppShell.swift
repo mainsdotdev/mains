@@ -39,17 +39,23 @@ struct AppShell: View {
                         Group {
                             if let homeRunID {
                                 ConversationView(session: session, runID: homeRunID, onNew: goHome)
+                                    .id("\(session.ownership):\(homeRunID)")
                                     .toolbar {
                                         ToolbarItem(placement: .topBarLeading) { sidebarButton }
                                     }
                             } else {
                                 HomeView(session: session, openSidebar: toggleDrawer, openComputer: showSettings, openPairing: openPairing,
-                                         onCreated: { homeRunID = $0 })
+                                         onCreated: { id in
+                                             var transaction = Transaction(animation: nil)
+                                             transaction.disablesAnimations = true
+                                             withTransaction(transaction) { homeRunID = id }
+                                         })
                             }
                         }
                         .navigationDestination(for: AppRoute.self) { route in
                             switch route {
                             case .conversation(let id): ConversationView(session: session, runID: id, onNew: goHome)
+                                .id("\(session.ownership):\(id)")
                             case .workspace(let id): WorkspaceConversationsView(session: session, workspaceID: id,
                                 openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
                             case .settings: ComputerView(session: session)
@@ -94,6 +100,7 @@ struct AppShell: View {
             }
         }
         .attachmentOverlayHost()
+        .contextPickerOverlayHost(isEnabled: !drawerOpen && !searchMounted)
         .onChange(of: session.pairing?.deviceId) { _, _ in
             resetSearch()
             path = []; homeRunID = nil; drawerOpen = false
@@ -117,6 +124,9 @@ struct AppShell: View {
         withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86)) { drawerOpen = false }
     }
     private func open(_ route: AppRoute) {
+        if case .conversation(let id) = route {
+            if session.viewingRunID != id { leaveCurrentConversation() }
+        } else { leaveCurrentConversation() }
         if case .workspace(let id) = route {
             if session.selectedSpace?.mode != "developer", let code = session.spaces.first(where: { $0.mode == "developer" }) { session.selectSpace(code.id) }
             if let space = session.selectedSpace, space.mode == "developer",
@@ -177,7 +187,10 @@ struct AppShell: View {
             open(route)
         }
     }
-    private func goHome() { path = []; homeRunID = nil; closeDrawer() }
+    private func goHome() { leaveCurrentConversation(); path = []; homeRunID = nil; closeDrawer() }
+    private func leaveCurrentConversation() {
+        if let runID = session.viewingRunID { session.leaveConversation(runID) }
+    }
     private func drawerGesture(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 10)
             .updating($drag) { value, state, _ in

@@ -1,5 +1,7 @@
 import Foundation
 
+public enum TranscriptPageDirection: String, Sendable { case older, newer }
+
 public struct TranscriptGeometry: Equatable, Sendable {
     public var offset: Double
     public var content: Double
@@ -9,6 +11,12 @@ public struct TranscriptGeometry: Equatable, Sendable {
     public init(offset: Double = 0, content: Double = 0, frame: Double = 0, topInset: Double = 0, bottomInset: Double = 0) {
         self.offset = offset; self.content = content; self.frame = frame
         self.topInset = topInset; self.bottomInset = bottomInset
+    }
+    /// SwiftUI's containerSize excludes its safe-area insets. The shared scroll
+    /// rules use the full scroll frame, as UIKit/React Native do.
+    public init(offset: Double, content: Double, visibleFrame: Double, topInset: Double, bottomInset: Double) {
+        self.init(offset: offset, content: content, frame: visibleFrame + topInset + bottomInset,
+                  topInset: topInset, bottomInset: bottomInset)
     }
     public var end: Double { max(-topInset, content - frame + bottomInset) }
     public var distanceFromEnd: Double { max(0, end - offset) }
@@ -33,22 +41,32 @@ public struct TranscriptViewport: Sendable {
         previousOffset = geometry.offset
         direction = 0
     }
-    public mutating func update(_ next: TranscriptGeometry, hasNewer: Bool) {
+    @discardableResult public mutating func update(_ next: TranscriptGeometry, hasNewer: Bool, hasOlder: Bool = false) -> TranscriptPageDirection? {
         // Inset, keyboard and content-size corrections must not create scroll intent.
         let layoutChanged = geometry.content != next.content || geometry.frame != next.frame
             || geometry.topInset != next.topInset || geometry.bottomInset != next.bottomInset
         geometry = next
         defer { previousOffset = next.offset }
-        guard interacting, !paging, !layoutChanged, let previousOffset else { return }
+        guard interacting, !paging, !layoutChanged, let previousOffset else { return nil }
         let difference = next.offset - previousOffset
-        guard abs(difference) >= 1 else { return }
+        guard abs(difference) >= 1 else { return nil }
         direction = difference < 0 ? -1 : 1
         updateFollowing(hasNewer: hasNewer)
+        return page(hasNewer: hasNewer, hasOlder: hasOlder)
     }
-    public mutating func endInteraction(hasNewer: Bool) {
+    private func page(hasNewer: Bool, hasOlder: Bool) -> TranscriptPageDirection? {
+        // A short page's boundaries coincide. Rubber banding must not replace it.
+        guard geometry.frame > 0, geometry.end > -geometry.topInset else { return nil }
+        if direction < 0 && geometry.offset < -geometry.topInset + 200 && hasOlder { return .older }
+        if direction > 0 && geometry.distanceFromEnd < 100 && hasNewer { return .newer }
+        return nil
+    }
+    @discardableResult public mutating func endInteraction(hasNewer: Bool, hasOlder: Bool = false) -> TranscriptPageDirection? {
+        let navigation = interacting && !paging ? page(hasNewer: hasNewer, hasOlder: hasOlder) : nil
         if interacting && direction != 0 { updateFollowing(hasNewer: hasNewer) }
         interacting = false
         direction = 0
+        return navigation
     }
     private mutating func updateFollowing(hasNewer: Bool) {
         if hasNewer { following = false }

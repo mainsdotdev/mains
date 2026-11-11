@@ -57,7 +57,7 @@ public enum ConnectionState: String, Sendable {
 }
 
 public struct PendingMessage: Sendable {
-    public enum Status: Sendable { case sending, accepted, uncertain }
+    public enum Status: Equatable, Sendable { case sending, accepted, uncertain }
     public var runID: String?
     public let text: String
     public let date: Date
@@ -69,7 +69,12 @@ public struct PendingMessage: Sendable {
     let owner: Int
     let previousArtifactID: Int
     public var attachments: [PromptAttachment] = []
+    public var contextSkills: [ContextSkill] = []
     public var id: String { commandID }
+    func matches(_ artifact: Artifact) -> Bool {
+        guard let runID else { return false }
+        return artifact.runId == runID && artifact.kind == "user-prompt" && artifact.id > previousArtifactID && artifact.content == text
+    }
 }
 
 /// One paired computer. All async writers are fenced by connection and pairing ownership.
@@ -101,22 +106,29 @@ public final class BackendSession {
     public private(set) var pendingMessage: PendingMessage?
     public private(set) var historyLoading = false
     public private(set) var historyError: String?
-    public private(set) var waitingForDecision = false
+    public private(set) var historyRetryDirection = "latest"
+    public private(set) var pendingApprovals: [PendingApproval] = []
+    public var waitingForDecision: Bool { pendingApprovals.contains { $0.expiresAt > Date() } }
     public private(set) var refreshing = false
     public private(set) var pairingInProgress = false
     public private(set) var sending = false
     public private(set) var stoppingRunID: String?
     public var actionError: String?
+    public private(set) var contextRevisions: [String: Int] = [:]
+    @ObservationIgnored private var contextCatalogues: [ContextScope: ContextCatalogue] = [:]
+    @ObservationIgnored private var contextRequests: [ContextScope: UUID] = [:]
+    @ObservationIgnored private var contextOrder: [ContextScope] = []
     private var consentRevision = 0
 
     @ObservationIgnored private let storage: any SessionStorage
+    @ObservationIgnored private let makeTransport: @MainActor (DemoBackend?) -> any BackendTransport
     @ObservationIgnored private var transport: (any BackendTransport)?
     @ObservationIgnored private var demoBackend: DemoBackend?
     @ObservationIgnored private var demoConsents: Set<String> = []
     @ObservationIgnored private var connectionTask: Task<Void, Never>?
     @ObservationIgnored private var eventRefresh: Task<Void, Never>?
     @ObservationIgnored private var listRefresh: Task<Void, Never>?
-    @ObservationIgnored private var historyTask: Task<Void, Never>?
+    @ObservationIgnored private var historyTask: Task<Bool, Never>?
     @ObservationIgnored private var historySequence = 0
     @ObservationIgnored private var historyRefreshNeeded = false
     @ObservationIgnored private var snapshotRefreshNeeded = false
@@ -137,8 +149,18 @@ public final class BackendSession {
     @ObservationIgnored private var settingsChanges: [String: SettingsChange] = [:]
     @ObservationIgnored private var settingsRevision = 0
     @ObservationIgnored private var settingsVersions: [String: Int] = [:]
+    @ObservationIgnored private var decisionDeliveries: [DecisionIdentity: DecisionDelivery] = [:]
+    @ObservationIgnored private var approvalExpiryTask: Task<Void, Never>?
+    @ObservationIgnored private var decisionRevision = 0
 
-    public init(storage: any SessionStorage) { self.storage = storage }
+    public convenience init(storage: any SessionStorage) {
+        self.init(storage: storage, makeTransport: { demo in
+            if let demo { DemoTransport(backend: demo) } else { WebSocketTransport() }
+        })
+    }
+    init(storage: any SessionStorage, makeTransport: @escaping @MainActor (DemoBackend?) -> any BackendTransport) {
+        self.storage = storage; self.makeTransport = makeTransport
+    }
     public var isConnected: Bool { connection == .connected }
     public var ownership: Int { pairingOwner }
     public var selectedSpace: Space? { spaces.first { $0.id == selectedSpaceID } }
@@ -259,6 +281,17 @@ public final class BackendSession {
         let value = try await transport.invoke("runs:listOutputs", args: [.object(payload)])
         guard current == generation else { throw MainsError.disconnected }
         return try value.decode(RunOutputsPage.self)
+    }
+
+    public func hasOutputs(_ runID: String) async throws -> Bool {
+        let owner = pairingOwner, current = generation
+        return try await RunOutputsPage.containsOutput { offset in
+            guard owner == self.pairingOwner, current == self.generation else { throw MainsError.changedBackend }
+            let page = try await self.listOutputs(runID, offset: offset)
+            guard owner == self.pairingOwner, current == self.generation else { throw MainsError.changedBackend }
+            guard page.items.allSatisfy({ $0.runId == runID }) else { throw MainsError.invalidReply }
+            return page
+        }
     }
 
     public func readOutput(_ output: RunOutput, offset: Int) async throws -> RunOutputChunk {
@@ -470,12 +503,16 @@ public final class BackendSession {
         models = [:]; modelErrors = [:]; loadingModels = []; changingMode = false
         savingConversationSettings = []; uncertainConversationSettings = []; settingsChanges = [:]
         settingsRevision = 0; settingsVersions = [:]
-        actionError = nil; historyError = nil; waitingForDecision = false
+        contextCatalogues = [:]; contextRequests = [:]; contextRevisions = [:]; contextOrder = []
+        actionError = nil; historyError = nil; pendingApprovals = []
+        approvalExpiryTask?.cancel(); approvalExpiryTask = nil
+        decisionDeliveries = [:]; decisionRevision += 1
     }
 
     private func restart() {
         generation += 1
         connectionTask?.cancel(); eventRefresh?.cancel(); listRefresh?.cancel(); historyTask?.cancel()
+        approvalExpiryTask?.cancel(); approvalExpiryTask = nil
         connectionTask = nil; eventRefresh = nil; listRefresh = nil; historyTask = nil
         transport?.onDisconnect = nil
         transport?.close(); transport = nil
@@ -497,9 +534,7 @@ public final class BackendSession {
         var recoveryEnd = ContinuousClock.now + .seconds(30)
         var quiet = false
         while !Task.isCancelled && generation == current && active && (online || isDemo) {
-            let candidate: any BackendTransport
-            if let demoBackend { candidate = DemoTransport(backend: demoBackend) }
-            else { candidate = WebSocketTransport() }
+            let candidate = makeTransport(demoBackend)
             let remaining = ContinuousClock.now.duration(to: recoveryEnd).components
             let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
             let attemptLimit = quiet ? 20 : max(0.1, min(20, seconds))
@@ -556,6 +591,46 @@ public final class BackendSession {
                 }
             }
         }
+    }
+
+    public func contextScope(providerID: String, workspaceID: String? = nil) -> ContextScope {
+        let workspace = workspaces.first { $0.id == workspaceID && $0.isReplica != true }
+        return ContextScope(providerID: providerID, workspaceID: workspaceID, workspacePath: workspace?.rootPath)
+    }
+
+    public func cachedContext(_ scope: ContextScope) -> ContextCatalogue? { contextCatalogues[scope] }
+
+    /// Lazy, workspace-scoped reads. A failed source keeps only that scope's previous successful list.
+    public func loadContext(_ scope: ContextScope) async throws -> ContextCatalogue {
+        guard isConnected, let candidate = transport else { throw MainsError.disconnected }
+        guard scope == contextScope(providerID: scope.providerID, workspaceID: scope.workspaceID) else { throw MainsError.changedBackend }
+        let owner = pairingOwner, current = generation, request = UUID()
+        contextRequests[scope] = request
+        let args: [JSONValue] = [.string(scope.providerID)] + (scope.workspacePath.map { [.string($0)] } ?? [])
+        async let skills = Self.contextRead(candidate, "providers:getSkills", args)
+        async let commands = Self.contextRead(candidate, "providers:getCommands", args)
+        let sources = await (skills, commands)
+        try Task.checkCancellation()
+        guard owner == pairingOwner, current == generation,
+              contextRequests[scope] == request,
+              scope == contextScope(providerID: scope.providerID, workspaceID: scope.workspaceID) else { throw MainsError.changedBackend }
+        var result = contextCatalogues[scope] ?? ContextCatalogue()
+        var errors: [String] = []
+        do { result.replaceSkills(try ContextCatalogue.skills(from: sources.0.get())) }
+        catch { errors.append("Couldn't load skills. " + error.localizedDescription) }
+        do { result.replaceCommands(try ContextCatalogue.commands(from: sources.1.get())) }
+        catch { errors.append("Couldn't load commands. " + error.localizedDescription) }
+        result.error = errors.isEmpty ? nil : errors.joined(separator: "\n")
+        contextCatalogues[scope] = result
+        contextOrder.removeAll { $0 == scope }; contextOrder.append(scope)
+        while contextOrder.count > 8 { let old = contextOrder.removeFirst(); contextCatalogues[old] = nil; contextRequests[old] = nil }
+        return result
+    }
+    private static func contextRead(_ candidate: any BackendTransport, _ channel: String, _ args: [JSONValue]) async -> Result<JSONValue, Error> {
+        // Discovery may start Codex and read its installed-plugin catalogue.
+        // Use the same deadline as the React Native transport, not the short
+        // ordinary-read default; no mutation/retry deadline changes here.
+        do { return .success(try await candidate.invoke(channel, args: args, timeout: 30)) } catch { return .failure(error) }
     }
 
     private func list<T: Decodable>(_ value: JSONValue, key: String, as type: T.Type) throws -> [T] {
@@ -617,7 +692,7 @@ public final class BackendSession {
         viewingRunID = id
         transcript = Transcript()
         historyError = nil
-        waitingForDecision = false
+        pendingApprovals = []; approvalExpiryTask?.cancel(); approvalExpiryTask = nil
         if let page = histories[id] { transcript.replace(page) }
         await loadHistory(direction: "latest")
     }
@@ -625,58 +700,72 @@ public final class BackendSession {
     public func leaveConversation(_ id: String) {
         guard viewingRunID == id else { return }
         viewingRunID = nil
-        waitingForDecision = false
+        pendingApprovals = []; approvalExpiryTask?.cancel(); approvalExpiryTask = nil
         historyTask?.cancel(); eventRefresh?.cancel(); historyLoading = false
         eventRefresh = nil; historyRefreshNeeded = false
         transcript = Transcript()
     }
 
-    public func loadHistory(direction: String) async {
-        guard let runID = viewingRunID, let transport, isConnected else { return }
-        if direction == "refresh", historyTask != nil { historyRefreshNeeded = true; return }
+    @discardableResult public func loadHistory(direction: String) async -> Bool {
+        guard let runID = viewingRunID, let transport, isConnected else { return false }
+        if direction == "refresh", historyTask != nil { historyRefreshNeeded = true; return false }
         let previous = historyTask
         let current = generation
         historySequence += 1
         let sequence = historySequence
         let job = Task { [weak self] in
-            await previous?.value
-            guard let self, !Task.isCancelled, self.generation == current, self.viewingRunID == runID else { return }
+            _ = await previous?.value
+            guard let self, !Task.isCancelled, self.generation == current, self.viewingRunID == runID else { return false }
             self.historyLoading = true; self.historyError = nil
             defer { if self.generation == current, self.viewingRunID == runID { self.historyLoading = false } }
             do {
                 let request = try self.transcript.request(runID: runID, direction: self.transcript.page == nil ? "latest" : direction)
                 let settingsReadVersion = self.settingsRevision
+                let decisionReadVersion = self.decisionRevision
                 async let pageValue = transport.invoke("runs:getHistory", args: [request])
                 async let runValue = transport.invoke("runs:getById", args: [.string(runID)])
                 async let approvalValue = transport.invoke("runs:listPendingApprovals", args: [.string(runID)])
                 let (pageJSON, runJSON, approvalJSON) = try await (pageValue, runValue, approvalValue)
-                guard !Task.isCancelled, self.generation == current, self.viewingRunID == runID, self.transport === transport else { return }
+                guard !Task.isCancelled, self.generation == current, self.viewingRunID == runID, self.transport === transport else { return false }
                 if runJSON == .null {
                     self.conversations.removeAll { $0.id == runID }; self.histories.removeValue(forKey: runID)
                     self.transcript = Transcript(); self.historyError = "This conversation was deleted on your computer."
-                    self.saveCache(); return
+                    self.pendingApprovals = []; self.approvalExpiryTask?.cancel(); self.approvalExpiryTask = nil
+                    self.saveCache(); return false
                 }
                 let page = try pageJSON.decode(HistoryPage.self)
                 let run = try runJSON.decode(Conversation.self)
                 self.upsert(self.keepingSettings(run, readVersion: settingsReadVersion))
-                self.transcript.replace(page, direction: direction)
-                self.waitingForDecision = !approvalJSON.array.isEmpty
+                self.transcript.replace(page, direction: direction, pending: self.pendingMessage)
+                let approvals = try approvalJSON.decode([PendingApproval].self)
+                if self.decisionRevision == decisionReadVersion {
+                    self.pendingApprovals = run.isReplica == true ? [] : approvals.filter { $0.runId == runID && $0.expiresAt > Date() }.map {
+                        var bound = $0; bound.sessionOwner = self.pairingOwner; return bound
+                    }
+                    self.retireResolvedDecisions(runID: runID, page: page)
+                    self.scheduleApprovalExpiry()
+                } else { self.historyRefreshNeeded = true }
                 if !run.isActive { self.transcript.settleTurn() }
                 self.reconcilePending(page, runID: runID)
                 self.histories[runID] = page
                 self.historyOrder.removeAll { $0 == runID }; self.historyOrder.append(runID)
                 while self.historyOrder.count > 4 { self.histories.removeValue(forKey: self.historyOrder.removeFirst()) }
                 self.saveCache()
+                return true
             } catch {
-                if !Task.isCancelled, self.generation == current, self.viewingRunID == runID { self.historyError = error.localizedDescription }
+                if !Task.isCancelled, self.generation == current, self.viewingRunID == runID {
+                    self.historyError = error.localizedDescription; self.historyRetryDirection = direction
+                }
+                return false
             }
         }
         historyTask = job
-        await job.value
+        let loaded = await job.value
         if historySequence == sequence {
             historyTask = nil
             if historyRefreshNeeded { historyRefreshNeeded = false; scheduleHistoryRefresh() }
         }
+        return loaded
     }
 
     private func safeConversation(_ input: Conversation) -> Conversation {
@@ -710,13 +799,20 @@ public final class BackendSession {
 
     private func event(_ channel: String, _ payload: JSONValue) {
         let runID = payload["runId"].string
+        if channel == "runs:toolApprovalResolved", let requestID = payload["requestId"].string {
+            decisionRevision += 1
+            pendingApprovals.removeAll {
+                $0.requestId == requestID && (payload["approvalToken"].string == nil || $0.approvalToken == payload["approvalToken"].string)
+            }
+            scheduleApprovalExpiry()
+        }
         if channel == "runs:ephemeralEvent" {
             if runID == viewingRunID { transcript.receive(payload) }
             return
         }
         if channel == "runs:statusChanged", runID == viewingRunID,
            ["succeeded", "failed", "canceled"].contains(payload["status"].string ?? "") { transcript.settleTurn() }
-        if ["runs:statusChanged", "runs:updated", "runs:eventPersisted", "runs:toolApprovalRequest", "runs:toolApprovalResolved"].contains(channel) {
+        if ["runs:statusChanged", "runs:updated", "runs:eventPersisted", "runs:diffUpdated", "runs:toolApprovalRequest", "runs:toolApprovalResolved"].contains(channel) {
             if runID == viewingRunID || channel == "runs:toolApprovalResolved" {
                 // Throttle bursts without continually postponing durable acknowledgement.
                 scheduleHistoryRefresh()
@@ -724,6 +820,9 @@ public final class BackendSession {
             if channel != "runs:eventPersisted" { scheduleListRefresh() }
         }
         if ["space:changed", "workspace:created", "workspace:updated", "workspace:deleted", "workspace:gitStateChanged", "collections:changed", "projects:changed"].contains(channel) { scheduleListRefresh() }
+        if channel == "providers:skillsUpdated", let providerID = payload["providerId"].string {
+            contextRevisions[providerID, default: 0] += 1
+        }
         if channel == "providers:modelsUpdated", let providerID = payload["providerId"].string {
             Task { await loadModels(providerID, force: true) }
         }
@@ -777,14 +876,20 @@ public final class BackendSession {
     }
 
     public func send(_ text: String, runID: String? = nil, spaceID: String? = nil, workspaceID: String? = nil,
-                     collectionID: String? = nil, settings: ComposerSettings? = nil, attachments: [PromptAttachment] = []) async throws -> String {
+                     collectionID: String? = nil, settings: ComposerSettings? = nil, attachments: [PromptAttachment] = [],
+                     contextSkills: [ContextSkill] = [], contextScope: ContextScope? = nil) async throws -> String {
         guard pendingMessage?.status != .uncertain else { throw MainsError.server("Check the unconfirmed message before sending another.") }
+        if let runID, decisionDeliveries.contains(where: { $0.value.attempt?.runID == runID && [.sending, .uncertain].contains($0.value.phase) }) {
+            throw MainsError.server("Wait for the pending answer, or check its delivery before sending another message.")
+        }
         guard isConnected, !sending,
               let pairing, let accountID else { throw MainsError.disconnected }
-        let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attached = ContextMentions.attached(in: text, skills: contextSkills)
+        let message = ContextMentions.goal(text, skills: attached)
         guard !message.isEmpty else { throw MainsError.server("Write a message first.") }
         let providerID: String
         let channel: String
+        let actualWorkspaceID: String?
         var payload: [String: JSONValue] = ["accountId": .string(accountID)]
         if let runID {
             guard settingsChanges[runID] == nil else { throw MainsError.server("Confirm the conversation’s settings before sending.") }
@@ -792,13 +897,14 @@ public final class BackendSession {
                 throw MainsError.server("Your previous message is still syncing.")
             }
             guard let run = conversations.first(where: { $0.id == runID }), run.isReplica != true else { throw MainsError.server("This conversation is read-only.") }
+            if let message = run.archivedReplyError { throw MainsError.server(message) }
             guard !run.isActive else { throw MainsError.server("Wait for this reply to finish, or stop it before sending.") }
-            providerID = run.providerId; channel = "runs:continue"
+            providerID = run.providerId; channel = "runs:continue"; actualWorkspaceID = run.workspaceId
             payload["runId"] = .string(runID); payload["message"] = .string(message)
             if let saved = self.settings(forRunID: runID) { payload["conversationSettings"] = try .encode(saved) }
         } else {
             guard let space = spaces.first(where: { $0.id == spaceID }) else { throw MainsError.server("Choose a space first.") }
-            providerID = space.providerId; channel = "runs:execute"
+            providerID = space.providerId; channel = "runs:execute"; actualWorkspaceID = space.mode == "developer" ? workspaceID : nil
             payload["spaceId"] = .string(space.id); payload["providerId"] = .string(space.providerId); payload["goal"] = .string(message)
             if let settings {
                 payload["conversationSettings"] = try .encode(settings)
@@ -813,6 +919,12 @@ public final class BackendSession {
                 payload["collectionId"] = .string(collectionID)
             }
         }
+        if !attached.isEmpty {
+            guard contextScope == self.contextScope(providerID: providerID, workspaceID: actualWorkspaceID) else {
+                throw MainsError.server("The context belongs to another provider or workspace. Choose it again before sending.")
+            }
+            payload["contextSkills"] = .array(attached.map(\.wire))
+        }
         if !attachments.isEmpty { payload["attachments"] = try .encode(attachments) }
         guard hasConsent(providerID: providerID) else {
             throw MainsError.server(isDemo ? "Continue the on-device demo disclosure before sending." : "Allow data sharing with \(Provider.recipient(providerID)) before sending.")
@@ -820,7 +932,7 @@ public final class BackendSession {
         let attempt = PendingMessage(runID: runID, text: message, date: Date(), status: .sending,
                                      commandID: UUID().uuidString, channel: channel, payload: .object(payload),
                                      backendID: pairing.descriptor.backendId, owner: pairingOwner,
-                                     previousArtifactID: transcript.page?.artifacts.map(\.id).max() ?? 0, attachments: attachments)
+                                     previousArtifactID: transcript.page?.artifacts.map(\.id).max() ?? 0, attachments: attachments, contextSkills: attached)
         pendingMessage = attempt
         return try await deliver(attempt)
     }
@@ -862,12 +974,13 @@ public final class BackendSession {
     }
 
     private func command(_ channel: String, args: [JSONValue], commandID: String = UUID().uuidString,
-                         owner: Int? = nil) async throws -> JSONValue {
+                         owner: Int? = nil, validate: (() throws -> Void)? = nil) async throws -> JSONValue {
         let owner = owner ?? pairingOwner
         let deadline = ContinuousClock.now + .seconds(60)
         while ContinuousClock.now < deadline {
             try Task.checkCancellation()
             guard pairingOwner == owner else { throw MainsError.changedBackend }
+            try validate?()
             if connection == .unauthorized { throw MainsError.unauthorized }
             if connection == .incompatible { throw MainsError.incompatible }
             if isConnected, let transport {
@@ -897,7 +1010,7 @@ public final class BackendSession {
 
     private func reconcilePending(_ page: HistoryPage, runID: String) {
         guard let pending = pendingMessage, pending.runID == runID,
-              page.artifacts.contains(where: { $0.kind == "user-prompt" && $0.id > pending.previousArtifactID && $0.content == pending.text }) else { return }
+              page.artifacts.contains(where: pending.matches) else { return }
         pendingMessage = nil
     }
 
@@ -912,6 +1025,22 @@ public final class BackendSession {
         return result
     }
 
+    public func readFileDiff(runID: String, turnID: Int, file: TurnFileChange, owner: Int, cursor: FileDiffCursor? = nil) async throws -> FileDiffPage {
+        guard owner == pairingOwner, viewingRunID == runID else { throw MainsError.changedBackend }
+        guard let transport, isConnected else { throw MainsError.disconnected }
+        guard turnID > 0, !file.path.isEmpty else { throw MainsError.invalidReply }
+        let current = generation
+        return try await TurnFileDiff.read(path: file.path, oldPath: file.oldPath, cursor: cursor) { offset in
+            try Task.checkCancellation()
+            guard self.pairingOwner == owner, self.generation == current, self.viewingRunID == runID else { throw MainsError.changedBackend }
+            let result = try await transport.invoke("runs:readHistoryContent", args: [.object([
+                "runId": .string(runID), "source": .string("turn-diff"), "id": .number(Double(turnID)), "offset": .number(Double(offset)),
+            ])])
+            guard self.pairingOwner == owner, self.generation == current, self.viewingRunID == runID else { throw MainsError.changedBackend }
+            return try result.decode(HistoryContentPage.self)
+        }
+    }
+
     private func saveCache() {
         guard !isDemo, let pairing else { return }
         storage.saveSnapshot(CachedSnapshot(backendID: pairing.descriptor.backendId, conversations: conversations,
@@ -919,5 +1048,169 @@ public final class BackendSession {
                                            collections: collections, projects: projects, gitStates: gitStates,
                                            selectedSpaceID: selectedSpaceID, homeTargets: homeTargets, composerSettings: composerSettings,
                                            lastSyncedAt: lastSyncedAt))
+    }
+}
+
+extension BackendSession {
+    public var pendingQuestions: PendingAsyncQuestions? {
+        guard let runID = viewingRunID, let page = transcript.page, !page.hasNewer, !waitingForDecision,
+              conversations.first(where: { $0.id == runID })?.isReplica != true else { return nil }
+        var questions = PendingAsyncQuestions.latest(in: page.artifacts)
+        questions?.sessionOwner = pairingOwner
+        return questions
+    }
+
+    public func decisionState(for identity: DecisionIdentity) -> DecisionDelivery {
+        if let state = decisionDeliveries[identity] { return state }
+        if decisionDeliveries.count > 128 {
+            decisionDeliveries = decisionDeliveries.filter { $0.value.attempt != nil }
+        }
+        let state = DecisionDelivery(); decisionDeliveries[identity] = state; return state
+    }
+
+    public func respondToApproval(_ approval: PendingApproval, approved: Bool, answer: String? = nil, checkOnly: Bool = false) async throws {
+        guard approval.sessionOwner == pairingOwner else { throw MainsError.changedBackend }
+        let state = decisionState(for: approval.id)
+        try validateDecisionRun(approval.runId)
+        if checkOnly {
+            guard state.phase == .uncertain, let attempt = state.attempt else { throw MainsError.invalidReply }
+            try await deliverDecision(attempt, checking: true)
+            return
+        }
+        guard state.phase == .editing, let current = pendingApprovals.first(where: { $0.id == approval.id }),
+              current.expiresAt > Date(), current.supported else { throw MainsError.server("This request is no longer waiting for an answer.") }
+        if approved {
+            if current.kind == "ask_user", (answer ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw MainsError.server("Choose an option or type an answer.") }
+            if current.isForm {
+                guard let answer, let bytes = answer.data(using: .utf8), let value = try? JSONDecoder().decode(JSONValue.self, from: bytes) else { throw MainsError.server("Complete the requested form.") }
+                let errors = ElicitationForm(schema: current.requestedSchema).validate(value)
+                if !errors.isEmpty { throw MainsError.server(errors.keys.sorted().compactMap { errors[$0] }.joined(separator: "\n")) }
+            }
+            if current.kind == "elicitation", !current.isForm, current.safeURL == nil { throw MainsError.server("This request has no supported web link. Complete it on your computer.") }
+            if answer == "acceptForSession", current.kind == "tool_approval",
+               (current.suppressAlwaysAllowRule == true || conversations.first(where: { $0.id == current.runId })?.providerId != "codex") {
+                throw MainsError.server("Only this call can be approved.")
+            }
+        }
+        guard (answer?.utf8.count ?? 0) <= 128 * 1024 else { throw MainsError.server("This answer is too large.") }
+        var payload: [String: JSONValue] = ["requestId": .string(current.requestId), "approved": .bool(approved)]
+        if let token = current.approvalToken { payload["approvalToken"] = .string(token) }
+        if let answer { payload["answer"] = .string(answer) }
+        let attempt = DecisionAttempt(identity: current.id, runID: current.runId, owner: pairingOwner,
+            channel: "runs:toolApprovalResponse", payload: .object(payload), commandID: UUID().uuidString)
+        try await deliverDecision(attempt)
+    }
+
+    public func answerQuestions(_ pending: PendingAsyncQuestions, answers: [String], checkOnly: Bool = false) async throws {
+        guard pending.sessionOwner == pairingOwner else { throw MainsError.changedBackend }
+        try validateDecisionRun(pending.runID)
+        let state = decisionState(for: pending.id)
+        if checkOnly {
+            guard state.phase == .uncertain, let original = state.attempt, original.channel == "runs:answerAsyncQuestions" else { throw MainsError.invalidReply }
+            // Check the question's accepted answer; never send an uncertain answer a second time.
+            var payload = original.payload.objectValue
+            payload["checkOnly"] = .bool(true)
+            try await deliverDecision(DecisionAttempt(identity: original.identity, runID: original.runID, owner: original.owner,
+                channel: original.channel, payload: .object(payload), commandID: UUID().uuidString), checking: true)
+            return
+        }
+        guard state.phase == .editing, pendingQuestions == pending, let accountID,
+              settingsChanges[pending.runID] == nil, !savingConversationSettings.contains(pending.runID),
+              let provider = conversations.first(where: { $0.id == pending.runID })?.providerId, hasConsent(providerID: provider) else {
+            throw MainsError.server("Confirm data sharing and conversation settings before answering.")
+        }
+        let answers = answers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard answers.count == pending.questions.count, answers.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 32_000 }) else {
+            throw MainsError.server("Answer every question before sending.")
+        }
+        let payload: JSONValue = .object(["runId": .string(pending.runID), "accountId": .string(accountID),
+            "artifactId": .number(Double(pending.artifactID)), "answers": .array(answers.map(JSONValue.string))])
+        try await deliverDecision(DecisionAttempt(identity: pending.id, runID: pending.runID, owner: pairingOwner,
+            channel: "runs:answerAsyncQuestions", payload: payload, commandID: UUID().uuidString))
+    }
+
+    public func dismissQuestions(_ pending: PendingAsyncQuestions, checkOnly: Bool = false) async throws {
+        guard pending.sessionOwner == pairingOwner else { throw MainsError.changedBackend }
+        try validateDecisionRun(pending.runID)
+        let state = decisionState(for: pending.id)
+        if checkOnly {
+            guard state.phase == .uncertain, let attempt = state.attempt, attempt.channel == "runs:dismissAsyncQuestions" else { throw MainsError.invalidReply }
+            try await deliverDecision(attempt, checking: true); return
+        }
+        guard state.phase == .editing, pendingQuestions == pending, let accountID else { throw MainsError.server("These questions are no longer waiting for an answer.") }
+        let payload: JSONValue = .object(["runId": .string(pending.runID), "accountId": .string(accountID), "artifactId": .number(Double(pending.artifactID))])
+        try await deliverDecision(DecisionAttempt(identity: pending.id, runID: pending.runID, owner: pairingOwner,
+            channel: "runs:dismissAsyncQuestions", payload: payload, commandID: UUID().uuidString))
+    }
+
+    public func checkQuestionDelivery(_ pending: PendingAsyncQuestions) async throws {
+        if decisionState(for: pending.id).attempt?.channel == "runs:dismissAsyncQuestions" { try await dismissQuestions(pending, checkOnly: true) }
+        else { try await answerQuestions(pending, answers: [], checkOnly: true) }
+    }
+
+    private func validateDecisionRun(_ runID: String) throws {
+        guard viewingRunID == runID, let run = conversations.first(where: { $0.id == runID }), run.isReplica != true else { throw MainsError.changedBackend }
+        guard isConnected else { throw MainsError.disconnected }
+    }
+
+    private func deliverDecision(_ attempt: DecisionAttempt, checking: Bool = false) async throws {
+        let state = decisionState(for: attempt.identity)
+        guard state.phase != .sending, attempt.owner == pairingOwner else { throw MainsError.changedBackend }
+        if !checking { state.attempt = attempt }
+        state.phase = .sending; state.error = nil
+        do {
+            let result = try await command(attempt.channel, args: [attempt.payload], commandID: attempt.commandID, owner: attempt.owner) {
+                guard self.viewingRunID == attempt.runID,
+                      self.conversations.first(where: { $0.id == attempt.runID })?.isReplica != true else { throw MainsError.changedBackend }
+            }
+            guard attempt.owner == pairingOwner else { throw MainsError.changedBackend }
+            if attempt.channel == "runs:answerAsyncQuestions", result["accepted"] != .bool(true) {
+                state.phase = .uncertain; state.error = "Delivery has not been confirmed yet. Check again."; return
+            }
+            state.phase = .done; state.attempt = nil
+            decisionRevision += 1
+            pendingApprovals.removeAll { $0.id == attempt.identity }
+            if viewingRunID == attempt.runID {
+                if attempt.channel == "runs:answerAsyncQuestions" { transcript.setFollowing(true) }
+                await loadHistory(direction: "refresh")
+            }
+        } catch {
+            guard attempt.owner == pairingOwner else { throw MainsError.changedBackend }
+            if state.phase == .done { throw error }
+            let knownRefusal: Bool
+            if let error = error as? MainsError, case .server(let message) = error {
+                knownRefusal = !error.isUnconfirmedCommand && !["delivery is unknown", "still being delivered", "timed out", "connection closed", "disposed"].contains { message.localizedCaseInsensitiveContains($0) }
+            } else { knownRefusal = false }
+            // A failed receipt lookup cannot make the original decision safe to resend.
+            if knownRefusal && !checking { state.phase = .editing; state.attempt = nil }
+            else { state.phase = .uncertain }
+            state.error = state.phase == .uncertain ? "Delivery is unknown. Check delivery before answering again." : error.localizedDescription
+            throw error
+        }
+    }
+
+    private func scheduleApprovalExpiry() {
+        approvalExpiryTask?.cancel(); approvalExpiryTask = nil
+        guard let expiry = pendingApprovals.map(\.expiresAt).min(), let runID = viewingRunID else { return }
+        let current = generation
+        approvalExpiryTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(max(0, min(300, expiry.timeIntervalSinceNow)))) } catch { return }
+            guard let self, self.generation == current, self.viewingRunID == runID else { return }
+            self.pendingApprovals.removeAll { $0.expiresAt <= Date() }
+            self.decisionRevision += 1; self.scheduleApprovalExpiry()
+            await self.loadHistory(direction: "refresh")
+        }
+    }
+
+    private func retireResolvedDecisions(runID: String, page: HistoryPage) {
+        let currentQuestions = page.hasNewer ? nil : PendingAsyncQuestions.latest(in: page.artifacts)?.id
+        for (identity, state) in decisionDeliveries {
+            let retired: Bool
+            switch identity {
+            case .approval(let id, _, _): retired = id == runID && !pendingApprovals.contains { $0.id == identity }
+            case .questions(let id, _): retired = id == runID && !page.hasNewer && currentQuestions != identity
+            }
+            if retired { state.phase = .done; state.attempt = nil; state.error = nil }
+        }
     }
 }

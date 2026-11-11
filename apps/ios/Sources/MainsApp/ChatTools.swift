@@ -3,11 +3,15 @@ import SwiftUI
 struct ChatToolBlock: View {
     let session: BackendSession
     let rows: [TranscriptRow]
-    @State private var override: Bool?
+    var live = false
+    @State private var disclosure = TranscriptDisclosure()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var calls: [ToolCall] { rows.compactMap(\.tool) }
+    private var providerID: String { session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? "" }
+    private var animate: Bool { session.isConnected && session.conversations.first { $0.id == session.viewingRunID }?.isActive == true }
     private var running: Bool { calls.contains { ["running", "queued"].contains($0.status) } }
-    private var expanded: Bool { override ?? running }
+    private var active: Bool { running || live }
+    private var expanded: Bool { disclosure.isExpanded(active: active) }
     private var summary: String {
         if let active = calls.first(where: { ["running", "queued"].contains($0.status) }) { return ToolPresentation(active).verb }
         if let first = calls.map({ $0.startedAt ?? $0.createdAt }).min(), let last = calls.compactMap(\.endedAt).max(), last.timeIntervalSince(first) >= 1 {
@@ -22,27 +26,29 @@ struct ChatToolBlock: View {
         return names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " +\(names.count - 3)" : "")
     }
     var body: some View {
-        if calls.count == 1, let call = calls.first { ChatToolRow(session: session, call: call) }
-        else if !calls.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { override = !expanded }
-                } label: {
-                    HStack(spacing: 9) {
-                        if running { ProgressView().controlSize(.mini).frame(width: 17) }
-                        else { Image(systemName: "wrench.and.screwdriver").frame(width: 17) }
-                        Text(summary).fontWeight(.semibold).fixedSize()
-                        Text(names).font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2)
-                    }.font(.footnote).foregroundStyle(.secondary).frame(minHeight: 32).contentShape(.rect)
-                }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("toolBlock-\(calls[0].id)")
-                    .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-                if expanded {
-                    VStack(alignment: .leading, spacing: 14) {
+        if !calls.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                if calls.count > 1 {
+                    Button {
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { disclosure.toggle(active: active) }
+                    } label: {
+                        HStack(spacing: 9) {
+                            if running { AgentAsciiSpinner(providerID: providerID, animated: animate).frame(width: 17) }
+                            else { Image(systemName: "wrench.and.screwdriver").frame(width: 17) }
+                            Text(summary).fontWeight(.semibold).fixedSize().activityShimmer(running && animate)
+                            Text(names).font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2)
+                        }.font(.footnote).foregroundStyle(.secondary).frame(minHeight: 32).contentShape(.rect)
+                    }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("toolBlock-\(calls[0].id)")
+                        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                }
+                if calls.count == 1 || expanded {
+                    VStack(alignment: .leading, spacing: 2) {
                         ForEach(calls) { call in ChatToolRow(session: session, call: call) }
                     }
                 }
             }
+            .onChange(of: active, initial: true) { _, active in disclosure.observe(active: active) }
         }
     }
 }
@@ -61,6 +67,8 @@ private struct ChatToolRow: View {
     private var view: ToolPresentation { ToolPresentation(call) }
     private var hasDetails: Bool { !view.body.isEmpty || !view.input.isEmpty || view.deferredInput || view.deferredOutput }
     private var tint: Color { view.failed ? .red : view.running ? .primary : .secondary }
+    private var providerID: String { session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? "" }
+    private var animate: Bool { session.isConnected && session.conversations.first { $0.id == session.viewingRunID }?.isActive == true }
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             Button {
@@ -68,11 +76,11 @@ private struct ChatToolRow: View {
             } label: {
                 HStack(spacing: 9) {
                     Group {
-                        if view.running { ProgressView().controlSize(.mini) }
+                        if view.running { AgentAsciiSpinner(providerID: providerID, animated: animate) }
                         else { Image(systemName: view.symbol) }
                     }.frame(width: 17).foregroundStyle(tint)
-                    Text(view.verb).fontWeight(.semibold).foregroundStyle(tint).lineLimit(1).layoutPriority(1)
-                    Text(view.detail).foregroundStyle(.tertiary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(view.verb).fontWeight(.semibold).foregroundStyle(tint).lineLimit(1).layoutPriority(1).activityShimmer(view.running && animate)
+                    Text(view.detail).foregroundStyle(.tertiary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).activityShimmer(view.running && animate)
                     if view.added > 0 || view.removed > 0 {
                         HStack(spacing: 5) {
                             if view.added > 0 { Text("+\(view.added)").foregroundStyle(.green) }
@@ -83,6 +91,9 @@ private struct ChatToolRow: View {
                 }.font(.footnote).frame(minHeight: 30).contentShape(.rect)
             }.buttonStyle(ChatPressStyle()).disabled(!hasDetails)
                 .accessibilityIdentifier("toolCall-\(call.id)").accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: ActiveToolFramesKey.self, value: view.running ? [call.id: geometry.frame(in: .global)] : [:])
+                })
             if let error = call.error, !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red).lineLimit(3).textSelection(.enabled) }
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {

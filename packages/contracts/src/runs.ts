@@ -402,7 +402,10 @@ export interface CollectionResponse {
  * echo it back as context, and nothing else.
  *
  * `iconSmall` / `iconLarge` are, for a plugin, its artwork inlined as a data
- * URL (or a remote https URL), which a device draws as is. For any other skill
+ * URL (or a remote https URL), which a device draws as is. Paired-device
+ * discovery may omit large artwork and send only one small icon per row to
+ * keep the catalogue within the mobile response budget; clients use a default
+ * icon when artwork is absent. For any other skill
  * they are absolute paths on the Mac — a device cannot read those, and carries
  * them only so the value round-trips into the prompt's artifact metadata
  * untouched.

@@ -133,6 +133,7 @@ export { default as Infinite } from "./infinite";
 export { default as ToggleClose } from "./toggle-close";
 export { default as Terminal } from "./terminal";
 export { default as TerminalOpen } from "./terminal-open";
+export { default as Slash } from "./slash";
 export { default as BrowserCursor } from "./browser-cursor";
 export { default as Crop } from "./crop";
 export { default as RequestEdits } from "./request-edits";

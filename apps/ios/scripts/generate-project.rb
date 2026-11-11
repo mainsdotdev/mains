@@ -5,10 +5,17 @@ require 'fileutils'
 
 root = File.expand_path('..', __dir__)
 project = Xcodeproj::Project.new(File.join(root, 'Mains.xcodeproj'))
-app = project.new_target(:application, 'Mains', :ios, '18.0')
+app = project.new_target(:application, 'Mains', :ios, '26.0')
 app.product_reference.path = 'Mains Native.app'
-tests = project.new_target(:ui_test_bundle, 'MainsUITests', :ios, '18.0')
+tests = project.new_target(:ui_test_bundle, 'MainsUITests', :ios, '26.0')
 tests.add_dependency(app)
+
+# Resolve against the selected SDK rather than pinning a versioned SDK path.
+project.objects.grep(Xcodeproj::Project::Object::PBXFileReference).each do |reference|
+  next unless File.basename(reference.path.to_s) == 'Foundation.framework'
+  reference.path = 'System/Library/Frameworks/Foundation.framework'
+  reference.source_tree = 'SDKROOT'
+end
 
 source_group = project.main_group.new_group('Sources', 'Sources')
 %w[MainsCore MainsApp].each do |directory|

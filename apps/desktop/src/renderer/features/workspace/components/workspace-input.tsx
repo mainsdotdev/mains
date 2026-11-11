@@ -517,6 +517,7 @@ export function WorkspaceInput({
         iconLarge: skill.iconLarge,
         brandColor: skill.brandColor,
         token,
+        scope: skill.scope,
       }, skill.scope !== "computer");
       if (skill.scope === "computer" && !replaced) {
         const next = replaceMentionInGoal(goal, trigger, unifiedMenu.filter, `${token} `);
@@ -598,6 +599,7 @@ export function WorkspaceInput({
         iconLarge: s.iconLarge,
         brandColor: s.brandColor,
         token: skillMentionToken(s),
+        scope: s.scope,
       });
     }
     return m;

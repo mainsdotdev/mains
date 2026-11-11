@@ -68,6 +68,13 @@ public struct Conversation: Codable, Equatable, Identifiable, Sendable {
     public let updatedAt: Date
     public var displayTitle: String { title?.isEmpty == false ? title! : "New conversation" }
     public var isActive: Bool { status == "queued" || status == "running" }
+    public var archivedReplyError: String? {
+        // A provider-archived chat is distinct from Mains' isArchived flag.
+        // The backend currently exposes this state through its normalized error.
+        guard providerId == "codex", status == "failed", let lastError,
+              lastError.hasPrefix("This chat is archived in Codex.") else { return nil }
+        return lastError
+    }
 }
 
 public struct Space: Codable, Equatable, Identifiable, Sendable {
@@ -150,6 +157,18 @@ public struct RunTurn: Codable, Equatable, Sendable {
     public let status: String
     public var model: String? = nil
     public var turnIndex: Int? = nil
+    public var startedAt: Date? = nil
+    public var endedAt: Date? = nil
+    public var createdAt: Date? = nil
+    public var changes: RunTurnChanges? = nil
+    private enum CodingKeys: String, CodingKey { case id, status, model, turnIndex, startedAt, endedAt, createdAt, changes }
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id); status = try c.decode(String.self, forKey: .status)
+        model = try c.decodeWireIfPresent(String.self, forKey: .model); turnIndex = try c.decodeWireIfPresent(Int.self, forKey: .turnIndex)
+        startedAt = try c.decodeWireIfPresent(Date.self, forKey: .startedAt); endedAt = try c.decodeWireIfPresent(Date.self, forKey: .endedAt)
+        createdAt = try c.decodeWireIfPresent(Date.self, forKey: .createdAt); changes = try c.decodeWireIfPresent(RunTurnChanges.self, forKey: .changes)
+    }
 }
 
 public struct HistoryPage: Codable, Equatable, Sendable {
