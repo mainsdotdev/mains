@@ -41,7 +41,7 @@ const FINISHED_LINGER_MS = 10_000;
 
 export interface BackgroundRunsView {
   runs: ActiveRun[];
-  /** Latest streamed line per run id, for the card's activity subtitle. */
+  /** Current foreground activity per run id, shared with the transcript. */
   activityByRunId: Record<string, string>;
   jumpToRun: (run: ActiveRun) => Promise<void>;
   stopRun: (run: ActiveRun) => Promise<void>;

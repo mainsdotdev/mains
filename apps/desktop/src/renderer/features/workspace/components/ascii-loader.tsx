@@ -6,19 +6,9 @@ import { coerceToolOutput, parseToolContent, previewParams } from "../lib/parse-
 import { shortFileName } from "../lib/path-utils";
 import { toPresentTense } from "./tools/_shared";
 import { useIsToolVisible } from "../lib/tool-activity-presence";
+import { plainActivityText } from "../lib/run-activity";
 
 export { AsciiSpinner };
-
-/** Strip markdown formatting for plain-text display */
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/\*\*(.+?)\*\*/g, "$1")  // **bold**
-    .replace(/\*(.+?)\*/g, "$1")       // *italic*
-    .replace(/__(.+?)__/g, "$1")       // __bold__
-    .replace(/_(.+?)_/g, "$1")         // _italic_
-    .replace(/`(.+?)`/g, "$1")         // `code`
-    .replace(/^#+\s*/gm, "");          // # headings
-}
 
 const TOOL_ACTIONS: Record<string, string> = {
   read: "Reading",
@@ -83,12 +73,13 @@ export function AsciiLoader({
   activeTool?: RunEvent;
 }) {
   const toolVisible = useIsToolVisible(activeTool?.id);
-  if (toolVisible) return null;
+  const thought = thinkingText && plainActivityText(thinkingText);
+  if (toolVisible && !thought) return null;
   return (
     <div className={`flex min-w-0 items-center gap-2 ${className || ""}`}>
-      {activeTool ? <ToolActivity event={activeTool} /> : (
+      {!thought && activeTool ? <ToolActivity event={activeTool} /> : (
         <Text as="span" size="sm" tone="inherit" className="shine-text truncate max-w-120">
-          {thinkingText ? stripMarkdown(thinkingText) : "Thinking"}
+          {thought || "Thinking"}
         </Text>
       )}
     </div>

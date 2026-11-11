@@ -16,7 +16,7 @@ const ARM_TIMEOUT_MS = 3000;
 
 interface BackgroundRunCardProps {
   run: ActiveRun;
-  /** Latest streamed line, shown as the "now playing" subtitle. */
+  /** Current foreground thought/progress, shared with the transcript. */
   activity?: string;
   /** Ticks once a second so the elapsed label advances. */
   nowMs: number;

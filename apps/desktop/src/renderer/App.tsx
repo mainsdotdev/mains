@@ -56,6 +56,7 @@ import { getProviderVariant } from "./lib/provider-variants";
 import { CommandMenu } from "./features/command-menu/command-menu";
 import { useAppshots } from "./hooks/use-appshots";
 import { useRunMessageQueueController } from "./features/workspace/hooks/use-run-message-queue-controller";
+import { useRunActivityLifecycle } from "./features/workspace/hooks/use-run-activity";
 import { useRealtimeVoiceLifecycle } from "./features/workspace/hooks/use-realtime-voice";
 import { RealtimeVoiceDock } from "./features/workspace/components/realtime-voice-dock";
 import { useWindowRequests } from "./hooks/use-window-requests";
@@ -120,6 +121,7 @@ function AppContent() {
   useAppTheme();
   useAppshots();
   useRunMessageQueueController();
+  useRunActivityLifecycle();
   useCreatedPullRequests();
   useWindowRequests();
   useAppSettingsEvents();

@@ -858,7 +858,7 @@ export function WorkspaceEvents({
                 />
               )}
               {isRunning && !history?.historical && !hasActiveImageGeneration && !activeCompaction &&
-                (activeTool || !hasStreamingResponse) && (
+                (latestThinking || activeTool || !hasStreamingResponse) && (
                 <AsciiLoader activeTool={activeTool} thinkingText={latestThinking} />
               )}
               <div ref={eventsEndRef} />

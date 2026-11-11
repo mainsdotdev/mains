@@ -58,10 +58,22 @@ it("handles a single visible tool and the tools-hidden setting", () => {
 it("keeps an in-flight row running when thought and progress snapshots arrive", () => {
   const thought: RunEvent = { id: "thought", type: "artifact", content: "Checking exports", timestamp: new Date(4000), metadata: { kind: "thinking", streaming: true } };
   const progress: RunEvent = { ...thought, id: "progress", content: "Compiling", metadata: { kind: "tool_progress", streaming: true } };
-  const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, command, thought, progress]} />);
+  const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, read, command, thought, progress]} />);
   expect(view.getByRole("button", { name: /Running\s*npm test/ })).toBeTruthy();
   expect(view.queryByText("Running npm test")).toBeNull();
-  expect(view.queryByText("Checking exports")).toBeNull();
+  expect(view.getByText("Checking exports")).toBeTruthy();
+  fireEvent.click(view.getByRole("button", { name: /read a file, ran a command/i }));
+  expect(view.getByText("Checking exports")).toBeTruthy();
+  expect(view.queryByText("Running npm test")).toBeNull();
+  view.rerender(<WorkspaceEvents {...props} currentEvents={[prompt, read, command]} />);
+  expect(view.getByText("Running npm test")).toBeTruthy();
+});
+
+it("shows a new thought even while an assistant response is streaming", () => {
+  const reply: RunEvent = { id: "reply", type: "artifact", content: "Here is the result", timestamp: new Date(4000), metadata: { kind: "report", streaming: true } };
+  const thought: RunEvent = { ...reply, id: "thought", content: "Checking the final result", metadata: { kind: "thinking", streaming: true } };
+  const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, reply, thought]} />);
+  expect(view.getByText("Checking the final result")).toBeTruthy();
 });
 
 it("shows thinking summaries without rendering command progress as thought text", () => {
