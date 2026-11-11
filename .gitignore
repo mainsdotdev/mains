@@ -1,4 +1,4 @@
-# Repo-level ignores; each app carries its own .gitignore.
+# Repo-level ignores; each app carries its own .gitignore. Add the app name to the list.
 node_modules/
 .DS_Store
 *.log
