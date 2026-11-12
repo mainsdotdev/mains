@@ -1,4 +1,5 @@
 import { CursorAcpServer } from "./cursor-acp";
+import { captureCursorImage } from "./cursor-images";
 import { createCursorLifecycle, CursorCanceledError, type CursorRunOwner, type CursorPromptOwner } from "./cursor-lifecycle";
 import { providerProcessPath, providerLoginCommand } from "../../providers.utils";
 // ─────────────────────────────────────────────────────────────
@@ -82,6 +83,7 @@ interface CursorToolCall {
 interface CursorSession {
   runId: string;
   sessionId: string;
+  cwd: string;
   agentMessage: CursorMessageStream;
   agentMessageIndex: number;
   agentMessageStreamId: string;
@@ -495,7 +497,13 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     server.setNotificationHandler((method, params) => ownerFor(params)?.onNotification(method, params));
     server.setServerRequestHandler((id, method, params) => {
       const owner = ownerFor(params);
-      if (owner) owner.onRequest(id, method, params);
+      // Some Cursor builds send this fire-and-forget extension via extMethod,
+      // which still needs a JSON-RPC acknowledgement. Both forms share the
+      // owning prompt's ordered projection and finalization barrier.
+      if (owner && method === "cursor/generate_image") {
+        owner.onNotification(method, params);
+        server.respondToRequest(id, {});
+      } else if (owner) owner.onRequest(id, method, params);
       else server.respondToRequestError(id, -32000, "No active Cursor session for this request");
     });
 
@@ -816,25 +824,6 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           model,
           agentId,
           durationMs,
-        },
-      });
-      return events;
-    }
-
-    if (method === "cursor/generate_image") {
-      const description = (p?.description as string) ?? "Generated image";
-      const filePath = p?.filePath as string | undefined;
-      const referenceImagePaths = p?.referenceImagePaths as string[] | undefined;
-
-      events.push({
-        type: "artifact",
-        kind: "file",
-        path: filePath,
-        content: description,
-        metadata: {
-          cursorExtension: "generate_image",
-          filePath,
-          referenceImagePaths,
         },
       });
       return events;
@@ -1628,6 +1617,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         const session: CursorSession = {
           runId,
           sessionId,
+          cwd: request.execution.cwd,
           agentMessage: new CursorMessageStream(),
           agentMessageIndex: 0,
           agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
@@ -1718,6 +1708,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         const session: CursorSession = {
           runId,
           sessionId,
+          cwd: request.execution.cwd,
           agentMessage: new CursorMessageStream(),
           agentMessageIndex: 0,
           agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
@@ -1782,6 +1773,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         const session: CursorSession = {
           runId,
           sessionId,
+          cwd: request.execution.cwd,
           agentMessage: new CursorMessageStream(),
           agentMessageIndex: 0,
           agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
@@ -1836,6 +1828,13 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       try {
         execution = cs.owner.begin(cs.sessionId, {
           onNotification(method, params) {
+            if (method === "cursor/generate_image") {
+              void execution.project(async () => {
+                const event = await captureCursorImage(cs.runId, cs.cwd, params);
+                if (event) await onEvent(event);
+              });
+              return;
+            }
             const p = params as { update?: { sessionUpdate?: string; title?: unknown } } | undefined;
             if (method === "session/update" && p?.update?.sessionUpdate === "session_info_update") {
               const title = typeof p.update.title === "string"

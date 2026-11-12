@@ -9,6 +9,8 @@ import type { WorkRunEvent, WorkRunEventHandler } from "../../../../../shared/ad
 import { ResourceCleanupError } from "../../../../runtime/resource-lifecycle";
 import { createCursorDriver } from "./cursor.driver";
 import { createWorkRunAdapter } from "../work-run-core";
+import { projectRunDeliverables } from "../../../runs/run-deliverables";
+import type { RunArtifactResponse } from "../../../runs/runs.dto";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), updateRun: vi.fn(), approval: vi.fn(), bridgeStart: vi.fn(), bridges: [] as any[] }));
 vi.mock("node:child_process", async (original) => ({
@@ -89,8 +91,8 @@ describe("Cursor ACP transcript", () => {
     vi.restoreAllMocks(); vi.clearAllMocks();
   });
 
-  async function acquire(runId = "run-1") {
-    return driver.createSession({ runId, accountId: "account-1", execution: { cwd: "/fixture", workspaceId: null }, goal: "hi" });
+  async function acquire(runId = "run-1", cwd = "/fixture") {
+    return driver.createSession({ runId, accountId: "account-1", execution: { cwd, workspaceId: null }, goal: "hi" });
   }
   async function replay(chunks: string[], onEvent?: WorkRunEventHandler) {
     const acquired = await acquire();
@@ -116,6 +118,44 @@ describe("Cursor ACP transcript", () => {
     const outcome = await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
     return { outcome, calls: events.filter((event) => event.type === "tool_call") };
   }
+
+  it.each(["request", "notification"])("delivers Cursor's native image outside the workspace from an extension %s", async (transport) => {
+    const home = path.join(temporary, "home");
+    vi.spyOn(os, "homedir").mockReturnValue(home);
+    const cwd = path.join(temporary, "workspace");
+    fs.mkdirSync(cwd);
+    const project = cwd.replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+    const source = path.join(home, ".cursor", "projects", project, "assets", "turkish-flag.jpg");
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, "generated image bytes");
+    const acquired = await acquire("run-1", cwd);
+    const events: WorkRunEvent[] = [];
+    fixture.onRpc = (message) => !message.method;
+    fixture.onPrompt = (message) => {
+      // Installed Cursor 2026.10.22 calls extMethod (a JSON-RPC request),
+      // even though its documentation calls this a notification. No sessionId.
+      fixture.send({ ...(transport === "request" ? { id: 77 } : {}), method: "cursor/generate_image",
+        params: { toolCallId: "image-call", description: "Turkish flag", filePath: source, referenceImagePaths: ["reference.png"] } });
+      fixture.text(acquired.sessionId!, "Turkish flag image generated — red field with white crescent and star.");
+      fixture.finish(message);
+    };
+    const outcome = await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    expect(outcome.status).toBe("succeeded");
+    const images = events.filter((event) => event.type === "artifact" && event.kind === "image");
+    expect(images).toHaveLength(1);
+    const image = images[0];
+    if (image.type !== "artifact") throw new Error("Expected image artifact");
+    expect(image.metadata).toMatchObject({ source: "cursor_image_generation", outputRole: "deliverable", toolCallId: "image-call" });
+    expect(path.relative(path.join(temporary, "generated-images", "run-1"), image.path!)).not.toMatch(/^\.\./);
+    expect(fs.readFileSync(image.path!, "utf8")).toBe("generated image bytes");
+    const artifacts = events.flatMap((event, index): RunArtifactResponse[] => event.type === "artifact" && !event.ephemeral
+      ? [{ id: index + 1, runId: "run-1", kind: event.kind as RunArtifactResponse["kind"], path: event.path ?? null, content: event.content ?? null,
+        metadata: event.metadata ?? null, createdAt: new Date(index), blobData: null, contentHash: null, entityId: null }] : []);
+    const outputs = await projectRunDeliverables({ runId: "run-1", root: cwd,
+      extraRoots: [path.join(temporary, "generated-images", "run-1")], artifacts, turns: [], terminal: true });
+    expect(outputs.filter((row) => row.metadata?.outputSelected)).toEqual([expect.objectContaining({ kind: "image", path: fs.realpathSync.native(image.path!) })]);
+    if (transport === "request") expect(fixture.calls).toContainEqual(expect.objectContaining({ id: 77, result: {} }));
+  });
 
   it.each(["initialize", "authenticate"])("retires pending %s instead of resurrecting a server after shutdown", async (method) => {
     fixture.holdMethod = method;
