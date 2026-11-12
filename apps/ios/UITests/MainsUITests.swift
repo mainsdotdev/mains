@@ -4,6 +4,7 @@ import UIKit
 /// Run alongside scripts/mock-backend.mjs. No AI provider or real workspace is contacted.
 @MainActor
 final class MainsUITests: XCTestCase {
+    #if MAINS_GPT_LIVE
     func testVoiceDefaultsToFocusAndSwitchesToConversationWithoutEndingOrUnmuting() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -90,6 +91,8 @@ final class MainsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["endVoice"].exists)
         forgetFixture(app)
     }
+
+    #endif
 
     func testTranscriptPagesAutomaticallyAndKeepsReadingPositionDuringRefresh() async throws {
         try await assertAutomaticTranscriptPaging(code: "ios-test-paging")
@@ -562,9 +565,14 @@ final class MainsUITests: XCTestCase {
         openSidebar(app); app.buttons["conversation-fixture-run"].tap()
         XCTAssertTrue(app.textViews["messageInput"].waitForExistence(timeout: 5))
         launcher.tap(); app.buttons["Photos"].tap()
+        let photos = app.descendants(matching: .any).matching(identifier: "attachmentPhotosPanel").firstMatch
+        XCTAssertTrue(photos.waitForExistence(timeout: 5))
         app.buttons["attachmentPanelBack"].tap()
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
-        app.buttons["Camera"].tap(); app.buttons["closeAttachmentPanel"].tap()
+        app.buttons["Camera"].tap()
+        let camera = app.descendants(matching: .any).matching(identifier: "attachmentCameraPanel").firstMatch
+        XCTAssertTrue(camera.waitForExistence(timeout: 5))
+        app.buttons["closeAttachmentPanel"].tap()
         XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
         forgetFixture(app)
     }
@@ -920,8 +928,11 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         _ = pairFixture(app, code: "ios-test-home")
         app.buttons["space-fixture-claude"].tap()
+        XCTAssertTrue(app.buttons["closeSidebar"].waitForNonExistence(timeout: 5))
         let draft = app.textViews["homeMessageInput"]
-        draft.tap(); draft.typeText("Keep this draft")
+        XCTAssertTrue(draft.waitForExistence(timeout: 5))
+        draft.tap(); assertKeyboardVisible(app)
+        draft.typeText("Keep this draft")
         app.buttons["chooseModel"].tap()
         XCTAssertTrue(app.buttons["selectModel"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["model-fixture-balanced"].exists)
@@ -949,12 +960,16 @@ final class MainsUITests: XCTestCase {
         selectEffort(at: 0, in: app)
         selectEffort(at: 1, in: app, drag: true)
         attachScreenshot(app, name: "Native model – stepped effort gradient")
-        app.buttons["Close"].tap()
+        let closeEffort = app.buttons["closeEffortOverlay"]
+        closeEffort.tap()
+        XCTAssertTrue(closeEffort.waitForNonExistence(timeout: 5))
         XCTAssertEqual(draft.value as? String, "Keep this draft")
         XCTAssertTrue(app.buttons["chooseModel"].label.contains("Extra High"))
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["chooseModel"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["chooseModel"].label.contains("Extra High"))
+        let restoredEffort = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Extra High"), object: app.buttons["chooseModel"])
+        let restored = await XCTWaiter.fulfillment(of: [restoredEffort], timeout: 10)
+        XCTAssertEqual(restored, .completed, "Restored model and effort: \(app.buttons["chooseModel"].label)")
         app.buttons["runOptions"].tap()
         XCTAssertTrue(app.buttons["permission-default"].isHittable)
         XCTAssertTrue(app.buttons["permission-dontAsk"].isHittable)
@@ -980,11 +995,12 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         assertInputAboveKeyboard()
-        XCTAssertTrue(app.staticTexts["Search chats and workspaces"].exists)
+        XCTAssertTrue(app.staticTexts["Search chats, messages and workspaces"].exists)
         input.typeText("No matching result")
+        XCTAssertEqual(input.value as? String, "No matching result", "Changing search results must preserve the editor and its focus.")
         XCTAssertTrue(app.staticTexts["No results found"].waitForExistence(timeout: 5))
         app.buttons["clearGlobalSearch"].tap()
-        XCTAssertTrue(app.staticTexts["Search chats and workspaces"].exists)
+        XCTAssertTrue(app.staticTexts["Search chats, messages and workspaces"].exists)
         input.typeText("m")
         XCTAssertTrue(app.buttons["search-run-workspace-third"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["mains · Code"].exists)
@@ -1182,9 +1198,11 @@ final class MainsUITests: XCTestCase {
         app.buttons["collection-fixture-kitchen"].tap()
         app.buttons["collection-fixture-kitchen"].tap()
         app.buttons["closeSidebar"].tap()
+        XCTAssertTrue(app.buttons["closeSidebar"].waitForNonExistence(timeout: 5))
         app.buttons["chooseTarget"].tap()
         attachScreenshot(app, name: "Native project – compact selection")
-        app.buttons["target-fixture-kitchen"].tap()
+        let kitchen = app.buttons["target-fixture-kitchen"]
+        XCTAssertTrue(kitchen.waitForExistence(timeout: 5)); kitchen.tap()
         XCTAssertTrue(app.buttons["chooseTarget"].label.contains("Kitchen Notes"))
         attachScreenshot(app, name: "Native project – icon color target")
 
@@ -1218,7 +1236,9 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Native model selection")
         selectEffort(at: 2.0 / 3, in: app)
         attachScreenshot(app, name: "Native effort selection")
-        app.buttons["Close"].tap()
+        let closeEffort = app.buttons["closeEffortOverlay"]
+        closeEffort.tap()
+        XCTAssertTrue(closeEffort.waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.buttons["chooseModel"].label.contains("Deep Thinker"))
         XCTAssertTrue(app.buttons["chooseModel"].label.contains("High"))
         app.buttons["runOptions"].tap()

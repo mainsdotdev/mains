@@ -10,10 +10,12 @@ struct HomeView: View {
     @State private var modelSheet = false
     @State private var optionsSheet = false
     @State private var consent: ConsentContext?
+    #if MAINS_GPT_LIVE
     @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
     private var preparingVoice: Bool {
         session.voice.ownsCall && session.voice.runID == nil && session.voiceSpaceID == space?.id
     }
+    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var space: Space? { session.selectedSpace }
 
@@ -27,20 +29,22 @@ struct HomeView: View {
                             .transition(.opacity)
                     }
                 }.frame(maxWidth: .infinity)
+                #if MAINS_GPT_LIVE
                 if preparingVoice {
                     VoicePresentationMenu().frame(width: 46, height: 46).modifier(GlassSurface(radius: 23))
                 } else { Color.clear.frame(width: 46, height: 46).accessibilityHidden(true) }
+                #else
+                Color.clear.frame(width: 46, height: 46).accessibilityHidden(true)
+                #endif
             }.padding(.horizontal, 16).padding(.top, 8)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: session.connection)
+            #if MAINS_GPT_LIVE
             if preparingVoice && voicePresentation == .focus {
                 VoiceFocusStage(voice: session.voice)
-            } else {
-                Spacer(minLength: 20)
-                if session.pairing != nil && space == nil && !session.connection.isBusy {
-                    ContentUnavailableView("Choose a space", systemImage: "square.grid.2x2", description: Text("Open the sidebar to choose where to start."))
-                }
-                Spacer(minLength: 20)
-            }
+            } else { homeContent }
+            #else
+            homeContent
+            #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background { KeyboardDismissBackground(color: Color(.systemBackground)) }
@@ -60,6 +64,14 @@ struct HomeView: View {
         .task(id: "\(space?.providerId ?? ""):\(session.isConnected)") {
             if let space { await session.loadModels(space.providerId, force: true) }
         }
+    }
+
+    @ViewBuilder private var homeContent: some View {
+        Spacer(minLength: 20)
+        if session.pairing != nil && space == nil && !session.connection.isBusy {
+            ContentUnavailableView("Choose a space", systemImage: "square.grid.2x2", description: Text("Open the sidebar to choose where to start."))
+        }
+        Spacer(minLength: 20)
     }
 
 }

@@ -51,7 +51,10 @@ final class DemoBackend {
         let result: Result<JSONValue, MainsError>
     }
     private var receipts: [String: Receipt] = [:]
+    #if MAINS_GPT_LIVE || SWIFT_PACKAGE
     private static let sampleVoices = ["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"]
+#endif
+
     private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:fork", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings",
         "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings"]
 
@@ -167,6 +170,7 @@ final class DemoBackend {
             let key = ["workspace:list":"workspaces", "workspace:listGitStates":"gitStates", "collections:list":"collections", "projects:list":"projects"][channel]!
             return seed[key]
         case "providers:getEnabled": return seed["providers"]
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         case "providers:getRealtimeVoices":
             guard first.string == "codex" else { throw MainsError.server("Voice is available with Codex.") }
             return .object(["voices": .array(Self.sampleVoices.map(JSONValue.string)), "defaultVoice": .string("sol")])
@@ -181,6 +185,8 @@ final class DemoBackend {
             providers[index] = .object(provider)
             var updated = seed.objectValue; updated["providers"] = .array(providers); seed = .object(updated)
             return .object(provider)
+#endif
+
         case "providers:getModels": return seed["models"][first.string ?? ""]
         case "providers:getSkills":
             guard seed["providers"].array.contains(where: { $0["id"].string == first.string }) else { throw MainsError.server("Choose a demo provider.") }

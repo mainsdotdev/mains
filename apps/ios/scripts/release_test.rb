@@ -227,6 +227,26 @@ class ReleaseTest < Minitest::Test
     assert_includes reasons.fetch('NSPrivacyAccessedAPICategoryFileTimestamp'), '3B52.1'
   end
 
+  def test_v1_target_excludes_voice_sources_packages_resources_and_permissions
+    project = Xcodeproj::Project.open(File.join(MainsRelease::ROOT, 'Mains.xcodeproj'))
+    app = project.targets.find { |target| target.name == 'Mains' }
+    sources = app.source_build_phase.files_references.map(&:path)
+    %w[NativeRealtimeVoiceMedia.swift RealtimeVoiceControls.swift VoiceSettingsView.swift VoiceAppearancePreview.swift VoiceWater.metal].each do |name|
+      refute_includes sources, name
+    end
+    assert_empty app.package_product_dependencies
+    assert_empty project.root_object.package_references
+    resources = app.resources_build_phase.files_references.map(&:path)
+    refute_includes resources, 'VoicePreviews'
+    refute_includes resources, 'WebRTC-LICENSE.txt'
+    app.build_configurations.each do |config|
+      refute_includes config.build_settings.fetch('SWIFT_ACTIVE_COMPILATION_CONDITIONS'), 'MAINS_GPT_LIVE'
+      plist = Xcodeproj::Plist.read_from_path(File.join(MainsRelease::ROOT, config.build_settings.fetch('INFOPLIST_FILE')))
+      refute plist.key?('NSMicrophoneUsageDescription')
+      refute_includes Array(plist['UIBackgroundModes']), 'audio'
+    end
+  end
+
   def test_invalid_version_cannot_reach_build_arguments
     File.write(File.join(@root, 'Version.xcconfig'), "MARKETING_VERSION = 0.1.0;bad\nCURRENT_PROJECT_VERSION = 1\n")
     assert_raises(ArgumentError) { MainsRelease::Config.new(env: @env, root: @root) }

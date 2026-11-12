@@ -91,6 +91,7 @@ public struct PendingMessage: Sendable {
 /// One paired computer. All async writers are fenced by connection and pairing ownership.
 @MainActor @Observable
 public final class BackendSession {
+    #if MAINS_GPT_LIVE || SWIFT_PACKAGE
     public let voice = RealtimeVoiceController()
     public private(set) var pendingVoiceConversation: PendingVoiceConversation?
     public private(set) var checkingVoiceConversation = false
@@ -104,6 +105,8 @@ public final class BackendSession {
     @ObservationIgnored private var voiceSettingsReadID: UUID?
     private struct VoiceSelectionChange { let id: String; let voice: String; let owner: Int }
     @ObservationIgnored private var voiceSelectionChange: VoiceSelectionChange?
+#endif
+
     public private(set) var isDemo = false
     public private(set) var pairing: PairedBackend?
     public private(set) var activeEndpoint: URL?
@@ -183,7 +186,7 @@ public final class BackendSession {
     @ObservationIgnored private var settingsVersions: [String: Int] = [:]
     @ObservationIgnored private var decisionDeliveries: [DecisionIdentity: DecisionDelivery] = [:]
     @ObservationIgnored private var approvalExpiryTask: Task<Void, Never>?
-    @ObservationIgnored private var decisionRevision = 0
+    private var decisionRevision = 0
 
     public convenience init(storage: any SessionStorage) {
         self.init(storage: storage, makeTransport: { demo in
@@ -192,17 +195,28 @@ public final class BackendSession {
     }
     init(storage: any SessionStorage, makeTransport: @escaping @MainActor (DemoBackend?) -> any BackendTransport) {
         self.storage = storage; self.makeTransport = makeTransport
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         voice.onChange = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, !self.active, !self.voice.keepsConnectionAlive, self.transport != nil else { return }
                 self.restart()
             }
         }
+#endif
+
     }
     public var isConnected: Bool { connection == .connected }
     public var ownership: Int { pairingOwner }
     public var selectedSpace: Space? { spaces.first { $0.id == selectedSpaceID } }
+    private var shouldMaintainConnection: Bool {
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
+        active || voice.keepsConnectionAlive
+        #else
+        active
+        #endif
+    }
 
+    #if MAINS_GPT_LIVE || SWIFT_PACKAGE
     public func loadVoiceSettings() async {
         guard isConnected, let candidate = transport, !loadingVoiceSettings, voiceSelectionChange == nil else { return }
         let current = generation, readID = UUID()
@@ -363,6 +377,8 @@ public final class BackendSession {
             throw error
         }
     }
+
+#endif
 
     public func searchConversations(_ query: String, cursor: ConversationSearchCursor? = nil) async throws -> ConversationSearchPage {
         guard let transport, isConnected, let accountID else { throw MainsError.disconnected }
@@ -769,10 +785,13 @@ public final class BackendSession {
 
     public func setActive(_ value: Bool) {
         guard active != value else { return }; active = value
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         if voice.keepsConnectionAlive {
             if !value { runQueues.pauseAll("Queued messages are paused while Mains is in the background.") }
             return
         }
+#endif
+
         restart()
     }
     public func setOnline(_ value: Bool) {
@@ -847,9 +866,12 @@ public final class BackendSession {
     }
 
     private func resetProjection() {
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         voice.retire(); pendingVoiceConversation = nil; checkingVoiceConversation = false; voiceSpaceID = nil
         realtimeVoices = nil; selectedRealtimeVoice = nil; voiceSettingsReadID = nil; voiceSelectionChange = nil
         loadingVoiceSettings = false; savingVoiceSettings = false; voiceSettingsError = nil; uncertainVoiceSelection = false
+#endif
+
         stopRemoteQueueWatch()
         runQueues.clear()
         initialHistoryCursor = nil
@@ -870,11 +892,15 @@ public final class BackendSession {
     }
 
     private func restart() {
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         voice.connectionLost()
+        #endif
         stopRemoteQueueWatch()
         runQueues.pauseAll("Backend disconnected. Queued messages are paused.")
         generation += 1
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         voiceSettingsReadID = nil; loadingVoiceSettings = false
+        #endif
         connectionTask?.cancel(); eventRefresh?.cancel(); listRefresh?.cancel(); historyTask?.cancel()
         approvalExpiryTask?.cancel(); approvalExpiryTask = nil
         connectionTask = nil; eventRefresh = nil; listRefresh = nil; historyTask = nil
@@ -886,7 +912,7 @@ public final class BackendSession {
         transcript.clearStreams()
         guard let pairing else { connection = .idle; return }
         if let blocked { connection = blocked; return }
-        guard active || voice.keepsConnectionAlive else { connection = .suspended; return }
+        guard shouldMaintainConnection else { connection = .suspended; return }
         guard online || isDemo else { connection = .offline; return }
         if connection == .unauthorized || connection == .incompatible { return }
         let current = generation
@@ -897,7 +923,7 @@ public final class BackendSession {
     private func connect(_ pairing: PairedBackend, generation current: Int) async {
         var recoveryEnd = ContinuousClock.now + .seconds(30)
         var quiet = false
-        while !Task.isCancelled && generation == current && (active || voice.keepsConnectionAlive) && (online || isDemo) {
+        while !Task.isCancelled && generation == current && shouldMaintainConnection && (online || isDemo) {
             let candidate = makeTransport(demoBackend)
             let remaining = ContinuousClock.now.duration(to: recoveryEnd).components
             let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
@@ -1181,13 +1207,16 @@ public final class BackendSession {
     }
 
     private func event(_ channel: String, _ payload: JSONValue) {
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         if channel == "runs:realtimeEvent" {
             voice.receive(payload)
             if payload["type"].string == "closed", payload["runId"].string == viewingRunID,
                let id = payload["connectionId"].string { transcript.closeVoice(id) }
             return
         }
+        #endif
         let runID = payload["runId"].string
+
         if channel == "runs:queueChanged", runID == viewingRunID { scheduleRemoteQueueRead() }
         if channel == "runs:statusChanged", let runID, let status = payload["status"].string { runQueues.observe(runID, status: status) }
         if channel == "runs:toolApprovalResolved", let requestID = payload["requestId"].string {
@@ -1302,23 +1331,30 @@ public final class BackendSession {
         if isDemo { demoConsents.remove(providerID) }
         else { storage.revokeConsent(backendID: backendID, providerID: providerID) }
         consentRevision += 1
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         if providerID == "codex" { Task { await voice.stop() } }
+        #endif
     }
     public func revokeAllConsents(backendID: String) {
         guard pairing?.descriptor.backendId == backendID else { return }
         if isDemo { demoConsents = [] }
         else { storage.revokeAllConsents(backendID: backendID) }
         consentRevision += 1
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         Task { await voice.stop() }
+        #endif
     }
 
     public func send(_ text: String, runID: String? = nil, spaceID: String? = nil, workspaceID: String? = nil,
                      collectionID: String? = nil, settings: ComposerSettings? = nil, attachments: [PromptAttachment] = [],
                      contextSkills: [ContextSkill] = [], contextScope: ContextScope? = nil, steering: Bool = false, queuedInputID: String? = nil) async throws -> String {
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         guard pendingVoiceConversation == nil else { throw MainsError.server("Check the unconfirmed voice conversation before sending.") }
         guard voice.runID != runID || !voice.ownsCall || voice.phase == .connected && conversations.first(where: { $0.id == runID })?.isActive == true else {
             throw MainsError.server("End voice chat before sending a written reply to this conversation.")
         }
+#endif
+
         guard pendingFork == nil else { throw MainsError.server("Wait for the fork, or check its delivery before sending.") }
         guard pendingMessage?.status != .uncertain else { throw MainsError.server("Check the unconfirmed message before sending another.") }
         if let runID, decisionDeliveries.contains(where: { $0.value.attempt?.runID == runID && [.sending, .uncertain].contains($0.value.phase) }) {
@@ -1393,7 +1429,10 @@ public final class BackendSession {
     }
 
     public func canForkConversation(_ id: String) -> Bool {
-        isConnected && pendingVoiceConversation == nil && !(voice.ownsCall && voice.runID == id) && pendingFork == nil && !sending && pendingMessage == nil && stoppingRunID == nil &&
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
+        guard pendingVoiceConversation == nil, !(voice.ownsCall && voice.runID == id) else { return false }
+        #endif
+        return isConnected && pendingFork == nil && !sending && pendingMessage == nil && stoppingRunID == nil &&
         settingsChanges[id] == nil && conversations.first(where: { $0.id == id })?.canFork == true &&
         !decisionDeliveries.contains { $0.value.attempt?.runID == id && [.sending, .uncertain].contains($0.value.phase) }
     }
@@ -1565,9 +1604,12 @@ public final class BackendSession {
 
 extension BackendSession {
     public var pendingQuestions: PendingAsyncQuestions? {
+        _ = decisionRevision
         guard let runID = viewingRunID, let page = transcript.page, !page.hasNewer, !waitingForDecision,
               conversations.first(where: { $0.id == runID })?.isReplica != true else { return nil }
         var questions = PendingAsyncQuestions.latest(in: page.artifacts)
+        // A confirmed answer or dismissal wins over an older in-flight history response.
+        if let questions, decisionDeliveries[questions.id]?.phase == .done { return nil }
         questions?.sessionOwner = pairingOwner
         return questions
     }

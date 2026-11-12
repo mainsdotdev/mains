@@ -2,8 +2,12 @@ import SwiftUI
 import Network
 
 enum AppFeatures {
-    // Staged for v2. Enable this to restore GPT Live entry points and native media.
+    // The v1 target never compiles or links the live voice module.
+    #if MAINS_GPT_LIVE
+    static let gptLiveEnabled = true
+    #else
     static let gptLiveEnabled = false
+    #endif
 }
 
 @main
@@ -15,7 +19,7 @@ struct MainsApp: App {
 
     var body: some Scene {
         WindowGroup {
-            #if DEBUG
+            #if DEBUG && MAINS_GPT_LIVE
             if CommandLine.arguments.contains("--voice-preview") { VoiceAppearancePreview() }
             else { application }
             #else
@@ -29,9 +33,12 @@ struct MainsApp: App {
             .preferredColorScheme(appearance.colorScheme)
             .tint(.primary)
             .task {
+#if MAINS_GPT_LIVE
                 if AppFeatures.gptLiveEnabled {
                     session.voice.makeMedia = { NativeRealtimeVoiceMedia() }
                 }
+#endif
+
                 session.restore()
                 session.setActive(scenePhase == .active)
                 monitor.pathUpdateHandler = { path in

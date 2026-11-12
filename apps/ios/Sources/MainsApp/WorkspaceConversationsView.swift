@@ -130,7 +130,7 @@ struct SearchView: View {
     private var savedOnly: Bool { !session.isConnected || visibleError != nil }
 
     var body: some View {
-        Group {
+        ZStack {
             if needle.isEmpty {
                 VStack(spacing: 20) {
                     Image(systemName: "magnifyingglass").font(.system(size: 36, weight: .regular)).accessibilityHidden(true)

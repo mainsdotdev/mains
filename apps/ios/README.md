@@ -3,8 +3,9 @@
 An independent SwiftUI client for the existing Mains backend. Requires iOS 26+
 and Xcode 26+ with Swift 6. Controls and the composer use native Liquid Glass;
 the system Reduce Transparency preference retains an opaque accessible surface.
-The app pins the native WebRTC Swift package to 157.0.0; its resolved revision and
-binary checksum are fixed, and its license ships in Resources/WebRTC-LICENSE.txt.
+The default v1 project has no WebRTC dependency, voice sources, voice resources,
+or microphone/background-audio capabilities. The opt-in v2 development profile
+pins WebRTC 157.0.0 and keeps its resolved revision and bundled license.
 The portable MainsCore package remains dependency-free. Math messages use the bundled KaTeX
 0.18.7 assets already used by the Expo app, inside an offline WebKit surface.
 `apps/mobile` remains the separate Expo/React Native app for iOS and Android.
@@ -39,11 +40,26 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
 
 ## GPT Live
 
-GPT Live is staged for v2 and hidden in the current native app. Set
-`AppFeatures.gptLiveEnabled` to `true` in `Sources/MainsApp/MainsApp.swift` to
-restore its composer entry, Settings section and native media factory together.
-The implementation and bundled resources stay in place; the isolated DEBUG
-`--voice-preview` fixture remains available for internal visual work.
+GPT Live stays in the repository for v2 but is **compiled out** of the default
+v1 app, including the call controller, signaling/settings methods and voice UI.
+Historical voice-originated messages and delegated-chat links remain readable.
+The v1 target has no WebRTC package/product, Metal voice shader, voice samples,
+voice license resource, microphone purpose string or background-audio mode.
+
+From `apps/ios`, select the project profile explicitly:
+
+```sh
+npm run project:generate                         # v1 submission profile (default)
+MAINS_IOS_GPT_LIVE=1 npm run project:generate     # v2 voice development only
+```
+
+The opt-in profile defines `MAINS_GPT_LIVE`, includes the preserved voice sources,
+links the pinned WebRTC package, adds the voice resources and selects
+`Info.Voice.plist` / `Info.Voice.Debug.plist`. `AppFeatures.gptLiveEnabled` follows
+that compile condition; changing a runtime constant cannot enable voice in v1.
+Portable Swift-package tests retain the v2 core through `SWIFT_PACKAGE`.
+Regenerate the default profile before archiving a v1 submission. Do not ship the
+bundled voice recordings until their redistribution rights have been verified.
 
 When enabled, an empty Codex composer offers the SF Symbols waveform voice button. Start it to speak in the current
 conversation, or create an idle conversation from Home without a synthetic text
@@ -77,7 +93,7 @@ static with Reduce Motion. Both light and dark appearances are supported.
 Xcode's optional Metal Toolchain component is required to compile the shader;
 install it with `xcodebuild -downloadComponent MetalToolchain` if missing.
 
-Debug builds accept `--voice-preview` for an entirely in-memory visual fixture;
+Debug builds of the opt-in v2 profile accept `--voice-preview` for an entirely in-memory visual fixture;
 `--voice-preview-conversation` and `--voice-preview-light` select its initial
 layout and appearance. Preview preferences use a separate UserDefaults suite;
 no pairing, drafts, microphone, files or external service is accessed.
@@ -511,6 +527,9 @@ Keep simulator signing enabled when running: Keychain needs the simulator's
 application-identifier entitlement. `CODE_SIGNING_ALLOWED=NO` is only for the
 compile-only check above, not for running pairing or UI tests.
 QR camera capture and real-device LAN/privacy prompts need physical-device QA.
+Keyboard tests require the software keyboard to be visible on the QA simulator.
+In Device Hub, select that simulator and use **Device → Keyboard → Toggle Software
+Keyboard** if only the hardware-keyboard accessory bar appears.
 
 The attachment UI test needs at least five library photos. Before running it,
 seed only your dedicated QA simulator and grant that test app library access:

@@ -335,7 +335,8 @@ wss.on('connection', socket => {
             if (!titleMatch && !message) return [];
             const rank = titleMatch ? 2 : 4, createdAt = run.createdAt.getTime(), cursor = input.cursor;
             if (cursor && !(rank > cursor.rank || rank === cursor.rank && (createdAt < cursor.createdAt || createdAt === cursor.createdAt && run.id > cursor.runId))) return [];
-            return [{ rank, createdAt, hit: { runId: run.id, title: run.title, providerId: run.providerId, mode: run.mode, context: null,
+            return [{ rank, createdAt, hit: { runId: run.id, title: run.title, providerId: run.providerId, mode: run.mode,
+              context: workspaces.find(workspace => workspace.id === run.workspaceId)?.name ?? collections.find(collection => collection.id === run.collectionId)?.name ?? null,
               updatedAt: run.updatedAt.getTime(), snippet: message?.content.slice(0, 400) ?? null,
               messageCursor: message ? { timestamp: message.createdAt.getTime(), source: 'artifact', id: message.id } : null } }];
           }).sort((a, b) => a.rank - b.rank || b.createdAt - a.createdAt || a.hit.runId.localeCompare(b.hit.runId));

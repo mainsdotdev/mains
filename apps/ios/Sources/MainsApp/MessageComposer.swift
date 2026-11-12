@@ -15,9 +15,11 @@ struct MessageComposer: View {
     let options: () -> Void
     let send: () -> Void
     var voiceCreated: ((String) -> Void)? = nil
+    #if MAINS_GPT_LIVE
     @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
     @State private var voiceConsent: ConsentContext?
     @State private var voiceStartOwner: Int?
+    #endif
     @State private var focused = false
     @State private var file = false
     @State private var pluginsOpen = false
@@ -34,10 +36,12 @@ struct MessageComposer: View {
     @State private var attachmentError: String?
     private var settings: ComposerSettings { context.settings(session) }
     private var selectedModel: ModelChoice? { context.model(session) }
+    #if MAINS_GPT_LIVE
     private var ownsVoice: Bool {
         session.voice.ownsCall && (session.voice.runID == context.runID && context.runID != nil || context.runID == nil && voiceStartOwner == session.ownership)
     }
     private var voiceCanStart: Bool { AppFeatures.gptLiveEnabled && session.canStartVoice(runID: context.runID, spaceID: context.spaceID) }
+    #endif
     private var effort: String? {
         guard let selectedModel else { return nil }
         switch EffortControlKind.resolve(provider: context.providerId, levels: selectedModel.supportedEffortLevels ?? []) {
@@ -57,6 +61,7 @@ struct MessageComposer: View {
     }
     var body: some View {
         VStack(spacing: 8) {
+            #if MAINS_GPT_LIVE
             if ownsVoice && voicePresentation == .conversation {
                 VoiceOrb(voice: session.voice, size: 104)
                     .accessibilityIdentifier("voiceComposerOrb")
@@ -64,6 +69,9 @@ struct MessageComposer: View {
             }
             if ownsVoice && voicePresentation == .focus { focusComposer }
             else { standardComposer }
+            #else
+            standardComposer
+            #endif
         }
         .background(GeometryReader { geometry in
             Color.clear.onAppear { composerFrame = geometry.frame(in: .global) }
@@ -75,6 +83,7 @@ struct MessageComposer: View {
         .attachmentOverlay(isPresented: attachmentsOpen, id: attachmentPresentationID, accent: Provider.accent(context.providerId),
                            maxCount: 5 - draft.attachments.count, maxBytes: remainingBytes, add: addFromPanel, close: closeAttachments)
         .onChange(of: session.ownership) { _, _ in attachmentsOpen = false; file = false; pluginsOpen = false }
+    #if MAINS_GPT_LIVE
         .onChange(of: session.voice.runID) { _, id in
             if let id, context.runID == nil, voiceStartOwner == session.ownership, session.selectedSpaceID == context.spaceID { voiceCreated?(id) }
         }
@@ -85,6 +94,7 @@ struct MessageComposer: View {
                 beginVoice()
             }
         }
+    #endif
         .fileImporter(isPresented: $file, allowedContentTypes: [.data]) { result in
             do {
                 let url = try result.get()
@@ -140,49 +150,81 @@ struct MessageComposer: View {
                         }
                     }.font(.footnote).foregroundStyle(.secondary)
                 }.scrollIndicators(.hidden)
-                if ownsVoice, session.voice.phase == .connected {
-                    Button { session.voice.toggleMute() } label: {
-                        Image(systemName: session.voice.muted ? "mic.slash.fill" : "mic.fill").frame(width: 40, height: 44)
-                    }.accessibilityLabel(session.voice.muted ? "Unmute microphone" : "Mute microphone").accessibilityIdentifier("muteVoice")
-                }
-                if ownsVoice && (session.voice.phase != .connected || !(active && canSendDuringRun && draft.hasContent)) || stopping || active && (!canSendDuringRun || !draft.hasContent) {
-                    Button {
-                        if ownsVoice { Task { await session.voice.stop() } }
-                        if active { stop?() }
-                    } label: {
-                        Group {
-                            if stopping { ProgressView().tint(.white) }
-                            else { Image(systemName: ownsVoice && session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill").font(.body.weight(.semibold)) }
-                        }.frame(width: 40, height: 40).foregroundStyle(.white)
-                            .background(Provider.accent(context.providerId), in: .circle).padding(2)
-                    }.buttonStyle(ChatPressStyle()).disabled(ownsVoice ? session.voice.phase == .ending : !session.isConnected || stopping)
-                        .accessibilityLabel(ownsVoice ? session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat" : stopping ? "Stopping reply" : "Stop reply")
-                        .accessibilityIdentifier(ownsVoice ? "endVoice" : "stopReply")
-                } else if !draft.hasContent && context.providerId == "codex" && !active && !session.isDemo {
-                    Button(action: prepareVoice) {
-                        Image(systemName: "waveform").font(.system(size: 20, weight: .medium))
-                            .frame(width: 40, height: 40).foregroundStyle(.white)
-                            .background(Provider.accent(context.providerId), in: .circle).padding(2)
-                    }.buttonStyle(ChatPressStyle()).disabled(!voiceCanStart || context.saving(session))
-                        .accessibilityLabel("Start GPT Live").accessibilityIdentifier("startVoice")
-                } else {
-                    Button(action: send) {
-                        Group {
-                            if draft.isSending { ProgressView().tint(.white) }
-                            else { Image(systemName: "arrow.up").font(.system(size: 22, weight: .medium)) }
-                        }.frame(width: 40, height: 40).foregroundStyle(.white)
-                            .background(Provider.accent(context.providerId), in: .circle).padding(2)
-                    }
-                    .buttonStyle(ChatPressStyle())
-                    .disabled(!canSend || draft.isSending || context.saving(session) || !draft.hasContent || session.pendingVoiceConversation != nil || ownsVoice && !active)
-                    .accessibilityLabel(draft.isSending ? "Sending message" : sendLabel ?? "Send message").accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
-                }
+                composerActions
             }
             .buttonStyle(.plain)
         }
         .padding(8).modifier(GlassSurface(radius: 34, interactive: false)).padding(.horizontal, 12)
     }
 
+    private var voiceBlocksSending: Bool {
+        #if MAINS_GPT_LIVE
+        session.pendingVoiceConversation != nil || ownsVoice && !active
+        #else
+        false
+        #endif
+    }
+
+    private var sendMessageButton: some View {
+        Button(action: send) {
+            Group {
+                if draft.isSending { ProgressView().tint(.white) }
+                else { Image(systemName: "arrow.up").font(.system(size: 22, weight: .medium)) }
+            }.frame(width: 40, height: 40).foregroundStyle(.white)
+                .background(Provider.accent(context.providerId), in: .circle).padding(2)
+        }
+        .buttonStyle(ChatPressStyle())
+        .disabled(!canSend || draft.isSending || context.saving(session) || !draft.hasContent || voiceBlocksSending)
+        .accessibilityLabel(draft.isSending ? "Sending message" : sendLabel ?? "Send message").accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
+    }
+
+    @ViewBuilder private var composerActions: some View {
+        #if MAINS_GPT_LIVE
+        if ownsVoice, session.voice.phase == .connected {
+            Button { session.voice.toggleMute() } label: {
+                Image(systemName: session.voice.muted ? "mic.slash.fill" : "mic.fill").frame(width: 40, height: 44)
+            }.accessibilityLabel(session.voice.muted ? "Unmute microphone" : "Mute microphone").accessibilityIdentifier("muteVoice")
+        }
+        if ownsVoice && (session.voice.phase != .connected || !(active && canSendDuringRun && draft.hasContent)) || stopping || active && (!canSendDuringRun || !draft.hasContent) {
+            Button {
+                if ownsVoice { Task { await session.voice.stop() } }
+                if active { stop?() }
+            } label: {
+                Group {
+                    if stopping { ProgressView().tint(.white) }
+                    else { Image(systemName: ownsVoice && session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill").font(.body.weight(.semibold)) }
+                }.frame(width: 40, height: 40).foregroundStyle(.white)
+                    .background(Provider.accent(context.providerId), in: .circle).padding(2)
+            }.buttonStyle(ChatPressStyle()).disabled(ownsVoice ? session.voice.phase == .ending : !session.isConnected || stopping)
+                .accessibilityLabel(ownsVoice ? session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat" : stopping ? "Stopping reply" : "Stop reply")
+                .accessibilityIdentifier(ownsVoice ? "endVoice" : "stopReply")
+        } else if !draft.hasContent && context.providerId == "codex" && !active && !session.isDemo {
+            Button(action: prepareVoice) {
+                Image(systemName: "waveform").font(.system(size: 20, weight: .medium))
+                    .frame(width: 40, height: 40).foregroundStyle(.white)
+                    .background(Provider.accent(context.providerId), in: .circle).padding(2)
+            }.buttonStyle(ChatPressStyle()).disabled(!voiceCanStart || context.saving(session))
+                .accessibilityLabel("Start GPT Live").accessibilityIdentifier("startVoice")
+        } else {
+            sendMessageButton
+        }
+        #else
+        if stopping || active {
+            Button { stop?() } label: {
+                Group {
+                    if stopping { ProgressView().tint(.white) }
+                    else { Image(systemName: "stop.fill").font(.body.weight(.semibold)) }
+                }.frame(width: 40, height: 40).foregroundStyle(.white)
+                    .background(Provider.accent(context.providerId), in: .circle).padding(2)
+            }
+            .buttonStyle(ChatPressStyle()).disabled(!session.isConnected || stopping)
+            .accessibilityLabel(stopping ? "Stopping reply" : "Stop reply").accessibilityIdentifier("stopReply")
+        }
+        if !stopping && (!active || canSendDuringRun && draft.hasContent) { sendMessageButton }
+        #endif
+    }
+
+    #if MAINS_GPT_LIVE
     private var focusComposer: some View {
         VStack(spacing: 8) {
             if let error = draft.storageError {
@@ -237,6 +279,7 @@ struct MessageComposer: View {
         .accessibilityIdentifier("voiceFocusComposer")
     }
 
+    #endif
     private var pickerRequest: ContextPickerRequest? {
         guard session.isConnected, !draft.isSending, !attachmentsOpen, trigger != nil || pluginsOpen else { return nil }
         let scope = contextScope, owner = session.ownership
@@ -255,6 +298,7 @@ struct MessageComposer: View {
                 pluginsOpen = false
             })
     }
+    #if MAINS_GPT_LIVE
     private func prepareVoice() {
         guard voiceCanStart, let backendID = session.pairing?.descriptor.backendId else { return }
         if session.hasConsent(providerID: "codex") { beginVoice() }
@@ -265,6 +309,7 @@ struct MessageComposer: View {
         focused = false; voiceStartOwner = session.ownership
         Task { await session.startVoice(runID: context.runID, spaceID: context.spaceID) }
     }
+    #endif
     private var remainingBytes: Int {
         min(2 * 1024 * 1024, max(0, (2_800_000 - draft.attachments.reduce(0) { $0 + $1.data.utf8.count }) / 4 * 3))
     }

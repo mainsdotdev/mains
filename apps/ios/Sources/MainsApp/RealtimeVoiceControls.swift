@@ -1,11 +1,6 @@
 import SwiftUI
 
-struct OpenVoiceConversationAction {
-    var action: (String) -> Void = { _ in }
-    func callAsFunction(_ id: String) { action(id) }
-}
 extension EnvironmentValues {
-    @Entry var openVoiceConversation = OpenVoiceConversationAction()
     @Entry var voiceSurfaceVisible = true
     @Entry var voiceReduceMotionPreview = false
 }

@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D394BE7584766AA13DFF839C69E0BB00"
+               BlueprintIdentifier = "B1D2D105877922053DDC2035AC2DCBF5"
                BuildableName = "Mains Native.app"
                BlueprintName = "Mains"
                ReferencedContainer = "container:Mains.xcodeproj">
@@ -44,7 +44,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D394BE7584766AA13DFF839C69E0BB00"
+            BlueprintIdentifier = "B1D2D105877922053DDC2035AC2DCBF5"
             BuildableName = "Mains Native.app"
             BlueprintName = "Mains"
             ReferencedContainer = "container:Mains.xcodeproj">
@@ -77,7 +77,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D394BE7584766AA13DFF839C69E0BB00"
+            BlueprintIdentifier = "B1D2D105877922053DDC2035AC2DCBF5"
             BuildableName = "Mains Native.app"
             BlueprintName = "Mains"
             ReferencedContainer = "container:Mains.xcodeproj">
@@ -94,7 +94,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D394BE7584766AA13DFF839C69E0BB00"
+            BlueprintIdentifier = "B1D2D105877922053DDC2035AC2DCBF5"
             BuildableName = "Mains Native.app"
             BlueprintName = "Mains"
             ReferencedContainer = "container:Mains.xcodeproj">

@@ -70,12 +70,15 @@ struct InlineContextText: View {
         let display = projection.display as NSString
         var result = Text(""), cursor = 0
         for mention in projection.mentions {
-            result = result + Text(display.substring(with: NSRange(location: cursor, length: mention.displayRange.location - cursor)))
+            let prefix = Text(display.substring(with: NSRange(location: cursor, length: mention.displayRange.location - cursor)))
             let icon = ContextArtwork.icon(artwork.images[mention.skill.name], skill: mention.skill, size: 17, tint: .white)
-            result = result + Text(Image(uiImage: icon)).baselineOffset(-2) + Text(" " + mention.skill.title).fontWeight(.semibold)
+            let symbol = Text(Image(uiImage: icon)).baselineOffset(-2)
+            let title = Text(" " + mention.skill.title).fontWeight(.semibold)
+            result = Text("\(result)\(prefix)\(symbol)\(title)")
             cursor = NSMaxRange(mention.displayRange)
         }
-        return result + Text(display.substring(from: cursor).replacingOccurrences(of: ContextMentions.marker, with: ""))
+        let suffix = Text(display.substring(from: cursor).replacingOccurrences(of: ContextMentions.marker, with: ""))
+        return Text("\(result)\(suffix)")
     }
 }
 

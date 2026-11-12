@@ -1,5 +1,15 @@
 import SwiftUI
 
+struct OpenVoiceConversationAction {
+    var action: (String) -> Void = { _ in }
+    func callAsFunction(_ id: String) { action(id) }
+}
+extension EnvironmentValues {
+    // Read-only navigation also works for chats created by desktop voice calls.
+    @Entry var openVoiceConversation = OpenVoiceConversationAction()
+}
+
+
 enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings }
 
 struct AppShell: View {
@@ -65,7 +75,9 @@ struct AppShell: View {
                                 }
                             }
                         }
+                        #if MAINS_GPT_LIVE
                         .environment(\.voiceSurfaceVisible, !drawerOpen && !searchMounted)
+                        #endif
                         .allowsHitTesting(!searchMounted)
                         .accessibilityHidden(drawerOpen || searchMounted)
                     }
@@ -113,13 +125,18 @@ struct AppShell: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 ForkDeliveryNotice(session: session, open: { open(.conversation($0)) })
+#if MAINS_GPT_LIVE
                 VoiceCallDock(session: session, visibleRunID: visibleVoiceRunID,
                     preparingHere: !drawerOpen && !searchMounted && path.isEmpty && homeRunID == nil && session.voiceSpaceID == session.selectedSpaceID,
                     open: { openVoiceConversation($0) })
+#endif
+
             }
         }
         .environment(\.openVoiceConversation, OpenVoiceConversationAction { openVoiceConversation($0) })
+        #if MAINS_GPT_LIVE
         .onChange(of: session.voice.error) { _, error in if let error { session.actionError = error } }
+        #endif
         .attachmentOverlayHost()
         .contextPickerOverlayHost(isEnabled: !drawerOpen && !searchMounted)
         .onChange(of: session.pairing?.deviceId) { _, _ in
@@ -132,6 +149,7 @@ struct AppShell: View {
         Button(action: toggleDrawer) { SidebarIcon() }
             .accessibilityLabel("Open sidebar").accessibilityIdentifier("openSidebar")
     }
+#if MAINS_GPT_LIVE
     private var visibleVoiceRunID: String? {
         guard !drawerOpen, !searchMounted else { return nil }
         switch path.last {
@@ -140,8 +158,13 @@ struct AppShell: View {
         case nil: return homeRunID
         }
     }
+#endif
+
     private func openVoiceConversation(_ id: String) {
-        let spaceID = session.conversations.first(where: { $0.id == id })?.spaceId ?? (session.voice.runID == id ? session.voiceSpaceID : nil)
+        var spaceID = session.conversations.first(where: { $0.id == id })?.spaceId
+        #if MAINS_GPT_LIVE
+        spaceID = spaceID ?? (session.voice.runID == id ? session.voiceSpaceID : nil)
+        #endif
         if let spaceID { session.selectSpace(spaceID) }
         open(.conversation(id))
     }

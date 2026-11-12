@@ -22,80 +22,15 @@ private struct EffortOverlayModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onPreferenceChange(EffortSourceFrameKey.self) { sourceFrame = $0 }
-            .background(EffortOverlayPresenter(isPresented: $isPresented, session: session, context: context, sourceFrame: sourceFrame))
-    }
-}
-
-/// A child overlay keeps the composer's first responder and keyboard in place.
-private struct EffortOverlayPresenter: UIViewControllerRepresentable {
-    @Binding var isPresented: Bool
-    let session: BackendSession
-    let context: ComposerContext?
-    let sourceFrame: CGRect
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-    func makeUIViewController(context: Context) -> UIViewController {
-        let controller = UIViewController()
-        controller.view.backgroundColor = .clear
-        controller.view.isUserInteractionEnabled = false
-        return controller
-    }
-    func updateUIViewController(_ controller: UIViewController, context: Context) {
-        context.coordinator.parent = self
-        context.coordinator.update(from: controller)
-    }
-    static func dismantleUIViewController(_ controller: UIViewController, coordinator: Coordinator) {
-        coordinator.removeOverlay()
-    }
-    @MainActor final class Coordinator {
-        var parent: EffortOverlayPresenter
-        var overlay: UIViewController?
-        private var scheduled = false
-        init(_ parent: EffortOverlayPresenter) { self.parent = parent }
-        func removeOverlay() {
-            guard let overlay else { return }
-            self.overlay = nil
-            overlay.presentedViewController?.dismiss(animated: false)
-            overlay.willMove(toParent: nil)
-            overlay.view.removeFromSuperview()
-            overlay.removeFromParent()
-        }
-        func update(from controller: UIViewController) {
-            guard parent.isPresented, let context = parent.context else {
-                removeOverlay()
-                return
-            }
-            guard overlay == nil, !scheduled else { return }
-            scheduled = true
-            let sourceFrame = parent.sourceFrame
-            DispatchQueue.main.async { [weak self, weak controller] in
-                guard let self, let controller else { return }
-                self.scheduled = false
-                guard self.parent.isPresented, let container = controller.view.window?.rootViewController,
-                      self.overlay == nil else { return }
-                let root = EffortOverlayView(session: self.parent.session, context: context,
-                                             sourceFrame: sourceFrame, currentSourceFrame: { [weak self] in
-                    self?.parent.sourceFrame ?? sourceFrame
-                }) { [weak self] in
-                    self?.parent.isPresented = false
+            .overlay {
+                if isPresented, let context {
+                    EffortOverlayView(session: session, context: context, sourceFrame: sourceFrame,
+                        currentSourceFrame: { sourceFrame }, close: { isPresented = false })
+                        .ignoresSafeArea(.container)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityAddTraits(.isModal)
                 }
-                let host = UIHostingController(rootView: root)
-                host.view.backgroundColor = .clear
-                host.view.accessibilityViewIsModal = true
-                self.overlay = host
-                container.addChild(host)
-                host.view.frame = container.view.bounds
-                host.view.translatesAutoresizingMaskIntoConstraints = false
-                container.view.addSubview(host.view)
-                NSLayoutConstraint.activate([
-                    host.view.leadingAnchor.constraint(equalTo: container.view.leadingAnchor),
-                    host.view.trailingAnchor.constraint(equalTo: container.view.trailingAnchor),
-                    host.view.topAnchor.constraint(equalTo: container.view.topAnchor),
-                    host.view.bottomAnchor.constraint(equalTo: container.view.bottomAnchor)
-                ])
-                host.didMove(toParent: container)
-                container.view.layoutIfNeeded()
             }
-        }
     }
 }
 

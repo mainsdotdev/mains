@@ -9,6 +9,14 @@ private final class DecisionFaults {
     var failBefore: String?
     var failAfter: String?
     var delay: String?
+    var holdNextHistory = false
+    var heldHistory: CheckedContinuation<Void, Never>?
+
+    func releaseHistory() {
+        let continuation = heldHistory
+        heldHistory = nil
+        continuation?.resume()
+    }
 }
 
 extension SessionIntegrationTests {
@@ -64,6 +72,11 @@ private final class DecisionFaultTransport: BackendTransport {
         if faults.failBefore == channel { faults.failBefore = nil; throw MainsError.timeout }
         if faults.delay == channel { faults.delay = nil; try await Task.sleep(for: .milliseconds(150)) }
         let result = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
+        if channel == "runs:getHistory", faults.holdNextHistory {
+            faults.holdNextHistory = false
+            await withCheckedContinuation { faults.heldHistory = $0 }
+            faults.heldHistory = nil
+        }
         if faults.failAfter == channel { faults.failAfter = nil; throw MainsError.timeout }
         return result
     }
@@ -212,6 +225,25 @@ struct DecisionTests {
         let approvals = faults.calls.filter { $0.channel == "runs:toolApprovalResponse" }
         #expect(approvals.count == 4 && approvals.allSatisfy { $0.args[0]["approvalToken"].string != nil && $0.commandID != nil })
         #expect(approvals[0].args[0]["answer"] == .string("acceptForSession"))
+        #expect(faults.calls.filter { $0.channel == "runs:answerAsyncQuestions" }.count == 1)
+    }
+
+    @Test @MainActor func acceptedAsyncAnswerStaysHiddenWhileAnOlderHistoryReadCompletes() async throws {
+        let (session, backend, faults) = try makeSession()
+        defer { faults.releaseHistory(); session.exitDemo(); backend.shutdown() }
+        try await openWalkthrough(session)
+        try await skipApprovals(session)
+        let pending = try #require(session.pendingQuestions)
+        faults.holdNextHistory = true
+        let refresh = Task { await session.loadHistory(direction: "refresh") }
+        try await eventually { faults.heldHistory != nil }
+
+        try await session.answerQuestions(pending, answers: ["Functionality", "Keep the answer settled"])
+        #expect(session.decisionState(for: pending.id).phase == .done)
+        #expect(session.pendingQuestions == nil, "An accepted answer must disappear before a delayed history refresh completes.")
+        faults.releaseHistory()
+        _ = await refresh.value
+        #expect(session.pendingQuestions == nil, "An older history response must not bring an accepted question back.")
         #expect(faults.calls.filter { $0.channel == "runs:answerAsyncQuestions" }.count == 1)
     }
 

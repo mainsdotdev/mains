@@ -1,0 +1,5 @@
+Mains is a companion app for managing the AI agents running on your computer. Start conversations, follow progress, respond to approvals, review code changes, and preview files from your phone.
+
+Pair with your computer using a QR code or pairing link. Live use requires Mains running on your computer and a reachable HTTPS connection. Try Demo Mode without pairing.
+
+Setup and desktop download: https://mains.dev

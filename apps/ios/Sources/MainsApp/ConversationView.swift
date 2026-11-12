@@ -2,6 +2,10 @@ import SwiftUI
 
 @MainActor
 struct ConversationView: View {
+    private struct HistoryEntry: Hashable {
+        let runID: String
+        let cursor: HistoryCursor?
+    }
     let session: BackendSession
     let runID: String
     let openComputer: () -> Void
@@ -12,6 +16,8 @@ struct ConversationView: View {
     @Bindable private var queue: ConversationQueue
     @State private var owner: Int?
     @State private var viewport = TranscriptViewport()
+    @State private var initializedHistoryEntry: HistoryEntry?
+    private var historyEntry: HistoryEntry { HistoryEntry(runID: runID, cursor: initialCursor) }
     @State private var consent: ConsentContext?
     @State private var consentQueuesMessage = false
     @State private var consentResumesQueue = false
@@ -25,9 +31,13 @@ struct ConversationView: View {
     @State private var selectedFile: TurnFileSelection?
     @State private var agentsExpanded = false
     @State private var selectedAgent: SubagentSelection?
+    #if MAINS_GPT_LIVE
     @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
     private var ownsVoice: Bool { session.voice.ownsCall && session.voice.runID == runID }
     private var focusedVoice: Bool { ownsVoice && voicePresentation == .focus }
+    #else
+    private var focusedVoice: Bool { false }
+    #endif
     private var agents: [SessionSubagent] { session.viewingRunID == runID ? session.transcript.subagents : [] }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
@@ -90,11 +100,13 @@ struct ConversationView: View {
             .opacity(focusedVoice ? 0 : 1)
             .allowsHitTesting(!focusedVoice)
             .accessibilityHidden(focusedVoice)
+            #if MAINS_GPT_LIVE
             if focusedVoice {
                 VoiceFocusStage(voice: session.voice)
                     .background { KeyboardDismissBackground(color: Color(.systemBackground)) }
                     .transition(.opacity)
             }
+            #endif
         }
         .background(Color(.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
@@ -117,7 +129,9 @@ struct ConversationView: View {
                 }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
+                #if MAINS_GPT_LIVE
                 if ownsVoice { VoicePresentationMenu() }
+                #endif
                 if hasOutputs && !focusedVoice {
                     Button("Outputs", systemImage: "doc.on.doc") { outputs = true }.accessibilityIdentifier("conversationOutputs")
                 }
@@ -142,9 +156,11 @@ struct ConversationView: View {
                 }
             }
         }
-        .task(id: runID) {
+        .task(id: historyEntry) {
             owner = session.ownership
-            if initialCursor != nil {
+            if initialCursor != nil, initializedHistoryEntry != historyEntry {
+                // Returning from a file diff must preserve the existing transcript and viewport.
+                initializedHistoryEntry = historyEntry
                 viewport.beginPage()
                 await session.selectConversation(runID, around: initialCursor)
                 viewport.finishPage(latestConfirmed: false)
@@ -190,6 +206,7 @@ struct ConversationView: View {
 
     private var composerArea: some View {
         VStack(spacing: 8) {
+            #if MAINS_GPT_LIVE
             if focusedVoice && (session.waitingForDecision || session.pendingQuestions != nil) {
                 Button { voicePresentation = .conversation } label: {
                     Label("Response needed", systemImage: "hand.raised")
@@ -198,6 +215,7 @@ struct ConversationView: View {
                     .accessibilityHint("Open the conversation to answer the pending request.")
                     .accessibilityIdentifier("voiceNeedsResponse")
             }
+            #endif
             if !focusedVoice && !agents.isEmpty {
                 SubagentDock(agents: agents, partial: session.transcript.page?.hasOlder == true || session.transcript.page?.hasNewer == true,
                              expanded: $agentsExpanded) { agent in

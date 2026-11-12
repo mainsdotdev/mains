@@ -1,6 +1,17 @@
 import Foundation
 import Observation
 
+public struct VoiceTaskLink: Equatable, Sendable {
+    public let id: String
+    public let title: String
+    static func read(_ value: JSONValue) -> VoiceTaskLink? {
+        guard let id = value["id"].string, !id.isEmpty, id.utf8.count <= 800,
+              let title = value["title"].string, title.utf8.count <= 4096 else { return nil }
+        return VoiceTaskLink(id: id, title: title)
+    }
+}
+
+#if MAINS_GPT_LIVE || SWIFT_PACKAGE
 public struct RealtimeVoiceCatalog: Decodable, Sendable {
     public let voices: [String]
     public let defaultVoice: String
@@ -16,16 +27,6 @@ public struct PendingVoiceConversation: Sendable {
     let commandID: String
     let payload: JSONValue
     let owner: Int
-}
-
-public struct VoiceTaskLink: Equatable, Sendable {
-    public let id: String
-    public let title: String
-    static func read(_ value: JSONValue) -> VoiceTaskLink? {
-        guard let id = value["id"].string, !id.isEmpty, id.utf8.count <= 800,
-              let title = value["title"].string, title.utf8.count <= 4096 else { return nil }
-        return VoiceTaskLink(id: id, title: title)
-    }
 }
 
 /// The app supplies a native WebRTC implementation. Core stays portable and testable.
@@ -266,3 +267,5 @@ public final class RealtimeVoiceController {
         }
     }
 }
+
+#endif
