@@ -14,6 +14,7 @@ struct ChatMessage: View {
     var copyIsPreview = false
     var forkRunID: String? = nil
     var fork: () -> Void = {}
+    @Environment(\.openVoiceConversation) private var openVoiceConversation
     var body: some View {
         VStack(alignment: row.kind == .prompt ? .trailing : .leading, spacing: row.kind == .response ? 4 : 10) {
             switch row.kind {
@@ -29,7 +30,20 @@ struct ChatMessage: View {
                     }.font(.caption).foregroundStyle(.secondary).frame(height: 18).padding(.trailing, 4)
                 }
             case .response:
-                ChatMessageBody(text: row.text).equatable().accessibilityIdentifier(row.live ? "liveMessage" : row.id)
+                if let task = row.voiceTask {
+                    Button { openVoiceConversation(task.id) } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.triangle.branch")
+                            Text(task.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                            Spacer(minLength: 8)
+                            Image(systemName: "arrow.up.right").font(.caption)
+                        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18))
+                    }.buttonStyle(ChatPressStyle()).accessibilityLabel("Open working chat: " + task.title)
+                        .accessibilityIdentifier("voiceTask-" + task.id)
+                } else {
+                    ChatMessageBody(text: row.text).equatable().accessibilityIdentifier(row.live ? "liveMessage" : row.id)
+                }
             case .notice:
                 Label(row.text, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
             case .media: ChatMediaGallery(session: session, media: row.media)

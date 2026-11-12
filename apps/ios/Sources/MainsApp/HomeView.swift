@@ -10,6 +10,10 @@ struct HomeView: View {
     @State private var modelSheet = false
     @State private var optionsSheet = false
     @State private var consent: ConsentContext?
+    @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
+    private var preparingVoice: Bool {
+        session.voice.ownsCall && session.voice.runID == nil && session.voiceSpaceID == space?.id
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var space: Space? { session.selectedSpace }
 
@@ -23,14 +27,20 @@ struct HomeView: View {
                             .transition(.opacity)
                     }
                 }.frame(maxWidth: .infinity)
-                Color.clear.frame(width: 46, height: 46).accessibilityHidden(true)
+                if preparingVoice {
+                    VoicePresentationMenu().frame(width: 46, height: 46).modifier(GlassSurface(radius: 23))
+                } else { Color.clear.frame(width: 46, height: 46).accessibilityHidden(true) }
             }.padding(.horizontal, 16).padding(.top, 8)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: session.connection)
-            Spacer(minLength: 20)
-            if session.pairing != nil && space == nil && !session.connection.isBusy {
-                ContentUnavailableView("Choose a space", systemImage: "square.grid.2x2", description: Text("Open the sidebar to choose where to start."))
+            if preparingVoice && voicePresentation == .focus {
+                VoiceFocusStage(voice: session.voice)
+            } else {
+                Spacer(minLength: 20)
+                if session.pairing != nil && space == nil && !session.connection.isBusy {
+                    ContentUnavailableView("Choose a space", systemImage: "square.grid.2x2", description: Text("Open the sidebar to choose where to start."))
+                }
+                Spacer(minLength: 20)
             }
-            Spacer(minLength: 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background { KeyboardDismissBackground(color: Color(.systemBackground)) }
@@ -192,7 +202,7 @@ private struct HomeComposerArea: View {
             .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 20))
             .disabled(!ready).padding(.horizontal, 16).accessibilityIdentifier("chooseTarget")
             MessageComposer(session: session, context: ComposerContext(space: space), draft: draft, canSend: ready,
-                         model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend)
+                         model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend, voiceCreated: onCreated)
         }.padding(.bottom, 8)
         .onChange(of: targetReady) { _, ready in
             if ready, draft.failureTitle == "Workspace required" { draft.dismissFailure() }

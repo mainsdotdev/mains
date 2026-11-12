@@ -867,5 +867,8 @@ function adaptSocket(socket: WebSocket, device?: VerifiedDevice, authorized: () 
         if (!isBinary) listener(raw.toString());
       }),
     onClose: (listener) => socket.on("close", () => listener()),
+    onPong: (listener) => { socket.on("pong", listener); },
+    ping: () => { socket.ping(); },
+    terminate: () => { socket.terminate(); },
   };
 }

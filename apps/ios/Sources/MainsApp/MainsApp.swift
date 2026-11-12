@@ -1,6 +1,11 @@
 import SwiftUI
 import Network
 
+enum AppFeatures {
+    // Staged for v2. Enable this to restore GPT Live entry points and native media.
+    static let gptLiveEnabled = false
+}
+
 @main
 struct MainsApp: App {
     @State private var session = BackendSession(storage: NativeStorage())
@@ -10,19 +15,31 @@ struct MainsApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(session: session)
-                .preferredColorScheme(appearance.colorScheme)
-                .tint(.primary)
-                .task {
-                    session.restore()
-                    session.setActive(scenePhase == .active)
-                    monitor.pathUpdateHandler = { path in
-                        Task { @MainActor in session.setOnline(path.status == .satisfied) }
-                    }
-                    monitor.start(queue: DispatchQueue(label: "dev.mains.ios.network"))
-                }
-                .onChange(of: scenePhase) { _, phase in session.setActive(phase == .active) }
+            #if DEBUG
+            if CommandLine.arguments.contains("--voice-preview") { VoiceAppearancePreview() }
+            else { application }
+            #else
+            application
+            #endif
         }
+    }
+
+    private var application: some View {
+        RootView(session: session)
+            .preferredColorScheme(appearance.colorScheme)
+            .tint(.primary)
+            .task {
+                if AppFeatures.gptLiveEnabled {
+                    session.voice.makeMedia = { NativeRealtimeVoiceMedia() }
+                }
+                session.restore()
+                session.setActive(scenePhase == .active)
+                monitor.pathUpdateHandler = { path in
+                    Task { @MainActor in session.setOnline(path.status == .satisfied) }
+                }
+                monitor.start(queue: DispatchQueue(label: "dev.mains.ios.network"))
+            }
+            .onChange(of: scenePhase) { _, phase in session.setActive(phase == .active) }
     }
 }
 

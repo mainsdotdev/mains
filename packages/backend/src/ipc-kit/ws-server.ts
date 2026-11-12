@@ -27,6 +27,9 @@ export interface WsConnection extends WsClientConnection {
   readonly commandChannels?: ReadonlySet<string>;
   onMessage(listener: (data: string) => void): void;
   onClose(listener: () => void): void;
+  onPong?(listener: () => void): void;
+  ping?(): void;
+  terminate?(): void;
 }
 
 export interface ServeConnectionOptions {
@@ -52,11 +55,23 @@ export function serveConnection(
   options: ServeConnectionOptions = {},
 ): void {
   let open = true;
+  const lifetime = new AbortController();
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  if (conn.onPong && conn.ping && conn.terminate) {
+    let alive = true;
+    conn.onPong(() => { alive = true; });
+    heartbeat = setInterval(() => {
+      if (!alive) { conn.terminate?.(); return; }
+      alive = false;
+      try { conn.ping?.(); } catch { conn.terminate?.(); }
+    }, 15_000);
+    heartbeat.unref();
+  }
   sink.addClient(conn);
-  conn.onClose(() => { open = false; sink.removeClient(conn.id); });
+  conn.onClose(() => { open = false; clearInterval(heartbeat); sink.removeClient(conn.id); lifetime.abort(); });
   conn.onMessage((data) => {
     if (open && (options.accepting?.() ?? true)) {
-      const work = routeMessage(conn, data, options, () => open);
+      const work = routeMessage(conn, data, options, () => open, lifetime.signal);
       options.track?.(work);
     }
   });
@@ -70,6 +85,7 @@ async function routeMessage(
   data: string,
   options: ServeConnectionOptions,
   isOpen: () => boolean,
+  connectionSignal: AbortSignal,
 ): Promise<void> {
   let message;
   try {
@@ -111,6 +127,7 @@ async function routeMessage(
   const ctx: IpcInvokeContext = conn.deviceId
     ? { clientId: conn.id, deviceId: conn.deviceId }
     : { clientId: conn.id };
+  Object.defineProperty(ctx, "connectionSignal", { value: connectionSignal });
 
   const receipts = options.commandReceipts;
   if (conn.deviceId && commandId && !receipts && !secretResponses.has(channel)) {

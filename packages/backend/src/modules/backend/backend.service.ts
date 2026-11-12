@@ -73,6 +73,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // The composer's model picker: what each provider can run, with the effort
   // levels each model supports.
   CHANNELS.providers.getModels,
+  CHANNELS.providers.getRealtimeVoices,
   // The composer's context picker: the skills and slash commands a provider
   // offers, so a phone can attach one the way the desktop's "@" menu does.
   // Read-only listings — installing or editing a skill stays off this list.
@@ -89,6 +90,9 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
  * needs. Anything touching files, git, terminal or settings stays out.
  */
 export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
+  CHANNELS.runs.createRealtimeConversation,
+  CHANNELS.runs.startRealtime,
+  CHANNELS.runs.stopRealtime,
   CHANNELS.runs.toolApprovalResponse,
   CHANNELS.runs.continue,
   CHANNELS.runs.execute,
@@ -127,6 +131,7 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
  * connections. Exactly the channels the phone subscribes to.
  */
 export const PAIRED_DEVICE_EVENTS: ReadonlySet<string> = new Set([
+  CHANNELS.runs.realtimeEvent,
   CHANNELS.runs.queueChanged,
   CHANNELS.runs.statusChanged,
   CHANNELS.runs.updated,

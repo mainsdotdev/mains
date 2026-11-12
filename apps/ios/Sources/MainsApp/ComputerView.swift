@@ -70,6 +70,15 @@ struct ComputerView: View {
                     .accessibilityIdentifier("copyDiagnostics")
                 }
             }
+            if AppFeatures.gptLiveEnabled && session.pairing != nil {
+                SettingsSection("GPT Live") {
+                    NavigationLink { VoiceSettingsView(session: session) } label: {
+                        SettingsRow(title: "Voice", subtitle: "Choose a voice and listen to samples",
+                                    value: session.selectedRealtimeVoice?.capitalized)
+                    }
+                    .accessibilityIdentifier("voiceSettings")
+                }
+            }
             SettingsSection("Appearance") {
                 ForEach(AppAppearance.allCases, id: \.self) { option in
                     Button {

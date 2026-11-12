@@ -35,6 +35,7 @@ const invokeFrame = (id: number, channel: string, args: unknown[]) =>
 describe("serveConnection", () => {
   afterEach(() => {
     clearHandlers();
+    vi.useRealTimers();
   });
 
   it.each(["read", "reserve"])("does not execute a command after a receipt %s failure", async (stage) => {
@@ -161,6 +162,35 @@ describe("serveConnection", () => {
 
     conn.fireClose();
     expect(sink.clientCount()).toBe(0);
+  });
+
+  it("retires a silent socket within two heartbeat intervals and clears the watchdog", () => {
+    vi.useFakeTimers();
+    const conn = fakeConn("silent-phone");
+    const ping = vi.fn(), terminate = vi.fn(() => conn.fireClose());
+    let pong!: () => void;
+    serveConnection(Object.assign(conn, { ping, terminate, onPong: (listener: () => void) => { pong = listener; } }), new WebSocketSink());
+    vi.advanceTimersByTime(15_000); expect(ping).toHaveBeenCalledOnce();
+    pong(); vi.advanceTimersByTime(15_000); expect(terminate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(15_000); expect(terminate).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(30_000); expect(terminate).toHaveBeenCalledOnce();
+  });
+
+  it("retires in-memory connection resources on close without serializing the signal", async () => {
+    let signal: AbortSignal | undefined;
+    registerHandler("voice:probe", async (ctx) => {
+      signal = ctx.connectionSignal;
+      return { success: true, data: ctx };
+    });
+    const conn = fakeConn("voice-phone");
+    serveConnection(conn, new WebSocketSink());
+    conn.emit(invokeFrame(1, "voice:probe", []));
+    await Promise.resolve(); await Promise.resolve();
+    expect(signal?.aborted).toBe(false);
+    expect(decodeWsMessage(conn.sent[0])).toMatchObject({ result: { data: { clientId: "voice-phone" } } });
+    expect(conn.sent[0]).not.toContain("connectionSignal");
+    conn.fireClose();
+    expect(signal?.aborted).toBe(true);
   });
 
   it("routes an invoke to the registry and replies with a response", async () => {

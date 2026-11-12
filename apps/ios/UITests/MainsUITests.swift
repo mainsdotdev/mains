@@ -1,8 +1,96 @@
 import XCTest
+import UIKit
 
 /// Run alongside scripts/mock-backend.mjs. No AI provider or real workspace is contacted.
 @MainActor
 final class MainsUITests: XCTestCase {
+    func testVoiceDefaultsToFocusAndSwitchesToConversationWithoutEndingOrUnmuting() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--voice-preview"]
+        app.launch()
+        let stage = app.descendants(matching: .any).matching(identifier: "voiceFocusStage").firstMatch
+        XCTAssertTrue(stage.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.scrollViews["conversationTranscript"].isHittable)
+        let orb = app.descendants(matching: .any).matching(identifier: "voiceOrb").firstMatch
+        XCTAssertGreaterThan(orb.frame.width, 180)
+        let focusedOrbWidth = orb.frame.width
+        XCTAssertEqual(orb.frame.midX, app.frame.midX, accuracy: 4)
+        attachScreenshot(app, name: "GPT Live – water focus")
+        app.buttons["muteVoice"].tap()
+        XCTAssertEqual(app.buttons["muteVoice"].label, "Unmute microphone")
+        app.buttons["voiceDisplayOptions"].tap()
+        app.buttons["Conversation"].tap()
+        XCTAssertTrue(stage.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.scrollViews["conversationTranscript"].waitForExistence(timeout: 5))
+        let compactOrb = app.descendants(matching: .any).matching(identifier: "voiceComposerOrb").firstMatch
+        XCTAssertTrue(compactOrb.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(compactOrb.frame.width, 80)
+        XCTAssertLessThan(compactOrb.frame.width, focusedOrbWidth)
+        XCTAssertLessThan(compactOrb.frame.maxY, app.textViews["messageInput"].frame.minY)
+        XCTAssertEqual(app.buttons["muteVoice"].label, "Unmute microphone")
+        attachScreenshot(app, name: "GPT Live – water above composer")
+        app.buttons["voiceDisplayOptions"].tap()
+        app.buttons["Focus"].tap()
+        XCTAssertTrue(stage.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["muteVoice"].label, "Unmute microphone")
+        app.buttons["endVoice"].tap()
+        XCTAssertTrue(stage.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.scrollViews["conversationTranscript"].exists)
+    }
+
+    func testWaterVoiceFocusSupportsLightAppearance() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--voice-preview", "--voice-preview-light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "voiceFocusStage").firstMatch.waitForExistence(timeout: 15))
+        attachScreenshot(app, name: "GPT Live – water in light appearance")
+        app.buttons["endVoice"].tap()
+    }
+
+    func testWaterVoiceStaysStaticWithReduceMotion() async throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--voice-preview", "--voice-preview-reduced-motion"]
+        app.launch()
+        let orb = app.descendants(matching: .any).matching(identifier: "voiceOrb").firstMatch
+        XCTAssertTrue(orb.waitForExistence(timeout: 15))
+        func pixels() throws -> Data {
+            let screenshot = try XCTUnwrap(app.screenshot().image.cgImage)
+            let scale = CGFloat(screenshot.width) / app.frame.width
+            let rect = CGRect(x: (orb.frame.minX - app.frame.minX) * scale, y: (orb.frame.minY - app.frame.minY) * scale,
+                              width: orb.frame.width * scale, height: orb.frame.height * scale).integral
+            return try XCTUnwrap(UIImage(cgImage: XCTUnwrap(screenshot.cropping(to: rect))).pngData())
+        }
+        let first = try pixels()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(first, try pixels())
+        app.buttons["endVoice"].tap()
+    }
+
+    func testCodexEmptyComposerOffersVoiceAndDisclosesMicrophoneSharing() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["closeSidebar"].tap()
+        let mic = app.buttons["startVoice"]
+        XCTAssertTrue(mic.waitForExistence(timeout: 10)); XCTAssertTrue(mic.isEnabled)
+        let input = app.textViews["homeMessageInput"]
+        input.tap(); input.typeText("Keep this written draft")
+        XCTAssertTrue(app.buttons["startConversation"].exists)
+        XCTAssertFalse(mic.exists)
+        // Clear with keyboard input so the same editor remains mounted.
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Keep this written draft".count))
+        XCTAssertTrue(mic.waitForExistence(timeout: 5)); mic.tap()
+        XCTAssertTrue(app.staticTexts["Your microphone audio during the call"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["allowDataSharing"].label.contains("Allow & Start"))
+        app.buttons["declineDataSharing"].tap()
+        XCTAssertTrue(mic.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["endVoice"].exists)
+        forgetFixture(app)
+    }
+
     func testTranscriptPagesAutomaticallyAndKeepsReadingPositionDuringRefresh() async throws {
         try await assertAutomaticTranscriptPaging(code: "ios-test-paging")
     }

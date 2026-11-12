@@ -166,13 +166,15 @@ public struct RunTurn: Codable, Equatable, Sendable {
     public var endedAt: Date? = nil
     public var createdAt: Date? = nil
     public var changes: RunTurnChanges? = nil
-    private enum CodingKeys: String, CodingKey { case id, status, model, turnIndex, startedAt, endedAt, createdAt, changes }
+    public var metadata: JSONValue? = nil
+    private enum CodingKeys: String, CodingKey { case id, status, model, turnIndex, startedAt, endedAt, createdAt, changes, metadata }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id); status = try c.decode(String.self, forKey: .status)
         model = try c.decodeWireIfPresent(String.self, forKey: .model); turnIndex = try c.decodeWireIfPresent(Int.self, forKey: .turnIndex)
         startedAt = try c.decodeWireIfPresent(Date.self, forKey: .startedAt); endedAt = try c.decodeWireIfPresent(Date.self, forKey: .endedAt)
         createdAt = try c.decodeWireIfPresent(Date.self, forKey: .createdAt); changes = try c.decodeWireIfPresent(RunTurnChanges.self, forKey: .changes)
+        metadata = try c.decodeIfPresent(JSONValue.self, forKey: .metadata)
     }
 }
 

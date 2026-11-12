@@ -91,6 +91,19 @@ public struct PendingMessage: Sendable {
 /// One paired computer. All async writers are fenced by connection and pairing ownership.
 @MainActor @Observable
 public final class BackendSession {
+    public let voice = RealtimeVoiceController()
+    public private(set) var pendingVoiceConversation: PendingVoiceConversation?
+    public private(set) var checkingVoiceConversation = false
+    public private(set) var voiceSpaceID: String?
+    public private(set) var realtimeVoices: RealtimeVoiceCatalog?
+    public private(set) var selectedRealtimeVoice: String?
+    public private(set) var loadingVoiceSettings = false
+    public private(set) var savingVoiceSettings = false
+    public private(set) var voiceSettingsError: String?
+    public private(set) var uncertainVoiceSelection = false
+    @ObservationIgnored private var voiceSettingsReadID: UUID?
+    private struct VoiceSelectionChange { let id: String; let voice: String; let owner: Int }
+    @ObservationIgnored private var voiceSelectionChange: VoiceSelectionChange?
     public private(set) var isDemo = false
     public private(set) var pairing: PairedBackend?
     public private(set) var activeEndpoint: URL?
@@ -179,10 +192,177 @@ public final class BackendSession {
     }
     init(storage: any SessionStorage, makeTransport: @escaping @MainActor (DemoBackend?) -> any BackendTransport) {
         self.storage = storage; self.makeTransport = makeTransport
+        voice.onChange = { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !self.active, !self.voice.keepsConnectionAlive, self.transport != nil else { return }
+                self.restart()
+            }
+        }
     }
     public var isConnected: Bool { connection == .connected }
     public var ownership: Int { pairingOwner }
     public var selectedSpace: Space? { spaces.first { $0.id == selectedSpaceID } }
+
+    public func loadVoiceSettings() async {
+        guard isConnected, let candidate = transport, !loadingVoiceSettings, voiceSelectionChange == nil else { return }
+        let current = generation, readID = UUID()
+        voiceSettingsReadID = readID; loadingVoiceSettings = true; voiceSettingsError = nil
+        defer { if voiceSettingsReadID == readID { loadingVoiceSettings = false } }
+        do {
+            async let catalogRead = candidate.invoke("providers:getRealtimeVoices", args: [.string("codex")])
+            async let providerRead = candidate.invoke("providers:getEnabled")
+            let (catalogValue, providerValue) = try await (catalogRead, providerRead)
+            let catalog = try catalogValue.decode(RealtimeVoiceCatalog.self)
+            let providers = try list(providerValue, key: "providers", as: ProviderSummary.self)
+            guard generation == current, transport === candidate, voiceSettingsReadID == readID else { return }
+            guard !catalog.voices.isEmpty, catalog.voices.count <= 256,
+                  catalog.voices.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 }),
+                  catalog.voices.contains(catalog.defaultVoice) else { throw MainsError.invalidReply }
+            realtimeVoices = catalog
+            let saved = providers.first { $0.id == "codex" }?.config?["realtimeVoice"]?.string
+            selectedRealtimeVoice = saved?.isEmpty == false ? saved : catalog.defaultVoice
+        } catch {
+            if generation == current, transport === candidate, voiceSettingsReadID == readID {
+                voiceSettingsError = error.localizedDescription
+            }
+        }
+    }
+
+    public func selectRealtimeVoice(_ value: String) async {
+        guard isConnected, !loadingVoiceSettings, voiceSelectionChange == nil,
+              realtimeVoices?.voices.contains(value) == true else { return }
+        voiceSettingsReadID = nil
+        let change = VoiceSelectionChange(id: UUID().uuidString, voice: value, owner: pairingOwner)
+        voiceSelectionChange = change
+        await saveVoiceSelection(change)
+    }
+
+    public func checkVoiceSelection() async {
+        guard isConnected, !savingVoiceSettings, let change = voiceSelectionChange else { return }
+        await saveVoiceSelection(change)
+    }
+
+    private func saveVoiceSelection(_ change: VoiceSelectionChange) async {
+        guard change.owner == pairingOwner else { return }
+        savingVoiceSettings = true; voiceSettingsError = nil
+        defer { if change.owner == pairingOwner { savingVoiceSettings = false } }
+        do {
+            let result = try await command("providers:updateRunSettings", args: [.string("codex"), .object(["realtimeVoice": .string(change.voice)])],
+                                           commandID: change.id, owner: change.owner)
+            guard change.owner == pairingOwner else { return }
+            guard result["config"]["realtimeVoice"].string == change.voice else {
+                throw MainsError.server("Update Mains on your computer to save voice selections from this iPhone.")
+            }
+            selectedRealtimeVoice = change.voice
+            voiceSelectionChange = nil; uncertainVoiceSelection = false
+        } catch {
+            guard change.owner == pairingOwner else { return }
+            let failure = error as? MainsError
+            let refused: Bool
+            if case .server = failure { refused = !(failure?.isUnconfirmedCommand ?? true) }
+            else { refused = failure == .unauthorized || failure == .incompatible }
+            if refused { voiceSelectionChange = nil; uncertainVoiceSelection = false }
+            else { uncertainVoiceSelection = true }
+            voiceSettingsError = refused ? error.localizedDescription : "Voice selection could not be confirmed. Check the save before choosing another voice."
+        }
+    }
+
+    public func canStartVoice(runID: String? = nil, spaceID: String? = nil) -> Bool {
+        guard isConnected, !isDemo, voice.makeMedia != nil, !voice.ownsCall, pendingVoiceConversation == nil,
+              pendingFork == nil, pendingMessage == nil, voiceSelectionChange == nil, !sending, stoppingRunID == nil else { return false }
+        if let runID, let run = conversations.first(where: { $0.id == runID }) {
+            return run.providerId == "codex" && !run.isActive && !run.isArchived && run.isReplica != true &&
+                run.archivedReplyError == nil && settingsChanges[runID] == nil &&
+                !decisionDeliveries.contains { $0.value.attempt?.runID == runID }
+        }
+        guard runID == nil, let space = spaces.first(where: { $0.id == spaceID }), space.providerId == "codex", !changingMode else { return false }
+        if space.mode == "developer" {
+            guard let workspaceID = homeTargets[space.id]?.workspaceID,
+                  workspaces.contains(where: { $0.id == workspaceID && $0.isReplica != true }),
+                  gitStates.first(where: { $0.workspaceId == workspaceID })?.pathExists != false else { return false }
+        }
+        return true
+    }
+
+    /// Creates an idle conversation only when the user explicitly starts voice.
+    /// A new-chat draft and its attachments remain owned by the home composer.
+    public func startVoice(runID: String? = nil, spaceID: String? = nil) async {
+        guard canStartVoice(runID: runID, spaceID: spaceID), let pairing, let accountID, let candidate = transport else { return }
+        guard hasConsent(providerID: "codex") else { actionError = "Allow data sharing with OpenAI before starting voice chat."; return }
+        let owner = pairingOwner, current = generation
+        let label = runID.flatMap { id in conversations.first { $0.id == id }?.displayTitle } ?? "New conversation"
+        let existingSettings = runID.flatMap { settings(forRunID: $0) }
+        voiceSpaceID = runID.flatMap { id in conversations.first { $0.id == id }?.spaceId } ?? spaceID
+        var creation: PendingVoiceConversation?
+        if runID == nil, let space = spaces.first(where: { $0.id == spaceID }) {
+            let target = homeTargets[space.id] ?? HomeTarget()
+            var payload: [String: JSONValue] = ["accountId": .string(accountID), "spaceId": .string(space.id)]
+            do { payload["conversationSettings"] = try .encode(settings(for: space)) }
+            catch { actionError = error.localizedDescription; return }
+            if space.mode == "developer", let workspaceID = target.workspaceID { payload["workspaceId"] = .string(workspaceID) }
+            if space.mode != "developer", let collectionID = target.collectionID { payload["collectionId"] = .string(collectionID) }
+            creation = PendingVoiceConversation(spaceID: space.id, commandID: UUID().uuidString, payload: .object(payload), owner: owner)
+        }
+        let startID = UUID().uuidString
+        var stopID = UUID().uuidString
+        await voice.start(label: label) { [weak self] in
+            guard let self, self.pairingOwner == owner, self.generation == current,
+                  self.transport === candidate, self.isConnected, self.hasConsent(providerID: "codex") else { throw MainsError.changedBackend }
+            var id = runID
+            if id == nil, let pending = creation {
+                self.pendingVoiceConversation = pending
+                id = try await self.resolveVoiceConversation(pending)
+            }
+            guard let id, self.pairingOwner == owner, self.generation == current,
+                  self.transport === candidate, self.isConnected, self.hasConsent(providerID: "codex") else { throw MainsError.changedBackend }
+            let settings = existingSettings ?? self.settings(forRunID: id)
+            return RealtimeVoiceSignaling(runID: id, start: { [weak self] sdp, connectionID in
+                guard let self, self.pairingOwner == owner, self.generation == current,
+                      self.transport === candidate, self.hasConsent(providerID: "codex") else { throw MainsError.changedBackend }
+                var payload: [String: JSONValue] = ["runId": .string(id), "accountId": .string(accountID),
+                    "connectionId": .string(connectionID), "sdp": .string(sdp)]
+                if let settings { payload["conversationSettings"] = try .encode(settings) }
+                // An SDP offer belongs to this one live peer. Never replay it
+                // on a replacement transport after the microphone has retired.
+                _ = try await candidate.invoke("runs:startRealtime", args: [.object(payload)], commandId: startID, timeout: 30)
+            }, stop: { [weak self] connectionID in
+                guard let self, self.pairingOwner == owner, self.pairing?.descriptor.backendId == pairing.descriptor.backendId else { throw MainsError.changedBackend }
+                do {
+                    _ = try await self.command("runs:stopRealtime", args: [.object([
+                        "runId": .string(id), "accountId": .string(accountID), "connectionId": .string(connectionID),
+                    ])], commandID: stopID, owner: owner)
+                    stopID = UUID().uuidString
+                } catch {
+                    if let failure = error as? MainsError, case .server = failure, !failure.isUnconfirmedCommand { stopID = UUID().uuidString }
+                    throw error
+                }
+            })
+        }
+    }
+
+    public func checkVoiceConversation() async throws -> String {
+        guard let pending = pendingVoiceConversation, pending.uncertain, !checkingVoiceConversation else { throw MainsError.invalidReply }
+        checkingVoiceConversation = true
+        defer { if pending.owner == pairingOwner { checkingVoiceConversation = false } }
+        return try await resolveVoiceConversation(pending)
+    }
+
+    private func resolveVoiceConversation(_ pending: PendingVoiceConversation) async throws -> String {
+        guard pending.owner == pairingOwner else { throw MainsError.changedBackend }
+        do {
+            let result = try await command("runs:createRealtimeConversation", args: [pending.payload], commandID: pending.commandID, owner: pending.owner)
+            guard let id = result["runId"].string, !id.isEmpty, id.utf8.count <= 800 else { throw MainsError.invalidReply }
+            if pairingOwner == pending.owner { pendingVoiceConversation = nil }
+            _ = try? await readQueuedRun(id)
+            return id
+        } catch {
+            if pairingOwner == pending.owner {
+                if let failure = error as? MainsError, case .server = failure, !failure.isUnconfirmedCommand { pendingVoiceConversation = nil }
+                else { pendingVoiceConversation?.uncertain = true }
+            }
+            throw error
+        }
+    }
 
     public func searchConversations(_ query: String, cursor: ConversationSearchCursor? = nil) async throws -> ConversationSearchPage {
         guard let transport, isConnected, let accountID else { throw MainsError.disconnected }
@@ -589,6 +769,10 @@ public final class BackendSession {
 
     public func setActive(_ value: Bool) {
         guard active != value else { return }; active = value
+        if voice.keepsConnectionAlive {
+            if !value { runQueues.pauseAll("Queued messages are paused while Mains is in the background.") }
+            return
+        }
         restart()
     }
     public func setOnline(_ value: Bool) {
@@ -663,6 +847,9 @@ public final class BackendSession {
     }
 
     private func resetProjection() {
+        voice.retire(); pendingVoiceConversation = nil; checkingVoiceConversation = false; voiceSpaceID = nil
+        realtimeVoices = nil; selectedRealtimeVoice = nil; voiceSettingsReadID = nil; voiceSelectionChange = nil
+        loadingVoiceSettings = false; savingVoiceSettings = false; voiceSettingsError = nil; uncertainVoiceSelection = false
         stopRemoteQueueWatch()
         runQueues.clear()
         initialHistoryCursor = nil
@@ -683,9 +870,11 @@ public final class BackendSession {
     }
 
     private func restart() {
+        voice.connectionLost()
         stopRemoteQueueWatch()
         runQueues.pauseAll("Backend disconnected. Queued messages are paused.")
         generation += 1
+        voiceSettingsReadID = nil; loadingVoiceSettings = false
         connectionTask?.cancel(); eventRefresh?.cancel(); listRefresh?.cancel(); historyTask?.cancel()
         approvalExpiryTask?.cancel(); approvalExpiryTask = nil
         connectionTask = nil; eventRefresh = nil; listRefresh = nil; historyTask = nil
@@ -697,7 +886,7 @@ public final class BackendSession {
         transcript.clearStreams()
         guard let pairing else { connection = .idle; return }
         if let blocked { connection = blocked; return }
-        guard active else { connection = .suspended; return }
+        guard active || voice.keepsConnectionAlive else { connection = .suspended; return }
         guard online || isDemo else { connection = .offline; return }
         if connection == .unauthorized || connection == .incompatible { return }
         let current = generation
@@ -708,7 +897,7 @@ public final class BackendSession {
     private func connect(_ pairing: PairedBackend, generation current: Int) async {
         var recoveryEnd = ContinuousClock.now + .seconds(30)
         var quiet = false
-        while !Task.isCancelled && generation == current && active && (online || isDemo) {
+        while !Task.isCancelled && generation == current && (active || voice.keepsConnectionAlive) && (online || isDemo) {
             let candidate = makeTransport(demoBackend)
             let remaining = ContinuousClock.now.duration(to: recoveryEnd).components
             let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
@@ -992,6 +1181,12 @@ public final class BackendSession {
     }
 
     private func event(_ channel: String, _ payload: JSONValue) {
+        if channel == "runs:realtimeEvent" {
+            voice.receive(payload)
+            if payload["type"].string == "closed", payload["runId"].string == viewingRunID,
+               let id = payload["connectionId"].string { transcript.closeVoice(id) }
+            return
+        }
         let runID = payload["runId"].string
         if channel == "runs:queueChanged", runID == viewingRunID { scheduleRemoteQueueRead() }
         if channel == "runs:statusChanged", let runID, let status = payload["status"].string { runQueues.observe(runID, status: status) }
@@ -1107,17 +1302,23 @@ public final class BackendSession {
         if isDemo { demoConsents.remove(providerID) }
         else { storage.revokeConsent(backendID: backendID, providerID: providerID) }
         consentRevision += 1
+        if providerID == "codex" { Task { await voice.stop() } }
     }
     public func revokeAllConsents(backendID: String) {
         guard pairing?.descriptor.backendId == backendID else { return }
         if isDemo { demoConsents = [] }
         else { storage.revokeAllConsents(backendID: backendID) }
         consentRevision += 1
+        Task { await voice.stop() }
     }
 
     public func send(_ text: String, runID: String? = nil, spaceID: String? = nil, workspaceID: String? = nil,
                      collectionID: String? = nil, settings: ComposerSettings? = nil, attachments: [PromptAttachment] = [],
                      contextSkills: [ContextSkill] = [], contextScope: ContextScope? = nil, steering: Bool = false, queuedInputID: String? = nil) async throws -> String {
+        guard pendingVoiceConversation == nil else { throw MainsError.server("Check the unconfirmed voice conversation before sending.") }
+        guard voice.runID != runID || !voice.ownsCall || voice.phase == .connected && conversations.first(where: { $0.id == runID })?.isActive == true else {
+            throw MainsError.server("End voice chat before sending a written reply to this conversation.")
+        }
         guard pendingFork == nil else { throw MainsError.server("Wait for the fork, or check its delivery before sending.") }
         guard pendingMessage?.status != .uncertain else { throw MainsError.server("Check the unconfirmed message before sending another.") }
         if let runID, decisionDeliveries.contains(where: { $0.value.attempt?.runID == runID && [.sending, .uncertain].contains($0.value.phase) }) {
@@ -1192,7 +1393,7 @@ public final class BackendSession {
     }
 
     public func canForkConversation(_ id: String) -> Bool {
-        isConnected && pendingFork == nil && !sending && pendingMessage == nil && stoppingRunID == nil &&
+        isConnected && pendingVoiceConversation == nil && !(voice.ownsCall && voice.runID == id) && pendingFork == nil && !sending && pendingMessage == nil && stoppingRunID == nil &&
         settingsChanges[id] == nil && conversations.first(where: { $0.id == id })?.canFork == true &&
         !decisionDeliveries.contains { $0.value.attempt?.runID == id && [.sending, .uncertain].contains($0.value.phase) }
     }

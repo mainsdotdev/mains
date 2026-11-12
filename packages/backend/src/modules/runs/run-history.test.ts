@@ -302,6 +302,23 @@ describe("conversation history pages", () => {
     expect(old.artifacts.map((a) => a.id)).toContain(voice.id);
   });
 
+  it("includes both voice speakers and bounded work provenance in the phone conversation window", () => {
+    const prompt = createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "Spoken request", createdAt: at(10),
+      metadata: JSON.stringify({ voice: true, voiceStartedAt: at(1).getTime(), streamId: "voice-user" }) });
+    const reply = createRunArtifact(db, { runId: "r", kind: "report", content: "Spoken answer", createdAt: at(11),
+      metadata: JSON.stringify({ voice: true, voiceStartedAt: at(2).getTime(), streamId: "voice-assistant" }) });
+    const native = createRunTurn(db, { runId: "r", turnIndex: 1, startedAt: at(1), createdAt: at(1), metadata: JSON.stringify({
+      inputSource: "voice", providerTurnId: "native-work", realtimeSessionId: "voice-call", secret: "must-not-project",
+    }) });
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", conversationWindow: true });
+    expect(page.artifacts.map(a => a.id)).toEqual([prompt.id, reply.id]);
+    expect(page.artifacts.map(a => a.metadata?.streamId)).toEqual(["voice-user", "voice-assistant"]);
+    expect(page.turns.find(t => t.id === native.id)?.metadata).toEqual({
+      inputSource: "voice", providerTurnId: "native-work", realtimeSessionId: "voice-call",
+    });
+    expect(JSON.stringify(page)).not.toContain("must-not-project");
+  });
+
   it("loads complete promptless histories and handles empty conversations", () => {
     expect(runsRepo.findHistoryPage({ runId: "r" }).start).toBeNull();
     for (let i = 0; i < 900; i++) createRunArtifact(db, { runId: "r", kind: "log", content: `log-${i}`, createdAt: at(i) });

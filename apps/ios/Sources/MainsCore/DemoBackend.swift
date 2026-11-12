@@ -51,8 +51,9 @@ final class DemoBackend {
         let result: Result<JSONValue, MainsError>
     }
     private var receipts: [String: Receipt] = [:]
+    private static let sampleVoices = ["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"]
     private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:fork", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings",
-        "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions"]
+        "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings"]
 
     var pairing: PairedBackend {
         PairedBackend(descriptor: BackendDescriptor(backendId: Self.backendID, name: "Demo Mac",
@@ -166,6 +167,20 @@ final class DemoBackend {
             let key = ["workspace:list":"workspaces", "workspace:listGitStates":"gitStates", "collections:list":"collections", "projects:list":"projects"][channel]!
             return seed[key]
         case "providers:getEnabled": return seed["providers"]
+        case "providers:getRealtimeVoices":
+            guard first.string == "codex" else { throw MainsError.server("Voice is available with Codex.") }
+            return .object(["voices": .array(Self.sampleVoices.map(JSONValue.string)), "defaultVoice": .string("sol")])
+        case "providers:updateRunSettings":
+            guard first.string == "codex", let voice = args.dropFirst().first?["realtimeVoice"].string,
+                  Self.sampleVoices.contains(voice) else { throw MainsError.server("Choose an available demo voice.") }
+            var providers = seed["providers"].array
+            guard let index = providers.firstIndex(where: { $0["id"].string == "codex" }) else { throw MainsError.invalidReply }
+            var provider = providers[index].objectValue
+            var config = provider["config"]?.objectValue ?? [:]
+            config["realtimeVoice"] = .string(voice); provider["config"] = .object(config)
+            providers[index] = .object(provider)
+            var updated = seed.objectValue; updated["providers"] = .array(providers); seed = .object(updated)
+            return .object(provider)
         case "providers:getModels": return seed["models"][first.string ?? ""]
         case "providers:getSkills":
             guard seed["providers"].array.contains(where: { $0["id"].string == first.string }) else { throw MainsError.server("Choose a demo provider.") }

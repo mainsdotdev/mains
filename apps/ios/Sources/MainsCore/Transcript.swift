@@ -15,6 +15,8 @@ public struct TranscriptRow: Identifiable, Equatable, Sendable {
     public var delivery: PendingMessage.Status? = nil
     public var pendingAttachments: [PromptAttachment] = []
     public var subagents: [SessionSubagent] = []
+    public var voiceTask: VoiceTaskLink? = nil
+    public var voice = false
 }
 
 /// One bounded backend page plus ephemeral previews. Acknowledgements outlive page replacement.
@@ -29,6 +31,7 @@ public struct Transcript: Sendable {
     private struct PromptIdentity: Equatable, Sendable { let id: String; let date: Date }
     private var promptIdentities: [Int: PromptIdentity] = [:]
     private var streamDates: [String: Date] = [:]
+    private var speechConnections: [String: String] = [:]
     private struct Thought: Sendable {
         let text: String
         let date: Date
@@ -64,6 +67,7 @@ public struct Transcript: Sendable {
                 if let preview = streams[id] { streamDates[id] = preview.date }
                 if let preview = childStreams[id] { streamDates[id] = preview.row.date }
                 streams.removeValue(forKey: id)
+                speechConnections.removeValue(forKey: id)
                 childStreams.removeValue(forKey: id)
                 thoughts.removeValue(forKey: id)
             }
@@ -76,6 +80,21 @@ public struct Transcript: Sendable {
         let event = payload["event"], metadata = event["metadata"]
         guard event["type"].string == "artifact", let id = event["streamId"].string,
               !acknowledged.contains(id), !settled.contains(id) else { return }
+        if metadata["voice"].bool {
+            guard ["user-prompt", "report"].contains(event["kind"].string ?? ""),
+                  let connectionID = metadata["realtimeSessionId"].string,
+                  let text = event["content"].string, !text.isEmpty else { return }
+            let kind: TranscriptRow.Kind = event["kind"].string == "user-prompt" ? .prompt : .response
+            streams[id] = TranscriptRow(id: "stream:" + id, kind: kind, text: String(text.prefix(16_384)),
+                date: streams[id]?.date ?? Date(timeIntervalSince1970: (metadata["voiceStartedAt"].number ?? payload["ts"].number ?? 0) / 1000),
+                live: metadata["streaming"] != .bool(false), deferredArtifactID: nil, turnID: Self.turnID(metadata), voice: true)
+            speechConnections[id] = connectionID
+            if streams[id]?.live == false { settled.insert(id) }
+            if speechConnections.count > 50, let oldest = speechConnections.keys.min(by: { (streams[$0]?.date ?? .distantPast) < (streams[$1]?.date ?? .distantPast) }) {
+                speechConnections.removeValue(forKey: oldest); streams.removeValue(forKey: oldest)
+            }
+            return
+        }
         if !AgentActivity.foreground(metadata) {
             guard ["report", "result", "command_result"].contains(event["kind"].string ?? ""),
                   !AgentActivity.thinking(kind: event["kind"].string ?? "", metadata: metadata),
@@ -103,6 +122,7 @@ public struct Transcript: Sendable {
             return
         }
         guard event["kind"].string == "report", ["agent_message_streaming", "assistant.message_delta"].contains(metadata["source"].string ?? "") else { return }
+        guard !voiceNarration(metadata) else { return }
         guard let text = event["content"].string, !text.isEmpty else { streams.removeValue(forKey: id); return }
         clearThoughts(); suppressStoredThoughts = true
         streams[id] = TranscriptRow(id: "stream:" + id, kind: .response, text: text,
@@ -118,7 +138,7 @@ public struct Transcript: Sendable {
         }
     }
     public mutating func settleTurn() {
-        for id in Array(streams.keys) { settle(id) }
+        for id in Array(streams.keys) where speechConnections[id] == nil { settle(id) }
         for id in Array(childStreams.keys) {
             if let preview = childStreams[id] {
                 let row = preview.row
@@ -129,7 +149,12 @@ public struct Transcript: Sendable {
         clearThoughts(); suppressStoredThoughts = true
     }
     private mutating func clearThoughts() { settled.formUnion(thoughts.keys); thoughts.removeAll() }
-    public mutating func clearStreams() { streams.removeAll(); childStreams.removeAll(); clearThoughts(); suppressStoredThoughts = true }
+    public mutating func clearStreams() { streams.removeAll(); speechConnections.removeAll(); childStreams.removeAll(); clearThoughts(); suppressStoredThoughts = true }
+    public mutating func closeVoice(_ connectionID: String) {
+        for (id, owner) in speechConnections where owner == connectionID && streams[id]?.live == true {
+            streams.removeValue(forKey: id); speechConnections.removeValue(forKey: id); settled.insert(id)
+        }
+    }
 
     public var subagents: [SessionSubagent] { SubagentProjection(calls: page?.toolCalls ?? []).agents }
     public func subagentFlow(for agent: SessionSubagent) -> SubagentFlow? {
@@ -182,8 +207,9 @@ public struct Transcript: Sendable {
     public var rows: [TranscriptRow] {
         var rows = (page?.artifacts ?? []).compactMap { artifact -> TranscriptRow? in
             let metadata = artifact.metadata ?? .null
-            guard AgentActivity.foreground(metadata), !AgentActivity.thinking(kind: artifact.kind, metadata: metadata),
+            guard (metadata["voice"].bool || AgentActivity.foreground(metadata)), !AgentActivity.thinking(kind: artifact.kind, metadata: metadata),
                   artifact.kind != "prompt_suggestion" else { return nil }
+            if artifact.kind == "report", voiceNarration(metadata) { return nil }
             var text = artifact.content ?? ""
             let kind: TranscriptRow.Kind
             var media: [TranscriptMedia] = []
@@ -204,11 +230,12 @@ public struct Transcript: Sendable {
             let streamID = metadata["streamId"].string
             let identity = promptIdentities[artifact.id]
             let id = rowID(for: artifact)
-            let date = identity?.date ?? streamID.flatMap { streamDates[$0] } ?? artifact.createdAt
+            let date = identity?.date ?? streamID.flatMap { streamDates[$0] } ?? metadata["voiceStartedAt"].number.map { Date(timeIntervalSince1970: $0 / 1000) } ?? artifact.createdAt
             return TranscriptRow(id: id, kind: kind, text: text, date: date, live: false,
                                  deferredArtifactID: metadata["mobileContentDeferred"].bool || metadata["mobileContentDeferred"]["chars"].number != nil ? artifact.id : nil, media: media,
                                  turnID: Self.turnID(metadata), contextSkills: (try? metadata["skills"].decode([ContextSkill].self)) ?? [],
-                                 delivery: identity == nil ? nil : .accepted)
+                                 delivery: identity == nil ? nil : .accepted,
+                                 voiceTask: VoiceTaskLink.read(metadata["voiceTask"]), voice: metadata["voice"].bool)
         }
         let projection = SubagentProjection(calls: page?.toolCalls ?? [])
         rows += (page?.toolCalls ?? []).filter { $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) && !projection.rootCallIDs.contains($0.id) }.map {
@@ -239,6 +266,16 @@ public struct Transcript: Sendable {
     private static func turnID(_ metadata: JSONValue) -> Int? {
         guard let number = metadata["turnId"].number, number > 0, number < Double(Int.max), number.rounded() == number else { return nil }
         return Int(number)
+    }
+
+    private func voiceNarration(_ metadata: JSONValue) -> Bool {
+        if metadata["voice"].bool || metadata["inputSource"].string == "text" { return false }
+        if metadata["inputSource"].string == "voice" { return true }
+        guard let nativeID = metadata["providerTurnId"].string else { return false }
+        if let turn = page?.turns.first(where: { $0.metadata?["providerTurnId"].string == nativeID }) {
+            return turn.metadata?["inputSource"].string == "voice"
+        }
+        return metadata["realtimeSessionId"].string != nil
     }
 
     public func request(runID: String, direction: String) throws -> JSONValue {

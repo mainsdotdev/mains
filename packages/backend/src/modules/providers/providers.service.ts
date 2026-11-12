@@ -140,9 +140,19 @@ export const providersService = {
     id: string,
     patch: UpdateRunSettingsPayload,
   ): Promise<ProviderResponse> {
+    if (patch.realtimeVoice !== undefined) {
+      if (id !== PROVIDER_IDS.codex || typeof patch.realtimeVoice !== "string" || !patch.realtimeVoice || patch.realtimeVoice.length > 128) {
+        throw new Error("Invalid Codex voice");
+      }
+      const catalog = await providersService.getRealtimeVoices(id);
+      if (!catalog?.voices.includes(patch.realtimeVoice)) throw new Error("This voice is no longer available. Refresh the voice list.");
+    }
+    // Read the latest config after asynchronous voice discovery so another
+    // settings edit made while the catalog loads is preserved.
     const provider = await providersRepo.findById(id);
     if (!provider) throw new Error("Provider not found");
     const config: Record<string, unknown> = { ...(provider.config ?? {}) };
+    if (patch.realtimeVoice !== undefined) config.realtimeVoice = patch.realtimeVoice;
 
     if (patch.effortLevel !== undefined) {
       if (typeof patch.effortLevel !== "string") {
@@ -404,8 +414,8 @@ export const providersService = {
 
 /**
  * The provider row a paired device may see. `config` is the Mac's settings
- * blob, credentials included — a device gets only the run-settings keys the
- * composer reads (`RUN_SETTING_CONFIG_KEYS`); everything else, apiKey and
+ * blob, credentials included — a device gets the run-settings keys the
+ * composer reads (`RUN_SETTING_CONFIG_KEYS`) and Codex's voice; apiKey and
  * baseUrl first of all, never leaves the machine.
  */
 export function providerForPairedDevice(provider: ProviderResponse): ProviderResponse {
@@ -413,6 +423,10 @@ export function providerForPairedDevice(provider: ProviderResponse): ProviderRes
   const config: Record<string, unknown> = {};
   for (const key of RUN_SETTING_CONFIG_KEYS) {
     if (key in provider.config) config[key] = provider.config[key];
+  }
+  // Voice is a provider preference, not a per-conversation model snapshot.
+  if (provider.id === PROVIDER_IDS.codex && typeof provider.config.realtimeVoice === "string") {
+    config.realtimeVoice = provider.config.realtimeVoice;
   }
   return { ...provider, config };
 }

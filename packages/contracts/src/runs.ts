@@ -350,7 +350,7 @@ export interface SpaceModePayload {
 
 /**
  * `providers:getEnabled` row (subset). `config` is the provider's settings
- * blob; the phone reads only the reasoning keys out of it (see `lib/models`).
+ * blob; paired devices receive only safe run preferences and the Codex voice.
  */
 export interface ProviderSummary {
   id: string;
@@ -391,6 +391,8 @@ export interface UpdateRunSettingsPayload {
   fastMode?: boolean;
   goalMode?: boolean;
   planMode?: boolean;
+  /** Codex voice preference; applies to the next realtime session. */
+  realtimeVoice?: string;
 }
 
 /** `collections:list` row (subset). */

@@ -687,6 +687,8 @@ const realtimeConnections = new Map<
     cancelRequested: boolean;
     prepared: Promise<void>;
     dispose?: () => void;
+    deviceId?: string;
+    releaseOwner?: () => void;
   }
 >();
 
@@ -766,7 +768,8 @@ export const runsService = {
     return { runId };
   },
 
-  async startRealtime(payload: RunRealtimeStartPayload): Promise<void> {
+  async startRealtime(payload: RunRealtimeStartPayload, owner?: { deviceId: string; clientId?: string; signal?: AbortSignal }): Promise<void> {
+    if (owner?.signal?.aborted) throw new Error("The voice connection was closed.");
     assertOwnedRecord("runs", payload.runId);
     assertRecordAvailable(recordKey("run", payload.runId));
     if (
@@ -794,17 +797,37 @@ export const runsService = {
       );
     if (realtimeConnections.has(run.id))
       throw new Error("Voice chat is already active for this conversation.");
+    if (owner?.signal?.aborted) throw new Error("The voice connection was closed.");
     assertRecordAvailable(recordKey("run", run.id));
     let prepared!: () => void;
     const connection: NonNullable<ReturnType<typeof realtimeConnections.get>> =
       {
         connectionId: payload.connectionId,
+        deviceId: owner?.deviceId,
         cancelRequested: false,
         prepared: new Promise<void>((resolve) => {
           prepared = resolve;
         }),
       };
     realtimeConnections.set(run.id, connection);
+    // A killed/backgrounded phone cannot leave an unowned native call alive.
+    // Failed closure retains the claim and retries until native teardown confirms.
+    if (owner?.signal) {
+      const signal = owner.signal;
+      let retry: ReturnType<typeof setTimeout> | undefined;
+      const close = () => {
+        if (realtimeConnections.get(run.id) !== connection) return;
+        void runsService.stopRealtime(payload, owner.deviceId).catch(() => {
+          if (realtimeConnections.get(run.id) !== connection) return;
+          retry = setTimeout(close, 2_000);
+          retry.unref();
+        });
+      };
+      signal.addEventListener("abort", close, { once: true });
+      connection.releaseOwner = () => { signal.removeEventListener("abort", close); clearTimeout(retry); };
+      if (signal.aborted) close();
+    }
+    const realtimeScope = owner?.clientId ? { clientId: owner.clientId } : { excludeDevices: true };
     let coordinator: ReturnType<typeof createVoiceTaskCoordinator> | undefined;
     try {
       const provider = await providersService.getById(run.providerId);
@@ -999,7 +1022,7 @@ export const runsService = {
             runId: run.id,
             connectionId: payload.connectionId,
             type: "ending",
-          } satisfies RunRealtimeEvent);
+          } satisfies RunRealtimeEvent, realtimeScope);
           await runsService.stopRealtime({
             runId: run.id,
             accountId: run.accountId,
@@ -1019,7 +1042,7 @@ export const runsService = {
             eventId: generateRunId(),
             content,
             announce,
-          } satisfies RunRealtimeEvent);
+          } satisfies RunRealtimeEvent, realtimeScope);
         },
       });
       connection.dispose = coordinator.dispose;
@@ -1039,12 +1062,13 @@ export const runsService = {
       const itemTimestamps = new Map<string, number>();
       let persistence = Promise.resolve();
       const onRealtimeEvent = (event: RunRealtimeEvent) => {
-        emit(CHANNELS.runs.realtimeEvent, event);
+        emit(CHANNELS.runs.realtimeEvent, event, realtimeScope);
         if (
           event.type === "closed" &&
           realtimeConnections.get(run.id) === connection
         ) {
           coordinator?.dispose();
+          connection.releaseOwner?.();
           realtimeConnections.delete(run.id);
         }
         if (event.type === "started") coordinator?.activate();
@@ -1259,6 +1283,7 @@ export const runsService = {
       );
     } catch (error) {
       coordinator?.dispose();
+      connection.releaseOwner?.();
       if (realtimeConnections.get(run.id) === connection)
         realtimeConnections.delete(run.id);
       throw error;
@@ -1267,7 +1292,7 @@ export const runsService = {
     }
   },
 
-  async stopRealtime(payload: RunRealtimeStopPayload): Promise<void> {
+  async stopRealtime(payload: RunRealtimeStopPayload, deviceId?: string): Promise<void> {
     assertOwnedRecord("runs", payload.runId);
     const run = await runsRepo.findRunById(payload.runId);
     if (!run) throw new Error("Run not found");
@@ -1275,6 +1300,8 @@ export const runsService = {
       throw new Error("Run does not belong to this account");
     const connection = realtimeConnections.get(run.id);
     if (!connection || connection.connectionId !== payload.connectionId) return;
+    if (deviceId && connection.deviceId !== deviceId)
+      throw new Error("This voice chat belongs to another device.");
     connection.cancelRequested = true;
     connection.dispose?.();
     await connection.prepared;

@@ -40,6 +40,7 @@ export class WebSocketSink implements EventSink {
       // scope.clientId, when present, targets a single client (e.g. terminal
       // output); otherwise the event is broadcast to everyone.
       if (scope?.clientId && client.id !== scope.clientId) continue;
+      if (scope?.excludeDevices && client.eventChannels) continue;
       // A paired device only receives the events on its allowlist — everything
       // else on the bus (terminal output, settings, window chrome) stays
       // between the desktop's own processes.

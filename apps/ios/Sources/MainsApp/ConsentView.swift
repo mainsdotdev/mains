@@ -4,6 +4,7 @@ struct ConsentContext: Identifiable {
     let backendID: String
     let providerID: String
     var isDemo = false
+    var isVoice = false
     var id: String { backendID + ":" + providerID }
 }
 
@@ -45,11 +46,12 @@ struct ConsentView: View {
                     VStack(spacing: 6) {
                         Text(context.isDemo ? "Continue the demo with \(Provider.name(context.providerID))?" : "Share data with \(recipient)?").font(.title3.bold())
                             .accessibilityAddTraits(.isHeader)
-                        Text(context.isDemo ? "This run uses bundled sample data. Your message and attachments stay on this iPhone; no computer or AI service is contacted." : "Mains on your computer will share the following with this third-party AI service to complete your request.")
+                        Text(context.isDemo ? "This run uses bundled sample data. Your message and attachments stay on this iPhone; no computer or AI service is contacted." : context.isVoice ? "During GPT Live, your microphone audio goes to OpenAI. Mains on your computer supplies the conversation context and runs delegated work." : "Mains on your computer will share the following with this third-party AI service to complete your request.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }.multilineTextAlignment(.center).frame(maxWidth: .infinity)
 
                     VStack(spacing: 0) {
+                        if context.isVoice { category("Your microphone audio during the call"); Divider().padding(.horizontal, 16) }
                         category("Your message and chat history")
                         Divider().padding(.horizontal, 16)
                         category("Skills and instructions you attach")
@@ -59,7 +61,7 @@ struct ConsentView: View {
                     .background(Color(.tertiarySystemBackground), in: .rect(cornerRadius: 20))
                     .overlay { RoundedRectangle(cornerRadius: 20).strokeBorder(.primary.opacity(0.08)) }
 
-                    Text(context.isDemo ? "This choice applies only to Demo Mode. Mains asks separately before sharing data with a provider on a paired computer." : "\(recipientDetail) Mains sends nothing until you choose Allow & Send.")
+                    Text(context.isDemo ? "This choice applies only to Demo Mode. Mains asks separately before sharing data with a provider on a paired computer." : "\(recipientDetail) Mains sends nothing until you choose \(context.isVoice ? "Allow & Start" : "Allow & Send").")
                         .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 8)
 
                     VStack(alignment: .leading, spacing: 0) {
@@ -100,7 +102,7 @@ struct ConsentView: View {
                 .frame(width: max(0, geometry.size.width - 10) * 0.43)
                 .accessibilityIdentifier("declineDataSharing")
                 Button { allow(); dismiss() } label: {
-                    Text(context.isDemo ? "Continue Demo" : "Allow & Send").foregroundStyle(.white)
+                    Text(context.isDemo ? "Continue Demo" : context.isVoice ? "Allow & Start" : "Allow & Send").foregroundStyle(.white)
                         .frame(maxWidth: .infinity, minHeight: buttonHeight)
                         .background(Provider.accent(context.providerID), in: .rect(cornerRadius: 14))
                 }

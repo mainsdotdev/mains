@@ -3,7 +3,9 @@
 An independent SwiftUI client for the existing Mains backend. Requires iOS 26+
 and Xcode 26+ with Swift 6. Controls and the composer use native Liquid Glass;
 the system Reduce Transparency preference retains an opaque accessible surface.
-No third-party Swift package dependencies. Math messages use the bundled KaTeX
+The app pins the native WebRTC Swift package to 157.0.0; its resolved revision and
+binary checksum are fixed, and its license ships in Resources/WebRTC-LICENSE.txt.
+The portable MainsCore package remains dependency-free. Math messages use the bundled KaTeX
 0.18.7 assets already used by the Expo app, inside an offline WebKit surface.
 `apps/mobile` remains the separate Expo/React Native app for iOS and Android.
 
@@ -34,6 +36,73 @@ reachable from the iPhone; this does not add a new mobile Bridge transport.
 xcodebuild -project Mains.xcodeproj -scheme Mains \
   -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
+
+## GPT Live
+
+GPT Live is staged for v2 and hidden in the current native app. Set
+`AppFeatures.gptLiveEnabled` to `true` in `Sources/MainsApp/MainsApp.swift` to
+restore its composer entry, Settings section and native media factory together.
+The implementation and bundled resources stay in place; the isolated DEBUG
+`--voice-preview` fixture remains available for internal visual work.
+
+When enabled, an empty Codex composer offers the SF Symbols waveform voice button. Start it to speak in the current
+conversation, or create an idle conversation from Home without a synthetic text
+prompt. The paired computer must run the updated backend and have working native
+Codex voice access through its existing account. Provider consent and the iPhone
+microphone permission still apply; no API key is stored on the phone.
+
+Calls open in **Focus** by default: a large water orb in the center, a compact
+composer and mute/end controls, with the transcript hidden. The sliders button
+switches to **Conversation**, which shows the same transcript and a larger orb
+above (outside) the normal composer. This local display preference is remembered;
+switching never reconnects audio, changes mute state or clears history. Ending
+the call restores the normal chat. Hidden speech still persists normally.
+
+**Settings → GPT Live → Voice** opens the voice picker before or during a call.
+The native sheet loads Codex's supported voices from the computer and saves the
+selection to that computer's existing Codex preference, shared with desktop.
+Changes apply to the next voice session without ending or muting the current one.
+Sample buttons play the same bundled English recordings as desktop, entirely
+locally; voices without a recording say so. Sample playback is available outside
+an active call so the microphone cannot feed a sample into the conversation, and
+stops when the voice settings page closes or the app becomes inactive. An unconfirmed save
+retains its original command identity for **Check saved voice** before another
+selection or a new voice call. Demo voice preferences remain in memory only.
+
+The water material is a bundled Metal shader with spherical refraction, moving
+surface normals, highlights and caustics. It samples the existing audio-level
+meters through a local attack/release envelope; it never opens another microphone.
+Rendering pauses offscreen/inactive, uses 30 fps (15 in Low Power Mode), and becomes
+static with Reduce Motion. Both light and dark appearances are supported.
+Xcode's optional Metal Toolchain component is required to compile the shader;
+install it with `xcodebuild -downloadComponent MetalToolchain` if missing.
+
+Debug builds accept `--voice-preview` for an entirely in-memory visual fixture;
+`--voice-preview-conversation` and `--voice-preview-light` select its initial
+layout and appearance. Preview preferences use a separate UserDefaults suite;
+no pairing, drafts, microphone, files or external service is accessed.
+`--voice-preview-reduced-motion` also freezes its material for accessibility QA.
+
+Audio uses native WebRTC directly between the iPhone and OpenAI. The existing
+Mains socket carries SDP, lifecycle and bounded context events. The call belongs
+to the app, so opening another chat or a delegated working chat preserves it; a
+compact dock provides return, mute and end controls. Ending the call leaves
+separately delegated workers running. The call's composer Stop also stops its
+current work independently. Final spoken messages remain in normal history;
+partials stay in memory, and duplicate voice-work narration stays hidden.
+
+Active calls can continue with the screen locked using the audio background mode.
+Queued text stays paused in the background. Interruptions, lost connections,
+revoked pairing or forgetting the computer release the microphone. A native close
+that cannot be confirmed retains its original identity and exposes Retry; a new
+call cannot replace it. The server watches socket liveness and tears down the
+phone's own call after disconnection. A lost new-conversation acknowledgement
+retains its receipt for Check delivery and never automatically restarts audio.
+
+Demo Mode does not request microphone permission or contact a live voice service.
+Physical-device QA is required for actual Codex audio, speaker/Bluetooth routing,
+barge-in, incoming phone calls, locked-screen audio and Wi-Fi/cellular changes.
+Unit/fixture tests validate signaling and lifecycle without an AI request.
 
 ## TestFlight
 

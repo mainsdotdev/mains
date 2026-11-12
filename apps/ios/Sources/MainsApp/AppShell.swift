@@ -65,6 +65,7 @@ struct AppShell: View {
                                 }
                             }
                         }
+                        .environment(\.voiceSurfaceVisible, !drawerOpen && !searchMounted)
                         .allowsHitTesting(!searchMounted)
                         .accessibilityHidden(drawerOpen || searchMounted)
                     }
@@ -109,7 +110,16 @@ struct AppShell: View {
                 .transition(.identity)
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { ForkDeliveryNotice(session: session, open: { open(.conversation($0)) }) }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                ForkDeliveryNotice(session: session, open: { open(.conversation($0)) })
+                VoiceCallDock(session: session, visibleRunID: visibleVoiceRunID,
+                    preparingHere: !drawerOpen && !searchMounted && path.isEmpty && homeRunID == nil && session.voiceSpaceID == session.selectedSpaceID,
+                    open: { openVoiceConversation($0) })
+            }
+        }
+        .environment(\.openVoiceConversation, OpenVoiceConversationAction { openVoiceConversation($0) })
+        .onChange(of: session.voice.error) { _, error in if let error { session.actionError = error } }
         .attachmentOverlayHost()
         .contextPickerOverlayHost(isEnabled: !drawerOpen && !searchMounted)
         .onChange(of: session.pairing?.deviceId) { _, _ in
@@ -121,6 +131,19 @@ struct AppShell: View {
     private var sidebarButton: some View {
         Button(action: toggleDrawer) { SidebarIcon() }
             .accessibilityLabel("Open sidebar").accessibilityIdentifier("openSidebar")
+    }
+    private var visibleVoiceRunID: String? {
+        guard !drawerOpen, !searchMounted else { return nil }
+        switch path.last {
+        case .conversation(let id), .searchMessage(let id, _): return id
+        case .workspace, .settings: return nil
+        case nil: return homeRunID
+        }
+    }
+    private func openVoiceConversation(_ id: String) {
+        let spaceID = session.conversations.first(where: { $0.id == id })?.spaceId ?? (session.voice.runID == id ? session.voiceSpaceID : nil)
+        if let spaceID { session.selectSpace(spaceID) }
+        open(.conversation(id))
     }
     private func showSettings() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)

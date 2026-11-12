@@ -180,6 +180,31 @@ describe("runsService", () => {
       return { run, payload, startRealtime, stopRealtime, voice, work: () => work };
     }
 
+    it("closes a disconnected phone's call and keeps signaling scoped to that socket", async () => {
+      const h = voiceFixture();
+      const lifetime = new AbortController();
+      const events: Array<{ channel: string; scope: unknown }> = [];
+      const off = registerEventSink({ kind: "voice-device-test", send(channel, _payload, scope) { events.push({ channel, scope }); } });
+      try {
+        await runsService.startRealtime(h.payload, { deviceId: "phone", clientId: "socket", signal: lifetime.signal });
+        h.voice({ type: "sdp", sdp: "v=0\r\n" });
+        expect(events.find(event => event.channel === CHANNELS.runs.realtimeEvent)?.scope).toEqual({ clientId: "socket" });
+        await expect(runsService.stopRealtime(h.payload, "another-phone")).rejects.toThrow("another device");
+        expect(h.stopRealtime).not.toHaveBeenCalled();
+        lifetime.abort();
+        await flushBackground();
+        expect(h.stopRealtime).toHaveBeenCalledOnce();
+        await runsService.archiveRun(h.run.id);
+      } finally { off(); await runsService.stopRealtime(h.payload); }
+    });
+
+    it("never starts voice from a socket already closed during command admission", async () => {
+      const h = voiceFixture();
+      const lifetime = new AbortController(); lifetime.abort();
+      await expect(runsService.startRealtime(h.payload, { deviceId: "phone", signal: lifetime.signal })).rejects.toThrow("closed");
+      expect(h.startRealtime).not.toHaveBeenCalled();
+    });
+
     it("requires confirmed voice closure before archiving or deleting the conversation", async () => {
       const h = voiceFixture();
       await runsService.startRealtime(h.payload);

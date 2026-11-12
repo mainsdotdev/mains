@@ -70,8 +70,12 @@ export function registerRunsIpc(): void {
   ipcMain.handle(CHANNELS.runs.listOutputs, handle((payload: ListRunOutputsPayload) => runsService.listOutputs(payload)));
   ipcMain.handle(CHANNELS.runs.readOutputFile, handle((payload: ReadRunOutputPayload) => runsService.readOutputFile(payload)));
   ipcMain.handle(CHANNELS.runs.createRealtimeConversation, handle((payload: CreateRealtimeConversationPayload) => runsService.createRealtimeConversation(payload)));
-  ipcMain.handle(CHANNELS.runs.startRealtime, handle((payload: RunRealtimeStartPayload) => runsService.startRealtime(payload)));
-  ipcMain.handle(CHANNELS.runs.stopRealtime, handle((payload: RunRealtimeStopPayload) => runsService.stopRealtime(payload)));
+  ipcMain.handle(CHANNELS.runs.startRealtime, (ctx: IpcInvokeContext, payload: RunRealtimeStartPayload) =>
+    handle(() => runsService.startRealtime(payload, ctx?.deviceId ? {
+      deviceId: ctx.deviceId, clientId: ctx.clientId, signal: ctx.connectionSignal,
+    } : undefined))(ctx));
+  ipcMain.handle(CHANNELS.runs.stopRealtime, (ctx: IpcInvokeContext, payload: RunRealtimeStopPayload) =>
+    handle(() => runsService.stopRealtime(payload, ctx?.deviceId))(ctx));
   // Runs
   const getAll = handle((limit?: number) => runsService.getAllRuns(limit));
   ipcMain.handle(CHANNELS.runs.getAll, async (ctx: IpcInvokeContext, limit?: number) => {

@@ -937,6 +937,10 @@ function mobileMetadata(column: SQLWrapper): SQL<string | null> {
       'parentToolUseId', substr(json_extract(${column}, '$.parentToolUseId'), 1, 512),
       'turnId', CASE WHEN json_type(${column}, '$.turnId') = 'integer' THEN json_extract(${column}, '$.turnId') ELSE NULL END,
       'voice', json(CASE WHEN json_extract(${column}, '$.voice') = 1 THEN 'true' ELSE 'false' END),
+      'inputSource', substr(json_extract(${column}, '$.inputSource'), 1, 16),
+      'realtimeSessionId', substr(json_extract(${column}, '$.realtimeSessionId'), 1, 512),
+      'providerTurnId', substr(json_extract(${column}, '$.providerTurnId'), 1, 512),
+      'providerRootTurnId', substr(json_extract(${column}, '$.providerRootTurnId'), 1, 512),
       'voiceStartedAt', CASE WHEN json_type(${column}, '$.voiceStartedAt') IN ('integer', 'real')
         THEN json_extract(${column}, '$.voiceStartedAt') ELSE NULL END)
     ELSE NULL END`;
@@ -1032,7 +1036,7 @@ function mobileKeyCut(cursor: RunHistoryCursor, before: boolean): SQL {
 
 function mobileActivityArtifact(row: RunArtifactResponse): boolean {
   const meta = row.metadata ?? {};
-  return meta.voice !== true && String(row.kind) !== "thinking" && meta.kind !== "thinking"
+  return String(row.kind) !== "thinking" && meta.kind !== "thinking"
     && !["agent_thinking_streaming", "assistant.reasoning_delta"].includes(String(meta.source))
     && (["user-prompt", "report", "result", "command_result", "file", "document", "image", "visualization", "async_questions"].includes(row.kind)
       || row.kind === "log" && meta.level === "error");
@@ -1042,10 +1046,9 @@ function mobileActivityArtifact(row: RunArtifactResponse): boolean {
 function mobileConversationKeys(db: ReturnType<typeof getDb>, request: ReadRunHistoryPayload, first?: RunHistoryCursor, last?: RunHistoryCursor) {
   const metadata = sql`CASE WHEN json_valid(${runArtifacts.metadata}) THEN ${runArtifacts.metadata} ELSE '{}' END`;
   const foreground = sql`coalesce(json_extract(${metadata}, '$.isFromSubagent'), 0) <> 1
-    AND coalesce(json_extract(${metadata}, '$.voice'), 0) <> 1
     AND json_extract(${metadata}, '$.agentId') IS NULL
     AND json_extract(${metadata}, '$.parentToolCallId') IS NULL AND json_extract(${metadata}, '$.parentToolUseId') IS NULL`;
-  const detail = sql`coalesce(json_extract(${metadata}, '$.voice'), 0) <> 1 AND kind <> 'thinking'
+  const detail = sql`kind <> 'thinking'
     AND coalesce(json_extract(${metadata}, '$.kind'), '') <> 'thinking'
     AND coalesce(json_extract(${metadata}, '$.source'), '') NOT IN ('agent_thinking_streaming', 'assistant.reasoning_delta')
     AND (kind IN ('user-prompt', 'report', 'result', 'command_result', 'file', 'document', 'image', 'visualization', 'async_questions')
@@ -1107,9 +1110,14 @@ function selectMobileTurns(runId: string, range?: { first: number; last: number;
   const rows = getDb().select({
     turn: { ...getTableColumns(runTurns),
       promptContent: sql<string | null>`NULL`, responseContent: sql<string | null>`NULL`, modelUsage: sql<string | null>`NULL`,
-      metadata: sql<string | null>`CASE WHEN json_valid(${runTurns.metadata})
-        AND length(json_extract(${runTurns.metadata}, '$.codexPlan')) <= 16384
-        THEN json_object('codexPlan', json_extract(${runTurns.metadata}, '$.codexPlan')) ELSE NULL END`,
+      metadata: sql<string | null>`CASE WHEN json_valid(${runTurns.metadata}) THEN
+        json_patch(CASE WHEN length(json_extract(${runTurns.metadata}, '$.codexPlan')) <= 16384
+          THEN json_object('codexPlan', json_extract(${runTurns.metadata}, '$.codexPlan')) ELSE '{}' END,
+        CASE WHEN json_extract(${runTurns.metadata}, '$.inputSource') IN ('voice', 'text') THEN json_object(
+          'inputSource', json_extract(${runTurns.metadata}, '$.inputSource'),
+          'providerTurnId', substr(json_extract(${runTurns.metadata}, '$.providerTurnId'), 1, 512),
+          'realtimeSessionId', substr(json_extract(${runTurns.metadata}, '$.realtimeSessionId'), 1, 512)) ELSE '{}' END)
+        ELSE NULL END`,
     },
     changes: { id: runTurnChanges.id,
       filesJson: sql<string>`CASE WHEN length(${runTurnChanges.filesJson}) <= 8192 THEN ${runTurnChanges.filesJson} ELSE '[]' END`,

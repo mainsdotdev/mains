@@ -25,6 +25,9 @@ struct ConversationView: View {
     @State private var selectedFile: TurnFileSelection?
     @State private var agentsExpanded = false
     @State private var selectedAgent: SubagentSelection?
+    @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
+    private var ownsVoice: Bool { session.voice.ownsCall && session.voice.runID == runID }
+    private var focusedVoice: Bool { ownsVoice && voicePresentation == .focus }
     private var agents: [SessionSubagent] { session.viewingRunID == runID ? session.transcript.subagents : [] }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
@@ -78,17 +81,25 @@ struct ConversationView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack {
             ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", viewport: $viewport, openFile: { turn, file in
                 selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
             }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor) {
                 content = ContentReference(id: $0)
             }
+            .opacity(focusedVoice ? 0 : 1)
+            .allowsHitTesting(!focusedVoice)
+            .accessibilityHidden(focusedVoice)
+            if focusedVoice {
+                VoiceFocusStage(voice: session.voice)
+                    .background { KeyboardDismissBackground(color: Color(.systemBackground)) }
+                    .transition(.opacity)
+            }
         }
         .background(Color(.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(showsConnectionPill ? "" : run?.displayTitle ?? "Conversation")
+        .navigationTitle(focusedVoice || showsConnectionPill ? "" : run?.displayTitle ?? "Conversation")
         .toolbarRole(.editor)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
@@ -97,7 +108,7 @@ struct ConversationView: View {
                     ConnectionPill(session: session, action: openComputer)
                 }
                 .sharedBackgroundVisibility(.hidden)
-            } else if session.isDemo {
+            } else if session.isDemo && !focusedVoice {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 1) {
                         Text(run?.displayTitle ?? "Conversation").font(.headline).lineLimit(1)
@@ -106,26 +117,29 @@ struct ConversationView: View {
                 }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if hasOutputs {
+                if ownsVoice { VoicePresentationMenu() }
+                if hasOutputs && !focusedVoice {
                     Button("Outputs", systemImage: "doc.on.doc") { outputs = true }.accessibilityIdentifier("conversationOutputs")
                 }
-                Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
-                Menu {
-                    Label(session.isDemo ? "Demo Mode · On this iPhone" : session.connection.label, systemImage: session.isConnected ? "checkmark.circle" : "wifi.slash")
-                    if run?.isReplica != true {
-                        Button(action: prepareFork) {
-                            Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
-                        }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
-                    }
-                    Button("Sync now", systemImage: "arrow.clockwise") {
-                        Task { await session.refresh(); if session.viewingRunID == runID { await session.loadHistory(direction: "refresh") } }
-                    }.disabled(!session.isConnected)
-                    if !session.isConnected {
-                        Button("Reconnect", systemImage: "arrow.clockwise") { session.retry() }
-                            .disabled(session.connection.isBusy || [.unauthorized, .incompatible].contains(session.connection))
-                    }
-                } label: { Image(systemName: "ellipsis") }
-                .accessibilityLabel("Conversation options").accessibilityIdentifier("conversationOptions")
+                if !focusedVoice {
+                    Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
+                    Menu {
+                        Label(session.isDemo ? "Demo Mode · On this iPhone" : session.connection.label, systemImage: session.isConnected ? "checkmark.circle" : "wifi.slash")
+                        if run?.isReplica != true {
+                            Button(action: prepareFork) {
+                                Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
+                            }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
+                        }
+                        Button("Sync now", systemImage: "arrow.clockwise") {
+                            Task { await session.refresh(); if session.viewingRunID == runID { await session.loadHistory(direction: "refresh") } }
+                        }.disabled(!session.isConnected)
+                        if !session.isConnected {
+                            Button("Reconnect", systemImage: "arrow.clockwise") { session.retry() }
+                                .disabled(session.connection.isBusy || [.unauthorized, .incompatible].contains(session.connection))
+                        }
+                    } label: { Image(systemName: "ellipsis") }
+                    .accessibilityLabel("Conversation options").accessibilityIdentifier("conversationOptions")
+                }
             }
         }
         .task(id: runID) {
@@ -176,7 +190,15 @@ struct ConversationView: View {
 
     private var composerArea: some View {
         VStack(spacing: 8) {
-            if !agents.isEmpty {
+            if focusedVoice && (session.waitingForDecision || session.pendingQuestions != nil) {
+                Button { voicePresentation = .conversation } label: {
+                    Label("Response needed", systemImage: "hand.raised")
+                        .font(.footnote.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 40)
+                }.buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 20))
+                    .accessibilityHint("Open the conversation to answer the pending request.")
+                    .accessibilityIdentifier("voiceNeedsResponse")
+            }
+            if !focusedVoice && !agents.isEmpty {
                 SubagentDock(agents: agents, partial: session.transcript.page?.hasOlder == true || session.transcript.page?.hasNewer == true,
                              expanded: $agentsExpanded) { agent in
                     guard owner == session.ownership, session.viewingRunID == runID else { return }
@@ -185,8 +207,10 @@ struct ConversationView: View {
                 }.zIndex(1)
             }
             SettingsRecoveryNotice(session: session, runID: runID)
-            RemoteConversationQueueView(queues: session.viewingRunID == runID ? session.remoteQueues : [])
-            if run?.supportsSteering == true, run?.isReplica != true {
+            if !focusedVoice {
+                RemoteConversationQueueView(queues: session.viewingRunID == runID ? session.remoteQueues : [])
+            }
+            if !focusedVoice, run?.supportsSteering == true, run?.isReplica != true {
                 ConversationQueueView(session: session, queue: queue, canSteer: run?.canSteer == true, resume: prepareQueueResume)
             }
             if uncertain, let pending = session.pendingMessage,
