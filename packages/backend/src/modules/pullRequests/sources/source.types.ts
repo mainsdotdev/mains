@@ -1,3 +1,4 @@
+import type { PrActivityFilter, PrActivityPage, PrCommitPage } from "@mains/contracts/pull-requests";
 // ─────────────────────────────────────────────────────────────
 // PR Source Types
 // Live pull-request data fetched per provider (GitHub today;
@@ -93,11 +94,16 @@ export interface PrNewReviewComment {
 }
 
 export interface PrCheck {
+  id: string;
+  url: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
   name: string;
   status: PrCiStatus;
 }
 
 export interface PullRequestDetail extends PullRequestSummary {
+  commitCount: number;
   /** Full markdown body (bodyText on the summary is a plain-text preview). */
   body: string;
   mergedAt: string | null;
@@ -138,6 +144,10 @@ export interface PrSource {
   getDetail(ref: PrRef): Promise<PullRequestDetail>;
 
   getDiff(ref: PrRef): Promise<PrDiff>;
+
+  getCommits(ref: PrRef, page: PrSearchPageInput): Promise<PrCommitPage>;
+
+  getActivity(ref: PrRef, page: PrSearchPageInput, filter: PrActivityFilter): Promise<PrActivityPage>;
 
   merge(ref: PrRef, method: PrMergeMethod): Promise<void>;
 

@@ -1,3 +1,4 @@
+import type { PrActivityFilter, PrActivityInput, PrActivityPage, PrCommitPage, PrPageInput } from "@mains/contracts/pull-requests";
 // ─────────────────────────────────────────────────────────────
 // Pull Requests Service
 // Live PR inbox across providers. Throw-style: plain values out,
@@ -108,6 +109,16 @@ function validateRef(ref: PrRefInput): { owner: string; repo: string; number: nu
   return { owner, repo, number: ref.number };
 }
 
+function validatePage(input: PrPageInput) {
+  if (input.cursor != null && (typeof input.cursor !== "string" || input.cursor.length > 2048)) {
+    throw new Error("Invalid pull request page cursor");
+  }
+  if (input.pageSize != null && (!Number.isSafeInteger(input.pageSize) || input.pageSize < 1 || input.pageSize > 100)) {
+    throw new Error("Pull request page size must be between 1 and 100");
+  }
+  return { cursor: input.cursor ?? null, pageSize: input.pageSize };
+}
+
 export const pullRequestsService = {
   /**
    * Whether the provider is ready to serve the PR inbox, and who the
@@ -176,6 +187,24 @@ export const pullRequestsService = {
   async getDetail(input: PrRefInput): Promise<PullRequestDetail> {
     const source = await requireSource(input.provider);
     return source.getDetail(validateRef(input));
+  },
+
+  async getCommits(input: PrPageInput): Promise<PrCommitPage> {
+    const ref = validateRef(input);
+    const page = validatePage(input);
+    const source = await requireSource(input.provider);
+    return source.getCommits(ref, page);
+  },
+
+  async getActivity(input: PrActivityInput): Promise<PrActivityPage> {
+    const ref = validateRef(input);
+    const page = validatePage(input);
+    const filter = input.filter ?? "all";
+    if (!(["all", "comments", "reviews", "events"] satisfies PrActivityFilter[]).includes(filter)) {
+      throw new Error("Unknown pull request activity filter");
+    }
+    const source = await requireSource(input.provider);
+    return source.getActivity(ref, page, filter);
   },
 
   async getDiff(input: PrRefInput): Promise<PrDiff> {

@@ -371,6 +371,8 @@ export const CHANNELS = {
     addReviewComment: "pullRequests:addReviewComment",
     getAvailability: "pullRequests:getAvailability",
     getDetail: "pullRequests:getDetail",
+    getCommits: "pullRequests:getCommits",
+    getActivity: "pullRequests:getActivity",
     getDiff: "pullRequests:getDiff",
     markReady: "pullRequests:markReady",
     merge: "pullRequests:merge",

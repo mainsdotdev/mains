@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { Octokit } from "@octokit/rest";
+import { readPrActivity, readPrCommits } from "./github.source.activity";
 
 import type {
   PrCheck,
@@ -197,19 +198,28 @@ const DETAIL_QUERY = `
           }
         }
         commits(last: 1) {
+          totalCount
           nodes {
             commit {
               statusCheckRollup {
+                id
                 state
-                contexts(first: 50) {
+                contexts(first: 100) {
+                  pageInfo { endCursor hasNextPage }
                   nodes {
                     __typename
                     ... on CheckRun {
+                      id
+                      detailsUrl
+                      startedAt
+                      completedAt
                       name
                       status
                       conclusion
                     }
                     ... on StatusContext {
+                      id
+                      targetUrl
                       context
                       state
                     }
@@ -267,6 +277,11 @@ interface GraphQlCommentNode {
 
 interface GraphQlCheckContext {
   __typename: string;
+  id: string;
+  detailsUrl?: string | null;
+  targetUrl?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
   name?: string;
   status?: string;
   conclusion?: string | null;
@@ -282,11 +297,13 @@ interface GraphQlDetailNode extends GraphQlPullRequestNode {
   viewerCanUpdate: boolean;
   autoMergeRequest: { enabledAt: string | null } | null;
   commits: {
+    totalCount: number;
     nodes: Array<{
       commit: {
         statusCheckRollup: {
+          id: string;
           state: string;
-          contexts?: { nodes: Array<GraphQlCheckContext | null> } | null;
+          contexts?: { nodes: Array<GraphQlCheckContext | null>; pageInfo?: { endCursor: string | null; hasNextPage: boolean } } | null;
         } | null;
       };
     } | null>;
@@ -468,6 +485,10 @@ function toChecks(node: GraphQlDetailNode): PrCheck[] {
   return contexts
     .filter((ctx): ctx is GraphQlCheckContext => ctx != null)
     .map((ctx) => ({
+      id: ctx.id,
+      url: ctx.detailsUrl ?? ctx.targetUrl ?? null,
+      startedAt: ctx.startedAt ?? null,
+      completedAt: ctx.completedAt ?? null,
       name: ctx.name ?? ctx.context ?? "check",
       status: checkContextStatus(ctx),
     }));
@@ -495,6 +516,7 @@ function toDetail(node: GraphQlDetailNode): PullRequestDetail {
   return {
     ...toSummary(node),
     body: node.body,
+    commitCount: node.commits?.totalCount ?? 0,
     mergedAt: node.mergedAt,
     mergeable: node.mergeable,
     mergeStateStatus: node.mergeStateStatus,
@@ -569,8 +591,40 @@ export function createGithubPrSource(options: { token: string }): PrSource {
           `Pull request ${ref.owner}/${ref.repo}#${ref.number} not found`,
         );
       }
+      // Continue on this rollup's id so a push cannot mix check runs from
+      // different heads while reading the remaining pages.
+      const rollup = node.commits?.nodes?.[0]?.commit.statusCheckRollup;
+      const contexts = rollup?.contexts;
+      while (rollup && contexts?.pageInfo?.hasNextPage) {
+        const cursor = contexts.pageInfo.endCursor;
+        if (!cursor) throw new Error("GitHub did not provide the next checks page");
+        const next = await octokit.graphql<{ node: { contexts: NonNullable<typeof contexts> } | null }>(`
+          query PrChecks($id: ID!, $after: String!) {
+            node(id: $id) {
+              ... on StatusCheckRollup {
+                contexts(first: 100, after: $after) {
+                  pageInfo { endCursor hasNextPage }
+                  nodes {
+                    __typename
+                    ... on CheckRun { id name status conclusion detailsUrl startedAt completedAt }
+                    ... on StatusContext { id context state targetUrl }
+                  }
+                }
+              }
+            }
+          }`, { id: rollup.id, after: cursor });
+        if (!next.node || next.node.contexts.pageInfo?.endCursor === cursor) {
+          throw new Error("Unable to load the remaining pull request checks");
+        }
+        contexts.nodes.push(...next.node.contexts.nodes);
+        contexts.pageInfo = next.node.contexts.pageInfo;
+      }
       return toDetail(node);
     },
+
+    getCommits(ref, page) { return readPrCommits(octokit, ref, page); },
+
+    getActivity(ref, page, filter) { return readPrActivity(octokit, ref, page, filter); },
 
     async getDiff(ref: PrRef): Promise<PrDiff> {
       try {

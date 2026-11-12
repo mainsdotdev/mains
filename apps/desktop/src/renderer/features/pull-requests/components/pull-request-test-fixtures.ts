@@ -10,7 +10,8 @@ export const prFixture: PullRequestDetail = {
   body: "## Summary\nPrepare the stable release.\n\n- [x] Version updated\n- [x] Checks passed",
   mergedAt: null, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", autoMergeEnabled: false,
   viewerCanUpdate: true, comments: [], reviewThreads: [], latestReviews: [{ author: "reviewer", state: "APPROVED" }],
-  checks: [{ name: "Desktop checks", status: "passing" }],
+  commitCount: 84,
+  checks: [{ id: "check-1", name: "Desktop checks", status: "passing", url: "https://github.com/acme/widget/actions/runs/1", startedAt: null, completedAt: null }],
 };
 
 export function deferred<T>() {

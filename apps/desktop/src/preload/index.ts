@@ -1455,6 +1455,10 @@ const api = {
       ipcRenderer.invoke(CHANNELS.pullRequests.search, input),
     getDetail: (input: unknown) =>
       ipcRenderer.invoke(CHANNELS.pullRequests.getDetail, input),
+    getCommits: (input: unknown) =>
+      ipcRenderer.invoke(CHANNELS.pullRequests.getCommits, input),
+    getActivity: (input: unknown) =>
+      ipcRenderer.invoke(CHANNELS.pullRequests.getActivity, input),
     getDiff: (input: unknown) =>
       ipcRenderer.invoke(CHANNELS.pullRequests.getDiff, input),
     merge: (input: unknown) =>

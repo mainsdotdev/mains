@@ -3,7 +3,7 @@ import { configureStore } from "@reduxjs/toolkit";
 import { StrictMode } from "react";
 import { Provider } from "react-redux";
 import { MemoryRouter } from "react-router-dom";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "@mains/contracts/channels";
 import { baseApi } from "@/lib/redux/api/baseApi";
@@ -49,11 +49,15 @@ beforeEach(() => {
     if (channel === CHANNELS.pullRequests.getDetail) return failDetail
       ? { success: false, error: "GitHub connection not found" } : { success: true, data: { ...detail, number: args[0].number } };
     if (channel === CHANNELS.pullRequests.getAvailability) return { success: true, data: { provider: "github", connected, viewer: null, error: null } };
+    if (channel === CHANNELS.pullRequests.getActivity || channel === CHANNELS.pullRequests.getCommits) return {
+      success: true, data: { items: [], startCursor: null, hasPreviousPage: false, totalCount: 0 },
+    };
     if (channel === CHANNELS.pullRequests.getDiff) return { success: true, data: { diffText, truncated: false } };
     return { success: true, data: undefined };
   });
   setTransport({ kind: "test", invoke, subscribe: () => () => {}, status: () => status,
     onStatusChange: (listener) => { statusListeners.add(listener); return () => { statusListeners.delete(listener); }; } } as Transport);
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   Object.defineProperty(window, "api", { configurable: true, value: { shell: { openExternal } } });
 });
@@ -64,6 +68,87 @@ afterEach(() => {
 });
 
 describe("shared pull request view", () => {
+  it("loads commits on expansion, follows older pages and deduplicates overlapping records", async () => {
+    const original = invoke.getMockImplementation()!;
+    const commit = (oid: string, message: string) => ({ oid, message, committedAt: prFixture.createdAt,
+      author: null, authorName: "Release Bot", url: `https://github.com/acme/widget/commit/${oid}` });
+    invoke.mockImplementation((channel, args) => channel === CHANNELS.pullRequests.getCommits
+      ? Promise.resolve({ success: true, data: args[0].cursor ? {
+        items: [commit("aaaaaaa", "First change"), commit("bbbbbbb", "Old overlapping message")],
+        startCursor: "first", hasPreviousPage: false, totalCount: 3,
+      } : {
+        items: [commit("bbbbbbb", "Second change"), commit("ccccccc", "Latest change")],
+        startCursor: "older", hasPreviousPage: true, totalCount: 3,
+      } }) : original(channel, args));
+    harness();
+    const toggle = await screen.findByRole("button", { name: /84 commits/ });
+    expect(invoke.mock.calls.some(([channel]) => channel === CHANNELS.pullRequests.getCommits)).toBe(false);
+    fireEvent.click(toggle);
+    await screen.findByRole("button", { name: "Second change" });
+    fireEvent.click(screen.getByRole("button", { name: "Load older commits" }));
+    await screen.findByRole("button", { name: "First change" });
+    expect(invoke).toHaveBeenCalledWith(CHANNELS.pullRequests.getCommits,
+      [{ provider: "github", owner: "acme", repo: "widget", number: 176, cursor: "older" }]);
+    const group = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    expect(within(group).getAllByRole("button").map((button) => button.textContent))
+      .toEqual(["First change", "aaaaaaa", "Second change", "bbbbbbb", "Latest change", "ccccccc"]);
+    expect(screen.queryByText("Old overlapping message")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Load older commits" })).toBeNull();
+  });
+
+  it("loads real activity pages, retries an older-page error and filters on the provider", async () => {
+    const original = invoke.getMockImplementation()!;
+    let failOlder = true;
+    const event = (id: string, kind: string, body: string | null) => ({ id, kind, body,
+      author: { login: "reviewer", avatarUrl: null }, createdAt: prFixture.updatedAt,
+      url: null, reviewer: null, reviewState: kind === "review" ? "APPROVED" : null, commitOid: null });
+    invoke.mockImplementation((channel, args) => {
+      if (channel !== CHANNELS.pullRequests.getActivity) return original(channel, args);
+      const input = args[0];
+      if (input.cursor && failOlder) return Promise.resolve({ success: false, error: "Temporary failure" });
+      return Promise.resolve({ success: true, data: input.filter === "comments" ? {
+        items: [event("comment", "comment", "Only comments")], hasPreviousPage: false, startCursor: "comment", totalCount: 1,
+      } : input.cursor ? {
+        items: [event("old", "comment", "Earlier comment")], hasPreviousPage: false, startCursor: "first", totalCount: 2,
+      } : {
+        items: [event("review", "review", "Approved release")], hasPreviousPage: true, startCursor: "older", totalCount: 2,
+      } });
+    });
+    harness();
+    await screen.findByText("Approved release");
+    expect(screen.queryByText("okan opened this pull request")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Load older activity" }));
+    await screen.findByText("Unable to load activity.");
+    expect(screen.getByText("Approved release")).toBeTruthy();
+    failOlder = false;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText("Earlier comment");
+    expect(screen.getByText("okan opened this pull request")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Filter activity" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Comments" }));
+    await screen.findByText("Only comments");
+    expect(invoke).toHaveBeenCalledWith(CHANNELS.pullRequests.getActivity,
+      [{ provider: "github", owner: "acme", repo: "widget", number: 176, filter: "comments", cursor: null }]);
+    expect(screen.queryByText("Approved release")).toBeNull();
+    expect(screen.queryByRole("button", { name: /commits/ })).toBeNull();
+  });
+
+  it("shows timed checks, exposes the rest and opens the check's details", async () => {
+    const start = "2026-11-12T10:00:00Z";
+    detail = { ...prFixture, ciStatus: "failing", checks: Array.from({ length: 6 }, (_, index) => ({
+      id: `check-${index}`, name: `Check ${index}`, status: index === 0 ? "failing" as const : "passing" as const,
+      startedAt: start, completedAt: "2026-11-12T10:01:05Z", url: `https://github.com/check/${index}`,
+    })) };
+    harness();
+    await screen.findByText("1 failing check");
+    expect(screen.getAllByText("01:05").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Check 5")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show 1 more" }));
+    expect(screen.getByText("Check 5")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Check 5 check details" }));
+    expect(openExternal).toHaveBeenCalledWith("https://github.com/check/5");
+  });
+
   it("retires queued status callbacks as well as receipts through an A-B-A backend switch", async () => {
     const receipt = deferred<any>(); const original = invoke.getMockImplementation()!;
     invoke.mockImplementation((channel, args) => channel === CHANNELS.pullRequests.addComment ? receipt.promise : original(channel, args));
@@ -283,7 +368,7 @@ describe("shared pull request view", () => {
     await screen.findByRole("heading", { name: prFixture.title });
     expect(invoke).toHaveBeenCalledWith(CHANNELS.pullRequests.getDetail,
       [{ provider: "github", owner: "acme", repo: "widget", number: 176 }]);
-    expect(screen.getByText("okan opened this pull request")).toBeTruthy();
+    await screen.findByText("okan opened this pull request");
     fireEvent.click(screen.getByRole("tab", { name: /Changes/ }));
     expect(screen.getByText("Diff for #176")).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Leave a comment" })).toBeNull();
