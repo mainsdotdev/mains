@@ -33,6 +33,7 @@
 		3F31CEA18736579708771296 /* Math in Resources */ = {isa = PBXBuildFile; fileRef = 9FFE5E19F4D9943DC157D711 /* Math */; };
 		4373816D5F44251336D9DA13207C815A /* MessageComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8864874F6AFC6BE12C4E653342D08D6 /* MessageComposer.swift */; };
 		4605F4D99ABA8BC2BA5E6755 /* RunMessageQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = E75024895C8CF954BC856D99 /* RunMessageQueue.swift */; };
+		47208A067621D892B2F2A880 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 8C053BFA44ADF1E05100A367 /* PrivacyInfo.xcprivacy */; };
 		4B8B51CB2D87D3FD7E57E8D5D0791898 /* OutputsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FF41D86452ECC79249896E14523A041 /* OutputsView.swift */; };
 		4BEDE45455BD26EAB13AF200CB095764 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0649CAD9796CADAA128ADCCD806B55C /* Assets.xcassets */; };
 		4F4DCC9D6A19B8BC54152DB52920B5A8 /* ChatMedia.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BEB8CFBC86BBA32EAA410B347CCC399 /* ChatMedia.swift */; };
@@ -120,6 +121,7 @@
 		35DC1CDC7955699C2CA865D7 /* ConversationMessageActions.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationMessageActions.swift; sourceTree = "<group>"; };
 		39980D81762295646E94B095847C6553 /* WebSocketTransport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WebSocketTransport.swift; sourceTree = "<group>"; };
 		39A1C207E4873E38D611B10575EA5838 /* Models.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		3AF5510525587FCCFEF05752AFE5BFDC /* Version.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 		3BAD21B4E41688A1ACC7FD230E64E325 /* RunDecisionCards.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RunDecisionCards.swift; sourceTree = "<group>"; };
 		3BEB8CFBC86BBA32EAA410B347CCC399 /* ChatMedia.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ChatMedia.swift; sourceTree = "<group>"; };
 		3C89294A9737E697C5B0EFB7CFDD9ADE /* TurnChangesView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TurnChangesView.swift; sourceTree = "<group>"; };
@@ -155,6 +157,7 @@
 		7D79406CF7EBF9FA1BFB23E1 /* MathMarkdownView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MathMarkdownView.swift; sourceTree = "<group>"; };
 		83E60B2E7CE73F80C9A5E01D12323C74 /* AppChrome.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppChrome.swift; sourceTree = "<group>"; };
 		8BA57C683BBBDBCD9F60D3F8ED38ABD4 /* MainsUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MainsUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		8C053BFA44ADF1E05100A367 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		8FDAF8F1A7D62899195BF3B176B72B62 /* AgentActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AgentActivity.swift; sourceTree = "<group>"; };
 		8FF41D86452ECC79249896E14523A041 /* OutputsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OutputsView.swift; sourceTree = "<group>"; };
 		90F4344E9F9FBA2D18DC497C /* ConversationSearch.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationSearch.swift; sourceTree = "<group>"; };
@@ -282,6 +285,7 @@
 				143E0FAF79646526BFFB28C2D75F6628 /* DemoSnapshot.json */,
 				27FD5BA69EF5DF54CECAEF2CF9A016D5 /* Info.plist */,
 				3017F46D5208D38F71DCF30207F14639 /* Info.Debug.plist */,
+				3AF5510525587FCCFEF05752AFE5BFDC /* Version.xcconfig */,
 				B460FEE6BC41C4DA1C01B7EED586CA93 /* UITests */,
 			);
 			sourceTree = "<group>";
@@ -310,6 +314,7 @@
 			children = (
 				A0649CAD9796CADAA128ADCCD806B55C /* Assets.xcassets */,
 				9FFE5E19F4D9943DC157D711 /* Math */,
+				8C053BFA44ADF1E05100A367 /* PrivacyInfo.xcprivacy */,
 			);
 			name = Resources;
 			path = Resources;
@@ -452,6 +457,7 @@
 				4BEDE45455BD26EAB13AF200CB095764 /* Assets.xcassets in Resources */,
 				A69A47FD965CD17146AEB7C4E4A1B618 /* DemoSnapshot.json in Resources */,
 				3F31CEA18736579708771296 /* Math in Resources */,
+				47208A067621D892B2F2A880 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -563,19 +569,18 @@
 /* Begin XCBuildConfiguration section */
 		387EAA1078528937D6E1A2BAE1428CDF /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 3AF5510525587FCCFEF05752AFE5BFDC /* Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = Y4MVJ7JSH6;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.mains.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mains.mobile;
 				PRODUCT_NAME = "Mains Native";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -589,18 +594,17 @@
 		};
 		58D2C1C9056B8BE05935E00DFEB7525A /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 3AF5510525587FCCFEF05752AFE5BFDC /* Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = Y4MVJ7JSH6;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				INFOPLIST_FILE = Info.Debug.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.mains.ios.dev;
 				PRODUCT_NAME = "Mains Native";
 				SDKROOT = iphoneos;

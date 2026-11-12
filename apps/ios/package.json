@@ -1,0 +1,13 @@
+{
+  "name": "mains-native-ios",
+  "private": true,
+  "description": "Local commands for the independent native iPhone app",
+  "scripts": {
+    "beta:setup": "bash scripts/with-ruby.sh bundle install",
+    "beta:check": "bash scripts/with-ruby.sh bundle exec fastlane ios doctor",
+    "beta": "bash scripts/with-ruby.sh bundle exec fastlane ios beta",
+    "test": "swift test",
+    "test:release": "bash scripts/with-ruby.sh bundle exec ruby scripts/release_test.rb",
+    "project:generate": "bash scripts/with-ruby.sh bundle exec ruby scripts/generate-project.rb"
+  }
+}

@@ -26,6 +26,7 @@ source_group = project.main_group.new_group('Sources', 'Sources')
 end
 resources = project.main_group.new_group('Resources', 'Resources')
 app.resources_build_phase.add_file_reference(resources.new_file('Assets.xcassets'))
+app.resources_build_phase.add_file_reference(resources.new_file('PrivacyInfo.xcprivacy'))
 math = resources.new_file('Math')
 math.last_known_file_type = 'folder'
 app.resources_build_phase.add_file_reference(math)
@@ -33,6 +34,7 @@ demo = project.main_group.new_file('Sources/MainsCore/Resources/DemoSnapshot.jso
 app.resources_build_phase.add_file_reference(demo)
 project.main_group.new_file('Info.plist')
 project.main_group.new_file('Info.Debug.plist')
+version_config = project.main_group.new_file('Version.xcconfig')
 test_group = project.main_group.new_group('UITests', 'UITests')
 Dir.glob(File.join(root, 'UITests', '*.swift')).sort.each do |path|
   tests.source_build_phase.add_file_reference(test_group.new_file(File.basename(path)))
@@ -52,13 +54,12 @@ end
   end
 end
 app.build_configurations.each do |configuration|
+  configuration.base_configuration_reference = version_config
   debug = configuration.name == 'Debug'
   configuration.build_settings.merge!({
-    'PRODUCT_BUNDLE_IDENTIFIER' => debug ? 'dev.mains.ios.dev' : 'dev.mains.ios',
+    'PRODUCT_BUNDLE_IDENTIFIER' => debug ? 'dev.mains.ios.dev' : 'dev.mains.mobile',
     'PRODUCT_NAME' => 'Mains Native',
     'INFOPLIST_FILE' => debug ? 'Info.Debug.plist' : 'Info.plist',
-    'MARKETING_VERSION' => '0.1.0',
-    'CURRENT_PROJECT_VERSION' => '1',
     'ASSETCATALOG_COMPILER_APPICON_NAME' => 'AppIcon',
     'ENABLE_USER_SCRIPT_SANDBOXING' => 'YES',
   })

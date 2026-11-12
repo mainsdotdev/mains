@@ -13,16 +13,18 @@ Open `Mains.xcodeproj`, select the **Mains** scheme and an iPhone simulator or
 connected iPhone, and Run. The checked-in development team matches the existing
 mobile configuration; choose your own team if necessary.
 
-Debug installs as `dev.mains.ios.dev` and Release as `dev.mains.ios`, both named
-**Mains Native**. These are independent of the Expo app's bundle identifiers,
-Keychain service and cache. Both apps can be installed together. The native app
-needs its own pairing code from the computer; it does not read Expo credentials.
+Debug installs as `dev.mains.ios.dev`, named **Mains Native**, alongside the
+existing app. Release installs as `dev.mains.mobile`, named **Mains**, and continues
+the existing Expo app's App Store Connect/TestFlight record (`6808557372`). A
+Release update replaces the Expo installation. Native storage does not import
+Expo credentials, cache or drafts; testers must pair with the computer again.
 
 In Mains on the computer, create a pairing code in device settings. Scan its QR
 code in this app, or paste the complete `mains://pair#…` link. The in-app scanner
 accepts `mains`, `mains-dev`, `mains-preview` and `mains-native` schemes. This app
-registers only `mains-native` for direct URL opening to avoid taking over the
-existing app's links. Never commit or log a real pairing link or device token.
+registers `mains-native` for direct URL opening in Debug; Release also registers
+the existing production `mains` scheme. Never commit or log a real pairing link
+or device token.
 
 Debug permits local HTTP/WS pairing, including LAN IP addresses. Release retains
 normal App Transport Security and requires HTTPS/WSS. The computer must be
@@ -32,6 +34,96 @@ reachable from the iPhone; this does not add a new mobile Bridge transport.
 xcodebuild -project Mains.xcodeproj -scheme Mains \
   -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
+
+## TestFlight
+
+Run these commands from `apps/ios`. The npm package is only a command wrapper;
+there are no Node dependencies and no `npm install` step.
+
+One-time local setup:
+
+```sh
+brew install ruby@3.3
+npm run beta:setup
+cp fastlane/.env.example fastlane/.env
+```
+
+The wrapper uses your selected Ruby 3.3+ or Homebrew's Ruby 3.3 without changing
+your global Ruby. Bundler installs the locked tooling into ignored `.bundle/`.
+Commit `Gemfile.lock` when updating dependencies; `Gemfile` includes `xcodeproj`
+for project regeneration as well as Fastlane.
+
+Before the first upload:
+
+1. Use the existing app `dev.mains.mobile` in App Store Connect (Apple ID
+   `6808557372`) for Developer team `Y4MVJ7JSH6`. Do not create a new app record:
+   native Release continues the previous Expo app. The Developer membership and
+   required Apple agreements must be active.
+2. Create an App Store Connect **Team API key** with **App Manager** access.
+   Put its key ID, issuer ID and an absolute path to the downloaded `.p8` into
+   `fastlane/.env`. Keep the `.p8` outside the repository. The env file and signing
+   files are ignored; never commit credentials or private keys.
+3. Install an **Apple Distribution** signing certificate **with its private key**
+   into your unlocked login Keychain. Use Xcode's account certificate manager or
+   import your existing identity. An API key authenticates Apple requests; it
+   does not replace a signing identity. The lane uses the Team API key to obtain
+   or create a **Mains Native App Store** provisioning profile backed by a local
+   signing identity. Archive uses automatic signing; export explicitly uses
+   this profile and the local Apple Distribution certificate, avoiding a
+   dependency on cloud-managed signing permissions. Expo's profiles are separate.
+   During export, macOS may ask for your login Keychain password so Apple's
+   `codesign` can use the Distribution private key. Enter it in the local macOS
+   dialog; the command waits until you grant access.
+4. In TestFlight, create an internal tester group and enable automatic distribution
+   of new builds for that group. This lane uploads internal betas; it does not
+   submit external beta review or publish an App Store release.
+
+Then use:
+
+```sh
+npm run beta:check
+npm run beta
+```
+
+`beta:check` checks the local version settings, key file, selected Xcode 26+ and
+presence of a distribution identity without contacting Apple or uploading. It
+cannot verify API permissions, agreements or provisioning. `beta` runs that check,
+runs `swift test`, queries the latest TestFlight build for the app version,
+archives the **Release** scheme, exports the signed IPA, uploads it and waits for
+processing before setting the TestFlight notes. Optional `MAINS_BETA_CHANGELOG`
+in `fastlane/.env` supplies **What to Test**; otherwise notes contain the version
+and build number. UI/backend fixture tests remain a separate manual QA step.
+
+Edit `Version.xcconfig` to change `MARKETING_VERSION`. Its positive integer
+`CURRENT_PROJECT_VERSION` is the local build default and minimum beta number.
+The initial native continuation is version `1.0.0` with a minimum build of `10`,
+following the existing TestFlight build `1.0.0 (9)`.
+`Resources/PrivacyInfo.xcprivacy` ships required-reason declarations for app-local
+UserDefaults and file metadata used for saved drafts/cache and user-selected
+attachments. Keep it in the app's resources when regenerating the project.
+Beta uses `max(local default, latest TestFlight build + 1)` through build-time
+overrides, leaving the tracked project/version files untouched. Regenerating
+the project preserves its reference to this file. Release artifacts and logs
+are in ignored `build/beta/`; do not share raw release logs without reviewing
+them. A lock prevents overlapping uploads from this checkout. Uploads from
+different checkouts/machines must also be serialized to avoid number collisions.
+
+If an upload succeeds but Apple processing or notes fail, check TestFlight before
+retrying: the build may already be present. Running `beta` again creates the next
+build rather than resuming a previous upload. First-time Apple processing may take
+longer. Test the actual TestFlight build on a phone: Release requires HTTPS/WSS,
+while local HTTP/WS pairing is supported only in Debug.
+
+Offline release configuration/orchestration tests (no Apple access or upload):
+
+```sh
+npm run test:release
+```
+
+This first stage runs locally. A hosted release workflow and shared signing
+storage are not configured yet. See the [Fastlane beta deployment guide](https://docs.fastlane.tools/getting-started/ios/beta-deployment/)
+and [API key guide](https://docs.fastlane.tools/app-store-connect-api/) for the
+underlying tooling.
 
 ## Current scope
 
@@ -411,8 +503,8 @@ they do not introduce a second backend API. Dates preserve the existing `$date`
 wire tag, and arbitrary JSON preserves `$undefined` markers.
 
 The Xcode project and shared scheme are committed. After adding/removing Swift
-files, update them in Xcode or regenerate with `ruby scripts/generate-project.rb`
-(the `xcodeproj` gem is needed only for regeneration). Vector icons are rendered
+files, update them in Xcode or regenerate with `npm run project:generate`
+(run `npm run beta:setup` once to install the locked Ruby tooling). Vector icons are rendered
 directly from desktop's current `iconRegistry` into the asset catalogue with
 `node scripts/sync-icons.mjs`. This includes new names, strokes and masks;
 full-viewport SVG wrappers are flattened for native template rendering.

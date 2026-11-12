@@ -5,3 +5,14 @@ DerivedData/
 xcuserdata/
 .swiftpm/
 TestResults/
+.bundle/
+vendor/bundle/
+*.ipa
+*.dSYM.zip
+*.xcarchive/
+*.p8
+*.p12
+*.mobileprovision
+fastlane/report.xml
+fastlane/README.md
+!fastlane/.env.example

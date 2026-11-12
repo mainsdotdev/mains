@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Mains Native</string>
+	<string>Mains</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,6 +25,7 @@
 			<string>dev.mains.native.pairing</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
+				<string>mains</string>
 				<string>mains-native</string>
 			</array>
 		</dict>
