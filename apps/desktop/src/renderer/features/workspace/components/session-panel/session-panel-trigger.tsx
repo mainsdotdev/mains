@@ -2,7 +2,7 @@ import { Menu } from "@/components/ui/icons";
 import { Button } from "@/components/ui";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
-import { useResyncWorkspaceDiffMutation } from "@/lib/redux/api";
+import { useGetTerminalSessionsQuery, useResyncWorkspaceDiffMutation } from "@/lib/redux/api";
 import { selectSessionRunId } from "./select-session-run";
 
 /**
@@ -12,9 +12,11 @@ import { selectSessionRunId } from "./select-session-run";
 export function SessionPanelTrigger({
   showGitActions,
   showSources,
+  showTerminal,
 }: {
   showGitActions: boolean;
   showSources: boolean;
+  showTerminal: boolean;
 }) {
   const dispatch = useAppDispatch();
   const activeWorkspaceId = useAppSelector(
@@ -32,6 +34,10 @@ export function SessionPanelTrigger({
 
   const canOpen =
     (showGitActions && !!activeWorkspaceId) || (showSources && !!sessionRunId);
+  const { currentData: terminals } = useGetTerminalSessionsQuery(undefined, { skip: !showTerminal || !canOpen });
+  const hasRunningServers = showTerminal && terminals?.some(
+    (session) => session.workspaceId && session.status === "running" && (session.servers?.length ?? 0) > 0,
+  );
   if (!canOpen) return null;
 
   return (
@@ -52,7 +58,7 @@ export function SessionPanelTrigger({
       tooltipPosition="left"
       className={isOpen ? "text-primary-700 dark:text-primary-300" : undefined}
     >
-      <Menu className="size-4 " fill={isOpen ? "currentColor" : "none"} />
+      <Menu className={!isOpen && hasRunningServers ? "size-4 text-success" : "size-4"} fill={isOpen ? "currentColor" : "none"} />
     </Button>
   );
 }

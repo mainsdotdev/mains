@@ -261,6 +261,14 @@ export function BrowserPanel({
     browserState.tabs.find((tab) => tab.tabId === browserState.activeTabId) ??
     null;
   const isBlank = !activeTab?.url || activeTab.url === BLANK_URL;
+  // New tabs can come from either the browser toolbar or the shared preview strip.
+  useEffect(() => {
+    if (!isOpen || !isVisible || !isBlank || !activeTab?.tabId ||
+      (selectedPreviewId && selectedPreviewId !== activeTab.tabId)) return;
+    const frame = requestAnimationFrame(() => locationInputRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, isVisible, isBlank, activeTab?.tabId, selectedPreviewId]);
+
   // The typed input leads the rows, so the default selection (0) is exactly
   // what was typed; history matches follow it.
   const addressRows = useMemo(
@@ -278,6 +286,7 @@ export function BrowserPanel({
 
   const applyBrowserState = useCallback((state: BrowserState) => {
     if (state.ownerKey && state.ownerKey !== ownerKey) return;
+    const activeChanged = browserStateOwnerRef.current !== ownerKey || activeTabIdRef.current !== state.activeTabId;
     const lastTabClosed = browserStateOwnerRef.current === ownerKey && !!activeTabIdRef.current && !state.tabs.length;
     const changedNativeSelection = browserStateOwnerRef.current === ownerKey &&
       !!activeTabIdRef.current && activeTabIdRef.current !== state.activeTabId && !!state.activeTabId &&
@@ -298,7 +307,7 @@ export function BrowserPanel({
     const active = state.tabs.find((tab) => tab.tabId === state.activeTabId);
     if (
       active &&
-      document.activeElement !== locationInputRef.current
+      (activeChanged || document.activeElement !== locationInputRef.current)
     ) {
       setUrlInput(active.url === BLANK_URL ? "" : active.url);
     }
@@ -682,9 +691,7 @@ export function BrowserPanel({
   const createTab = useCallback(() => {
     if (!api) return;
     void api.createTab(undefined, ownerKey).then((response: any) => {
-      if (applyResponseState(response, "Failed to create tab")) {
-        requestAnimationFrame(() => locationInputRef.current?.focus());
-      }
+      applyResponseState(response, "Failed to create tab");
     });
   }, [api, applyResponseState, ownerKey]);
 

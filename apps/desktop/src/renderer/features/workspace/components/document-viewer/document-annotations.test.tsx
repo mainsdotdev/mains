@@ -3,11 +3,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode } from "react";
 import type { DocumentAnnotationSurface } from "../../lib/document-selection";
+import type { ContextItem } from "../../lib/composer-context";
 
-const mocks = vi.hoisted(() => ({ key: "chat-a", dispatch: vi.fn(), capture: vi.fn(), revision: 0 }));
+const mocks = vi.hoisted(() => ({ key: "chat-a", dispatch: vi.fn(), capture: vi.fn(), revision: 0, items: [] as ContextItem[] }));
 vi.mock("@/lib/local-document-url", () => ({ localDocumentUrlRevision: () => mocks.revision, subscribeLocalDocumentUrls: () => () => {} }));
 vi.mock("@/lib/redux/hooks", () => ({ useAppDispatch: () => mocks.dispatch,
-  useAppSelector: (select: (state: any) => unknown) => select({ workspace: { composerContextKey: mocks.key, composerContextReady: true } }) }));
+  useAppSelector: (select: (state: any) => unknown) => select({ workspace: { composerContextKey: mocks.key, composerContextReady: true, contextItems: mocks.items } }) }));
 vi.mock("../../lib/document-capture", () => ({ captureDocumentPage: mocks.capture }));
 import { DocumentAnnotations } from "./document-annotations";
 
@@ -17,6 +18,7 @@ let nodes: HTMLElement[];
 const doc = { fileName: "deck.pptx", path: "/work/deck.pptx", docType: "pptx" as const };
 beforeEach(() => {
   mocks.key = "chat-a"; mocks.revision = 0; mocks.dispatch.mockReset(); mocks.capture.mockReset().mockResolvedValue("cGl4ZWxz");
+  mocks.items = [];
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   const scroller = document.createElement("div"); scroller.className = "pptx-stage-scroller";
   scroller.getBoundingClientRect = () => rect(0, 0, 1000, 600);
@@ -31,6 +33,57 @@ beforeEach(() => {
 afterEach(() => { cleanup(); document.body.replaceChildren(); vi.unstubAllGlobals(); });
 
 describe("presentation annotation interaction", () => {
+  it.each(["pdf", "docx", "pptx"] as const)("keeps unsent %s annotations on the document until the composer releases them", async (docType) => {
+    const document = { path: `/work/document.${docType}`, fileName: `document.${docType}`, docType };
+    const view = render(<DocumentAnnotations surface={surface} doc={document} onExit={vi.fn()} />);
+    fireEvent.click(nodes[0]);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Rewrite this passage" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+    await waitFor(() => expect(mocks.dispatch).toHaveBeenCalledOnce());
+    mocks.items = [mocks.dispatch.mock.calls[0][0].payload.item];
+    view.rerender(<DocumentAnnotations surface={surface} doc={document} onExit={vi.fn()} />);
+    expect(screen.queryByRole("dialog", { name: "Annotate document" })).toBeNull();
+    const mark = screen.getByRole("group", { name: "Pending edit 1: Rewrite this passage" });
+    expect(mark.querySelector('[data-document-draft-outline]')?.getAttribute("style")).toContain("left: 100px");
+    view.rerender(<DocumentAnnotations surface={surface} doc={document} active={false} onExit={vi.fn()} />);
+    expect(screen.getByRole("group", { name: "Pending edit 1: Rewrite this passage" })).toBeTruthy();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(nodes[0].hasAttribute("tabindex")).toBe(false);
+    mocks.items = mocks.items.map((item) => ({ ...item, comment: "Edited in composer" } as ContextItem));
+    view.rerender(<DocumentAnnotations surface={surface} doc={document} active={false} />);
+    expect(screen.getByRole("group", { name: "Pending edit 1: Edited in composer" })).toBeTruthy();
+    view.rerender(<DocumentAnnotations surface={surface} doc={{ ...document, path: "/work/other" }} active={false} />);
+    expect(screen.queryByRole("group", { name: /Pending edit/ })).toBeNull();
+    view.rerender(<DocumentAnnotations surface={surface} doc={document} active={false} />);
+    expect(screen.getByRole("group", { name: /Pending edit 1/ })).toBeTruthy();
+    mocks.items = [];
+    view.rerender(<DocumentAnnotations surface={surface} doc={document} active={false} />);
+    expect(screen.queryByRole("group", { name: /Pending edit/ })).toBeNull();
+  });
+
+  it("keeps pending text line boxes aligned after zoom, scrolling and text-node replacement", async () => {
+    const document = { path: "/work/a.pdf", fileName: "a.pdf", docType: "pdf" as const };
+    mocks.items = [{ kind: "document", id: "pending", documentType: "pdf", filePath: document.path, fileName: document.fileName,
+      pageNumber: 1, comment: "Rewrite", screenshotData: "pixels", elements: [{ id: "text", name: "Text", type: "text", text: "Passage",
+        rect: { x: 0.1, y: 0.1, width: 0.3, height: 0.2 },
+        rects: [{ x: 0.1, y: 0.1, width: 0.3, height: 0.1 }, { x: 0.1, y: 0.2, width: 0.2, height: 0.1 }] }] }];
+    render(<DocumentAnnotations surface={surface} doc={document} active={false} />);
+    const marks = () => Array.from(screen.getByRole("group", { name: "Pending edit 1: Rewrite" }).querySelectorAll<HTMLElement>("[data-document-draft-outline]"));
+    expect(marks()).toHaveLength(2);
+    expect(marks()[0].style.width).toBe("300px");
+    const page = surface.pages()[0];
+    page.getBoundingClientRect = () => rect(0, -100, 2000, 1200);
+    nodes.forEach((node) => node.remove());
+    fireEvent.scroll(surface.viewport);
+    await waitFor(() => expect(marks()[0].style.width).toBe("600px"));
+    expect(marks()[0].style.left).toBe("200px");
+    expect(marks()[0].style.top).toBe("20px");
+    expect(marks()[1].style.top).toBe("140px");
+    page.getBoundingClientRect = () => rect(0, -400, 2000, 1200);
+    fireEvent.scroll(surface.viewport);
+    await waitFor(() => expect(screen.queryByRole("group", { name: /Pending edit/ })).toBeNull());
+  });
+
   it.each(["surface", "backend"])("retires selection when the %s changes at the same document path", (boundary) => {
     const view = render(<DocumentAnnotations surface={surface} doc={doc} onExit={vi.fn()} />);
     fireEvent.click(nodes[0]);

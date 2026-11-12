@@ -59,6 +59,7 @@ import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import type { FloatingChatMode } from "../../../../shared/floating-chat";
 import { FloatingChatOverlay } from "./floating-chat-overlay";
 import { ComposerSendTargetSelect } from "./composer-send-target-select";
+import { ComposerQueueCard } from "./composer-run-queue";
 import { ChatHeader } from "./chat-header";
 import { NewConversationContextSelect } from "./new-conversation-context-select";
 import { floatingChatRunStatus } from "../lib/floating-chat-run-status";
@@ -748,6 +749,14 @@ function InteractiveWorkspaceProviderPage({
           onShowDetails={() => floatingPanel.setChatMode("details")}
           onMinimize={() => floatingPanel.setChatMode("icon")}
           onComposerHeightChange={browserChatOnly ? handleBrowserComposerHeight : undefined}
+          beforeComposer={browserRunQueue && (
+            <div className="shrink-0 px-3">
+              <ComposerQueueCard
+                controls={browserRunQueue}
+                isRunning={ws.composerRun?.status === "running" || ws.composerRun?.status === "queued"}
+              />
+            </div>
+          )}
           composer={
             <ComposerSlot
               request={blockingApproval}

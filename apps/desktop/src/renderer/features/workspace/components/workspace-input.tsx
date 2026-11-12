@@ -1014,7 +1014,7 @@ export function WorkspaceInput({
         )
       )}
 
-      {runQueue && <ComposerQueueCard controls={runQueue} isRunning={isRunning} />}
+      {layout !== "floating" && runQueue && <ComposerQueueCard controls={runQueue} isRunning={isRunning} />}
       <div
         className={`@container/composer relative mx-auto flex min-w-0 w-full max-w-210 flex-col cursor-pointer transition-all
         ${layout === "floating"
@@ -1079,6 +1079,7 @@ export function WorkspaceInput({
         <ComposerAttachments
           files={uploadedFiles}
           onRemove={handleRemoveUploadedFile}
+          className={compactFloating ? "pl-8 pr-3" : undefined}
         />
         {/* The compact row reserves each control's actual width, including speed labels. */}
         <div className={compactFloating

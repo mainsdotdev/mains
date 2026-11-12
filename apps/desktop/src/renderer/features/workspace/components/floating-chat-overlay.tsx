@@ -99,6 +99,8 @@ interface FloatingChatOverlayProps {
   onShowDetails: () => void;
   onMinimize: () => void;
   onComposerHeightChange?: (height: number) => void;
+  /** Cards above the composer, included in the dock's measured height. */
+  beforeComposer?: ReactNode;
   composer?: ReactNode;
   children?: ReactNode;
   actions?: ReactNode;
@@ -114,6 +116,7 @@ export function FloatingChatOverlay({
   onShowDetails,
   onMinimize,
   onComposerHeightChange,
+  beforeComposer,
   composer,
   children,
   actions,
@@ -332,7 +335,7 @@ export function FloatingChatOverlay({
             </m.div>
           </m.div>
           <m.div
-            className="absolute bottom-0 right-0 bg-primary-50 dark:bg-primary-900"
+            className="absolute bottom-0 right-0"
             aria-hidden={mode === "icon"}
             inert={mode === "icon"}
             style={{
@@ -341,15 +344,22 @@ export function FloatingChatOverlay({
               pointerEvents: mode === "icon" ? "none" : "auto",
             }}
           >
-            <m.div
-              className="pointer-events-none absolute inset-x-0 top-0 h-px bg-primary-200/60 dark:bg-primary/5"
-              style={{ opacity: composerCovered ? 0 : detailsOpacity }}
-            />
-            <ComposerDockCoverContext.Provider value={setComposerCovered}>
-              <m.div ref={composerRef} style={{ opacity: composerOpacity }}>
-                {composer}
+            <m.div ref={composerRef} style={{ opacity: composerOpacity }}>
+              {beforeComposer}
+              <m.div
+                data-floating-chat-composer=""
+                className="relative bg-primary-50 dark:bg-primary-900"
+                style={{ borderRadius: surfaceRadius }}
+              >
+                <m.div
+                  className="pointer-events-none absolute inset-x-0 top-0 h-px bg-primary-200/60 dark:bg-primary/5"
+                  style={{ opacity: composerCovered ? 0 : detailsOpacity }}
+                />
+                <ComposerDockCoverContext.Provider value={setComposerCovered}>
+                  {composer}
+                </ComposerDockCoverContext.Provider>
               </m.div>
-            </ComposerDockCoverContext.Provider>
+            </m.div>
           </m.div>
           <m.div
             className="absolute bottom-0 right-0 z-30 size-12"

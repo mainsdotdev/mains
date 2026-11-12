@@ -164,6 +164,43 @@ describe("BrowserPanel browser menu", () => {
     delete (window as unknown as { api?: unknown }).api;
   });
 
+  it("focuses the address when a blank tab becomes active through a native state update", async () => {
+    const api = createBrowserApi();
+    Object.defineProperty(window, "api", { configurable: true, value: { browser: api } });
+    render(createElement(BrowserPanel));
+    const address = await screen.findByRole("combobox", { name: "Search or enter address" }) as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(address));
+    fireEvent.change(address, { target: { value: "unfinished search" } });
+
+    const nextTab = { ...blankTab, tabId: "new-blank-tab" };
+    const stateChanged = api.onStateChanged.mock.calls[0][0];
+    act(() => stateChanged({ activeTabId: nextTab.tabId, tabs: [blankTab, nextTab] }));
+    expect(address.value).toBe("");
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+    expect(document.activeElement).toBe(address);
+
+    const newTabButton = screen.getByRole("button", { name: "New browser tab" });
+    newTabButton.focus();
+    act(() => stateChanged({ activeTabId: nextTab.tabId, tabs: [blankTab, { ...nextTab, isLoading: true }] }));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(document.activeElement).toBe(newTabButton);
+
+    const thirdTab = { ...blankTab, tabId: "third-blank-tab" };
+    act(() => stateChanged({ activeTabId: thirdTab.tabId, tabs: [blankTab, nextTab, thirdTab] }));
+    await waitFor(() => expect(document.activeElement).toBe(address));
+  });
+
+  it("keeps loaded tabs from taking focus into the address bar", async () => {
+    const api = createBrowserApi();
+    const loadedTab = { ...blankTab, url: "https://mains.dev/", title: "Mains" };
+    api.getState.mockResolvedValue({ success: true, data: { activeTabId: loadedTab.tabId, tabs: [loadedTab] } });
+    Object.defineProperty(window, "api", { configurable: true, value: { browser: api } });
+    render(createElement(BrowserPanel));
+    await screen.findByRole("tab", { name: "Mains" });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(document.activeElement).not.toBe(screen.getByRole("combobox", { name: "Search or enter address" }));
+  });
+
   it("exits annotation mode with Escape while the toolbar is focused and no items are selected", async () => {
     const api = createBrowserApi();
     const loadedTab = { ...blankTab, url: "https://mains.dev/", title: "Mains" };

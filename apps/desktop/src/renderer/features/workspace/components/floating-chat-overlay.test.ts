@@ -149,7 +149,7 @@ describe("floating chat overlay", () => {
     );
   });
 
-  it("measures a wrapped composer and keeps the transcript above it", async () => {
+  it("keeps accessory controls outside the composer and measures both above the transcript", async () => {
     const observers: Array<{ callback: ResizeObserverCallback; target?: Element }> = [];
     class ResizeObserverStub {
       readonly entry: (typeof observers)[number];
@@ -162,26 +162,35 @@ describe("floating chat overlay", () => {
     }
     vi.stubGlobal("ResizeObserver", ResizeObserverStub);
     const onComposerHeightChange = vi.fn();
+    const onSteer = vi.fn();
     const props = {
       ...presentation(run),
       mode: "input" as const,
       onShowDetails: vi.fn(),
       onMinimize: vi.fn(),
       onComposerHeightChange,
+      beforeComposer: createElement("button", { onClick: onSteer }, "Steer message"),
       composer: createElement("div", null, "Composer"),
       children: createElement("div", null, "Transcript"),
     };
     const { rerender, unmount } = render(createElement(FloatingChatOverlay, props));
-    const composer = screen.getByText("Composer").parentElement!;
-    expect(composer.parentElement?.style.borderRadius).toBe("28px");
+    const composerSurface = screen.getByText("Composer").closest("[data-floating-chat-composer]") as HTMLElement;
+    const composer = composerSurface.parentElement!;
+    const steer = screen.getByRole("button", { name: "Steer message" });
+    expect(composerSurface.contains(steer)).toBe(false);
+    expect(composer.contains(steer)).toBe(true);
+    fireEvent.click(steer);
+    expect(onSteer).toHaveBeenCalledOnce();
+    expect(composerSurface.style.borderRadius).toBe("28px");
     vi.spyOn(composer, "getBoundingClientRect").mockReturnValue({ height: 76 } as DOMRect);
     const observer = observers.find((entry) => entry.target === composer);
     expect(observer).toBeDefined();
     act(() => observer?.callback([], {} as ResizeObserver));
     expect(onComposerHeightChange).toHaveBeenLastCalledWith(76);
-    expect(composer.parentElement?.style.borderRadius).toBe("28px");
+    expect(composerSurface.style.borderRadius).toBe("28px");
 
     rerender(createElement(FloatingChatOverlay, { ...props, mode: "details" }));
+    expect(screen.getByRole("button", { name: "Steer message" })).toBe(steer);
     await waitFor(() => {
       expect(screen.getByText("Transcript").parentElement?.style.paddingBottom).toBe("76px");
     });

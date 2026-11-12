@@ -151,8 +151,8 @@ export function PdfDocument({ doc, zoom, annotating = false, onExitAnnotation }:
           </div>
         )}
       </div>
-      {annotating && status === "ready" && annotationSurface && onExitAnnotation && (
-        <DocumentAnnotations surface={annotationSurface} doc={doc} onExit={onExitAnnotation} />
+      {status === "ready" && annotationSurface && (
+        <DocumentAnnotations surface={annotationSurface} doc={doc} active={annotating} onExit={onExitAnnotation} />
       )}
     </div>
   );

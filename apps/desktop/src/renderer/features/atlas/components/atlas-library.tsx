@@ -204,9 +204,9 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
     ? bridgeBackend(bridgeStatus, entry.generated.replica.backendId).label : null;
   const originLabel = (entry: Entry) => {
     if (entry.saved) return "Saved to Atlas";
-    const origin = entry.generated?.origin === "attachment" ? "Uploaded" : "Generated";
+    if (entry.generated?.origin !== "attachment") return "Generated";
     const device = deviceOf(entry);
-    return device ? `${origin} on ${device}` : origin;
+    return device ? `Uploaded on ${device}` : "Uploaded";
   };
   const focusSearch = params.get("focus") === "search";
   useEffect(() => {

@@ -1,11 +1,12 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { AtlasItem } from "@mains/contracts/atlas";
 import { Button, Text } from "@/components/ui";
-import { Bookmark, Star } from "@/components/ui/icons/space";
+import { Star } from "@/components/ui/icons/space";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { useAtlasFilePath } from "../hooks/use-atlas-file-path";
 import { AtlasItemTags } from "./atlas-item-tags";
+import { AtlasBookmarkPreview } from "./atlas-bookmark-preview";
 
 export function AtlasBookmarkCard({
   item,
@@ -25,10 +26,8 @@ export function AtlasBookmarkCard({
   );
   const local = useLocalImageUrl(path, 768, item.updatedAt);
   const src = local ?? proxiedImageSrc(item.metadata?.bookmark?.imageUrl);
-  const [failed, setFailed] = useState<string>();
-  const hasImage = !!src && src !== failed;
-  const organizing = item.bookmarkState?.status === "pending" || item.bookmarkState?.status === "running";
-  const status = organizing ? "Organizing…" : item.bookmarkState?.error ? "Details incomplete" : null;
+  const fetching = item.bookmarkState?.status === "pending" || item.bookmarkState?.status === "running";
+  const status = fetching ? "Fetching details…" : item.bookmarkState?.error ? "Details incomplete" : null;
   const savedAt = new Date(item.createdAt);
   const dateLabel = Number.isNaN(savedAt.getTime()) ? null : savedAt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   let domain = item.metadata?.bookmark?.siteName ?? "Bookmark";
@@ -44,19 +43,8 @@ export function AtlasBookmarkCard({
         onClick={onOpen}
         className="block w-full text-left focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
       >
-        <div className={`flex aspect-[2.4/1] max-h-32 w-full items-center justify-center overflow-hidden ${hasImage ? "bg-primary-100/70 dark:bg-primary-900/70" : "bg-primary-200/40 dark:bg-primary-800/60"}`}>
-          {hasImage ? (
-            <img
-              src={src}
-              onError={() => setFailed(src)}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className="size-full object-cover transition-transform duration-200 group-hover:scale-[1.02] motion-reduce:transform-none"
-            />
-          ) : (
-            <Bookmark className="size-8 text-primary-400" />
-          )}
+        <div className="flex aspect-[2.4/1] max-h-32 w-full items-center justify-center overflow-hidden bg-primary-200/40 dark:bg-primary-800/60">
+          <AtlasBookmarkPreview src={src} pending={fetching} imageClassName="group-hover:scale-[1.02] motion-reduce:transform-none" />
         </div>
         <div className="px-4 pb-1.5 pt-3">
           <h2 className="line-clamp-2 text-sm font-semibold leading-snug text-primary-900 dark:text-primary-100">
@@ -71,8 +59,8 @@ export function AtlasBookmarkCard({
       </Button>
       <AtlasItemTags tags={item.tags ?? []} onTag={onTag} className="px-4" />
       {status && (
-        <Text size="xs" tone="subtle" role={organizing ? "status" : undefined} className="px-4 pt-1.5" title={item.bookmarkState?.error}>
-          <span className={organizing ? "shine-text" : undefined}>{status}</span>
+        <Text size="xs" tone="subtle" role={fetching ? "status" : undefined} className="px-4 pt-1.5" title={item.bookmarkState?.error}>
+          <span className={fetching ? "shine-text" : undefined}>{status}</span>
         </Text>
       )}
       <div className={`mt-auto flex min-w-0 items-center gap-1.5 pb-3 pl-4 pt-2 text-xs text-primary-500 ${item.isFavorite ? "pr-10" : "pr-4"}`}>

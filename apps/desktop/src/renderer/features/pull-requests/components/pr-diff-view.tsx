@@ -463,8 +463,8 @@ export function PrDiffView({ prRef }: { prRef: PrRefInput }) {
         <Text
           as="div"
           size="xs"
-          tone="warning"
-          className="mx-4 my-3 px-3 py-3 rounded-xl bg-warning/10"
+          tone="muted"
+          className="bg-primary-100/50 dark:bg-primary-800/30 glass-primary backdrop-blur-md p-2"
         >
           This diff is large — only the available files and patches are shown.
           Open the pull request on GitHub for the full diff.

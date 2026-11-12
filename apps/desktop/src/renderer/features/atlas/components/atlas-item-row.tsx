@@ -8,6 +8,7 @@ import { useAtlasFilePath } from "../hooks/use-atlas-file-path";
 import { AtlasFileIcon } from "./atlas-file-icon";
 import { AtlasPageIcon } from "./atlas-page-icon";
 import { AtlasItemTags } from "./atlas-item-tags";
+import { AtlasBookmarkPreview } from "./atlas-bookmark-preview";
 
 export function AtlasItemRow({ entry, menu, onOpen, onTag, onSource, sourceLabel }: {
   entry: AtlasLibraryEntry;
@@ -35,14 +36,16 @@ export function AtlasItemRow({ entry, menu, onOpen, onTag, onSource, sourceLabel
   const date = entry.saved?.createdAt ?? entry.date;
   const savedAt = new Date(date);
   const dateLabel = Number.isNaN(savedAt.getTime()) ? null : savedAt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  const organizing = bookmark && (entry.saved?.bookmarkState?.status === "pending" || entry.saved?.bookmarkState?.status === "running");
-  const status = organizing ? "Organizing…" : entry.saved?.bookmarkState?.error ? "Details incomplete" : null;
+  const fetching = bookmark && (entry.saved?.bookmarkState?.status === "pending" || entry.saved?.bookmarkState?.status === "running");
+  const status = fetching ? "Fetching details…" : entry.saved?.bookmarkState?.error ? "Details incomplete" : null;
   return (
     <article className="group relative min-h-20 min-w-0 border-b border-primary-200/50 py-2.5 pl-21 pr-12 transition-colors hover:bg-primary-100/50 focus-within:bg-primary-100/50 dark:border-primary-800/70 dark:hover:bg-primary-900/50 dark:focus-within:bg-primary-900/50 sm:pl-22">
       <Button aria-label={bookmark ? `Open ${entry.title}` : entry.title} onClick={onOpen}
         className="block w-full text-left focus-visible:ring-2 focus-visible:ring-accent/40">
         <span aria-hidden="true" className="absolute left-3 top-1/2 flex h-11 w-14 -translate-y-1/2 items-center justify-center overflow-hidden rounded-md bg-primary-100/70 text-accent dark:bg-primary-900/70 sm:h-12 sm:w-16">
-          {src && src !== failed ? (
+          {bookmark ? (
+            <AtlasBookmarkPreview src={src} pending={fetching} iconClassName="size-6" />
+          ) : src && src !== failed ? (
             <>
               <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(src)} className="size-full object-cover" />
               {entry.kind === "page" && <>
@@ -69,7 +72,7 @@ export function AtlasItemRow({ entry, menu, onOpen, onTag, onSource, sourceLabel
           <Button onClick={onSource} className="min-w-0 truncate text-left hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/40">{label}</Button>
         ) : <span className="min-w-0 truncate" title={label}>{label}</span>}
         {dateLabel && <><span aria-hidden="true">·</span><time dateTime={date} title={savedAt.toLocaleString()} className="shrink-0">{dateLabel}</time></>}
-        {status && <><span aria-hidden="true">·</span><span role={organizing ? "status" : undefined} title={entry.saved?.bookmarkState?.error} className={`truncate ${organizing ? "shine-text" : ""}`}>{status}</span></>}
+        {status && <><span aria-hidden="true">·</span><span role={fetching ? "status" : undefined} title={entry.saved?.bookmarkState?.error} className={`truncate ${fetching ? "shine-text" : ""}`}>{status}</span></>}
       </div>
       <div className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full">{menu}</div>
     </article>

@@ -12,6 +12,7 @@ import appSettingsReducer, { setBottomTerminalOpen, setSessionPanelOpen } from "
 import { resetTransport, setTransport, type Transport } from "@/lib/transport";
 import { getModeConfig } from "@/lib/mode-config";
 import { SessionPanel } from "./session-panel";
+import { SessionPanelTrigger } from "./session-panel-trigger";
 
 const mode = vi.hoisted(() => ({ id: "developer" }));
 vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => getModeConfig(mode.id) }));
@@ -54,7 +55,7 @@ function makeStore() {
   const result = configureStore({
     reducer: {
       [baseApi.reducerPath]: baseApi.reducer, terminal: terminalReducer, appSettings: appSettingsReducer,
-      backends: () => ({ activeBackendId: null }), workspace: () => ({ activeWorkspaceId: "a" }),
+      backends: () => ({ activeBackendId: null }), workspace: () => ({ activeWorkspaceId: "a", activeTab: "run-1", previousNonEditorTab: null }),
     },
     middleware: (defaults) => defaults().concat(baseApi.middleware),
   });
@@ -64,6 +65,7 @@ function makeStore() {
 function Location() { return <span data-testid="location">{useLocation().pathname}</span>; }
 function panel() {
   return <Provider store={testStore}><MemoryRouter initialEntries={["/code/a"]}>
+    <SessionPanelTrigger {...getModeConfig(mode.id)} />
     <SessionPanel runId="run-1" laneOffset="0rem" floating={false} /><Location />
   </MemoryRouter></Provider>;
 }
@@ -139,6 +141,8 @@ describe("session panel running servers", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith(CHANNELS.terminal.list, []));
     expect(screen.queryByRole("region", { name: "Running servers" })).toBeNull();
     expect(screen.getByRole("heading", { name: "Sources" })).toBeTruthy();
+    act(() => testStore.dispatch(setSessionPanelOpen(false)));
+    expect(screen.getByRole("button", { name: "Open session details" }).querySelector("svg")?.classList.contains("text-success")).toBe(false);
   });
 
   it("updates live port changes without destroying the shell or hiding the terminal drawer", async () => {
@@ -154,8 +158,15 @@ describe("session panel running servers", () => {
     await screen.findByText(":3001");
     act(() => testStore.dispatch(setSessionPanelOpen(false)));
     expect(screen.queryByRole("complementary", { name: "Session panel" })).toBeNull();
+    const trigger = screen.getByRole("button", { name: "Open session details" });
+    expect(trigger.querySelector("svg")?.classList.contains("text-success")).toBe(true);
+    act(() => { sessions[0].servers = []; changed(); });
+    await waitFor(() => expect(trigger.querySelector("svg")?.classList.contains("text-success")).toBe(false));
+    act(() => { sessions[0].servers = [{ pid: 11, port: 3001, command: "node" }]; changed(); });
+    await waitFor(() => expect(trigger.querySelector("svg")?.classList.contains("text-success")).toBe(true));
     act(() => testStore.dispatch(setSessionPanelOpen(true)));
     expect(screen.getByText(":3001")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close session details" }).querySelector("svg")?.classList.contains("text-success")).toBe(false);
     expect(invoke.mock.calls.some(([channel]) => channel === CHANNELS.terminal.destroy)).toBe(false);
   });
 

@@ -374,7 +374,7 @@ function AppContent() {
           contentInsetRight={contentInsetRight}
           headerActions={operationalAccess && (!isMobile || showTerminalToggle) && !hideWorkspacePanels && !preview.isExpanded && (
             <div className="flex items-center gap-0.5 empty:hidden">
-              {!isMobile && <SessionPanelTrigger showGitActions={modeConfig.showGitActions} showSources={modeConfig.showSources} />}
+              {!isMobile && <SessionPanelTrigger showGitActions={modeConfig.showGitActions} showSources={modeConfig.showSources} showTerminal={modeConfig.showTerminal} />}
               {showTerminalToggle && <TerminalPanelTrigger isOpen={bottomTerminal.isOpen} onToggle={bottomTerminal.toggle} />}
             </div>
           )}
