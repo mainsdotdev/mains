@@ -353,7 +353,7 @@ async function* libraryEntries(options: AtlasLibraryOptions, query: string) {
 }
 
 export const atlasService = {
-  async saveBookmark(input: AtlasSaveBookmark) { return format(await atlasBookmarks.save(input)); },
+  async saveBookmark(input: AtlasSaveBookmark, validate?: () => void) { return format(await atlasBookmarks.save(input, validate)); },
   async enrichBookmark(input: AtlasIdentity) { return format(await atlasBookmarks.enrich(identity(input))); },
   listTags(input: { accountId: string }) { return atlasRepo.listTags(required(input?.accountId, "Account")); },
   renameTag(input: AtlasIdentity & { name: string }) {

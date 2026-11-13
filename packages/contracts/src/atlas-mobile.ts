@@ -52,3 +52,11 @@ export interface AtlasMobileUpdateItem {
   accountId: string; id: string; isFavorite?: boolean; collectionId?: string | null;
 }
 export interface AtlasMobileItemState extends AtlasMobileSavedItem { requestedId: string; isFavorite: boolean; collectionId: string | null }
+export interface AtlasMobileBookmark extends AtlasMobileSavedItem {
+  kind: "bookmark"; requestedId: string; url: string; description: string; note: string; revision: string;
+}
+export interface AtlasMobileBookmarkIdentity { accountId: string; id: string }
+export interface AtlasMobileEditBookmark extends AtlasMobileBookmarkIdentity {
+  expectedRevision: string; title?: string; description?: string; note?: string;
+}
+export interface AtlasMobileBookmarkEditResult extends AtlasMobileSavedItem { requestedId: string; revision: string }

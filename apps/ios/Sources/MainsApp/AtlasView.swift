@@ -20,6 +20,7 @@ struct AtlasView: View {
     @State private var libraryOwner: Int?
     @State private var moveSelection: AtlasMoveSelection?
     @State private var editError: String?
+    @State private var bookmarkEdit: AtlasBookmarkEditSelection?
     private var canOrganize: Bool { libraryOwner == session.ownership && session.canSaveToAtlas }
     private var filter: String { "\(query.type):\(query.scope):\(query.collectionID ?? ""):\(query.text)" }
     private var loadKey: String { "\(query.hashValue):\(session.connection):\(session.atlasRevision):\(reload)" }
@@ -86,6 +87,11 @@ struct AtlasView: View {
                         .buttonStyle(.plain).accessibilityIdentifier("atlasItem-" + entry.key)
                         .contextMenu {
                             if entry.savedIdentity != nil {
+                                if entry.kind == "bookmark", let id = entry.savedIdentity {
+                                    Button("Edit bookmark", systemImage: "pencil") {
+                                        if let owner = libraryOwner { bookmarkEdit = AtlasBookmarkEditSelection(itemID: id, owner: owner) }
+                                    }.disabled(!canOrganize)
+                                }
                                 Button(entry.isFavorite ? "Remove from favorites" : "Add to favorites", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
                                     .disabled(!canOrganize)
                                 Button("Move to project", systemImage: "folder") { move(entry) }.disabled(!canOrganize)
@@ -127,7 +133,7 @@ struct AtlasView: View {
         .onChange(of: filter) { _, _ in query.page = 1 }
         .sheet(item: $file) { AtlasFilePreview(session: session, selection: $0, openConversation: { id in file = nil; openConversation(id) }) }
         .sheet(item: $bookmark) { entry in
-            AtlasBookmarkView(entry: entry, openConversation: { id in bookmark = nil; openConversation(id) })
+            AtlasBookmarkView(session: session, entry: entry, owner: libraryOwner ?? session.ownership, openConversation: { id in bookmark = nil; openConversation(id) })
         }
         .sheet(isPresented: $addingBookmark) {
             NewAtlasBookmarkView(session: session, owner: bookmarkOwner, onSaved: {
@@ -135,6 +141,7 @@ struct AtlasView: View {
             }, collectionID: query.collectionID)
         }
         .sheet(item: $moveSelection) { MoveAtlasItemView(session: session, selection: $0) }
+        .sheet(item: $bookmarkEdit) { AtlasBookmarkEditor(session: session, selection: $0, onSaved: { reload += 1 }) }
         .alert("Couldn’t update item", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) { Button("OK", role: .cancel) {} } message: { Text(editError ?? "") }
     }
     private func favorite(_ entry: AtlasEntry) {
@@ -272,25 +279,57 @@ struct AtlasPageView: View {
 }
 
 private struct AtlasBookmarkView: View {
+    let session: BackendSession
     let entry: AtlasEntry
+    let owner: Int
     let openConversation: (String) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var current: AtlasBookmarkDocument?
+    @State private var editing: AtlasBookmarkEditSelection?
+    @State private var refresh = 0
+    @State private var error: String?
+    private var title: String { current?.title ?? entry.title }
+    private var description: String { current?.description ?? entry.description ?? "" }
+    private var note: String { current?.note ?? entry.note ?? "" }
+    private var webURL: URL? {
+        guard let current else { return entry.webURL }
+        guard let url = URL(string: current.url), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return nil }
+        return url
+    }
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    Text(entry.title).font(.title2.bold()).textSelection(.enabled)
-                    if let description = entry.description, !description.isEmpty { Text(description).textSelection(.enabled) }
-                    if let url = entry.webURL {
+                    Text(title).font(.title2.bold()).textSelection(.enabled)
+                    if !description.isEmpty { Text(description).textSelection(.enabled) }
+                    if let url = webURL {
                         Link(url.host ?? url.absoluteString, destination: url)
                         ShareLink(item: url) { Label("Share link", systemImage: "square.and.arrow.up") }
                     }
                 }
-                if let note = entry.note, !note.isEmpty { Section("Notes") { Text(note).textSelection(.enabled) } }
+                if !note.isEmpty { Section("Notes") { Text(note).textSelection(.enabled) } }
+                if let error { Text(error).font(.footnote).foregroundStyle(.secondary) }
                 if let id = entry.sourceRunId { Button("Open source chat", systemImage: "bubble.left") { openConversation(id) } }
             }.navigationTitle("Bookmark").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Close", systemImage: "xmark") { dismiss() } } }
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) { Button("Close", systemImage: "xmark") { dismiss() } }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Edit") { if let id = entry.savedIdentity { editing = AtlasBookmarkEditSelection(itemID: id, owner: owner) } }
+                            .disabled(!session.canSaveToAtlas || owner != session.ownership).accessibilityIdentifier("editAtlasBookmark")
+                    }
+                }
         }
+        .sheet(item: $editing) { AtlasBookmarkEditor(session: session, selection: $0, onSaved: { refresh += 1 }) }
+        .task(id: "\(session.connection):\(session.atlasRevision):\(refresh)") {
+            error = nil
+            do {
+                guard owner == session.ownership, let id = entry.savedIdentity else { throw MainsError.changedBackend }
+                let item = try await session.readAtlasBookmark(id)
+                try Task.checkCancellation(); guard owner == session.ownership else { return }
+                current = item
+            } catch { if !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription } }
+        }
+        .onChange(of: session.ownership) { _, _ in dismiss() }
     }
 }
 

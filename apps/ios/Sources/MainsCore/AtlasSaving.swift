@@ -31,7 +31,8 @@ public struct PendingAtlasSave: Sendable {
     let owner: Int
     let createdAt: Date
     public var id: String { commandID }
-    public var isUpdate: Bool { channel == "atlas:updateMobileItem" }
+    public var isBookmarkEdit: Bool { channel == "atlas:editMobileBookmark" }
+    public var isUpdate: Bool { channel == "atlas:updateMobileItem" || isBookmarkEdit }
 }
 
 public enum AtlasBookmarkURL {

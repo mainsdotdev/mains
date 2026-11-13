@@ -35,6 +35,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.atlas.readMobilePage,
   CHANNELS.atlas.describeMobileFile,
   CHANNELS.atlas.readMobileFile,
+  CHANNELS.atlas.readMobileBookmark,
   CHANNELS.runs.getAll,
   CHANNELS.runs.listActive,
   CHANNELS.runs.listRecent,
@@ -98,6 +99,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
  */
 export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   CHANNELS.atlas.updateMobileItem,
+  CHANNELS.atlas.editMobileBookmark,
   CHANNELS.atlas.saveMobileFile,
   CHANNELS.atlas.saveMobileBookmark,
   CHANNELS.runs.createRealtimeConversation,

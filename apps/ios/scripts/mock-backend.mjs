@@ -380,10 +380,12 @@ wss.on('connection', socket => {
         case CHANNELS.atlas.readMobilePage:
         case CHANNELS.atlas.describeMobileFile:
         case CHANNELS.atlas.readMobileFile:
+        case CHANNELS.atlas.readMobileBookmark:
           result = atlasFixture(channel, args[0], { pdfBytes, outputBytes, imageBase64, version: outputVersion }); break;
         case CHANNELS.atlas.saveMobileFile:
         case CHANNELS.atlas.saveMobileBookmark:
         case CHANNELS.atlas.updateMobileItem:
+        case CHANNELS.atlas.editMobileBookmark:
           if (!commandId) throw new Error('Atlas saves require a command identity');
           result = atlasFixture(channel, args[0], { pdfBytes, outputBytes, imageBase64, version: outputVersion });
           receipts.set(commandId, { success: true, data: result }); broadcast(CHANNELS.atlas.changed, {}); break;

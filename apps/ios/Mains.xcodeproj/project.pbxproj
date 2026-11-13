@@ -98,6 +98,8 @@
 		18EE9AED8519F7DEAC608D15AB3AD8B5 /* AtlasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BA48913EFDE51CD66B715AAB71ED7E /* AtlasView.swift */; };
 		27B72038650772FB9CAC21F859EF4D03 /* AtlasSaving.swift in Sources */ = {isa = PBXBuildFile; fileRef = 936CF73F786C5D3D9BADF8C7F44B88E6 /* AtlasSaving.swift */; };
 		C4749122308B90F5AFE9B1278CFF350A /* AtlasSaveControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A2DF0099301CFA2DC3B12E48DDDF1F2 /* AtlasSaveControls.swift */; };
+		7CD228D6F11A09C03E18D015DF8C0276 /* BookmarkEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317452162624C74E418A2A90E03E6376 /* BookmarkEditing.swift */; };
+		1ABC23266DB4589BE89CA7BF52E1549A /* AtlasBookmarkEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 659863D227B33393165A134B0C2295EF /* AtlasBookmarkEditor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -215,6 +217,8 @@
 		71BA48913EFDE51CD66B715AAB71ED7E /* AtlasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasView.swift; sourceTree = "<group>"; };
 		936CF73F786C5D3D9BADF8C7F44B88E6 /* AtlasSaving.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasSaving.swift; sourceTree = "<group>"; };
 		3A2DF0099301CFA2DC3B12E48DDDF1F2 /* AtlasSaveControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasSaveControls.swift; sourceTree = "<group>"; };
+		317452162624C74E418A2A90E03E6376 /* BookmarkEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkEditing.swift; sourceTree = "<group>"; };
+		659863D227B33393165A134B0C2295EF /* AtlasBookmarkEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasBookmarkEditor.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -297,6 +301,7 @@
 		9F99657CFDED4A92038F06FFC05619BA /* MainsApp */ = {
 			isa = PBXGroup;
 			children = (
+				659863D227B33393165A134B0C2295EF /* AtlasBookmarkEditor.swift */,
 				3A2DF0099301CFA2DC3B12E48DDDF1F2 /* AtlasSaveControls.swift */,
 				71BA48913EFDE51CD66B715AAB71ED7E /* AtlasView.swift */,
 				95489360F16BBE3C3799CEA347E713CD /* WorkInboxView.swift */,
@@ -360,6 +365,7 @@
 		D0FE9E15764B1F5BE92FDCBC54559C91 /* MainsCore */ = {
 			isa = PBXGroup;
 			children = (
+				317452162624C74E418A2A90E03E6376 /* BookmarkEditing.swift */,
 				936CF73F786C5D3D9BADF8C7F44B88E6 /* AtlasSaving.swift */,
 				9BD59A6B9A74B03FBAD06CA053FFBD7B /* DemoAtlas.swift */,
 				427411C1A144C684E1F9C5A961891B49 /* Atlas.swift */,
@@ -510,6 +516,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1ABC23266DB4589BE89CA7BF52E1549A /* AtlasBookmarkEditor.swift in Sources */,
+				7CD228D6F11A09C03E18D015DF8C0276 /* BookmarkEditing.swift in Sources */,
 				C4749122308B90F5AFE9B1278CFF350A /* AtlasSaveControls.swift in Sources */,
 				27B72038650772FB9CAC21F859EF4D03 /* AtlasSaving.swift in Sources */,
 				18EE9AED8519F7DEAC608D15AB3AD8B5 /* AtlasView.swift in Sources */,

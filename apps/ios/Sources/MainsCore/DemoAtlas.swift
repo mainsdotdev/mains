@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 @MainActor final class DemoAtlas {
     private var saved: [String: JSONValue] = [:]
@@ -19,6 +20,15 @@ import Foundation
     }
 
     private func summary(_ row: JSONValue) -> JSONValue { .object(["id": row["key"], "title": row["title"], "kind": row["kind"]]) }
+
+    private func bookmark(_ row: JSONValue, account: JSONValue, requestedID: String) throws -> JSONValue {
+        guard row["kind"].string == "bookmark", let id = row["savedItemId"].string, let url = row["url"].string else { throw MainsError.server("Bookmark not found or in Trash") }
+        let description = row["description"].string ?? "", note = row["note"].string ?? ""
+        let content: JSONValue = .array([account, .string(id), .string(url), row["title"], .string(description), .string(note)])
+        let revision = SHA256.hash(data: try JSONEncoder().encode(content)).map { String(format: "%02x", $0) }.joined()
+        return .object(["id": .string(id), "requestedId": .string(requestedID), "kind": .string("bookmark"), "title": row["title"],
+                        "url": .string(url), "description": .string(description), "note": .string(note), "revision": .string(revision)])
+    }
 
     func answer(_ channel: String, input: JSONValue, runID: String, collectionID: String?, image: JSONValue) throws -> JSONValue {
         let source = String(repeating: "a", count: 64)
@@ -53,6 +63,26 @@ import Foundation
             }
         }
         switch channel {
+        case "atlas:readMobileBookmark", "atlas:editMobileBookmark":
+            guard let id = input["id"].string, let row = libraryRows().first(where: { $0["savedItemId"].string == id }) else { throw MainsError.server("Bookmark not found or in Trash") }
+            let current = try bookmark(row, account: input["accountId"], requestedID: id)
+            if channel == "atlas:readMobileBookmark" { return current }
+            guard input["expectedRevision"].string == current["revision"].string else { throw MainsError.server("This bookmark changed elsewhere. Reload it before saving your edits.") }
+            var patch = edits[id] ?? [:]
+            var changed = false
+            for field in ["title", "description", "note"] {
+                if let value = input.objectValue[field] {
+                    guard let text = value.string else { throw MainsError.invalidReply }
+                    patch[field] = .string(text.trimmingCharacters(in: .whitespacesAndNewlines)); changed = true
+                }
+            }
+            let draft = AtlasBookmarkDraft(title: patch["title"]?.string ?? current["title"].string ?? "",
+                                           description: patch["description"]?.string ?? current["description"].string ?? "", note: patch["note"]?.string ?? current["note"].string ?? "")
+            guard changed, draft.validationError == nil else { throw MainsError.server(draft.validationError ?? "Make a change before saving.") }
+            edits[id] = patch
+            guard let updatedRow = libraryRows().first(where: { $0["savedItemId"].string == id }) else { throw MainsError.invalidReply }
+            let updated = try bookmark(updatedRow, account: input["accountId"], requestedID: id)
+            return .object(["id": updated["id"], "requestedId": .string(id), "kind": .string("bookmark"), "title": updated["title"], "revision": updated["revision"]])
         case "atlas:updateMobileItem":
             guard let id = input["id"].string, let row = libraryRows().first(where: { $0["savedItemId"].string == id }) else { throw MainsError.server("Atlas item not found.") }
             var patch = edits[id] ?? [:]

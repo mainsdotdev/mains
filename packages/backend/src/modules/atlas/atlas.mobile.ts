@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { promises as fs, type Stats } from "node:fs";
 import type { AtlasMobileEntry, AtlasMobileFile, AtlasMobileFileRead, AtlasMobileFileReference, AtlasMobileFileRequest,
   AtlasMobileLibraryOptions, AtlasMobileLibraryPage, AtlasMobilePage, AtlasMobilePageRequest,
-  AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileSavedItem, AtlasMobileUpdateItem, AtlasMobileItemState } from "@mains/contracts/atlas-mobile";
+  AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileSavedItem, AtlasMobileUpdateItem, AtlasMobileItemState,
+  AtlasMobileBookmarkIdentity, AtlasMobileBookmark, AtlasMobileEditBookmark, AtlasMobileBookmarkEditResult } from "@mains/contracts/atlas-mobile";
 import { MOBILE_OUTPUT_MAX_BYTES, outputFileType, type RunOutputChunk } from "@mains/contracts/run-outputs";
 import { readRunFileChunk } from "../../../shared/file-chunks";
 import { atlasService, generatedForRun } from "./atlas.service";
@@ -26,6 +27,36 @@ const signature = (accountId: string, reference: AtlasMobileFileReference, stat:
   .update(JSON.stringify([accountId, reference, stat.size, stat.mtimeMs, stat.ctimeMs, stat.ino, stat.dev])).digest("hex");
 
 export const atlasMobile = {
+  readBookmark(input: AtlasMobileBookmarkIdentity): AtlasMobileBookmark {
+    const accountId = required(input?.accountId), id = required(input?.id);
+    const item = atlasService.get({ accountId, id });
+    if (!item || item.kind !== "bookmark" || item.trashedAt || !item.url) throw new Error("Bookmark not found or in Trash");
+    const description = item.description ?? "", note = item.note ?? "";
+    const revision = createHash("sha256").update(JSON.stringify([accountId, item.id, item.url, item.title, description, note])).digest("hex");
+    return { id: item.id, requestedId: id, title: item.title, kind: "bookmark", url: item.url, description, note, revision };
+  },
+
+  async editBookmark(input: AtlasMobileEditBookmark): Promise<AtlasMobileBookmarkEditResult> {
+    const accountId = required(input?.accountId), id = required(input?.id);
+    if (Object.keys(input).some((key) => !["accountId", "id", "expectedRevision", "title", "description", "note"].includes(key))
+      || typeof input.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.expectedRevision)) throw new Error("Invalid bookmark edit");
+    const fields: { title?: string; description?: string; note?: string } = {};
+    for (const [field, limit] of [["title", 240], ["description", 2000], ["note", 10000]] as const) {
+      const value = input[field];
+      if (value === undefined) continue;
+      if (typeof value !== "string" || value.length > limit || value.includes("\0") || field === "title" && !value.trim()) throw new Error(`Invalid bookmark ${field}`);
+      fields[field] = value.trim();
+    }
+    if (!Object.keys(fields).length) throw new Error("Change the title, description or note before saving");
+    const checkRevision = () => {
+      if (this.readBookmark({ accountId, id }).revision !== input.expectedRevision) throw new Error("This bookmark changed elsewhere. Reload it before saving your edits.");
+    };
+    checkRevision();
+    const original = this.readBookmark({ accountId, id });
+    const item = await atlasService.saveBookmark({ accountId, id: original.id, url: original.url, ...fields }, checkRevision);
+    return { id: item.id, requestedId: id, title: item.title, kind: item.kind, revision: this.readBookmark({ accountId, id: item.id }).revision };
+  },
+
   async updateItem(input: AtlasMobileUpdateItem): Promise<AtlasMobileItemState> {
     const accountId = required(input?.accountId), id = required(input?.id);
     if (Object.keys(input).some((key) => !["accountId", "id", "isFavorite", "collectionId"].includes(key))

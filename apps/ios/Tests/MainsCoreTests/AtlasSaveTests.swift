@@ -3,6 +3,69 @@ import Testing
 @testable import MainsCore
 
 @Suite struct AtlasSaveTests {
+    @Test @MainActor func bookmarkEditsKeepUnchangedFieldsAndAllowDescriptionAndNoteToBeCleared() async throws {
+        let backend = try DemoBackend(), probe = AtlasSaveProbe(), storage = MemoryStorage()
+        let session = BackendSession(storage: storage, makeTransport: { _ in AtlasSaveTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let original = try await session.readAtlasBookmark("demo-atlas-bookmark")
+        var draft = original.draft; draft.title = "İstanbul 🌍"; draft.description = "New description"; draft.note = "First line\nSecond line"
+        _ = try await session.editAtlasBookmark(original, draft: draft, owner: session.ownership)
+        let edited = try await session.readAtlasBookmark(original.id)
+        #expect(edited.title == draft.title && edited.description == draft.description && edited.note == draft.note && edited.url == original.url)
+        #expect(edited.revision != original.revision)
+        var cleared = edited.draft; cleared.description = ""; cleared.note = ""
+        _ = try await session.editAtlasBookmark(edited, draft: cleared, owner: session.ownership)
+        let current = try await session.readAtlasBookmark(original.id)
+        #expect(current.title == draft.title && current.description.isEmpty && current.note.isEmpty)
+        let edit = try #require(probe.calls.last(where: { $0.0 == "atlas:editMobileBookmark" })?.1.first)
+        #expect(edit["title"] == .null && edit["url"] == .null && edit["description"] == .string("") && edit["note"] == .string(""))
+        var boundary = current.draft; boundary.title = String(repeating: "😀", count: 120)
+        #expect(boundary.validationError == nil)
+        boundary.title += "😀"; #expect(boundary.validationError != nil)
+        #expect(session.viewingRunID == nil && storage.snapshot == nil)
+    }
+
+    @Test @MainActor func aStaleBookmarkEditIsRefusedWithoutDiscardingTheLocalDraft() async throws {
+        let backend = try DemoBackend()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let original = try await session.readAtlasBookmark("demo-atlas-bookmark")
+        var draft = original.draft; draft.title = "My unsent title"
+        let account = try backend.invoke("account:get", args: [])["id"]
+        _ = try backend.invoke("atlas:editMobileBookmark", args: [.object(["accountId": account, "id": .string(original.id), "expectedRevision": .string(original.revision), "title": .string("Newer title"), "note": .string("Keep newer note")])], commandID: UUID().uuidString)
+        await #expect(throws: MainsError.self) { try await session.editAtlasBookmark(original, draft: draft, owner: session.ownership) }
+        #expect(draft.title == "My unsent title" && session.pendingAtlasSave == nil && session.canSaveToAtlas)
+        let latest = try await session.readAtlasBookmark(original.id)
+        #expect(latest.title == "Newer title" && latest.note == "Keep newer note")
+    }
+
+    @Test @MainActor func bookmarkEditRecoveryKeepsTheOriginalReceiptAndReadsNewerEditsAfterReconnection() async throws {
+        let backend = try DemoBackend(), probe = AtlasSaveProbe()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let original = try await session.readAtlasBookmark("demo-atlas-bookmark")
+        var draft = original.draft; draft.note = "Phone note"
+        probe.loseACK = true
+        await #expect(throws: MainsError.self) { try await session.editAtlasBookmark(original, draft: draft, owner: session.ownership) }
+        #expect(session.pendingAtlasSave?.isBookmarkEdit == true && session.pendingAtlasSave?.isUpdate == true)
+        let applied = try await session.readAtlasBookmark(original.id)
+        let account = try backend.invoke("account:get", args: [])["id"]
+        _ = try backend.invoke("atlas:editMobileBookmark", args: [.object(["accountId": account, "id": .string(original.id), "expectedRevision": .string(applied.revision), "note": .string("Newer computer note")])], commandID: UUID().uuidString)
+        session.setActive(false); session.setActive(true)
+        try await eventually { session.isConnected }
+        _ = try await session.checkAtlasSaveDelivery()
+        let edits = probe.calls.filter { $0.0 == "atlas:editMobileBookmark" }
+        #expect(edits.count == 2 && edits[0].1 == edits[1].1 && edits[0].2 == edits[1].2)
+        #expect(try await session.readAtlasBookmark(original.id).note == "Newer computer note")
+        #expect(session.pendingAtlasSave == nil)
+    }
+
     @Test @MainActor func favoritesAndProjectMovesUpdateTheFilteredLibraryWithoutMovingTheReader() async throws {
         let backend = try DemoBackend(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
@@ -141,6 +204,28 @@ import Testing
 }
 
 extension SessionIntegrationTests {
+    @Test @MainActor func bookmarkEditingUsesFreshBoundedReadsAndItsOwnReceiptBackedCommand() async throws {
+        let session = BackendSession(storage: MemoryStorage())
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
+        let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")
+        try await eventually { session.isConnected }
+        let original = try await session.readAtlasBookmark("fixture-atlas-bookmark")
+        var draft = original.draft; draft.title = "Research link"; draft.description = "Updated description"; draft.note = "A useful note"
+        _ = try await session.editAtlasBookmark(original, draft: draft, owner: session.ownership)
+        let edited = try await session.readAtlasBookmark(original.id)
+        #expect(edited.title == draft.title && edited.description == draft.description && edited.note == draft.note && edited.url == original.url)
+        await #expect(throws: MainsError.self) { try await session.editAtlasBookmark(original, draft: draft, owner: session.ownership) }
+        var query = AtlasQuery(); query.text = "Research link"
+        #expect(try await session.atlasLibrary(query).items.map(\.id) == [original.id])
+        let (data, _) = try await URLSession.shared.data(from: URL(string: endpoint + "/observations")!)
+        let calls = try JSONDecoder().decode([JSONValue].self, from: data).filter { $0["channel"].string == "atlas:editMobileBookmark" }
+        #expect(calls.allSatisfy { $0["commandId"].string?.isEmpty == false && $0["args"].array.first?["url"].string == nil })
+        #expect(session.viewingRunID == nil && session.transcript.rows.isEmpty)
+    }
+
     @Test @MainActor func atlasOrganizationUsesWhitelistedReceiptCommandsAndRefreshesProjectAndFavoriteFilters() async throws {
         let session = BackendSession(storage: MemoryStorage())
         session.restore(); session.setActive(true)
@@ -206,7 +291,7 @@ extension SessionIntegrationTests {
     func close() { base.close() }
     func perform(_ channel: String, args: [JSONValue], commandId: String?, timeout: TimeInterval) async throws -> JSONValue {
         probe.calls.append((channel, args, commandId))
-        let mutation = channel.hasPrefix("atlas:save") || channel == "atlas:updateMobileItem"
+        let mutation = channel.hasPrefix("atlas:save") || channel == "atlas:updateMobileItem" || channel == "atlas:editMobileBookmark"
         if mutation, probe.reject { probe.reject = false; throw MainsError.server("Invalid bookmark URL") }
         let value = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
         if mutation, probe.loseACK { probe.loseACK = false; throw MainsError.timeout }

@@ -1,4 +1,5 @@
 import { CHANNELS } from '../../../packages/contracts/src/channels.ts';
+import { createHash } from 'node:crypto';
 
 const saved = new Map(), sources = new Map(), edits = new Map();
 export function resetAtlasFixture() { saved.clear(); sources.clear(); edits.clear(); }
@@ -22,6 +23,22 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
     row.savedItemId = row.key; row.savedCollectionId = row.collectionId;
   }
   switch (channel) {
+    case CHANNELS.atlas.readMobileBookmark:
+    case CHANNELS.atlas.editMobileBookmark: {
+      const item = rows.find(row => row.key === input.id && row.kind === 'bookmark');
+      if (!item) throw new Error('Bookmark not found or in Trash');
+      const document = row => ({ id: row.key, requestedId: input.id, title: row.title, kind: 'bookmark', url: row.url,
+        description: row.description ?? '', note: row.note ?? '',
+        revision: createHash('sha256').update(JSON.stringify([input.accountId, row.key, row.url, row.title, row.description ?? '', row.note ?? ''])).digest('hex') });
+      const current = document(item);
+      if (channel === CHANNELS.atlas.readMobileBookmark) return current;
+      if (input.expectedRevision !== current.revision) throw new Error('This bookmark changed elsewhere. Reload it before saving your edits.');
+      const patch = { ...edits.get(input.id) };
+      for (const field of ['title', 'description', 'note']) if (field in input) patch[field] = input[field].trim();
+      edits.set(input.id, patch);
+      const updated = document({ ...item, ...patch });
+      return { id: updated.id, requestedId: input.id, kind: 'bookmark', title: updated.title, revision: updated.revision };
+    }
     case CHANNELS.atlas.updateMobileItem: {
       const item = rows.find(row => row.key === input.id);
       if (!item) throw new Error('Atlas item not found');

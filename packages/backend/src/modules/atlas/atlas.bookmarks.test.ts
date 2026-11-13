@@ -35,6 +35,71 @@ beforeEach(() => {
 afterEach(async () => { await atlasBookmarks.stop(); cleanup(); restore(); fs.rmSync(directory, { recursive: true, force: true }); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Atlas bookmarks", () => {
+  it("reads and edits phone bookmark fields while preserving URL, tags, project and favorites", async () => {
+    const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/edited", title: "Original", description: "Before", note: "Old note", tags: ["Research"] });
+    await atlasService.update({ accountId, id: item.id, isFavorite: true });
+    const original = atlasMobile.readBookmark({ accountId, id: item.id });
+    expect(original.revision).toMatch(/^[a-f0-9]{64}$/); expect(original).not.toHaveProperty("path");
+    const result = await atlasMobile.editBookmark({ accountId, id: item.id, expectedRevision: original.revision, title: "İstanbul 🌍", description: "A new description", note: "Line one\nLine two" });
+    expect(result).toMatchObject({ id: item.id, requestedId: item.id, title: "İstanbul 🌍", kind: "bookmark" });
+    expect(result).not.toHaveProperty("note");
+    atlasBookmarks.start(); await waitForReady(item.id);
+    const edited = atlasService.get({ accountId, id: item.id })!;
+    expect(edited).toMatchObject({ title: "İstanbul 🌍", description: "A new description", note: "Line one\nLine two", url: item.url, collectionId: item.collectionId, isFavorite: true });
+    expect(edited.tags).toEqual(item.tags);
+    expect(edited.metadata?.bookmark).toMatchObject({ customTitle: true, customDescription: true });
+    const current = atlasMobile.readBookmark({ accountId, id: item.id });
+    await atlasMobile.editBookmark({ accountId, id: item.id, expectedRevision: current.revision, description: "", note: "" });
+    expect(atlasMobile.readBookmark({ accountId, id: item.id })).toMatchObject({ title: "İstanbul 🌍", description: "", note: "" });
+  });
+
+  it("changes only submitted fields and allows unrelated organization updates during an edit", async () => {
+    const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/partial" });
+    const before = atlasMobile.readBookmark({ accountId, id: item.id });
+    await atlasMobile.updateItem({ accountId, id: item.id, isFavorite: true });
+    expect(atlasMobile.readBookmark({ accountId, id: item.id }).revision).toBe(before.revision);
+    await atlasMobile.editBookmark({ accountId, id: item.id, expectedRevision: before.revision, note: "Only the note" });
+    const edited = atlasService.get({ accountId, id: item.id })!;
+    expect(edited).toMatchObject({ title: item.title, description: item.description, note: "Only the note", isFavorite: true });
+    expect(edited.metadata?.bookmark?.customTitle).not.toBe(true);
+    expect(edited.metadata?.bookmark?.customDescription).not.toBe(true);
+  });
+
+  it("refuses stale revisions, including a write that becomes stale during asynchronous preparation", async () => {
+    const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/conflict", title: "Original" });
+    const before = atlasMobile.readBookmark({ accountId, id: item.id });
+    const preferences = atlasBookmarks.preferences.bind(atlasBookmarks);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let entered = false;
+    vi.spyOn(atlasBookmarks, "preferences").mockImplementation(async (owner) => {
+      const value = await preferences(owner); entered = true; await held; return value;
+    });
+    const saving = atlasMobile.editBookmark({ accountId, id: item.id, expectedRevision: before.revision, title: "Phone title" });
+    await vi.waitFor(() => expect(entered).toBe(true));
+    atlasRepo.update(item.id, accountId, { title: "Newer title", note: "Keep this" });
+    release();
+    await expect(saving).rejects.toThrow("changed elsewhere");
+    expect(atlasMobile.readBookmark({ accountId, id: item.id })).toMatchObject({ title: "Newer title", note: "Keep this" });
+    await expect(atlasMobile.editBookmark({ accountId, id: item.id, expectedRevision: before.revision, note: "stale" })).rejects.toThrow("changed elsewhere");
+  });
+
+  it("bounds editable fields, rejects foreign/trashed/non-bookmark items and keeps broad mutations private", async () => {
+    const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/limits" });
+    const before = atlasMobile.readBookmark({ accountId, id: item.id });
+    const identity = { accountId, id: item.id, expectedRevision: before.revision };
+    for (const patch of [{ title: " " }, { title: "😀".repeat(121) }, { description: "x".repeat(2001) }, { note: "x".repeat(10001) }, { note: "\0" }, { url: "https://other.example" }, { collectionId: null }, { isFavorite: true }, {}]) {
+      await expect(atlasMobile.editBookmark({ ...identity, ...patch } as never)).rejects.toThrow();
+    }
+    expect(() => atlasMobile.readBookmark({ accountId: "other", id: item.id })).toThrow("not found");
+    await expect(atlasMobile.editBookmark({ ...identity, accountId: "other", note: "Foreign" })).rejects.toThrow("not found");
+    atlasRepo.insert({ id: "not-bookmark", accountId, kind: "page", title: "Page" });
+    expect(() => atlasMobile.readBookmark({ accountId, id: "not-bookmark" })).toThrow("not found");
+    await atlasService.update({ accountId, id: item.id, trashed: true });
+    await expect(atlasMobile.editBookmark({ ...identity, title: "Trashed" })).rejects.toThrow("Trash");
+    expect(atlasService.get({ accountId, id: item.id })?.title).toBe(item.title);
+  });
+
   it("lets a phone add a deduplicated URL without editing an existing bookmark or opening broad Atlas writes", async () => {
     const saved = await atlasMobile.saveBookmark({ accountId, url: "https://example.com/phone?id=7&utm_source=mail" });
     const same = await atlasMobile.saveBookmark({ accountId, url: "https://example.com/phone?id=7", title: "ignored", id: saved.id } as never);

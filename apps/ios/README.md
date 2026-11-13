@@ -212,6 +212,18 @@ underlying tooling.
 
 ## Current scope
 
+- Saved bookmarks expose **Edit** in their detail sheet and **Edit bookmark** in
+  the row's long-press menu. The editor loads fresh title/description/note data,
+  validates the existing 240/2,000/10,000 UTF-16 limits, and submits only dirty
+  fields through `atlas:editMobileBookmark`; empty description/note values clear
+  them. The URL and other Atlas metadata are preserved. An editable-content
+  revision is checked again at the commit seam, so stale edits cannot overwrite
+  another device or background enrichment. Drafts remain in memory on failure;
+  **Discard edits and reload** explicitly replaces them with the current values.
+  Unknown acknowledgements use the shared **Check change** recovery. Returning
+  to the detail/library reads fresh metadata instead of applying old receipt
+  text. Older computers show update guidance. Demo supports the same edits and
+  revision conflicts without contacting a website, provider or real computer.
 - Saved Atlas Pages, documents, images and bookmarks support **Add to favorites** /
   **Remove from favorites** and **Move to project** from a row's long-press menu
   or swipe actions. The project sheet includes **No project**. These affect the

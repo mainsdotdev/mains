@@ -147,6 +147,7 @@ describe("backendService", () => {
         );
       }
       expect(PAIRED_DEVICE_CHANNELS.has("backend:describe")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("atlas:readMobileBookmark")).toBe(true);
       for (const channel of ["atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile"]) expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(true);
       for (const channel of ["atlas:library", "atlas:get", "atlas:resolveFile", "atlas:update", "atlas:savePage", "atlas:remove"]) expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("search:conversations")).toBe(true);
@@ -164,6 +165,7 @@ describe("backendService", () => {
   describe("PAIRED_DEVICE_COMMANDS", () => {
     it("is exactly the control loop's verbs plus the picker writes, disjoint from the read list", () => {
       expect([...PAIRED_DEVICE_COMMANDS].sort()).toEqual([
+        "atlas:editMobileBookmark",
         "atlas:saveMobileBookmark",
         "atlas:saveMobileFile",
         "atlas:updateMobileItem",

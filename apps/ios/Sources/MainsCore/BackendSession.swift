@@ -774,6 +774,23 @@ public final class BackendSession {
 
     public var canSaveToAtlas: Bool { active && isConnected && pendingAtlasSave == nil }
 
+    public func readAtlasBookmark(_ id: String) async throws -> AtlasBookmarkDocument {
+        let item = try await atlasRead("atlas:readMobileBookmark", fields: ["id": .string(id)]).decode(AtlasBookmarkDocument.self)
+        guard item.requestedId == id, !item.id.isEmpty, item.id.utf8.count <= 256, item.kind == "bookmark",
+              item.title.utf16.count <= 240, item.url.utf16.count <= 4096, item.description.utf16.count <= 2000, item.note.utf16.count <= 10000,
+              item.revision.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw MainsError.invalidReply }
+        return item
+    }
+
+    public func editAtlasBookmark(_ original: AtlasBookmarkDocument, draft: AtlasBookmarkDraft, owner: Int) async throws -> AtlasSavedItem {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        if let error = draft.validationError { throw MainsError.server(error) }
+        var fields = draft.changes(from: original)
+        guard !fields.isEmpty else { throw MainsError.server("Make a change before saving.") }
+        fields["id"] = .string(original.id); fields["expectedRevision"] = .string(original.revision)
+        return try await beginAtlasSave("atlas:editMobileBookmark", fields: fields, label: original.title)
+    }
+
     public func setAtlasFavorite(_ entry: AtlasEntry, to value: Bool, owner: Int) async throws -> AtlasSavedItem {
         try await updateAtlasItem(entry, patch: ["isFavorite": .bool(value)], owner: owner)
     }
@@ -832,7 +849,10 @@ public final class BackendSession {
             guard !item.id.isEmpty, item.id.utf8.count <= 256,
                   validKind,
                   item.title.utf8.count <= 4096 else { throw MainsError.invalidReply }
-            if attempt.isUpdate {
+            if attempt.isBookmarkEdit {
+                guard item.kind == "bookmark", value["requestedId"] == attempt.payload["id"],
+                      value["revision"].string?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw MainsError.invalidReply }
+            } else if attempt.isUpdate {
                 guard value["requestedId"] == attempt.payload["id"],
                       attempt.payload.objectValue["isFavorite"].map({ value["isFavorite"] == $0 }) ?? true,
                       attempt.payload.objectValue["collectionId"].map({ value.objectValue["collectionId"] == $0 }) ?? true else { throw MainsError.invalidReply }
