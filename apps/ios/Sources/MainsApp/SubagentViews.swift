@@ -9,6 +9,9 @@ struct SubagentSelection: Identifiable {
 
 /// The card is an overlay: opening it never changes the transcript's insets.
 struct SubagentDock: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let agents: [SessionSubagent]
     let partial: Bool
     @Binding var expanded: Bool
@@ -81,6 +84,9 @@ struct SubagentDock: View {
 }
 
 struct SubagentSummaryRow: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let text: String
     let open: () -> Void
     var body: some View {
@@ -95,6 +101,9 @@ struct SubagentSummaryRow: View {
 }
 
 struct SubagentDetailSheet: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let selection: SubagentSelection
     @Environment(\.dismiss) private var dismiss
@@ -168,6 +177,9 @@ struct SubagentDetailSheet: View {
 private struct AgentContentReference: Identifiable { let id: Int }
 
 private struct SubagentGlyph: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 4).stroke(lineWidth: 1.6).frame(width: 18, height: 13).offset(y: 3)

@@ -13,6 +13,9 @@ enum VoicePresentation: String, CaseIterable {
 }
 
 struct VoicePresentationMenu: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @AppStorage(VoicePresentation.storageKey) private var presentation = VoicePresentation.focus
     var body: some View {
         Menu {
@@ -31,6 +34,9 @@ struct VoicePresentationMenu: View {
 }
 
 struct VoiceFocusStage: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let voice: RealtimeVoiceController
     var body: some View {
         GeometryReader { geometry in
@@ -43,6 +49,9 @@ struct VoiceFocusStage: View {
 }
 
 struct VoiceOrb: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let voice: RealtimeVoiceController
     var size: CGFloat = 104
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -97,6 +106,9 @@ private struct VoiceOrbFrame {
 }
 
 struct VoiceCallDock: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let visibleRunID: String?
     var preparingHere = false

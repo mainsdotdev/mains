@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct AtlasSaveButton: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let source: AtlasSaveSource
     let owner: Int
@@ -29,6 +32,9 @@ struct AtlasSaveButton: View {
 
 /// A lost save acknowledgement can be recovered after leaving the original file/form.
 struct AtlasSaveDeliveryNotice: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     @State private var message: String?
     @State private var failed = false
@@ -61,6 +67,9 @@ struct AtlasMoveSelection: Identifiable {
 }
 
 struct MoveAtlasItemView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let selection: AtlasMoveSelection
     @Environment(\.dismiss) private var dismiss
@@ -112,6 +121,9 @@ struct MoveAtlasItemView: View {
 }
 
 struct NewAtlasBookmarkView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let owner: Int
     let onSaved: () -> Void

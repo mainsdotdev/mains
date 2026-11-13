@@ -6,6 +6,9 @@ private let atlasTypes = [("all", "All", "atlas-all"), ("page", "Pages", "atlas-
 private let atlasScopes = [("all", "All sources"), ("saved", "Saved to Atlas"), ("generated", "Generated"), ("uploads", "Uploads"), ("favorites", "Favorites")]
 
 struct AtlasView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let openPage: (String) -> Void
     let openConversation: (String) -> Void
@@ -246,6 +249,9 @@ struct AtlasView: View {
 }
 
 private struct AtlasTypeScrollFade: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     private struct Edges: Equatable {
         var left = false
         var right = false
@@ -284,6 +290,9 @@ private struct AtlasTypeScrollFade: ViewModifier {
 }
 
 private struct AtlasEntryRow: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let entry: AtlasEntry
     let project: String?
@@ -341,6 +350,9 @@ private struct AtlasEntryRow: View {
 }
 
 private struct AtlasListImage: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let reference: AtlasFileReference
     let revision: String
@@ -377,6 +389,9 @@ private struct AtlasListImage: View {
 }
 
 struct AtlasPageView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let pageID: String
     let openPage: (String) -> Void
@@ -454,6 +469,9 @@ struct AtlasPageView: View {
 }
 
 private struct AtlasBookmarkView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let entry: AtlasEntry
     let owner: Int
@@ -515,6 +533,9 @@ struct AtlasFileSelection: Identifiable {
     var sourceRunID: String? = nil
 }
 struct AtlasFilePreview: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let selection: AtlasFileSelection
     var openConversation: ((String) -> Void)? = nil

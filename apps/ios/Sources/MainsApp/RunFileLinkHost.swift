@@ -15,6 +15,9 @@ extension View {
 }
 
 private struct RunFileLinkHost: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let runID: String
     let base: String?
@@ -34,6 +37,9 @@ private struct RunFileLinkHost: ViewModifier {
 }
 
 struct LocalTextFilePreview: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let url: URL
     let markdown: Bool
     @State private var page: LocalTextFilePage?

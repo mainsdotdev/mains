@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct HomeView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let openSidebar: () -> Void
     let openComputer: () -> Void
@@ -77,6 +80,9 @@ struct HomeView: View {
 }
 
 private struct UnpairedHomeArea: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let pair: () -> Void
     var body: some View {
@@ -120,6 +126,9 @@ private struct UnpairedHomeArea: View {
 }
 
 private struct HomeComposerArea: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let space: Space
     @Binding var targetSheet: Bool

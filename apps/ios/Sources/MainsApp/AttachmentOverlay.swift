@@ -44,6 +44,9 @@ extension View {
 }
 
 private struct AttachmentOverlayModifier: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let isPresented: Bool
     let id: UUID
     let accent: Color
@@ -62,6 +65,9 @@ private struct AttachmentOverlayModifier: ViewModifier {
 }
 
 private struct AttachmentOverlayHost: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @State private var presented: AttachmentOverlayRequest?
     @Environment(\.scenePhase) private var scenePhase
     func body(content: Content) -> some View {
@@ -79,6 +85,9 @@ private struct AttachmentOverlayHost: ViewModifier {
 }
 
 private struct AttachmentOverlayContent: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let request: AttachmentOverlayRequest
     let scenePhase: ScenePhase
     var body: some View {

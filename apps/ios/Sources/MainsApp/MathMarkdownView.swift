@@ -2,6 +2,9 @@ import SwiftUI
 import WebKit
 
 struct MathMarkdownView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let document: MathMarkdown
     let source: String
     @Environment(\.colorScheme) private var colorScheme
@@ -19,6 +22,9 @@ struct MathMarkdownView: View {
 }
 
 private struct MathWebView: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let html: String
     let fontSize: Double
     let dark: Bool

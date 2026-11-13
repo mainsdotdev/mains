@@ -5,6 +5,9 @@ struct ChatPressStyle: ButtonStyle {
 }
 
 struct ChatMessage: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let row: TranscriptRow
     let providerID: String
@@ -66,6 +69,9 @@ struct ChatMessage: View {
 }
 
 private struct PromptBubble: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let text: String
     let skills: [ContextSkill]
     let providerID: String
@@ -80,6 +86,9 @@ private struct PromptBubble: View {
 
 /// Native Markdown uses an isolated, offline KaTeX surface only when it contains math.
 struct ChatMessageBody: View, Equatable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let text: String
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text }
     var body: some View {
@@ -120,6 +129,9 @@ struct ChatMessageBody: View, Equatable {
 }
 
 private struct MarkdownTable: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let table: MessageTable
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var widths: [CGFloat] {
@@ -163,6 +175,9 @@ private struct MarkdownTable: View {
 }
 
 private struct CodeBlock: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let language: String
     let code: String
     private var title: String {
@@ -190,6 +205,9 @@ private struct CodeBlock: View {
 }
 
 struct ChatActivity: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let title: String
     let symbol: String
     let busy: Bool
@@ -203,6 +221,9 @@ struct ChatActivity: View {
 }
 
 struct ChatNotice<Actions: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let title: String
     let message: String
     let symbol: String

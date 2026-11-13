@@ -3,6 +3,9 @@ import AVFoundation
 import VisionKit
 
 struct PairingView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     private enum EntryMode { case camera, manual }
     let session: BackendSession
     let initialLink: String
@@ -266,6 +269,9 @@ struct PairingActionStyle: ButtonStyle {
 }
 
 private struct QRScanner: UIViewControllerRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let scanning: Bool
     let onScan: (String) -> Void
     let onError: (String) -> Void

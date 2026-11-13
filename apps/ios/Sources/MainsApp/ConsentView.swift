@@ -9,6 +9,9 @@ struct ConsentContext: Identifiable {
 }
 
 struct ConsentView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let context: ConsentContext
     let allow: () -> Void
     @Environment(\.dismiss) private var dismiss

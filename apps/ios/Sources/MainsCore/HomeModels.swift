@@ -65,6 +65,15 @@ public struct ComposerSettings: Codable, Equatable, Sendable {
         if provider == "claude_code", config["ultracode"]?.bool == true { return "ultracode" }
         return config[["codex", "copilot_cli"].contains(provider) ? "modelReasoningEffort" : "effortLevel"]?.string ?? ""
     }
+    /// Display older incompatible settings without silently writing a repair.
+    /// Explicit model selection saves the same compatible value below.
+    public func effort(provider: String, model: ModelChoice?) -> String {
+        let value = effort(provider: provider)
+        guard provider == "claude_code", value == "ultracode", let model else { return value }
+        let levels = model.supportedEffortLevels ?? []
+        guard !EffortControlKind.supportsUltracode(provider: provider, levels: levels) else { return value }
+        return EffortControlKind.ordered(levels).last ?? ""
+    }
     public mutating func setEffort(_ value: String, provider: String) {
         config["thinkingMode"] = .bool(!value.isEmpty)
         if provider == "claude_code", value == "ultracode" { config["ultracode"] = .bool(true); return }
@@ -86,7 +95,13 @@ public struct ComposerSettings: Codable, Equatable, Sendable {
         self.model = model.id
         let levels = model.supportedEffortLevels ?? []
         let current = effort(provider: provider)
-        if !levels.isEmpty, !current.isEmpty, current != "ultracode", !levels.contains(current) {
+        let compatible = effort(provider: provider, model: model)
+        if compatible != current {
+            let thinking = config["thinkingMode"]?.bool ?? true
+            setEffort(compatible, provider: provider)
+            // Claude models with no graded effort still have a Thinking switch.
+            if levels.isEmpty { config["thinkingMode"] = .bool(thinking) }
+        } else if !levels.isEmpty, !current.isEmpty, current != "ultracode", !levels.contains(current) {
             let ranked = ["minimal", "low", "medium", "high", "xhigh", "max"]
             let rank = ranked.firstIndex(of: current) ?? ranked.count
             let next = levels.min { abs((ranked.firstIndex(of: $0) ?? 0) - rank) < abs((ranked.firstIndex(of: $1) ?? 0) - rank) } ?? ""

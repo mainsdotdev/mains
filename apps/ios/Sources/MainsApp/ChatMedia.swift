@@ -17,6 +17,9 @@ private struct ChatImageFrame: Layout {
 }
 
 struct PendingPromptAttachments: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let attachments: [PromptAttachment]
     private var images: [PromptAttachment] { attachments.filter { $0.type == "image" } }
     var body: some View {
@@ -39,6 +42,9 @@ struct PendingPromptAttachments: View {
 }
 
 private struct PendingImageTile: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let file: PromptAttachment
     let width: CGFloat
     let height: CGFloat
@@ -61,6 +67,9 @@ private struct PendingImageTile: View {
 }
 
 struct ChatMediaGallery: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let media: [TranscriptMedia]
     var prompt = false
@@ -109,6 +118,9 @@ struct ChatMediaGallery: View {
 }
 
 private struct ChatImageTile: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let media: TranscriptMedia
     let maxWidth: CGFloat

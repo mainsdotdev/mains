@@ -89,6 +89,16 @@ app.build_configurations.each do |configuration|
     'ASSETCATALOG_COMPILER_APPICON_NAME' => 'AppIcon',
     'ENABLE_USER_SCRIPT_SANDBOXING' => 'YES',
   })
+  if debug
+    # Injection is local to Debug simulators. Physical devices and every Release
+    # retain the normal linker, cache and SwiftUI rendering configuration.
+    configuration.build_settings['OTHER_LDFLAGS[sdk=iphonesimulator*]'] = ['$(inherited)', '-Xlinker', '-interposable']
+    configuration.build_settings['EMIT_FRONTEND_COMMAND_LINES[sdk=iphonesimulator*]'] = 'YES'
+    configuration.build_settings['COMPILATION_CACHE_ENABLE_CACHING[sdk=iphonesimulator*]'] = 'NO'
+    configuration.build_settings['SWIFT_ENABLE_OPAQUE_TYPE_ERASURE[sdk=iphonesimulator*]'] = 'YES'
+  else
+    configuration.build_settings['EXCLUDED_SOURCE_FILE_NAMES'] = 'DeveloperHotReload.swift'
+  end
 end
 tests.build_configurations.each do |configuration|
   configuration.build_settings.merge!({
@@ -102,5 +112,13 @@ project.predictabilize_uuids
 project.save
 scheme = Xcodeproj::XCScheme.new
 scheme.configure_with_targets(app, tests, :launch_target => app)
+scheme.launch_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
+  Xcodeproj::XCScheme::EnvironmentVariable.new(key: 'INJECTION_DIRECTORIES', value: '$(SRCROOT)/Sources/MainsApp,$(HOME)/Library'),
+])
+# Tests must not load a file watcher or allow source injection during a run.
+scheme.test_action.should_use_launch_scheme_args_env = false
+scheme.test_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
+  Xcodeproj::XCScheme::EnvironmentVariable.new(key: 'MAINS_HOT_RELOAD', value: '0'),
+])
 scheme.save_as(project.path, 'Mains', true)
 puts "Generated Mains.xcodeproj (#{voice_enabled ? 'v2 voice development' : 'v1, no voice module'})"

@@ -3,6 +3,9 @@ import Photos
 import Observation
 
 struct LibraryPhotoThumbnail: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let asset: PHAsset
     let pixels: CGFloat
     func makeCoordinator() -> Coordinator { Coordinator() }

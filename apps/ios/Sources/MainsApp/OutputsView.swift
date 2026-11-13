@@ -3,6 +3,9 @@ import QuickLook
 import UniformTypeIdentifiers
 
 struct OutputsView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let runID: String
     @State private var page: RunOutputsPage?
@@ -63,6 +66,9 @@ struct OutputsView: View {
 }
 
 struct OutputPreviewView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     private let output: RunOutput?
     private let media: TranscriptMedia?
@@ -209,6 +215,9 @@ struct OutputPreviewView: View {
 }
 
 struct OutputQuickLook: UIViewControllerRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let url: URL
     func makeCoordinator() -> Coordinator { Coordinator(url: url) }
     func makeUIViewController(context: Context) -> QLPreviewController {

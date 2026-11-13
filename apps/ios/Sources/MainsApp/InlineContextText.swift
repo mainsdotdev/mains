@@ -58,6 +58,9 @@ final class ContextArtwork {
 
 /// Same metadata-based token positions as the composer, rendered inside sent prompts.
 struct InlineContextText: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let text: String
     let skills: [ContextSkill]
     @State private var artwork = ContextArtwork()
@@ -103,6 +106,9 @@ private final class ContextAttachment: NSTextAttachment {
 }
 
 struct ContextTextEditor: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @Binding var text: String
     @Binding var skills: [ContextSkill]
     let scope: ContextScope
@@ -120,6 +126,9 @@ struct ContextTextEditor: View {
 }
 
 private struct ContextTextInput: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @Binding var text: String
     @Binding var skills: [ContextSkill]
     let scope: ContextScope

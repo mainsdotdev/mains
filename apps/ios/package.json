@@ -8,6 +8,7 @@
     "beta": "bash scripts/with-ruby.sh bundle exec fastlane ios beta",
     "test": "swift test",
     "test:release": "bash scripts/with-ruby.sh bundle exec ruby scripts/release_test.rb",
+    "dev:hot-reload": "bash scripts/setup-hot-reload.sh",
     "project:generate": "bash scripts/with-ruby.sh bundle exec ruby scripts/generate-project.rb"
   }
 }

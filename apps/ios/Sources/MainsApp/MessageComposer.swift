@@ -2,6 +2,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct MessageComposer: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let context: ComposerContext
     @Bindable var draft: ConversationDraft
@@ -48,7 +51,7 @@ struct MessageComposer: View {
         case .hidden: return nil
         case .thinking: return settings.config["thinkingMode"]?.bool == true ? "On" : nil
         case .toggle, .slider, .list:
-            let value = settings.effort(provider: context.providerId)
+            let value = settings.effort(provider: context.providerId, model: selectedModel)
             return ComposerSettings.effortLabel(value, provider: context.providerId)
         }
     }
@@ -124,9 +127,9 @@ struct MessageComposer: View {
                 placeholder: context.runID == nil ? "Start a run in \(context.name)" : "Continue this run…",
                 identifier: context.runID == nil ? "homeMessageInput" : "messageInput")
                 .padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 3)
-            HStack(spacing: 6) {
+            HStack(alignment: .center, spacing: 6) {
                 Button(action: openAttachments) {
-                    Image(systemName: "plus").font(.system(size: 24, weight: .light)).frame(width: 44, height: 44)
+                    Image(systemName: "plus").font(.system(size: 22, weight: .light)).frame(width: 44, height: 44)
                 }
                 .background(GeometryReader { geometry in
                     Color.clear.preference(key: AttachmentSourceFrameKey.self, value: geometry.frame(in: .global))
@@ -138,18 +141,18 @@ struct MessageComposer: View {
                             HStack(spacing: 5) {
                                 ComposerModelLabel(model: selectedModel, loading: context.modelsLoading(session), providerID: context.providerId)
                                 if let effort { Text(effort).foregroundStyle(.secondary) }
-                            }.lineLimit(1).frame(minHeight: 40)
+                            }.lineLimit(1).frame(minHeight: 44)
                         }
                         .background(GeometryReader { geometry in
                             Color.clear.preference(key: EffortSourceFrameKey.self, value: geometry.frame(in: .global))
                         })
                         .disabled(!session.isConnected || session.sending || context.saving(session)).accessibilityIdentifier("chooseModel")
                         if let label = optionsLabel {
-                            Button(label, action: options).fontWeight(.semibold).frame(minHeight: 40)
+                            Button(label, action: options).fontWeight(.semibold).frame(minHeight: 44)
                                 .disabled(!session.isConnected || session.sending || context.saving(session)).accessibilityIdentifier("runOptions")
                         }
                     }.font(.footnote).foregroundStyle(.secondary)
-                }.scrollIndicators(.hidden)
+                }.scrollIndicators(.hidden).fixedSize(horizontal: false, vertical: true)
                 composerActions
             }
             .buttonStyle(.plain)
@@ -169,9 +172,10 @@ struct MessageComposer: View {
         Button(action: send) {
             Group {
                 if draft.isSending { ProgressView().tint(.white) }
-                else { Image(systemName: "arrow.up").font(.system(size: 22, weight: .medium)) }
-            }.frame(width: 40, height: 40).foregroundStyle(.white)
-                .background(Provider.accent(context.providerId), in: .circle).padding(2)
+                else { Image(systemName: "arrow.up").font(.system(size: 18, weight: .medium)) }
+            }.frame(width: 36, height: 36).foregroundStyle(.white)
+                .background(Provider.accent(context.providerId), in: .circle)
+                .frame(width: 44, height: 44).contentShape(.circle)
         }
         .buttonStyle(ChatPressStyle())
         .disabled(!canSend || draft.isSending || context.saving(session) || !draft.hasContent || voiceBlocksSending)
@@ -192,17 +196,19 @@ struct MessageComposer: View {
             } label: {
                 Group {
                     if stopping { ProgressView().tint(.white) }
-                    else { Image(systemName: ownsVoice && session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill").font(.body.weight(.semibold)) }
-                }.frame(width: 40, height: 40).foregroundStyle(.white)
-                    .background(Provider.accent(context.providerId), in: .circle).padding(2)
+                    else { Image(systemName: ownsVoice && session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill").font(.callout.weight(.semibold)) }
+                }.frame(width: 36, height: 36).foregroundStyle(.white)
+                    .background(Provider.accent(context.providerId), in: .circle)
+                    .frame(width: 44, height: 44).contentShape(.circle)
             }.buttonStyle(ChatPressStyle()).disabled(ownsVoice ? session.voice.phase == .ending : !session.isConnected || stopping)
                 .accessibilityLabel(ownsVoice ? session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat" : stopping ? "Stopping reply" : "Stop reply")
                 .accessibilityIdentifier(ownsVoice ? "endVoice" : "stopReply")
         } else if !draft.hasContent && context.providerId == "codex" && !active && !session.isDemo {
             Button(action: prepareVoice) {
-                Image(systemName: "waveform").font(.system(size: 20, weight: .medium))
-                    .frame(width: 40, height: 40).foregroundStyle(.white)
-                    .background(Provider.accent(context.providerId), in: .circle).padding(2)
+                Image(systemName: "waveform").font(.system(size: 18, weight: .medium))
+                    .frame(width: 36, height: 36).foregroundStyle(.white)
+                    .background(Provider.accent(context.providerId), in: .circle)
+                    .frame(width: 44, height: 44).contentShape(.circle)
             }.buttonStyle(ChatPressStyle()).disabled(!voiceCanStart || context.saving(session))
                 .accessibilityLabel("Start GPT Live").accessibilityIdentifier("startVoice")
         } else {
@@ -213,9 +219,10 @@ struct MessageComposer: View {
             Button { stop?() } label: {
                 Group {
                     if stopping { ProgressView().tint(.white) }
-                    else { Image(systemName: "stop.fill").font(.body.weight(.semibold)) }
-                }.frame(width: 40, height: 40).foregroundStyle(.white)
-                    .background(Provider.accent(context.providerId), in: .circle).padding(2)
+                    else { Image(systemName: "stop.fill").font(.callout.weight(.semibold)) }
+                }.frame(width: 36, height: 36).foregroundStyle(.white)
+                    .background(Provider.accent(context.providerId), in: .circle)
+                    .frame(width: 44, height: 44).contentShape(.circle)
             }
             .buttonStyle(ChatPressStyle()).disabled(!session.isConnected || stopping)
             .accessibilityLabel(stopping ? "Stopping reply" : "Stop reply").accessibilityIdentifier("stopReply")
@@ -236,7 +243,7 @@ struct MessageComposer: View {
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(spacing: 0) {
                     Button(action: openAttachments) {
-                        Image(systemName: "plus").font(.system(size: 23, weight: .light)).frame(width: 44, height: 52)
+                        Image(systemName: "plus").font(.system(size: 21, weight: .light)).frame(width: 44, height: 52)
                     }
                     .background(GeometryReader { geometry in
                         Color.clear.preference(key: AttachmentSourceFrameKey.self, value: geometry.frame(in: .global))
@@ -247,7 +254,7 @@ struct MessageComposer: View {
                         .padding(.vertical, 13).padding(.trailing, 12)
                     if draft.hasContent {
                         Button(action: send) {
-                            Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 40, height: 44)
+                            Image(systemName: "arrow.up").font(.callout.weight(.semibold)).frame(width: 40, height: 44)
                         }.disabled(!canSend || !active || session.voice.phase != .connected || draft.isSending || context.saving(session))
                             .accessibilityLabel(sendLabel ?? "Send message").accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
                     }

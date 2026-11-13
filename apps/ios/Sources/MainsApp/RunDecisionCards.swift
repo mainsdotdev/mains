@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct RunDecisionCards: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let runID: String
     let providerID: String
@@ -23,6 +26,9 @@ struct RunDecisionCards: View {
 }
 
 private struct PendingApprovalCard: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let approval: PendingApproval
     let providerID: String
@@ -252,6 +258,9 @@ private struct PendingApprovalCard: View {
 
 /// Keep the footer reachable without truncating the proposed command or connector parameters.
 private struct ApprovalPreviewViewport<Content: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @ViewBuilder let content: Content
     var body: some View {
         ViewThatFits(in: .vertical) {
@@ -274,6 +283,9 @@ private struct CompactApprovalActionStyle: ButtonStyle {
 }
 
 private struct AsyncQuestionCard: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let pending: PendingAsyncQuestions
     let providerID: String
@@ -349,6 +361,9 @@ private struct AsyncQuestionCard: View {
 }
 
 private struct ElicitationFormView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let form: ElicitationForm
     let accent: Color
     let respond: (Bool, String?) -> Void
@@ -417,6 +432,9 @@ private struct ElicitationFormView: View {
 }
 
 private struct DecisionRecovery: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let delivery: DecisionDelivery
     let enabled: Bool
     let check: () -> Void
@@ -428,6 +446,9 @@ private struct DecisionRecovery: View {
 }
 
 private struct DecisionOption: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let title: String
     var detail: String? = nil
     let selected: Bool
@@ -449,6 +470,9 @@ private struct DecisionOption: View {
 }
 
 private struct DecisionTextInput: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let label: String
     var secret = false
     @Binding var text: String

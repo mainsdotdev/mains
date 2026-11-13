@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct FullMessageView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let artifactID: Int
     var source = "artifact"

@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct WorkInboxView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let openConversation: (String) -> Void
     let openSettings: () -> Void
@@ -72,6 +75,9 @@ struct WorkInboxView: View {
 }
 
 private struct WorkInboxRow: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     enum Kind { case waiting, running, failed, finished }
     let session: BackendSession
     let item: WorkInboxItem

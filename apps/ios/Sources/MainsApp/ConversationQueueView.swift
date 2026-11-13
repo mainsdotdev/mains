@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct RemoteConversationQueueView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let queues: [RemoteRunQueue]
     var body: some View {
         let current = queues.filter(\.isCurrent)
@@ -46,6 +49,9 @@ struct RemoteConversationQueueView: View {
 }
 
 struct ConversationQueueView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     @Bindable var queue: ConversationQueue
     let canSteer: Bool

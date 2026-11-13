@@ -38,6 +38,35 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
 
+## Development hot reload
+
+Run `npm run dev:hot-reload` once from `apps/ios`. It installs the pinned
+[InjectionIII 5.2.1RC5](https://github.com/johnno1962/InjectionIII/releases/tag/5.2.1RC5)
+Mac helper after checking the release SHA-256 and code signature. Then run the
+**Mains** scheme in **Debug** on an iPhone **simulator** once from Xcode. Keep the
+app running and save a Swift file: supported UI/function-body changes recompile
+and appear in place. The bundle starts its own file watcher; opening the Mac
+helper or restarting Xcode through it is unnecessary.
+
+The console reports `[Mains Hot Reload] Enabled` and InjectionIII's watcher and
+injection results. The shared scheme watches `Sources/MainsApp` and the build-log
+directory, including edits made outside Xcode. A full Run is still necessary after
+adding/removing stored properties, changing signatures, adding files, changing
+build settings or updating resources. The custom UIKit model wheel may need to
+be closed/reopened when editing its existing row configuration/layout code.
+
+Hot reload is compiled only under `DEBUG && targetEnvironment(simulator)`;
+Release also excludes `DeveloperHotReload.swift`. There is no shipped injection
+bundle, package dependency, device permission or Release linker flag. UI tests
+disable it explicitly. Set `MAINS_HOT_RELOAD=0` in the Run scheme environment to
+disable it for a normal simulator run as well.
+
+Each SwiftUI view/modifier observes `@ObserveHotReload` inside that same compiler
+guard. New views should follow that pattern. Xcode's Debug opaque-type erasure
+handles body changes; reload invalidates the existing views without `.id` resets
+or rebuilding the session, conversation or draft. UIKit representables receive
+an ordinary update; their coordinators and current view state stay mounted.
+
 ## GPT Live
 
 GPT Live stays in the repository for v2 but is **compiled out** of the default
@@ -434,20 +463,34 @@ underlying tooling.
 - Shared two-row glass composer for home and conversations, with provider-coloured
   prompt bubbles, a native title/Outputs/New/More toolbar and a circular Latest control.
 - Live model catalogues, model-specific effort and provider-specific permissions.
-  All providers share model brand icons in the catalogue, composer and effort
-  control. Unknown models use their provider's logo; Copilot Auto uses Copilot
+  All providers share model brand icons in the wheel and composer.
+  Unknown models use their provider's logo; Copilot Auto uses Copilot
   and Cursor Auto/Composer uses Cursor. Icons stay in one consistent 16-point slot.
-  OpenCode matches desktop's provider groups, model brand icons and display names;
-  rows and the composer omit the repeated provider prefix and show only the model name.
+  OpenCode preserves desktop's provider grouping/order, model brand icons and
+  display names. The composer and wheel show only the model name and brand icon;
+  provider provenance remains in accessibility labels for ambiguous model names.
   Selections keep the catalogue's original model ids for settings and requests.
-  Model and run-options lists use compact rows. Effort opens as a large floating
+  Run-options lists use compact rows. Effort opens as a large floating
   control with a soft material halo confined to the component; the rest of the
   conversation stays visible and mounted. Its position follows the live keyboard
   safe area, moving back down when the keyboard closes. Opening effort preserves the
   composer's keyboard focus and positions the control just above the keyboard. It grows from the composer’s model
-  button, with an opacity transition for Reduce Motion. Tapping the model name opens a card catalogue sheet
-  with provider-supplied descriptions. A confirmed selection or closing that
-  sheet returns to effort.
+  button, with an opacity transition for Reduce Motion. The current model sits
+  inside an inline snapping scroll wheel with faded neighbours above/below,
+  larger single-line names and no selected-row background or descriptions.
+  Scroll settling submits the original model id
+  through the existing settings writer; scrolling/programmatic positioning does
+  not submit intermediate models. Effort stays below the wheel and is disabled
+  while a model save is pending. Saved selections outside the current catalogue
+  remain visible, without automatically choosing another model. Nearby rows are
+  reused, and accessibility exposes one adjustable control. The effort caption
+  and control reserve the same scaled height for sliders, menus, toggles and
+  models without effort, so changing capabilities never moves the model wheel.
+  Model saves keep the wheel and effort at full opacity, with a delayed saving
+  indicator and a consistent pending model/settings preview. One glass surface
+  survives model changes at a constant width; shared stops and the thumb animate
+  inside it to the new range without remounting the control. Menus/toggles crossfade in the
+  same reserved space, and Reduce Motion removes range movement.
   OpenCode labels an unset effort as Default, separately from its native None option.
   None comes first when advertised, followed by Default and the effort levels;
   models without None keep Default first. Selection follows the original value.
@@ -455,9 +498,13 @@ underlying tooling.
   measured track provides 44 points between stops (scaled with text size).
   Narrow layouts, accessibility text and larger catalogues use the same ordered
   options in a menu. None/Default stay neutral; the lowest explicit effort begins the colour ramp.
-  On/off models retain their Thinking switch. Claude's
-  Ultracode stays separate. Dragging previews locally and saves only on release;
+  On/off models retain their Thinking switch. Claude's Ultracode is the last stop
+  of the same slider/menu, without a separate row. Dragging previews locally and saves only on release;
   accessibility adjustments use the same stops.
+  Selecting a Claude model without Ultracode clears that flag and uses its
+  highest supported effort. Older incompatible saved values use the same display
+  projection in the composer, caption and slider without an automatic write;
+  switching to a Thinking-only model preserves the switch's existing intent.
   Codex permissions respect the computer’s managed profile/sandbox policy. New-chat
   choices travel in `conversationSettings`; they do not change provider defaults
   or existing conversations. Existing-chat choices are saved through

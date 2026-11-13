@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct AtlasTrashView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let owner: Int
     @Environment(\.dismiss) private var dismiss

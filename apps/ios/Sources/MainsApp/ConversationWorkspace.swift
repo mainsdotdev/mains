@@ -5,6 +5,9 @@ extension EnvironmentValues {
 }
 
 struct ConversationWorkspace<ConversationContent: View, OutputContent: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let state: ConversationCompanionState
     let conversation: ConversationContent
     let output: OutputContent

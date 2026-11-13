@@ -59,6 +59,9 @@ struct PickedPhoto: Transferable, Sendable {
 }
 
 struct ComposerAttachmentStrip: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let attachments: [PromptAttachment]
     let remove: (UUID) -> Void
     private var images: [PromptAttachment] { attachments.filter { $0.type == "image" } }
@@ -115,6 +118,9 @@ struct ComposerAttachmentStrip: View {
 }
 
 private struct AttachmentThumbnail: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let attachment: PromptAttachment
     @State private var image: CGImage?
     var body: some View {

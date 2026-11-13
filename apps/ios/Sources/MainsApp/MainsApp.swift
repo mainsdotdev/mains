@@ -51,6 +51,9 @@ struct MainsApp: App {
 }
 
 struct RootView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @Bindable var session: BackendSession
     @State private var incomingLink = ""
     @State private var showPairing = false
@@ -74,6 +77,9 @@ struct RootView: View {
 }
 
 struct ConnectionPill: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let action: () -> Void
     private var name: String { session.pairing?.descriptor.name ?? "Computer" }

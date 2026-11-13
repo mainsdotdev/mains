@@ -170,6 +170,9 @@ final class CameraEngine: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Se
 }
 
 struct CameraPreview: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let camera: AttachmentCamera
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()

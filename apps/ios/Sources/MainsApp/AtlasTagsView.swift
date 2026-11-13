@@ -7,6 +7,9 @@ struct AtlasTagEditSelection: Identifiable {
 }
 
 struct AtlasTagsEditor: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let selection: AtlasTagEditSelection
     @Environment(\.dismiss) private var dismiss
@@ -113,6 +116,9 @@ struct AtlasTagsEditor: View {
 }
 
 struct AtlasTagFilterView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let owner: Int
     let selected: AtlasTag?
@@ -134,6 +140,9 @@ struct AtlasTagFilterView: View {
 
 /// One searchable page, independent of the item's in-memory edit selection.
 private struct AtlasTagCatalogue: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let owner: Int
     let selected: Set<String>

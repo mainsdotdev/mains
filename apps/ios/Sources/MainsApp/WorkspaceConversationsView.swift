@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct WorkspaceConversationsView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let workspaceID: String
     let openConversation: (String) -> Void
@@ -96,6 +99,9 @@ struct WorkspaceConversationsView: View {
 }
 
 struct SearchView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     nonisolated private static let layoutSpace = "globalSearchPage"
     let session: BackendSession
     let focusRequested: Bool

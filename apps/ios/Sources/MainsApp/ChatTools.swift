@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct ChatToolBlock: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let rows: [TranscriptRow]
     var live = false
@@ -49,6 +52,9 @@ private struct ToolContentSelection: Identifiable {
 }
 
 private struct ChatToolRow: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let call: ToolCall
     var displayStatus: String? = nil
@@ -114,6 +120,9 @@ private struct ChatToolRow: View {
 }
 
 private struct ToolBody: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let text: String
     let diff: Bool
     var error = false

@@ -2,6 +2,9 @@ import SwiftUI
 
 /// App-scoped recovery remains reachable after leaving the source conversation.
 struct ForkDeliveryNotice: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let open: (String) -> Void
     var body: some View {

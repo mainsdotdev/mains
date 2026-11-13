@@ -23,6 +23,9 @@ extension EnvironmentValues {
 }
 
 struct ConversationOutputsPane: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let runID: String
     let owner: Int

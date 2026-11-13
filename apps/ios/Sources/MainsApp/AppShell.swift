@@ -13,6 +13,9 @@ extension EnvironmentValues {
 enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String) }
 
 struct AppShell: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let openPairing: () -> Void
     @State private var path: [AppRoute] = []

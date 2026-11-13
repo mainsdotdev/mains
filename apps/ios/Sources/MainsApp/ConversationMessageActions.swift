@@ -31,6 +31,9 @@ enum ConversationActionIcons {
 }
 
 struct ConversationMessageActions: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let copyText: String?
     let copyIsPreview: Bool

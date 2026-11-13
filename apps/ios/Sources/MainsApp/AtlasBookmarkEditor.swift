@@ -7,6 +7,9 @@ struct AtlasBookmarkEditSelection: Identifiable {
 }
 
 struct AtlasBookmarkEditor: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let selection: AtlasBookmarkEditSelection
     let onSaved: () -> Void

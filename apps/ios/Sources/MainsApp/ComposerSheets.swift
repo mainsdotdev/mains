@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct ComposerSheet<Content: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let title: String
     var backgroundStyle = AnyShapeStyle(.regularMaterial)
     @ViewBuilder let content: () -> Content
@@ -22,6 +25,9 @@ struct ComposerSheet<Content: View>: View {
 }
 
 struct TargetSheet: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let space: Space
     @Environment(\.dismiss) private var dismiss
@@ -87,106 +93,244 @@ struct TargetSheet: View {
     }
 }
 
-struct ModelSheet: View {
-    let session: BackendSession
-    let context: ComposerContext
-    @State private var selecting = false
-    @Environment(\.dismiss) private var dismiss
-    private var settings: ComposerSettings { context.settings(session) }
-    private var models: [ModelChoice] { session.models[context.providerId] ?? [] }
-    private var selected: ModelChoice? { context.model(session) }
-    private var blocked: Bool { selecting || context.saving(session) || !session.isConnected || session.sending }
-    var body: some View {
-        ComposerSheet(title: "Select model", backgroundStyle: AnyShapeStyle(Color(.secondarySystemBackground))) {
-            catalogue
-                .safeAreaInset(edge: .bottom, spacing: 0) { SettingsRecoveryNotice(session: session, runID: context.runID) }
-                .task { await session.loadModels(context.providerId) }
-        }
-    }
-    private var catalogue: some View {
-        ScrollViewReader { reader in
-            ScrollView {
-                VStack(spacing: 0) {
-                    if context.modelsLoading(session) && models.isEmpty {
-                        HStack { ProgressView(); Text("Loading models…").foregroundStyle(.secondary) }.padding(16)
-                    }
-                    if let error = session.modelErrors[context.providerId] {
-                        Text(error).font(.caption).foregroundStyle(.secondary).padding(16)
-                        Button("Try again") { Task { await session.loadModels(context.providerId, force: true) } }.padding(.bottom, 12)
-                    }
-                    if models.isEmpty && session.modelErrors[context.providerId] == nil && !context.modelsLoading(session) {
-                        Text("No models available.").font(.subheadline).foregroundStyle(.secondary).padding(16)
-                    }
-                    if !settings.model.isEmpty && selected == nil && !context.modelsLoading(session) && session.modelErrors[context.providerId] == nil {
-                        let parts = context.providerId == "opencode" ? OpenCodeModelDisplay.parts(settings.model) : nil
-                        modelRow(parts.map { $0.provider + " / " + $0.name } ?? settings.model, detail: "Saved selection", selected: true, modelName: settings.model) { dismiss() }
-                            .id(settings.model)
-                        separator
-                    }
-                    if context.providerId == "opencode" {
-                        ForEach(OpenCodeModelDisplay.groups(models)) { group in
-                            Text(group.provider.uppercased()).font(.caption2.weight(.semibold)).tracking(0.6)
-                                .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 4)
-                                .accessibilityAddTraits(.isHeader)
-                            ForEach(group.models) { model in
-                                let name = OpenCodeModelDisplay.parts(model.displayName)?.name ?? model.name
-                                modelRow(name, detail: nil, selected: selected?.id == model.id, modelName: model.displayName) {
-                                    var next = settings; next.select(model, provider: context.providerId); choose(next)
-                                }.id(model.id).accessibilityIdentifier("model-\(model.id)")
-                                    .accessibilityLabel(group.provider + ", " + name)
-                                if model.id != group.models.last?.id { separator }
-                            }
-                        }
-                    } else {
-                        ForEach(models) { model in
-                            modelRow(model.name, detail: model.description, selected: selected?.id == model.id, modelName: model.displayName) {
-                                var next = settings; next.select(model, provider: context.providerId); choose(next)
-                            }.id(model.id).accessibilityIdentifier("model-\(model.id)")
-                            if model.id != models.last?.id { separator }
-                        }
-                    }
-                }
-                .background(Color(.tertiarySystemBackground), in: .rect(cornerRadius: 24))
-                .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 16)
-            }
-            .onChange(of: selected?.id, initial: true) { _, id in
-                reader.scrollTo(id ?? settings.model, anchor: .center)
-            }
-        }
-    }
-    private var separator: some View { Color(.separator).frame(height: 0.5).padding(.horizontal, 16) }
-    private func modelRow(_ title: String, detail: String?, selected: Bool, modelName: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                ComposerModelIcon(name: modelName, providerID: context.providerId)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.body).foregroundStyle(.primary).lineLimit(2)
-                    if let detail, !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-                if selected { Image(systemName: "checkmark").foregroundStyle(.blue) }
-            }.padding(.horizontal, 16).padding(.vertical, 12).frame(minHeight: 44).contentShape(.rect)
-        }.buttonStyle(ChatPressStyle()).disabled(blocked).accessibilityAddTraits(selected ? .isSelected : [])
-    }
-    private func choose(_ next: ComposerSettings) {
-        guard !blocked else { return }
-        guard next != settings else { dismiss(); return }
-        selecting = true
-        let owner = session.ownership
-        Task {
-            guard owner == session.ownership else { return }
-            defer { if owner == session.ownership { selecting = false } }
-            do {
-                try await context.commit(next, session: session)
-                guard owner == session.ownership else { return }
-                dismiss()
-            } catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
-        }
-    }
+/// A transparent snapping wheel. Native scrolling supplies momentum, while the
+/// rows have no system picker highlight or model-dependent height.
+struct ComposerModelWheel: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let models: [ModelChoice]
+    let selectedID: String
+    let pendingModel: ModelChoice?
+    let providerID: String
+    let loading: Bool
+    let enabled: Bool
+    let rowHeight: CGFloat
+    var reduceMotion = false
+    let onSelect: (ModelChoice) -> Void
 
+    fileprivate struct Item: Equatable {
+        let id: String
+        let title: String
+        let displayName: String
+        let accessibilityDetail: String?
+        let model: ModelChoice?
+        var accessibleName: String { accessibilityDetail.map { title + ", " + $0 } ?? title }
+    }
+    fileprivate var items: [Item] {
+        let catalogue = providerID == "opencode" ? OpenCodeModelDisplay.groups(models).flatMap(\.models) : models
+        var result = catalogue.map { model in
+            Item(id: model.id, title: model.label(for: providerID), displayName: model.displayName,
+                 accessibilityDetail: providerID == "opencode" ? OpenCodeModelDisplay.parts(model.displayName)?.provider : nil, model: model)
+        }
+        if !result.contains(where: { $0.id == selectedID }) {
+            let name = pendingModel?.label(for: providerID) ?? (providerID == "opencode" ? OpenCodeModelDisplay.parts(selectedID)?.name : nil) ?? selectedID
+            let title = !name.isEmpty ? name : loading ? "Loading models…" : models.isEmpty ? "No models available" : "Select model"
+            result.insert(Item(id: selectedID, title: title, displayName: pendingModel?.displayName ?? selectedID,
+                               accessibilityDetail: selectedID.isEmpty ? nil : "Saved selection", model: nil), at: 0)
+        }
+        return result
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> ModelWheelScroller {
+        let view = ModelWheelScroller()
+        let coordinator = context.coordinator
+        coordinator.view = view; view.delegate = coordinator
+        view.configureRow = { [weak coordinator] index, reused in coordinator?.row(index, reusing: reused) ?? UIView() }
+        view.onChoose = { [weak coordinator] index, animated in coordinator?.choose(index, animated: animated) }
+        view.onGeometryChange = { [weak coordinator] in coordinator?.restorePosition() }
+        view.accessibilityIdentifier = "selectModel"; view.accessibilityLabel = "Model"
+        return view
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ModelWheelScroller, context: Context) -> CGSize? {
+        guard let width = proposal.width, let height = proposal.height, width.isFinite, height.isFinite else { return nil }
+        return CGSize(width: width, height: height)
+    }
+    func updateUIView(_ view: ModelWheelScroller, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        let nextItems = items
+        let changed = coordinator.items != nextItems || coordinator.lastRowHeight != rowHeight
+        let availabilityChanged = coordinator.lastEnabled != enabled
+        coordinator.items = nextItems; coordinator.lastRowHeight = rowHeight
+        coordinator.lastEnabled = enabled
+        view.rowHeight = rowHeight; view.rowCount = nextItems.count; view.reduceMotion = reduceMotion
+        if changed { view.reloadRows(); view.layoutIfNeeded() }
+        // History/effort refreshes must not interrupt an in-progress wheel spin.
+        // Programmatic positioning/reload never invokes the selection callback.
+        if changed || availabilityChanged || coordinator.lastSelectedID != selectedID { coordinator.restorePosition() }
+        view.isUserInteractionEnabled = enabled && !models.isEmpty
+        view.accessibilityTraits = enabled ? [.adjustable] : [.adjustable, .notEnabled]
+        coordinator.updateAccessibility()
+    }
+    static func dismantleUIView(_ view: ModelWheelScroller, coordinator: Coordinator) {
+        view.delegate = nil; view.configureRow = nil; view.onChoose = nil; view.onGeometryChange = nil
+    }
+    @MainActor final class Coordinator: NSObject, UIScrollViewDelegate {
+        var parent: ComposerModelWheel
+        fileprivate var items: [Item]
+        weak var view: ModelWheelScroller?
+        var lastSelectedID: String?
+        var lastRowHeight: CGFloat = 0
+        var lastEnabled: Bool?
+        private var userInitiated = false
+        init(_ parent: ComposerModelWheel) { self.parent = parent; items = parent.items }
+        func row(_ index: Int, reusing view: UIView?) -> UIView {
+            guard items.indices.contains(index) else { return UIView() }
+            let item = items[index]
+            let providerID = parent.providerID
+            let configuration = UIHostingConfiguration { ModelWheelRow(item: item, providerID: providerID) }
+                .background { Color.clear }.margins(.all, 0)
+            if let view, let content = view as? UIContentView {
+                content.configuration = configuration
+                return view
+            }
+            let content = configuration.makeContentView()
+            content.backgroundColor = .clear
+            return content
+        }
+        func restorePosition() {
+            userInitiated = false
+            guard let view, let index = items.firstIndex(where: { $0.id == parent.selectedID }) else { return }
+            let offset = CGPoint(x: 0, y: CGFloat(index) * parent.rowHeight)
+            if abs(view.contentOffset.y - offset.y) > 0.5 { view.setContentOffset(offset, animated: false) }
+            lastSelectedID = parent.selectedID; updateAccessibility()
+        }
+        func choose(_ index: Int, animated: Bool) {
+            guard parent.enabled, let view, items.indices.contains(index) else { return }
+            userInitiated = true
+            let offset = CGPoint(x: 0, y: CGFloat(index) * parent.rowHeight)
+            if animated && !parent.reduceMotion && abs(view.contentOffset.y - offset.y) > 0.5 {
+                view.setContentOffset(offset, animated: true)
+            } else { view.setContentOffset(offset, animated: false); finish(endingInteraction: true) }
+        }
+        func updateAccessibility() {
+            guard let view, items.indices.contains(view.centeredIndex) else { return }
+            view.accessibilityValue = items[view.centeredIndex].accessibleName
+        }
+        private func finish(endingInteraction: Bool = false) {
+            guard let view, endingInteraction || (!view.isTracking && !view.isDragging) else { return }
+            guard userInitiated, parent.enabled, items.indices.contains(view.centeredIndex),
+                  let model = items[view.centeredIndex].model else { restorePosition(); return }
+            userInitiated = false
+            view.setContentOffset(CGPoint(x: 0, y: CGFloat(view.centeredIndex) * parent.rowHeight), animated: false)
+            lastSelectedID = model.id
+            parent.onSelect(model)
+        }
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { userInitiated = parent.enabled }
+        func scrollViewDidScroll(_ scrollView: UIScrollView) { updateAccessibility() }
+        func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+            guard let view else { return }
+            let index = userInitiated && parent.enabled ? view.index(at: targetContentOffset.pointee.y)
+                : items.firstIndex(where: { $0.id == parent.selectedID }) ?? 0
+            targetContentOffset.pointee = CGPoint(x: 0, y: CGFloat(index) * parent.rowHeight)
+        }
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) { if !decelerate { finish(endingInteraction: true) } }
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { finish() }
+        func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { finish() }
+    }
+}
+
+/// Reuses only nearby rows. Transparent native scrolling avoids depending on
+/// UIPickerView's private selection-background hierarchy.
+final class ModelWheelScroller: UIScrollView {
+    var rowHeight: CGFloat = 52
+    var rowCount = 0
+    var reduceMotion = false
+    var configureRow: (@MainActor (Int, UIView?) -> UIView)?
+    var onChoose: (@MainActor (Int, Bool) -> Void)?
+    var onGeometryChange: (@MainActor () -> Void)?
+    private var rows: [Int: UIView] = [:]
+    private var reusableRows: [UIView] = []
+    private var previousSize = CGSize.zero
+    var centeredIndex: Int { index(at: contentOffset.y) }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear; clipsToBounds = true; bounces = false
+        showsVerticalScrollIndicator = false; showsHorizontalScrollIndicator = false
+        contentInsetAdjustmentBehavior = .never; keyboardDismissMode = .none
+        decelerationRate = .fast; isDirectionalLockEnabled = true
+        isAccessibilityElement = true; accessibilityTraits = .adjustable
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func index(at offset: CGFloat) -> Int { min(max(0, rowCount - 1), max(0, Int((offset / max(1, rowHeight)).rounded()))) }
+    func reloadRows() {
+        for view in rows.values { view.removeFromSuperview(); reusableRows.append(view) }
+        rows.removeAll(); setNeedsLayout()
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        let resized = previousSize != bounds.size
+        previousSize = bounds.size
+        let size = CGSize(width: bounds.width, height: bounds.height + CGFloat(max(0, rowCount - 1)) * rowHeight)
+        if contentSize != size { contentSize = size }
+        if resized { onGeometryChange?() }
+        guard rowCount > 0, rowHeight > 0, bounds.height > 0 else { return }
+        let radius = Int(ceil(bounds.height / rowHeight / 2)) + 1
+        let visible = Set(max(0, centeredIndex - radius)...min(rowCount - 1, centeredIndex + radius))
+        for index in Array(rows.keys) where !visible.contains(index) {
+            if let view = rows.removeValue(forKey: index) { view.removeFromSuperview(); reusableRows.append(view) }
+        }
+        let padding = (bounds.height - rowHeight) / 2
+        for index in visible {
+            let row: UIView
+            if let existing = rows[index] { row = existing }
+            else {
+                row = configureRow?(index, reusableRows.popLast()) ?? UIView()
+                row.isUserInteractionEnabled = false; row.accessibilityElementsHidden = true
+                rows[index] = row; addSubview(row)
+            }
+            row.bounds = CGRect(x: 0, y: 0, width: bounds.width, height: rowHeight)
+            row.center = CGPoint(x: bounds.width / 2, y: padding + (CGFloat(index) + 0.5) * rowHeight)
+            let distance = (row.center.y - contentOffset.y - bounds.height / 2) / rowHeight
+            let scale = 1 - min(2, abs(distance)) * 0.06
+            var transform = CATransform3DIdentity
+            if !reduceMotion {
+                transform.m34 = -1 / 600
+                transform = CATransform3DRotate(transform, max(-1.2, min(1.2, distance * .pi / 7)), 1, 0, 0)
+                transform = CATransform3DScale(transform, scale, scale, 1)
+            }
+            row.layer.transform = transform
+            row.alpha = max(0.15, 1 - abs(distance) * 0.45)
+        }
+    }
+    @objc private func tapped(_ gesture: UITapGestureRecognizer) {
+        let row = index(at: gesture.location(in: self).y - bounds.height / 2)
+        onChoose?(row, true)
+    }
+    override func accessibilityIncrement() {
+        let next = min(max(0, rowCount - 1), centeredIndex + 1)
+        if next != centeredIndex { onChoose?(next, false) }
+    }
+    override func accessibilityDecrement() {
+        let next = max(0, centeredIndex - 1)
+        if next != centeredIndex { onChoose?(next, false) }
+    }
+}
+
+private struct ModelWheelRow: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let item: ComposerModelWheel.Item
+    let providerID: String
+    var body: some View {
+        HStack(spacing: 7) {
+            ComposerModelIcon(name: item.displayName, providerID: providerID)
+            Text(item.title).font(.title2.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.85)
+        }.foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .center).padding(.horizontal, 4)
+            .transaction { $0.animation = nil; $0.disablesAnimations = true }
+            .accessibilityElement(children: .ignore).accessibilityLabel(item.accessibleName)
+    }
 }
 
 struct RunOptionsSheet: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let context: ComposerContext
     @State private var catalog: CodexPermissions?
@@ -290,6 +434,9 @@ struct RunOptionsSheet: View {
 }
 
 private struct CompactOptionRow: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var top: CGFloat = 10
     var bottom: CGFloat = 10
     func body(content: Content) -> some View {

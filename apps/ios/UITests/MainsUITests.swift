@@ -4,9 +4,15 @@ import UIKit
 /// Run alongside scripts/mock-backend.mjs. No AI provider or real workspace is contacted.
 @MainActor
 final class MainsUITests: XCTestCase {
+    private func makeApplication() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["MAINS_HOT_RELOAD"] = "0"
+        return app
+    }
+
     func testWorkInboxShowsAllProvidersOpensRequestsAndStopsBackgroundWork() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
         var request = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/inbox")!)
         request.httpMethod = "POST"
@@ -44,7 +50,7 @@ final class MainsUITests: XCTestCase {
     #if MAINS_GPT_LIVE
     func testVoiceDefaultsToFocusAndSwitchesToConversationWithoutEndingOrUnmuting() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         app.launchArguments = ["--voice-preview"]
         app.launch()
         let stage = app.descendants(matching: .any).matching(identifier: "voiceFocusStage").firstMatch
@@ -79,7 +85,7 @@ final class MainsUITests: XCTestCase {
 
     func testWaterVoiceFocusSupportsLightAppearance() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         app.launchArguments = ["--voice-preview", "--voice-preview-light"]
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "voiceFocusStage").firstMatch.waitForExistence(timeout: 15))
@@ -89,7 +95,7 @@ final class MainsUITests: XCTestCase {
 
     func testWaterVoiceStaysStaticWithReduceMotion() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         app.launchArguments = ["--voice-preview", "--voice-preview-reduced-motion"]
         app.launch()
         let orb = app.descendants(matching: .any).matching(identifier: "voiceOrb").firstMatch
@@ -109,7 +115,7 @@ final class MainsUITests: XCTestCase {
 
     func testCodexEmptyComposerOffersVoiceAndDisclosesMicrophoneSharing() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
         let mic = app.buttons["startVoice"]
@@ -141,7 +147,7 @@ final class MainsUITests: XCTestCase {
 
     private func assertAutomaticTranscriptPaging(code: String) async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         let conversation = pairFixture(app, code: code)
         conversation.tap()
         let transcript = app.scrollViews["conversationTranscript"]
@@ -197,7 +203,7 @@ final class MainsUITests: XCTestCase {
 
     func testDemoLiveActivityTransitionsFromThinkingThroughToolsToFinished() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         prepareUnpaired(app); app.buttons["startDemo"].tap()
         let input = app.textViews["homeMessageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap(); input.typeText("Review the sample workspace")
@@ -217,7 +223,7 @@ final class MainsUITests: XCTestCase {
 
     func testMissingWorkspaceExplainsSendAndKeepsTheDraft() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
         app.buttons["sidebarMode-developer"].tap()
         app.buttons["closeSidebar"].tap()
@@ -241,7 +247,7 @@ final class MainsUITests: XCTestCase {
 
     func testDemoContextPickerKeepsKeyboardAndSendsSelections() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         prepareUnpaired(app); app.buttons["startDemo"].tap()
         let input = app.textViews["homeMessageInput"]
         XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap(); input.typeText("$demo-wr")
@@ -304,7 +310,7 @@ final class MainsUITests: XCTestCase {
 
     func testDemoAgentsOverlayDoesNotMoveTranscriptAndDetailsReturnToConversation() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         prepareUnpaired(app); app.buttons["startDemo"].tap()
         openSidebar(app); app.buttons["Search"].tap()
         let search = app.textFields["globalSearchInput"]
@@ -329,7 +335,7 @@ final class MainsUITests: XCTestCase {
 
     func testDemoChangedFilesDiffPagingAndReturn() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         prepareUnpaired(app); app.buttons["startDemo"].tap()
         openSidebar(app); app.buttons["Search"].tap()
         let search = app.textFields["globalSearchInput"]
@@ -372,7 +378,7 @@ final class MainsUITests: XCTestCase {
 
     func testDemoApprovalAndQuestionCards() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         prepareUnpaired(app)
         app.buttons["startDemo"].tap()
         let sample = app.buttons["demoDecisionsPrompt"]
@@ -424,7 +430,7 @@ final class MainsUITests: XCTestCase {
     /// Runs entirely on-device; no mock server or external service is required.
     func testDemoModeEntryReplayMediaAndExit() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         prepareUnpaired(app)
         app.buttons["scanPairingCode"].tap()
         let demo = app.buttons["startDemoFromPairing"]
@@ -477,7 +483,7 @@ final class MainsUITests: XCTestCase {
 
     func testUnpairedHomeAndInlinePairing() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         prepareUnpaired(app)
         XCTAssertTrue(app.staticTexts["No computer paired"].exists)
         XCTAssertFalse(app.buttons["connectionPill"].exists)
@@ -520,7 +526,7 @@ final class MainsUITests: XCTestCase {
 
     func testConversationToolDetailsAndMediaPreviews() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         let conversation = pairFixture(app, code: "ios-test-media")
         conversation.tap()
         let transcript = app.scrollViews["conversationTranscript"]
@@ -564,7 +570,7 @@ final class MainsUITests: XCTestCase {
 
     func testAttachmentPanelsReturnToTheirMenuAndCloseRepeatedly() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
         let launcher = app.buttons["addAttachment"]
@@ -616,7 +622,7 @@ final class MainsUITests: XCTestCase {
 
     func testAttachmentMenuKeepsKeyboardAndDraftInHomeAndConversation() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         let conversation = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
         func checkMenu(inputID: String, text: String) {
@@ -651,7 +657,7 @@ final class MainsUITests: XCTestCase {
     func testAttachmentPhotosStayUniformAndSendFromTheDraft() async throws {
         // Seed only the dedicated QA simulator with scripts' temporary coloured photo fixtures.
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
         let input = app.textViews["homeMessageInput"]
@@ -706,7 +712,7 @@ final class MainsUITests: XCTestCase {
 
     func testSettingsAppearanceAndProviderPermissionReset() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         let conversation = pairFixture(app, code: "ios-test")
         conversation.tap()
         let input = app.textViews["messageInput"]
@@ -760,7 +766,7 @@ final class MainsUITests: XCTestCase {
 
     func testEffortFollowsKeyboardVisibilityAndCatalogueReturn() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
         func closeEffort() {
@@ -802,7 +808,7 @@ final class MainsUITests: XCTestCase {
 
     func testComposerControlsStayAboveKeyboard() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         let conversation = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
         let home = app.textViews["homeMessageInput"]
@@ -837,7 +843,7 @@ final class MainsUITests: XCTestCase {
 
     func testDataSharingDeclineKeepsDraftAndAllowSendsOnce() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         let conversation = pairFixture(app, code: "ios-test")
         conversation.tap()
         let input = app.textViews["messageInput"]
@@ -877,7 +883,7 @@ final class MainsUITests: XCTestCase {
 
     func testEffortRepeatedOpeningUsesInteractiveControls() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test-home")
         chooseSidebarSpace("fixture-claude", in: app)
         let input = app.textViews["homeMessageInput"]
@@ -898,7 +904,7 @@ final class MainsUITests: XCTestCase {
             let launcher = app.buttons["chooseModel"]
             XCTAssertTrue(launcher.isHittable)
             launcher.tap()
-            let picker = app.buttons["selectModel"]
+            let picker = app.descendants(matching: .any).matching(identifier: "selectModel").firstMatch
             XCTAssertTrue(picker.waitForExistence(timeout: 5))
             XCTAssertTrue(picker.isHittable)
             let slider = app.descendants(matching: .any).matching(identifier: "effortSlider").firstMatch
@@ -916,7 +922,7 @@ final class MainsUITests: XCTestCase {
 
     func testEffortKeepsKeyboardDraftAndClosesOnBackdrop() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         let conversation = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
         let input = app.textViews["homeMessageInput"]
@@ -962,7 +968,7 @@ final class MainsUITests: XCTestCase {
 
     func testEffortControlsFollowModelAndKeepSavedValue() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test-home")
         chooseSidebarSpace("fixture-claude", in: app)
         XCTAssertTrue(app.buttons["closeSidebar"].waitForNonExistence(timeout: 5))
@@ -971,21 +977,17 @@ final class MainsUITests: XCTestCase {
         draft.tap(); assertKeyboardVisible(app)
         draft.typeText("Keep this draft")
         app.buttons["chooseModel"].tap()
-        XCTAssertTrue(app.buttons["selectModel"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "selectModel").firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["model-fixture-balanced"].exists)
-        attachScreenshot(app, name: "Native model – effort first")
-        app.buttons["selectModel"].tap()
-        XCTAssertTrue(app.buttons["model-fixture-thinking"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["For everyday tasks"].exists)
-        XCTAssertTrue(app.staticTexts["For complex problems"].exists)
-        attachScreenshot(app, name: "Native model – card catalogue")
-        app.buttons["model-fixture-thinking"].tap()
+        XCTAssertFalse(app.navigationBars["Select model"].exists)
+        attachScreenshot(app, name: "Native model – inline wheel")
+        chooseModel("fixture-thinking", in: app)
         let thinking = app.switches["thinkingToggle"]
         XCTAssertTrue(thinking.waitForExistence(timeout: 5))
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "effortSlider").firstMatch.exists)
         thinking.tap(); XCTAssertEqual(thinking.value as? String, "1")
-        app.buttons["selectModel"].tap()
-        app.buttons["closeComposerSheet"].tap()
+        app.buttons["closeEffortOverlay"].tap()
+        app.buttons["chooseModel"].tap()
         XCTAssertTrue(thinking.waitForExistence(timeout: 5))
         XCTAssertEqual(thinking.value as? String, "1")
         thinking.tap(); XCTAssertEqual(thinking.value as? String, "0")
@@ -1001,10 +1003,10 @@ final class MainsUITests: XCTestCase {
         closeEffort.tap()
         XCTAssertTrue(closeEffort.waitForNonExistence(timeout: 5))
         XCTAssertEqual(draft.value as? String, "Keep this draft")
-        XCTAssertTrue(app.buttons["chooseModel"].label.contains("Extra High"))
+        XCTAssertTrue(app.buttons["chooseModel"].label.contains("Ultracode"))
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["chooseModel"].waitForExistence(timeout: 10))
-        let restoredEffort = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Extra High"), object: app.buttons["chooseModel"])
+        let restoredEffort = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Ultracode"), object: app.buttons["chooseModel"])
         let restored = await XCTWaiter.fulfillment(of: [restoredEffort], timeout: 10)
         XCTAssertEqual(restored, .completed, "Restored model and effort: \(app.buttons["chooseModel"].label)")
         app.buttons["runOptions"].tap()
@@ -1017,7 +1019,7 @@ final class MainsUITests: XCTestCase {
 
     func testSearchChatsWorkspacesClearAndClose() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test-workspace")
         app.buttons["Search"].tap()
         let input = app.textFields["globalSearchInput"]
@@ -1076,7 +1078,7 @@ final class MainsUITests: XCTestCase {
 
     func testHomeConnectionRecoveryKeepsDraftAndOpensComputer() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
         app.buttons["closeSidebar"].tap()
         let input = app.textViews["homeMessageInput"]
@@ -1116,7 +1118,7 @@ final class MainsUITests: XCTestCase {
 
     func testWorkspaceListSearchOpenAndNewConversation() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test-workspace")
         chooseSidebarSpace("fixture-code", in: app)
         openSidebar(app)
@@ -1153,7 +1155,7 @@ final class MainsUITests: XCTestCase {
 
     func testConversationReferenceLayoutSettingsAndOutputs() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         let conversation = pairFixture(app, code: "ios-test-design", search: true)
         conversation.tap()
         let transcript = app.scrollViews["conversationTranscript"]
@@ -1214,7 +1216,7 @@ final class MainsUITests: XCTestCase {
 
     func testHomeSidebarModesAndConfiguredConversation() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         _ = pairFixture(app, code: "ios-test-home")
         XCTAssertTrue(app.staticTexts["Projects"].exists)
         attachScreenshot(app, name: "Native sidebar – projects")
@@ -1325,7 +1327,7 @@ final class MainsUITests: XCTestCase {
 
     func testChatDraftStopReadingAndRecovery() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         let conversation = pairFixture(app, code: "ios-test-chat")
         conversation.tap()
         let message = app.textViews["messageInput"]
@@ -1392,7 +1394,7 @@ final class MainsUITests: XCTestCase {
 
     func testPairReadSendStreamAndRestore() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = makeApplication()
         let conversation = pairFixture(app, code: "ios-test")
         conversation.tap()
         XCTAssertTrue(app.staticTexts["Hello from the computer."].waitForExistence(timeout: 10))
@@ -1539,12 +1541,28 @@ final class MainsUITests: XCTestCase {
     }
 
     private func chooseModel(_ id: String, in app: XCUIApplication) {
-        let picker = app.buttons["selectModel"]
-        XCTAssertTrue(picker.waitForExistence(timeout: 5)); picker.tap()
-        let model = app.buttons["model-" + id]
-        XCTAssertTrue(model.waitForExistence(timeout: 5)); model.tap()
-        XCTAssertTrue(picker.waitForExistence(timeout: 10))
-        XCTAssertFalse(model.exists)
+        let ids = ["fixture-balanced", "fixture-thinking", "fixture-single", "fixture-deep"]
+        let names = ["Balanced", "Thinking toggle", "Single effort", "Deep Thinker"]
+        guard let target = ids.firstIndex(of: id) else { XCTFail("Unknown fixture model: \(id)"); return }
+        let wheel = app.descendants(matching: .any).matching(identifier: "selectModel").firstMatch
+        XCTAssertTrue(wheel.waitForExistence(timeout: 5))
+        let initialY = wheel.frame.midY
+        for _ in 0..<8 {
+            let value = wheel.value as? String ?? ""
+            guard let current = names.firstIndex(where: { value.hasPrefix($0) }) else { XCTFail("Unknown wheel value: \(value)"); return }
+            if current == target { break }
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: wheel)
+            XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
+            let next = current + (current < target ? 1 : -1)
+            let start = wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let end = wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: current < target ? 0.2 : 0.8))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.25)
+            let settled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true AND value BEGINSWITH %@", names[next]), object: wheel)
+            XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed)
+        }
+        XCTAssertTrue((wheel.value as? String ?? "").hasPrefix(names[target]))
+        XCTAssertEqual(wheel.frame.midY, initialY, accuracy: 1, "Changing model capabilities must not move the wheel")
+        XCTAssertFalse(app.navigationBars["Select model"].exists)
     }
 
     private func selectEffort(at fraction: CGFloat, in app: XCUIApplication, drag: Bool = false) {

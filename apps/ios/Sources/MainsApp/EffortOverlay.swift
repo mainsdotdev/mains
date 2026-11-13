@@ -15,6 +15,9 @@ struct EffortSourceFrameKey: PreferenceKey {
 }
 
 private struct EffortOverlayModifier: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @Binding var isPresented: Bool
     let session: BackendSession
     let context: ComposerContext?
@@ -26,6 +29,7 @@ private struct EffortOverlayModifier: ViewModifier {
                 if isPresented, let context {
                     EffortOverlayView(session: session, context: context, sourceFrame: sourceFrame,
                         currentSourceFrame: { sourceFrame }, close: { isPresented = false })
+                        .id("\(session.ownership):\(context.providerId):\(context.spaceID ?? ""):\(context.runID ?? "")")
                         .ignoresSafeArea(.container)
                         .accessibilityElement(children: .contain)
                         .accessibilityAddTraits(.isModal)
@@ -35,12 +39,18 @@ private struct EffortOverlayModifier: ViewModifier {
 }
 
 private struct EffortOverlayView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let context: ComposerContext
     let sourceFrame: CGRect
     let currentSourceFrame: () -> CGRect
     let close: () -> Void
-    @State private var catalogueOpen = false
+    @State private var selectingModel = false
+    @State private var pendingModel: ModelChoice?
+    @State private var pendingSettings: ComposerSettings?
+    @State private var showingModelSave = false
     @State private var preview: String?
     @State private var panelSize = CGSize.zero
     @State private var revealed = false
@@ -49,13 +59,28 @@ private struct EffortOverlayView: View {
     @State private var returnFrame = CGRect.zero
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .title2) private var modelRowHeight: CGFloat = 52
+    @ScaledMetric(relativeTo: .subheadline) private var effortCaptionHeight: CGFloat = 24
+    @ScaledMetric(relativeTo: .body) private var effortControlHeight: CGFloat = 76
     private var settings: ComposerSettings { context.settings(session) }
     private var selected: ModelChoice? { context.model(session) }
-    private var effort: String {
-        if EffortControlKind.resolve(provider: context.providerId, levels: selected?.supportedEffortLevels ?? []) == .thinking {
-            return settings.config["thinkingMode"]?.bool == true ? "On" : "Off"
+    private var presentedModel: ModelChoice? { pendingModel ?? selected }
+    private var presentedSettings: ComposerSettings { pendingSettings ?? settings }
+    private var models: [ModelChoice] { session.models[context.providerId] ?? [] }
+    private var modelSelectionBlocked: Bool { closing || selectingModel || context.saving(session) || !session.isConnected || session.sending }
+    private var showsEffortCaption: Bool {
+        guard let selected = presentedModel else { return false }
+        switch EffortControlKind.resolve(provider: context.providerId, levels: selected.supportedEffortLevels ?? []) {
+        case .slider, .list: return true
+        default: return false
         }
-        let value = settings.effort(provider: context.providerId)
+    }
+    private var effort: String {
+        if EffortControlKind.resolve(provider: context.providerId, levels: presentedModel?.supportedEffortLevels ?? []) == .thinking {
+            return presentedSettings.config["thinkingMode"]?.bool == true ? "On" : "Off"
+        }
+        let value = presentedSettings.effort(provider: context.providerId, model: presentedModel)
         return ComposerSettings.effortLabel(value, provider: context.providerId)
     }
     private var transition: Animation {
@@ -99,10 +124,10 @@ private struct EffortOverlayView: View {
                     .scaleEffect(reduceMotion || revealed ? 1 : initialScale)
                     .offset(x: reduceMotion || revealed ? 0 : origin.x - center.x,
                             y: reduceMotion || revealed ? 0 : origin.y - center.y)
-                    .opacity(revealed && !catalogueOpen ? 1 : 0)
+                    .opacity(revealed ? 1 : 0)
                     .position(center)
-                    .allowsHitTesting(revealed && !closing && !catalogueOpen)
-                    .accessibilityHidden(catalogueOpen || !revealed || closing)
+                    .allowsHitTesting(revealed && !closing)
+                    .accessibilityHidden(!revealed || closing)
             }
         }
         .onAppear {
@@ -116,35 +141,73 @@ private struct EffortOverlayView: View {
         }
         .tint(.primary)
         .accessibilityAction(.escape, requestClose)
-        .sheet(isPresented: $catalogueOpen) { ModelSheet(session: session, context: context) }
         .task { await session.loadModels(context.providerId) }
+        .task(id: pendingModel?.id) {
+            showingModelSave = false
+            guard let pendingID = pendingModel?.id, selectingModel else { return }
+            do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+            if pendingModel?.id == pendingID && selectingModel && !closing { showingModelSave = true }
+        }
         .onChange(of: selected?.id) { _, _ in preview = nil }
     }
     private var controls: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 10) {
             HStack(spacing: 4) {
-                Button { catalogueOpen = true } label: {
-                    HStack(spacing: 7) {
-                        ComposerModelLabel(model: selected, loading: context.modelsLoading(session), providerID: context.providerId)
-                        if selected != nil { Text(preview ?? effort).foregroundStyle(.secondary) }
-                        Image(systemName: "chevron.right").font(.body.weight(.semibold)).foregroundStyle(.secondary)
+                ComposerModelWheel(models: models, selectedID: pendingModel?.id ?? selected?.id ?? settings.model,
+                                   pendingModel: pendingModel, providerID: context.providerId,
+                                   loading: context.modelsLoading(session), enabled: !modelSelectionBlocked,
+                                   rowHeight: modelRowHeight, reduceMotion: reduceMotion, onSelect: chooseModel)
+                    .frame(maxWidth: .infinity).frame(height: modelRowHeight * (dynamicTypeSize.isAccessibilitySize ? 1.8 : 3))
+                    .mask {
+                        LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .white.opacity(0.55), location: 0.16),
+                                               .init(color: .white, location: 0.4), .init(color: .white, location: 0.6),
+                                               .init(color: .white.opacity(0.55), location: 0.84), .init(color: .clear, location: 1)],
+                                       startPoint: .top, endPoint: .bottom)
                     }
-                    .font(.title3).lineLimit(1).minimumScaleFactor(0.75)
-                    .frame(maxWidth: .infinity, minHeight: 48).contentShape(.rect)
-                }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("selectModel")
                 Button(action: requestClose) {
                     Image(systemName: "xmark").font(.body).foregroundStyle(.secondary)
                         .frame(width: 44, height: 44).contentShape(.circle)
                 }.buttonStyle(ChatPressStyle()).accessibilityLabel("Close").accessibilityIdentifier("closeEffortOverlay")
             }.padding(.leading, 28).padding(.trailing, 16)
-            if let selected {
-                EffortControlPanel(session: session, context: context, model: selected, expanded: true, onPreview: { preview = $0 })
-                    .id(selected.id)
-                if EffortControlKind.resolve(provider: context.providerId, levels: selected.supportedEffortLevels ?? []) == .hidden {
-                    Text("This model has no effort options.").font(.subheadline).foregroundStyle(.secondary)
+            if let error = session.modelErrors[context.providerId] {
+                HStack {
+                    Text(error).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Button("Try again") { Task { await session.loadModels(context.providerId, force: true) } }
+                        .font(.caption.weight(.semibold)).disabled(!session.isConnected)
+                }.padding(.horizontal, 28)
+            }
+            VStack(spacing: 6) {
+                HStack {
+                    Text("Effort").foregroundStyle(.secondary)
+                    Spacer()
+                    if showingModelSave { ProgressView().controlSize(.mini).accessibilityLabel("Saving model") }
+                    Text(preview ?? effort)
+                }.font(.subheadline).padding(.horizontal, 28).frame(height: effortCaptionHeight)
+                    .opacity(showsEffortCaption ? 1 : 0).accessibilityHidden(!showsEffortCaption)
+                ZStack {
+                    if let selected = presentedModel {
+                        EffortControlPanel(session: session, context: context, model: selected, expanded: true,
+                                           expandedControlHeight: effortControlHeight, settingsPreview: pendingSettings,
+                                           interactionBlocked: selectingModel, onPreview: { preview = $0 })
+                    } else if session.loadingModels.contains(context.providerId) { ProgressView() }
                 }
-            } else if session.loadingModels.contains(context.providerId) { ProgressView() }
+                .frame(height: effortControlHeight + 16)
+            }
+            .frame(height: effortCaptionHeight + 6 + effortControlHeight + 16)
             SettingsRecoveryNotice(session: session, runID: context.runID)
+        }
+    }
+    private func chooseModel(_ candidate: ModelChoice) {
+        guard !modelSelectionBlocked, let model = models.first(where: { $0.id == candidate.id }) else { return }
+        var next = settings; next.select(model, provider: context.providerId)
+        guard next != settings else { return }
+        let owner = session.ownership
+        selectingModel = true; pendingModel = model; pendingSettings = next; preview = nil
+        Task {
+            guard owner == session.ownership else { return }
+            defer { if owner == session.ownership { selectingModel = false; pendingModel = nil; pendingSettings = nil } }
+            do { try await context.commit(next, session: session) }
+            catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
         }
     }
 }

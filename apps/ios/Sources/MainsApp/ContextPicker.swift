@@ -33,6 +33,9 @@ extension View {
 }
 
 private struct ContextPickerHost: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let enabled: Bool
     @State private var presented: ContextPickerRequest?
     func body(content: Content) -> some View {
@@ -60,6 +63,9 @@ private struct ContextPickerHost: ViewModifier {
 }
 
 private struct ContextPickerPanel: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let request: ContextPickerRequest
     let maxHeight: CGFloat
     @State private var catalogue = ContextCatalogue()
@@ -182,6 +188,9 @@ private struct ContextPickerPanel: View {
 }
 
 private struct ContextTypeBadge: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let title: String
     var body: some View {
         Text(title).font(.caption2).foregroundStyle(Color(uiColor: .secondaryLabel))
@@ -191,6 +200,9 @@ private struct ContextTypeBadge: View {
 }
 
 private struct ContextDefaultIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var tint = Color(uiColor: .secondaryLabel)
     var command = false
     var skill = false
@@ -202,6 +214,9 @@ private struct ContextDefaultIcon: View {
 }
 
 struct ContextSkillIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let skill: ContextSkill
     private var tint: Color {
         guard let hex = skill.brandColor?.trimmingCharacters(in: CharacterSet(charactersIn: "#")), hex.count == 6,

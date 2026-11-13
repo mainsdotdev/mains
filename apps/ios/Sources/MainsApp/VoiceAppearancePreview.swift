@@ -3,6 +3,9 @@ import SwiftUI
 
 /// A launch-only visual fixture. It has no Keychain, files, microphone or network.
 struct VoiceAppearancePreview: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     @State private var session = BackendSession(storage: VoicePreviewStorage())
     @State private var runID: String?
     private let preferences = UserDefaults(suiteName: "dev.mains.voice-preview")!

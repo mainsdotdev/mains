@@ -59,6 +59,9 @@ struct ComposerContext {
 }
 
 struct ComposerModelLabel: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let model: ModelChoice?
     let loading: Bool
     let providerID: String
@@ -83,6 +86,9 @@ struct ComposerModelLabel: View {
 }
 
 struct ComposerModelIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let name: String
     let providerID: String
     private var providerToken: String {
@@ -128,6 +134,9 @@ struct ComposerModelIcon: View {
 }
 
 struct SettingsRecoveryNotice: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let runID: String?
     var body: some View {

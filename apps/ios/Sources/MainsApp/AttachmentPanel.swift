@@ -4,6 +4,9 @@ import Photos
 
 /// The attachment menu and media panels share one reversible, source-anchored surface.
 struct AttachmentPanel: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     enum Mode: String, Identifiable { case menu, camera, photos; var id: String { rawValue } }
     let sourceFrame: CGRect
     let accent: Color

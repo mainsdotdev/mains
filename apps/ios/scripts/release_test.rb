@@ -247,6 +247,26 @@ class ReleaseTest < Minitest::Test
     end
   end
 
+  def test_hot_reload_is_limited_to_debug_simulators_and_not_embedded
+    project = Xcodeproj::Project.open(File.join(MainsRelease::ROOT, 'Mains.xcodeproj'))
+    app = project.targets.find { |target| target.name == 'Mains' }
+    debug = app.build_configurations.find { |config| config.name == 'Debug' }.build_settings
+    release = app.build_configurations.find { |config| config.name == 'Release' }.build_settings
+    assert_equal ['$(inherited)', '-Xlinker', '-interposable'], debug.fetch('OTHER_LDFLAGS[sdk=iphonesimulator*]')
+    assert_equal 'YES', debug.fetch('EMIT_FRONTEND_COMMAND_LINES[sdk=iphonesimulator*]')
+    assert_equal 'YES', debug.fetch('SWIFT_ENABLE_OPAQUE_TYPE_ERASURE[sdk=iphonesimulator*]')
+    assert_equal 'NO', debug.fetch('COMPILATION_CACHE_ENABLE_CACHING[sdk=iphonesimulator*]')
+    refute debug.key?('OTHER_LDFLAGS')
+    refute release.keys.any? { |key| key.start_with?('OTHER_LDFLAGS', 'EMIT_FRONTEND_COMMAND_LINES', 'SWIFT_ENABLE_OPAQUE_TYPE_ERASURE') }
+    assert_includes release.fetch('EXCLUDED_SOURCE_FILE_NAMES'), 'DeveloperHotReload.swift'
+    refute app.resources_build_phase.files_references.any? { |file| file.path.include?('Injection') }
+    refute app.shell_script_build_phases.any? { |phase| phase.shell_script.include?('Injection') }
+    scheme = Xcodeproj::XCScheme.new(File.join(project.path, 'xcshareddata/xcschemes/Mains.xcscheme'))
+    assert_equal '$(SRCROOT)/Sources/MainsApp,$(HOME)/Library', scheme.launch_action.environment_variables['INJECTION_DIRECTORIES'].value
+    refute scheme.test_action.should_use_launch_scheme_args_env?
+    assert_equal '0', scheme.test_action.environment_variables['MAINS_HOT_RELOAD'].value
+  end
+
   def test_invalid_version_cannot_reach_build_arguments
     File.write(File.join(@root, 'Version.xcconfig'), "MARKETING_VERSION = 0.1.0;bad\nCURRENT_PROJECT_VERSION = 1\n")
     assert_raises(ArgumentError) { MainsRelease::Config.new(env: @env, root: @root) }

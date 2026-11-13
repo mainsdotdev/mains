@@ -28,6 +28,9 @@ enum AppBrand {
 /// A hit target behind the page content, never a gesture on the composer or
 /// its controls. Ending editing also updates ContextTextEditor's focus binding.
 struct KeyboardDismissBackground: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var color: Color = .clear
     var body: some View {
         color.contentShape(Rectangle())
@@ -52,6 +55,9 @@ extension Provider {
 }
 
 struct GlassSurface: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var radius: CGFloat = 28
     var tint: Color = .clear
     var interactive = true
@@ -67,6 +73,9 @@ struct GlassSurface: ViewModifier {
 }
 
 struct RoundControl: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let symbol: String
     let label: String
     var size: CGFloat = 46
@@ -83,6 +92,9 @@ struct RoundControl: View {
 
 /// Matches mobile's SidebarIcon: two leading-aligned strokes on a 24-unit grid.
 struct SidebarIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var body: some View {
         Path { path in
             let scale = 22.0 / 24.0
@@ -98,6 +110,9 @@ struct SidebarIcon: View {
 }
 
 struct SidebarControl: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let action: () -> Void
     var body: some View {
         Button(action: action) {
@@ -110,6 +125,9 @@ struct SidebarControl: View {
 
 /// Uses the same vector registry and stored icon tokens as desktop and Expo.
 struct RegistryIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let token: String?
     var fallback = "folder"
     var size: CGFloat = 20
@@ -144,6 +162,9 @@ struct RegistryIcon: View {
 }
 
 struct BridgeIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var size: CGFloat = 16
     var body: some View {
         RegistryIcon(token: "icon:bridge", size: size, tint: .secondary)
@@ -151,6 +172,9 @@ struct BridgeIcon: View {
 }
 
 struct BridgeReadOnlyNotice: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let text: String
     var body: some View {
         HStack(spacing: 10) {
@@ -167,6 +191,9 @@ struct BridgeReadOnlyNotice: View {
 }
 
 struct SpaceDisc: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let space: Space
     let selected: Bool
     let action: () -> Void

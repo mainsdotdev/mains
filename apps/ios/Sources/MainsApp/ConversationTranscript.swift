@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct ConversationTranscript: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let runID: String
     let providerID: String
@@ -269,6 +272,9 @@ private struct ConversationActivitySelection: Identifiable {
 
 /// Detail pages remain separate from the message window and its scroll position.
 private struct ConversationActivitySheet: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let selection: ConversationActivitySelection
     @Environment(\.dismiss) private var dismiss
@@ -357,6 +363,9 @@ private struct TranscriptFramesKey: PreferenceKey {
 }
 
 private struct ChatTurnView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let section: TranscriptSection
     let providerID: String

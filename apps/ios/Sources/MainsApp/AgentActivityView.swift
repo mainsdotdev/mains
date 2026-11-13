@@ -2,6 +2,9 @@ import SwiftUI
 
 /// Same two-second diagonal square sweep as desktop's AsciiSpinner.
 struct AgentAsciiSpinner: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let providerID: String
     var animated = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -36,6 +39,9 @@ struct AgentAsciiSpinner: View {
 }
 
 private struct ActivityShimmer: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let enabled: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -61,6 +67,9 @@ extension View {
 }
 
 struct AgentActivityView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let activity: AgentActivity
     let providerID: String
     var body: some View {

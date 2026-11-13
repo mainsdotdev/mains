@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct SidebarView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     @Binding var collapsed: Set<String>
     let openConversation: (String) -> Void
@@ -97,8 +100,8 @@ struct SidebarView: View {
         GeometryReader { geometry in
             HStack(spacing: 8) {
                 Image("registry-mains-fill").renderingMode(.template).resizable().scaledToFit()
-                    .frame(width: 20, height: 20).foregroundStyle(.primary)
-                    .frame(width: 40, height: 40).modifier(GlassSurface(radius: 20, interactive: false))
+                    .frame(width: 20, height: 20).foregroundStyle(.black)
+                    .frame(width: 40, height: 40).background(Color(white: 0.92), in: .circle)
                     .frame(width: 44, height: 44).accessibilityLabel("Mains")
                 modeSwitcher(showLabel: geometry.size.width >= 264 && !dynamicTypeSize.isAccessibilitySize)
                 Spacer(minLength: 0)
@@ -277,6 +280,9 @@ struct SidebarView: View {
 }
 
 private struct SidebarScrollFade: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var axis: Axis = .vertical
     private struct Edges: Equatable {
         var start = false
@@ -316,6 +322,9 @@ private struct SidebarScrollFade: ViewModifier {
 }
 
 struct WorkspaceLabel: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let workspace: Workspace
     var body: some View {

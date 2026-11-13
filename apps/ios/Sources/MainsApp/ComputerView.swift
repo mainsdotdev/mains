@@ -9,6 +9,9 @@ enum AppAppearance: String, CaseIterable {
 }
 
 struct ComputerView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     @AppStorage("appearancePreference") private var appearance = AppAppearance.system
     @Environment(\.dismiss) private var dismiss
@@ -229,6 +232,9 @@ struct ComputerView: View {
 }
 
 private struct AIDataSharingSettingsView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     @State private var revokeProvider: String?
     @State private var revokeBackendID: String?
@@ -295,6 +301,9 @@ private struct AIDataSharingSettingsView: View {
 }
 
 private struct SettingsRow: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let title: String
     var subtitle: String? = nil
     var value: String? = nil
@@ -318,6 +327,9 @@ private struct SettingsRow: View {
 }
 
 private struct SettingsSection<Content: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     var title: String? = nil
     @ViewBuilder let content: Content
     init(_ title: String? = nil, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
@@ -331,6 +343,9 @@ private struct SettingsSection<Content: View>: View {
 }
 
 private struct SettingsListStyle: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     func body(content: Content) -> some View {
         content.listStyle(.insetGrouped).scrollContentBackground(.hidden)
             .background(Color(.systemBackground)).listSectionSpacing(24).buttonStyle(.plain)

@@ -2,6 +2,9 @@ import SwiftUI
 
 @MainActor
 struct ConversationView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     private struct HistoryEntry: Hashable {
         let runID: String
         let cursor: HistoryCursor?

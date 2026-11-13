@@ -3,6 +3,9 @@ import Observation
 @preconcurrency import AVFAudio
 
 struct VoiceSettingsView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase

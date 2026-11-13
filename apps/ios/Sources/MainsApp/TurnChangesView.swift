@@ -8,6 +8,9 @@ struct TurnFileSelection: Hashable {
 }
 
 struct TurnChangesCard: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let turn: RunTurn
     let open: (TurnFileChange) -> Void
     @State private var expanded = false
@@ -76,6 +79,9 @@ struct TurnChangesCard: View {
 }
 
 struct DiffCounts: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let additions: Int
     let deletions: Int
     var body: some View {
@@ -87,6 +93,9 @@ struct DiffCounts: View {
 }
 
 struct TurnFileDiffView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let session: BackendSession
     let selection: TurnFileSelection
     let close: () -> Void
@@ -158,6 +167,9 @@ struct TurnFileDiffView: View {
 }
 
 private struct NumberedDiffBody: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
     let lines: [FileDiffLine]
     @Environment(\.colorScheme) private var scheme
     var body: some View {
