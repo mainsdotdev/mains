@@ -93,6 +93,9 @@
 		FD3BBD18F27BFEB15B735D6913EE4F74 /* TurnChanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5BD6E09AD63A3C625EB23BAAEFFA4B1 /* TurnChanges.swift */; };
 		A77DCE413E6EC6E33449692EAD313BA8 /* WorkInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1875F72005B82148E77DE3E6AAB3FB6 /* WorkInbox.swift */; };
 		6D575D7EC469702B0C572C519C575987 /* WorkInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95489360F16BBE3C3799CEA347E713CD /* WorkInboxView.swift */; };
+		E3FC157998BCB0DCCC24860A25A3D4F7 /* Atlas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427411C1A144C684E1F9C5A961891B49 /* Atlas.swift */; };
+		844662272A7AD96C143F2F6B6CB7E99F /* DemoAtlas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BD59A6B9A74B03FBAD06CA053FFBD7B /* DemoAtlas.swift */; };
+		18EE9AED8519F7DEAC608D15AB3AD8B5 /* AtlasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BA48913EFDE51CD66B715AAB71ED7E /* AtlasView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -205,6 +208,9 @@
 		FFA0706413B10E2AB3A239B6ECAB34CB /* DemoBackend.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DemoBackend.swift; sourceTree = "<group>"; };
 		E1875F72005B82148E77DE3E6AAB3FB6 /* WorkInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkInbox.swift; sourceTree = "<group>"; };
 		95489360F16BBE3C3799CEA347E713CD /* WorkInboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkInboxView.swift; sourceTree = "<group>"; };
+		427411C1A144C684E1F9C5A961891B49 /* Atlas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Atlas.swift; sourceTree = "<group>"; };
+		9BD59A6B9A74B03FBAD06CA053FFBD7B /* DemoAtlas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAtlas.swift; sourceTree = "<group>"; };
+		71BA48913EFDE51CD66B715AAB71ED7E /* AtlasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -287,6 +293,7 @@
 		9F99657CFDED4A92038F06FFC05619BA /* MainsApp */ = {
 			isa = PBXGroup;
 			children = (
+				71BA48913EFDE51CD66B715AAB71ED7E /* AtlasView.swift */,
 				95489360F16BBE3C3799CEA347E713CD /* WorkInboxView.swift */,
 				4207C99582D5B48E13FEE987AF3DCAD4 /* AgentActivityView.swift */,
 				F77FDAAFFB260DBC3F579ECF2A12E2FA /* AppChrome.swift */,
@@ -348,6 +355,8 @@
 		D0FE9E15764B1F5BE92FDCBC54559C91 /* MainsCore */ = {
 			isa = PBXGroup;
 			children = (
+				9BD59A6B9A74B03FBAD06CA053FFBD7B /* DemoAtlas.swift */,
+				427411C1A144C684E1F9C5A961891B49 /* Atlas.swift */,
 				E1875F72005B82148E77DE3E6AAB3FB6 /* WorkInbox.swift */,
 				561FCC9918AE91F89CD868D6F3EA73AD /* AgentActivity.swift */,
 				7B97DDA0E6DD029C45D063FAB732403E /* ApprovalToolPreview.swift */,
@@ -495,6 +504,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				18EE9AED8519F7DEAC608D15AB3AD8B5 /* AtlasView.swift in Sources */,
+				844662272A7AD96C143F2F6B6CB7E99F /* DemoAtlas.swift in Sources */,
+				E3FC157998BCB0DCCC24860A25A3D4F7 /* Atlas.swift in Sources */,
 				6D575D7EC469702B0C572C519C575987 /* WorkInboxView.swift in Sources */,
 				A77DCE413E6EC6E33449692EAD313BA8 /* WorkInbox.swift in Sources */,
 				15BEB9DA8126AD56F1E75FC5553023ED /* AgentActivity.swift in Sources */,

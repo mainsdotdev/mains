@@ -5,8 +5,14 @@ import { handle } from "../../ipc-kit/handle";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { atlasService } from "./atlas.service";
 import { atlasBookmarks } from "./atlas.bookmarks";
+import { atlasMobile } from "./atlas.mobile";
+import type { AtlasMobileLibraryOptions, AtlasMobilePageRequest, AtlasMobileFileRequest, AtlasMobileFileRead } from "@mains/contracts/atlas-mobile";
 
 export function registerAtlasIpc() {
+  ipcMain.handle(CHANNELS.atlas.mobileLibrary, handle((input: AtlasMobileLibraryOptions) => atlasMobile.library(input)));
+  ipcMain.handle(CHANNELS.atlas.readMobilePage, handle((input: AtlasMobilePageRequest) => atlasMobile.readPage(input)));
+  ipcMain.handle(CHANNELS.atlas.describeMobileFile, handle((input: AtlasMobileFileRequest) => atlasMobile.describeFile(input)));
+  ipcMain.handle(CHANNELS.atlas.readMobileFile, handle((input: AtlasMobileFileRead) => atlasMobile.readFile(input)));
   ipcMain.handle(CHANNELS.atlas.saveBookmark, handle((input: AtlasSaveBookmark) => atlasService.saveBookmark(input)));
   ipcMain.handle(CHANNELS.atlas.enrichBookmark, handle((input: AtlasIdentity) => atlasService.enrichBookmark(input)));
   ipcMain.handle(CHANNELS.atlas.listTags, handle((input: { accountId: string }) => atlasService.listTags(input)));

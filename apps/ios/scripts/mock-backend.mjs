@@ -5,6 +5,7 @@ import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { encodeWsMessage, decodeWsMessage, WS_PROTOCOL_VERSION } from '../../../packages/contracts/src/ws-protocol.ts';
 import { CHANNELS } from '../../../packages/contracts/src/channels.ts';
+import { atlasFixture } from './mock-atlas.mjs';
 import { historyWindow, compareHistoryCursors } from '../../../packages/contracts/src/run-history.ts';
 
 // Backend sources live in an explicit CommonJS package. Load this dependency-free
@@ -374,6 +375,11 @@ wss.on('connection', socket => {
           result = { fileName: 'notes.md', relativePath: 'docs/notes.md', content: '# Notes\n\nA run-local file with $x^2$ and [a PDF](report.pdf).' }; break;
         }
         case CHANNELS.backend.describe: result = descriptor; break;
+        case CHANNELS.atlas.mobileLibrary:
+        case CHANNELS.atlas.readMobilePage:
+        case CHANNELS.atlas.describeMobileFile:
+        case CHANNELS.atlas.readMobileFile:
+          result = atlasFixture(channel, args[0], { pdfBytes, outputBytes, imageBase64, version: outputVersion }); break;
         case CHANNELS.account.get: result = { id: 'fixture-account', displayName: 'Fixture' }; break;
         case CHANNELS.runs.listActive: result = runs.filter(run => ['running', 'queued'].includes(run.status) && !run.isReplica); break;
         case CHANNELS.runs.getAll:

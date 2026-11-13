@@ -163,6 +163,10 @@ final class DemoBackend {
         let first = args.first ?? .null
         let runID = first["runId"].string ?? first.string ?? ""
         switch channel {
+        case "atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile":
+            guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
+            return try DemoAtlas.answer(channel, input: first, runID: runs.first(where: { $0["mode"]?.string == "work" })?["id"]?.string ?? Self.tourID,
+                                        collectionID: seed["collections"].array.first?["id"].string, image: seed["images"].objectValue.values.first ?? .null)
         case "backend:describe": return try .encode(pairing.descriptor)
         case "account:get": return seed["account"]
         case "space:getAll": return .array(spaces.map(JSONValue.object))

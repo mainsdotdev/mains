@@ -176,7 +176,7 @@ struct OutputPreviewView: View {
     }
 }
 
-private struct OutputQuickLook: UIViewControllerRepresentable {
+struct OutputQuickLook: UIViewControllerRepresentable {
     let url: URL
     func makeCoordinator() -> Coordinator { Coordinator(url: url) }
     func makeUIViewController(context: Context) -> QLPreviewController {

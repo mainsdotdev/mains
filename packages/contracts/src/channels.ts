@@ -112,6 +112,10 @@ export const CHANNELS = {
     stopFindInPage: "browser:stopFindInPage",
   },
   atlas: {
+    mobileLibrary: "atlas:mobileLibrary",
+    readMobilePage: "atlas:readMobilePage",
+    describeMobileFile: "atlas:describeMobileFile",
+    readMobileFile: "atlas:readMobileFile",
     saveBookmark: "atlas:saveBookmark",
     enrichBookmark: "atlas:enrichBookmark",
     listTags: "atlas:listTags",

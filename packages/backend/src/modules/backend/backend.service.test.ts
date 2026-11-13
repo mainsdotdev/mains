@@ -147,6 +147,8 @@ describe("backendService", () => {
         );
       }
       expect(PAIRED_DEVICE_CHANNELS.has("backend:describe")).toBe(true);
+      for (const channel of ["atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile"]) expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(true);
+      for (const channel of ["atlas:library", "atlas:get", "atlas:resolveFile", "atlas:update", "atlas:savePage", "atlas:remove"]) expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("search:conversations")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("search:query")).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:getAll")).toBe(true);
@@ -464,6 +466,7 @@ describe("backendService", () => {
 describe("PAIRED_DEVICE_EVENTS", () => {
   it("is exactly the pushes the phone subscribes to", () => {
     expect([...PAIRED_DEVICE_EVENTS].sort()).toEqual([
+      "atlas:changed",
       "providers:modelsUpdated",
       "providers:skillsUpdated",
       "runs:diffUpdated",

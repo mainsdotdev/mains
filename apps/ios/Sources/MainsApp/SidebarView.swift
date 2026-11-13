@@ -9,6 +9,7 @@ struct SidebarView: View {
     let search: () -> Void
     let settings: () -> Void
     let openWorkInbox: () -> Void
+    let openAtlas: () -> Void
     @State private var pendingMode: String?
     @Namespace private var modeSelection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -44,7 +45,12 @@ struct SidebarView: View {
                         }.frame(minHeight: 44).contentShape(.rect)
                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openWorkInbox")
                         .accessibilityValue(count > 0 ? "\(count) conversations need you" : "")
-                }.padding(.horizontal, 16).padding(.bottom, 14)
+                }.padding(.horizontal, 16)
+                Button(action: openAtlas) {
+                    Label("Atlas", systemImage: "square.stack").font(.body.weight(.medium))
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
+                }.buttonStyle(ChatPressStyle()).padding(.horizontal, 16).padding(.bottom, 14)
+                    .accessibilityIdentifier("openAtlas")
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {

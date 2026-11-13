@@ -25,6 +25,8 @@ const replicaOutputs = new Map<string, unknown[]>();
 vi.mock("../../db/client", () => ({ getDb: () => db }));
 // Keep the integration focused on Atlas' real SQLite/storage boundary.
 vi.mock("../runs", () => ({ runsService: {
+  listOutputs: vi.fn(),
+  readOutputFile: vi.fn(),
   getRunById: async (id: string) => {
     const run = db.select().from(runs).where(eq(runs.id, id)).get();
     return run ? { ...run, ...ownershipOf(run.ownerBackendId) } : null;
@@ -53,6 +55,7 @@ vi.mock("../runs", () => ({ runsService: {
   listRunAttachmentRecords: (id: string) => listRunAttachmentRecords(id),
 } }));
 import { atlasService } from "./atlas.service";
+import { atlasMobile } from "./atlas.mobile";
 import { attachmentDescriptor, listRunAttachmentRecords, prepareRunAttachments, resolveRunAttachment } from "../runs/run-attachment-storage";
 import { runsRepo } from "../runs/runs.repo";
 import { insertRunInputArtifact } from "../runs/run-input-artifact";
@@ -284,6 +287,109 @@ function output(name = "report.pdf", runId = "conversation") {
   createRunArtifact(db, { runId, kind: "report", content: `[Output](<${file}>)` });
   return file;
 }
+describe("Atlas phone library", { timeout: 15000 }, () => {
+  it("keeps replica download hydration with the original output reader and checks ownership on each chunk", async () => {
+    createRun(db, { id: "phone-replica", mode: "work", status: "succeeded", ownerBackendId: "remote-phone-source" });
+    replicaOutputs.set("phone-replica", [{ id: -42, kind: "document", metadata: { path: "/other-device/report.pdf", byteSize: 2 }, createdAt: new Date() }]);
+    const { runsService } = await import("../runs");
+    const version = "d".repeat(64);
+    const describe = vi.mocked(runsService.listOutputs).mockReset().mockResolvedValue({ items: [{ runId: "phone-replica", artifactId: -42,
+      name: "report.pdf", mimeType: "application/pdf", previewType: "native", byteSize: 2, modifiedAt: 1, version }], nextOffset: null });
+    const read = vi.mocked(runsService.readOutputFile).mockReset().mockImplementation(async (input) => {
+      if (input.version !== version) throw new Error("Output changed");
+      return { base64: Buffer.from("x").toString("base64"), byteSize: 2, version, offset: input.offset, nextOffset: input.offset === 0 ? 1 : null };
+    });
+    const reference = (await atlasMobile.library({ accountId: "default" })).items[0].file!;
+    expect((await atlasMobile.describeFile({ accountId: "default", reference })).version).toBe(version);
+    await atlasMobile.readFile({ accountId: "default", reference, version, offset: 0 });
+    await atlasMobile.readFile({ accountId: "default", reference, version, offset: 1 });
+    expect(describe).toHaveBeenCalledTimes(1); expect(read).toHaveBeenCalledTimes(2);
+    await expect(atlasMobile.readFile({ accountId: "default", reference, version: "a".repeat(64), offset: 1 })).rejects.toThrow("changed");
+    await expect(atlasMobile.readFile({ accountId: "other", reference, version, offset: 1 })).rejects.toThrow("not found");
+    expect(JSON.stringify(await atlasMobile.library({ accountId: "default" }))).not.toContain("/other-device");
+  });
+  it("paginates saved Pages, filters favorites/search and never exposes blocks or computer paths", async () => {
+    const date = new Date();
+    for (let index = 0; index < 55; index++) {
+      const id = `phone-page-${String(index).padStart(2, "0")}`;
+      atlasRepo.insert({ id, accountId: "default", kind: "page", title: `Phone notes ${index}`, version: 1, isFavorite: index === 0 });
+      db.update(atlasItems).set({ updatedAt: date }).where(eq(atlasItems.id, id)).run();
+    }
+    const first = await atlasMobile.library({ accountId: "default", type: "page" });
+    const second = await atlasMobile.library({ accountId: "default", type: "page", page: 2 });
+    expect(first.items).toHaveLength(50); expect(first.hasNext).toBe(true);
+    expect(second.items).toHaveLength(5); expect(second.hasNext).toBe(false);
+    expect(new Set([...first.items, ...second.items].map((item) => item.key)).size).toBe(55);
+    expect(first.items.every((item) => item.file === null && item.pageId === item.key)).toBe(true);
+    const favorites = await atlasMobile.library({ accountId: "default", scope: "favorites", query: "Phone" });
+    expect(favorites.items.map((item) => item.key)).toEqual(["phone-page-00"]);
+    const wire = JSON.stringify(first);
+    expect(wire).not.toContain('"path"'); expect(wire).not.toContain('"blocks"'); expect(wire).not.toContain(directory);
+    createAccount(db, { id: "other" });
+    expect((await atlasMobile.library({ accountId: "other" })).items).toEqual([]);
+  });
+
+  it("reads Page Markdown in scalar-safe numbered parts and refuses changed, foreign and trashed Pages", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Travel" });
+    const markdown = "x".repeat(16_383) + "😀" + "İstanbul 🌍";
+    db.update(atlasPageRevisions).set({ markdown }).where(eq(atlasPageRevisions.id, page.revision.id)).run();
+    const first = atlasMobile.readPage({ accountId: "default", id: page.item.id });
+    expect(first.markdown.endsWith("😀")).toBe(true); expect(first.nextOffset).toBe(16_384);
+    const second = atlasMobile.readPage({ accountId: "default", id: page.item.id, offset: first.nextOffset!, version: first.version });
+    expect(first.markdown + second.markdown).toBe(markdown); expect(second.nextOffset).toBeNull();
+    expect(() => atlasMobile.readPage({ accountId: "default", id: page.item.id, offset: 16_384 })).toThrow("position");
+    expect(() => atlasMobile.readPage({ accountId: "default", id: page.item.id, version: 2 })).toThrow("changed");
+    expect(() => atlasMobile.readPage({ accountId: "other", id: page.item.id })).toThrow("not found");
+    expect(first).not.toHaveProperty("blocks");
+    await atlasService.update({ accountId: "default", id: page.item.id, trashed: true });
+    expect(() => atlasMobile.readPage({ accountId: "default", id: page.item.id })).toThrow("not found");
+  });
+
+  it("downloads only selected Work files by opaque identity, checking revisions on every chunk", async () => {
+    const file = output();
+    const bytes = Buffer.from("😀abc".repeat(50_000)); fs.writeFileSync(file, bytes);
+    const listed = await atlasMobile.library({ accountId: "default" });
+    const reference = listed.items[0].file!;
+    expect(reference).toEqual({ runId: "conversation", sourceKey: sourceKey("conversation", fs.realpathSync(file)) });
+    const descriptor = await atlasMobile.describeFile({ accountId: "default", reference });
+    expect(JSON.stringify(descriptor)).not.toContain(directory);
+    let offset = 0; const parts: Buffer[] = [];
+    while (true) {
+      const chunk = await atlasMobile.readFile({ accountId: "default", reference, version: descriptor.version, offset });
+      const part = Buffer.from(chunk.base64, "base64"); expect(part.length).toBeLessThanOrEqual(128 * 1024); parts.push(part);
+      if (chunk.nextOffset === null) break;
+      offset = chunk.nextOffset;
+    }
+    expect(Buffer.concat(parts)).toEqual(bytes);
+    fs.writeFileSync(file, "changed");
+    await expect(atlasMobile.readFile({ accountId: "default", reference, version: descriptor.version, offset: 0 })).rejects.toThrow("changed");
+    await expect(atlasMobile.describeFile({ accountId: "other", reference })).rejects.toThrow("not found");
+    await expect(atlasMobile.describeFile({ accountId: "default", reference: { runId: "conversation", sourceKey: "a".repeat(64) } })).rejects.toThrow("not found");
+    db.update(runs).set({ mode: "developer" }).where(eq(runs.id, "conversation")).run();
+    await expect(atlasMobile.describeFile({ accountId: "default", reference })).rejects.toThrow("not found");
+    expect((await atlasMobile.library({ accountId: "default" })).items).toEqual([]);
+  });
+
+  it("opens explicit saved copies across modes, but rejects Trash, symlinks and mixed references", async () => {
+    const file = output();
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+    db.update(runs).set({ mode: "developer" }).where(eq(runs.id, "conversation")).run();
+    const reference = { itemId: saved.id }, request = { accountId: "default", reference };
+    expect((await atlasMobile.library({ accountId: "default" })).items[0].file).toEqual(reference);
+    const descriptor = await atlasMobile.describeFile(request);
+    fs.rmSync(file);
+    const chunk = await atlasMobile.readFile({ ...request, offset: 0, version: descriptor.version });
+    expect(Buffer.from(chunk.base64, "base64").toString()).toBe("original contents");
+    await expect(atlasMobile.describeFile({ accountId: "other", reference })).rejects.toThrow("not found");
+    await expect(atlasMobile.describeFile({ ...request, reference: { ...reference, runId: "conversation" } as never })).rejects.toThrow("reference");
+    await atlasService.update({ accountId: "default", id: saved.id, trashed: true });
+    await expect(atlasMobile.describeFile(request)).rejects.toThrow("not found");
+    await atlasService.update({ accountId: "default", id: saved.id, trashed: false });
+    const outside = path.join(directory, "private.pdf"); fs.writeFileSync(outside, "private");
+    fs.rmSync(saved.path!); fs.symlinkSync(outside, saved.path!);
+    await expect(atlasMobile.describeFile(request)).rejects.toThrow();
+  });
+});
 describe("Atlas file lifecycle", { timeout: 15000 }, () => {
   it("uses the same final-message, deduplicated outputs as the conversation", async () => {
     const file = output("final.md");

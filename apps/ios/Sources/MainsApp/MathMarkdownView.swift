@@ -74,7 +74,7 @@ private struct MathWebView: UIViewRepresentable {
                 if abs(parent.height - next) > 0.5 { parent.height = next }
             } else if body["height"] != nil { parent.failed = true }
             if let href = body["href"] as? String, href.utf8.count <= 4096, let url = URL(string: href),
-               ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") || RunFileReference(href) != nil { parent.open(url) }
+               ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") || RunFileReference(href) != nil || AtlasLink(url) != nil { parent.open(url) }
         }
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) { if !retired { parent.failed = true } }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) { if !retired { parent.failed = true } }

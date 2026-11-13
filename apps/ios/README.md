@@ -212,6 +212,24 @@ underlying tooling.
 
 ## Current scope
 
+- Sidebar **Atlas** opens the account library without changing the active provider
+  or Space mode. All, Pages, Docs, Images and Bookmarks support search, project,
+  source and favorites filters, with one 50-entry page retained in memory.
+  Pages are read-only Markdown in version-pinned parts of up to 16,384 Unicode
+  scalars; embedded Atlas files open by identity. Bookmark details expose their
+  description, note and HTTP(S) link. Items can open their source conversation.
+  Documents/images reuse native file previews, paged text and Share / Save to Files;
+  downloads stream in 128 KB chunks up to 100 MB into protected temporary storage.
+  Closing a preview removes its files. Saved items span providers/modes; automatic
+  files follow desktop's Work-only discovery, including synced conversation files.
+  This requires an updated computer with the four narrow `atlas:*Mobile*` readers
+  (`mobileLibrary`, `readMobilePage`, `describeMobileFile`, `readMobileFile`). Broad
+  Atlas mutations/path resolvers remain unavailable to paired phones. Library
+  metadata and Page content stay out of the snapshot cache; stale pairing/connection
+  reads cannot populate another session. Atlas changes refresh an open library,
+  while a Page refresh explicitly restarts its reading version. Demo includes all
+  four content kinds and a prepared generated file without a network connection.
+  Page editing/creation and Page chat are outside this first native Atlas scope.
 - Sidebar **Activity** shows work across all spaces/providers: pending tool
   approvals/questions, authoritative running/queued work, recent failures (seven
   days), and completed/stopped work (24 hours). Requests take priority over running

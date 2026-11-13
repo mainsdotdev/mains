@@ -10,7 +10,7 @@ extension EnvironmentValues {
 }
 
 
-enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox }
+enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String) }
 
 struct AppShell: View {
     let session: BackendSession
@@ -39,7 +39,7 @@ struct AppShell: View {
                     Color(.systemBackground).ignoresSafeArea()
                     if offset > 0 || searchMounted {
                         SidebarView(session: session, collapsed: $collapsedCollections, openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
-                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) })
+                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) })
                             .frame(width: width)
                             .offset(x: searchExpanded ? -width : 0)
                             .allowsHitTesting(!searchExpanded)
@@ -73,6 +73,10 @@ struct AppShell: View {
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
                                 case .settings: ComputerView(session: session)
                                 case .workInbox: WorkInboxView(session: session, openConversation: { path.append(.conversation($0)) }, openSettings: showSettings)
+                                case .atlas: AtlasView(session: session, openPage: { path.append(.atlasPage($0)) }, openConversation: { path.append(.conversation($0)) })
+                                    .id(session.ownership)
+                                case .atlasPage(let id): AtlasPageView(session: session, pageID: id, openPage: { path.append(.atlasPage($0)) }, openConversation: { path.append(.conversation($0)) })
+                                    .id("\(session.ownership):atlas:\(id)")
                                 }
                             }
                         }
@@ -159,7 +163,7 @@ struct AppShell: View {
         guard !drawerOpen, !searchMounted else { return nil }
         switch path.last {
         case .conversation(let id), .searchMessage(let id, _): return id
-        case .workspace, .settings, .workInbox: return nil
+        case .workspace, .settings, .workInbox, .atlas, .atlasPage: return nil
         case nil: return homeRunID
         }
     }

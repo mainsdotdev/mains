@@ -91,6 +91,7 @@ public struct PendingMessage: Sendable {
 /// One paired computer. All async writers are fenced by connection and pairing ownership.
 @MainActor @Observable
 public final class BackendSession {
+    public private(set) var atlasRevision = 0
     #if MAINS_GPT_LIVE || SWIFT_PACKAGE
     public let voice = RealtimeVoiceController()
     public private(set) var pendingVoiceConversation: PendingVoiceConversation?
@@ -745,6 +746,59 @@ public final class BackendSession {
         }, read: read, write: write, progress: progress)
     }
 
+    private func atlasRead(_ channel: String, fields: [String: JSONValue]) async throws -> JSONValue {
+        guard active, isConnected, let accountID, let candidate = transport else { throw MainsError.disconnected }
+        let owner = pairingOwner, current = generation
+        var input = fields; input["accountId"] = .string(accountID)
+        let result: JSONValue
+        do { result = try await candidate.invoke(channel, args: [.object(input)]) }
+        catch {
+            try Task.checkCancellation()
+            guard owner == pairingOwner, current == generation, self.transport === candidate else { throw MainsError.changedBackend }
+            if case MainsError.server(let message) = error, message.contains("not available to paired devices") || message.contains("Unknown channel") || message.contains("No handler") {
+                throw MainsError.server("Update Mains on your computer to use Atlas on iPhone.")
+            }
+            throw error
+        }
+        try Task.checkCancellation()
+        guard owner == pairingOwner, current == generation, self.transport === candidate, active, isConnected else { throw MainsError.changedBackend }
+        return result
+    }
+
+    public func atlasLibrary(_ query: AtlasQuery) async throws -> AtlasLibraryPage {
+        let result = try await atlasRead("atlas:mobileLibrary", fields: query.payload).decode(AtlasLibraryPage.self)
+        guard result.items.count <= 50, (1...100_000).contains(result.page), Set(result.items.map(\.key)).count == result.items.count else { throw MainsError.invalidReply }
+        return result
+    }
+
+    public func atlasPage(_ id: String, offset: Int = 0, version: Int? = nil) async throws -> AtlasPageContent {
+        var fields: [String: JSONValue] = ["id": .string(id), "offset": .number(Double(offset))]
+        if let version { fields["version"] = .number(Double(version)) }
+        let page = try await atlasRead("atlas:readMobilePage", fields: fields).decode(AtlasPageContent.self)
+        let length = page.markdown.unicodeScalars.count
+        guard page.id == id, page.offset == offset, page.version > 0, version == nil || version == page.version,
+              length <= 16_384, page.nextOffset == nil || page.nextOffset == offset + length && length > 0 else { throw MainsError.invalidReply }
+        return page
+    }
+
+    public func describeAtlasFile(_ reference: AtlasFileReference) async throws -> AtlasFile {
+        let file = try await atlasRead("atlas:describeMobileFile", fields: ["reference": try .encode(reference)]).decode(AtlasFile.self)
+        guard file.reference == reference, (0...RunFilePolicy.maxBytes).contains(file.byteSize), !file.version.isEmpty else { throw MainsError.invalidReply }
+        return file
+    }
+
+    public func downloadAtlasFile(_ file: AtlasFile, owner: Int, to url: URL, progress: (Double) -> Void = { _ in }) async throws {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        let current = generation
+        try await RunFileTransfer.save(to: url) { write in
+            try await RunFileTransfer.receive(byteSize: file.byteSize, version: file.version, validate: {
+                guard owner == self.pairingOwner, current == self.generation, self.active, self.isConnected else { throw MainsError.changedBackend }
+            }, read: { offset in
+                try await self.atlasRead("atlas:readMobileFile", fields: ["reference": try .encode(file.reference), "version": .string(file.version), "offset": .number(Double(offset))]).decode(RunOutputChunk.self)
+            }, write: write, progress: progress)
+        }
+    }
+
     public func loadModels(_ providerID: String, force: Bool = false) async {
         guard let transport, isConnected, !loadingModels.contains(providerID), force || models[providerID] == nil else { return }
         let current = generation
@@ -1225,6 +1279,7 @@ public final class BackendSession {
     }
 
     private func event(_ channel: String, _ payload: JSONValue) {
+        if channel == "atlas:changed" { atlasRevision += 1; return }
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         if channel == "runs:realtimeEvent" {
             voice.receive(payload)

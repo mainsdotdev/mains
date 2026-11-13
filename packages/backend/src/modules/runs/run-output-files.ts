@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { constants, promises as fs, type Stats } from "node:fs";
+import { promises as fs, type Stats } from "node:fs";
 import path from "node:path";
-import { MOBILE_OUTPUT_MAX_BYTES, OUTPUT_CHUNK_BYTES, outputFileType, type RunFileDescriptor, type RunOutput, type RunOutputChunk, type ReadRunOutputPayload } from "@mains/contracts/run-outputs";
+import { MOBILE_OUTPUT_MAX_BYTES, outputFileType, type RunOutput, type RunOutputChunk, type ReadRunOutputPayload } from "@mains/contracts/run-outputs";
 import type { RunArtifactResponse } from "./runs.dto";
+import { readRunFileChunk } from "../../../shared/file-chunks";
+export { readRunFileChunk } from "../../../shared/file-chunks";
 
 const revision = (runId: string, id: number, reference: string, identity: unknown) => createHash("sha256").update(JSON.stringify([runId, id, reference, identity])).digest("hex");
 export function attachmentFileRevision(runId: string, attachmentId: string, stats: Stats): string {
@@ -37,21 +39,4 @@ export async function describeRunOutput(runId: string, artifact: RunArtifactResp
 /** An original file travels in bounded chunks, with revision and symlink checks on each read. */
 export async function readRunOutputChunk(output: RunOutput, sourcePath: string, request: ReadRunOutputPayload, replica: boolean): Promise<RunOutputChunk> {
   return readRunFileChunk(output, sourcePath, request, replica ? undefined : (stats) => revision(output.runId, output.artifactId, sourcePath, [stats.size, stats.mtimeMs, stats.ctimeMs, stats.ino, stats.dev]));
-}
-
-export async function readRunFileChunk(output: RunFileDescriptor, sourcePath: string, request: { offset: number; version: string }, fileRevision?: (stats: Stats) => string): Promise<RunOutputChunk> {
-  if (!Number.isSafeInteger(request.offset) || request.offset < 0 || request.offset > output.byteSize ||
-    typeof request.version !== "string" || request.version !== output.version) throw new Error("The output changed. Refresh the file and try again.");
-  if (await fs.realpath(sourcePath) !== sourcePath) throw new Error("Output file is unavailable");
-  const handle = await fs.open(sourcePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const before = await handle.stat();
-    if (!before.isFile() || before.size !== output.byteSize || fileRevision && fileRevision(before) !== output.version) throw new Error("The file changed. Refresh the file and try again.");
-    const buffer = Buffer.alloc(Math.min(OUTPUT_CHUNK_BYTES, output.byteSize - request.offset));
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, request.offset);
-    const after = await handle.stat();
-    if (before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.size !== after.size || bytesRead !== buffer.length) throw new Error("The output changed while downloading. Try again.");
-    const next = request.offset + bytesRead;
-    return { offset: request.offset, nextOffset: next < output.byteSize ? next : null, byteSize: output.byteSize, version: output.version, base64: buffer.subarray(0, bytesRead).toString("base64") };
-  } finally { await handle.close(); }
 }

@@ -184,7 +184,7 @@ async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeo
   }
   return [...new Map(result.map((item) => [item.sourceKey, item])).values()];
 }
-async function generatedForRun(runId: string, accountId: string, hashImages = true): Promise<AtlasGeneratedFile[]> {
+export async function generatedForRun(runId: string, accountId: string, hashImages = true): Promise<AtlasGeneratedFile[]> {
   const context = await runContext(runId, accountId);
   const { run, runsService, roots, attachments } = context;
   // Generated discovery walks this backend's execution folders.
