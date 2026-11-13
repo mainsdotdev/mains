@@ -355,7 +355,15 @@ async function* libraryEntries(options: AtlasLibraryOptions, query: string) {
 export const atlasService = {
   async saveBookmark(input: AtlasSaveBookmark, validate?: () => void) { return format(await atlasBookmarks.save(input, validate)); },
   async enrichBookmark(input: AtlasIdentity) { return format(await atlasBookmarks.enrich(identity(input))); },
-  listTags(input: { accountId: string }) { return atlasRepo.listTags(required(input?.accountId, "Account")); },
+  listTags(input: { accountId: string; query?: string; offset?: number; limit?: number }) {
+    const accountId = required(input?.accountId, "Account");
+    if (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 64)
+      || input.offset !== undefined && (!Number.isSafeInteger(input.offset) || input.offset < 0)
+      || input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 1000)) throw new Error("Invalid tag search or pagination");
+    const bounded = input.query !== undefined || input.offset !== undefined || input.limit !== undefined;
+    return atlasRepo.listTags(accountId, bounded ? { query: (input.query ?? "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase(),
+      offset: input.offset ?? 0, limit: input.limit ?? 50 } : undefined);
+  },
   renameTag(input: AtlasIdentity & { name: string }) {
     const { id, accountId } = identity(input);
     const [name] = validateTagInputs([input.name]);

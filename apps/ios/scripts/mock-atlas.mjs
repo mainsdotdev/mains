@@ -2,7 +2,12 @@ import { CHANNELS } from '../../../packages/contracts/src/channels.ts';
 import { createHash } from 'node:crypto';
 
 const saved = new Map(), sources = new Map(), edits = new Map();
-export function resetAtlasFixture() { saved.clear(); sources.clear(); edits.clear(); }
+const initialTags = () => [['fixture-tag-research', 'Research'], ['fixture-tag-work', 'Work']];
+const tags = new Map(initialTags());
+export function resetAtlasFixture() { saved.clear(); sources.clear(); edits.clear(); tags.clear(); for (const [id, name] of initialTags()) tags.set(id, name); }
+const normalizeTag = name => name.normalize('NFKC').trim().replace(/\s+/g, ' ');
+const tagDocument = (row, accountId) => ({ id: row.key, requestedId: row.key, title: row.title, kind: row.kind, tags: row.tags,
+  revision: createHash('sha256').update(JSON.stringify([accountId, row.key, [...row.tags].sort((a, b) => a.id.localeCompare(b.id))])).digest('hex') });
 
 /** Prepared Atlas responses and memory-only saves; no user library access. */
 export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase64, version }) {
@@ -16,13 +21,38 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
     pageId: index === 0 ? 'fixture-atlas-page' : index > 3 ? `fixture-atlas-page-${index}` : null,
     icon: index === 0 ? 'emoji:🗺️' : null, url: index === 3 ? 'https://example.com' : null,
     description: index === 3 ? 'A saved bookmark' : null, note: null,
+    tags: [0, 3].includes(index) ? [{ id: 'fixture-tag-research', name: 'Research', source: 'user' }] : index === 1 ? [{ id: 'fixture-tag-work', name: 'Work', source: 'user' }] : [],
   }));
   rows.push(...saved.values());
   for (const row of rows) {
     Object.assign(row, edits.get(row.key));
+    row.tags ??= [];
     row.savedItemId = row.key; row.savedCollectionId = row.collectionId;
   }
   switch (channel) {
+    case CHANNELS.atlas.mobileTags: {
+      const search = normalizeTag(input.query ?? '').toLowerCase(), page = input.page ?? 1;
+      const rowsOfTags = [...tags].filter(([, name]) => name.toLowerCase().includes(search)).sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([id, name]) => ({ id, name, count: rows.filter(row => !row.trashedAt && row.tags.some(tag => tag.id === id)).length }));
+      return { items: rowsOfTags.slice((page - 1) * 50, page * 50), page, hasNext: page * 50 < rowsOfTags.length };
+    }
+    case CHANNELS.atlas.readMobileTags:
+    case CHANNELS.atlas.setMobileTags: {
+      const row = rows.find(row => row.key === input.id && !row.trashedAt);
+      if (!row) throw new Error('Atlas item not found or in Trash');
+      const current = tagDocument(row, input.accountId);
+      if (channel === CHANNELS.atlas.readMobileTags) return current;
+      if (input.expectedRevision !== current.revision) throw new Error('These tags changed elsewhere. Reload them before saving your edits.');
+      if (!Array.isArray(input.tags) || input.tags.length > 30 || input.tags.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 64 || /\p{Cc}/u.test(tag))) throw new Error('Invalid tags');
+      const selected = new Map();
+      for (const value of input.tags) {
+        const name = normalizeTag(value), id = tags.has(value) ? value : [...tags].find(([, old]) => normalizeTag(old).toLowerCase() === name.toLowerCase())?.[0] ?? `fixture-tag-${tags.size}`;
+        if (!tags.has(id)) tags.set(id, name);
+        selected.set(id, { id, name: tags.get(id), source: row.tags.find(tag => tag.id === id)?.source ?? 'user' });
+      }
+      edits.set(row.key, { ...edits.get(row.key), tags: [...selected.values()] });
+      const result = tagDocument({ ...row, tags: [...selected.values()] }, input.accountId); delete result.tags; return result;
+    }
     case CHANNELS.atlas.mobileTrash: {
       const trashed = rows.filter(row => row.trashedAt).sort((left, right) => right.trashedAt.localeCompare(left.trashedAt) || right.key.localeCompare(left.key));
       const page = input.page ?? 1;
@@ -82,9 +112,9 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
       const item = saved.get(key); return { id: key, title: item.title, kind: item.kind };
     }
     case CHANNELS.atlas.mobileLibrary: {
-      const filtered = rows.filter(row => !row.trashedAt && (!input.type || input.type === 'all' || input.type === row.kind)
+      const filtered = rows.filter(row => !row.trashedAt && (!input.tagId || row.tags.some(tag => tag.id === input.tagId)) && (!input.type || input.type === 'all' || input.type === row.kind)
         && (!input.scope || input.scope === 'all' || input.scope === 'saved' || input.scope === 'favorites' && row.isFavorite)
-        && (!input.collectionId || row.collectionId === input.collectionId) && (!input.query || row.title.toLowerCase().includes(input.query.toLowerCase())));
+        && (!input.collectionId || row.collectionId === input.collectionId) && (!input.query || `${row.title} ${row.tags.map(tag => tag.name).join(' ')}`.toLowerCase().includes(input.query.toLowerCase())));
       const page = Math.max(1, Math.min(input.page ?? 1, Math.ceil(filtered.length / 50)));
       return { items: filtered.slice((page - 1) * 50, page * 50), page, hasNext: page * 50 < filtered.length };
     }

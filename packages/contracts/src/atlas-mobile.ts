@@ -1,4 +1,4 @@
-import type { AtlasKind, AtlasLibraryOptions } from "./atlas";
+import type { AtlasKind, AtlasLibraryOptions, AtlasItemTag, AtlasTag } from "./atlas";
 import type { OutputPreviewType } from "./run-outputs";
 
 /** Phone DTOs. Host paths and canonical Page blocks never travel here. */
@@ -23,6 +23,7 @@ export interface AtlasMobileEntry {
   url: string | null;
   description: string | null;
   note: string | null;
+  tags: AtlasItemTag[];
 }
 export interface AtlasMobileLibraryPage { items: AtlasMobileEntry[]; page: number; hasNext: boolean }
 export interface AtlasMobilePageRequest {
@@ -65,3 +66,9 @@ export interface AtlasMobileTrashItem extends AtlasMobileSavedItem { collectionI
 export interface AtlasMobileTrashPage { items: AtlasMobileTrashItem[]; page: number; hasNext: boolean }
 export interface AtlasMobileSetTrash { accountId: string; id: string; trashed: boolean }
 export interface AtlasMobileTrashState extends AtlasMobileSavedItem { requestedId: string; trashed: boolean }
+export interface AtlasMobileTagsOptions { accountId: string; query?: string; page?: number }
+export interface AtlasMobileTagsPage { items: AtlasTag[]; page: number; hasNext: boolean }
+export interface AtlasMobileItemTags extends AtlasMobileSavedItem { requestedId: string; tags: AtlasItemTag[]; revision: string }
+/** Existing account tag ids and new names, following the desktop's 30/64 limits. */
+export interface AtlasMobileSetTags extends AtlasMobileBookmarkIdentity { tags: string[]; expectedRevision: string }
+export interface AtlasMobileTagsResult extends AtlasMobileSavedItem { requestedId: string; revision: string }

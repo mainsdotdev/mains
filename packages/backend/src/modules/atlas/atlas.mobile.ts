@@ -4,7 +4,8 @@ import type { AtlasMobileEntry, AtlasMobileFile, AtlasMobileFileRead, AtlasMobil
   AtlasMobileLibraryOptions, AtlasMobileLibraryPage, AtlasMobilePage, AtlasMobilePageRequest,
   AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileSavedItem, AtlasMobileUpdateItem, AtlasMobileItemState,
   AtlasMobileBookmarkIdentity, AtlasMobileBookmark, AtlasMobileEditBookmark, AtlasMobileBookmarkEditResult,
-  AtlasMobileTrashOptions, AtlasMobileTrashPage, AtlasMobileSetTrash, AtlasMobileTrashState } from "@mains/contracts/atlas-mobile";
+  AtlasMobileTrashOptions, AtlasMobileTrashPage, AtlasMobileSetTrash, AtlasMobileTrashState,
+  AtlasMobileTagsOptions, AtlasMobileTagsPage, AtlasMobileItemTags, AtlasMobileSetTags, AtlasMobileTagsResult } from "@mains/contracts/atlas-mobile";
 import { MOBILE_OUTPUT_MAX_BYTES, outputFileType, type RunOutputChunk } from "@mains/contracts/run-outputs";
 import { readRunFileChunk } from "../../../shared/file-chunks";
 import { atlasService, generatedForRun } from "./atlas.service";
@@ -28,6 +29,34 @@ const signature = (accountId: string, reference: AtlasMobileFileReference, stat:
   .update(JSON.stringify([accountId, reference, stat.size, stat.mtimeMs, stat.ctimeMs, stat.ino, stat.dev])).digest("hex");
 
 export const atlasMobile = {
+  tags(input: AtlasMobileTagsOptions): AtlasMobileTagsPage {
+    const accountId = required(input?.accountId), page = input.page ?? 1;
+    if (!Number.isSafeInteger(page) || page < 1 || page > 100_000) throw new Error("Invalid tag page");
+    const rows = atlasService.listTags({ accountId, query: input.query ?? "", offset: (page - 1) * 50, limit: 51 });
+    return { items: rows.slice(0, 50), page, hasNext: rows.length > 50 };
+  },
+
+  readTags(input: AtlasMobileBookmarkIdentity): AtlasMobileItemTags {
+    const accountId = required(input?.accountId), id = required(input?.id);
+    const item = atlasService.get({ accountId, id });
+    if (!item || item.trashedAt) throw new Error("Atlas item not found or in Trash");
+    const tags = item.tags ?? [];
+    if (tags.length > 60) throw new Error("This item has too many tags to edit on iPhone. Edit its tags on your computer.");
+    const revision = createHash("sha256").update(JSON.stringify([accountId, item.id,
+      tags.map(({ id, name, source }) => [id, name, source]).sort((a, b) => a[0].localeCompare(b[0]))])).digest("hex");
+    return { id: item.id, requestedId: id, kind: item.kind, title: item.title, tags, revision };
+  },
+
+  setTags(input: AtlasMobileSetTags): AtlasMobileTagsResult {
+    const accountId = required(input?.accountId), id = required(input?.id);
+    if (Object.keys(input).some((key) => !["accountId", "id", "tags", "expectedRevision"].includes(key))
+      || typeof input.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.expectedRevision)) throw new Error("Invalid tag change");
+    if (this.readTags({ accountId, id }).revision !== input.expectedRevision) throw new Error("These tags changed elsewhere. Reload them before saving your edits.");
+    // Both the revision check and the existing transactional tag writer are synchronous.
+    const item = atlasService.setTags({ accountId, id, tags: input.tags });
+    return { id: item.id, requestedId: id, title: item.title, kind: item.kind, revision: this.readTags({ accountId, id }).revision };
+  },
+
   trash(input: AtlasMobileTrashOptions): AtlasMobileTrashPage {
     const accountId = required(input?.accountId), page = input.page ?? 1;
     if (!Number.isSafeInteger(page) || page < 1 || page > 100_000) throw new Error("Invalid Trash page");
@@ -152,7 +181,7 @@ export const atlasMobile = {
         file: entry.kind === "file" || entry.kind === "image"
           ? saved ? { itemId: saved.id } : generated ? { runId: generated.runId, sourceKey: generated.sourceKey } : null : null,
         pageId: entry.kind === "page" ? saved?.id ?? null : null, icon: saved?.metadata?.icon ?? null,
-        url: saved?.url ?? null, description: saved?.description ?? null, note: saved?.note ?? null };
+        url: saved?.url ?? null, description: saved?.description ?? null, note: saved?.note ?? null, tags: (saved?.tags ?? []).slice(0, 60) };
     });
     return { items, page: result.page, hasNext: result.hasNext };
   },

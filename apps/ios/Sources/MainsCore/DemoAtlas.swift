@@ -6,6 +6,14 @@ import CryptoKit
     private var storedFiles: [String: DemoFile] = [:]
     private var sources: [String: String] = [:]
     private var edits: [String: [String: JSONValue]] = [:]
+    private var tagNames = ["demo-tag-research": "Research", "demo-tag-work": "Work"]
+
+    private func tagsDocument(_ row: JSONValue, account: JSONValue) throws -> JSONValue {
+        let tags = row["tags"].array.sorted { ($0["id"].string ?? "") < ($1["id"].string ?? "") }
+        let content: JSONValue = .array([account, row["key"], .array(tags.map { .array([$0["id"], $0["name"], $0["source"]]) })])
+        let revision = SHA256.hash(data: try JSONEncoder().encode(content)).map { String(format: "%02x", $0) }.joined()
+        return .object(["id": row["key"], "requestedId": row["key"], "title": row["title"], "kind": row["kind"], "tags": .array(tags), "revision": .string(revision)])
+    }
 
     func save(_ file: DemoFile, source: String, runID: String, collectionID: String?) throws -> JSONValue {
         if let id = sources[source], let row = saved[id] { edits[id, default: [:]]["trashedAt"] = .null; return summary(row) }
@@ -57,12 +65,43 @@ import CryptoKit
                 var value = row.objectValue
                 let id = row["key"].string ?? ""
                 if let patch = edits[id] { value.merge(patch) { _, new in new } }
+                if value["tags"] == nil {
+                    let tagID = ["demo-atlas-page", "demo-atlas-bookmark"].contains(id) ? "demo-tag-research" : id == "demo-atlas-doc" ? "demo-tag-work" : nil
+                    value["tags"] = .array(tagID.map { [.object(["id": .string($0), "name": .string(tagNames[$0]!), "source": .string("user")])] } ?? [])
+                }
                 value["savedItemId"] = row["origin"].string == "saved" ? .string(id) : .null
                 value["savedCollectionId"] = row["origin"].string == "saved" ? value["collectionId"] ?? .null : .null
                 return .object(value)
             }
         }
         switch channel {
+        case "atlas:mobileTags":
+            let requested = input["page"].number ?? 1
+            guard requested.isFinite, requested.rounded() == requested, (1...100_000).contains(requested) else { throw MainsError.invalidReply }
+            let search = (input["query"].string ?? "").precomposedStringWithCompatibilityMapping.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let rows = tagNames.filter { search.isEmpty || $0.value.lowercased().contains(search) }.sorted { $0.value.lowercased() < $1.value.lowercased() }
+            let page = Int(requested)
+            let items = rows.dropFirst((page - 1) * 50).prefix(50).map { tag in
+                JSONValue.object(["id": .string(tag.key), "name": .string(tag.value), "count": .number(Double(libraryRows().filter { $0["trashedAt"].string == nil && $0["tags"].array.contains { $0["id"].string == tag.key } }.count))])
+            }
+            return .object(["items": .array(items), "page": .number(requested), "hasNext": .bool(page * 50 < rows.count)])
+        case "atlas:readMobileTags", "atlas:setMobileTags":
+            guard let id = input["id"].string, let row = libraryRows().first(where: { $0["savedItemId"].string == id }), row["trashedAt"].string == nil else { throw MainsError.server("Atlas item not found or in Trash") }
+            let current = try tagsDocument(row, account: input["accountId"])
+            if channel == "atlas:readMobileTags" { return current }
+            guard input["expectedRevision"].string == current["revision"].string else { throw MainsError.server("These tags changed elsewhere. Reload them before saving your edits.") }
+            guard case .array(let values) = input["tags"], values.count <= 30, values.allSatisfy({ $0.string.flatMap(AtlasTagNames.normalized) != nil }) else { throw MainsError.server("Use up to 30 tags, each 64 characters or fewer.") }
+            var known = tagNames, tags: [JSONValue] = [], seen = Set<String>()
+            for value in values {
+                let text = value.string!, name = AtlasTagNames.normalized(text)!
+                let tagID = known[text] != nil ? text : known.first(where: { $0.value.precomposedStringWithCompatibilityMapping.lowercased() == name.lowercased() })?.key ?? UUID().uuidString.lowercased()
+                if known[tagID] == nil { known[tagID] = name }
+                if seen.insert(tagID).inserted { tags.append(.object(["id": .string(tagID), "name": .string(known[tagID]!), "source": row["tags"].array.first(where: { $0["id"].string == tagID })?["source"] ?? .string("user")])) }
+            }
+            tagNames = known; edits[id, default: [:]]["tags"] = .array(tags)
+            guard let updated = libraryRows().first(where: { $0["key"].string == id }) else { throw MainsError.invalidReply }
+            var result = try tagsDocument(updated, account: input["accountId"]).objectValue; result.removeValue(forKey: "tags")
+            return .object(result)
         case "atlas:mobileTrash":
             let requested = input["page"].number ?? 1
             guard requested.isFinite, requested.rounded() == requested, (1...100_000).contains(requested) else { throw MainsError.invalidReply }
@@ -137,7 +176,8 @@ import CryptoKit
                 (type == "all" || row["kind"].string == type)
                 && (scope == "all" || scope == "favorites" && row["isFavorite"].bool == true || scope == "saved" && row["origin"].string == "saved" || scope == "generated" && row["origin"].string == "generated")
                 && (input["collectionId"].string == nil || input["collectionId"].string == row["collectionId"].string)
-                && (query.isEmpty || (row["title"].string ?? "").localizedCaseInsensitiveContains(query))
+                && (input["tagId"].string == nil || row["tags"].array.contains { $0["id"].string == input["tagId"].string })
+                && (query.isEmpty || ((row["title"].string ?? "") + " " + row["tags"].array.compactMap { $0["name"].string }.joined(separator: " ")).localizedCaseInsensitiveContains(query))
             }
             let page = max(1, min(Int(input["page"].number ?? 1), max(1, (rows.count + 49) / 50)))
             return .object(["items": .array(Array(rows.dropFirst((page - 1) * 50).prefix(50))), "page": .number(Double(page)), "hasNext": .bool(page * 50 < rows.count)])

@@ -34,12 +34,15 @@ export const atlasRepo = {
     for (const { itemId, ...tag } of rows) result.set(itemId, [...(result.get(itemId) ?? []), tag]);
     return result;
   },
-  listTags(accountId: string): AtlasTag[] {
-    return getDb().select({ id: atlasTags.id, name: atlasTags.name,
+  listTags(accountId: string, options?: { query: string; offset: number; limit: number }): AtlasTag[] {
+    const query = getDb().select({ id: atlasTags.id, name: atlasTags.name,
       count: sql<number>`count(CASE WHEN ${atlasItems.trashedAt} IS NULL AND ${atlasItemTags.isExcluded}=0 THEN ${atlasItems.id} END)` })
       .from(atlasTags).leftJoin(atlasItemTags, eq(atlasTags.id, atlasItemTags.tagId))
       .leftJoin(atlasItems, and(eq(atlasItems.id, atlasItemTags.itemId), eq(atlasItems.accountId, accountId)))
-      .where(eq(atlasTags.accountId, accountId)).groupBy(atlasTags.id).orderBy(atlasTags.normalizedName).all();
+      .where(and(eq(atlasTags.accountId, accountId), options?.query ? sql`instr(${atlasTags.normalizedName}, ${options.query}) > 0` : undefined))
+      .groupBy(atlasTags.id).orderBy(atlasTags.normalizedName, atlasTags.id).$dynamic();
+    if (options) query.offset(options.offset).limit(options.limit);
+    return query.all();
   },
   /** Names and ids both resolve within this account. User removal records an
    * exclusion, so another enrichment cannot resurrect that relationship. */

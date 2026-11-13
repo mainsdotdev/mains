@@ -37,6 +37,8 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.atlas.readMobileFile,
   CHANNELS.atlas.readMobileBookmark,
   CHANNELS.atlas.mobileTrash,
+  CHANNELS.atlas.mobileTags,
+  CHANNELS.atlas.readMobileTags,
   CHANNELS.runs.getAll,
   CHANNELS.runs.listActive,
   CHANNELS.runs.listRecent,
@@ -95,12 +97,13 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
  * control loop's verbs — answer a request or a question, continue or steer a
  * run, start one, branch one, stop one — plus the picker writes the composer
  * needs, plus narrow saves of existing conversation files/bookmark URLs into
- * Atlas and organizing permanent Atlas favorites/projects/Trash. Arbitrary filesystem
- * paths, git, terminal and general settings stay out.
+ * Atlas and organizing permanent Atlas favorites, projects, tags and Trash.
+ * Arbitrary filesystem paths, git, terminal and general settings stay out.
  */
 export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   CHANNELS.atlas.updateMobileItem,
   CHANNELS.atlas.setMobileTrash,
+  CHANNELS.atlas.setMobileTags,
   CHANNELS.atlas.editMobileBookmark,
   CHANNELS.atlas.saveMobileFile,
   CHANNELS.atlas.saveMobileBookmark,

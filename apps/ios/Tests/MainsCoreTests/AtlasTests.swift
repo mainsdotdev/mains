@@ -3,6 +3,25 @@ import Testing
 @testable import MainsCore
 
 @Suite struct AtlasTests {
+    @Test(arguments: ["atlas:mobileTags", "atlas:readMobileTags"]) @MainActor func tagReadsRetiredByReconnectionCannotReturnToTheNewConnection(channel: String) async throws {
+        let backend = try DemoBackend(), probe = AtlasProbe()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { probe.release(); session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        probe.hold = channel
+        let read = Task {
+            if channel == "atlas:mobileTags" { _ = try await session.atlasTags() }
+            else { _ = try await session.readAtlasTags("demo-atlas-page") }
+        }
+        try await eventually { probe.held != nil }
+        session.setActive(false); session.setActive(true)
+        try await eventually { session.isConnected }
+        probe.release()
+        await #expect(throws: MainsError.self) { try await read.value }
+        #expect(try await session.readAtlasTags("demo-atlas-page").tags.count == 1)
+    }
+
     @Test @MainActor func demoLibraryFiltersAndReadsWithoutChangingTheConversationOrDiskSnapshot() async throws {
         let storage = MemoryStorage()
         let backend = try DemoBackend()

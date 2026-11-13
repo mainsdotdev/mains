@@ -4,12 +4,14 @@ public struct AtlasQuery: Equatable, Hashable, Sendable {
     public var type = "all"
     public var scope = "all"
     public var collectionID: String?
+    public var tagID: String?
     public var text = ""
     public var page = 1
     public init() {}
     var payload: [String: JSONValue] {
         var value: [String: JSONValue] = ["type": .string(type), "scope": .string(scope), "query": .string(String(text.prefix(512))), "page": .number(Double(page))]
         if let collectionID { value["collectionId"] = .string(collectionID) }
+        if let tagID { value["tagId"] = .string(tagID) }
         return value
     }
 }
@@ -39,6 +41,7 @@ public struct AtlasEntry: Decodable, Identifiable, Sendable {
     public let url: String?
     public let description: String?
     public let note: String?
+    public let tags: [AtlasTag]?
     public var savedIdentity: String? {
         savedItemId ?? pageId ?? file?.itemId ?? (kind == "bookmark" && origin == "saved" ? key : nil)
     }
@@ -46,6 +49,31 @@ public struct AtlasEntry: Decodable, Identifiable, Sendable {
     public var webURL: URL? {
         guard let url, let value = URL(string: url), ["http", "https"].contains(value.scheme?.lowercased() ?? ""), value.host != nil else { return nil }
         return value
+    }
+}
+public struct AtlasTag: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public init(id: String, name: String) { self.id = id; self.name = name }
+}
+public struct AtlasTagPage: Decodable, Sendable {
+    public let items: [AtlasTag]
+    public let page: Int
+    public let hasNext: Bool
+}
+public struct AtlasItemTags: Decodable, Sendable {
+    public let id: String
+    public let requestedId: String
+    public let title: String
+    public let kind: String
+    public let tags: [AtlasTag]
+    public let revision: String
+}
+public enum AtlasTagNames {
+    public static func normalized(_ text: String) -> String? {
+        guard text.utf16.count <= 64, !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+        let value = text.precomposedStringWithCompatibilityMapping.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return !value.isEmpty && value.utf16.count <= 64 ? value : nil
     }
 }
 public struct AtlasLibraryPage: Decodable, Sendable {

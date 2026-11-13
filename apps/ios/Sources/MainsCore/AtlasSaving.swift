@@ -33,7 +33,8 @@ public struct PendingAtlasSave: Sendable {
     public var id: String { commandID }
     public var isBookmarkEdit: Bool { channel == "atlas:editMobileBookmark" }
     public var isTrashChange: Bool { channel == "atlas:setMobileTrash" }
-    public var isUpdate: Bool { channel == "atlas:updateMobileItem" || isBookmarkEdit || isTrashChange }
+    public var isTagsChange: Bool { channel == "atlas:setMobileTags" }
+    public var isUpdate: Bool { channel == "atlas:updateMobileItem" || isBookmarkEdit || isTrashChange || isTagsChange }
 }
 
 public enum AtlasBookmarkURL {

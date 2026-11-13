@@ -768,11 +768,40 @@ public final class BackendSession {
 
     public func atlasLibrary(_ query: AtlasQuery) async throws -> AtlasLibraryPage {
         let result = try await atlasRead("atlas:mobileLibrary", fields: query.payload).decode(AtlasLibraryPage.self)
-        guard result.items.count <= 50, (1...100_000).contains(result.page), Set(result.items.map(\.key)).count == result.items.count else { throw MainsError.invalidReply }
+        guard result.items.count <= 50, (1...100_000).contains(result.page), Set(result.items.map(\.key)).count == result.items.count,
+              result.items.allSatisfy({ validAtlasTags($0.tags ?? [], limit: 60) }) else { throw MainsError.invalidReply }
         return result
     }
 
     public var canSaveToAtlas: Bool { active && isConnected && pendingAtlasSave == nil }
+
+    private func validAtlasTags(_ tags: [AtlasTag], limit: Int) -> Bool {
+        tags.count <= limit && Set(tags.map(\.id)).count == tags.count && tags.allSatisfy {
+            !$0.id.isEmpty && $0.id.utf8.count <= 256 && !$0.name.isEmpty && $0.name.utf16.count <= 256
+        }
+    }
+
+    public func atlasTags(query: String = "", page: Int = 1) async throws -> AtlasTagPage {
+        guard (1...100_000).contains(page), query.utf16.count <= 64 else { throw MainsError.invalidReply }
+        let result = try await atlasRead("atlas:mobileTags", fields: ["query": .string(query), "page": .number(Double(page))]).decode(AtlasTagPage.self)
+        guard result.page == page, validAtlasTags(result.items, limit: 50) else { throw MainsError.invalidReply }
+        return result
+    }
+
+    public func readAtlasTags(_ id: String) async throws -> AtlasItemTags {
+        let result = try await atlasRead("atlas:readMobileTags", fields: ["id": .string(id)]).decode(AtlasItemTags.self)
+        guard result.id == id, result.requestedId == id, result.title.utf8.count <= 4096,
+              ["page", "file", "image", "bookmark"].contains(result.kind), validAtlasTags(result.tags, limit: 60),
+              result.revision.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw MainsError.invalidReply }
+        return result
+    }
+
+    public func setAtlasTags(_ original: AtlasItemTags, tags: [AtlasTag], owner: Int) async throws -> AtlasSavedItem {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        guard validAtlasTags(tags, limit: 30), tags.allSatisfy({ $0.id.utf16.count <= 64 }) else { throw MainsError.server("Use up to 30 tags, each 64 characters or fewer.") }
+        return try await beginAtlasSave("atlas:setMobileTags", fields: ["id": .string(original.id), "expectedRevision": .string(original.revision),
+            "tags": .array(tags.map { .string($0.id) })], label: original.title)
+    }
 
     public func atlasTrash(page: Int = 1) async throws -> AtlasTrashPage {
         guard (1...100_000).contains(page) else { throw MainsError.invalidReply }
@@ -868,8 +897,8 @@ public final class BackendSession {
             guard !item.id.isEmpty, item.id.utf8.count <= 256,
                   validKind,
                   item.title.utf8.count <= 4096 else { throw MainsError.invalidReply }
-            if attempt.isBookmarkEdit {
-                guard item.kind == "bookmark", value["requestedId"] == attempt.payload["id"],
+            if attempt.isBookmarkEdit || attempt.isTagsChange {
+                guard (!attempt.isBookmarkEdit || item.kind == "bookmark"), value["requestedId"] == attempt.payload["id"],
                       value["revision"].string?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw MainsError.invalidReply }
             } else if attempt.isTrashChange {
                 guard value["requestedId"] == attempt.payload["id"], value["trashed"] == attempt.payload["trashed"] else { throw MainsError.invalidReply }

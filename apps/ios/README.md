@@ -212,6 +212,19 @@ underlying tooling.
 
 ## Current scope
 
+- Atlas rows show their saved item's tags. **Edit tags** in a row's long-press
+  menu loads a fresh selection; choose existing tags, remove them or add a new
+  name, then **Save**. Names reuse the desktop's normalization and duplicate
+  handling, with up to 30 selected tags and 64 UTF-16 units per new name.
+  **Filter → Tag…** opens a searchable, paginated tag picker; **All tags** or
+  **Reset** clears that filter. `atlas:mobileTags` reads 50 catalogue entries at
+  a time, `atlas:readMobileTags` reads only the saved item's tags/revision, and
+  receipt-backed `atlas:setMobileTags` changes only tags. Stale selections refuse
+  without losing the draft; **Discard edits and reload** reads the new selection.
+  Unconfirmed changes reuse **Check change**, including after navigation or
+  reconnection, without replacing newer metadata with an old receipt. User
+  removals retain the desktop's exclusions against later automatic tagging.
+  Unsaved projections must be saved first. Demo uses only in-memory tags.
 - Saved Pages, documents, images and bookmarks support **Move to Trash** from
   the row's long-press menu or swipe actions. Atlas's **Trash** button opens a
   separate paginated list with **Restore** for each item. Restoring preserves

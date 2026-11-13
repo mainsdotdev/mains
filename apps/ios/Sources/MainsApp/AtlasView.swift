@@ -23,8 +23,12 @@ struct AtlasView: View {
     @State private var bookmarkEdit: AtlasBookmarkEditSelection?
     @State private var showingTrash = false
     @State private var trashOwner = 0
+    @State private var tagEdit: AtlasTagEditSelection?
+    @State private var showingTagFilter = false
+    @State private var tagFilterOwner = 0
+    @State private var activeTag: AtlasTag?
     private var canOrganize: Bool { libraryOwner == session.ownership && session.canSaveToAtlas }
-    private var filter: String { "\(query.type):\(query.scope):\(query.collectionID ?? ""):\(query.text)" }
+    private var filter: String { "\(query.type):\(query.scope):\(query.collectionID ?? ""):\(query.tagID ?? ""):\(query.text)" }
     private var loadKey: String { "\(query.hashValue):\(session.connection):\(session.atlasRevision):\(reload)" }
 
     var body: some View {
@@ -52,18 +56,20 @@ struct AtlasView: View {
                             Text("All projects").tag(String?.none)
                             ForEach(session.collections) { Text($0.name).tag(Optional($0.id)) }
                         }
+                        Button("Tag…", systemImage: "tag") { tagFilterOwner = session.ownership; showingTagFilter = true }
                     } label: {
-                        Label(query.scope == "all" && query.collectionID == nil ? "Filter" : "Filtered", systemImage: "line.3.horizontal.decrease")
+                        Label(query.scope == "all" && query.collectionID == nil && query.tagID == nil ? "Filter" : "Filtered", systemImage: "line.3.horizontal.decrease")
                             .frame(minHeight: 44)
                     }.accessibilityIdentifier("atlasFilters")
                     Spacer()
-                    if query.scope != "all" || query.collectionID != nil {
-                        Button("Reset") { query.scope = "all"; query.collectionID = nil }
+                    if query.scope != "all" || query.collectionID != nil || query.tagID != nil {
+                        Button("Reset") { query.scope = "all"; query.collectionID = nil; query.tagID = nil; activeTag = nil }
                     }
                 }
-                if query.scope != "all" || query.collectionID != nil {
+                if query.scope != "all" || query.collectionID != nil || query.tagID != nil {
                     Text([atlasScopes.first(where: { $0.0 == query.scope })?.1,
-                          session.collections.first(where: { $0.id == query.collectionID })?.name].compactMap { $0 }.joined(separator: " · "))
+                          session.collections.first(where: { $0.id == query.collectionID })?.name,
+                          activeTag.map { "#" + $0.name }].compactMap { $0 }.joined(separator: " · "))
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }.listRowBackground(Color.clear).listRowSeparator(.hidden)
@@ -97,6 +103,9 @@ struct AtlasView: View {
                                 Button(entry.isFavorite ? "Remove from favorites" : "Add to favorites", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
                                     .disabled(!canOrganize)
                                 Button("Move to project", systemImage: "folder") { move(entry) }.disabled(!canOrganize)
+                                Button("Edit tags", systemImage: "tag") {
+                                    if let id = entry.savedIdentity, let owner = libraryOwner { tagEdit = AtlasTagEditSelection(itemID: id, owner: owner) }
+                                }.disabled(!canOrganize)
                                 Button("Move to Trash", systemImage: "trash", role: .destructive) { trash(entry) }.disabled(!canOrganize)
                             }
                             if let id = entry.sourceRunId { Button("Open source chat", systemImage: "bubble.left") { openConversation(id) } }
@@ -151,6 +160,13 @@ struct AtlasView: View {
         .sheet(item: $moveSelection) { MoveAtlasItemView(session: session, selection: $0) }
         .sheet(item: $bookmarkEdit) { AtlasBookmarkEditor(session: session, selection: $0, onSaved: { reload += 1 }) }
         .sheet(isPresented: $showingTrash) { AtlasTrashView(session: session, owner: trashOwner) }
+        .sheet(item: $tagEdit) { AtlasTagsEditor(session: session, selection: $0) }
+        .sheet(isPresented: $showingTagFilter) {
+            AtlasTagFilterView(session: session, owner: tagFilterOwner, selected: activeTag) { tag in
+                activeTag = tag; query.tagID = tag?.id
+            }
+        }
+        .onChange(of: session.ownership) { _, _ in query.tagID = nil; activeTag = nil }
         .alert("Couldn’t update item", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) { Button("OK", role: .cancel) {} } message: { Text(editError ?? "") }
     }
     private func favorite(_ entry: AtlasEntry) {
@@ -210,6 +226,10 @@ private struct AtlasEntryRow: View {
                 }
                 Text([entry.origin == "saved" ? "Saved to Atlas" : entry.origin == "attachment" ? "Uploaded" : "Generated", project].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                if let tags = entry.tags, !tags.isEmpty {
+                    Text(tags.map { "#" + $0.name }.joined(separator: "  ")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        .accessibilityLabel("Tags: " + tags.map(\.name).joined(separator: ", "))
+                }
                 if let date = ISO8601DateFormatter.atlasDate(entry.date) { Text(date, style: .relative).font(.caption2).foregroundStyle(.secondary) }
             }.frame(maxWidth: .infinity, alignment: .leading)
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).padding(.top, 7)

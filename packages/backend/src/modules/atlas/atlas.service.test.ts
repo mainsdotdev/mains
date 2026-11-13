@@ -8,7 +8,7 @@ import { createTestDb } from "../../../test/setup-db";
 import { createAccount, createRun, createRunArtifact, createToolCall } from "../../../test/factories";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import type { DatabaseInstance } from "../../db/types";
-import { atlasItems, atlasPageRevisions, collections, runAttachmentRefs, runAttachments, runs } from "../../db/schema";
+import { atlasItems, atlasPageRevisions, atlasTags, atlasItemTags, collections, runAttachmentRefs, runAttachments, runs } from "../../db/schema";
 import { ownershipOf } from "../bridge/bridge.ownership";
 import { HISTORY_CHECKPOINTS } from "./atlas.history";
 import { atlasRepo } from "./atlas.repo";
@@ -290,6 +290,98 @@ function output(name = "report.pdf", runId = "conversation", mode: "work" | "dev
   return file;
 }
 describe("Atlas phone library", { timeout: 15000 }, () => {
+  it.each(["page", "file", "image", "bookmark"] as const)("shows, creates and removes phone tags on a saved %s without changing content or source context", async (kind) => {
+    createRun(db, { id: "tag-conversation", mode: "work" });
+    atlasRepo.insert({ id: "tag-item", accountId: "default", kind, title: "Keep title", sourceRunId: "tag-conversation", isFavorite: true,
+      version: 4, url: kind === "bookmark" ? "https://example.com" : null, description: "Keep description", note: "Keep note" });
+    const identity = { accountId: "default", id: "tag-item" };
+    atlasRepo.setTags(identity.id, identity.accountId, ["Work", "AI suggestion"], "ai");
+    const before = atlasMobile.readTags(identity), work = before.tags.find(tag => tag.name === "Work")!;
+    const result = atlasMobile.setTags({ ...identity, expectedRevision: before.revision, tags: [work.id, "New topic", "Ｗｏｒｋ"] });
+    const current = atlasMobile.readTags(identity);
+    expect(current.tags).toEqual(expect.arrayContaining([{ ...work, source: "ai" }, expect.objectContaining({ name: "New topic", source: "user" })]));
+    expect(current.tags).toHaveLength(2);
+    expect(result).toEqual({ id: identity.id, requestedId: identity.id, title: "Keep title", kind, revision: current.revision });
+    const library = await atlasMobile.library({ accountId: "default", scope: "saved", tagId: work.id });
+    expect(library.items.map(row => row.savedItemId)).toEqual([identity.id]);
+    expect(library.items[0].tags).toEqual(current.tags);
+    expect(atlasService.get(identity)).toMatchObject({ title: "Keep title", sourceRunId: "tag-conversation", isFavorite: true, version: 4, description: "Keep description", note: "Keep note" });
+    expect(JSON.stringify(current)).not.toMatch(/"(path|blocks|markdown|metadata|note|url)":/);
+    atlasMobile.setTags({ ...identity, expectedRevision: current.revision, tags: [] });
+    expect((await atlasMobile.library({ accountId: "default", tagId: work.id })).items).toEqual([]);
+    atlasRepo.setTags(identity.id, identity.accountId, ["Work", "AI suggestion"], "ai");
+    expect(atlasMobile.readTags(identity).tags).toEqual([]);
+    expect(atlasService.listTags({ accountId: "default" })).toHaveLength(3);
+  });
+
+  it("bounds a large merged tag selection without silently replacing hidden tags", async () => {
+    atlasRepo.insert({ id: "merged-tags", accountId: "default", kind: "page", title: "Merged Page" });
+    for (let index = 0; index < 61; index++) {
+      const id = `merged-tag-${index}`, name = `Tag ${String(index).padStart(2, "0")}`;
+      db.insert(atlasTags).values({ id, accountId: "default", name, normalizedName: name.toLowerCase() }).run();
+      db.insert(atlasItemTags).values({ itemId: "merged-tags", tagId: id, source: "user" }).run();
+    }
+    expect((await atlasMobile.library({ accountId: "default" })).items[0].tags).toHaveLength(60);
+    expect(() => atlasMobile.readTags({ accountId: "default", id: "merged-tags" })).toThrow("too many tags");
+    expect(atlasService.get({ accountId: "default", id: "merged-tags" })?.tags).toHaveLength(61);
+  });
+
+  it("keeps the phone tag catalogue bounded, searchable and scoped to the account", async () => {
+    createAccount(db, { id: "tag-foreign" });
+    for (const [id, accountId] of [["one", "default"], ["two", "default"], ["private", "tag-foreign"]]) atlasRepo.insert({ id, accountId, kind: "page", title: id });
+    const names = Array.from({ length: 55 }, (_, index) => `Topic ${String(index).padStart(2, "0")}`);
+    atlasRepo.setTags("one", "default", names.slice(0, 30), "user");
+    atlasRepo.setTags("two", "default", names.slice(30), "user");
+    atlasRepo.setTags("private", "tag-foreign", ["Private"], "user");
+    await atlasService.update({ accountId: "default", id: "two", trashed: true });
+    const first = atlasMobile.tags({ accountId: "default" }), second = atlasMobile.tags({ accountId: "default", page: 2 });
+    expect(first.items).toHaveLength(50); expect(first.hasNext).toBe(true);
+    expect(second.items).toHaveLength(5); expect(second.hasNext).toBe(false);
+    expect([...first.items, ...second.items].map(tag => tag.name)).toEqual(names);
+    expect(first.items[0].count).toBe(1); expect(second.items[0].count).toBe(0);
+    expect(atlasMobile.tags({ accountId: "default", query: "ＴＯＰＩＣ ０" }).items).toHaveLength(10);
+    expect(atlasMobile.tags({ accountId: "default", query: "%" }).items).toEqual([]);
+    expect(atlasMobile.tags({ accountId: "default", page: 3 }).items).toEqual([]);
+    for (const page of [0, -1, 1.5, 100001]) expect(() => atlasMobile.tags({ accountId: "default", page })).toThrow();
+    expect(() => atlasMobile.tags({ accountId: "default", query: "x".repeat(65) })).toThrow();
+  });
+
+  it("refuses stale phone tag edits after another device or enrichment changes them, without creating orphan tags", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Original", markdown: "Keep body" });
+    const identity = { accountId: "default", id: page.item.id };
+    atlasService.setTags({ ...identity, tags: ["Research"] });
+    const before = atlasMobile.readTags(identity);
+    await atlasService.update({ ...identity, isFavorite: true });
+    expect(atlasMobile.readTags(identity).revision).toBe(before.revision);
+    atlasService.renameTag({ accountId: "default", id: before.tags[0].id, name: "Renamed elsewhere" });
+    expect(() => atlasMobile.setTags({ ...identity, expectedRevision: before.revision, tags: ["Unsent new tag"] })).toThrow("changed elsewhere");
+    expect(atlasService.listTags({ accountId: "default" }).map(tag => tag.name)).toEqual(["Renamed elsewhere"]);
+    const fresh = atlasMobile.readTags(identity);
+    atlasRepo.setTags(identity.id, "default", ["Enriched"], "ai");
+    expect(() => atlasMobile.setTags({ ...identity, expectedRevision: fresh.revision, tags: [] })).toThrow("changed elsewhere");
+    expect(atlasService.getPage(identity)?.revision.markdown).toContain("Keep body");
+  });
+
+  it("rejects foreign, trashed or generated-only tag targets and refuses fields beyond tags", async () => {
+    createAccount(db, { id: "tag-other" });
+    atlasRepo.insert({ id: "tag-active", accountId: "default", kind: "page", title: "Active" });
+    atlasRepo.insert({ id: "tag-other-item", accountId: "tag-other", kind: "page", title: "Private" });
+    atlasService.setTags({ accountId: "tag-other", id: "tag-other-item", tags: ["Private tag"] });
+    const identity = { accountId: "default", id: "tag-active" }, revision = atlasMobile.readTags(identity).revision;
+    const foreignTag = atlasService.listTags({ accountId: "tag-other" })[0].id;
+    expect(() => atlasMobile.setTags({ ...identity, expectedRevision: revision, tags: ["Roll back creation", foreignTag] })).toThrow("different account");
+    expect(atlasService.listTags({ accountId: "default" })).toEqual([]);
+    for (const tags of [null, [false], [""], ["a\nb"], ["😀".repeat(33)], Array(31).fill("Tag")])
+      expect(() => atlasMobile.setTags({ ...identity, expectedRevision: revision, tags } as never)).toThrow();
+    for (const field of ["title", "path", "isFavorite", "collectionId", "trashed", "metadata"])
+      expect(() => atlasMobile.setTags({ ...identity, expectedRevision: revision, tags: ["Tag"], [field]: true } as never)).toThrow("Invalid");
+    for (const id of ["tag-other-item", "generated-only"])
+      expect(() => atlasMobile.readTags({ accountId: "default", id })).toThrow("not found");
+    await atlasService.update({ ...identity, trashed: true });
+    expect(() => atlasMobile.setTags({ ...identity, expectedRevision: revision, tags: ["Tag"] })).toThrow("Trash");
+    expect(atlasService.get(identity)?.title).toBe("Active");
+  });
+
   it.each(["page", "file", "image", "bookmark"] as const)("moves a saved %s to Trash and restores it idempotently without losing metadata", async (kind) => {
     db.insert(collections).values({ id: "trash-project", accountId: "default", name: "Research" }).run();
     atlasRepo.insert({ id: "trash-item", accountId: "default", kind, title: "Keep title", collectionId: "trash-project", isFavorite: true, version: 4 });
