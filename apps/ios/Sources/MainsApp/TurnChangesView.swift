@@ -27,8 +27,10 @@ struct TurnChangesCard: View {
                     DiffCounts(additions: changes.additions, deletions: changes.deletions)
                 }.padding(14)
                     .background {
-                        Rectangle().fill(Color(.secondarySystemBackground))
-                            .overlay(Color.black.opacity(scheme == .dark ? 0.3 : 0.06))
+                        let shape = UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 0,
+                                                           bottomTrailingRadius: 0, topTrailingRadius: 16)
+                        shape.fill(Color(.secondarySystemBackground))
+                            .overlay { shape.fill(Color.black.opacity(scheme == .dark ? 0.3 : 0.06)) }
                     }
                 Divider()
                 ForEach(Array((expanded ? changes.files : Array(changes.files.prefix(2))).enumerated()), id: \.offset) { _, file in

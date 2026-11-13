@@ -155,12 +155,11 @@ export function registerRunsIpc(): void {
     ),
   );
 
-  ipcMain.handle(
-    CHANNELS.runs.moveToCollection,
-    handle((payload: MoveRunToCollectionPayload) =>
-      runsService.moveRunToCollection(payload),
-    ),
-  );
+  const moveToCollection = handle((payload: MoveRunToCollectionPayload) => runsService.moveRunToCollection(payload));
+  ipcMain.handle(CHANNELS.runs.moveToCollection, async (ctx: IpcInvokeContext, payload: MoveRunToCollectionPayload) => {
+    const result = await moveToCollection(ctx, payload);
+    return ctx?.deviceId && result.success ? ok(runForPairedDevice(result.data)) : result;
+  });
 
   ipcMain.handle(
     CHANNELS.runs.setPinned,
@@ -187,15 +186,19 @@ export function registerRunsIpc(): void {
     handle((id: string) => runsService.cancelRun(id)),
   );
 
-  ipcMain.handle(
-    CHANNELS.runs.delete,
-    handle((id: string) => runsService.deleteRun(id)),
-  );
+  const deleteRun = handle((id: string) => runsService.deleteRun(id));
+  ipcMain.handle(CHANNELS.runs.delete, async (ctx: IpcInvokeContext, id: string) => {
+    const result = await deleteRun(ctx, id);
+    if (ctx?.deviceId && result.success) emit(CHANNELS.runs.updated, { runId: id, ts: Date.now() });
+    return result;
+  });
 
-  ipcMain.handle(
-    CHANNELS.runs.archive,
-    handle((id: string) => runsService.archiveRun(id)),
-  );
+  const archive = handle((id: string) => runsService.archiveRun(id));
+  ipcMain.handle(CHANNELS.runs.archive, async (ctx: IpcInvokeContext, id: string) => {
+    const result = await archive(ctx, id);
+    if (ctx?.deviceId && result.success) emit(CHANNELS.runs.updated, { runId: id, ts: Date.now() });
+    return ctx?.deviceId && result.success ? ok(runForPairedDevice(result.data)) : result;
+  });
 
   ipcMain.handle(
     CHANNELS.runs.unarchive,

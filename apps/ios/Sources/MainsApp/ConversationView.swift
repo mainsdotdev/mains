@@ -29,6 +29,8 @@ struct ConversationView: View {
     @State private var acceptedCount = 0
     @State private var modelSheet = false
     @State private var optionsSheet = false
+    @State private var projectSheet = false
+    @State private var confirmDelete = false
     @State private var companion = ConversationCompanionState()
     @State private var outputSelection: ConversationOutputSelection?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -146,6 +148,15 @@ struct ConversationView: View {
         .onChange(of: draft.text) { _, _ in companion.focusConversation() }
         .onChange(of: focusedVoice) { _, focused in if focused { companion.close(); outputSelection = nil } }
         .onChange(of: session.ownership) { _, _ in companion.close(); outputSelection = nil }
+        .sheet(isPresented: $projectSheet) {
+            ConversationProjectSheet(session: session, runID: runID, owner: owner ?? -1)
+        }
+        .confirmationDialog("Delete chat?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete chat", role: .destructive) { manage(.delete) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes the chat and its chat files. This can’t be undone.")
+        }
         .onDisappear { if selectedFile == nil { session.leaveConversation(runID) } }
         .navigationDestination(item: $selectedFile) { selection in
             TurnFileDiffView(session: session, selection: selection, close: { selectedFile = nil })
@@ -234,6 +245,22 @@ struct ConversationView: View {
                         Button(action: prepareFork) {
                             Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
                         }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
+                        if run?.mode == "work" || run?.mode == "chat" {
+                            Button("Move to project", systemImage: "folder") { projectSheet = true }
+                                .disabled(!session.canManageConversation(runID, action: .moveToProject(nil)))
+                                .accessibilityIdentifier("moveConversationToProject")
+                        }
+                        Divider()
+                        Button("Archive", systemImage: "archivebox") { manage(.archive) }
+                            .disabled(!session.canManageConversation(runID, action: .archive)).accessibilityIdentifier("archiveConversation")
+                        Button(role: .destructive) { confirmDelete = true } label: {
+                            Label { Text("Delete") } icon: {
+                                Image(uiImage: (UIImage(systemName: "trash") ?? UIImage())
+                                    .withTintColor(.systemRed, renderingMode: .alwaysOriginal))
+                                    .renderingMode(.original)
+                            }
+                        }
+                            .disabled(!session.canManageConversation(runID, action: .delete)).accessibilityIdentifier("deleteConversation")
                     } label: { Image(systemName: "ellipsis") }
                     .accessibilityLabel("Conversation options").accessibilityIdentifier("conversationOptions")
                 }
@@ -300,12 +327,12 @@ struct ConversationView: View {
                     .accessibilityIdentifier("archivedConversationNotice")
             } else if let context = composerContext {
                 MessageComposer(session: session, context: context, draft: draft,
-                    canSend: run != nil && session.pendingFork == nil && session.stoppingRunID != runID && (usesQueue ||
+                    canSend: run != nil && session.pendingConversationAction == nil && session.pendingFork == nil && session.stoppingRunID != runID && (usesQueue ||
                         session.isConnected && !uncertain && !session.sending && pending?.status != .accepted && !viewport.paging && run?.isActive != true),
                     active: run?.isActive == true, canSendDuringRun: run?.supportsSteering == true, sendLabel: sendLabel,
                     stopping: session.stoppingRunID == runID, stop: { Task { await stop() } },
                     model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend)
-                    .disabled(run == nil)
+                    .disabled(run == nil || session.pendingConversationAction.map { $0.runID == runID && $0.action.retiresConversation } == true)
             }
         }
         .padding(.top, 8).padding(.bottom, 8)
@@ -319,6 +346,22 @@ struct ConversationView: View {
             consentQueuesMessage = queued; consentResumesQueue = false; consentForksConversation = false
             consent = ConsentContext(backendID: backendID, providerID: run.providerId, isDemo: session.isDemo)
         } else { Task { await send(queued: queued) } }
+    }
+
+    private func manage(_ action: ConversationAction) {
+        guard owner == session.ownership, session.canManageConversation(runID, action: action) else { return }
+        let currentOwner = session.ownership
+        Task {
+            guard currentOwner == session.ownership else { return }
+            do { try await session.manageConversation(runID, action: action) }
+            catch {
+                if currentOwner == session.ownership {
+                    let message = error.localizedDescription
+                    session.actionError = message.contains("not available to paired devices")
+                        ? "Update Mains on your computer to manage chats from this iPhone." : message
+                }
+            }
+        }
     }
 
     private func prepareQueueResume() {

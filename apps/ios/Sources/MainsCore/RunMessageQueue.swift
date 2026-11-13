@@ -65,6 +65,7 @@ final class RunQueueController {
     private var pumpID: UUID?
     init(session: BackendSession) { self.session = session }
     func existing(_ id: String) -> ConversationQueue? { queues[id] }
+    func retire(_ id: String) { queues.removeValue(forKey: id)?.retire() }
     func queue(_ id: String) -> ConversationQueue {
         if let value = queues[id] { return value }
         let value = ConversationQueue(runID: id); queues[id] = value; return value
@@ -80,7 +81,7 @@ final class RunQueueController {
     }
     func observe(_ id: String, status: String) { queues[id]?.observe(status); kick() }
     func submit(_ id: String, draft: ConversationDraft) throws {
-        guard let session, let run = session.conversations.first(where: { $0.id == id }), run.supportsSteering,
+        guard let session, session.pendingConversationAction == nil, let run = session.conversations.first(where: { $0.id == id }), run.supportsSteering,
               run.isReplica != true, !run.isArchived else { throw MainsError.server("This conversation cannot queue messages.") }
         let queue = queue(id)
         if !session.isConnected, queue.pauseReason == nil { queue.pause("Backend disconnected. Queued messages are paused.") }
@@ -135,7 +136,7 @@ final class RunQueueController {
         kick()
     }
     func resume(_ runID: String) async {
-        guard let session, session.isConnected, let queue = queues[runID], !queue.busy, !locks.contains(runID) else { return }
+        guard let session, session.pendingConversationAction == nil, session.isConnected, let queue = queues[runID], !queue.busy, !locks.contains(runID) else { return }
         let owner = session.ownership
         locks.insert(runID)
         defer { if owner == session.ownership { locks.remove(runID) } }
@@ -184,7 +185,7 @@ final class RunQueueController {
         }
     }
     private func send(_ queue: ConversationQueue, id: String, delivery: MessageDelivery) async {
-        guard let session, session.isConnected, !session.sending, session.pendingMessage == nil, session.pendingFork == nil,
+        guard let session, session.isConnected, !session.sending, session.pendingMessage == nil, session.pendingFork == nil, session.pendingConversationAction == nil,
               !queue.retired, !queue.busy, !locks.contains(queue.runID),
               delivery == .steer || queue.pauseReason == nil,
               delivery == .steer || (queue.deferredUntil.map { ContinuousClock.now >= $0 } ?? true),
@@ -208,7 +209,7 @@ final class RunQueueController {
                 guard let head = queue.messages.first, head.status == .queued, queue.pauseReason == nil else { return }
                 admittedID = head.id
             }
-            guard owner == session.ownership, !queue.retired, queue.revision == revision, session.isConnected, !session.sending, session.pendingMessage == nil, session.pendingFork == nil,
+            guard owner == session.ownership, !queue.retired, queue.revision == revision, session.isConnected, !session.sending, session.pendingMessage == nil, session.pendingFork == nil, session.pendingConversationAction == nil,
                   let index = queue.messages.firstIndex(where: { $0.id == admittedID }), queue.messages[index].status == .queued else { return }
             let message = queue.messages[index]
             queue.messages[index].status = .sending; queue.messages[index].delivery = delivery; queue.messages[index].error = nil

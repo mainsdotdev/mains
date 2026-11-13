@@ -38,6 +38,25 @@ xcodebuild -project Mains.xcodeproj -scheme Mains \
   -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
 
+## Chat organization
+
+The conversation's options menu keeps **Fork chat** and adds **Move to project**
+for Work/Chat, plus **Archive** and **Delete** in every mode. The project picker
+uses the account's active Projects (collections), with search and **No project**
+to detach a chat. Moving preserves the same conversation, provider, workspace,
+transcript, draft and selected space. Archive/Delete are disabled for live work,
+replicas and unresolved deliveries; Delete requires confirmation. Archive keeps
+an unfinished draft, while confirmed deletion removes that chat's local history,
+queued messages and persisted draft. Only the matching open chat is closed.
+
+These commands require a computer running this version of Mains. They use the
+existing desktop commands and durable receipts; general `runs:update` and
+provider-session deletion stay unavailable to paired devices. A lost/malformed
+reply retains its original identity and exposes **Check change** even after
+leaving the chat. Current metadata is refreshed after a recovered move, and
+older reads cannot reinsert a retired chat. Demo actions and receipts stay in
+memory. In-chat Find remains outside this menu for now.
+
 ## Development hot reload
 
 Run `npm run dev:hot-reload` once from `apps/ios`. It installs the pinned

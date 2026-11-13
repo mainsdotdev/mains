@@ -118,6 +118,11 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   // the source's workspace, mode and policy snapshot wholesale, so a device
   // can't widen its own reach by forking.
   CHANNELS.runs.fork,
+  // The same owned-record retirement and collection-membership operations as
+  // desktop, guarded by the existing durable command receipt at the WS seam.
+  CHANNELS.runs.archive,
+  CHANNELS.runs.delete,
+  CHANNELS.runs.moveToCollection,
   // Stopping a run you can already start and continue takes nothing further —
   // it only ends work the device itself asked for.
   CHANNELS.runs.abort,

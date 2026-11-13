@@ -31,6 +31,7 @@ struct ComposerContext {
             session.isConnected && session.models[providerId] == nil && session.modelErrors[providerId] == nil
     }
     @MainActor func saving(_ session: BackendSession) -> Bool {
+        if session.pendingConversationAction != nil { return true }
         if let runID, session.existingMessageQueue(for: runID)?.editingID != nil { return false }
         return runID.map { session.savingConversationSettings.contains($0) || session.uncertainConversationSettings.contains($0) } ?? false
     }

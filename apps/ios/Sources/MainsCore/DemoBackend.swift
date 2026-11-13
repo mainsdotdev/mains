@@ -56,7 +56,7 @@ final class DemoBackend {
     private static let sampleVoices = ["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"]
 #endif
 
-    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:fork", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings",
+    private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:fork", "runs:archive", "runs:delete", "runs:moveToCollection", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings",
         "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:editMobileBookmark", "atlas:setMobileTrash", "atlas:setMobileTags"]
 
     var pairing: PairedBackend {
@@ -157,6 +157,33 @@ final class DemoBackend {
         let first = args.first ?? .null
         let runID = first["runId"].string ?? first.string ?? ""
         switch channel {
+        case "runs:archive", "runs:delete", "runs:moveToCollection":
+            guard let index = runs.firstIndex(where: { $0["id"]?.string == runID }), runs[index]["isReplica"] != .bool(true) else {
+                throw MainsError.server("This demo chat is unavailable or read-only.")
+            }
+            if channel == "runs:moveToCollection" {
+                guard ["work", "chat"].contains(runs[index]["mode"]?.string ?? ""),
+                      first["accountId"].string == seed["account"]["id"].string,
+                      runs[index]["isArchived"] != .bool(true) else { throw MainsError.server("This chat cannot move to a project.") }
+                let projectID = first["collectionId"].string
+                guard first["collectionId"] == .null || projectID.map({ id in seed["collections"].array.contains { $0["id"].string == id && $0["isArchived"] != .bool(true) } }) == true else {
+                    throw MainsError.server("This project is unavailable.")
+                }
+                runs[index]["collectionId"] = projectID.map(JSONValue.string) ?? .null
+            } else {
+                guard !isRunning(runID), !["running", "queued"].contains(runs[index]["status"]?.string ?? "") else {
+                    throw MainsError.server("Stop the active reply before archiving or deleting this chat.")
+                }
+                if channel == "runs:delete" {
+                    runs.remove(at: index); tasks.removeValue(forKey: runID)?.cancel(); replays[runID] = nil
+                    artifacts[runID] = nil; tools[runID] = nil; turns[runID] = nil; patches[runID] = nil
+                    push("runs:updated", ["runId": .string(runID)])
+                    return .null
+                }
+                runs[index]["isArchived"] = .bool(true)
+            }
+            push("runs:updated", ["runId": .string(runID)])
+            return .object(runs[index])
         case "atlas:saveMobileFile" where first["sourceKey"].string == nil:
             guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
             try requireRun(runID)

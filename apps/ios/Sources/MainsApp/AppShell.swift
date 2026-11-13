@@ -151,6 +151,7 @@ struct AppShell: View {
             VStack(spacing: 0) {
                 ForkDeliveryNotice(session: session, open: { open(.conversation($0)) })
                 AtlasSaveDeliveryNotice(session: session)
+                ConversationActionDeliveryNotice(session: session)
 #if MAINS_GPT_LIVE
                 VoiceCallDock(session: session, visibleRunID: visibleVoiceRunID,
                     preparingHere: !drawerOpen && !searchMounted && path.isEmpty && homeRunID == nil && session.voiceSpaceID == session.selectedSpaceID,
@@ -169,6 +170,16 @@ struct AppShell: View {
             session.setWorkInboxVisible(visible)
         }
         .onDisappear { session.setWorkInboxVisible(false) }
+        .onChange(of: session.retiredConversation) { _, retired in
+            guard let retired else { return }
+            if homeRunID == retired.runID { homeRunID = nil }
+            path.removeAll { route in
+                switch route {
+                case .conversation(let id), .searchMessage(let id, _): id == retired.runID
+                default: false
+                }
+            }
+        }
         .onChange(of: session.pairing?.deviceId) { _, _ in
             resetSearch()
             path = []; homeRunID = nil; drawerOpen = false

@@ -93,6 +93,9 @@ public struct PendingMessage: Sendable {
 public final class BackendSession {
     public private(set) var atlasRevision = 0
     public private(set) var pendingAtlasSave: PendingAtlasSave?
+    public private(set) var pendingConversationAction: PendingConversationAction?
+    public private(set) var retiredConversation: RetiredConversation?
+    @ObservationIgnored private var conversationActionRevision = 0
     #if MAINS_GPT_LIVE || SWIFT_PACKAGE
     public let voice = RealtimeVoiceController()
     public private(set) var pendingVoiceConversation: PendingVoiceConversation?
@@ -296,7 +299,7 @@ public final class BackendSession {
 
     public func canStartVoice(runID: String? = nil, spaceID: String? = nil) -> Bool {
         guard isConnected, !isDemo, voice.makeMedia != nil, !voice.ownsCall, pendingVoiceConversation == nil,
-              pendingFork == nil, pendingMessage == nil, voiceSelectionChange == nil, !sending, stoppingRunID == nil else { return false }
+              pendingFork == nil, pendingConversationAction == nil, pendingMessage == nil, voiceSelectionChange == nil, !sending, stoppingRunID == nil else { return false }
         if let runID, let run = conversations.first(where: { $0.id == runID }) {
             return run.providerId == "codex" && !run.isActive && !run.isArchived && run.isReplica != true &&
                 run.archivedReplyError == nil && settingsChanges[runID] == nil &&
@@ -482,8 +485,9 @@ public final class BackendSession {
         guard let transport, isConnected else { throw MainsError.disconnected }
         let owner = pairingOwner, current = generation
         let settingsReadVersion = settingsRevision
+        let actionRevision = conversationActionRevision
         let value = try await transport.invoke("runs:getById", args: [.string(id)])
-        guard owner == pairingOwner, current == generation else { throw MainsError.changedBackend }
+        guard owner == pairingOwner, current == generation, actionRevision == conversationActionRevision else { throw MainsError.changedBackend }
         guard value != .null else { return nil }
         let run = keepingSettings(try value.decode(Conversation.self), readVersion: settingsReadVersion)
         guard run.id == id else { throw MainsError.invalidReply }
@@ -573,7 +577,7 @@ public final class BackendSession {
     }
 
     public func updateConversationSettings(_ settings: ComposerSettings, runID: String) async throws {
-        guard isConnected, !sending, !savingConversationSettings.contains(runID), settingsChanges[runID] == nil,
+        guard isConnected, !sending, pendingConversationAction == nil, !savingConversationSettings.contains(runID), settingsChanges[runID] == nil,
               let run = conversations.first(where: { $0.id == runID }), run.isReplica != true else {
             throw MainsError.server("Conversation settings are unavailable. Check any unconfirmed save first.")
         }
@@ -1108,6 +1112,7 @@ public final class BackendSession {
     }
 
     private func resetProjection() {
+        pendingConversationAction = nil; retiredConversation = nil; conversationActionRevision = 0
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         voice.retire(); pendingVoiceConversation = nil; checkingVoiceConversation = false; voiceSpaceID = nil
         realtimeVoices = nil; selectedRealtimeVoice = nil; voiceSettingsReadID = nil; voiceSelectionChange = nil
@@ -1278,6 +1283,7 @@ public final class BackendSession {
 
     private func syncSnapshot(_ candidate: any BackendTransport, generation current: Int) async throws {
         let settingsReadVersion = settingsRevision
+        let actionRevision = conversationActionRevision
         async let runResult = candidate.invoke("runs:getAll", args: [.number(100)])
         async let spaceResult = candidate.invoke("space:getAll")
         async let workspaceResult = candidate.invoke("workspace:list")
@@ -1296,7 +1302,7 @@ public final class BackendSession {
         let newProjects = try list(projectValue, key: "projects", as: CodeProject.self)
         let newGitStates = try list(gitValue, key: "states", as: WorkspaceGitState.self)
         let providers = try list(providerValue, key: "providers", as: ProviderSummary.self)
-        guard generation == current, transport === candidate else { return }
+        guard generation == current, transport === candidate, actionRevision == conversationActionRevision else { return }
         accountID = id
         let viewed = conversations.first { $0.id == viewingRunID && !$0.isArchived }
         conversations = runs.map { safeConversation(keepingSettings($0, readVersion: settingsReadVersion)) }.filter { !$0.isArchived }.sorted { $0.updatedAt > $1.updatedAt }
@@ -1372,11 +1378,13 @@ public final class BackendSession {
                 } else { request = try self.transcript.request(runID: runID, direction: self.transcript.page == nil ? "latest" : direction) }
                 let settingsReadVersion = self.settingsRevision
                 let decisionReadVersion = self.decisionRevision
+                let actionRevision = self.conversationActionRevision
                 async let pageValue = transport.invoke("runs:getHistory", args: [request])
                 async let runValue = transport.invoke("runs:getById", args: [.string(runID)])
                 async let approvalValue = transport.invoke("runs:listPendingApprovals", args: [.string(runID)])
                 let (pageJSON, runJSON, approvalJSON) = try await (pageValue, runValue, approvalValue)
-                guard !Task.isCancelled, self.generation == current, self.viewingRunID == runID, self.transport === transport else { return false }
+                guard !Task.isCancelled, self.generation == current, self.viewingRunID == runID, self.transport === transport,
+                      actionRevision == self.conversationActionRevision else { return false }
                 if runJSON == .null {
                     self.conversations.removeAll { $0.id == runID }; self.histories.removeValue(forKey: runID)
                     self.transcript = Transcript(); self.historyError = "This conversation was deleted on your computer."
@@ -1612,6 +1620,7 @@ public final class BackendSession {
         }
 #endif
 
+        guard pendingConversationAction == nil else { throw MainsError.server("Check the pending chat change before sending.") }
         guard pendingFork == nil else { throw MainsError.server("Wait for the fork, or check its delivery before sending.") }
         guard pendingMessage?.status != .uncertain else { throw MainsError.server("Check the unconfirmed message before sending another.") }
         if let runID, decisionDeliveries.contains(where: { $0.value.attempt?.runID == runID && [.sending, .uncertain].contains($0.value.phase) }) {
@@ -1689,7 +1698,7 @@ public final class BackendSession {
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         guard pendingVoiceConversation == nil, !(voice.ownsCall && voice.runID == id) else { return false }
         #endif
-        return isConnected && pendingFork == nil && !sending && pendingMessage == nil && stoppingRunID == nil &&
+        return isConnected && pendingConversationAction == nil && pendingFork == nil && !sending && pendingMessage == nil && stoppingRunID == nil &&
         settingsChanges[id] == nil && conversations.first(where: { $0.id == id })?.canFork == true &&
         !decisionDeliveries.contains { $0.value.attempt?.runID == id && [.sending, .uncertain].contains($0.value.phase) }
     }
@@ -1704,6 +1713,95 @@ public final class BackendSession {
                                   payload: .object(["sourceRunId": .string(id), "accountId": .string(accountID),
                                                     "message": .string("Continue from where this session left off.")]), owner: pairingOwner)
         return try await deliverFork(attempt)
+    }
+
+    public func canManageConversation(_ id: String, action: ConversationAction) -> Bool {
+        #if MAINS_GPT_LIVE || SWIFT_PACKAGE
+        guard pendingVoiceConversation == nil, !(voice.ownsCall && voice.runID == id) else { return false }
+        #endif
+        guard isConnected, pendingConversationAction == nil, pendingFork == nil, pendingMessage == nil, !sending,
+              stoppingRunID == nil, settingsChanges[id] == nil,
+              let run = conversations.first(where: { $0.id == id }), run.accountId == accountID,
+              run.isReplica != true, !run.isArchived,
+              !decisionDeliveries.contains(where: { $0.value.attempt?.runID == id && [.sending, .uncertain].contains($0.value.phase) }) else { return false }
+        let queue = runQueues.existing(id)
+        guard queue?.busy != true, queue?.hasUnknown != true, queue?.editingID == nil else { return false }
+        if action.retiresConversation { return !run.isActive }
+        return ["work", "chat"].contains(run.mode)
+    }
+
+    public func manageConversation(_ id: String, action: ConversationAction) async throws {
+        guard canManageConversation(id, action: action), let accountID,
+              let run = conversations.first(where: { $0.id == id }) else {
+            throw MainsError.server("This chat cannot be changed right now. Stop active replies and resolve pending changes first.")
+        }
+        let args: [JSONValue]
+        if case .moveToProject(let projectID) = action {
+            guard projectID == nil || collections.contains(where: { $0.id == projectID && !$0.isArchived }) else {
+                throw MainsError.server("This project is no longer available.")
+            }
+            if run.collectionId == projectID { return }
+            args = [.object(["runId": .string(id), "accountId": .string(accountID), "collectionId": projectID.map(JSONValue.string) ?? .null])]
+        } else { args = [.string(id)] }
+        if action.retiresConversation { runQueues.existing(id)?.pause("Chat change pending. Queued messages are paused.") }
+        let attempt = PendingConversationAction(runID: id, action: action, status: .sending, commandID: UUID().uuidString,
+                                                accountID: accountID, args: args, owner: pairingOwner)
+        try await deliverConversationAction(attempt)
+    }
+
+    public func checkConversationAction() async throws {
+        guard let attempt = pendingConversationAction, attempt.status == .uncertain, isConnected else { throw MainsError.disconnected }
+        try await deliverConversationAction(attempt)
+    }
+
+    private func deliverConversationAction(_ original: PendingConversationAction) async throws {
+        var attempt = original; attempt.status = .sending; pendingConversationAction = attempt
+        do {
+            let result = try await command(attempt.action.channel, args: attempt.args, commandID: attempt.commandID, owner: attempt.owner)
+            guard attempt.owner == pairingOwner else { throw MainsError.changedBackend }
+            try attempt.validate(result)
+            pendingConversationAction = nil
+            conversationActionRevision += 1
+            if attempt.action.retiresConversation {
+                leaveConversation(attempt.runID)
+                conversations.removeAll { $0.id == attempt.runID }
+                histories[attempt.runID] = nil; historyOrder.removeAll { $0 == attempt.runID }
+                stopWorkInboxWatch()
+                workInbox = WorkInboxSnapshot(saved: workInbox.runs.filter { $0.id != attempt.runID })
+                if workInboxVisible { startWorkInboxWatch() }
+                if attempt.action == .delete {
+                    runQueues.retire(attempt.runID)
+                    drafts.removeValue(forKey: attempt.runID)?.textChanged = nil
+                    if !isDemo, let pairing {
+                        let key = TextDraftKey(backendID: pairing.descriptor.backendId, deviceID: pairing.deviceId, owner: .conversation, ownerID: attempt.runID)
+                        do { try storage.saveDraftText("", for: key) }
+                        catch { actionError = "Chat deleted, but its saved draft could not be cleared on this iPhone." }
+                    }
+                }
+                retiredConversation = RetiredConversation(id: attempt.commandID, runID: attempt.runID)
+                saveCache()
+            }
+            // A replayed receipt may predate another device's project change.
+            // Read current metadata instead of applying that old row locally.
+            let current = generation
+            Task { [weak self] in
+                guard let self, self.pairingOwner == attempt.owner, self.generation == current else { return }
+                if !attempt.action.retiresConversation { _ = try? await self.readQueuedRun(attempt.runID) }
+                guard self.pairingOwner == attempt.owner, self.generation == current else { return }
+                await self.refresh()
+            }
+            runQueues.kick()
+        } catch {
+            if pairingOwner == attempt.owner {
+                let failure = error as? MainsError
+                let refused: Bool
+                if case .server = failure { refused = failure?.isUnconfirmedCommand == false }
+                else { refused = failure == .unauthorized || failure == .incompatible }
+                if refused { pendingConversationAction = nil; runQueues.kick() }
+                else { attempt.status = .uncertain; pendingConversationAction = attempt }
+            }
+            throw error
+        }
     }
 
     public func checkForkDelivery() async throws -> String {
