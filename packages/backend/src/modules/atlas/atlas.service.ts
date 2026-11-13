@@ -558,7 +558,7 @@ export const atlasService = {
     emit(CHANNELS.atlas.changed, {});
     return pageFor(owned(input));
   },
-  async saveFile(input: AtlasSaveFile) {
+  async saveFile(input: AtlasSaveFile, validate?: () => Promise<void>) {
     const accountId = required(input?.accountId, "Account");
     const requested = required(input?.path, "File path");
     const context = await runContext(input.runId, accountId);
@@ -566,6 +566,7 @@ export const atlasService = {
     const { real } = await inspectSource(requested, context.roots);
     const key = sourceKey(input.runId, real);
     return once(`${accountId}:${key}`, async () => {
+      await validate?.();
       const old = atlasRepo.bySource(accountId, key);
       if (old) {
         if (old.trashedAt) atlasRepo.update(old.id, accountId, { trashedAt: null });
@@ -577,6 +578,7 @@ export const atlasService = {
       if (!attachment && !(await generatedForRun(input.runId, accountId)).some((file) => file.sourceKey === key))
         throw new Error("File is not a generated output of this conversation");
       const bytes = await readSource(real, context.roots);
+      await validate?.();
       return store(accountId, key, safeName(path.basename(real)), bytes, input.runId, context.run.collectionId);
     });
   },

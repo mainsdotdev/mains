@@ -27,6 +27,8 @@ vi.mock("../../db/client", () => ({ getDb: () => db }));
 vi.mock("../runs", () => ({ runsService: {
   listOutputs: vi.fn(),
   readOutputFile: vi.fn(),
+  describeAttachmentFile: vi.fn(),
+  resolveAttachmentPath: vi.fn(),
   getRunById: async (id: string) => {
     const run = db.select().from(runs).where(eq(runs.id, id)).get();
     return run ? { ...run, ...ownershipOf(run.ownerBackendId) } : null;
@@ -277,10 +279,10 @@ describe("Atlas agent access", { timeout: 15000 }, () => {
 });
 afterEach(() => { cleanup(); restoreRuntime(); vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
 
-function output(name = "report.pdf", runId = "conversation") {
-  createRun(db, { id: runId, mode: "work", title: "Research", status: "succeeded" });
-  fs.mkdirSync(root(runId), { recursive: true });
-  const file = path.join(root(runId), name);
+function output(name = "report.pdf", runId = "conversation", mode: "work" | "developer" | "chat" = "work") {
+  createRun(db, { id: runId, mode, title: "Research", status: "succeeded" });
+  fs.mkdirSync(root(runId, mode), { recursive: true });
+  const file = path.join(root(runId, mode), name);
   fs.writeFileSync(file, "original contents");
   createRunArtifact(db, { runId, kind: name.endsWith(".png") ? "image" : "document",
     metadata: JSON.stringify({ path: file }) });
@@ -288,6 +290,44 @@ function output(name = "report.pdf", runId = "conversation") {
   return file;
 }
 describe("Atlas phone library", { timeout: 15000 }, () => {
+  it.each(["work", "developer", "chat"] as const)("saves an exact selected output by identity in %s without accepting a path", async (mode) => {
+    const file = output("snapshot.pdf", `save-${mode}`, mode);
+    const { runsService } = await import("../runs");
+    const { describeRunOutput } = await import("../runs/run-output-files");
+    const selected = (await runsService.getOutputArtifacts(`save-${mode}`)).find((row) => row.path === fs.realpathSync(file))!;
+    const descriptor = await describeRunOutput(`save-${mode}`, selected, false);
+    vi.mocked(runsService.listOutputs).mockResolvedValue({ items: [descriptor], nextOffset: null });
+    const input = { accountId: "default", runId: `save-${mode}`, artifactId: descriptor.artifactId, version: descriptor.version };
+    const item = await atlasMobile.saveFile(input);
+    expect(item.kind).toBe("file"); expect(item).not.toHaveProperty("path");
+    expect(await atlasMobile.saveFile(input)).toEqual(item);
+    const stored = atlasService.get({ accountId: "default", id: item.id })!;
+    expect(fs.readFileSync(stored.path!, "utf8")).toBe("original contents");
+    expect(atlasService.list({ accountId: "default" })).toHaveLength(1);
+    await expect(atlasMobile.saveFile({ ...input, accountId: "other" })).rejects.toThrow("not found");
+    await expect(atlasMobile.saveFile({ ...input, attachmentId: "a".repeat(64) })).rejects.toThrow("source");
+    await expect(atlasMobile.saveFile({ ...input, version: "e".repeat(64) })).rejects.toThrow("changed");
+    await expect(atlasMobile.saveFile({ accountId: "default", runId: input.runId, version: descriptor.version, path: file } as never)).rejects.toThrow("source");
+  });
+
+  it("saves generated library files and explicit attachments while refusing replicas", async () => {
+    output();
+    const entry = (await atlasMobile.library({ accountId: "default" })).items[0];
+    const file = await atlasMobile.describeFile({ accountId: "default", reference: entry.file! });
+    const result = await atlasMobile.saveFile({ accountId: "default", runId: "conversation", sourceKey: entry.key, version: file.version });
+    expect(result.kind).toBe("file");
+    const { runsService } = await import("../runs");
+    const { prepareRunAttachments, resolveRunAttachment } = await import("../runs/run-attachment-storage");
+    const { describeAttachmentFile } = await import("../runs/run-attachment-download");
+    const uploaded = (await prepareRunAttachments("conversation", [{ name: "photo.png", type: "image", mimeType: "image/png", data: Buffer.from("png bytes").toString("base64") }], "phone-upload"))![0];
+    const attachment = await describeAttachmentFile({ runId: "conversation", attachmentId: uploaded.attachmentId });
+    vi.mocked(runsService.describeAttachmentFile).mockResolvedValue(attachment);
+    vi.mocked(runsService.resolveAttachmentPath).mockResolvedValue((await resolveRunAttachment("conversation", uploaded.attachmentId)).path);
+    const saved = await atlasMobile.saveFile({ accountId: "default", runId: "conversation", attachmentId: uploaded.attachmentId, version: attachment.version });
+    expect(saved.kind).toBe("image");
+    db.update(runs).set({ ownerBackendId: "different-computer" }).where(eq(runs.id, "conversation")).run();
+    await expect(atlasMobile.saveFile({ accountId: "default", runId: "conversation", attachmentId: uploaded.attachmentId, version: attachment.version })).rejects.toThrow("source computer");
+  });
   it("keeps replica download hydration with the original output reader and checks ownership on each chunk", async () => {
     createRun(db, { id: "phone-replica", mode: "work", status: "succeeded", ownerBackendId: "remote-phone-source" });
     replicaOutputs.set("phone-replica", [{ id: -42, kind: "document", metadata: { path: "/other-device/report.pdf", byteSize: 2 }, createdAt: new Date() }]);

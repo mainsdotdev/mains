@@ -92,6 +92,7 @@ public struct PendingMessage: Sendable {
 @MainActor @Observable
 public final class BackendSession {
     public private(set) var atlasRevision = 0
+    public private(set) var pendingAtlasSave: PendingAtlasSave?
     #if MAINS_GPT_LIVE || SWIFT_PACKAGE
     public let voice = RealtimeVoiceController()
     public private(set) var pendingVoiceConversation: PendingVoiceConversation?
@@ -771,6 +772,66 @@ public final class BackendSession {
         return result
     }
 
+    public var canSaveToAtlas: Bool { active && isConnected && pendingAtlasSave == nil }
+
+    public func saveAtlasFile(_ source: AtlasSaveSource, owner: Int) async throws -> AtlasSavedItem {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        if conversations.first(where: { $0.id == source.runId })?.isReplica == true { throw MainsError.server("Save this file to Atlas from its source computer.") }
+        return try await beginAtlasSave("atlas:saveMobileFile", fields: try JSONValue.encode(source).objectValue, label: "the file")
+    }
+
+    public func saveAtlasBookmark(_ url: String, collectionID: String?, owner: Int) async throws -> AtlasSavedItem {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        guard let url = AtlasBookmarkURL.validate(url) else { throw MainsError.server("Enter a complete http:// or https:// link.") }
+        var fields: [String: JSONValue] = ["url": .string(url)]
+        if let collectionID {
+            guard collections.contains(where: { $0.id == collectionID }) else { throw MainsError.server("This project is no longer available.") }
+            fields["collectionId"] = .string(collectionID)
+        }
+        return try await beginAtlasSave("atlas:saveMobileBookmark", fields: fields, label: URL(string: url)?.host ?? "Bookmark")
+    }
+
+    private func beginAtlasSave(_ channel: String, fields: [String: JSONValue], label: String) async throws -> AtlasSavedItem {
+        guard canSaveToAtlas, let accountID else { throw MainsError.server("Connect to your computer and resolve any pending Atlas save first.") }
+        var fields = fields; fields["accountId"] = .string(accountID)
+        return try await deliverAtlasSave(PendingAtlasSave(status: .sending, label: label, commandID: UUID().uuidString,
+            channel: channel, payload: .object(fields), owner: pairingOwner, createdAt: .now))
+    }
+
+    public func checkAtlasSaveDelivery() async throws -> AtlasSavedItem {
+        guard let pending = pendingAtlasSave, pending.status == .uncertain, active, isConnected else { throw MainsError.disconnected }
+        guard Date().timeIntervalSince(pending.createdAt) < 7 * 86_400 else { throw MainsError.server("This save is too old to check. Look for the item in Atlas on your computer.") }
+        return try await deliverAtlasSave(pending)
+    }
+
+    private func deliverAtlasSave(_ input: PendingAtlasSave) async throws -> AtlasSavedItem {
+        var attempt = input; attempt.status = .sending; pendingAtlasSave = attempt
+        do {
+            let value = try await command(attempt.channel, args: [attempt.payload], commandID: attempt.commandID, owner: attempt.owner)
+            guard attempt.owner == pairingOwner, pendingAtlasSave?.id == attempt.id else { throw MainsError.changedBackend }
+            let item = try value.decode(AtlasSavedItem.self)
+            guard !item.id.isEmpty, item.id.utf8.count <= 256,
+                  (attempt.channel == "atlas:saveMobileBookmark" ? item.kind == "bookmark" : ["file", "image"].contains(item.kind)),
+                  item.title.utf8.count <= 4096 else { throw MainsError.invalidReply }
+            pendingAtlasSave = nil; atlasRevision += 1
+            return item
+        } catch {
+            if attempt.owner == pairingOwner, pendingAtlasSave?.id == attempt.id {
+                let failure = error as? MainsError
+                let refused: Bool
+                if case .server = failure { refused = failure?.isUnconfirmedCommand == false }
+                else { refused = failure == .unauthorized || failure == .incompatible }
+                if refused { pendingAtlasSave = nil }
+                else { attempt.status = .uncertain; pendingAtlasSave = attempt }
+                if refused, case .server(let message) = failure,
+                   message.contains("not available to paired devices") || message.contains("No handler") || message.contains("Unknown channel") {
+                    throw MainsError.server("Update Mains on your computer to save items to Atlas.")
+                }
+            }
+            throw error
+        }
+    }
+
     public func atlasPage(_ id: String, offset: Int = 0, version: Int? = nil) async throws -> AtlasPageContent {
         var fields: [String: JSONValue] = ["id": .string(id), "offset": .number(Double(offset))]
         if let version { fields["version"] = .number(Double(version)) }
@@ -948,7 +1009,7 @@ public final class BackendSession {
         activeEndpoint = nil; connectedDescriptor = nil; lastSyncedAt = nil
         consentRevision += 1
         conversations = []; spaces = []; workspaces = []; histories = [:]; historyOrder = []
-        transcript = Transcript(); viewingRunID = nil; pendingMessage = nil; pendingFork = nil; accountID = nil
+        transcript = Transcript(); viewingRunID = nil; pendingMessage = nil; pendingFork = nil; pendingAtlasSave = nil; accountID = nil
         sending = false; stoppingRunID = nil; drafts = [:]
         homeDrafts = [:]; collections = []; projects = []; gitStates = []
         selectedSpaceID = nil; homeTargets = [:]; composerSettings = [:]; providerConfigs = [:]

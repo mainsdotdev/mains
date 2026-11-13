@@ -1,7 +1,7 @@
 import type { AtlasKind, AtlasLibraryOptions } from "./atlas";
 import type { OutputPreviewType } from "./run-outputs";
 
-/** Read-only phone projections. Host paths and canonical Page blocks never travel here. */
+/** Phone DTOs. Host paths and canonical Page blocks never travel here. */
 export type AtlasMobileLibraryOptions = Omit<AtlasLibraryOptions, "includePagePreview">;
 export type AtlasMobileFileReference = { itemId: string; runId?: never; sourceKey?: never }
   | { runId: string; sourceKey: string; itemId?: never };
@@ -37,3 +37,11 @@ export interface AtlasMobileFile {
   modifiedAt: number; version: string; previewType: OutputPreviewType;
 }
 export interface AtlasMobileFileRead extends AtlasMobileFileRequest { offset: number; version: string }
+
+/** Exactly one conversation-owned identity; paths and uploaded bytes are never accepted. */
+export interface AtlasMobileSaveFile {
+  accountId: string; runId: string; version: string;
+  artifactId?: number; attachmentId?: string; sourceKey?: string;
+}
+export interface AtlasMobileSaveBookmark { accountId: string; url: string; collectionId?: string | null }
+export interface AtlasMobileSavedItem { id: string; title: string; kind: AtlasKind }

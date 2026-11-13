@@ -164,6 +164,8 @@ describe("backendService", () => {
   describe("PAIRED_DEVICE_COMMANDS", () => {
     it("is exactly the control loop's verbs plus the picker writes, disjoint from the read list", () => {
       expect([...PAIRED_DEVICE_COMMANDS].sort()).toEqual([
+        "atlas:saveMobileBookmark",
+        "atlas:saveMobileFile",
         "providers:updateRunSettings",
         "runs:abort",
         "runs:answerAsyncQuestions",

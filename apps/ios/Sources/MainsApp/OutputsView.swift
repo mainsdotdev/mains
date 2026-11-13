@@ -11,6 +11,7 @@ struct OutputsView: View {
     @State private var loading = false
     @State private var error: String?
     @State private var selection: RunOutput?
+    @State private var pageOwner: Int?
     var body: some View {
         ComposerSheet(title: "Outputs") {
             List {
@@ -34,6 +35,7 @@ struct OutputsView: View {
                         }.padding(.vertical, 5)
                     }.disabled(output.byteSize > output.downloadLimit || !session.isConnected)
                         .accessibilityIdentifier("output-\(output.id)")
+                        .contextMenu { if let pageOwner, AtlasSaveSource.supports(output.name) { AtlasSaveButton(session: session, source: .output(output), owner: pageOwner) } }
                 }
                 if !previous.isEmpty || page?.nextOffset != nil {
                     HStack {
@@ -48,11 +50,14 @@ struct OutputsView: View {
         .sheet(item: $selection) { output in OutputPreviewView(session: session, output: output) }
     }
     private func load() async {
+        let owner = session.ownership
         loading = true; error = nil
         defer { loading = false }
         do {
             let result = try await session.listOutputs(runID, offset: offset)
-            try Task.checkCancellation(); page = result
+            try Task.checkCancellation()
+            guard owner == session.ownership else { return }
+            page = result; pageOwner = owner
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }
@@ -77,6 +82,8 @@ struct OutputPreviewView: View {
     @State private var progress = 0.0
     @State private var retry = 0
     @State private var loadID = UUID()
+    @State private var atlasSource: AtlasSaveSource?
+    @State private var loadedOwner: Int?
     var body: some View {
         NavigationStack {
             Group {
@@ -105,6 +112,9 @@ struct OutputPreviewView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     if let url { ShareLink(item: url) { Label("Share output", systemImage: "square.and.arrow.up") }.accessibilityIdentifier("shareOutput") }
                 }
+                ToolbarItem(placement: .bottomBar) {
+                    if let atlasSource, let loadedOwner { AtlasSaveButton(session: session, source: atlasSource, owner: loadedOwner) }
+                }
             }
         }
         .runFileLinks(session: session, runID: runID, relativeTo: relativePath)
@@ -115,6 +125,8 @@ struct OutputPreviewView: View {
     private func cleanup() { if let folder { try? FileManager.default.removeItem(at: folder) }; folder = nil; url = nil }
     private func download() async {
         let ticket = UUID(); loadID = ticket
+        let owner = session.ownership
+        atlasSource = nil; loadedOwner = nil
         cleanup(); error = nil; progress = 0
         var destination: URL?
         do {
@@ -144,7 +156,7 @@ struct OutputPreviewView: View {
                 guard selected?.artifactId == file.artifactId, selected?.runId == runID else { throw MainsError.server("This output is no longer available.") }
             }
             try Task.checkCancellation()
-            guard ticket == loadID else { throw CancellationError() }
+            guard ticket == loadID, owner == session.ownership else { throw CancellationError() }
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mains-output-" + UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
             destination = directory; folder = directory
@@ -169,6 +181,8 @@ struct OutputPreviewView: View {
             guard ticket == loadID else { throw CancellationError() }
             try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: fileURL.path)
             downloadedName = fileName; url = fileURL
+            atlasSource = AtlasSaveSource.supports(fileName) ? selected.map(AtlasSaveSource.output) ?? attachment.map(AtlasSaveSource.attachment) : nil
+            loadedOwner = owner
         } catch {
             if let destination { try? FileManager.default.removeItem(at: destination) }
             if ticket == loadID { cleanup(); if !Task.isCancelled { self.error = error.localizedDescription } }

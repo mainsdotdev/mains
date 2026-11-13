@@ -5,7 +5,7 @@ import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { encodeWsMessage, decodeWsMessage, WS_PROTOCOL_VERSION } from '../../../packages/contracts/src/ws-protocol.ts';
 import { CHANNELS } from '../../../packages/contracts/src/channels.ts';
-import { atlasFixture } from './mock-atlas.mjs';
+import { atlasFixture, resetAtlasFixture } from './mock-atlas.mjs';
 import { historyWindow, compareHistoryCursors } from '../../../packages/contracts/src/run-history.ts';
 
 // Backend sources live in an explicit CommonJS package. Load this dependency-free
@@ -32,6 +32,7 @@ let pagedHistory = false;
 let disjointHistory = false;
 let artifacts, runs, nextID, spaces, tools;
 function reset(longHistory = false, home = false, design = false, workspaceList = false, media = false, paging = false, disjoint = false) {
+  resetAtlasFixture();
   for (const timer of timers) clearTimeout(timer);
   timers.clear(); replies.clear(); acceptsConnections = true;
   holdSnapshot = 0; contextDelayMs = 0; contextInvalidRows = false;
@@ -380,6 +381,11 @@ wss.on('connection', socket => {
         case CHANNELS.atlas.describeMobileFile:
         case CHANNELS.atlas.readMobileFile:
           result = atlasFixture(channel, args[0], { pdfBytes, outputBytes, imageBase64, version: outputVersion }); break;
+        case CHANNELS.atlas.saveMobileFile:
+        case CHANNELS.atlas.saveMobileBookmark:
+          if (!commandId) throw new Error('Atlas saves require a command identity');
+          result = atlasFixture(channel, args[0], { pdfBytes, outputBytes, imageBase64, version: outputVersion });
+          receipts.set(commandId, { success: true, data: result }); broadcast(CHANNELS.atlas.changed, {}); break;
         case CHANNELS.account.get: result = { id: 'fixture-account', displayName: 'Fixture' }; break;
         case CHANNELS.runs.listActive: result = runs.filter(run => ['running', 'queued'].includes(run.status) && !run.isReplica); break;
         case CHANNELS.runs.getAll:

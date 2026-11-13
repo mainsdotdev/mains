@@ -15,6 +15,8 @@ struct AtlasView: View {
     @State private var reload = 0
     @State private var bookmark: AtlasEntry?
     @State private var file: AtlasFileSelection?
+    @State private var addingBookmark = false
+    @State private var bookmarkOwner = 0
     private var filter: String { "\(query.type):\(query.scope):\(query.collectionID ?? ""):\(query.text)" }
     private var loadKey: String { "\(query.hashValue):\(session.connection):\(session.atlasRevision):\(reload)" }
 
@@ -90,7 +92,12 @@ struct AtlasView: View {
         }
         .listStyle(.insetGrouped).navigationTitle("Atlas")
         .searchable(text: $query.text, prompt: "Search Atlas")
-        .toolbar { ToolbarItem(placement: .topBarTrailing) {
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("New bookmark", systemImage: "bookmark.badge.plus") { bookmarkOwner = session.ownership; addingBookmark = true }
+                    .disabled(!session.canSaveToAtlas).accessibilityIdentifier("newAtlasBookmark")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
             Button("Refresh", systemImage: "arrow.clockwise") { reload += 1 }.disabled(loading || !session.isConnected)
         } }
         .accessibilityIdentifier("atlasLibrary")
@@ -100,6 +107,11 @@ struct AtlasView: View {
         .sheet(item: $file) { AtlasFilePreview(session: session, selection: $0, openConversation: { id in file = nil; openConversation(id) }) }
         .sheet(item: $bookmark) { entry in
             AtlasBookmarkView(entry: entry, openConversation: { id in bookmark = nil; openConversation(id) })
+        }
+        .sheet(isPresented: $addingBookmark) {
+            NewAtlasBookmarkView(session: session, owner: bookmarkOwner, onSaved: {
+                query = AtlasQuery(); query.type = "bookmark"; reload += 1
+            }, collectionID: query.collectionID)
         }
     }
     private func open(_ entry: AtlasEntry) {
@@ -283,6 +295,9 @@ struct AtlasFilePreview: View {
                 ToolbarItem(placement: .topBarTrailing) { if let url { ShareLink(item: url) { Label("Share or save", systemImage: "square.and.arrow.up") } } }
                 ToolbarItem(placement: .bottomBar) {
                     if let id = selection.sourceRunID, let openConversation { Button("Open source chat", systemImage: "bubble.left") { openConversation(id) } }
+                }
+                ToolbarItem(placement: .bottomBar) {
+                    if let file, let source = AtlasSaveSource.generated(file) { AtlasSaveButton(session: session, source: source, owner: selection.owner) }
                 }
             }
         }

@@ -9,6 +9,7 @@ import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import type { DatabaseInstance } from "../../db/types";
 import { atlasRepo } from "./atlas.repo";
 import { atlasService } from "./atlas.service";
+import { atlasMobile } from "./atlas.mobile";
 import { appSettingsService } from "../appSettings";
 import { atlasBookmarks } from "./atlas.bookmarks";
 import { bookmarkUrl, extractBookmarkMetadata, fetchBookmarkResource } from "./atlas.bookmark-metadata";
@@ -34,6 +35,14 @@ beforeEach(() => {
 afterEach(async () => { await atlasBookmarks.stop(); cleanup(); restore(); fs.rmSync(directory, { recursive: true, force: true }); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Atlas bookmarks", () => {
+  it("lets a phone add a deduplicated URL without editing an existing bookmark or opening broad Atlas writes", async () => {
+    const saved = await atlasMobile.saveBookmark({ accountId, url: "https://example.com/phone?id=7&utm_source=mail" });
+    const same = await atlasMobile.saveBookmark({ accountId, url: "https://example.com/phone?id=7", title: "ignored", id: saved.id } as never);
+    expect(same.id).toBe(saved.id); expect(same.title).toBe("example.com"); expect(same).not.toHaveProperty("path");
+    expect(atlasService.list({ accountId })).toHaveLength(1);
+    await expect(atlasMobile.saveBookmark({ accountId, url: "file:///etc/passwd" })).rejects.toThrow();
+    await expect(atlasMobile.saveBookmark({ accountId, url: "https://example.com/other", collectionId: "missing-project" })).rejects.toThrow("Project unavailable");
+  });
   it("normalizes only tracking parameters and preserves content queries and fragment routes", () => {
     expect(bookmarkUrl("https://example.com/docs?id=7&utm_source=mail#/intro").normalizedUrl).toBe("https://example.com/docs?id=7#/intro");
     expect(() => bookmarkUrl("file:///etc/passwd")).toThrow();

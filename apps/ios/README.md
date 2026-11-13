@@ -212,6 +212,18 @@ underlying tooling.
 
 ## Current scope
 
+- **Save to Atlas** is available in conversation output/document/image previews
+  and the Outputs row menu, plus previews of generated library files. The phone
+  sends an existing artifact/attachment/source identity and its version; the
+  computer retains the verified original, without uploading the preview or
+  exposing a host path. Explicit saves work across Code/Work/Chat; replicas save
+  from their source computer. Repeated saves reuse the existing immutable copy.
+  Atlas's **New bookmark** button accepts an HTTP(S) link and optional project;
+  normalized duplicate URLs reuse their item and preserve authored fields.
+  Both narrow save commands use the standard command receipts. Unknown results
+  retain the original request, block new Atlas saves and expose **Check save**
+  across navigation. Pairing retirement fences late replies. Demo supports both
+  saves entirely in memory, including duplicate/receipt recovery behavior.
 - Sidebar **Atlas** opens the account library without changing the active provider
   or Space mode. All, Pages, Docs, Images and Bookmarks support search, project,
   source and favorites filters, with one 50-entry page retained in memory.

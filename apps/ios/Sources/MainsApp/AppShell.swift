@@ -130,6 +130,7 @@ struct AppShell: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 ForkDeliveryNotice(session: session, open: { open(.conversation($0)) })
+                AtlasSaveDeliveryNotice(session: session)
 #if MAINS_GPT_LIVE
                 VoiceCallDock(session: session, visibleRunID: visibleVoiceRunID,
                     preparingHere: !drawerOpen && !searchMounted && path.isEmpty && homeRunID == nil && session.voiceSpaceID == session.selectedSpaceID,

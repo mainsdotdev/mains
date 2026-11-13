@@ -23,6 +23,7 @@ final class DemoBackend {
     private var spaces: [[String: JSONValue]]
     private var images: [Int: JSONValue] = [:]
     private var attachments: [String: DemoFile] = [:]
+    private let atlas = DemoAtlas()
     private var attachmentBytes = 0
     private var nextID = 10_000_000
     private let stepDelay: Duration
@@ -56,7 +57,7 @@ final class DemoBackend {
 #endif
 
     private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:fork", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings",
-        "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings"]
+        "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings", "atlas:saveMobileFile", "atlas:saveMobileBookmark"]
 
     var pairing: PairedBackend {
         PairedBackend(descriptor: BackendDescriptor(backendId: Self.backendID, name: "Demo Mac",
@@ -163,10 +164,24 @@ final class DemoBackend {
         let first = args.first ?? .null
         let runID = first["runId"].string ?? first.string ?? ""
         switch channel {
-        case "atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile":
+        case "atlas:saveMobileFile" where first["sourceKey"].string == nil:
             guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
-            return try DemoAtlas.answer(channel, input: first, runID: runs.first(where: { $0["mode"]?.string == "work" })?["id"]?.string ?? Self.tourID,
-                                        collectionID: seed["collections"].array.first?["id"].string, image: seed["images"].objectValue.values.first ?? .null)
+            try requireRun(runID)
+            let file: DemoFile, source: String
+            if let attachmentID = first["attachmentId"].string { file = try attachment(runID, id: attachmentID); source = "attachment:" + runID + ":" + attachmentID }
+            else if runID == Self.tourID, [-9001.0, -9002.0].contains(first["artifactId"].number ?? 0) {
+                file = first["artifactId"].number == -9001 ? .pdf : .notes; source = "output:" + runID + ":" + String(first["artifactId"].number!)
+            } else { throw MainsError.server("Demo output not found.") }
+            guard first["version"].string == file.version else { throw MainsError.server("This demo file changed.") }
+            let result = try atlas.save(file, source: source, runID: runID, collectionID: runs.first(where: { $0["id"]?.string == runID })?["collectionId"]?.string)
+            push("atlas:changed", [:]); return result
+        case "atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile", "atlas:saveMobileFile", "atlas:saveMobileBookmark":
+            guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
+            if let project = first["collectionId"].string, !seed["collections"].array.contains(where: { $0["id"].string == project }) { throw MainsError.server("Project unavailable.") }
+            let result = try atlas.answer(channel, input: first, runID: runs.first(where: { $0["mode"]?.string == "work" })?["id"]?.string ?? Self.tourID,
+                                          collectionID: seed["collections"].array.first?["id"].string, image: seed["images"].objectValue.values.first ?? .null)
+            if channel == "atlas:saveMobileFile" || channel == "atlas:saveMobileBookmark" { push("atlas:changed", [:]) }
+            return result
         case "backend:describe": return try .encode(pairing.descriptor)
         case "account:get": return seed["account"]
         case "space:getAll": return .array(spaces.map(JSONValue.object))

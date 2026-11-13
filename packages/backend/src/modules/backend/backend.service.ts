@@ -92,9 +92,12 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
  * router turns into exactly-once semantics through `command_receipts`. The
  * control loop's verbs — answer a request or a question, continue or steer a
  * run, start one, branch one, stop one — plus the picker writes the composer
- * needs. Anything touching files, git, terminal or settings stays out.
+ * needs, plus narrow saves of existing conversation files/bookmark URLs into
+ * Atlas. Arbitrary filesystem paths, git, terminal and general settings stay out.
  */
 export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
+  CHANNELS.atlas.saveMobileFile,
+  CHANNELS.atlas.saveMobileBookmark,
   CHANNELS.runs.createRealtimeConversation,
   CHANNELS.runs.startRealtime,
   CHANNELS.runs.stopRealtime,

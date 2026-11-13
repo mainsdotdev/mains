@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { promises as fs, type Stats } from "node:fs";
 import type { AtlasMobileEntry, AtlasMobileFile, AtlasMobileFileRead, AtlasMobileFileReference, AtlasMobileFileRequest,
-  AtlasMobileLibraryOptions, AtlasMobileLibraryPage, AtlasMobilePage, AtlasMobilePageRequest } from "@mains/contracts/atlas-mobile";
+  AtlasMobileLibraryOptions, AtlasMobileLibraryPage, AtlasMobilePage, AtlasMobilePageRequest,
+  AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileSavedItem } from "@mains/contracts/atlas-mobile";
 import { MOBILE_OUTPUT_MAX_BYTES, outputFileType, type RunOutputChunk } from "@mains/contracts/run-outputs";
 import { readRunFileChunk } from "../../../shared/file-chunks";
 import { atlasService, generatedForRun } from "./atlas.service";
@@ -25,6 +26,50 @@ const signature = (accountId: string, reference: AtlasMobileFileReference, stat:
   .update(JSON.stringify([accountId, reference, stat.size, stat.mtimeMs, stat.ctimeMs, stat.ino, stat.dev])).digest("hex");
 
 export const atlasMobile = {
+  async saveBookmark(input: AtlasMobileSaveBookmark): Promise<AtlasMobileSavedItem> {
+    const item = await atlasService.saveBookmark({ accountId: required(input?.accountId), url: input?.url,
+      ...(input.collectionId !== undefined ? { collectionId: input.collectionId } : {}) });
+    return { id: item.id, title: item.title, kind: item.kind };
+  },
+
+  async saveFile(input: AtlasMobileSaveFile): Promise<AtlasMobileSavedItem> {
+    const accountId = required(input?.accountId), runId = required(input?.runId);
+    if (typeof input.version !== "string" || !/^[a-f0-9]{64}$/.test(input.version)
+      || [input.artifactId, input.attachmentId, input.sourceKey].filter((value) => value !== undefined).length !== 1
+      || input.artifactId !== undefined && (!Number.isSafeInteger(input.artifactId) || input.artifactId === 0)
+      || input.attachmentId !== undefined && !/^[a-f0-9]{64}$/.test(input.attachmentId)
+      || input.sourceKey !== undefined && !/^[a-f0-9]{64}$/.test(input.sourceKey)) throw new Error("Invalid Atlas save source");
+    const { runsService } = await import("../runs");
+    const resolve = async () => {
+      const run = await runsService.getRunById(runId);
+      if (!run || run.accountId !== accountId) throw new Error("Conversation not found");
+      if (run.isReplica) throw new Error("Save this file to Atlas from its source computer");
+      let path: string, version: string;
+      if (input.attachmentId !== undefined) {
+        const file = await runsService.describeAttachmentFile({ runId, attachmentId: input.attachmentId });
+        path = await runsService.resolveAttachmentPath({ runId, attachmentId: input.attachmentId }); version = file.version;
+      } else if (input.artifactId !== undefined) {
+        const file = (await runsService.listOutputs({ runId, artifactId: input.artifactId })).items[0];
+        const artifact = (await runsService.getOutputArtifacts(runId)).find((row) => row.id === input.artifactId);
+        const selectedPath = artifact?.path ?? artifact?.metadata?.path;
+        if (!file || typeof selectedPath !== "string") throw new Error("File is no longer a selected output of this conversation");
+        path = selectedPath; version = file.version;
+      } else {
+        const reference = { runId, sourceKey: input.sourceKey! };
+        const selected = await selectGenerated(accountId, reference);
+        const file = await this.describeFile({ accountId, reference });
+        path = selected.selected.path; version = file.version;
+      }
+      if (version !== input.version) throw new Error("This file changed. Open it again before saving to Atlas.");
+      return path;
+    };
+    const path = await resolve();
+    const item = await atlasService.saveFile({ accountId, runId, path }, async () => {
+      if (await resolve() !== path) throw new Error("This file changed. Open it again before saving to Atlas.");
+    });
+    return { id: item.id, title: item.title, kind: item.kind };
+  },
+
   async library(input: AtlasMobileLibraryOptions): Promise<AtlasMobileLibraryPage> {
     required(input?.accountId);
     // Whitelist options; callers cannot opt into full previews or file paths.
