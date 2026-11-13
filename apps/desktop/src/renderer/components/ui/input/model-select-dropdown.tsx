@@ -11,7 +11,7 @@ import Text from "../text";
 import DropdownWrapper from "../dropdown-wrapper";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { getModelIcon } from "@/lib/model-icons";
-import { formatModelDisplayName, groupModelsByOpenCodeProvider, openCodeModelParts, selectableModelNames } from "@/lib/model-display";
+import { formatComposerModelName, formatModelDisplayName, groupModelsByOpenCodeProvider, openCodeModelParts, selectableModelNames } from "@/lib/model-display";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import { formatEffortLevel } from "@/lib/format";
 import { ArrowUp, Brain, Check } from "../icons";
@@ -133,7 +133,7 @@ export function ModelSelectDropdown({
 }: ModelSelectDropdownProps) {
   const modelList = selectableModelNames(models, variant);
   const noModels = !isLoading && modelList.length === 0;
-  const displayModel = formatModelDisplayName(model, variant);
+  const displayModel = formatComposerModelName(model, variant);
   const selectedModelEffortLevels =
     modelEffortLevelsByModel[model] ?? [];
   const selectedModelUsesThinkingToggle =
@@ -401,7 +401,7 @@ export function ModelSelectDropdown({
         <Button
           tooltip={noModels
             ? "No models available"
-            : `${displayModel}${selectedEffortLabel ? ` · ${selectedEffortLabel}` : ""}`}
+            : `${formatModelDisplayName(model, variant)}${selectedEffortLabel ? ` · ${selectedEffortLabel}` : ""}`}
           tooltipPosition="top"
           type="button"
           onClick={

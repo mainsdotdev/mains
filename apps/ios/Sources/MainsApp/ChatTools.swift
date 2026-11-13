@@ -7,36 +7,24 @@ struct ChatToolBlock: View {
     @State private var disclosure = TranscriptDisclosure()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var calls: [ToolCall] { rows.compactMap(\.tool) }
-    private var providerID: String { session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? "" }
-    private var animate: Bool { session.isConnected && session.conversations.first { $0.id == session.viewingRunID }?.isActive == true }
-    private var running: Bool { calls.contains { ["running", "queued"].contains($0.status) } }
+    private var running: Bool { rows.contains { $0.tool != nil && $0.live } }
     private var active: Bool { running || live }
     private var expanded: Bool { disclosure.isExpanded(active: active) }
-    private var summary: String {
-        if let active = calls.first(where: { ["running", "queued"].contains($0.status) }) { return ToolPresentation(active).verb }
-        if let first = calls.map({ $0.startedAt ?? $0.createdAt }).min(), let last = calls.compactMap(\.endedAt).max(), last.timeIntervalSince(first) >= 1 {
-            let seconds = Int(last.timeIntervalSince(first))
-            return seconds < 60 ? "Worked for \(seconds)s" : "Worked for \(seconds / 60)m \(seconds % 60)s"
-        }
-        return "\(calls.count) tool calls"
-    }
-    private var names: String {
-        var names: [String] = []
-        for call in calls { let name = ToolPresentation(call).name; if !names.contains(name) { names.append(name) } }
-        return names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " +\(names.count - 3)" : "")
-    }
     var body: some View {
         if !calls.isEmpty {
+            let group = ToolGroupPresentation(calls)
             VStack(alignment: .leading, spacing: 6) {
                 if calls.count > 1 {
                     Button {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { disclosure.toggle(active: active) }
                     } label: {
                         HStack(spacing: 9) {
-                            if running { AgentAsciiSpinner(providerID: providerID, animated: animate).frame(width: 17) }
-                            else { Image(systemName: "wrench.and.screwdriver").frame(width: 17) }
-                            Text(summary).fontWeight(.semibold).fixedSize().activityShimmer(running && animate)
-                            Text(names).font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            if !expanded {
+                                HStack(spacing: 4) {
+                                    ForEach(group.symbols, id: \.self) { Image(systemName: $0).frame(width: 17) }
+                                }
+                            }
+                            Text(group.summary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                             Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2)
                         }.font(.footnote).foregroundStyle(.secondary).frame(minHeight: 32).contentShape(.rect)
                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("toolBlock-\(calls[0].id)")
@@ -44,7 +32,9 @@ struct ChatToolBlock: View {
                 }
                 if calls.count == 1 || expanded {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(calls) { call in ChatToolRow(session: session, call: call) }
+                        ForEach(rows) { row in
+                            if let call = row.tool { ChatToolRow(session: session, call: call, displayStatus: row.toolDisplayStatus) }
+                        }
                     }
                 }
             }
@@ -61,10 +51,11 @@ private struct ToolContentSelection: Identifiable {
 private struct ChatToolRow: View {
     let session: BackendSession
     let call: ToolCall
+    var displayStatus: String? = nil
     @State private var expanded = false
     @State private var fullContent: ToolContentSelection?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var view: ToolPresentation { ToolPresentation(call) }
+    private var view: ToolPresentation { ToolPresentation(call, status: displayStatus) }
     private var hasDetails: Bool { view.hasDetails }
     private var tint: Color { view.running ? .primary : .secondary }
     private var providerID: String { session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? "" }

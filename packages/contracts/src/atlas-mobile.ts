@@ -24,6 +24,12 @@ export interface AtlasMobileEntry {
   description: string | null;
   note: string | null;
   tags: AtlasItemTag[];
+  /** Optional display metadata; absent on older computers. No host paths. */
+  fileName?: string | null;
+  mimeType?: string | null;
+  byteSize?: number | null;
+  /** At most 240 Unicode scalars of display-only Page text. */
+  preview?: string | null;
 }
 export interface AtlasMobileLibraryPage { items: AtlasMobileEntry[]; page: number; hasNext: boolean }
 export interface AtlasMobilePageRequest {
@@ -41,6 +47,11 @@ export interface AtlasMobileFile {
   modifiedAt: number; version: string; previewType: OutputPreviewType;
 }
 export interface AtlasMobileFileRead extends AtlasMobileFileRequest { offset: number; version: string }
+/** Fixed 128-pixel thumbnail, at most 128 KiB decoded; never the original file. */
+export interface AtlasMobileImage {
+  reference: AtlasMobileFileReference; version: string;
+  mime: "image/jpeg" | "image/png"; base64: string; width: number; height: number;
+}
 
 /** Exactly one conversation-owned identity; paths and uploaded bytes are never accepted. */
 export interface AtlasMobileSaveFile {

@@ -71,6 +71,11 @@ import CryptoKit
                 }
                 value["savedItemId"] = row["origin"].string == "saved" ? .string(id) : .null
                 value["savedCollectionId"] = row["origin"].string == "saved" ? value["collectionId"] ?? .null : .null
+                if let file = files[id] ?? storedFiles[id] {
+                    value["fileName"] = .string(file.name); value["mimeType"] = .string(file.mime)
+                    value["byteSize"] = .number(Double(file.bytes.count))
+                }
+                if id == "demo-atlas-page" { value["preview"] = .string("Pages, documents, images and bookmarks together in your library.") }
                 return .object(value)
             }
         }
@@ -188,11 +193,17 @@ import CryptoKit
             guard input["offset"].number == nil || input["offset"].number == 0 else { throw MainsError.invalidReply }
             return .object(["id": .string("demo-atlas-page"), "title": .string("Explore Atlas"), "icon": .string("emoji:🗺️"), "version": .number(1),
                             "markdown": .string(markdown), "offset": .number(0), "nextOffset": .null, "sourceRunId": .string(runID)])
-        case "atlas:describeMobileFile", "atlas:readMobileFile":
+        case "atlas:describeMobileFile", "atlas:readMobileFile", "atlas:readMobileImage":
             let reference = input["reference"]
             let id = reference["itemId"].string ?? (reference["runId"].string == runID && reference["sourceKey"].string == source ? "demo-atlas-generated" : "")
             guard edits[id]?["trashedAt"]?.string == nil else { throw MainsError.server("Atlas file not found or in Trash") }
             guard let file = files[id] ?? storedFiles[id] else { throw MainsError.server("Demo Atlas file not found.") }
+            if channel == "atlas:readMobileImage" {
+                guard file.preview == "image", file.bytes == imageFile.bytes else { throw MainsError.server("No prepared thumbnail for this demo file.") }
+                var thumbnail = DemoFile.atlasThumbnail.objectValue
+                thumbnail["reference"] = reference; thumbnail["version"] = .string(file.version)
+                return .object(thumbnail)
+            }
             if channel == "atlas:readMobileFile" { return try file.chunk(input) }
             var row = file.descriptor(runID: runID).objectValue; row.removeValue(forKey: "runId"); row["reference"] = reference
             return .object(row)

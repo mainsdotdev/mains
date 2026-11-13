@@ -1,5 +1,20 @@
 import SwiftUI
 
+enum AppListStyle {
+    static let rowInsets = EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
+    static let minimumContentHeight: CGFloat = 48
+}
+
+func compactRelativeAge(_ date: Date, now: Date) -> String {
+    let seconds = max(0, now.timeIntervalSince(date))
+    if seconds < 45 { return "just now" }
+    if seconds < 3600 { return "\(max(1, Int(seconds / 60)))m ago" }
+    if seconds < 86400 { return "\(Int(seconds / 3600))h ago" }
+    if seconds < 30 * 86400 { return "\(Int(seconds / 86400))d ago" }
+    if seconds < 365 * 86400 { return "\(Int(seconds / (30 * 86400)))mo ago" }
+    return "\(Int(seconds / (365 * 86400)))y ago"
+}
+
 enum AppBrand {
     static var accent: Color {
         Color(uiColor: UIColor { traits in
@@ -164,8 +179,7 @@ struct SpaceDisc: View {
             }.frame(width: 44, height: 44).contentShape(.circle)
         }
         .buttonStyle(ChatPressStyle())
-        .modifier(GlassSurface(radius: 22, tint: selected ? accent.opacity(0.18) : .clear))
-        .overlay { Circle().strokeBorder(selected ? accent : .clear, lineWidth: 1) }
+        .modifier(GlassSurface(radius: 22, tint: selected ? accent.opacity(0.3) : .clear))
         .accessibilityLabel("\(space.name) space")
         .accessibilityIdentifier("space-\(space.id)")
         .accessibilityAddTraits(selected ? .isSelected : [])

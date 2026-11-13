@@ -6,15 +6,26 @@ struct EffortControlPanel: View {
     let model: ModelChoice
     var expanded = false
     var onPreview: (String?) -> Void = { _ in }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var minimumStopSpacing: CGFloat = 44
+    @State private var controlWidth: CGFloat?
     private var settings: ComposerSettings { context.settings(session) }
     private var value: String { settings.effort(provider: context.providerId) }
-    private var kind: EffortControlKind { .resolve(provider: context.providerId, levels: model.supportedEffortLevels ?? []) }
+    private var kind: EffortControlKind {
+        let base = EffortControlKind.resolve(provider: context.providerId, levels: model.supportedEffortLevels ?? [])
+        guard case .slider(let stops) = base else { return base }
+        guard let controlWidth else { return dynamicTypeSize.isAccessibilitySize ? .list(stops) : base }
+        let metrics = EffortSliderMetrics(expanded: expanded)
+        return base.fittingSlider(trackLength: Double(metrics.trackLength(in: controlWidth)),
+                                  minimumStopSpacing: Double(minimumStopSpacing), prefersMenu: dynamicTypeSize.isAccessibilitySize)
+    }
+    private func label(_ level: String) -> String { ComposerSettings.effortLabel(level, provider: context.providerId) }
     var body: some View {
         if kind != .hidden {
             VStack(spacing: expanded ? 12 : 0) {
                 switch kind {
                 case .slider(let stops):
-                    SteppedEffortSlider(stops: stops, value: value, emptyLabel: context.providerId == "codex" ? "Default" : "Off", saving: context.saving(session), expanded: expanded, onPreview: { onPreview($0) }, onCommit: save)
+                    SteppedEffortSlider(stops: stops, value: value, emptyLabel: label(""), saving: context.saving(session), expanded: expanded, onPreview: { onPreview($0) }, onCommit: save)
                 case .thinking:
                     thinkingRow(Binding(get: { settings.config["thinkingMode"]?.bool == true }, set: { on in
                         var next = settings
@@ -23,19 +34,19 @@ struct EffortControlPanel: View {
                         context.save(next, session: session)
                     }))
                 case .toggle(let level):
-                    thinkingRow(Binding(get: { value == level || value == "ultracode" }, set: { save($0 ? level : "") }), detail: ComposerSettings.effortLabel(level))
+                    thinkingRow(Binding(get: { value == level || value == "ultracode" }, set: { save($0 ? level : "") }), detail: label(level))
                 case .list(let stops):
                     Menu {
                         ForEach(stops, id: \.self) { level in
                             Button { save(level) } label: {
-                                if value == level { Label(ComposerSettings.effortLabel(level), systemImage: "checkmark") }
-                                else { Text(ComposerSettings.effortLabel(level)) }
+                                if value == level { Label(label(level), systemImage: "checkmark") }
+                                else { Text(label(level)) }
                             }.accessibilityIdentifier("effort-\(level.isEmpty ? "off" : level)")
                         }
                     } label: {
-                        HStack { Text("Effort"); Spacer(); Text(ComposerSettings.effortLabel(value)).foregroundStyle(.secondary); Image(systemName: "chevron.up.chevron.down").font(.caption) }
+                        HStack { Text("Effort"); Spacer(); Text(label(value)).foregroundStyle(.secondary); Image(systemName: "chevron.up.chevron.down").font(.caption) }
                             .frame(minHeight: 44).contentShape(.rect)
-                    }.buttonStyle(.plain).accessibilityIdentifier("chooseEffort")
+                    }.menuOrder(.fixed).buttonStyle(.plain).accessibilityIdentifier("chooseEffort")
                 case .hidden: EmptyView()
                 }
                 if context.providerId == "claude_code", model.supportedEffortLevels?.contains("xhigh") == true {
@@ -50,6 +61,7 @@ struct EffortControlPanel: View {
                 }
             }
             .font(expanded ? .title3 : .subheadline).tint(Provider.accent(context.providerId))
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { controlWidth = $0 }
             .padding(.horizontal, expanded ? 0 : 14).padding(.vertical, expanded ? 0 : 10)
             .background {
                 if !expanded { RoundedRectangle(cornerRadius: 22).fill(Color(.tertiarySystemFill)) }
@@ -76,13 +88,26 @@ struct EffortControlPanel: View {
     }
 }
 
+/// Shared by fitting and drawing, so a change to the thumb or track padding
+/// cannot make the layout policy overestimate space for the stops.
+private struct EffortSliderMetrics {
+    let expanded: Bool
+    var thumb: CGFloat { expanded ? 44 : 30 }
+    var track: CGFloat { expanded ? 50 : 26 }
+    var hit: CGFloat { expanded ? 76 : 44 }
+    var inset: CGFloat { expanded ? 12 : 0 }
+    var dot: CGFloat { expanded ? 10 : 5 }
+    var endInset: CGFloat { max(track, thumb) / 2 }
+    func trackLength(in width: CGFloat) -> CGFloat { max(0, width - inset * 2 - endInset * 2) }
+}
+
 private struct SteppedEffortSlider: View {
     let stops: [String]
     let value: String
     let emptyLabel: String
     let saving: Bool
     var expanded = false
-    var onPreview: (String) -> Void = { _ in }
+    var onPreview: (String?) -> Void = { _ in }
     let onCommit: (String) -> Void
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -92,26 +117,35 @@ private struct SteppedEffortSlider: View {
     @State private var moved = false
     @State private var pending: String?
     @State private var nearest: Int?
+    @State private var interrupted = false
+    @State private var gestureActive = false
     private var index: Int { nearest ?? EffortControlKind.stopIndex(in: stops, value: pending ?? value) }
-    private var thumb: CGFloat { expanded ? 44 : 30 }
-    private var track: CGFloat { expanded ? 50 : 26 }
-    private var hit: CGFloat { expanded ? 76 : 44 }
-    private var inset: CGFloat { expanded ? 12 : 0 }
-    private var dot: CGFloat { expanded ? 10 : 5 }
-    private var endInset: CGFloat { max(track, thumb) / 2 }
+    private var metrics: EffortSliderMetrics { .init(expanded: expanded) }
+    private var thumb: CGFloat { metrics.thumb }
+    private var track: CGFloat { metrics.track }
+    private var hit: CGFloat { metrics.hit }
+    private var inset: CGFloat { metrics.inset }
+    private var dot: CGFloat { metrics.dot }
+    private var endInset: CGFloat { metrics.endInset }
+    private var selection: String { nearest.map { stops[$0] } ?? pending ?? value }
     private var label: String {
-        let level = nearest.map { stops[$0] } ?? pending ?? value
-        return level.isEmpty ? emptyLabel : ComposerSettings.effortLabel(level)
+        selection.isEmpty ? emptyLabel : ComposerSettings.effortLabel(selection)
     }
-    // Exact yellow → violet ramp from mobile's effort-control.tsx.
-    private var ramp: LinearGradient {
-        LinearGradient(stops: [
-            .init(color: Color(red: 245/255, green: 215/255, blue: 110/255), location: 0),
-            .init(color: Color(red: 125/255, green: 222/255, blue: 106/255), location: 0.22),
-            .init(color: Color(red: 61/255, green: 220/255, blue: 180/255), location: 0.42),
-            .init(color: Color(red: 59/255, green: 130/255, blue: 246/255), location: 0.64),
-            .init(color: Color(red: 109/255, green: 94/255, blue: 245/255), location: 0.82),
-            .init(color: Color(red: 192/255, green: 132/255, blue: 252/255), location: 1)
+    private func neutral(_ level: String) -> Bool { level.isEmpty || level == "none" || level == "default" }
+    // Keep the yellow → violet ramp, starting at the first explicit effort so
+    // adding None/Default never changes Low into a higher-effort colour.
+    private func ramp(width: CGFloat) -> LinearGradient {
+        let first = stops.firstIndex { !neutral($0) } ?? 0
+        let start = width > 0 ? center(first, width: width) / width : 0
+        let end = width > 0 ? center(stops.count - 1, width: width) / width : 1
+        let span = max(0, end - start)
+        return LinearGradient(stops: [
+            .init(color: Color(red: 245/255, green: 215/255, blue: 110/255), location: start),
+            .init(color: Color(red: 125/255, green: 222/255, blue: 106/255), location: start + span * 0.22),
+            .init(color: Color(red: 61/255, green: 220/255, blue: 180/255), location: start + span * 0.42),
+            .init(color: Color(red: 59/255, green: 130/255, blue: 246/255), location: start + span * 0.64),
+            .init(color: Color(red: 109/255, green: 94/255, blue: 245/255), location: start + span * 0.82),
+            .init(color: Color(red: 192/255, green: 132/255, blue: 252/255), location: end)
         ], startPoint: .leading, endPoint: .trailing)
     }
     var body: some View {
@@ -122,11 +156,13 @@ private struct SteppedEffortSlider: View {
                 let x = dragPosition ?? center(index, width: width)
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color(.separator)).frame(height: track)
-                    ramp.frame(height: track)
-                        .mask(alignment: .leading) {
-                            Capsule().frame(width: min(width, max(track, x + track / 2)), height: track)
-                        }
-                        .clipShape(.capsule)
+                    if !neutral(selection) {
+                        ramp(width: width).frame(height: track)
+                            .mask(alignment: .leading) {
+                                Capsule().frame(width: min(width, max(track, x + track / 2)), height: track)
+                            }
+                            .clipShape(.capsule)
+                    }
                     ForEach(stops.indices, id: \.self) { tick in
                         if tick != index {
                             Circle().fill(tick < index ? Color.white.opacity(0.92) : Color(.tertiaryLabel))
@@ -141,6 +177,8 @@ private struct SteppedEffortSlider: View {
                         .updating($touching) { _, state, _ in state = true }
                         .onChanged { gesture in
                             guard enabled else { return }
+                            if !gestureActive { gestureActive = true; interrupted = false }
+                            guard !interrupted else { return }
                             if origin == nil { origin = center(index, width: width) }
                             if abs(gesture.translation.width) > 8 { moved = true }
                             if moved {
@@ -149,7 +187,8 @@ private struct SteppedEffortSlider: View {
                             }
                         }
                         .onEnded { gesture in
-                            guard enabled else { reset(); return }
+                            defer { gestureActive = false }
+                            guard enabled, !interrupted else { reset(); return }
                             let position = moved ? (origin ?? x) + gesture.translation.width : gesture.location.x
                             let selected = stop(at: position, width: width)
                             let level = stops[selected]
@@ -158,7 +197,12 @@ private struct SteppedEffortSlider: View {
                                 origin = nil; moved = false
                             }
                             if level != value { onCommit(level) }
-                        }).padding(.horizontal, inset)
+                        })
+                    .onChange(of: geometry.size.width) { _, _ in
+                        let wasTouching = touching
+                        reset(); interrupted = wasTouching
+                    }
+                    .padding(.horizontal, inset)
             }.frame(height: hit)
                 .background { if expanded { Color.clear.modifier(GlassSurface(radius: hit / 2)) } }
                 .allowsHitTesting(enabled)
@@ -173,10 +217,13 @@ private struct SteppedEffortSlider: View {
         }
         .sensoryFeedback(.selection, trigger: index)
         .onAppear { onPreview(label) }
+        .onDisappear { onPreview(nil) }
         .onChange(of: label) { _, text in onPreview(text) }
         .onChange(of: value) { _, _ in reset() }
         .onChange(of: saving) { _, busy in if !busy { reset() } }
-        .onChange(of: touching) { _, active in if !active && origin != nil { reset() } }
+        .onChange(of: touching) { _, active in
+            if !active { if origin != nil { reset() }; gestureActive = false }
+        }
         .opacity(enabled ? 1 : 0.5)
     }
     private func center(_ index: Int, width: CGFloat) -> CGFloat {

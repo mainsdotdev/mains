@@ -291,6 +291,11 @@ underlying tooling.
 - Sidebar **Atlas** opens the account library without changing the active provider
   or Space mode. All, Pages, Docs, Images and Bookmarks support search, project,
   source and favorites filters, with one 50-entry page retained in memory.
+  Image rows show a fixed-size thumbnail; only visible rows request the bounded
+  128-pixel/128 KB `readMobileImage` response, and offscreen rows release it.
+  Metadata shows bookmark domains, file type/size and short Page excerpts instead
+  of source labels. File metadata and 240-scalar Page previews are optional on older
+  computers, which retain category icons when thumbnails are unavailable.
   Pages are read-only Markdown in version-pinned parts of up to 16,384 Unicode
   scalars; embedded Atlas files open by identity. Bookmark details expose their
   description, note and HTTP(S) link. Items can open their source conversation.
@@ -298,8 +303,8 @@ underlying tooling.
   downloads stream in 128 KB chunks up to 100 MB into protected temporary storage.
   Closing a preview removes its files. Saved items span providers/modes; automatic
   files follow desktop's Work-only discovery, including synced conversation files.
-  This requires an updated computer with the four narrow `atlas:*Mobile*` readers
-  (`mobileLibrary`, `readMobilePage`, `describeMobileFile`, `readMobileFile`). Broad
+  This requires an updated computer with the narrow `atlas:*Mobile*` readers
+  (`mobileLibrary`, `readMobilePage`, `describeMobileFile`, `readMobileFile`, `readMobileImage`). Broad
   Atlas mutations/path resolvers remain unavailable to paired phones. Library
   metadata and Page content stay out of the snapshot cache; stale pairing/connection
   reads cannot populate another session. Atlas changes refresh an open library,
@@ -328,6 +333,8 @@ underlying tooling.
   mutable mode/model/permission choices, replayed streaming messages and tool calls,
   and native image/PDF/Markdown previews. It never opens a socket, starts a provider
   or executes a tool. Live-to-durable messages retain their stream identity.
+  The bundled `demo-report.pdf` chat attachment appears only in **Explore Mains**;
+  other prepared conversations retain their original attachments.
   The Demo Mac identity, imported attachments, command receipts and new conversations
   stay in memory; explicit file previews use the normal protected temporary files.
   Only a separate demo-enabled flag survives app termination. A new
@@ -390,7 +397,15 @@ underlying tooling.
   and Tests agents; **Explore Mains** includes their prepared completed reports.
 - A sliding sidebar with provider/space discs, Code workspaces and branch
   information, and Work/Chat project groups and recent conversations.
-- Code / Work / Chat tabs sit under the Mains title in the sidebar. Selection
+- The sidebar header places the filled Mains vector logo beside Code / Work / Chat.
+  Only the selected mode has a text label, with icon-only controls in narrow
+  layouts and accessibility text sizes. The fixed-height footer holds the selected
+  provider, Search and Settings. Tapping the selected provider reveals the other
+  spaces to its right in a bounded horizontal scroller; Search becomes an icon
+  below its 110-point, text-scaled label threshold, while Settings stays at the edge.
+  Provider selection, Search and Settings close the strip. Controls retain 44-point
+  hit targets and respect Reduce Motion and Reduce Transparency.
+- Code / Work / Chat selection
   persists through `space:update` on the computer and updates the list while
   keeping the sidebar open. Unsupported experiences are hidden for code-only providers.
 - Home and conversation headers share a centered capsule showing the computer
@@ -419,6 +434,12 @@ underlying tooling.
 - Shared two-row glass composer for home and conversations, with provider-coloured
   prompt bubbles, a native title/Outputs/New/More toolbar and a circular Latest control.
 - Live model catalogues, model-specific effort and provider-specific permissions.
+  All providers share model brand icons in the catalogue, composer and effort
+  control. Unknown models use their provider's logo; Copilot Auto uses Copilot
+  and Cursor Auto/Composer uses Cursor. Icons stay in one consistent 16-point slot.
+  OpenCode matches desktop's provider groups, model brand icons and display names;
+  rows and the composer omit the repeated provider prefix and show only the model name.
+  Selections keep the catalogue's original model ids for settings and requests.
   Model and run-options lists use compact rows. Effort opens as a large floating
   control with a soft material halo confined to the component; the rest of the
   conversation stays visible and mounted. Its position follows the live keyboard
@@ -427,9 +448,14 @@ underlying tooling.
   button, with an opacity transition for Reduce Motion. Tapping the model name opens a card catalogue sheet
   with provider-supplied descriptions. A confirmed selection or closing that
   sheet returns to effort.
-  Effort uses a stepped
-  yellow-to-violet scale, a Thinking switch for on/off models,
-  or a menu for more than six stops, following Expo's capability rules. Claude's
+  OpenCode labels an unset effort as Default, separately from its native None option.
+  None comes first when advertised, followed by Default and the effort levels;
+  models without None keep Default first. Selection follows the original value.
+  Effort uses a stepped yellow-to-violet scale for up to seven stops when the
+  measured track provides 44 points between stops (scaled with text size).
+  Narrow layouts, accessibility text and larger catalogues use the same ordered
+  options in a menu. None/Default stay neutral; the lowest explicit effort begins the colour ramp.
+  On/off models retain their Thinking switch. Claude's
   Ultracode stays separate. Dragging previews locally and saves only on release;
   accessibility adjustments use the same stops.
   Codex permissions respect the computer’s managed profile/sandbox policy. New-chat
@@ -574,7 +600,14 @@ underlying tooling.
   Sending from a historical page first opens the latest page; subsequent send
   acknowledgements respect any new reading gesture instead of forcing another jump.
 
-Consecutive tool calls share a work summary. Each row shows its command, file or
+Consecutive tool calls share desktop's stable work summary (for example, “Read
+files, looked for files”), rather than the first unfinished call's activity label.
+Tool rows and the activity footer share a display-only status projection: later
+foreground output retires stale running/queued previews, while the trailing
+parallel batch stays active. Thinking, command progress and child activity do
+not finish foreground tools. Explicit background MCP task lifecycle still wins;
+wire statuses and cached history are unchanged.
+Each row shows its command, file or
 search pattern, status, error and available line/diff counts. Opening a row shows
 up to 40 output lines; deferred input/output opens a separate bounded reader.
 Conversation images load small previews on demand, preserve their aspect ratio
@@ -696,13 +729,18 @@ adapters. Swift models are a manually maintained subset of `packages/contracts`;
 they do not introduce a second backend API. Dates preserve the existing `$date`
 wire tag, and arbitrary JSON preserves `$undefined` markers.
 
+Atlas, Trash and Activity share `AppListStyle` row insets and minimum content height.
+Keep list metadata compact beneath a single-line title, allowing extra lines at
+accessibility text sizes. Use `compactRelativeAge` for list dates (`5m ago`, `3h ago`,
+`1d ago`), with minute updates while visible; VoiceOver can read the exact Atlas date.
+
 The Xcode project and shared scheme are committed. After adding/removing Swift
 files, update them in Xcode or regenerate with `npm run project:generate`
 (run `npm run beta:setup` once to install the locked Ruby tooling). Vector icons are rendered
 directly from desktop's current `iconRegistry` into the asset catalogue with
 `node scripts/sync-icons.mjs`. This includes new names, strokes and masks;
 full-viewport SVG wrappers are flattened for native template rendering.
-The Bridge status mark is included from its desktop component as well.
+The filled Mains mark, Bridge status mark, Atlas navigation icons and model brand marks are included from their desktop components as well.
 Current-colour alpha masks use white mask paint so native luminance rendering
 does not erase outlined marks such as Mains.
 Existing legacy assets remain available for previously saved tokens.

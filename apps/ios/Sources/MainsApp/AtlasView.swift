@@ -1,7 +1,8 @@
 import SwiftUI
 import QuickLook
+import ImageIO
 
-private let atlasTypes = [("all", "All", "square.stack"), ("page", "Pages", "doc.text"), ("file", "Docs", "doc"), ("image", "Images", "photo"), ("bookmark", "Bookmarks", "bookmark")]
+private let atlasTypes = [("all", "All", "atlas-all"), ("page", "Pages", "atlas-page"), ("file", "Docs", "atlas-file"), ("image", "Images", "atlas-image"), ("bookmark", "Bookmarks", "atlas-bookmark")]
 private let atlasScopes = [("all", "All sources"), ("saved", "Saved to Atlas"), ("generated", "Generated"), ("uploads", "Uploads"), ("favorites", "Favorites")]
 
 struct AtlasView: View {
@@ -28,50 +29,14 @@ struct AtlasView: View {
     @State private var tagFilterOwner = 0
     @State private var activeTag: AtlasTag?
     private var canOrganize: Bool { libraryOwner == session.ownership && session.canSaveToAtlas }
+    private var hasFilters: Bool { query.scope != "all" || query.collectionID != nil || query.tagID != nil }
     private var filter: String { "\(query.type):\(query.scope):\(query.collectionID ?? ""):\(query.tagID ?? ""):\(query.text)" }
     private var loadKey: String { "\(query.hashValue):\(session.connection):\(session.atlasRevision):\(reload)" }
 
     var body: some View {
         List {
             Section {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        ForEach(atlasTypes, id: \.0) { type in
-                            Button { query.type = type.0 } label: {
-                                Label(type.1, systemImage: type.2).font(.subheadline.weight(.medium)).fixedSize()
-                                    .padding(.horizontal, 14).frame(minHeight: 44)
-                                    .background(query.type == type.0 ? Color.primary.opacity(0.1) : Color(.tertiarySystemGroupedBackground), in: .capsule)
-                            }.buttonStyle(ChatPressStyle()).foregroundStyle(.primary)
-                                .accessibilityAddTraits(query.type == type.0 ? .isSelected : [])
-                                .accessibilityIdentifier("atlasType-" + type.0)
-                        }
-                    }.padding(.vertical, 4)
-                }.scrollIndicators(.hidden)
-                HStack {
-                    Menu {
-                        Picker("Source", selection: $query.scope) {
-                            ForEach(atlasScopes, id: \.0) { Text($0.1).tag($0.0) }
-                        }
-                        Picker("Project", selection: $query.collectionID) {
-                            Text("All projects").tag(String?.none)
-                            ForEach(session.collections) { Text($0.name).tag(Optional($0.id)) }
-                        }
-                        Button("Tag…", systemImage: "tag") { tagFilterOwner = session.ownership; showingTagFilter = true }
-                    } label: {
-                        Label(query.scope == "all" && query.collectionID == nil && query.tagID == nil ? "Filter" : "Filtered", systemImage: "line.3.horizontal.decrease")
-                            .frame(minHeight: 44)
-                    }.accessibilityIdentifier("atlasFilters")
-                    Spacer()
-                    if query.scope != "all" || query.collectionID != nil || query.tagID != nil {
-                        Button("Reset") { query.scope = "all"; query.collectionID = nil; query.tagID = nil; activeTag = nil }
-                    }
-                }
-                if query.scope != "all" || query.collectionID != nil || query.tagID != nil {
-                    Text([atlasScopes.first(where: { $0.0 == query.scope })?.1,
-                          session.collections.first(where: { $0.id == query.collectionID })?.name,
-                          activeTag.map { "#" + $0.name }].compactMap { $0 }.joined(separator: " · "))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                libraryFilters.listRowInsets(EdgeInsets())
             }.listRowBackground(Color.clear).listRowSeparator(.hidden)
 
             if loading { HStack(spacing: 12) { ProgressView(); Text("Loading Atlas…").foregroundStyle(.secondary) } }
@@ -91,8 +56,9 @@ struct AtlasView: View {
                         .listRowBackground(Color.clear).accessibilityIdentifier("atlasEmpty")
                 }
                 ForEach(library.items) { entry in
-                    Button { open(entry) } label: { AtlasEntryRow(entry: entry, project: session.collections.first { $0.id == entry.collectionId }?.name) }
+                    Button { open(entry) } label: { AtlasEntryRow(session: session, entry: entry, project: session.collections.first { $0.id == entry.collectionId }?.name) }
                         .buttonStyle(.plain).accessibilityIdentifier("atlasItem-" + entry.key)
+                        .listRowInsets(AppListStyle.rowInsets)
                         .contextMenu {
                             if entry.savedIdentity != nil {
                                 if entry.kind == "bookmark", let id = entry.savedIdentity {
@@ -131,19 +97,30 @@ struct AtlasView: View {
             }
         }
         .listStyle(.insetGrouped).navigationTitle("Atlas")
-        .searchable(text: $query.text, prompt: "Search Atlas")
+        .contentMargins(.top, 8, for: .scrollContent)
+        .listSectionSpacing(.compact)
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query.text, placement: .toolbar, prompt: "Search Atlas")
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Trash", systemImage: "trash") { trashOwner = session.ownership; showingTrash = true }
-                    .accessibilityIdentifier("openAtlasTrash")
+            DefaultToolbarItem(kind: .search, placement: .bottomBar)
+            ToolbarSpacer(.flexible, placement: .bottomBar)
+            ToolbarItem(placement: .bottomBar) {
+                Menu {
+                    Button("New bookmark", systemImage: "bookmark.badge.plus") { bookmarkOwner = session.ownership; addingBookmark = true }
+                        .disabled(!session.canSaveToAtlas).accessibilityIdentifier("newAtlasBookmark")
+                    Button("Trash", systemImage: "trash") { trashOwner = session.ownership; showingTrash = true }
+                        .accessibilityIdentifier("openAtlasTrash")
+                    Divider()
+                    Button("Refresh", systemImage: "arrow.clockwise") { reload += 1 }
+                        .disabled(loading || !session.isConnected)
+                } label: {
+                    Label("Atlas options", systemImage: "ellipsis")
+                }
+                .labelStyle(.iconOnly)
+                .buttonBorderShape(.circle)
+                .accessibilityIdentifier("atlasOptions")
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("New bookmark", systemImage: "bookmark.badge.plus") { bookmarkOwner = session.ownership; addingBookmark = true }
-                    .disabled(!session.canSaveToAtlas).accessibilityIdentifier("newAtlasBookmark")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-            Button("Refresh", systemImage: "arrow.clockwise") { reload += 1 }.disabled(loading || !session.isConnected)
-        } }
+        }
         .accessibilityIdentifier("atlasLibrary")
         .task(id: loadKey) { await load() }
         .refreshable { await load() }
@@ -168,6 +145,64 @@ struct AtlasView: View {
         }
         .onChange(of: session.ownership) { _, _ in query.tagID = nil; activeTag = nil }
         .alert("Couldn’t update item", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) { Button("OK", role: .cancel) {} } message: { Text(editError ?? "") }
+    }
+    private var libraryFilters: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(atlasTypes, id: \.0) { type in
+                            Button { query.type = type.0 } label: {
+                                Label {
+                                    Text(type.1)
+                                } icon: {
+                                    RegistryIcon(token: "icon:" + type.2, size: 18, tint: .primary)
+                                }
+                                    .font(.subheadline.weight(.medium)).fixedSize()
+                                    .padding(.horizontal, 14).frame(minHeight: 36)
+                                    .background(query.type == type.0 ? Color.primary.opacity(0.1) : Color(.tertiarySystemGroupedBackground), in: .capsule)
+                                    .frame(minHeight: 44).contentShape(.rect)
+                            }.buttonStyle(ChatPressStyle()).foregroundStyle(.primary)
+                                .accessibilityAddTraits(query.type == type.0 ? .isSelected : [])
+                                .accessibilityIdentifier("atlasType-" + type.0)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .modifier(AtlasTypeScrollFade())
+                Menu {
+                    Picker("Source", selection: $query.scope) {
+                        ForEach(atlasScopes, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    Picker("Project", selection: $query.collectionID) {
+                        Text("All projects").tag(String?.none)
+                        ForEach(session.collections) { Text($0.name).tag(Optional($0.id)) }
+                    }
+                    Button("Tag…", systemImage: "tag") { tagFilterOwner = session.ownership; showingTagFilter = true }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(hasFilters ? Color.accentColor : .primary)
+                        .frame(width: 36, height: 36)
+                        .background(Color(.tertiarySystemGroupedBackground), in: .circle)
+                        .frame(width: 44, height: 44).contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(hasFilters ? "Filtered" : "Filter")
+                .accessibilityIdentifier("atlasFilters")
+            }
+            if hasFilters {
+                HStack(spacing: 8) {
+                    Text([atlasScopes.first(where: { $0.0 == query.scope })?.1,
+                          session.collections.first(where: { $0.id == query.collectionID })?.name,
+                          activeTag.map { "#" + $0.name }].compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Reset") { query.scope = "all"; query.collectionID = nil; query.tagID = nil; activeTag = nil }
+                        .font(.caption).fixedSize().frame(minHeight: 44).buttonStyle(.plain)
+                }
+            }
+        }
     }
     private func favorite(_ entry: AtlasEntry) {
         guard let owner = libraryOwner, canOrganize else { return }
@@ -210,30 +245,134 @@ struct AtlasView: View {
     }
 }
 
+private struct AtlasTypeScrollFade: ViewModifier {
+    private struct Edges: Equatable {
+        var left = false
+        var right = false
+    }
+    @State private var edges = Edges()
+    @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: Edges.self) { geometry in
+                let start = -geometry.contentInsets.leading
+                let end = max(start, geometry.contentSize.width - geometry.containerSize.width + geometry.contentInsets.trailing)
+                let overflows = end > start + 1
+                return Edges(left: overflows && geometry.contentOffset.x > start + 1,
+                             right: overflows && geometry.contentOffset.x < end - 1)
+            } action: { _, next in edges = next }
+            .overlay(alignment: layoutDirection == .leftToRight ? .leading : .trailing) {
+                fade(left: true).opacity(edges.left ? 1 : 0)
+            }
+            .overlay(alignment: layoutDirection == .leftToRight ? .trailing : .leading) {
+                fade(left: false).opacity(edges.right ? 1 : 0)
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: edges)
+    }
+
+    private func fade(left: Bool) -> some View {
+        let background = Color(.systemGroupedBackground)
+        let fromLeading = left == (layoutDirection == .leftToRight)
+        return LinearGradient(colors: [background, background.opacity(0)],
+                              startPoint: fromLeading ? .leading : .trailing,
+                              endPoint: fromLeading ? .trailing : .leading)
+            .frame(width: 20)
+            .allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+
 private struct AtlasEntryRow: View {
+    let session: BackendSession
     let entry: AtlasEntry
     let project: String?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var detail: String? {
+        if entry.kind == "bookmark", let host = entry.webURL?.host?.lowercased() {
+            return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        }
+        if entry.kind == "page", let preview = entry.preview {
+            let text = (try? AttributedString(markdown: preview)).map { String($0.characters) } ?? preview
+            let summary = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            return summary.isEmpty ? nil : summary
+        }
+        guard entry.kind == "file" || entry.kind == "image" else { return nil }
+        let name = entry.fileName ?? entry.title
+        let suffix = (name as NSString).pathExtension
+        let type = !suffix.isEmpty && suffix.count <= 10 ? suffix.uppercased() : entry.mimeType?.split(separator: "/").last.map { $0.uppercased() }
+        let size = entry.byteSize.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) }
+        let info = [type, size].compactMap { $0 }.joined(separator: " · ")
+        return info.isEmpty ? nil : info
+    }
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        let date = ISO8601DateFormatter.atlasDate(entry.date)
+        let detail = self.detail
+        HStack(alignment: .center, spacing: 10) {
             Group {
-                if let icon = entry.icon { RegistryIcon(token: icon, size: 24, tint: .secondary) }
-                else { Image(systemName: atlasTypes.first { $0.0 == entry.kind }?.2 ?? "doc").font(.title3).foregroundStyle(.secondary) }
-            }.frame(width: 30, height: 32).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack {
-                    Text(entry.title).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(2)
+                if entry.kind == "image", let reference = entry.file {
+                    AtlasListImage(session: session, reference: reference, revision: entry.date)
+                }
+                else if let icon = entry.icon { RegistryIcon(token: icon, size: 22, tint: .secondary) }
+                else { RegistryIcon(token: "icon:" + (atlasTypes.first { $0.0 == entry.kind }?.2 ?? "document"), size: 22, tint: .secondary) }
+            }.frame(width: 36, height: 36).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(entry.title).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                     if entry.isFavorite { Image(systemName: "star.fill").font(.caption).foregroundStyle(.yellow).accessibilityLabel("Favorite") }
                 }
-                Text([entry.origin == "saved" ? "Saved to Atlas" : entry.origin == "attachment" ? "Uploaded" : "Generated", project].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                TimelineView(.periodic(from: .now, by: 60)) { clock in
+                    Text([date.map { compactRelativeAge($0, now: clock.date) }, detail, project].compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                        .accessibilityLabel([date.map { $0.formatted(date: .abbreviated, time: .shortened) }, project, detail].compactMap { $0 }.joined(separator: ", "))
+                }
                 if let tags = entry.tags, !tags.isEmpty {
-                    Text(tags.map { "#" + $0.name }.joined(separator: "  ")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Text(tags.map { "#" + $0.name }.joined(separator: "  ")).font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                         .accessibilityLabel("Tags: " + tags.map(\.name).joined(separator: ", "))
                 }
-                if let date = ISO8601DateFormatter.atlasDate(entry.date) { Text(date, style: .relative).font(.caption2).foregroundStyle(.secondary) }
             }.frame(maxWidth: .infinity, alignment: .leading)
-            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).padding(.top, 7)
-        }.padding(.vertical, 7).frame(minHeight: 60).contentShape(.rect)
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                .padding(.leading, 8).accessibilityHidden(true)
+        }.frame(minHeight: AppListStyle.minimumContentHeight).contentShape(.rect)
+    }
+}
+
+private struct AtlasListImage: View {
+    let session: BackendSession
+    let reference: AtlasFileReference
+    let revision: String
+    @State private var visible = false
+    @State private var image: UIImage?
+    private var loadKey: String { "\(reference.hashValue):\(revision):\(session.ownership):\(session.connection):\(session.atlasRevision):\(visible)" }
+    var body: some View {
+        ZStack {
+            Color(.tertiarySystemGroupedBackground)
+            if let image { Image(uiImage: image).resizable().scaledToFill() }
+            else { RegistryIcon(token: "icon:atlas-image", size: 22, tint: .secondary) }
+        }
+        .frame(width: 36, height: 36).clipShape(.rect(cornerRadius: 8))
+        .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
+        .task(id: loadKey) {
+            image = nil
+            guard visible, session.isConnected else { return }
+            let owner = session.ownership
+            do {
+                let preview = try await session.readAtlasImage(reference)
+                try Task.checkCancellation()
+                guard owner == session.ownership, let data = preview.data,
+                      let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 128,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                      ] as CFDictionary) else { return }
+                image = UIImage(cgImage: thumbnail)
+            } catch { /* Keep the category icon when a preview is unavailable. */ }
+        }
+        .onDisappear { image = nil }
     }
 }
 

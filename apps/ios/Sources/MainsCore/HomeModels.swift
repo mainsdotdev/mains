@@ -98,8 +98,12 @@ public struct ComposerSettings: Codable, Equatable, Sendable {
             config["serviceTier"] = .string(tiers.contains(tier) ? tier : "default")
         }
     }
-    public static func effortLabel(_ value: String) -> String {
-        switch value { case "": "Off"; case "xhigh": "Extra High"; default: value.capitalized }
+    public static func effortLabel(_ value: String, provider: String? = nil) -> String {
+        switch value {
+        case "": ["codex", "opencode"].contains(provider ?? "") ? "Default" : "Off"
+        case "xhigh": "Extra High"
+        default: value.capitalized
+        }
     }
 }
 
@@ -144,6 +148,49 @@ public struct ModelChoice: Codable, Equatable, Identifiable, Sendable {
     }
     public var name: String {
         displayName.lowercased().hasPrefix("gpt-") ? "GPT " + displayName.dropFirst(4).replacingOccurrences(of: "-", with: " ") : displayName
+    }
+    /// Compact composer label; catalogue identities and provider groups stay intact.
+    public func label(for providerID: String) -> String {
+        guard providerID == "opencode", let parts = OpenCodeModelDisplay.parts(displayName) else { return name }
+        return parts.name
+    }
+}
+
+/// Mirrors desktop's model-display.ts; presentation never replaces a catalogue id.
+public enum OpenCodeModelDisplay {
+    public struct Parts: Equatable, Sendable {
+        public let provider: String
+        public let name: String
+    }
+    public struct Group: Identifiable, Sendable {
+        public var id: String { provider }
+        public let provider: String
+        public var models: [ModelChoice]
+    }
+    private static let providers = [
+        "github-copilot": "GitHub Copilot", "copilot": "GitHub Copilot", "openai": "OpenAI",
+        "anthropic": "Anthropic", "google": "Google", "opencode": "OpenCode", "openrouter": "OpenRouter",
+        "groq": "Groq", "mistral": "Mistral", "xai": "xAI", "azure": "Azure",
+        "amazon-bedrock": "Amazon Bedrock", "bedrock": "Amazon Bedrock", "claude-agent": "Claude",
+    ]
+    public static func parts(_ model: String) -> Parts? {
+        guard let slash = model.firstIndex(of: "/"), slash > model.startIndex else { return nil }
+        let slug = String(model[..<slash]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = String(model[model.index(after: slash)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !slug.isEmpty, !name.isEmpty else { return nil }
+        let provider = providers[slug.lowercased()] ?? slug.split(separator: "-").map { word in
+            word.count <= 2 ? word.uppercased() : String(word.prefix(1)).uppercased() + word.dropFirst()
+        }.joined(separator: " ")
+        return Parts(provider: provider, name: name)
+    }
+    public static func groups(_ models: [ModelChoice]) -> [Group] {
+        var result: [Group] = [], indices: [String: Int] = [:]
+        for model in models {
+            let provider = parts(model.displayName)?.provider ?? "Other"
+            if let index = indices[provider] { result[index].models.append(model) }
+            else { indices[provider] = result.count; result.append(Group(provider: provider, models: [model])) }
+        }
+        return result
     }
 }
 

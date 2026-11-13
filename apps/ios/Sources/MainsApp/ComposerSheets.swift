@@ -118,15 +118,33 @@ struct ModelSheet: View {
                         Text("No models available.").font(.subheadline).foregroundStyle(.secondary).padding(16)
                     }
                     if !settings.model.isEmpty && selected == nil && !context.modelsLoading(session) && session.modelErrors[context.providerId] == nil {
-                        modelRow(settings.model, detail: "Saved selection", selected: true) { dismiss() }
+                        let parts = context.providerId == "opencode" ? OpenCodeModelDisplay.parts(settings.model) : nil
+                        modelRow(parts.map { $0.provider + " / " + $0.name } ?? settings.model, detail: "Saved selection", selected: true, modelName: settings.model) { dismiss() }
                             .id(settings.model)
                         separator
                     }
-                    ForEach(models) { model in
-                        modelRow(model.name, detail: model.description, selected: selected?.id == model.id) {
-                            var next = settings; next.select(model, provider: context.providerId); choose(next)
-                        }.id(model.id).accessibilityIdentifier("model-\(model.id)")
-                        if model.id != models.last?.id { separator }
+                    if context.providerId == "opencode" {
+                        ForEach(OpenCodeModelDisplay.groups(models)) { group in
+                            Text(group.provider.uppercased()).font(.caption2.weight(.semibold)).tracking(0.6)
+                                .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 4)
+                                .accessibilityAddTraits(.isHeader)
+                            ForEach(group.models) { model in
+                                let name = OpenCodeModelDisplay.parts(model.displayName)?.name ?? model.name
+                                modelRow(name, detail: nil, selected: selected?.id == model.id, modelName: model.displayName) {
+                                    var next = settings; next.select(model, provider: context.providerId); choose(next)
+                                }.id(model.id).accessibilityIdentifier("model-\(model.id)")
+                                    .accessibilityLabel(group.provider + ", " + name)
+                                if model.id != group.models.last?.id { separator }
+                            }
+                        }
+                    } else {
+                        ForEach(models) { model in
+                            modelRow(model.name, detail: model.description, selected: selected?.id == model.id, modelName: model.displayName) {
+                                var next = settings; next.select(model, provider: context.providerId); choose(next)
+                            }.id(model.id).accessibilityIdentifier("model-\(model.id)")
+                            if model.id != models.last?.id { separator }
+                        }
                     }
                 }
                 .background(Color(.tertiarySystemBackground), in: .rect(cornerRadius: 24))
@@ -138,9 +156,10 @@ struct ModelSheet: View {
         }
     }
     private var separator: some View { Color(.separator).frame(height: 0.5).padding(.horizontal, 16) }
-    private func modelRow(_ title: String, detail: String?, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func modelRow(_ title: String, detail: String?, selected: Bool, modelName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 12) {
+                ComposerModelIcon(name: modelName, providerID: context.providerId)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title).font(.body).foregroundStyle(.primary).lineLimit(2)
                     if let detail, !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2) }

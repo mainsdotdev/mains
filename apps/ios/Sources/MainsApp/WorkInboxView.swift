@@ -62,7 +62,7 @@ struct WorkInboxView: View {
                 ForEach(items) { item in
                     WorkInboxRow(session: session, item: item, kind: kind, now: now, live: live) { openConversation(item.id) }
                         .listRowBackground(Color(.secondarySystemBackground))
-                        .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+                        .listRowInsets(AppListStyle.rowInsets)
                 }
             } header: {
                 HStack { Text(title); Spacer(); Text(items.count, format: .number).monospacedDigit() }
@@ -118,7 +118,7 @@ private struct WorkInboxRow: View {
                             .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         HStack(alignment: .firstTextBaseline, spacing: 5) {
-                            Text([conversationAge(run.updatedAt, now: now), projectName].compactMap { $0 }.joined(separator: " · "))
+                            Text([compactRelativeAge(run.updatedAt, now: now), projectName].compactMap { $0 }.joined(separator: " · "))
                                 .font(.caption2).foregroundStyle(.secondary)
                                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                             if run.isReplica == true { Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary) }
@@ -126,10 +126,10 @@ private struct WorkInboxRow: View {
                             Text(Provider.name(run.providerId)).font(.caption2).foregroundStyle(.secondary).fixedSize()
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                }.frame(minHeight: 48).contentShape(.rect)
+                }.frame(minHeight: AppListStyle.minimumContentHeight).contentShape(.rect)
             }
             .buttonStyle(.plain).accessibilityIdentifier("inboxRun-\(run.id)")
-            .accessibilityLabel([run.displayTitle, Provider.name(run.providerId), projectName, status, conversationAge(run.updatedAt, now: now), run.isReplica == true ? "Read-only · another computer" : nil].compactMap { $0 }.joined(separator: ", "))
+            .accessibilityLabel([run.displayTitle, Provider.name(run.providerId), projectName, status, compactRelativeAge(run.updatedAt, now: now), run.isReplica == true ? "Read-only · another computer" : nil].compactMap { $0 }.joined(separator: ", "))
             .accessibilityHint(kind == .waiting ? "Open conversation to review and answer" : "Open conversation")
 
             if live && run.isActive && run.isReplica != true {

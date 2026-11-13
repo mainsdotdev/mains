@@ -11,9 +11,15 @@ struct SidebarView: View {
     let openWorkInbox: () -> Void
     let openAtlas: () -> Void
     @State private var pendingMode: String?
+    @State private var providersExpanded = false
     @Namespace private var modeSelection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var searchLabelWidth: CGFloat = 110
     private var space: Space? { session.selectedSpace }
+    private var modes: [String] { space.map { Experience.modes(for: $0.providerId) } ?? [] }
+    private var otherSpaces: [Space] { session.spaces.filter { $0.id != space?.id } }
+    private var controlAnimation: Animation? { reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 1) }
     private var chats: [Conversation] {
         session.conversations.filter { $0.providerId == space?.providerId && $0.mode == space?.mode }
     }
@@ -23,13 +29,7 @@ struct SidebarView: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Mains").font(.title2.bold())
-                Spacer()
-                RoundControl(symbol: "gearshape", label: "Settings", action: settings).accessibilityIdentifier("openSettings")
-                RoundControl(symbol: "magnifyingglass", label: "Search", action: search)
-            }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
-            modeSwitcher.padding(.horizontal, 16).padding(.bottom, 12)
+            header.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
             if session.pairing != nil {
                 TimelineView(.periodic(from: .now, by: 15)) { clock in
                     let count = session.displayedWorkInbox.groups(now: clock.date, live: session.workInboxIsCurrent && session.isConnected).needsYou.count
@@ -86,23 +86,109 @@ struct SidebarView: View {
             .scrollIndicators(.hidden)
             .modifier(SidebarScrollFade())
             .id("\(space?.id ?? ""):\(space?.mode ?? "")")
-            ScrollView(.horizontal) {
-                HStack(spacing: 10) {
-                    ForEach(session.spaces) { item in
-                        SpaceDisc(space: item, selected: item.id == space?.id) { selectSpace(item.id) }
-                    }
-                }.padding(2)
-            }
-            .scrollClipDisabled()
-            .scrollIndicators(.hidden)
-            .frame(height: 48)
-            .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 16)
+            bottomBar.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 16)
         }
         .background(Color(.systemBackground))
+        .onChange(of: space?.id) { _, _ in providersExpanded = false }
+        .onChange(of: session.ownership) { _, _ in providersExpanded = false; pendingMode = nil }
+        .onDisappear { providersExpanded = false }
     }
-    private var modeSwitcher: some View {
+    private var header: some View {
+        GeometryReader { geometry in
+            HStack(spacing: 8) {
+                Image("registry-mains-fill").renderingMode(.template).resizable().scaledToFit()
+                    .frame(width: 20, height: 20).foregroundStyle(.primary)
+                    .frame(width: 40, height: 40).modifier(GlassSurface(radius: 20, interactive: false))
+                    .frame(width: 44, height: 44).accessibilityLabel("Mains")
+                modeSwitcher(showLabel: geometry.size.width >= 264 && !dynamicTypeSize.isAccessibilitySize)
+                Spacer(minLength: 0)
+            }.frame(height: 48)
+        }.frame(height: 48)
+    }
+    private var bottomBar: some View {
+        GeometryReader { geometry in
+            let control: CGFloat = 44
+            let gap: CGFloat = 8
+            let available = geometry.size.width
+            let providerWidth = providersExpanded
+                ? min(control + CGFloat(otherSpaces.count) * (control + gap) + (otherSpaces.isEmpty ? 0 : 16), max(control, available - 2 * control - 2 * gap))
+                : control
+            let searchWidth = max(control, available - providerWidth - control - 2 * gap)
+            let compactSearch = searchWidth < searchLabelWidth
+            HStack(spacing: gap) {
+                providerSwitcher(width: providerWidth)
+                Button {
+                    setProvidersExpanded(false)
+                    search()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass").font(.system(size: 19))
+                        if !compactSearch {
+                            Text("Search").font(.body).foregroundStyle(.secondary).fixedSize()
+                                .transition(.opacity)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .padding(.horizontal, compactSearch ? 0 : 14)
+                    .frame(width: compactSearch ? control : searchWidth, height: control)
+                    .foregroundStyle(.primary)
+                    .contentShape(.capsule)
+                }
+                .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 22))
+                .accessibilityLabel("Search").accessibilityIdentifier("sidebarSearch")
+                .frame(width: searchWidth, alignment: providersExpanded ? .trailing : .center)
+                RoundControl(symbol: "gearshape", label: "Settings", size: control) {
+                    setProvidersExpanded(false)
+                    settings()
+                }.accessibilityIdentifier("openSettings")
+            }
+            .frame(height: 48)
+            .animation(controlAnimation, value: providersExpanded)
+            .animation(controlAnimation, value: available)
+        }.frame(height: 48)
+    }
+    private func providerSwitcher(width: CGFloat) -> some View {
         HStack(spacing: 8) {
-            ForEach(space.map { Experience.modes(for: $0.providerId) } ?? [], id: \.self) { mode in
+            if let space {
+                SpaceDisc(space: space, selected: true) { setProvidersExpanded(!providersExpanded) }
+                    .accessibilityHint(providersExpanded ? "Hide providers" : "Show providers")
+                    .accessibilityValue(providersExpanded ? "Expanded" : "Collapsed")
+                    .disabled(otherSpaces.isEmpty)
+            } else {
+                Image(systemName: "square.stack").foregroundStyle(.secondary).frame(width: 44, height: 44)
+                    .accessibilityLabel("No provider selected")
+            }
+            if providersExpanded && !otherSpaces.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(otherSpaces) { item in
+                            SpaceDisc(space: item, selected: false) {
+                                setProvidersExpanded(false)
+                                selectSpace(item.id)
+                            }
+                        }
+                    }.padding(.vertical, 2)
+                }
+                .scrollIndicators(.hidden)
+                .contentMargins(.horizontal, 8, for: .scrollContent)
+                .scrollClipDisabled()
+                .frame(width: max(0, width - 52), height: 48)
+                // Keep horizontal overflow bounded, with room for native press feedback.
+                .mask { Rectangle().padding(.vertical, -12) }
+                .modifier(SidebarScrollFade(axis: .horizontal))
+                .accessibilityIdentifier("sidebarProviderStrip")
+                .transition(.opacity)
+            }
+        }
+        .frame(width: width, height: 48, alignment: .leading)
+        .accessibilityElement(children: .contain).accessibilityLabel("Providers")
+    }
+    private func setProvidersExpanded(_ expanded: Bool) {
+        withAnimation(controlAnimation) { providersExpanded = expanded }
+    }
+    private func modeSwitcher(showLabel: Bool) -> some View {
+        HStack(spacing: 8) {
+            ForEach(modes, id: \.self) { mode in
                 let selected = space?.mode == mode
                 Button { chooseMode(mode) } label: {
                     HStack(spacing: 8) {
@@ -114,7 +200,7 @@ struct SidebarView: View {
                         }
                         .frame(width: 22, height: 22)
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: pendingMode)
-                        if selected {
+                        if selected && showLabel {
                             Text(Experience.label(mode)).fixedSize().lineLimit(1)
                                 .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .leading)))
                         }
@@ -136,12 +222,13 @@ struct SidebarView: View {
                 .accessibilityIdentifier("sidebarMode-\(mode)")
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
         .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.94), value: space?.mode)
         .accessibilityElement(children: .contain).accessibilityLabel("Mode")
     }
     private func chooseMode(_ mode: String) {
         guard let space, space.mode != mode, pendingMode == nil else { return }
+        setProvidersExpanded(false)
         let owner = session.ownership
         pendingMode = mode
         Task {
@@ -190,30 +277,40 @@ struct SidebarView: View {
 }
 
 private struct SidebarScrollFade: ViewModifier {
+    var axis: Axis = .vertical
     private struct Edges: Equatable {
-        var top = false
-        var bottom = false
+        var start = false
+        var end = false
     }
     @State private var edges = Edges()
+    @Environment(\.layoutDirection) private var layoutDirection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func body(content: Content) -> some View {
         content
             .onScrollGeometryChange(for: Edges.self) { geometry in
-                let start = -geometry.contentInsets.top
-                let end = max(start, geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom)
+                let start = axis == .vertical ? -geometry.contentInsets.top : -geometry.contentInsets.leading
+                let end = max(start, axis == .vertical
+                    ? geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom
+                    : geometry.contentSize.width - geometry.containerSize.width + geometry.contentInsets.trailing)
+                let offset = axis == .vertical ? geometry.contentOffset.y : geometry.contentOffset.x
                 let overflows = end > start + 1
-                return Edges(top: overflows && geometry.contentOffset.y > start + 1,
-                             bottom: overflows && geometry.contentOffset.y < end - 1)
+                return Edges(start: overflows && offset > start + 1, end: overflows && offset < end - 1)
             } action: { _, next in edges = next }
-            .overlay(alignment: .top) { fade(top: true).opacity(edges.top ? 1 : 0) }
-            .overlay(alignment: .bottom) { fade(top: false).opacity(edges.bottom ? 1 : 0) }
+            .overlay(alignment: axis == .vertical ? .top : layoutDirection == .leftToRight ? .leading : .trailing) {
+                fade(start: true).opacity(edges.start ? 1 : 0)
+            }
+            .overlay(alignment: axis == .vertical ? .bottom : layoutDirection == .leftToRight ? .trailing : .leading) {
+                fade(start: false).opacity(edges.end ? 1 : 0)
+            }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: edges)
     }
-    private func fade(top: Bool) -> some View {
+    private func fade(start: Bool) -> some View {
         let background = Color(.systemBackground)
-        return LinearGradient(colors: top ? [background, background.opacity(0)] : [background.opacity(0), background],
-                              startPoint: .top, endPoint: .bottom)
-            .frame(height: 24)
+        let leading = start == (layoutDirection == .leftToRight)
+        let from: UnitPoint = axis == .vertical ? (start ? .top : .bottom) : (leading ? .leading : .trailing)
+        let to: UnitPoint = axis == .vertical ? (start ? .bottom : .top) : (leading ? .trailing : .leading)
+        return LinearGradient(colors: [background, background.opacity(0)], startPoint: from, endPoint: to)
+            .frame(width: axis == .horizontal ? 16 : nil, height: axis == .vertical ? 24 : nil)
             .allowsHitTesting(false).accessibilityHidden(true)
     }
 }

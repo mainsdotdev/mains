@@ -779,7 +779,10 @@ public final class BackendSession {
     public func atlasLibrary(_ query: AtlasQuery) async throws -> AtlasLibraryPage {
         let result = try await atlasRead("atlas:mobileLibrary", fields: query.payload).decode(AtlasLibraryPage.self)
         guard result.items.count <= 50, (1...100_000).contains(result.page), Set(result.items.map(\.key)).count == result.items.count,
-              result.items.allSatisfy({ validAtlasTags($0.tags ?? [], limit: 60) }) else { throw MainsError.invalidReply }
+              result.items.allSatisfy({ validAtlasTags($0.tags ?? [], limit: 60)
+                  && ($0.preview?.unicodeScalars.count ?? 0) <= 240
+                  && ($0.fileName?.utf16.count ?? 0) <= 240 && ($0.mimeType?.utf8.count ?? 0) <= 256
+                  && ($0.byteSize == nil || $0.byteSize! >= 0) }) else { throw MainsError.invalidReply }
         return result
     }
 
@@ -950,6 +953,12 @@ public final class BackendSession {
         let file = try await atlasRead("atlas:describeMobileFile", fields: ["reference": try .encode(reference)]).decode(AtlasFile.self)
         guard file.reference == reference, (0...RunFilePolicy.maxBytes).contains(file.byteSize), !file.version.isEmpty else { throw MainsError.invalidReply }
         return file
+    }
+
+    public func readAtlasImage(_ reference: AtlasFileReference) async throws -> AtlasImage {
+        let image = try await atlasRead("atlas:readMobileImage", fields: ["reference": try .encode(reference)]).decode(AtlasImage.self)
+        guard image.reference == reference, image.data != nil else { throw MainsError.invalidReply }
+        return image
     }
 
     public func downloadAtlasFile(_ file: AtlasFile, owner: Int, to url: URL, progress: (Double) -> Void = { _ in }) async throws {

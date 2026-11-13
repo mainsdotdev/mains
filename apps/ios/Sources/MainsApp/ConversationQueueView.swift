@@ -12,7 +12,11 @@ struct RemoteConversationQueueView: View {
                         ForEach(current) { queue in
                             ForEach(queue.messages) { message in
                                 HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: message.attachmentNames.isEmpty ? "text.line.first.and.arrowtriangle.forward" : "paperclip").foregroundStyle(.secondary)
+                                    Group {
+                                        if message.attachmentNames.isEmpty {
+                                            Image("registry-queue").resizable().scaledToFit().frame(width: 16, height: 16)
+                                        } else { Image(systemName: "paperclip") }
+                                    }.foregroundStyle(.secondary)
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text(message.preview).font(.subheadline).lineLimit(2)
                                         if !message.attachmentNames.isEmpty, !message.text.isEmpty {
@@ -82,8 +86,11 @@ struct ConversationQueueView: View {
     }
     private func row(_ message: QueuedRunMessage) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: message.input.attachments.isEmpty ? "text.line.first.and.arrowtriangle.forward" : message.input.attachments[0].type == "image" ? "photo" : "doc.text")
-                .foregroundStyle(.secondary).font(.footnote)
+            Group {
+                if message.input.attachments.isEmpty {
+                    Image("registry-queue").resizable().scaledToFit().frame(width: 16, height: 16)
+                } else { Image(systemName: message.input.attachments[0].type == "image" ? "photo" : "doc.text") }
+            }.foregroundStyle(.secondary).font(.footnote)
             VStack(alignment: .leading, spacing: 3) {
                 Text(message.preview).font(.subheadline).lineLimit(1)
                 if let status = status(message) { Text(status).font(.caption).foregroundStyle(.secondary) }

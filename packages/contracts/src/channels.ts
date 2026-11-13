@@ -126,6 +126,7 @@ export const CHANNELS = {
     readMobilePage: "atlas:readMobilePage",
     describeMobileFile: "atlas:describeMobileFile",
     readMobileFile: "atlas:readMobileFile",
+    readMobileImage: "atlas:readMobileImage",
     saveBookmark: "atlas:saveBookmark",
     enrichBookmark: "atlas:enrichBookmark",
     listTags: "atlas:listTags",

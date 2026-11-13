@@ -879,7 +879,7 @@ final class MainsUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         _ = pairFixture(app, code: "ios-test-home")
-        app.buttons["space-fixture-claude"].tap()
+        chooseSidebarSpace("fixture-claude", in: app)
         let input = app.textViews["homeMessageInput"]
         input.tap(); input.typeText("Keep this draft through repeated opening")
         let keyboard = app.keyboards.firstMatch
@@ -964,7 +964,7 @@ final class MainsUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         _ = pairFixture(app, code: "ios-test-home")
-        app.buttons["space-fixture-claude"].tap()
+        chooseSidebarSpace("fixture-claude", in: app)
         XCTAssertTrue(app.buttons["closeSidebar"].waitForNonExistence(timeout: 5))
         let draft = app.textViews["homeMessageInput"]
         XCTAssertTrue(draft.waitForExistence(timeout: 5))
@@ -1118,7 +1118,7 @@ final class MainsUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         _ = pairFixture(app, code: "ios-test-workspace")
-        app.buttons["space-fixture-code"].tap()
+        chooseSidebarSpace("fixture-code", in: app)
         openSidebar(app)
         app.buttons["workspace-fixture-workspace"].tap()
         let input = app.textFields["workspaceSearch"]
@@ -1190,7 +1190,6 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Article summary"].waitForExistence(timeout: 10))
         attachScreenshot(app, name: "Native conversation – output preview")
         app.buttons["Close preview"].tap(); app.buttons["Close"].tap()
-        app.buttons["conversationOptions"].tap(); app.buttons["Sync now"].tap()
         let input = app.textViews["messageInput"]
         input.tap(); input.typeText("Use the conversation’s saved settings")
         app.buttons["sendMessage"].tap()
@@ -1219,7 +1218,7 @@ final class MainsUITests: XCTestCase {
         _ = pairFixture(app, code: "ios-test-home")
         XCTAssertTrue(app.staticTexts["Projects"].exists)
         attachScreenshot(app, name: "Native sidebar – projects")
-        app.buttons["space-fixture-claude"].tap()
+        chooseSidebarSpace("fixture-claude", in: app)
         XCTAssertTrue(app.textViews["homeMessageInput"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["modeSwitcher"].exists)
         XCTAssertFalse(app.buttons["startConversation"].isEnabled)
@@ -1309,12 +1308,12 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Native home – saved configuration")
         openSidebar(app)
         XCTAssertTrue(app.buttons["sidebarMode-developer"].isSelected)
-        app.buttons["space-fixture-copilot"].tap()
+        chooseSidebarSpace("fixture-copilot", in: app)
         openSidebar(app)
         XCTAssertTrue(app.buttons["sidebarMode-developer"].isSelected)
         XCTAssertFalse(app.buttons["sidebarMode-work"].exists)
         XCTAssertFalse(app.buttons["sidebarMode-chat"].exists)
-        app.buttons["space-fixture-claude"].tap()
+        chooseSidebarSpace("fixture-claude", in: app)
         openSidebar(app)
         app.buttons["Search"].tap()
         let search = app.textFields["globalSearchInput"]
@@ -1508,6 +1507,25 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
         XCTAssertTrue(confirmation.buttons["Cancel"].exists)
         confirmation.buttons["Forget"].tap()
+    }
+
+    private func chooseSidebarSpace(_ id: String, in app: XCUIApplication) {
+        let button = app.buttons["space-" + id]
+        if button.exists && button.isSelected {
+            app.buttons["closeSidebar"].tap()
+            return
+        }
+        if !button.exists {
+            let selected = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND selected == true", "space-")).firstMatch
+            XCTAssertTrue(selected.waitForExistence(timeout: 5)); selected.tap()
+        }
+        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        let strip = app.scrollViews["sidebarProviderStrip"]
+        for _ in 0..<8 {
+            if button.isHittable { break }
+            strip.swipeLeft()
+        }
+        XCTAssertTrue(button.isHittable); button.tap()
     }
 
     private func chooseSidebarMode(_ mode: String, in app: XCUIApplication) async {

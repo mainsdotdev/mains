@@ -3,7 +3,7 @@ import Testing
 @testable import MainsCore
 
 @Suite struct AtlasTests {
-    @Test(arguments: ["atlas:mobileTags", "atlas:readMobileTags"]) @MainActor func tagReadsRetiredByReconnectionCannotReturnToTheNewConnection(channel: String) async throws {
+    @Test(arguments: ["atlas:mobileTags", "atlas:readMobileTags", "atlas:readMobileImage"]) @MainActor func atlasReadsRetiredByReconnectionCannotReturnToTheNewConnection(channel: String) async throws {
         let backend = try DemoBackend(), probe = AtlasProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
         session.restore(); session.setActive(true); try session.startDemo()
@@ -12,7 +12,8 @@ import Testing
         probe.hold = channel
         let read = Task {
             if channel == "atlas:mobileTags" { _ = try await session.atlasTags() }
-            else { _ = try await session.readAtlasTags("demo-atlas-page") }
+            else if channel == "atlas:readMobileTags" { _ = try await session.readAtlasTags("demo-atlas-page") }
+            else { _ = try await session.readAtlasImage(.saved("demo-atlas-image")) }
         }
         try await eventually { probe.held != nil }
         session.setActive(false); session.setActive(true)
@@ -20,6 +21,33 @@ import Testing
         probe.release()
         await #expect(throws: MainsError.self) { try await read.value }
         #expect(try await session.readAtlasTags("demo-atlas-page").tags.count == 1)
+    }
+
+    @Test @MainActor func atlasThumbnailsStayBoundedAndUsePreparedDemoBytesWithoutChangingTheTranscript() async throws {
+        let storage = MemoryStorage(), backend = try DemoBackend()
+        let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let rows = try await session.atlasLibrary(AtlasQuery()).items
+        #expect(rows.first { $0.kind == "page" }?.preview?.contains("Pages") == true)
+        #expect(rows.first { $0.key == "demo-atlas-doc" }?.mimeType == "application/pdf")
+        let reference = try #require(rows.first { $0.kind == "image" }?.file)
+        let thumbnail = try await session.readAtlasImage(reference)
+        #expect(thumbnail.width == 128 && thumbnail.height == 85)
+        #expect(try #require(thumbnail.data).count <= 131_072)
+        await #expect(throws: MainsError.self) { try await session.readAtlasImage(.saved("demo-atlas-doc")) }
+        #expect(session.viewingRunID == nil && session.transcript.rows.isEmpty && storage.snapshot == nil)
+    }
+
+    @Test(arguments: ["identity", "size", "bytes", "mime"]) @MainActor func malformedThumbnailsAreRejected(field: String) async throws {
+        let backend = try DemoBackend(), probe = AtlasProbe()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        probe.corruptImage = field
+        await #expect(throws: MainsError.self) { try await session.readAtlasImage(.saved("demo-atlas-image")) }
     }
 
     @Test @MainActor func demoLibraryFiltersAndReadsWithoutChangingTheConversationOrDiskSnapshot() async throws {
@@ -95,6 +123,7 @@ import Testing
     var hold: String?
     var held: CheckedContinuation<Void, Never>?
     var corruptChunk = false
+    var corruptImage: String?
     var unsupported = false
     func release() { let continuation = held; held = nil; continuation?.resume() }
 }
@@ -111,6 +140,14 @@ import Testing
         var value = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
         if probe.hold == channel { probe.hold = nil; await withCheckedContinuation { probe.held = $0 } }
         if channel == "atlas:readMobileFile", probe.corruptChunk { var row = value.objectValue; row["version"] = .string("different-file"); value = .object(row) }
+        if channel == "atlas:readMobileImage", let field = probe.corruptImage {
+            var row = value.objectValue
+            if field == "identity" { row["reference"] = .object(["itemId": .string("other-item")]) }
+            if field == "size" { row["width"] = .number(129) }
+            if field == "bytes" { row["base64"] = .string(String(repeating: "A", count: 174_768)) }
+            if field == "mime" { row["mime"] = .string("text/html") }
+            value = .object(row)
+        }
         return value
     }
 }
@@ -131,6 +168,8 @@ extension SessionIntegrationTests {
         let second = try await session.atlasLibrary(query)
         #expect(second.items.count == 5 && !second.hasNext)
         #expect(Set((first.items + second.items).map(\.id)).count == 55)
+        let imageReference = try #require((first.items + second.items).first { $0.kind == "image" }?.file)
+        #expect(try await session.readAtlasImage(imageReference).data != nil)
         query.page = 1; query.scope = "favorites"
         #expect(try await session.atlasLibrary(query).items.count == 2)
         let page = try await session.atlasPage("fixture-atlas-page")

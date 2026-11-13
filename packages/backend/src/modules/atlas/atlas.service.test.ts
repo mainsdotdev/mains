@@ -29,6 +29,8 @@ vi.mock("../runs", () => ({ runsService: {
   readOutputFile: vi.fn(),
   describeAttachmentFile: vi.fn(),
   resolveAttachmentPath: vi.fn(),
+  readAttachmentImage: vi.fn(),
+  readArtifactImage: vi.fn(),
   getRunById: async (id: string) => {
     const run = db.select().from(runs).where(eq(runs.id, id)).get();
     return run ? { ...run, ...ownershipOf(run.ownerBackendId) } : null;
@@ -290,6 +292,69 @@ function output(name = "report.pdf", runId = "conversation", mode: "work" | "dev
   return file;
 }
 describe("Atlas phone library", { timeout: 15000 }, () => {
+  it("returns useful bounded display metadata without paths or embedded image hydration", async () => {
+    output();
+    const page = await atlasService.createPage({ accountId: "default", title: "Brief", markdown: "😀".repeat(500) });
+    const resolve = vi.spyOn(atlasService, "resolveFile");
+    const rows = (await atlasMobile.library({ accountId: "default" })).items;
+    const document = rows.find(item => item.kind === "file")!;
+    expect(document).toMatchObject({ fileName: "report.pdf", mimeType: "application/pdf", byteSize: 17 });
+    expect(Array.from(rows.find(item => item.pageId === page.item.id)!.preview!)).toHaveLength(240);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(JSON.stringify(rows)).not.toContain(directory);
+    expect(rows.every(item => !("blocks" in item) && !("path" in item))).toBe(true);
+    output("x".repeat(239) + "😀.pdf", "unicode-name");
+    const unicode = (await atlasMobile.library({ accountId: "default" })).items.find(item => item.file?.runId === "unicode-name")!;
+    expect(unicode.fileName).toBe("x".repeat(239)); // Never cut a UTF-16 surrogate pair at the wire limit.
+  });
+
+  it("reads bounded thumbnails for selected and saved images, refusing foreign and non-image sources", async () => {
+    const file = output("photo.png"), preview = Buffer.from("small thumbnail");
+    const resize = vi.fn(async () => ({ bytes: preview, mime: "image/png" as const, width: 128, height: 96 }));
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize } });
+    try {
+      const reference = (await atlasMobile.library({ accountId: "default" })).items[0].file!;
+      const image = await atlasMobile.readImage({ accountId: "default", reference });
+      expect(Buffer.from(image.base64, "base64")).toEqual(preview);
+      expect(image).toMatchObject({ reference, width: 128, height: 96, version: expect.stringMatching(/^[a-f0-9]{64}$/) });
+      expect(resize).toHaveBeenCalledWith(expect.any(Buffer), 128, true);
+      expect(JSON.stringify(image)).not.toContain(directory);
+      const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+      expect((await atlasMobile.readImage({ accountId: "default", reference: { itemId: saved.id } })).base64).toBe(image.base64);
+      await expect(atlasMobile.readImage({ accountId: "other", reference })).rejects.toThrow("not found");
+      const pdf = output("notes.pdf", "pdf-chat");
+      const document = await atlasService.saveFile({ accountId: "default", runId: "pdf-chat", path: pdf });
+      await expect(atlasMobile.readImage({ accountId: "default", reference: { itemId: document.id } })).rejects.toThrow("Not an Atlas image");
+      await atlasService.update({ accountId: "default", id: saved.id, trashed: true });
+      await expect(atlasMobile.readImage({ accountId: "default", reference: { itemId: saved.id } })).rejects.toThrow("not found");
+    } finally { reset(); }
+  });
+
+  it.each(["changed", "trashed", "oversized"])("refuses thumbnail bytes when their source becomes %s during decoding", async (condition) => {
+    const file = output("photo.png");
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
+    const reference = condition === "trashed" ? { itemId: saved.id } : { runId: "conversation", sourceKey: sourceKey("conversation", fs.realpathSync(file)) };
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize: async () => {
+      if (condition === "changed") fs.writeFileSync(file, "changed source during decoding");
+      if (condition === "trashed") await atlasService.update({ accountId: "default", id: saved.id, trashed: true });
+      return { bytes: condition === "oversized" ? Buffer.alloc(128 * 1024 + 1) : Buffer.from("thumbnail"), mime: "image/png", width: 128, height: 96 };
+    } } });
+    try { await expect(atlasMobile.readImage({ accountId: "default", reference })).rejects.toThrow(); }
+    finally { reset(); }
+  });
+
+  it("routes replica thumbnails through the verified conversation image reader", async () => {
+    createRun(db, { id: "replica-image", mode: "work", status: "succeeded", ownerBackendId: "remote-source" });
+    replicaOutputs.set("replica-image", [{ id: -42, kind: "image", metadata: { path: "/remote/photo.png", byteSize: 2 }, createdAt: new Date() }]);
+    const { runsService } = await import("../runs");
+    vi.mocked(runsService.listOutputs).mockReset().mockResolvedValue({ items: [{ runId: "replica-image", artifactId: -42,
+      name: "photo.png", mimeType: "image/png", previewType: "image", byteSize: 2, modifiedAt: 1, version: "d".repeat(64) }], nextOffset: null });
+    const reader = vi.mocked(runsService.readArtifactImage).mockReset().mockResolvedValue({ mime: "image/png", base64: Buffer.from("tiny").toString("base64"), width: 1, height: 1 });
+    const reference = (await atlasMobile.library({ accountId: "default" })).items[0].file!;
+    expect((await atlasMobile.readImage({ accountId: "default", reference })).width).toBe(1);
+    expect(reader).toHaveBeenCalledWith({ runId: "replica-image", artifactId: -42, maxSide: 128 });
+  });
+
   it.each(["page", "file", "image", "bookmark"] as const)("shows, creates and removes phone tags on a saved %s without changing content or source context", async (kind) => {
     createRun(db, { id: "tag-conversation", mode: "work" });
     atlasRepo.insert({ id: "tag-item", accountId: "default", kind, title: "Keep title", sourceRunId: "tag-conversation", isFavorite: true,

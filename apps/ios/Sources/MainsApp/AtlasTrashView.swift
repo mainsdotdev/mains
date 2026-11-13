@@ -4,6 +4,7 @@ struct AtlasTrashView: View {
     let session: BackendSession
     let owner: Int
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var page = 1
     @State private var result: AtlasTrashPage?
     @State private var loading = false
@@ -27,12 +28,20 @@ struct AtlasTrashView: View {
                             .listRowBackground(Color.clear).accessibilityIdentifier("atlasTrashEmpty")
                     }
                     ForEach(result.items) { item in
-                        HStack(alignment: .center, spacing: 14) {
-                            Image(systemName: symbol(item.kind)).font(.title3).foregroundStyle(.secondary).frame(width: 28)
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(item.title).font(.body.weight(.medium)).lineLimit(2)
-                                if let project = session.collections.first(where: { $0.id == item.collectionId })?.name { Text(project).font(.caption).foregroundStyle(.secondary) }
-                                if let date = date(item.trashedAt) { Text("Trashed \(date, style: .relative) ago").font(.caption2).foregroundStyle(.secondary) }
+                        HStack(alignment: .center, spacing: 10) {
+                            RegistryIcon(token: "icon:atlas-" + item.kind, fallback: symbol(item.kind), size: 22, tint: .secondary)
+                                .frame(width: 24, height: 24)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.title).font(.subheadline.weight(.medium))
+                                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                                TimelineView(.periodic(from: .now, by: 60)) { clock in
+                                    let trashedAt = date(item.trashedAt)
+                                    let project = session.collections.first(where: { $0.id == item.collectionId })?.name
+                                    Text([trashedAt.map { compactRelativeAge($0, now: clock.date) }, project].compactMap { $0 }.joined(separator: " · "))
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                                        .accessibilityLabel([trashedAt.map { "Trashed on " + $0.formatted(date: .abbreviated, time: .shortened) }, project].compactMap { $0 }.joined(separator: ", "))
+                                }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                             if restoring == item.id { ProgressView().frame(minWidth: 44, minHeight: 44) }
                             else {
@@ -41,7 +50,9 @@ struct AtlasTrashView: View {
                                     .accessibilityLabel("Restore " + item.title).accessibilityIdentifier("atlasRestore-" + item.id)
                                     .disabled(!session.canSaveToAtlas || owner != session.ownership)
                             }
-                        }.padding(.vertical, 6).accessibilityIdentifier("atlasTrashItem-" + item.id)
+                        }.frame(minHeight: AppListStyle.minimumContentHeight)
+                            .listRowInsets(AppListStyle.rowInsets)
+                            .accessibilityIdentifier("atlasTrashItem-" + item.id)
                     }
                     if result.page > 1 || result.hasNext {
                         HStack {

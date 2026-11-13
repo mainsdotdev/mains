@@ -6,7 +6,7 @@ public struct TranscriptRow: Identifiable, Equatable, Sendable {
     public let kind: Kind
     public let text: String
     public let date: Date
-    public let live: Bool
+    public var live: Bool
     public let deferredArtifactID: Int?
     public var tool: ToolCall? = nil
     public var media: [TranscriptMedia] = []
@@ -17,6 +17,10 @@ public struct TranscriptRow: Identifiable, Equatable, Sendable {
     public var subagents: [SessionSubagent] = []
     public var voiceTask: VoiceTaskLink? = nil
     public var voice = false
+    /// Display-only lifecycle adjustment; the history/cache keeps the wire status.
+    public var toolDisplayStatus: String? = nil
+    public var toolPresentation: ToolPresentation? { tool.map { ToolPresentation($0, status: toolDisplayStatus) } }
+    var sourceID: Int? = nil
 }
 
 /// One bounded backend page plus ephemeral previews. Acknowledgements outlive page replacement.
@@ -171,11 +175,10 @@ public struct Transcript: Sendable {
             if let turnID, let candidateTurn { return candidateTurn == turnID }
             return prompt.map { date >= $0.createdAt } ?? true
         }
-        if let tool = page?.toolCalls.last(where: {
-            ["running", "queued"].contains($0.status) && $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) &&
-            !SubagentProjection.isAgent($0) &&
-            current($0.createdAt, Self.turnID($0.metadata ?? .null))
-        }) { return AgentActivity(tool: tool) }
+        // Use the same display projection as the rows/group. A stale persisted
+        // call must not reappear as a second "Searching" footer after it settles.
+        if let row = rows.last(where: { $0.kind == .tool && $0.live && current($0.date, $0.turnID) }),
+           let tool = row.tool { return AgentActivity(tool: tool) }
         if streams.values.contains(where: { $0.live && current($0.date, $0.turnID) }) { return nil }
         if let thought = thoughts.values.filter({ current($0.date, $0.turnID) }).max(by: { $0.sequence < $1.sequence }) {
             return AgentActivity(thinking: thought.text)
@@ -235,12 +238,12 @@ public struct Transcript: Sendable {
                                  deferredArtifactID: metadata["mobileContentDeferred"].bool || metadata["mobileContentDeferred"]["chars"].number != nil ? artifact.id : nil, media: media,
                                  turnID: Self.turnID(metadata), contextSkills: (try? metadata["skills"].decode([ContextSkill].self)) ?? [],
                                  delivery: identity == nil ? nil : .accepted,
-                                 voiceTask: VoiceTaskLink.read(metadata["voiceTask"]), voice: metadata["voice"].bool)
+                                 voiceTask: VoiceTaskLink.read(metadata["voiceTask"]), voice: metadata["voice"].bool, sourceID: artifact.id)
         }
         let projection = SubagentProjection(calls: page?.toolCalls ?? [])
         rows += (page?.toolCalls ?? []).filter { $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) && !projection.rootCallIDs.contains($0.id) }.map {
             TranscriptRow(id: "tool:\($0.id)", kind: .tool, text: "\($0.toolName) · \($0.status)", date: $0.createdAt,
-                          live: ["queued", "running"].contains($0.status), deferredArtifactID: nil, tool: $0, turnID: Self.turnID($0.metadata ?? .null))
+                          live: ["queued", "running"].contains($0.statusForDisplay()), deferredArtifactID: nil, tool: $0, turnID: Self.turnID($0.metadata ?? .null), sourceID: $0.id)
         }
         if let first = projection.firstCall, !projection.agents.isEmpty {
             rows.append(TranscriptRow(id: "subagents:\(first.id)", kind: .subagents,
@@ -249,7 +252,33 @@ public struct Transcript: Sendable {
         }
         // Historical pages never pull live output into an older reading position.
         if !isHistorical { rows += streams.values }
-        return rows.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+        return Self.projectToolStatuses(rows.sorted(by: Self.ordered))
+    }
+
+    private static func ordered(_ lhs: TranscriptRow, _ rhs: TranscriptRow) -> Bool {
+        if lhs.date != rhs.date { return lhs.date < rhs.date }
+        // Desktop orders artifacts before tools on timestamp ties, then by the
+        // numeric database id ("tool:10" must never sort before "tool:9").
+        if (lhs.kind == .tool) != (rhs.kind == .tool) { return rhs.kind == .tool }
+        let left = lhs.sourceID ?? 0, right = rhs.sourceID ?? 0
+        if left != right { return left < right }
+        return lhs.id < rhs.id
+    }
+
+    private static func projectToolStatuses(_ rows: [TranscriptRow]) -> [TranscriptRow] {
+        func inflight(_ row: TranscriptRow) -> Bool { row.tool.map { ["running", "queued"].contains($0.status) } ?? false }
+        // Match desktop's demoteStaleRunningTools: later foreground output
+        // retires earlier unfinished previews. The trailing parallel batch stays
+        // live, even with partial output. Thinking/progress and child activity
+        // are outside these rows and cannot finish a foreground call.
+        guard let cut = rows.lastIndex(where: { $0.kind != .subagents && !inflight($0) }), cut > 0 else { return rows }
+        return rows.enumerated().map { index, original in
+            guard index < cut, inflight(original), let call = original.tool else { return original }
+            var row = original
+            row.toolDisplayStatus = "done"
+            row.live = ["running", "queued"].contains(call.statusForDisplay(overriding: "done"))
+            return row
+        }
     }
 
     /// The optimistic prompt occupies its chronological slot from the first frame,
@@ -260,7 +289,7 @@ public struct Transcript: Sendable {
         result.append(TranscriptRow(id: "pending:" + pending.id, kind: .prompt, text: pending.text, date: pending.date,
                                     live: false, deferredArtifactID: nil, contextSkills: pending.contextSkills,
                                     delivery: pending.status, pendingAttachments: pending.attachments))
-        return result.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+        return result.sorted(by: Self.ordered)
     }
 
     private static func turnID(_ metadata: JSONValue) -> Int? {

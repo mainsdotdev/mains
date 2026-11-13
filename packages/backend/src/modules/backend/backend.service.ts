@@ -35,6 +35,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.atlas.readMobilePage,
   CHANNELS.atlas.describeMobileFile,
   CHANNELS.atlas.readMobileFile,
+  CHANNELS.atlas.readMobileImage,
   CHANNELS.atlas.readMobileBookmark,
   CHANNELS.atlas.mobileTrash,
   CHANNELS.atlas.mobileTags,

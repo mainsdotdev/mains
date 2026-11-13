@@ -42,6 +42,10 @@ public struct AtlasEntry: Decodable, Identifiable, Sendable {
     public let description: String?
     public let note: String?
     public let tags: [AtlasTag]?
+    public let fileName: String?
+    public let mimeType: String?
+    public let byteSize: Int?
+    public let preview: String?
     public var savedIdentity: String? {
         savedItemId ?? pageId ?? file?.itemId ?? (kind == "bookmark" && origin == "saved" ? key : nil)
     }
@@ -120,6 +124,21 @@ public struct AtlasFile: Decodable, Sendable {
     public let modifiedAt: Double
     public let version: String
     public let previewType: String
+}
+
+public struct AtlasImage: Decodable, Sendable {
+    public let reference: AtlasFileReference
+    public let version: String
+    public let mime: String
+    public let base64: String
+    public let width: Int
+    public let height: Int
+    public var data: Data? {
+        guard ["image/jpeg", "image/png"].contains(mime), (1...128).contains(width), (1...128).contains(height),
+              version.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+              base64.utf8.count <= 174_764, let data = Data(base64Encoded: base64), (1...131_072).contains(data.count) else { return nil }
+        return data
+    }
 }
 
 /// Links inside a Page may name another Page or an explicitly stored Atlas file.

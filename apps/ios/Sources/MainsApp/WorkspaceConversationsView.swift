@@ -43,7 +43,7 @@ struct WorkspaceConversationsView: View {
                             HStack(alignment: .firstTextBaseline, spacing: 16) {
                                 Text(run.displayTitle).font(.body.weight(.medium)).foregroundStyle(.primary)
                                     .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                                Text(run.isActive && run.isReplica != true ? (run.status == "queued" ? "Queued" : "Running") : conversationAge(run.updatedAt, now: clock.date))
+                                Text(run.isActive && run.isReplica != true ? (run.status == "queued" ? "Queued" : "Running") : compactRelativeAge(run.updatedAt, now: clock.date))
                                     .font(.caption).monospacedDigit().foregroundStyle(run.isActive && run.isReplica != true ? accent : Color(.tertiaryLabel))
                                     .fixedSize(horizontal: true, vertical: false)
                             }.padding(.horizontal, 4).padding(.vertical, 16).contentShape(.rect)
@@ -206,7 +206,7 @@ struct SearchView: View {
                 Text(context).font(.footnote).foregroundStyle(Color(.secondaryLabel)).lineLimit(1)
                 if let snippet, !snippet.isEmpty { Text(snippet).font(.footnote).foregroundStyle(.secondary).lineLimit(2) }
             }.frame(maxWidth: .infinity, alignment: .leading)
-            Text(conversationAge(date, now: now)).font(.caption).monospacedDigit().foregroundStyle(Color(.secondaryLabel)).fixedSize(horizontal: true, vertical: false)
+            Text(compactRelativeAge(date, now: now)).font(.caption).monospacedDigit().foregroundStyle(Color(.secondaryLabel)).fixedSize(horizontal: true, vertical: false)
         }.padding(.vertical, 10).contentShape(.rect)
     }
     private func search(debounce: Bool = false) async {
@@ -272,13 +272,4 @@ struct SearchView: View {
     private func openResult(_ route: AppRoute) {
         searching = false; open(route)
     }
-}
-
-func conversationAge(_ date: Date, now: Date) -> String {
-    let seconds = now.timeIntervalSince(date)
-    if seconds < 45 { return "just now" }
-    if seconds < 3600 { return "\(max(1, Int((seconds / 60).rounded())))m ago" }
-    if seconds < 86400 { return "\(Int((seconds / 3600).rounded()))h ago" }
-    if seconds < 7 * 86400 { return "\(Int((seconds / 86400).rounded()))d ago" }
-    return date.formatted(date: .numeric, time: .omitted)
 }

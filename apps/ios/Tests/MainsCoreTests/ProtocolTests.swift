@@ -2,6 +2,29 @@ import Foundation
 import Testing
 @testable import MainsCore
 
+@Test func openCodeModelLabelsKeepDesktopGroupsAndOriginalSelectionIdentities() throws {
+    let names = [
+        ("github-copilot/raw-sonnet", "github-copilot/Claude Sonnet 5.5"),
+        ("openai/raw-sol", "openai/GPT-6.1 Sol"),
+        ("copilot/raw-haiku", "copilot/Claude Haiku 4.5"),
+        ("openai/raw-fast", "openai/GPT-6.1 Sol Fast"),
+        ("local/custom", "local-ai-lab/some-org/model-v2"),
+        ("auto", "Auto"),
+    ]
+    let models = try JSONValue.array(names.map { .object(["id": .string($0.0), "displayName": .string($0.1)]) }).decode([ModelChoice].self)
+    let groups = OpenCodeModelDisplay.groups(models)
+    #expect(groups.map(\.provider) == ["GitHub Copilot", "OpenAI", "Local AI Lab", "Other"])
+    #expect(groups[0].models.map(\.id) == ["github-copilot/raw-sonnet", "copilot/raw-haiku"])
+    #expect(groups[1].models.map(\.id) == ["openai/raw-sol", "openai/raw-fast"])
+    #expect(models[0].label(for: "opencode") == "Claude Sonnet 5.5")
+    #expect(models[1].label(for: "opencode") == "GPT-6.1 Sol")
+    #expect(models[4].label(for: "opencode") == "some-org/model-v2")
+    #expect(OpenCodeModelDisplay.parts(models[4].displayName)?.name == "some-org/model-v2")
+    var settings = ComposerSettings()
+    settings.select(groups[0].models[1], provider: "opencode")
+    #expect(settings.model == "copilot/raw-haiku")
+    #expect(Set(groups.flatMap(\.models).map(\.id)) == Set(models.map(\.id)))
+}
 @Test func pairingLinkPreservesEncodedEndpointsAndAcceptsVariants() throws {
     for scheme in ["mains", "mains-dev", "mains-preview", "mains-native"] {
         let link = try PairingLink("\(scheme)://pair#code=a%2Bb&name=Work+Mac&endpoint=http%3A%2F%2F192.168.1.2%3A8787&endpoint=https%3A%2F%2Fmac.example.com&endpoint=javascript%3Abad")

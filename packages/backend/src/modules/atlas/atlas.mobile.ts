@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { promises as fs, type Stats } from "node:fs";
-import type { AtlasMobileEntry, AtlasMobileFile, AtlasMobileFileRead, AtlasMobileFileReference, AtlasMobileFileRequest,
+import type { AtlasMobileEntry, AtlasMobileFile, AtlasMobileFileRead, AtlasMobileFileReference, AtlasMobileFileRequest, AtlasMobileImage,
   AtlasMobileLibraryOptions, AtlasMobileLibraryPage, AtlasMobilePage, AtlasMobilePageRequest,
   AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileSavedItem, AtlasMobileUpdateItem, AtlasMobileItemState,
   AtlasMobileBookmarkIdentity, AtlasMobileBookmark, AtlasMobileEditBookmark, AtlasMobileBookmarkEditResult,
@@ -10,6 +10,8 @@ import { MOBILE_OUTPUT_MAX_BYTES, outputFileType, type RunOutputChunk } from "@m
 import { readRunFileChunk } from "../../../shared/file-chunks";
 import { atlasService, generatedForRun } from "./atlas.service";
 import { atlasRoot, inspectSource } from "./atlas.storage";
+import { readImagePreview } from "../imageProxy";
+import type { ArtifactImage } from "@mains/contracts/runs";
 
 function required(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.length > 256 || value.includes("\0")) throw new Error("Invalid Atlas identity");
@@ -172,6 +174,10 @@ export const atlasMobile = {
     // Whitelist options; callers cannot opt into full previews or file paths.
     const result = await atlasService.library({ accountId: input.accountId, type: input.type, scope: input.scope,
       collectionId: input.collectionId, query: input.query, tagId: input.tagId, page: input.page });
+    const pageIDs = result.items.filter(entry => entry.kind === "page").map(entry => entry.key);
+    // Read only bounded excerpts of the returned page, without resolving embedded files.
+    const previews = new Map(pageIDs.length ? atlasService.list({ accountId: input.accountId, ids: pageIDs, includePagePreview: true, limit: 50 })
+      .map(item => [item.id, Array.from(item.preview ?? "").slice(0, 240).join("")]) : []);
     const items = result.items.map((entry): AtlasMobileEntry => {
       const saved = entry.saved?.trashedAt ? undefined : entry.saved, generated = entry.generated;
       return { key: entry.key, kind: entry.kind, title: entry.title, date: entry.date, collectionId: entry.collectionId,
@@ -181,7 +187,10 @@ export const atlasMobile = {
         file: entry.kind === "file" || entry.kind === "image"
           ? saved ? { itemId: saved.id } : generated ? { runId: generated.runId, sourceKey: generated.sourceKey } : null : null,
         pageId: entry.kind === "page" ? saved?.id ?? null : null, icon: saved?.metadata?.icon ?? null,
-        url: saved?.url ?? null, description: saved?.description ?? null, note: saved?.note ?? null, tags: (saved?.tags ?? []).slice(0, 60) };
+        url: saved?.url ?? null, description: saved?.description ?? null, note: saved?.note ?? null, tags: (saved?.tags ?? []).slice(0, 60),
+        fileName: (saved?.fileName ?? generated?.fileName)?.split(/[/\\]/).pop()?.slice(0, 240).replace(/[\uD800-\uDBFF]$/u, "") ?? null,
+        mimeType: saved?.mimeType ?? generated?.mimeType ?? null,
+        byteSize: saved?.byteSize ?? generated?.byteSize ?? null, preview: previews.get(entry.key) ?? null };
     });
     return { items, page: result.page, hasNext: result.hasNext };
   },
@@ -205,6 +214,22 @@ export const atlasMobile = {
 
   async describeFile(input: AtlasMobileFileRequest): Promise<AtlasMobileFile> {
     return (await resolveFile(input)).file;
+  },
+
+  async readImage(input: AtlasMobileFileRequest): Promise<AtlasMobileImage> {
+    const selection = await resolveFile(input);
+    if (selection.file.previewType !== "image") throw new Error("Not an Atlas image");
+    const image = await selection.image();
+    // Recheck ownership, membership, Trash and version after asynchronous decoding,
+    // including cache hits and hydrated replica files.
+    const current = await resolveFile(input);
+    if (current.file.version !== selection.file.version) throw new Error("Atlas image changed while loading");
+    if (!["image/jpeg", "image/png"].includes(image.mime) || image.base64.length > 174_764
+      || !image.base64.length || Buffer.from(image.base64, "base64").length > 128 * 1024
+      || !Number.isInteger(image.width) || !Number.isInteger(image.height)
+      || image.width! < 1 || image.height! < 1 || image.width! > 128 || image.height! > 128) throw new Error("Invalid Atlas thumbnail");
+    return { reference: selection.file.reference, version: selection.file.version,
+      mime: image.mime as AtlasMobileImage["mime"], base64: image.base64, width: image.width!, height: image.height! };
   },
 
   async readFile(input: AtlasMobileFileRead): Promise<RunOutputChunk> {
@@ -236,7 +261,9 @@ async function selectGenerated(accountId: string, reference: AtlasMobileFileRefe
   return { run, selected, runsService };
 }
 
-async function resolveFile(input: AtlasMobileFileRequest, generated?: Awaited<ReturnType<typeof selectGenerated>>): Promise<{ file: AtlasMobileFile; read: (offset: number, version: string) => Promise<RunOutputChunk> }> {
+async function resolveFile(input: AtlasMobileFileRequest, generated?: Awaited<ReturnType<typeof selectGenerated>>): Promise<{
+  file: AtlasMobileFile; read: (offset: number, version: string) => Promise<RunOutputChunk>; image: () => Promise<ArtifactImage>;
+}> {
   const accountId = required(input?.accountId), reference = referenceOf(input?.reference);
   let sourcePath: string;
   if (reference.itemId) {
@@ -249,12 +276,14 @@ async function resolveFile(input: AtlasMobileFileRequest, generated?: Awaited<Re
       const replica = selected.replica;
       if (replica.attachmentId) {
         const descriptor = await runsService.describeAttachmentFile({ runId: run.id, attachmentId: replica.attachmentId });
-        return { file: { ...descriptor, reference }, read: (offset, version) => runsService.readAttachmentChunk({ runId: run.id, attachmentId: replica.attachmentId!, offset, version }) };
+        return { file: { ...descriptor, reference }, read: (offset, version) => runsService.readAttachmentChunk({ runId: run.id, attachmentId: replica.attachmentId!, offset, version }),
+          image: () => runsService.readAttachmentImage({ runId: run.id, attachmentId: replica.attachmentId!, maxSide: 128 }) };
       }
       if (replica.artifactId !== undefined) {
         const descriptor = (await runsService.listOutputs({ runId: run.id, artifactId: replica.artifactId })).items[0];
         if (!descriptor) throw new Error("Atlas output is unavailable on its source device");
-        return { file: { ...descriptor, reference }, read: (offset, version) => runsService.readOutputFile({ runId: run.id, artifactId: replica.artifactId!, offset, version }) };
+        return { file: { ...descriptor, reference }, read: (offset, version) => runsService.readOutputFile({ runId: run.id, artifactId: replica.artifactId!, offset, version }),
+          image: () => runsService.readArtifactImage({ runId: run.id, artifactId: replica.artifactId!, maxSide: 128 }) };
       }
       throw new Error("Atlas file is unavailable on its source device");
     }
@@ -266,5 +295,9 @@ async function resolveFile(input: AtlasMobileFileRequest, generated?: Awaited<Re
   const name = sourcePath.replace(/\\/g, "/").split("/").pop()!;
   const file = { reference, name, byteSize: stat.size, modifiedAt: stat.mtimeMs,
     version: signature(accountId, reference, stat), ...outputFileType(name) };
-  return { file, read: (offset, version) => readRunFileChunk({ ...file, runId: "atlas" }, sourcePath, { offset, version }, (stats) => signature(accountId, reference, stats)) };
+  return { file, read: (offset, version) => readRunFileChunk({ ...file, runId: "atlas" }, sourcePath, { offset, version }, (stats) => signature(accountId, reference, stats)),
+    image: async () => {
+      const preview = await readImagePreview(sourcePath, 128, { preserveAlpha: true });
+      return { mime: preview.mime, base64: preview.bytes.toString("base64"), width: preview.width, height: preview.height };
+    } };
 }

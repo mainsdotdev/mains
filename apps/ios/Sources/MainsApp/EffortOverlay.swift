@@ -56,7 +56,7 @@ private struct EffortOverlayView: View {
             return settings.config["thinkingMode"]?.bool == true ? "On" : "Off"
         }
         let value = settings.effort(provider: context.providerId)
-        return value.isEmpty && context.providerId == "codex" ? "Default" : ComposerSettings.effortLabel(value)
+        return ComposerSettings.effortLabel(value, provider: context.providerId)
     }
     private var transition: Animation {
         reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.36, dampingFraction: 0.94)
@@ -125,7 +125,7 @@ private struct EffortOverlayView: View {
             HStack(spacing: 4) {
                 Button { catalogueOpen = true } label: {
                     HStack(spacing: 7) {
-                        ComposerModelLabel(model: selected, loading: context.modelsLoading(session))
+                        ComposerModelLabel(model: selected, loading: context.modelsLoading(session), providerID: context.providerId)
                         if selected != nil { Text(preview ?? effort).foregroundStyle(.secondary) }
                         Image(systemName: "chevron.right").font(.body.weight(.semibold)).foregroundStyle(.secondary)
                     }

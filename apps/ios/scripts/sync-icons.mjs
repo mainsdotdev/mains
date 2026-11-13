@@ -26,7 +26,28 @@ try {
       const { default: CopilotStatic } = require('./src/renderer/components/ui/icons/copilot.tsx');
       // Bridge is a status mark, rather than an option in the desktop icon picker.
       const { default: Bridge } = require('./src/renderer/components/ui/icons/bridge.tsx');
-      module.exports = Object.fromEntries(Object.entries({ ...iconRegistry, copilot: CopilotStatic, bridge: Bridge })
+      const { default: MainsFill } = require('./src/renderer/components/ui/icons/mains.tsx');
+      const { default: Queue } = require('./src/renderer/components/ui/icons/queue.tsx');
+      // Atlas navigation uses its own outlined icons outside the space registry.
+      const atlasIcons = {
+        'atlas-all': require('./src/renderer/components/ui/icons/library.tsx').default,
+        'atlas-page': require('./src/renderer/components/ui/icons/page.tsx').default,
+        'atlas-file': require('./src/renderer/components/ui/icons/passport.tsx').default,
+        'atlas-image': require('./src/renderer/components/ui/icons/picture.tsx').default,
+        'atlas-bookmark': require('./src/renderer/components/ui/icons/space/bookmark.tsx').default,
+      };
+      const modelIcons = {
+        'model-muse': require('./src/renderer/components/ui/icons/muse.tsx').default,
+        'model-deepseek': require('./src/renderer/components/ui/icons/deep-seek.tsx').default,
+        'model-gpt': require('./src/renderer/components/ui/icons/gpt.tsx').default,
+        'model-meta': require('./src/renderer/components/ui/icons/meta.tsx').default,
+        'model-gemini': require('./src/renderer/components/ui/icons/gemini.tsx').default,
+        'model-grok': require('./src/renderer/components/ui/icons/grok.tsx').default,
+        'model-kimi': require('./src/renderer/components/ui/icons/kimi.tsx').default,
+        'model-zai': require('./src/renderer/components/ui/icons/zai.tsx').default,
+        'model-bot': require('./src/renderer/components/ui/icons/bot.tsx').default,
+      };
+      module.exports = Object.fromEntries(Object.entries({ ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill, ...atlasIcons, ...modelIcons })
         .map(([name, Icon]) => [name, renderToStaticMarkup(React.createElement(Icon))]));
     `, resolveDir: desktopRoot, loader: 'tsx' },
     bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic',
@@ -51,6 +72,8 @@ for (const [name, markup] of Object.entries(icons)) {
     // opacity, inherited strokes and masking rather than flattening to paths.
     for (const attr of ['width', 'height', 'class', 'style']) element.removeAttribute(attr);
     for (const title of element.querySelectorAll('title')) title.remove();
+    // Desktop's GPT icon has an off-canvas accessible name; native supplies its own.
+    for (const text of element.querySelectorAll('text[x="-9999"]')) text.remove();
     for (const child of element.querySelectorAll('[class]')) child.removeAttribute('class');
     // Desktop's Mains mark uses currentColor inside an alpha mask. Native SVG
     // template rendering reads the black paint as zero luminance instead.

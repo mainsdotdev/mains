@@ -380,6 +380,7 @@ wss.on('connection', socket => {
         case CHANNELS.atlas.readMobilePage:
         case CHANNELS.atlas.describeMobileFile:
         case CHANNELS.atlas.readMobileFile:
+        case CHANNELS.atlas.readMobileImage:
         case CHANNELS.atlas.readMobileBookmark:
         case CHANNELS.atlas.mobileTags:
         case CHANNELS.atlas.readMobileTags:

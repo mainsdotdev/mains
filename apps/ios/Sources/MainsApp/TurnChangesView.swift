@@ -11,6 +11,7 @@ struct TurnChangesCard: View {
     let turn: RunTurn
     let open: (TurnFileChange) -> Void
     @State private var expanded = false
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
         if let changes = turn.changes {
             let count = changes.fileCount ?? changes.files.count
@@ -22,7 +23,10 @@ struct TurnChangesCard: View {
                         .accessibilityLabel("Turn \((turn.turnIndex ?? 0) + 1). \(changes.undoneAt != nil ? "Changes undone" : "Edited \(count) files")")
                     DiffCounts(additions: changes.additions, deletions: changes.deletions)
                 }.padding(14)
-                    .background { Rectangle().fill(Color(.tertiarySystemBackground)) }
+                    .background {
+                        Rectangle().fill(Color(.secondarySystemBackground))
+                            .overlay(Color.black.opacity(scheme == .dark ? 0.3 : 0.06))
+                    }
                 Divider()
                 ForEach(Array((expanded ? changes.files : Array(changes.files.prefix(2))).enumerated()), id: \.offset) { _, file in
                     Button { open(file) } label: {

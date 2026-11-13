@@ -110,13 +110,6 @@ final class DemoBackend {
         turns = data["turns"].objectValue.mapValues { $0.array.map(\.objectValue) }
         self.stepDelay = stepDelay; self.streamDelay = streamDelay; self.decisionLifetime = decisionLifetime
         for (id, image) in data["images"].objectValue { if let id = Int(id) { images[id] = image } }
-        for runID in artifacts.keys {
-            if let index = artifacts[runID]?.firstIndex(where: { $0["kind"]?.string == "user-prompt" }) {
-                var metadata = artifacts[runID]![index]["metadata"]?.objectValue ?? [:]
-                metadata["attachments"] = .array([attachmentMetadata(Self.pdfAttachmentID, file: .pdf)])
-                artifacts[runID]![index]["metadata"] = .object(metadata)
-            }
-        }
         addTour()
     }
 
@@ -175,7 +168,7 @@ final class DemoBackend {
             guard first["version"].string == file.version else { throw MainsError.server("This demo file changed.") }
             let result = try atlas.save(file, source: source, runID: runID, collectionID: runs.first(where: { $0["id"]?.string == runID })?["collectionId"]?.string)
             push("atlas:changed", [:]); return result
-        case "atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:readMobileBookmark", "atlas:editMobileBookmark", "atlas:mobileTrash", "atlas:setMobileTrash", "atlas:mobileTags", "atlas:readMobileTags", "atlas:setMobileTags":
+        case "atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile", "atlas:readMobileImage", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:readMobileBookmark", "atlas:editMobileBookmark", "atlas:mobileTrash", "atlas:setMobileTrash", "atlas:mobileTags", "atlas:readMobileTags", "atlas:setMobileTags":
             guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
             if let project = first["collectionId"].string, !seed["collections"].array.contains(where: { $0["id"].string == project }) { throw MainsError.server("Project unavailable.") }
             let result = try atlas.answer(channel, input: first, runID: runs.first(where: { $0["mode"]?.string == "work" })?["id"]?.string ?? Self.tourID,

@@ -186,7 +186,7 @@ struct ComputerView: View {
     private func timestampRow(_ title: String, date: Date?, empty: String) -> some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in
             SettingsRow(title: title, subtitle: date?.formatted(date: .numeric, time: .standard),
-                        value: date.map { Self.relativeTime($0, now: timeline.date) } ?? empty)
+                        value: date.map { compactRelativeAge($0, now: timeline.date) } ?? empty)
         }
     }
     private func externalRow(_ title: String, subtitle: String, url: String, symbol: String = "arrow.up.right.square") -> some View {
@@ -211,14 +211,6 @@ struct ComputerView: View {
     private static func host(_ endpoint: URL) -> String {
         guard let parts = URLComponents(url: endpoint, resolvingAgainstBaseURL: false), let host = parts.host else { return "—" }
         return host + (parts.port.map { ":\($0)" } ?? "")
-    }
-    private static func relativeTime(_ date: Date, now: Date) -> String {
-        let seconds = now.timeIntervalSince(date)
-        if seconds < 45 { return "just now" }
-        if seconds < 3600 { return "\(max(1, Int((seconds / 60).rounded())))m ago" }
-        if seconds < 86400 { return "\(Int((seconds / 3600).rounded()))h ago" }
-        if seconds < 604800 { return "\(Int((seconds / 86400).rounded()))d ago" }
-        return date.formatted(date: .numeric, time: .omitted)
     }
     private var diagnostics: String {
         var lines = [

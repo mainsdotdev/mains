@@ -49,7 +49,7 @@ struct MessageComposer: View {
         case .thinking: return settings.config["thinkingMode"]?.bool == true ? "On" : nil
         case .toggle, .slider, .list:
             let value = settings.effort(provider: context.providerId)
-            return value.isEmpty && context.providerId == "codex" ? "Default" : ComposerSettings.effortLabel(value)
+            return ComposerSettings.effortLabel(value, provider: context.providerId)
         }
     }
     private var optionsLabel: String? {
@@ -136,7 +136,7 @@ struct MessageComposer: View {
                     HStack(spacing: 12) {
                         Button(action: model) {
                             HStack(spacing: 5) {
-                                ComposerModelLabel(model: selectedModel, loading: context.modelsLoading(session))
+                                ComposerModelLabel(model: selectedModel, loading: context.modelsLoading(session), providerID: context.providerId)
                                 if let effort { Text(effort).foregroundStyle(.secondary) }
                             }.lineLimit(1).frame(minHeight: 40)
                         }

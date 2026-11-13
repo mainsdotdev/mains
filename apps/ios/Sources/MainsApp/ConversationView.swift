@@ -55,7 +55,7 @@ struct ConversationView: View {
     private var uncertain: Bool { session.pendingMessage?.status == .uncertain }
     private var showsConnectionPill: Bool { session.pairing != nil && !session.isConnected }
     private var forkTitle: String {
-        guard let pending = session.pendingFork, pending.sourceRunID == runID else { return "Fork conversation" }
+        guard let pending = session.pendingFork, pending.sourceRunID == runID else { return "Fork chat" }
         return pending.status == .sending ? "Forking…" : "Fork unconfirmed"
     }
     private var usesQueue: Bool {
@@ -228,19 +228,9 @@ struct ConversationView: View {
                 if !focusedVoice {
                     Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
                     Menu {
-                        Label(session.isDemo ? "Demo Mode · On this iPhone" : session.connection.label, systemImage: session.isConnected ? "checkmark.circle" : "wifi.slash")
-                        if run?.isReplica != true {
-                            Button(action: prepareFork) {
-                                Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
-                            }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
-                        }
-                        Button("Sync now", systemImage: "arrow.clockwise") {
-                            Task { await session.refresh(); if session.viewingRunID == runID { await session.loadHistory(direction: "refresh") } }
-                        }.disabled(!session.isConnected)
-                        if !session.isConnected {
-                            Button("Reconnect", systemImage: "arrow.clockwise") { session.retry() }
-                                .disabled(session.connection.isBusy || [.unauthorized, .incompatible].contains(session.connection))
-                        }
+                        Button(action: prepareFork) {
+                            Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
+                        }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
                     } label: { Image(systemName: "ellipsis") }
                     .accessibilityLabel("Conversation options").accessibilityIdentifier("conversationOptions")
                 }

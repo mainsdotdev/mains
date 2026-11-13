@@ -3,7 +3,7 @@ import SwiftUI
 enum ConversationActionIcons {
     /// Desktop's 24-unit fork path, including SessionTimeBar's 90° rotation.
     static var fork: Image {
-        Image(size: CGSize(width: 24, height: 24)) { context in
+        Image(size: CGSize(width: 20, height: 20)) { context in
             var path = Path()
             path.move(to: CGPoint(x: 21, y: 8.5))
             path.addLine(to: CGPoint(x: 21, y: 6.6))
@@ -22,6 +22,7 @@ enum ConversationActionIcons {
             path.addCurve(to: CGPoint(x: 11.695, y: 12.127), control1: CGPoint(x: 10.813, y: 10.813), control2: CGPoint(x: 11.391, y: 11.391))
             path.addCurve(to: CGPoint(x: 12, y: 15.314), control1: CGPoint(x: 12, y: 12.861), control2: CGPoint(x: 12, y: 13.679))
             path.addLine(to: CGPoint(x: 12, y: 21))
+            context.scaleBy(x: 20.0 / 24, y: 20.0 / 24)
             context.translateBy(x: 24, y: 0)
             context.rotate(by: .degrees(90))
             context.stroke(path, with: .color(.black), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))

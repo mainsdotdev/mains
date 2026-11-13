@@ -40,6 +40,7 @@ struct AppShell: View {
                 let progress = width > 0 && !pinned ? offset / width : 0
                 let pageOffset = searchMounted ? (searchExpanded ? 0 : width) : offset
                 let pageCorner = searchMounted ? (searchExpanded ? 0.0 : 44.0) : 44 * progress
+                let pageExpansion = searchMounted ? 0 : 12 * progress
                 ZStack(alignment: .leading) {
                     Color(.systemBackground).ignoresSafeArea()
                     if offset > 0 || searchMounted {
@@ -96,7 +97,11 @@ struct AppShell: View {
                     }
                     .frame(width: max(1, geometry.size.width - (pinned ? width : 0)))
                     .accessibilityHidden(drawerOpen && !pinned && !searchMounted)
-                    .overlay { if progress > 0 && !searchMounted { Color.primary.opacity(0.08 * progress).allowsHitTesting(false) } }
+                    .overlay {
+                        if progress > 0 && !searchMounted {
+                            Color.primary.opacity(0.08 * progress).ignoresSafeArea(edges: .vertical).allowsHitTesting(false)
+                        }
+                    }
                     .overlay(alignment: .leading) {
                         if drawerOpen && !pinned && !searchMounted {
                             Button(action: toggleDrawer) { Color.clear.contentShape(.rect) }
@@ -104,7 +109,7 @@ struct AppShell: View {
                                 .buttonStyle(.plain).accessibilityLabel("Close sidebar").accessibilityIdentifier("closeSidebar")
                         }
                     }
-                    .clipShape(MainPaneClip(cornerRadius: pageCorner, safeAreaInsets: geometry.safeAreaInsets))
+                    .clipShape(MainPaneClip(cornerRadius: pageCorner, safeAreaInsets: geometry.safeAreaInsets, verticalExpansion: pageExpansion))
                     .offset(x: pageOffset)
                     .simultaneousGesture(drawerGesture(width: width), isEnabled: drawerOpen && !pinned && !searchMounted)
                     if !drawerOpen && !pinned && !searchMounted {
@@ -288,9 +293,10 @@ struct AppShell: View {
 private struct MainPaneClip: Shape {
     var cornerRadius: CGFloat
     let safeAreaInsets: EdgeInsets
-    var animatableData: CGFloat {
-        get { cornerRadius }
-        set { cornerRadius = newValue }
+    var verticalExpansion: CGFloat = 0
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(cornerRadius, verticalExpansion) }
+        set { cornerRadius = newValue.first; verticalExpansion = newValue.second }
     }
 
     func path(in rect: CGRect) -> Path {
@@ -300,6 +306,7 @@ private struct MainPaneClip: Shape {
             return Path(rect.inset(by: UIEdgeInsets(top: -safeAreaInsets.top, left: -safeAreaInsets.leading,
                                                   bottom: -safeAreaInsets.bottom, right: -safeAreaInsets.trailing)))
         }
-        return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).path(in: rect)
+        return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .path(in: rect.insetBy(dx: 0, dy: -verticalExpansion))
     }
 }

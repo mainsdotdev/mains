@@ -125,11 +125,16 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
       return { id: input.id, title: 'Travel notes', icon: 'emoji:🗺️', version: 1, markdown: chars.slice(offset, end).join(''), offset, nextOffset: end < chars.length ? end : null, sourceRunId: 'fixture-run' };
     }
     case CHANNELS.atlas.describeMobileFile:
+    case CHANNELS.atlas.readMobileImage:
     case CHANNELS.atlas.readMobileFile: {
       const id = input.reference?.itemId;
       if (rows.find(row => row.key === id)?.trashedAt) throw new Error('Atlas file not found');
       if (!['fixture-atlas-doc', 'fixture-atlas-image'].includes(id) && saved.get(id)?.kind !== 'file') throw new Error('Atlas file not found');
       const image = id === 'fixture-atlas-image', bytes = image ? Buffer.from(imageBase64, 'base64') : saved.get(id)?.title === 'report.pdf' ? pdfBytes : outputBytes;
+      if (channel === CHANNELS.atlas.readMobileImage) {
+        if (!image) throw new Error('Not an Atlas image');
+        return { reference: input.reference, version, mime: 'image/png', base64: imageBase64, width: 1, height: 1 };
+      }
       if (channel === CHANNELS.atlas.describeMobileFile) return { reference: input.reference, name: image ? 'image.png' : 'notes.md', mimeType: image ? 'image/png' : 'text/markdown', previewType: image ? 'image' : 'markdown', byteSize: bytes.length, modifiedAt: 1, version };
       if (input.version !== version || !Number.isSafeInteger(input.offset) || input.offset < 0 || input.offset > bytes.length) throw new Error('Atlas file changed');
       const end = Math.min(bytes.length, input.offset + 128 * 1024);
