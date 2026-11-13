@@ -274,7 +274,7 @@ struct SearchView: View {
     }
 }
 
-private func conversationAge(_ date: Date, now: Date) -> String {
+func conversationAge(_ date: Date, now: Date) -> String {
     let seconds = now.timeIntervalSince(date)
     if seconds < 45 { return "just now" }
     if seconds < 3600 { return "\(max(1, Int((seconds / 60).rounded())))m ago" }

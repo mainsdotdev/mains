@@ -8,6 +8,7 @@ struct SidebarView: View {
     let selectSpace: (String) -> Void
     let search: () -> Void
     let settings: () -> Void
+    let openWorkInbox: () -> Void
     @State private var pendingMode: String?
     @Namespace private var modeSelection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -27,7 +28,24 @@ struct SidebarView: View {
                 RoundControl(symbol: "gearshape", label: "Settings", action: settings).accessibilityIdentifier("openSettings")
                 RoundControl(symbol: "magnifyingglass", label: "Search", action: search)
             }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
-            modeSwitcher.padding(.horizontal, 16).padding(.bottom, 22)
+            modeSwitcher.padding(.horizontal, 16).padding(.bottom, 12)
+            if session.pairing != nil {
+                TimelineView(.periodic(from: .now, by: 15)) { clock in
+                    let count = session.displayedWorkInbox.groups(now: clock.date, live: session.workInboxIsCurrent && session.isConnected).needsYou.count
+                    Button(action: openWorkInbox) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "tray").font(.system(size: 19)).frame(width: 22)
+                            Text("Activity").font(.body.weight(.medium))
+                            Spacer()
+                            if count > 0 {
+                                Text(count, format: .number).font(.caption.weight(.semibold)).monospacedDigit()
+                                    .padding(.horizontal, 8).padding(.vertical, 3).background(.orange.opacity(0.15), in: .capsule).foregroundStyle(.orange)
+                            }
+                        }.frame(minHeight: 44).contentShape(.rect)
+                    }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openWorkInbox")
+                        .accessibilityValue(count > 0 ? "\(count) conversations need you" : "")
+                }.padding(.horizontal, 16).padding(.bottom, 14)
+            }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if space?.mode == "developer" {

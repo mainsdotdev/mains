@@ -4,6 +4,43 @@ import UIKit
 /// Run alongside scripts/mock-backend.mjs. No AI provider or real workspace is contacted.
 @MainActor
 final class MainsUITests: XCTestCase {
+    func testWorkInboxShowsAllProvidersOpensRequestsAndStopsBackgroundWork() async throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        _ = pairFixture(app, code: "ios-test")
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/inbox")!)
+        request.httpMethod = "POST"
+        _ = try await URLSession.shared.data(for: request)
+        let inbox = app.buttons["openWorkInbox"]
+        XCTAssertTrue(inbox.waitForExistence(timeout: 5)); inbox.tap()
+        let waiting = app.buttons["inboxRun-inbox-waiting"]
+        XCTAssertTrue(waiting.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["inboxRun-inbox-running"].exists)
+        XCTAssertTrue(app.buttons["inboxRun-inbox-failed"].exists)
+        XCTAssertTrue(app.buttons["inboxRun-inbox-finished"].exists)
+        attachScreenshot(app, name: "Activity – requests and work across providers")
+        waiting.tap()
+        XCTAssertTrue(app.buttons["approvalDeny"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Run the deployment checks?"].exists)
+        app.buttons["approvalDeny"].tap()
+        XCTAssertTrue(app.buttons["approvalDeny"].waitForNonExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["inboxStop-inbox-running"].waitForExistence(timeout: 10))
+        app.buttons["inboxStop-inbox-running"].tap()
+        XCTAssertTrue(app.buttons["inboxStop-inbox-running"].waitForNonExistence(timeout: 10))
+        let stopped = app.buttons["inboxRun-inbox-running"]
+        XCTAssertTrue(stopped.waitForExistence(timeout: 5))
+        XCTAssertTrue(stopped.label.contains("Stopped"))
+        let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:18787/observations")!)
+        let calls = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let abort = try XCTUnwrap(calls.last { $0["channel"] as? String == "runs:abort" })
+        XCTAssertEqual(abort["args"] as? [String], ["inbox-running"])
+        XCTAssertNotNil(abort["commandId"] as? String)
+        // Return to the home shell before using the shared fixture cleanup.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        forgetFixture(app)
+    }
+
     #if MAINS_GPT_LIVE
     func testVoiceDefaultsToFocusAndSwitchesToConversationWithoutEndingOrUnmuting() throws {
         continueAfterFailure = false

@@ -212,6 +212,18 @@ underlying tooling.
 
 ## Current scope
 
+- Sidebar **Activity** shows work across all spaces/providers: pending tool
+  approvals/questions, authoritative running/queued work, recent failures (seven
+  days), and completed/stopped work (24 hours). Requests take priority over running
+  rows; selecting one opens the existing conversation decision cards. Running work
+  can be stopped from the list through the normal receipt-backed abort command.
+  Reads use existing paired-device channels, retain at most 100 descriptors/200
+  request identities in memory, and resolve older requested conversations without
+  loading their history. The screen and sidebar refresh on events plus a 15-second
+  visible-only poll. Connection/navigation retirement fences reads; resolved and
+  expired requests cannot return from stale responses. Offline/error views label
+  last-known work, hide decisions and disable Stop. The inbox never changes the
+  selected transcript or persists decision evidence. Demo uses the same reader.
 - The unpaired home keeps its sidebar and composer, with a connection card above
   the composer. Scan opens a dismissible pairing sheet with a square QR preview
   or manual/paste entry. Detected computer details, retry and explicit pairing

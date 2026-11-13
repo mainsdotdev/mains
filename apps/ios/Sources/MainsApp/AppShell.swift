@@ -10,7 +10,7 @@ extension EnvironmentValues {
 }
 
 
-enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings }
+enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox }
 
 struct AppShell: View {
     let session: BackendSession
@@ -39,7 +39,7 @@ struct AppShell: View {
                     Color(.systemBackground).ignoresSafeArea()
                     if offset > 0 || searchMounted {
                         SidebarView(session: session, collapsed: $collapsedCollections, openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
-                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings)
+                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) })
                             .frame(width: width)
                             .offset(x: searchExpanded ? -width : 0)
                             .allowsHitTesting(!searchExpanded)
@@ -72,6 +72,7 @@ struct AppShell: View {
                                 case .workspace(let id): WorkspaceConversationsView(session: session, workspaceID: id,
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
                                 case .settings: ComputerView(session: session)
+                                case .workInbox: WorkInboxView(session: session, openConversation: { path.append(.conversation($0)) }, openSettings: showSettings)
                                 }
                             }
                         }
@@ -139,6 +140,10 @@ struct AppShell: View {
         #endif
         .attachmentOverlayHost()
         .contextPickerOverlayHost(isEnabled: !drawerOpen && !searchMounted)
+        .onChange(of: !searchMounted && (drawerOpen || path.last == .workInbox), initial: true) { _, visible in
+            session.setWorkInboxVisible(visible)
+        }
+        .onDisappear { session.setWorkInboxVisible(false) }
         .onChange(of: session.pairing?.deviceId) { _, _ in
             resetSearch()
             path = []; homeRunID = nil; drawerOpen = false
@@ -154,7 +159,7 @@ struct AppShell: View {
         guard !drawerOpen, !searchMounted else { return nil }
         switch path.last {
         case .conversation(let id), .searchMessage(let id, _): return id
-        case .workspace, .settings: return nil
+        case .workspace, .settings, .workInbox: return nil
         case nil: return homeRunID
         }
     }

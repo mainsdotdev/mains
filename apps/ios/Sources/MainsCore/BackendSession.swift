@@ -142,6 +142,10 @@ public final class BackendSession {
     public private(set) var pairingInProgress = false
     public private(set) var sending = false
     public private(set) var stoppingRunID: String?
+    public private(set) var workInbox = WorkInboxSnapshot()
+    public private(set) var workInboxLoading = false
+    public private(set) var workInboxIsCurrent = false
+    public private(set) var workInboxError: String?
     public var actionError: String?
     public private(set) var contextRevisions: [String: Int] = [:]
     @ObservationIgnored private var contextCatalogues: [ContextScope: ContextCatalogue] = [:]
@@ -187,6 +191,13 @@ public final class BackendSession {
     @ObservationIgnored private var decisionDeliveries: [DecisionIdentity: DecisionDelivery] = [:]
     @ObservationIgnored private var approvalExpiryTask: Task<Void, Never>?
     private var decisionRevision = 0
+    @ObservationIgnored private var workInboxVisible = false
+    @ObservationIgnored private var workInboxRead: Task<Void, Never>?
+    @ObservationIgnored private var workInboxPoll: Task<Void, Never>?
+    @ObservationIgnored private var workInboxRefresh: Task<Void, Never>?
+    @ObservationIgnored private var workInboxReadID: UUID?
+    @ObservationIgnored private var workInboxRevision = 0
+    @ObservationIgnored private var workInboxReadAgain = false
 
     public convenience init(storage: any SessionStorage) {
         self.init(storage: storage, makeTransport: { demo in
@@ -787,7 +798,10 @@ public final class BackendSession {
         guard active != value else { return }; active = value
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         if voice.keepsConnectionAlive {
-            if !value { runQueues.pauseAll("Queued messages are paused while Mains is in the background.") }
+            if !value {
+                stopWorkInboxWatch()
+                runQueues.pauseAll("Queued messages are paused while Mains is in the background.")
+            } else if workInboxVisible { startWorkInboxWatch() }
             return
         }
 #endif
@@ -873,6 +887,8 @@ public final class BackendSession {
 #endif
 
         stopRemoteQueueWatch()
+        stopWorkInboxWatch()
+        workInbox = WorkInboxSnapshot()
         runQueues.clear()
         initialHistoryCursor = nil
         activeEndpoint = nil; connectedDescriptor = nil; lastSyncedAt = nil
@@ -896,6 +912,7 @@ public final class BackendSession {
         voice.connectionLost()
         #endif
         stopRemoteQueueWatch()
+        stopWorkInboxWatch()
         runQueues.pauseAll("Backend disconnected. Queued messages are paused.")
         generation += 1
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
@@ -959,6 +976,7 @@ public final class BackendSession {
                 guard generation == current, !Task.isCancelled else { return }
                 attemptTimer.cancel()
                 connection = .connected
+                if workInboxVisible { startWorkInboxWatch() }
                 runQueues.kick()
                 if let runID = viewingRunID { startRemoteQueueWatch(runID) }
                 if viewingRunID != nil { await loadHistory(direction: "refresh") }
@@ -1216,6 +1234,16 @@ public final class BackendSession {
         }
         #endif
         let runID = payload["runId"].string
+
+        if ["runs:statusChanged", "runs:updated", "runs:toolApprovalRequest", "runs:toolApprovalResolved"].contains(channel) {
+            workInboxRevision += 1
+            if channel == "runs:toolApprovalResolved", let id = payload["requestId"].string {
+                workInbox.requests.removeAll {
+                    $0.requestId == id && (payload["approvalToken"].string == nil || $0.approvalToken == payload["approvalToken"].string)
+                }
+            }
+            scheduleWorkInboxRefresh()
+        }
 
         if channel == "runs:queueChanged", runID == viewingRunID { scheduleRemoteQueueRead() }
         if channel == "runs:statusChanged", let runID, let status = payload["status"].string { runQueues.observe(runID, status: status) }
@@ -1547,7 +1575,8 @@ public final class BackendSession {
 
     public func stop(_ runID: String) async throws {
         guard stoppingRunID == nil, isConnected,
-              let run = conversations.first(where: { $0.id == runID }), run.isReplica != true, run.isActive else { return }
+              let run = (workInboxIsCurrent ? workInbox.runs.first(where: { $0.id == runID }) : nil) ?? conversations.first(where: { $0.id == runID }),
+              run.isReplica != true, run.isActive else { return }
         let owner = pairingOwner
         stoppingRunID = runID
         if let queue = runQueues.existing(runID), !queue.messages.isEmpty { queue.pause("Run stopped. Queued messages are paused.") }
@@ -1555,6 +1584,7 @@ public final class BackendSession {
         _ = try await command("runs:abort", args: [.string(runID)], owner: owner)
         if viewingRunID == runID { await loadHistory(direction: "refresh") }
         else { await refresh() }
+        if workInboxVisible { await refreshWorkInbox() }
     }
 
     private func reconcilePending(_ page: HistoryPage, runID: String) {
@@ -1599,6 +1629,94 @@ public final class BackendSession {
                                            collections: collections, projects: projects, gitStates: gitStates,
                                            selectedSpaceID: selectedSpaceID, homeTargets: homeTargets, composerSettings: composerSettings,
                                            lastSyncedAt: lastSyncedAt))
+    }
+}
+
+extension BackendSession {
+    public var displayedWorkInbox: WorkInboxSnapshot {
+        workInbox.updatedAt == nil && workInbox.runs.isEmpty ? WorkInboxSnapshot(saved: conversations) : workInbox
+    }
+
+    /// The shell keeps this reader alive only while the sidebar or inbox is
+    /// visible. It never selects a run, loads history or writes the disk cache.
+    public func setWorkInboxVisible(_ visible: Bool) {
+        guard visible != workInboxVisible else { return }
+        workInboxVisible = visible
+        if visible { startWorkInboxWatch() } else { stopWorkInboxWatch() }
+    }
+
+    public func refreshWorkInbox() async {
+        if let workInboxRead { await workInboxRead.value; return }
+        guard active, isConnected, let candidate = transport, let accountID else { return }
+        let ticket = UUID(), owner = pairingOwner, current = generation, revision = workInboxRevision
+        workInboxReadID = ticket; workInboxLoading = true
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.workInboxReadID == ticket {
+                    self.workInboxRead = nil; self.workInboxReadID = nil; self.workInboxLoading = false
+                    if self.workInboxReadAgain { self.workInboxReadAgain = false; self.scheduleWorkInboxRefresh() }
+                }
+            }
+            do {
+                let snapshot = try await WorkInboxSnapshot.read(accountID: accountID) { channel, args in
+                    try Task.checkCancellation()
+                    guard self.pairingOwner == owner, self.generation == current, self.transport === candidate,
+                          self.workInboxReadID == ticket else { throw MainsError.changedBackend }
+                    return try await candidate.invoke(channel, args: args)
+                }
+                try Task.checkCancellation()
+                guard self.pairingOwner == owner, self.generation == current, self.transport === candidate,
+                      self.workInboxReadID == ticket else { return }
+                // A decision resolved or a run changed while these reads were
+                // in flight. Refresh again instead of resurrecting its old row.
+                guard self.workInboxRevision == revision else { self.workInboxReadAgain = true; return }
+                self.workInbox = snapshot; self.workInboxIsCurrent = true; self.workInboxError = nil
+            } catch {
+                guard !Task.isCancelled, self.pairingOwner == owner, self.generation == current, self.workInboxReadID == ticket else { return }
+                self.workInboxIsCurrent = false; self.workInbox.requests = []
+                self.workInboxError = "Couldn't update activity. " + error.localizedDescription
+            }
+        }
+        workInboxRead = task
+        await task.value
+    }
+
+    public func canStopInboxRun(_ id: String) -> Bool {
+        isConnected && workInboxIsCurrent && stoppingRunID == nil && workInbox.activeIDs.contains(id) &&
+            workInbox.runs.contains { $0.id == id && $0.isActive && $0.isReplica != true }
+    }
+
+    private func startWorkInboxWatch() {
+        guard active, workInboxVisible, isConnected, workInboxPoll == nil else { return }
+        let owner = pairingOwner, current = generation
+        workInboxPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.active, self.workInboxVisible, self.isConnected, self.pairingOwner == owner, self.generation == current else { return }
+                await self.refreshWorkInbox()
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            }
+        }
+    }
+
+    private func stopWorkInboxWatch() {
+        workInboxPoll?.cancel(); workInboxRefresh?.cancel(); workInboxRead?.cancel()
+        workInboxPoll = nil; workInboxRefresh = nil; workInboxRead = nil; workInboxReadID = nil
+        workInboxLoading = false; workInboxReadAgain = false; workInboxIsCurrent = false
+        workInbox.requests = []; workInboxError = nil; workInboxRevision += 1
+    }
+
+    private func scheduleWorkInboxRefresh() {
+        guard active, workInboxVisible, isConnected else { return }
+        if workInboxRead != nil { workInboxReadAgain = true; return }
+        guard workInboxRefresh == nil else { return }
+        let current = generation
+        workInboxRefresh = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            guard let self, self.generation == current else { return }
+            self.workInboxRefresh = nil
+            await self.refreshWorkInbox()
+        }
     }
 }
 

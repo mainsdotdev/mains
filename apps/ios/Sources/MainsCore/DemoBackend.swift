@@ -197,6 +197,8 @@ final class DemoBackend {
                             "allowedSandboxModes": .array(["read-only","workspace-write","danger-full-access"].map(JSONValue.string))])
         case "runs:getAll":
             return .array(runs.sorted { time($0, "updatedAt") > time($1, "updatedAt") }.prefix(100).map(JSONValue.object))
+        case "runs:listActive":
+            return .array(runs.filter { ["running", "queued"].contains($0["status"]?.string ?? "") }.map(JSONValue.object))
         case "runs:getById": return runs.first { $0["id"]?.string == runID }.map(JSONValue.object) ?? .null
         case "runs:getQueue": return .object(["queues": .array([])])
         case "search:conversations": return searchConversations(first)

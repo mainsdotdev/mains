@@ -199,6 +199,31 @@ const server = http.createServer(async (request, response) => {
   const parts = []; for await (const part of request) parts.push(part);
   response.setHeader('Content-Type', 'application/json');
   if (request.url === '/observations') { response.end(JSON.stringify(observations)); return; }
+  if (request.method === 'POST' && request.url === '/test/inbox') {
+    const { older = false } = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    const original = runs[0], now = Date.now();
+    for (const [id, title, status, providerId, age] of [
+      ['inbox-waiting', 'Review deployment request', 'running', 'codex', older ? 90 * 86400000 : 60000],
+      ['inbox-running', 'Run the test suite', 'running', 'claude_code', older ? 90 * 86400000 : 120000],
+      ['inbox-failed', 'Fix the failing build', 'failed', 'codex', 180000],
+      ['inbox-finished', 'Prepare release notes', 'succeeded', 'claude_code', 240000],
+    ]) {
+      const at = new Date(now - age);
+      runs.push({ ...original, id, title, status, providerId, createdAt: at, updatedAt: at });
+      artifacts.set(id, []);
+    }
+    if (older) for (let index = 0; index < 105; index++) {
+      const id = `inbox-recent-${index}`, at = new Date(now - 300000 - index * 1000);
+      runs.push({ ...original, id, title: `Recent work ${index}`, createdAt: at, updatedAt: at }); artifacts.set(id, []);
+    }
+    const pending = { requestId: 'inbox-decision', approvalToken: 'inbox-incarnation', runId: 'inbox-waiting', kind: 'tool_approval',
+      toolName: 'Bash', question: 'Run the deployment checks?', toolInput: { command: 'npm test', cwd: '/fixture/mains' },
+      timestamp: now, expiresAt: now + 300000 };
+    pendingDecisions.set(pending.requestId, pending);
+    event(CHANNELS.runs.toolApprovalRequest, pending.runId, pending);
+    event(CHANNELS.runs.statusChanged, 'inbox-running', { status: 'running' });
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/search-data') {
     const original = runs[0];
     for (let index = 0; index < 140; index++) {
@@ -350,6 +375,7 @@ wss.on('connection', socket => {
         }
         case CHANNELS.backend.describe: result = descriptor; break;
         case CHANNELS.account.get: result = { id: 'fixture-account', displayName: 'Fixture' }; break;
+        case CHANNELS.runs.listActive: result = runs.filter(run => ['running', 'queued'].includes(run.status) && !run.isReplica); break;
         case CHANNELS.runs.getAll:
           if (holdSnapshot) {
             const delay = holdSnapshot; holdSnapshot = 0;

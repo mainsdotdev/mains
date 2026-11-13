@@ -91,6 +91,8 @@
 		F3E4660769EE36062D0C256196A1A41E /* EffortControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4DC2D515719D4B4E4D57BB5535E833C /* EffortControl.swift */; };
 		F5B5C411B7D201F3A55E69905E63AB6A /* ConversationQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F67D0110AB9967FAF26C7B0705943E9 /* ConversationQueueView.swift */; };
 		FD3BBD18F27BFEB15B735D6913EE4F74 /* TurnChanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5BD6E09AD63A3C625EB23BAAEFFA4B1 /* TurnChanges.swift */; };
+		A77DCE413E6EC6E33449692EAD313BA8 /* WorkInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1875F72005B82148E77DE3E6AAB3FB6 /* WorkInbox.swift */; };
+		6D575D7EC469702B0C572C519C575987 /* WorkInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95489360F16BBE3C3799CEA347E713CD /* WorkInboxView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -201,6 +203,8 @@
 		FEADF9A81208A140D084E9E42BF6CC7D /* ConversationTranscript.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationTranscript.swift; sourceTree = "<group>"; };
 		FF17AF804D52C33119F987A83EDF8ABF /* ForkDeliveryNotice.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ForkDeliveryNotice.swift; sourceTree = "<group>"; };
 		FFA0706413B10E2AB3A239B6ECAB34CB /* DemoBackend.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DemoBackend.swift; sourceTree = "<group>"; };
+		E1875F72005B82148E77DE3E6AAB3FB6 /* WorkInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkInbox.swift; sourceTree = "<group>"; };
+		95489360F16BBE3C3799CEA347E713CD /* WorkInboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkInboxView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -283,6 +287,7 @@
 		9F99657CFDED4A92038F06FFC05619BA /* MainsApp */ = {
 			isa = PBXGroup;
 			children = (
+				95489360F16BBE3C3799CEA347E713CD /* WorkInboxView.swift */,
 				4207C99582D5B48E13FEE987AF3DCAD4 /* AgentActivityView.swift */,
 				F77FDAAFFB260DBC3F579ECF2A12E2FA /* AppChrome.swift */,
 				FBF181F391D685F23868C3E29C211793 /* AppShell.swift */,
@@ -343,6 +348,7 @@
 		D0FE9E15764B1F5BE92FDCBC54559C91 /* MainsCore */ = {
 			isa = PBXGroup;
 			children = (
+				E1875F72005B82148E77DE3E6AAB3FB6 /* WorkInbox.swift */,
 				561FCC9918AE91F89CD868D6F3EA73AD /* AgentActivity.swift */,
 				7B97DDA0E6DD029C45D063FAB732403E /* ApprovalToolPreview.swift */,
 				7B867772210984E45C9F3C7BB1BA6E1C /* AttachmentPhotoLibrary.swift */,
@@ -489,6 +495,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6D575D7EC469702B0C572C519C575987 /* WorkInboxView.swift in Sources */,
+				A77DCE413E6EC6E33449692EAD313BA8 /* WorkInbox.swift in Sources */,
 				15BEB9DA8126AD56F1E75FC5553023ED /* AgentActivity.swift in Sources */,
 				0193C685B63B275571669D1B6CCCE3B8 /* ApprovalToolPreview.swift in Sources */,
 				C6FB99AF46C21569011B0F1EC40E536C /* AttachmentPhotoLibrary.swift in Sources */,
