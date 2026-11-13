@@ -57,7 +57,7 @@ final class DemoBackend {
 #endif
 
     private let mutationChannels: Set<String> = ["runs:execute", "runs:continue", "runs:fork", "runs:steer", "runs:inputStatus", "runs:abort", "space:update", "runs:updateConversationSettings",
-        "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:editMobileBookmark"]
+        "runs:toolApprovalResponse", "runs:answerAsyncQuestions", "runs:dismissAsyncQuestions", "providers:updateRunSettings", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:editMobileBookmark", "atlas:setMobileTrash"]
 
     var pairing: PairedBackend {
         PairedBackend(descriptor: BackendDescriptor(backendId: Self.backendID, name: "Demo Mac",
@@ -175,12 +175,12 @@ final class DemoBackend {
             guard first["version"].string == file.version else { throw MainsError.server("This demo file changed.") }
             let result = try atlas.save(file, source: source, runID: runID, collectionID: runs.first(where: { $0["id"]?.string == runID })?["collectionId"]?.string)
             push("atlas:changed", [:]); return result
-        case "atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:readMobileBookmark", "atlas:editMobileBookmark":
+        case "atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:readMobileBookmark", "atlas:editMobileBookmark", "atlas:mobileTrash", "atlas:setMobileTrash":
             guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
             if let project = first["collectionId"].string, !seed["collections"].array.contains(where: { $0["id"].string == project }) { throw MainsError.server("Project unavailable.") }
             let result = try atlas.answer(channel, input: first, runID: runs.first(where: { $0["mode"]?.string == "work" })?["id"]?.string ?? Self.tourID,
                                           collectionID: seed["collections"].array.first?["id"].string, image: seed["images"].objectValue.values.first ?? .null)
-            if channel == "atlas:saveMobileFile" || channel == "atlas:saveMobileBookmark" || channel == "atlas:updateMobileItem" || channel == "atlas:editMobileBookmark" { push("atlas:changed", [:]) }
+            if channel == "atlas:saveMobileFile" || channel == "atlas:saveMobileBookmark" || channel == "atlas:updateMobileItem" || channel == "atlas:editMobileBookmark" || channel == "atlas:setMobileTrash" { push("atlas:changed", [:]) }
             return result
         case "backend:describe": return try .encode(pairing.descriptor)
         case "account:get": return seed["account"]

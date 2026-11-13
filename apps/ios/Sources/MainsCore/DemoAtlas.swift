@@ -8,7 +8,7 @@ import CryptoKit
     private var edits: [String: [String: JSONValue]] = [:]
 
     func save(_ file: DemoFile, source: String, runID: String, collectionID: String?) throws -> JSONValue {
-        if let id = sources[source], let row = saved[id] { return summary(row) }
+        if let id = sources[source], let row = saved[id] { edits[id, default: [:]]["trashedAt"] = .null; return summary(row) }
         guard saved.count < 100, storedFiles.values.reduce(0, { $0 + $1.bytes.count }) + file.bytes.count <= 32 * 1024 * 1024 else { throw MainsError.server("Reopen Demo Mode to reset the sample library.") }
         let id = "demo-saved-" + UUID().uuidString.lowercased()
         let row: JSONValue = .object(["key": .string(id), "kind": .string(file.mime.hasPrefix("image/") ? "image" : "file"), "title": .string(file.name),
@@ -63,8 +63,27 @@ import CryptoKit
             }
         }
         switch channel {
+        case "atlas:mobileTrash":
+            let requested = input["page"].number ?? 1
+            guard requested.isFinite, requested.rounded() == requested, (1...100_000).contains(requested) else { throw MainsError.invalidReply }
+            let page = Int(requested)
+            let rows = libraryRows().filter { $0["savedItemId"].string != nil && $0["trashedAt"].string != nil }.sorted {
+                let left = $0["trashedAt"].string ?? "", right = $1["trashedAt"].string ?? ""
+                return left == right ? ($0["key"].string ?? "") > ($1["key"].string ?? "") : left > right
+            }
+            let items = rows.dropFirst((page - 1) * 50).prefix(50).map { row in
+                JSONValue.object(["id": row["key"], "title": row["title"], "kind": row["kind"], "collectionId": row["collectionId"], "trashedAt": row["trashedAt"]])
+            }
+            return .object(["items": .array(items), "page": .number(requested), "hasNext": .bool(page * 50 < rows.count)])
+        case "atlas:setMobileTrash":
+            guard let id = input["id"].string, let row = libraryRows().first(where: { $0["savedItemId"].string == id }),
+                  case .bool(let trashed) = input["trashed"] else { throw MainsError.server("Atlas item not found") }
+            if (row["trashedAt"].string != nil) != trashed {
+                edits[id, default: [:]]["trashedAt"] = trashed ? .string(ISO8601DateFormatter().string(from: .now)) : .null
+            }
+            return .object(["id": .string(id), "requestedId": .string(id), "title": row["title"], "kind": row["kind"], "trashed": .bool(trashed)])
         case "atlas:readMobileBookmark", "atlas:editMobileBookmark":
-            guard let id = input["id"].string, let row = libraryRows().first(where: { $0["savedItemId"].string == id }) else { throw MainsError.server("Bookmark not found or in Trash") }
+            guard let id = input["id"].string, let row = libraryRows().first(where: { $0["savedItemId"].string == id }), row["trashedAt"].string == nil else { throw MainsError.server("Bookmark not found or in Trash") }
             let current = try bookmark(row, account: input["accountId"], requestedID: id)
             if channel == "atlas:readMobileBookmark" { return current }
             guard input["expectedRevision"].string == current["revision"].string else { throw MainsError.server("This bookmark changed elsewhere. Reload it before saving your edits.") }
@@ -84,7 +103,7 @@ import CryptoKit
             let updated = try bookmark(updatedRow, account: input["accountId"], requestedID: id)
             return .object(["id": updated["id"], "requestedId": .string(id), "kind": .string("bookmark"), "title": updated["title"], "revision": updated["revision"]])
         case "atlas:updateMobileItem":
-            guard let id = input["id"].string, let row = libraryRows().first(where: { $0["savedItemId"].string == id }) else { throw MainsError.server("Atlas item not found.") }
+            guard let id = input["id"].string, let row = libraryRows().first(where: { $0["savedItemId"].string == id }), row["trashedAt"].string == nil else { throw MainsError.server("Atlas item not found or in Trash") }
             var patch = edits[id] ?? [:]
             if let favorite = input.objectValue["isFavorite"] {
                 guard case .bool = favorite else { throw MainsError.invalidReply }
@@ -100,7 +119,7 @@ import CryptoKit
             if parts.queryItems?.isEmpty == true { parts.queryItems = nil }
             parts.host = parts.host?.lowercased()
             let key = "bookmark:" + (parts.string ?? url)
-            if let id = sources[key], let row = saved[id] { return summary(row) }
+            if let id = sources[key], let row = saved[id] { edits[id, default: [:]]["trashedAt"] = .null; return summary(row) }
             guard saved.count < 100 else { throw MainsError.server("Reopen Demo Mode to reset the sample library.") }
             let id = "demo-bookmark-" + UUID().uuidString.lowercased()
             let row: JSONValue = .object(["key": .string(id), "kind": .string("bookmark"), "title": .string(parts.host ?? url), "date": .string(ISO8601DateFormatter().string(from: .now)),
@@ -112,7 +131,7 @@ import CryptoKit
             guard input["sourceKey"].string == source, input["runId"].string == runID, input["version"].string == DemoFile.notes.version else { throw MainsError.server("Demo Atlas source changed.") }
             return try save(.notes, source: "generated:" + runID, runID: runID, collectionID: collectionID)
         case "atlas:mobileLibrary":
-            var rows = libraryRows()
+            var rows = libraryRows().filter { $0["trashedAt"].string == nil }
             let type = input["type"].string ?? "all", scope = input["scope"].string ?? "all", query = (input["query"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             rows = rows.filter { row in
                 (type == "all" || row["kind"].string == type)
@@ -123,6 +142,7 @@ import CryptoKit
             let page = max(1, min(Int(input["page"].number ?? 1), max(1, (rows.count + 49) / 50)))
             return .object(["items": .array(Array(rows.dropFirst((page - 1) * 50).prefix(50))), "page": .number(Double(page)), "hasNext": .bool(page * 50 < rows.count)])
         case "atlas:readMobilePage":
+            guard edits["demo-atlas-page"]?["trashedAt"]?.string == nil else { throw MainsError.server("Atlas page not found or in Trash") }
             guard input["id"].string == "demo-atlas-page", input["version"].number == nil || input["version"].number == 1 else { throw MainsError.server("This demo page is unavailable. Refresh it to read again.") }
             let markdown = "# Your library, on iPhone\n\nAtlas brings **Pages, documents, images and bookmarks** together.\n\n- Search your library\n- Filter by project or favorites\n- Preview and share a file\n\n[Open the sample report](atlas-file://demo-atlas-doc)\n\nEverything here is prepared sample data. No computer or AI service was contacted."
             guard input["offset"].number == nil || input["offset"].number == 0 else { throw MainsError.invalidReply }
@@ -131,6 +151,7 @@ import CryptoKit
         case "atlas:describeMobileFile", "atlas:readMobileFile":
             let reference = input["reference"]
             let id = reference["itemId"].string ?? (reference["runId"].string == runID && reference["sourceKey"].string == source ? "demo-atlas-generated" : "")
+            guard edits[id]?["trashedAt"]?.string == nil else { throw MainsError.server("Atlas file not found or in Trash") }
             guard let file = files[id] ?? storedFiles[id] else { throw MainsError.server("Demo Atlas file not found.") }
             if channel == "atlas:readMobileFile" { return try file.chunk(input) }
             var row = file.descriptor(runID: runID).objectValue; row.removeValue(forKey: "runId"); row["reference"] = reference

@@ -60,3 +60,8 @@ export interface AtlasMobileEditBookmark extends AtlasMobileBookmarkIdentity {
   expectedRevision: string; title?: string; description?: string; note?: string;
 }
 export interface AtlasMobileBookmarkEditResult extends AtlasMobileSavedItem { requestedId: string; revision: string }
+export interface AtlasMobileTrashOptions { accountId: string; page?: number }
+export interface AtlasMobileTrashItem extends AtlasMobileSavedItem { collectionId: string | null; trashedAt: string }
+export interface AtlasMobileTrashPage { items: AtlasMobileTrashItem[]; page: number; hasNext: boolean }
+export interface AtlasMobileSetTrash { accountId: string; id: string; trashed: boolean }
+export interface AtlasMobileTrashState extends AtlasMobileSavedItem { requestedId: string; trashed: boolean }

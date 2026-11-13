@@ -53,6 +53,18 @@ public struct AtlasLibraryPage: Decodable, Sendable {
     public let page: Int
     public let hasNext: Bool
 }
+public struct AtlasTrashItem: Decodable, Identifiable, Sendable {
+    public let id: String
+    public let title: String
+    public let kind: String
+    public let collectionId: String?
+    public let trashedAt: String
+}
+public struct AtlasTrashPage: Decodable, Sendable {
+    public let items: [AtlasTrashItem]
+    public let page: Int
+    public let hasNext: Bool
+}
 public struct AtlasPageContent: Decodable, Sendable {
     public let id: String
     public let title: String

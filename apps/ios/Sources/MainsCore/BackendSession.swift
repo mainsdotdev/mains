@@ -774,6 +774,25 @@ public final class BackendSession {
 
     public var canSaveToAtlas: Bool { active && isConnected && pendingAtlasSave == nil }
 
+    public func atlasTrash(page: Int = 1) async throws -> AtlasTrashPage {
+        guard (1...100_000).contains(page) else { throw MainsError.invalidReply }
+        let result = try await atlasRead("atlas:mobileTrash", fields: ["page": .number(Double(page))]).decode(AtlasTrashPage.self)
+        guard result.page == page, result.items.count <= 50, Set(result.items.map(\.id)).count == result.items.count,
+              result.items.allSatisfy({ !$0.id.isEmpty && $0.id.utf8.count <= 256 && $0.title.utf8.count <= 4096 && ["page", "file", "image", "bookmark"].contains($0.kind) && $0.trashedAt.utf8.count <= 64 }) else { throw MainsError.invalidReply }
+        return result
+    }
+
+    public func trashAtlasItem(_ entry: AtlasEntry, owner: Int) async throws -> AtlasSavedItem {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        guard let id = entry.savedIdentity else { throw MainsError.server("Only saved Atlas items can be moved to Trash.") }
+        return try await beginAtlasSave("atlas:setMobileTrash", fields: ["id": .string(id), "trashed": .bool(true)], label: entry.title)
+    }
+
+    public func restoreAtlasItem(_ item: AtlasTrashItem, owner: Int) async throws -> AtlasSavedItem {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        return try await beginAtlasSave("atlas:setMobileTrash", fields: ["id": .string(item.id), "trashed": .bool(false)], label: item.title)
+    }
+
     public func readAtlasBookmark(_ id: String) async throws -> AtlasBookmarkDocument {
         let item = try await atlasRead("atlas:readMobileBookmark", fields: ["id": .string(id)]).decode(AtlasBookmarkDocument.self)
         guard item.requestedId == id, !item.id.isEmpty, item.id.utf8.count <= 256, item.kind == "bookmark",
@@ -852,6 +871,8 @@ public final class BackendSession {
             if attempt.isBookmarkEdit {
                 guard item.kind == "bookmark", value["requestedId"] == attempt.payload["id"],
                       value["revision"].string?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw MainsError.invalidReply }
+            } else if attempt.isTrashChange {
+                guard value["requestedId"] == attempt.payload["id"], value["trashed"] == attempt.payload["trashed"] else { throw MainsError.invalidReply }
             } else if attempt.isUpdate {
                 guard value["requestedId"] == attempt.payload["id"],
                       attempt.payload.objectValue["isFavorite"].map({ value["isFavorite"] == $0 }) ?? true,

@@ -35,6 +35,15 @@ beforeEach(() => {
 afterEach(async () => { await atlasBookmarks.stop(); cleanup(); restore(); fs.rmSync(directory, { recursive: true, force: true }); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Atlas bookmarks", () => {
+  it("restores a phone-trashed bookmark through the existing enrichment lifecycle without losing authored fields", async () => {
+    const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/trash-phone", title: "Authored", description: "Keep description", note: "Keep note", tags: ["Research"] });
+    await atlasMobile.setTrash({ accountId, id: item.id, trashed: true });
+    expect(() => atlasMobile.readBookmark({ accountId, id: item.id })).toThrow("Trash");
+    await atlasMobile.setTrash({ accountId, id: item.id, trashed: false });
+    atlasBookmarks.start(); await waitForReady(item.id);
+    expect(atlasMobile.readBookmark({ accountId, id: item.id })).toMatchObject({ title: "Authored", description: "Keep description", note: "Keep note", url: item.url });
+    expect(atlasService.get({ accountId, id: item.id })?.tags).toEqual(item.tags);
+  });
   it("reads and edits phone bookmark fields while preserving URL, tags, project and favorites", async () => {
     const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/edited", title: "Original", description: "Before", note: "Old note", tags: ["Research"] });
     await atlasService.update({ accountId, id: item.id, isFavorite: true });

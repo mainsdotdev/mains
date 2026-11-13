@@ -23,9 +23,20 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
     row.savedItemId = row.key; row.savedCollectionId = row.collectionId;
   }
   switch (channel) {
+    case CHANNELS.atlas.mobileTrash: {
+      const trashed = rows.filter(row => row.trashedAt).sort((left, right) => right.trashedAt.localeCompare(left.trashedAt) || right.key.localeCompare(left.key));
+      const page = input.page ?? 1;
+      return { items: trashed.slice((page - 1) * 50, page * 50).map(row => ({ id: row.key, title: row.title, kind: row.kind, collectionId: row.collectionId, trashedAt: row.trashedAt })), page, hasNext: page * 50 < trashed.length };
+    }
+    case CHANNELS.atlas.setMobileTrash: {
+      const item = rows.find(row => row.key === input.id);
+      if (!item || typeof input.trashed !== 'boolean') throw new Error('Atlas item not found');
+      if (!!item.trashedAt !== input.trashed) edits.set(input.id, { ...edits.get(input.id), trashedAt: input.trashed ? new Date().toISOString() : null });
+      return { id: item.key, requestedId: input.id, title: item.title, kind: item.kind, trashed: input.trashed };
+    }
     case CHANNELS.atlas.readMobileBookmark:
     case CHANNELS.atlas.editMobileBookmark: {
-      const item = rows.find(row => row.key === input.id && row.kind === 'bookmark');
+      const item = rows.find(row => row.key === input.id && row.kind === 'bookmark' && !row.trashedAt);
       if (!item) throw new Error('Bookmark not found or in Trash');
       const document = row => ({ id: row.key, requestedId: input.id, title: row.title, kind: 'bookmark', url: row.url,
         description: row.description ?? '', note: row.note ?? '',
@@ -41,7 +52,7 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
     }
     case CHANNELS.atlas.updateMobileItem: {
       const item = rows.find(row => row.key === input.id);
-      if (!item) throw new Error('Atlas item not found');
+      if (!item || item.trashedAt) throw new Error('Atlas item not found');
       const patch = { ...edits.get(input.id) };
       if (typeof input.isFavorite === 'boolean') patch.isFavorite = input.isFavorite;
       if ('collectionId' in input) patch.collectionId = input.collectionId;
@@ -71,14 +82,14 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
       const item = saved.get(key); return { id: key, title: item.title, kind: item.kind };
     }
     case CHANNELS.atlas.mobileLibrary: {
-      const filtered = rows.filter(row => (!input.type || input.type === 'all' || input.type === row.kind)
+      const filtered = rows.filter(row => !row.trashedAt && (!input.type || input.type === 'all' || input.type === row.kind)
         && (!input.scope || input.scope === 'all' || input.scope === 'saved' || input.scope === 'favorites' && row.isFavorite)
         && (!input.collectionId || row.collectionId === input.collectionId) && (!input.query || row.title.toLowerCase().includes(input.query.toLowerCase())));
       const page = Math.max(1, Math.min(input.page ?? 1, Math.ceil(filtered.length / 50)));
       return { items: filtered.slice((page - 1) * 50, page * 50), page, hasNext: page * 50 < filtered.length };
     }
     case CHANNELS.atlas.readMobilePage: {
-      if (!rows.some(row => row.pageId === input.id) || input.version !== undefined && input.version !== 1) throw new Error('Atlas page changed or not found');
+      if (!rows.some(row => row.pageId === input.id && !row.trashedAt) || input.version !== undefined && input.version !== 1) throw new Error('Atlas page changed or not found');
       const chars = Array.from('x'.repeat(16383) + '😀' + 'İstanbul 🌍'), offset = input.offset ?? 0, end = Math.min(chars.length, offset + 16384);
       if (offset < 0 || offset > chars.length) throw new Error('Invalid page offset');
       return { id: input.id, title: 'Travel notes', icon: 'emoji:🗺️', version: 1, markdown: chars.slice(offset, end).join(''), offset, nextOffset: end < chars.length ? end : null, sourceRunId: 'fixture-run' };
@@ -86,6 +97,7 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
     case CHANNELS.atlas.describeMobileFile:
     case CHANNELS.atlas.readMobileFile: {
       const id = input.reference?.itemId;
+      if (rows.find(row => row.key === id)?.trashedAt) throw new Error('Atlas file not found');
       if (!['fixture-atlas-doc', 'fixture-atlas-image'].includes(id) && saved.get(id)?.kind !== 'file') throw new Error('Atlas file not found');
       const image = id === 'fixture-atlas-image', bytes = image ? Buffer.from(imageBase64, 'base64') : saved.get(id)?.title === 'report.pdf' ? pdfBytes : outputBytes;
       if (channel === CHANNELS.atlas.describeMobileFile) return { reference: input.reference, name: image ? 'image.png' : 'notes.md', mimeType: image ? 'image/png' : 'text/markdown', previewType: image ? 'image' : 'markdown', byteSize: bytes.length, modifiedAt: 1, version };

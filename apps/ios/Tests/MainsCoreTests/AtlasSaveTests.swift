@@ -3,6 +3,71 @@ import Testing
 @testable import MainsCore
 
 @Suite struct AtlasSaveTests {
+    @Test @MainActor func trashAndRestoreKeepSavedKindsAndTheirOrganizationWithoutChangingTheConversation() async throws {
+        let backend = try DemoBackend(), storage = MemoryStorage()
+        let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let space = session.selectedSpaceID
+        let initial = try await session.atlasLibrary(AtlasQuery())
+        let bookmark = try #require(initial.items.first { $0.kind == "bookmark" })
+        let project = try #require(session.collections.first { $0.id != bookmark.savedProjectID }?.id)
+        _ = try await session.setAtlasFavorite(bookmark, to: true, owner: session.ownership)
+        _ = try await session.moveAtlasItem(bookmark, to: project, owner: session.ownership)
+        for item in initial.items where item.savedIdentity != nil { _ = try await session.trashAtlasItem(item, owner: session.ownership) }
+        let trash = try await session.atlasTrash()
+        #expect(Set(trash.items.map(\.kind)) == ["page", "file", "image", "bookmark"])
+        #expect(try await session.atlasLibrary(AtlasQuery()).items.allSatisfy { $0.savedIdentity == nil })
+        for item in trash.items { _ = try await session.restoreAtlasItem(item, owner: session.ownership) }
+        #expect(try await session.atlasTrash().items.isEmpty)
+        let current = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.id == bookmark.id })
+        #expect(current.isFavorite && current.savedProjectID == project && current.url == bookmark.url)
+        #expect(session.viewingRunID == nil && session.selectedSpaceID == space && storage.snapshot == nil)
+    }
+
+    @Test @MainActor func trashReceiptRecoveryDoesNotTrashAnItemThatWasRestoredByANewerCommand() async throws {
+        let backend = try DemoBackend(), probe = AtlasSaveProbe()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.kind == "page" })
+        probe.loseACK = true
+        await #expect(throws: MainsError.self) { try await session.trashAtlasItem(entry, owner: session.ownership) }
+        #expect(session.pendingAtlasSave?.isTrashChange == true && !session.canSaveToAtlas)
+        let trashed = try #require(try await session.atlasTrash().items.first)
+        await #expect(throws: MainsError.self) { try await session.restoreAtlasItem(trashed, owner: session.ownership) }
+        let account = try backend.invoke("account:get", args: [])["id"]
+        _ = try backend.invoke("atlas:setMobileTrash", args: [.object(["accountId": account, "id": .string(trashed.id), "trashed": .bool(false)])], commandID: UUID().uuidString)
+        _ = try await session.checkAtlasSaveDelivery()
+        #expect(try await session.atlasTrash().items.isEmpty)
+        #expect(try await session.atlasLibrary(AtlasQuery()).items.contains { $0.id == entry.id })
+        let calls = probe.calls.filter { $0.0 == "atlas:setMobileTrash" }
+        #expect(calls.count == 2 && calls[0].1 == calls[1].1 && calls[0].2 == calls[1].2)
+    }
+
+    @Test @MainActor func anUnconfirmedRestoreRetainsItsFalseStateAndCommandIdentityAcrossReconnection() async throws {
+        let backend = try DemoBackend(), probe = AtlasSaveProbe()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.kind == "bookmark" })
+        _ = try await session.trashAtlasItem(entry, owner: session.ownership)
+        let item = try #require(try await session.atlasTrash().items.first)
+        probe.loseACK = true
+        await #expect(throws: MainsError.self) { try await session.restoreAtlasItem(item, owner: session.ownership) }
+        let id = try #require(session.pendingAtlasSave?.id)
+        session.setActive(false); session.setActive(true)
+        try await eventually { session.isConnected }
+        _ = try await session.checkAtlasSaveDelivery()
+        let restores = probe.calls.filter { $0.0 == "atlas:setMobileTrash" && $0.1.first?["trashed"] == .bool(false) }
+        #expect(restores.count == 2 && restores.allSatisfy { $0.2 == id })
+        #expect(session.pendingAtlasSave == nil)
+        #expect(try await session.atlasTrash().items.isEmpty)
+    }
+
     @Test @MainActor func bookmarkEditsKeepUnchangedFieldsAndAllowDescriptionAndNoteToBeCleared() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in AtlasSaveTransport(backend, probe) })
@@ -204,6 +269,31 @@ import Testing
 }
 
 extension SessionIntegrationTests {
+    @Test @MainActor func atlasTrashAndRestoreUseNarrowReceiptCommandsAndExcludeTrashedItemsFromTheLibrary() async throws {
+        let session = BackendSession(storage: MemoryStorage())
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
+        let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")
+        try await eventually { session.isConnected }
+        let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.kind == "bookmark" })
+        _ = try await session.trashAtlasItem(entry, owner: session.ownership)
+        let item = try #require(try await session.atlasTrash().items.first)
+        #expect(item.id == entry.id)
+        var query = AtlasQuery(); query.text = entry.title
+        #expect(try await session.atlasLibrary(query).items.isEmpty)
+        _ = try await session.restoreAtlasItem(item, owner: session.ownership)
+        #expect(try await session.atlasTrash().items.isEmpty)
+        #expect(try await session.atlasLibrary(query).items.map(\.id) == [entry.id])
+        let (data, _) = try await URLSession.shared.data(from: URL(string: endpoint + "/observations")!)
+        let calls = try JSONDecoder().decode([JSONValue].self, from: data)
+        let changes = calls.filter { $0["channel"].string == "atlas:setMobileTrash" }
+        #expect(changes.count == 2 && changes.allSatisfy { $0["commandId"].string?.isEmpty == false })
+        #expect(!calls.contains { $0["channel"].string == "atlas:remove" || $0["channel"].string == "atlas:update" })
+        #expect(session.viewingRunID == nil && session.transcript.rows.isEmpty)
+    }
+
     @Test @MainActor func bookmarkEditingUsesFreshBoundedReadsAndItsOwnReceiptBackedCommand() async throws {
         let session = BackendSession(storage: MemoryStorage())
         session.restore(); session.setActive(true)
@@ -291,7 +381,7 @@ extension SessionIntegrationTests {
     func close() { base.close() }
     func perform(_ channel: String, args: [JSONValue], commandId: String?, timeout: TimeInterval) async throws -> JSONValue {
         probe.calls.append((channel, args, commandId))
-        let mutation = channel.hasPrefix("atlas:save") || channel == "atlas:updateMobileItem" || channel == "atlas:editMobileBookmark"
+        let mutation = channel.hasPrefix("atlas:save") || channel == "atlas:updateMobileItem" || channel == "atlas:editMobileBookmark" || channel == "atlas:setMobileTrash"
         if mutation, probe.reject { probe.reject = false; throw MainsError.server("Invalid bookmark URL") }
         let value = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
         if mutation, probe.loseACK { probe.loseACK = false; throw MainsError.timeout }

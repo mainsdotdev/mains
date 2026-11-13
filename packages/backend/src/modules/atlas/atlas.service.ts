@@ -608,7 +608,7 @@ export const atlasService = {
     }
     if (input.trashed !== undefined) {
       if (typeof input.trashed !== "boolean") throw new Error("Invalid Trash state");
-      fields.trashedAt = input.trashed ? new Date() : null;
+      fields.trashedAt = input.trashed ? owned(input).trashedAt ?? new Date() : null;
       if (item.kind === "bookmark" && input.trashed) fields.bookmarkJob = atlasBookmarks.retire(owned(input));
     }
     validate?.();

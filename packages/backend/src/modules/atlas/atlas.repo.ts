@@ -122,7 +122,9 @@ export const atlasRepo = {
     if (trashed !== undefined) conditions.push(trashed ? isNotNull(atlasItems.trashedAt) : isNull(atlasItems.trashedAt));
     if (collectionId) conditions.push(eq(atlasItems.collectionId, collectionId));
     if (isFavorite !== undefined) conditions.push(eq(atlasItems.isFavorite, isFavorite));
-    query.where(and(...conditions)).orderBy(desc(atlasItems.updatedAt), desc(atlasItems.id));
+    query.where(and(...conditions)).orderBy(...(trashed === true
+      ? [desc(atlasItems.trashedAt), desc(atlasItems.updatedAt), desc(atlasItems.id)]
+      : [desc(atlasItems.updatedAt), desc(atlasItems.id)]));
     if (offset !== undefined) query.offset(offset);
     if (limit !== undefined || offset !== undefined) query.limit(limit ?? ATLAS_LIBRARY_PAGE_SIZE);
     return query.all();

@@ -100,6 +100,7 @@
 		C4749122308B90F5AFE9B1278CFF350A /* AtlasSaveControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A2DF0099301CFA2DC3B12E48DDDF1F2 /* AtlasSaveControls.swift */; };
 		7CD228D6F11A09C03E18D015DF8C0276 /* BookmarkEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317452162624C74E418A2A90E03E6376 /* BookmarkEditing.swift */; };
 		1ABC23266DB4589BE89CA7BF52E1549A /* AtlasBookmarkEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 659863D227B33393165A134B0C2295EF /* AtlasBookmarkEditor.swift */; };
+		011960D6CBE1F56E86DC8FF88C506BD7 /* AtlasTrashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C54881473FDFBAC9AB61E76B3B8A54 /* AtlasTrashView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -219,6 +220,7 @@
 		3A2DF0099301CFA2DC3B12E48DDDF1F2 /* AtlasSaveControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasSaveControls.swift; sourceTree = "<group>"; };
 		317452162624C74E418A2A90E03E6376 /* BookmarkEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkEditing.swift; sourceTree = "<group>"; };
 		659863D227B33393165A134B0C2295EF /* AtlasBookmarkEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasBookmarkEditor.swift; sourceTree = "<group>"; };
+		35C54881473FDFBAC9AB61E76B3B8A54 /* AtlasTrashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasTrashView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -301,6 +303,7 @@
 		9F99657CFDED4A92038F06FFC05619BA /* MainsApp */ = {
 			isa = PBXGroup;
 			children = (
+				35C54881473FDFBAC9AB61E76B3B8A54 /* AtlasTrashView.swift */,
 				659863D227B33393165A134B0C2295EF /* AtlasBookmarkEditor.swift */,
 				3A2DF0099301CFA2DC3B12E48DDDF1F2 /* AtlasSaveControls.swift */,
 				71BA48913EFDE51CD66B715AAB71ED7E /* AtlasView.swift */,
@@ -516,6 +519,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				011960D6CBE1F56E86DC8FF88C506BD7 /* AtlasTrashView.swift in Sources */,
 				1ABC23266DB4589BE89CA7BF52E1549A /* AtlasBookmarkEditor.swift in Sources */,
 				7CD228D6F11A09C03E18D015DF8C0276 /* BookmarkEditing.swift in Sources */,
 				C4749122308B90F5AFE9B1278CFF350A /* AtlasSaveControls.swift in Sources */,

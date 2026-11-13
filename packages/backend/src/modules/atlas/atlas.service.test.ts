@@ -290,6 +290,85 @@ function output(name = "report.pdf", runId = "conversation", mode: "work" | "dev
   return file;
 }
 describe("Atlas phone library", { timeout: 15000 }, () => {
+  it.each(["page", "file", "image", "bookmark"] as const)("moves a saved %s to Trash and restores it idempotently without losing metadata", async (kind) => {
+    db.insert(collections).values({ id: "trash-project", accountId: "default", name: "Research" }).run();
+    atlasRepo.insert({ id: "trash-item", accountId: "default", kind, title: "Keep title", collectionId: "trash-project", isFavorite: true, version: 4 });
+    const identity = { accountId: "default", id: "trash-item" };
+    const first = await atlasMobile.setTrash({ ...identity, trashed: true });
+    const date = atlasService.get(identity)!.trashedAt;
+    expect(await atlasMobile.setTrash({ ...identity, trashed: true })).toEqual(first);
+    expect(atlasService.get(identity)!.trashedAt).toBe(date);
+    expect(atlasMobile.trash({ accountId: "default" }).items).toMatchObject([{ id: "trash-item", kind, collectionId: "trash-project" }]);
+    expect(first).toMatchObject({ id: "trash-item", requestedId: "trash-item", kind, trashed: true });
+    expect(first).not.toHaveProperty("path");
+    expect((await atlasMobile.setTrash({ ...identity, trashed: false })).trashed).toBe(false);
+    await atlasMobile.setTrash({ ...identity, trashed: false });
+    expect(atlasService.get(identity)).toMatchObject({ title: "Keep title", collectionId: "trash-project", isFavorite: true, version: 4, trashedAt: null });
+    expect(atlasMobile.trash({ accountId: "default" }).items).toEqual([]);
+  });
+
+  it("pages only the account's trashed metadata in stable Trash-date order", () => {
+    createAccount(db, { id: "trash-foreign" });
+    const date = new Date();
+    for (let index = 0; index < 55; index++) {
+      atlasRepo.insert({ id: `trash-${String(index).padStart(2, "0")}`, accountId: "default", kind: "page", title: `Page ${index}`, trashedAt: date });
+    }
+    atlasRepo.insert({ id: "trash-old", accountId: "default", kind: "file", title: "Older trash", trashedAt: new Date(0), updatedAt: new Date(date.getTime() + 86400_000) });
+    atlasRepo.insert({ id: "active", accountId: "default", kind: "page", title: "Active" });
+    atlasRepo.insert({ id: "foreign", accountId: "trash-foreign", kind: "page", title: "Private", trashedAt: date });
+    const first = atlasMobile.trash({ accountId: "default" }), next = atlasMobile.trash({ accountId: "default", page: 2 });
+    expect(first.items).toHaveLength(50); expect(first.hasNext).toBe(true);
+    expect(next.items).toHaveLength(6); expect(next.hasNext).toBe(false);
+    expect(next.items.at(-1)?.id).toBe("trash-old");
+    expect(new Set([...first.items, ...next.items].map((item) => item.id)).size).toBe(56);
+    expect(first.items.every((item) => item.id !== "foreign" && item.id !== "active")).toBe(true);
+    expect(JSON.stringify(first)).not.toMatch(/"(path|blocks|markdown|note)":/);
+    for (const page of [0, -1, 1.5, 100001]) expect(() => atlasMobile.trash({ accountId: "default", page })).toThrow("Invalid");
+  });
+
+  it("keeps the first Trash timestamp when another device submits the same state before confirmation", async () => {
+    const page = await atlasService.createPage({ accountId: "default", title: "Shared Page", markdown: "Body" });
+    const input = { accountId: "default", id: page.item.id, trashed: true };
+    const update = atlasService.update.bind(atlasService);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-13T10:00:00Z"));
+    let commits = 0;
+    const spy = vi.spyOn(atlasService, "update").mockImplementation((fields, validate) => update(fields, () => {
+      validate?.();
+      if (++commits === 1) vi.setSystemTime(new Date("2026-11-13T10:00:10Z"));
+    }));
+    try {
+      await Promise.all([atlasMobile.setTrash(input), atlasMobile.setTrash(input)]);
+      expect(atlasService.get(input)?.trashedAt).toBe("2026-11-13T10:00:00.000Z");
+    } finally { spy.mockRestore(); vi.useRealTimers(); }
+  });
+  it("preserves both an Atlas file's immutable bytes and its conversation's original through Trash/Restore", async () => {
+    const source = output("kept.pdf", "trash-source");
+    const copy = await atlasService.saveFile({ accountId: "default", runId: "trash-source", path: source });
+    const identity = { accountId: "default", id: copy.id };
+    await atlasMobile.setTrash({ ...identity, trashed: true });
+    expect(fs.existsSync(source) && fs.existsSync(copy.path!)).toBe(true);
+    await expect(atlasMobile.describeFile({ accountId: "default", reference: { itemId: copy.id } })).rejects.toThrow("not found");
+    expect((await atlasMobile.library({ accountId: "default" })).items).toEqual([]);
+    const { runsService } = await import("../runs");
+    expect((await runsService.getOutputArtifacts("trash-source")).some((item) => item.path === fs.realpathSync(source))).toBe(true);
+    await atlasMobile.setTrash({ ...identity, trashed: false });
+    expect((await atlasMobile.describeFile({ accountId: "default", reference: { itemId: copy.id } })).name).toBe("kept.pdf");
+    expect(fs.readFileSync(copy.path!, "utf8")).toBe("original contents");
+  });
+
+  it("rejects foreign, missing and generated-only Trash targets and all wider mutations", async () => {
+    atlasRepo.insert({ id: "trash-safe", accountId: "default", kind: "file", title: "Keep" });
+    const identity = { accountId: "default", id: "trash-safe", trashed: true };
+    await expect(atlasMobile.setTrash({ ...identity, accountId: "other" })).rejects.toThrow("not found");
+    await expect(atlasMobile.setTrash({ ...identity, id: "a".repeat(64) })).rejects.toThrow("not found");
+    await expect(atlasMobile.setTrash({ ...identity, trashed: "yes" } as never)).rejects.toThrow("Only Trash");
+    for (const field of ["title", "path", "remove", "metadata", "collectionId"]) {
+      await expect(atlasMobile.setTrash({ ...identity, [field]: "forbidden" } as never)).rejects.toThrow("Only Trash");
+    }
+    expect(atlasService.get(identity)?.trashedAt).toBeNull();
+  });
+
   it.each(["page", "file", "image", "bookmark"] as const)("organizes a permanent %s without changing its content or source", async (kind) => {
     db.insert(collections).values({ id: "phone-project", accountId: "default", name: "Research" }).run();
     atlasRepo.insert({ id: "organize", accountId: "default", kind, title: "Keep title", version: 7 });

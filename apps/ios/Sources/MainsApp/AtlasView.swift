@@ -21,6 +21,8 @@ struct AtlasView: View {
     @State private var moveSelection: AtlasMoveSelection?
     @State private var editError: String?
     @State private var bookmarkEdit: AtlasBookmarkEditSelection?
+    @State private var showingTrash = false
+    @State private var trashOwner = 0
     private var canOrganize: Bool { libraryOwner == session.ownership && session.canSaveToAtlas }
     private var filter: String { "\(query.type):\(query.scope):\(query.collectionID ?? ""):\(query.text)" }
     private var loadKey: String { "\(query.hashValue):\(session.connection):\(session.atlasRevision):\(reload)" }
@@ -95,12 +97,14 @@ struct AtlasView: View {
                                 Button(entry.isFavorite ? "Remove from favorites" : "Add to favorites", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
                                     .disabled(!canOrganize)
                                 Button("Move to project", systemImage: "folder") { move(entry) }.disabled(!canOrganize)
+                                Button("Move to Trash", systemImage: "trash", role: .destructive) { trash(entry) }.disabled(!canOrganize)
                             }
                             if let id = entry.sourceRunId { Button("Open source chat", systemImage: "bubble.left") { openConversation(id) } }
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             if entry.savedIdentity != nil {
                                 Button("Move", systemImage: "folder") { move(entry) }.tint(.blue).disabled(!canOrganize)
+                                Button("Trash", systemImage: "trash") { trash(entry) }.tint(.red).disabled(!canOrganize)
                                 Button(entry.isFavorite ? "Unfavorite" : "Favorite", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
                                     .tint(.orange).disabled(!canOrganize)
                             }
@@ -120,6 +124,10 @@ struct AtlasView: View {
         .listStyle(.insetGrouped).navigationTitle("Atlas")
         .searchable(text: $query.text, prompt: "Search Atlas")
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Trash", systemImage: "trash") { trashOwner = session.ownership; showingTrash = true }
+                    .accessibilityIdentifier("openAtlasTrash")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("New bookmark", systemImage: "bookmark.badge.plus") { bookmarkOwner = session.ownership; addingBookmark = true }
                     .disabled(!session.canSaveToAtlas).accessibilityIdentifier("newAtlasBookmark")
@@ -142,12 +150,20 @@ struct AtlasView: View {
         }
         .sheet(item: $moveSelection) { MoveAtlasItemView(session: session, selection: $0) }
         .sheet(item: $bookmarkEdit) { AtlasBookmarkEditor(session: session, selection: $0, onSaved: { reload += 1 }) }
+        .sheet(isPresented: $showingTrash) { AtlasTrashView(session: session, owner: trashOwner) }
         .alert("Couldn’t update item", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) { Button("OK", role: .cancel) {} } message: { Text(editError ?? "") }
     }
     private func favorite(_ entry: AtlasEntry) {
         guard let owner = libraryOwner, canOrganize else { return }
         Task {
             do { _ = try await session.setAtlasFavorite(entry, to: !entry.isFavorite, owner: owner) }
+            catch { if owner == session.ownership { editError = error.localizedDescription } }
+        }
+    }
+    private func trash(_ entry: AtlasEntry) {
+        guard let owner = libraryOwner, canOrganize else { return }
+        Task {
+            do { _ = try await session.trashAtlasItem(entry, owner: owner) }
             catch { if owner == session.ownership { editError = error.localizedDescription } }
         }
     }

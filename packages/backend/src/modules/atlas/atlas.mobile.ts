@@ -3,7 +3,8 @@ import { promises as fs, type Stats } from "node:fs";
 import type { AtlasMobileEntry, AtlasMobileFile, AtlasMobileFileRead, AtlasMobileFileReference, AtlasMobileFileRequest,
   AtlasMobileLibraryOptions, AtlasMobileLibraryPage, AtlasMobilePage, AtlasMobilePageRequest,
   AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileSavedItem, AtlasMobileUpdateItem, AtlasMobileItemState,
-  AtlasMobileBookmarkIdentity, AtlasMobileBookmark, AtlasMobileEditBookmark, AtlasMobileBookmarkEditResult } from "@mains/contracts/atlas-mobile";
+  AtlasMobileBookmarkIdentity, AtlasMobileBookmark, AtlasMobileEditBookmark, AtlasMobileBookmarkEditResult,
+  AtlasMobileTrashOptions, AtlasMobileTrashPage, AtlasMobileSetTrash, AtlasMobileTrashState } from "@mains/contracts/atlas-mobile";
 import { MOBILE_OUTPUT_MAX_BYTES, outputFileType, type RunOutputChunk } from "@mains/contracts/run-outputs";
 import { readRunFileChunk } from "../../../shared/file-chunks";
 import { atlasService, generatedForRun } from "./atlas.service";
@@ -27,6 +28,26 @@ const signature = (accountId: string, reference: AtlasMobileFileReference, stat:
   .update(JSON.stringify([accountId, reference, stat.size, stat.mtimeMs, stat.ctimeMs, stat.ino, stat.dev])).digest("hex");
 
 export const atlasMobile = {
+  trash(input: AtlasMobileTrashOptions): AtlasMobileTrashPage {
+    const accountId = required(input?.accountId), page = input.page ?? 1;
+    if (!Number.isSafeInteger(page) || page < 1 || page > 100_000) throw new Error("Invalid Trash page");
+    const rows = atlasService.list({ accountId, trashed: true, offset: (page - 1) * 50, limit: 51 });
+    return { items: rows.slice(0, 50).map((item) => ({ id: item.id, title: item.title, kind: item.kind, collectionId: item.collectionId, trashedAt: item.trashedAt! })),
+      page, hasNext: rows.length > 50 };
+  },
+
+  async setTrash(input: AtlasMobileSetTrash): Promise<AtlasMobileTrashState> {
+    const accountId = required(input?.accountId), id = required(input?.id);
+    if (typeof input.trashed !== "boolean" || Object.keys(input).some((key) => !["accountId", "id", "trashed"].includes(key))) throw new Error("Only Trash or Restore is supported by this command");
+    const current = atlasService.get({ accountId, id });
+    if (!current) throw new Error("Atlas item not found");
+    // Setting a state is idempotent; repeated Trash preserves its original date.
+    const item = !!current.trashedAt === input.trashed ? current : await atlasService.update({ accountId, id, trashed: input.trashed }, () => {
+      if (!atlasService.get({ accountId, id })) throw new Error("Atlas item not found");
+    });
+    return { id: item.id, requestedId: id, title: item.title, kind: item.kind, trashed: !!item.trashedAt };
+  },
+
   readBookmark(input: AtlasMobileBookmarkIdentity): AtlasMobileBookmark {
     const accountId = required(input?.accountId), id = required(input?.id);
     const item = atlasService.get({ accountId, id });

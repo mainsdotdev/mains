@@ -148,6 +148,7 @@ describe("backendService", () => {
       }
       expect(PAIRED_DEVICE_CHANNELS.has("backend:describe")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("atlas:readMobileBookmark")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("atlas:mobileTrash")).toBe(true);
       for (const channel of ["atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile"]) expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(true);
       for (const channel of ["atlas:library", "atlas:get", "atlas:resolveFile", "atlas:update", "atlas:savePage", "atlas:remove"]) expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(false);
       expect(PAIRED_DEVICE_CHANNELS.has("search:conversations")).toBe(true);
@@ -168,6 +169,7 @@ describe("backendService", () => {
         "atlas:editMobileBookmark",
         "atlas:saveMobileBookmark",
         "atlas:saveMobileFile",
+        "atlas:setMobileTrash",
         "atlas:updateMobileItem",
         "providers:updateRunSettings",
         "runs:abort",
@@ -190,6 +192,7 @@ describe("backendService", () => {
       }
       expect(PAIRED_DEVICE_COMMANDS.has("runs:update")).toBe(false);
       expect(PAIRED_DEVICE_COMMANDS.has("runs:publishQueue")).toBe(false);
+      expect(PAIRED_DEVICE_COMMANDS.has("atlas:remove")).toBe(false);
     });
 
     it("counts toward a paired device's capabilities", async () => {
