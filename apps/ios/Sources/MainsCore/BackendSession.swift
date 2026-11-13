@@ -774,6 +774,23 @@ public final class BackendSession {
 
     public var canSaveToAtlas: Bool { active && isConnected && pendingAtlasSave == nil }
 
+    public func setAtlasFavorite(_ entry: AtlasEntry, to value: Bool, owner: Int) async throws -> AtlasSavedItem {
+        try await updateAtlasItem(entry, patch: ["isFavorite": .bool(value)], owner: owner)
+    }
+
+    public func moveAtlasItem(_ entry: AtlasEntry, to collectionID: String?, owner: Int) async throws -> AtlasSavedItem {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        if let collectionID, !collections.contains(where: { $0.id == collectionID }) { throw MainsError.server("This project is no longer available.") }
+        return try await updateAtlasItem(entry, patch: ["collectionId": collectionID.map(JSONValue.string) ?? .null], owner: owner)
+    }
+
+    private func updateAtlasItem(_ entry: AtlasEntry, patch: [String: JSONValue], owner: Int) async throws -> AtlasSavedItem {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        guard let id = entry.savedIdentity else { throw MainsError.server("Save this item to Atlas before organizing it.") }
+        var fields = patch; fields["id"] = .string(id)
+        return try await beginAtlasSave("atlas:updateMobileItem", fields: fields, label: entry.title)
+    }
+
     public func saveAtlasFile(_ source: AtlasSaveSource, owner: Int) async throws -> AtlasSavedItem {
         guard owner == pairingOwner else { throw MainsError.changedBackend }
         if conversations.first(where: { $0.id == source.runId })?.isReplica == true { throw MainsError.server("Save this file to Atlas from its source computer.") }
@@ -810,9 +827,16 @@ public final class BackendSession {
             let value = try await command(attempt.channel, args: [attempt.payload], commandID: attempt.commandID, owner: attempt.owner)
             guard attempt.owner == pairingOwner, pendingAtlasSave?.id == attempt.id else { throw MainsError.changedBackend }
             let item = try value.decode(AtlasSavedItem.self)
+            let validKind = attempt.isUpdate ? ["page", "file", "image", "bookmark"].contains(item.kind)
+                : attempt.channel == "atlas:saveMobileBookmark" ? item.kind == "bookmark" : ["file", "image"].contains(item.kind)
             guard !item.id.isEmpty, item.id.utf8.count <= 256,
-                  (attempt.channel == "atlas:saveMobileBookmark" ? item.kind == "bookmark" : ["file", "image"].contains(item.kind)),
+                  validKind,
                   item.title.utf8.count <= 4096 else { throw MainsError.invalidReply }
+            if attempt.isUpdate {
+                guard value["requestedId"] == attempt.payload["id"],
+                      attempt.payload.objectValue["isFavorite"].map({ value["isFavorite"] == $0 }) ?? true,
+                      attempt.payload.objectValue["collectionId"].map({ value.objectValue["collectionId"] == $0 }) ?? true else { throw MainsError.invalidReply }
+            }
             pendingAtlasSave = nil; atlasRevision += 1
             return item
         } catch {
@@ -825,7 +849,7 @@ public final class BackendSession {
                 else { attempt.status = .uncertain; pendingAtlasSave = attempt }
                 if refused, case .server(let message) = failure,
                    message.contains("not available to paired devices") || message.contains("No handler") || message.contains("Unknown channel") {
-                    throw MainsError.server("Update Mains on your computer to save items to Atlas.")
+                    throw MainsError.server(attempt.isUpdate ? "Update Mains on your computer to organize Atlas items." : "Update Mains on your computer to save items to Atlas.")
                 }
             }
             throw error

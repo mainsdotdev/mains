@@ -6,9 +6,10 @@ import { ipcMain } from "../../ipc-kit/ipc-main";
 import { atlasService } from "./atlas.service";
 import { atlasBookmarks } from "./atlas.bookmarks";
 import { atlasMobile } from "./atlas.mobile";
-import type { AtlasMobileLibraryOptions, AtlasMobilePageRequest, AtlasMobileFileRequest, AtlasMobileFileRead, AtlasMobileSaveFile, AtlasMobileSaveBookmark } from "@mains/contracts/atlas-mobile";
+import type { AtlasMobileLibraryOptions, AtlasMobilePageRequest, AtlasMobileFileRequest, AtlasMobileFileRead, AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileUpdateItem } from "@mains/contracts/atlas-mobile";
 
 export function registerAtlasIpc() {
+  ipcMain.handle(CHANNELS.atlas.updateMobileItem, handle((input: AtlasMobileUpdateItem) => atlasMobile.updateItem(input)));
   ipcMain.handle(CHANNELS.atlas.saveMobileFile, handle((input: AtlasMobileSaveFile) => atlasMobile.saveFile(input)));
   ipcMain.handle(CHANNELS.atlas.saveMobileBookmark, handle((input: AtlasMobileSaveBookmark) => atlasMobile.saveBookmark(input)));
   ipcMain.handle(CHANNELS.atlas.mobileLibrary, handle((input: AtlasMobileLibraryOptions) => atlasMobile.library(input)));

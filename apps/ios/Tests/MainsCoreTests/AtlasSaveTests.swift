@@ -3,6 +3,71 @@ import Testing
 @testable import MainsCore
 
 @Suite struct AtlasSaveTests {
+    @Test @MainActor func favoritesAndProjectMovesUpdateTheFilteredLibraryWithoutMovingTheReader() async throws {
+        let backend = try DemoBackend(), storage = MemoryStorage()
+        let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.id == "demo-atlas-bookmark" })
+        let project = try #require(session.collections.first { $0.id != entry.savedProjectID }?.id)
+        let space = session.selectedSpaceID
+        _ = try await session.setAtlasFavorite(entry, to: true, owner: session.ownership)
+        _ = try await session.moveAtlasItem(entry, to: project, owner: session.ownership)
+        var query = AtlasQuery(); query.scope = "favorites"; query.collectionID = project
+        let moved = try #require(try await session.atlasLibrary(query).items.first)
+        #expect(moved.id == entry.id && moved.isFavorite && moved.savedProjectID == project)
+        _ = try await session.setAtlasFavorite(moved, to: false, owner: session.ownership)
+        #expect(try await session.atlasLibrary(query).items.isEmpty)
+        _ = try await session.moveAtlasItem(moved, to: nil, owner: session.ownership)
+        let current = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.id == entry.id })
+        #expect(current.savedProjectID == nil && !current.isFavorite && current.url == entry.url)
+        let generated = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.origin == "generated" })
+        await #expect(throws: MainsError.self) { try await session.setAtlasFavorite(generated, to: true, owner: session.ownership) }
+        #expect(session.selectedSpaceID == space && session.viewingRunID == nil && storage.snapshot == nil)
+    }
+
+    @Test @MainActor func anUnknownFavoriteChecksItsOriginalReceiptWithoutReapplyingOverANewerChange() async throws {
+        let backend = try DemoBackend(), probe = AtlasSaveProbe()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.id == "demo-atlas-bookmark" })
+        probe.loseACK = true
+        await #expect(throws: MainsError.self) { try await session.setAtlasFavorite(entry, to: true, owner: session.ownership) }
+        #expect(session.pendingAtlasSave?.isUpdate == true && !session.canSaveToAtlas)
+        await #expect(throws: MainsError.self) { try await session.moveAtlasItem(entry, to: nil, owner: session.ownership) }
+        let account = try backend.invoke("account:get", args: [])["id"]
+        _ = try backend.invoke("atlas:updateMobileItem", args: [.object(["accountId": account, "id": .string(entry.id), "isFavorite": .bool(false)])], commandID: UUID().uuidString)
+        _ = try await session.checkAtlasSaveDelivery()
+        let current = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.id == entry.id })
+        #expect(!current.isFavorite && session.pendingAtlasSave == nil)
+        let updates = probe.calls.filter { $0.0 == "atlas:updateMobileItem" }
+        #expect(updates.count == 2 && updates[0].1 == updates[1].1 && updates[0].2 == updates[1].2)
+    }
+
+    @Test @MainActor func malformedPageChangeAcknowledgementRecoversTheOriginalDestinationAfterReconnection() async throws {
+        let backend = try DemoBackend(), probe = AtlasSaveProbe()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasSaveTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.kind == "page" })
+        let project = try #require(session.collections.first { $0.id != entry.savedProjectID }?.id)
+        probe.malformedUpdate = true
+        await #expect(throws: MainsError.self) { try await session.moveAtlasItem(entry, to: project, owner: session.ownership) }
+        let command = try #require(session.pendingAtlasSave?.id)
+        session.setActive(false); session.setActive(true)
+        try await eventually { session.isConnected }
+        let result = try await session.checkAtlasSaveDelivery()
+        #expect(result.kind == "page" && result.id == entry.id && session.pendingAtlasSave == nil)
+        let updates = probe.calls.filter { $0.0 == "atlas:updateMobileItem" }
+        #expect(updates.count == 2 && updates.allSatisfy { $0.2 == command && $0.1.first?["collectionId"].string == project })
+        var query = AtlasQuery(); query.collectionID = project
+        #expect(try await session.atlasLibrary(query).items.contains { $0.id == entry.id })
+    }
+
     @Test @MainActor func demoSavesOutputsAndBookmarksOnceWithoutChangingChatsOrStorage() async throws {
         let backend = try DemoBackend(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
@@ -76,6 +141,30 @@ import Testing
 }
 
 extension SessionIntegrationTests {
+    @Test @MainActor func atlasOrganizationUsesWhitelistedReceiptCommandsAndRefreshesProjectAndFavoriteFilters() async throws {
+        let session = BackendSession(storage: MemoryStorage())
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        let endpoint = ProcessInfo.processInfo.environment["MAINS_TEST_BACKEND"]!
+        let encoded = endpoint.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        try await session.pair(PairingLink("mains://pair#code=ios-test&endpoint=\(encoded)"), deviceName: "Test iPhone")
+        try await eventually { session.isConnected }
+        let entry = try #require(try await session.atlasLibrary(AtlasQuery()).items.first { $0.kind == "bookmark" })
+        let project = try #require(session.collections.first?.id)
+        _ = try await session.setAtlasFavorite(entry, to: true, owner: session.ownership)
+        _ = try await session.moveAtlasItem(entry, to: project, owner: session.ownership)
+        var query = AtlasQuery(); query.scope = "favorites"; query.collectionID = project
+        #expect(try await session.atlasLibrary(query).items.map(\.id) == [entry.id])
+        _ = try await session.setAtlasFavorite(entry, to: false, owner: session.ownership)
+        #expect(try await session.atlasLibrary(query).items.isEmpty)
+        _ = try await session.moveAtlasItem(entry, to: nil, owner: session.ownership)
+        let (data, _) = try await URLSession.shared.data(from: URL(string: endpoint + "/observations")!)
+        let calls = try JSONDecoder().decode([JSONValue].self, from: data).filter { $0["channel"].string == "atlas:updateMobileItem" }
+        #expect(calls.count == 4 && calls.allSatisfy { $0["commandId"].string?.isEmpty == false })
+        #expect(calls.last?["args"].array.first?["collectionId"] == .null)
+        #expect(session.viewingRunID == nil && session.transcript.rows.isEmpty)
+    }
+
     @Test @MainActor func atlasSavesUseReceiptBackedCommandsAndAppearInTheLibrary() async throws {
         let session = BackendSession(storage: MemoryStorage())
         session.restore(); session.setActive(true)
@@ -102,6 +191,7 @@ extension SessionIntegrationTests {
 
 @MainActor private final class AtlasSaveProbe {
     var loseACK = false, hold = false, reject = false
+    var malformedUpdate = false
     var held: CheckedContinuation<Void, Never>?
     var calls: [(String, [JSONValue], String?)] = []
     func release() { let continuation = held; held = nil; continuation?.resume() }
@@ -116,10 +206,15 @@ extension SessionIntegrationTests {
     func close() { base.close() }
     func perform(_ channel: String, args: [JSONValue], commandId: String?, timeout: TimeInterval) async throws -> JSONValue {
         probe.calls.append((channel, args, commandId))
-        if channel.hasPrefix("atlas:save"), probe.reject { probe.reject = false; throw MainsError.server("Invalid bookmark URL") }
+        let mutation = channel.hasPrefix("atlas:save") || channel == "atlas:updateMobileItem"
+        if mutation, probe.reject { probe.reject = false; throw MainsError.server("Invalid bookmark URL") }
         let value = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
-        if channel.hasPrefix("atlas:save"), probe.loseACK { probe.loseACK = false; throw MainsError.timeout }
-        if channel.hasPrefix("atlas:save"), probe.hold { probe.hold = false; await withCheckedContinuation { probe.held = $0 } }
+        if mutation, probe.loseACK { probe.loseACK = false; throw MainsError.timeout }
+        if mutation, probe.hold { probe.hold = false; await withCheckedContinuation { probe.held = $0 } }
+        if channel == "atlas:updateMobileItem", probe.malformedUpdate {
+            probe.malformedUpdate = false
+            var changed = value.objectValue; changed["requestedId"] = .string("another-item"); return .object(changed)
+        }
         return value
     }
 }

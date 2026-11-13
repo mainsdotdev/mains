@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { promises as fs, type Stats } from "node:fs";
 import type { AtlasMobileEntry, AtlasMobileFile, AtlasMobileFileRead, AtlasMobileFileReference, AtlasMobileFileRequest,
   AtlasMobileLibraryOptions, AtlasMobileLibraryPage, AtlasMobilePage, AtlasMobilePageRequest,
-  AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileSavedItem } from "@mains/contracts/atlas-mobile";
+  AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileSavedItem, AtlasMobileUpdateItem, AtlasMobileItemState } from "@mains/contracts/atlas-mobile";
 import { MOBILE_OUTPUT_MAX_BYTES, outputFileType, type RunOutputChunk } from "@mains/contracts/run-outputs";
 import { readRunFileChunk } from "../../../shared/file-chunks";
 import { atlasService, generatedForRun } from "./atlas.service";
@@ -26,6 +26,22 @@ const signature = (accountId: string, reference: AtlasMobileFileReference, stat:
   .update(JSON.stringify([accountId, reference, stat.size, stat.mtimeMs, stat.ctimeMs, stat.ino, stat.dev])).digest("hex");
 
 export const atlasMobile = {
+  async updateItem(input: AtlasMobileUpdateItem): Promise<AtlasMobileItemState> {
+    const accountId = required(input?.accountId), id = required(input?.id);
+    if (Object.keys(input).some((key) => !["accountId", "id", "isFavorite", "collectionId"].includes(key))
+      || input.isFavorite === undefined && input.collectionId === undefined
+      || input.isFavorite !== undefined && typeof input.isFavorite !== "boolean"
+      || input.collectionId !== undefined && input.collectionId !== null && (typeof input.collectionId !== "string" || !input.collectionId.trim())) throw new Error("Only favorite and project changes are supported on iPhone");
+    const assertActive = () => {
+      const item = atlasService.get({ accountId, id });
+      if (!item || item.trashedAt) throw new Error("Atlas item not found or in Trash");
+    };
+    assertActive();
+    const item = await atlasService.update({ accountId, id,
+      ...(input.isFavorite !== undefined ? { isFavorite: input.isFavorite } : {}),
+      ...(input.collectionId !== undefined ? { collectionId: input.collectionId } : {}) }, assertActive);
+    return { id: item.id, requestedId: id, kind: item.kind, title: item.title, isFavorite: item.isFavorite, collectionId: item.collectionId };
+  },
   async saveBookmark(input: AtlasMobileSaveBookmark): Promise<AtlasMobileSavedItem> {
     const item = await atlasService.saveBookmark({ accountId: required(input?.accountId), url: input?.url,
       ...(input.collectionId !== undefined ? { collectionId: input.collectionId } : {}) });
@@ -78,7 +94,8 @@ export const atlasMobile = {
     const items = result.items.map((entry): AtlasMobileEntry => {
       const saved = entry.saved?.trashedAt ? undefined : entry.saved, generated = entry.generated;
       return { key: entry.key, kind: entry.kind, title: entry.title, date: entry.date, collectionId: entry.collectionId,
-        isFavorite: saved?.isFavorite ?? false, origin: generated?.origin ?? (generated ? "generated" : "saved"),
+        isFavorite: saved?.isFavorite ?? false, savedItemId: saved?.id ?? null, savedCollectionId: saved?.collectionId ?? null,
+        origin: generated?.origin ?? (generated ? "generated" : "saved"),
         sourceRunId: generated?.runId ?? saved?.sourceRunId ?? null,
         file: entry.kind === "file" || entry.kind === "image"
           ? saved ? { itemId: saved.id } : generated ? { runId: generated.runId, sourceKey: generated.sourceKey } : null : null,

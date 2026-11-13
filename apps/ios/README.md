@@ -212,6 +212,18 @@ underlying tooling.
 
 ## Current scope
 
+- Saved Atlas Pages, documents, images and bookmarks support **Add to favorites** /
+  **Remove from favorites** and **Move to project** from a row's long-press menu
+  or swipe actions. The project sheet includes **No project**. These affect the
+  permanent Atlas item, including an existing saved copy shown under Generated;
+  unsaved projections must be saved first. The source conversation and file bytes
+  stay unchanged. Library favorites/project filters refresh after confirmation.
+  A narrow receipt-backed `atlas:updateMobileItem` command accepts only favorite
+  and project fields, rejects Trash/foreign/archived targets and returns the
+  requested identity plus confirmed fields. Unknown outcomes share the Atlas
+  write recovery owner and expose **Check change** across navigation. Recovery
+  refreshes current metadata instead of reapplying an old result over newer edits.
+  Demo supplies the same in-memory updates and filters.
 - **Save to Atlas** is available in conversation output/document/image previews
   and the Outputs row menu, plus previews of generated library files. The phone
   sends an existing artifact/attachment/source identity and its version; the

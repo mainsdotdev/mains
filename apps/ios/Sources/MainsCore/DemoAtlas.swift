@@ -4,6 +4,7 @@ import Foundation
     private var saved: [String: JSONValue] = [:]
     private var storedFiles: [String: DemoFile] = [:]
     private var sources: [String: String] = [:]
+    private var edits: [String: [String: JSONValue]] = [:]
 
     func save(_ file: DemoFile, source: String, runID: String, collectionID: String?) throws -> JSONValue {
         if let id = sources[source], let row = saved[id] { return summary(row) }
@@ -34,7 +35,35 @@ import Foundation
                      "description": kind == "bookmark" ? .string("A sample bookmark stored in your on-device demo library.") : .null,
                      "note": kind == "bookmark" ? .string("Save useful links alongside your pages and files.") : .null])
         }
+        func libraryRows() -> [JSONValue] {
+            var rows = [entry("demo-atlas-page", kind: "page", title: "Explore Atlas", favorite: true),
+                        entry("demo-atlas-doc", kind: "file", title: "Demo report", favorite: true),
+                        entry("demo-atlas-image", kind: "image", title: "Sample image"),
+                        entry("demo-atlas-bookmark", kind: "bookmark", title: "A useful link"),
+                        entry("demo-atlas-generated", kind: "file", title: "Notes from a Work chat", generated: true)]
+            if sources["generated:" + runID] != nil { rows.removeAll { $0["key"].string == "demo-atlas-generated" } }
+            rows += saved.values.sorted { ($0["key"].string ?? "") < ($1["key"].string ?? "") }
+            return rows.map { row in
+                var value = row.objectValue
+                let id = row["key"].string ?? ""
+                if let patch = edits[id] { value.merge(patch) { _, new in new } }
+                value["savedItemId"] = row["origin"].string == "saved" ? .string(id) : .null
+                value["savedCollectionId"] = row["origin"].string == "saved" ? value["collectionId"] ?? .null : .null
+                return .object(value)
+            }
+        }
         switch channel {
+        case "atlas:updateMobileItem":
+            guard let id = input["id"].string, let row = libraryRows().first(where: { $0["savedItemId"].string == id }) else { throw MainsError.server("Atlas item not found.") }
+            var patch = edits[id] ?? [:]
+            if let favorite = input.objectValue["isFavorite"] {
+                guard case .bool = favorite else { throw MainsError.invalidReply }
+                patch["isFavorite"] = favorite
+            }
+            if input.objectValue.keys.contains("collectionId") { patch["collectionId"] = input["collectionId"] }
+            edits[id] = patch
+            return .object(["id": .string(id), "requestedId": .string(id), "title": row["title"], "kind": row["kind"],
+                            "isFavorite": patch["isFavorite"] ?? row["isFavorite"], "collectionId": patch["collectionId"] ?? row["collectionId"]])
         case "atlas:saveMobileBookmark":
             guard let url = AtlasBookmarkURL.validate(input["url"].string ?? ""), var parts = URLComponents(string: url) else { throw MainsError.server("Enter a complete web link.") }
             parts.queryItems = parts.queryItems?.filter { !$0.name.lowercased().hasPrefix("utm_") && !["fbclid", "gclid"].contains($0.name.lowercased()) }
@@ -53,13 +82,7 @@ import Foundation
             guard input["sourceKey"].string == source, input["runId"].string == runID, input["version"].string == DemoFile.notes.version else { throw MainsError.server("Demo Atlas source changed.") }
             return try save(.notes, source: "generated:" + runID, runID: runID, collectionID: collectionID)
         case "atlas:mobileLibrary":
-            var rows = [entry("demo-atlas-page", kind: "page", title: "Explore Atlas", favorite: true),
-                        entry("demo-atlas-doc", kind: "file", title: "Demo report", favorite: true),
-                        entry("demo-atlas-image", kind: "image", title: "Sample image"),
-                        entry("demo-atlas-bookmark", kind: "bookmark", title: "A useful link"),
-                        entry("demo-atlas-generated", kind: "file", title: "Notes from a Work chat", generated: true)]
-            if sources["generated:" + runID] != nil { rows.removeAll { $0["key"].string == "demo-atlas-generated" } }
-            rows += saved.values.sorted { ($0["key"].string ?? "") < ($1["key"].string ?? "") }
+            var rows = libraryRows()
             let type = input["type"].string ?? "all", scope = input["scope"].string ?? "all", query = (input["query"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             rows = rows.filter { row in
                 (type == "all" || row["kind"].string == type)

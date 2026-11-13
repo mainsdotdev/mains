@@ -29,6 +29,8 @@ public struct AtlasEntry: Decodable, Identifiable, Sendable {
     public let date: String
     public let collectionId: String?
     public let isFavorite: Bool
+    public let savedItemId: String?
+    public let savedCollectionId: String?
     public let origin: String
     public let sourceRunId: String?
     public let file: AtlasFileReference?
@@ -37,6 +39,10 @@ public struct AtlasEntry: Decodable, Identifiable, Sendable {
     public let url: String?
     public let description: String?
     public let note: String?
+    public var savedIdentity: String? {
+        savedItemId ?? pageId ?? file?.itemId ?? (kind == "bookmark" && origin == "saved" ? key : nil)
+    }
+    public var savedProjectID: String? { savedItemId == nil ? collectionId : savedCollectionId }
     public var webURL: URL? {
         guard let url, let value = URL(string: url), ["http", "https"].contains(value.scheme?.lowercased() ?? ""), value.host != nil else { return nil }
         return value

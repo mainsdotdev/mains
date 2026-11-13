@@ -290,6 +290,71 @@ function output(name = "report.pdf", runId = "conversation", mode: "work" | "dev
   return file;
 }
 describe("Atlas phone library", { timeout: 15000 }, () => {
+  it.each(["page", "file", "image", "bookmark"] as const)("organizes a permanent %s without changing its content or source", async (kind) => {
+    db.insert(collections).values({ id: "phone-project", accountId: "default", name: "Research" }).run();
+    atlasRepo.insert({ id: "organize", accountId: "default", kind, title: "Keep title", version: 7 });
+    const initial = atlasService.get({ id: "organize", accountId: "default" })!;
+    const identity = { id: "organize", accountId: "default" };
+    const favorite = await atlasMobile.updateItem({ ...identity, isFavorite: true });
+    expect(favorite).toMatchObject({ id: "organize", requestedId: "organize", isFavorite: true, collectionId: null, kind });
+    expect(await atlasMobile.updateItem({ ...identity, isFavorite: true })).toEqual(favorite);
+    const moved = await atlasMobile.updateItem({ ...identity, collectionId: "phone-project" });
+    expect(moved).toMatchObject({ isFavorite: true, collectionId: "phone-project" });
+    expect((await atlasMobile.library({ accountId: "default", scope: "favorites", collectionId: "phone-project" })).items.map((item) => item.savedItemId)).toEqual(["organize"]);
+    await atlasMobile.updateItem({ ...identity, isFavorite: false });
+    expect((await atlasMobile.library({ accountId: "default", scope: "favorites" })).items).toEqual([]);
+    await atlasMobile.updateItem({ ...identity, collectionId: null });
+    const current = atlasService.get(identity)!;
+    expect(current).toMatchObject({ title: initial.title, version: initial.version, metadata: initial.metadata, sourceRunId: initial.sourceRunId, collectionId: null, isFavorite: false });
+    expect(moved).not.toHaveProperty("path");
+  });
+
+  it("refuses foreign/archived projects, Trash, generated-only identities and broader item writes", async () => {
+    createAccount(db, { id: "other" });
+    db.insert(collections).values([{ id: "foreign-project", accountId: "other", name: "Private" }, { id: "archived-project", accountId: "default", name: "Old", isArchived: true }]).run();
+    atlasRepo.insert({ id: "phone-item", accountId: "default", kind: "file", title: "Original" });
+    const identity = { accountId: "default", id: "phone-item" };
+    await expect(atlasMobile.updateItem({ ...identity, accountId: "other", isFavorite: true })).rejects.toThrow("not found");
+    await expect(atlasMobile.updateItem({ ...identity, collectionId: "foreign-project" })).rejects.toThrow();
+    await expect(atlasMobile.updateItem({ ...identity, collectionId: "archived-project" })).rejects.toThrow("archived");
+    await expect(atlasMobile.updateItem({ ...identity, collectionId: "missing" })).rejects.toThrow("not found");
+    await expect(atlasMobile.updateItem({ ...identity, isFavorite: "yes" } as never)).rejects.toThrow("Only favorite");
+    await expect(atlasMobile.updateItem(identity)).rejects.toThrow("Only favorite");
+    for (const field of ["title", "trashed", "metadata", "path"]) {
+      await expect(atlasMobile.updateItem({ ...identity, isFavorite: true, [field]: "forbidden" } as never)).rejects.toThrow("Only favorite");
+    }
+    await expect(atlasMobile.updateItem({ ...identity, id: "a".repeat(64), isFavorite: true })).rejects.toThrow("not found");
+    await atlasService.update({ ...identity, trashed: true });
+    await expect(atlasMobile.updateItem({ ...identity, isFavorite: true })).rejects.toThrow("Trash");
+    expect(atlasService.get(identity)).toMatchObject({ title: "Original", collectionId: null, isFavorite: false });
+  });
+
+  it("rechecks active item ownership after awaiting project validation", async () => {
+    db.insert(collections).values({ id: "race-project", accountId: "default", name: "Research" }).run();
+    atlasRepo.insert({ id: "racing-item", accountId: "default", kind: "page", title: "Notes" });
+    const identity = { accountId: "default", id: "racing-item" };
+    const { collectionsService } = await import("../collections");
+    const original = collectionsService.get.bind(collectionsService);
+    vi.spyOn(collectionsService, "get").mockImplementation(async (input) => {
+      const project = await original(input);
+      await atlasService.update({ ...identity, trashed: true });
+      return project;
+    });
+    await expect(atlasMobile.updateItem({ ...identity, collectionId: "race-project" })).rejects.toThrow("Trash");
+    expect(atlasService.get(identity)?.collectionId).toBeNull();
+  });
+
+  it("organizes the permanent copy of a generated result without moving its source conversation", async () => {
+    const file = output("report.pdf", "organize-source");
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "organize-source", path: file });
+    db.insert(collections).values({ id: "copy-project", accountId: "default", name: "Saved research" }).run();
+    await atlasMobile.updateItem({ accountId: "default", id: saved.id, collectionId: "copy-project", isFavorite: true });
+    const generated = (await atlasMobile.library({ accountId: "default", scope: "generated" })).items[0];
+    expect(generated.key).not.toBe(saved.id);
+    expect(generated).toMatchObject({ savedItemId: saved.id, savedCollectionId: "copy-project", collectionId: null, isFavorite: true });
+    expect(db.select().from(runs).where(eq(runs.id, "organize-source")).get()?.collectionId).toBeNull();
+  });
+
   it.each(["work", "developer", "chat"] as const)("saves an exact selected output by identity in %s without accepting a path", async (mode) => {
     const file = output("snapshot.pdf", `save-${mode}`, mode);
     const { runsService } = await import("../runs");

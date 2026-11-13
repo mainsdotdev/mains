@@ -12,6 +12,9 @@ export interface AtlasMobileEntry {
   date: string;
   collectionId: string | null;
   isFavorite: boolean;
+  /** Permanent copy being organized; generated-only projections have no saved identity. */
+  savedItemId: string | null;
+  savedCollectionId: string | null;
   origin: "saved" | "generated" | "attachment";
   sourceRunId: string | null;
   file: AtlasMobileFileReference | null;
@@ -45,3 +48,7 @@ export interface AtlasMobileSaveFile {
 }
 export interface AtlasMobileSaveBookmark { accountId: string; url: string; collectionId?: string | null }
 export interface AtlasMobileSavedItem { id: string; title: string; kind: AtlasKind }
+export interface AtlasMobileUpdateItem {
+  accountId: string; id: string; isFavorite?: boolean; collectionId?: string | null;
+}
+export interface AtlasMobileItemState extends AtlasMobileSavedItem { requestedId: string; isFavorite: boolean; collectionId: string | null }

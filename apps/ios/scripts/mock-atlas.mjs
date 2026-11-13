@@ -1,7 +1,7 @@
 import { CHANNELS } from '../../../packages/contracts/src/channels.ts';
 
-const saved = new Map(), sources = new Map();
-export function resetAtlasFixture() { saved.clear(); sources.clear(); }
+const saved = new Map(), sources = new Map(), edits = new Map();
+export function resetAtlasFixture() { saved.clear(); sources.clear(); edits.clear(); }
 
 /** Prepared Atlas responses and memory-only saves; no user library access. */
 export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase64, version }) {
@@ -17,7 +17,21 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
     description: index === 3 ? 'A saved bookmark' : null, note: null,
   }));
   rows.push(...saved.values());
+  for (const row of rows) {
+    Object.assign(row, edits.get(row.key));
+    row.savedItemId = row.key; row.savedCollectionId = row.collectionId;
+  }
   switch (channel) {
+    case CHANNELS.atlas.updateMobileItem: {
+      const item = rows.find(row => row.key === input.id);
+      if (!item) throw new Error('Atlas item not found');
+      const patch = { ...edits.get(input.id) };
+      if (typeof input.isFavorite === 'boolean') patch.isFavorite = input.isFavorite;
+      if ('collectionId' in input) patch.collectionId = input.collectionId;
+      edits.set(input.id, patch);
+      const result = { ...item, ...patch };
+      return { id: result.key, requestedId: input.id, title: result.title, kind: result.kind, isFavorite: result.isFavorite, collectionId: result.collectionId };
+    }
     case CHANNELS.atlas.saveMobileBookmark:
     case CHANNELS.atlas.saveMobileFile: {
       let source, title, kind, url = null;
@@ -42,7 +56,7 @@ export function atlasFixture(channel, input, { outputBytes, pdfBytes, imageBase6
     case CHANNELS.atlas.mobileLibrary: {
       const filtered = rows.filter(row => (!input.type || input.type === 'all' || input.type === row.kind)
         && (!input.scope || input.scope === 'all' || input.scope === 'saved' || input.scope === 'favorites' && row.isFavorite)
-        && (!input.collectionId) && (!input.query || row.title.toLowerCase().includes(input.query.toLowerCase())));
+        && (!input.collectionId || row.collectionId === input.collectionId) && (!input.query || row.title.toLowerCase().includes(input.query.toLowerCase())));
       const page = Math.max(1, Math.min(input.page ?? 1, Math.ceil(filtered.length / 50)));
       return { items: filtered.slice((page - 1) * 50, page * 50), page, hasNext: page * 50 < filtered.length };
     }

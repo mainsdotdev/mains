@@ -17,6 +17,10 @@ struct AtlasView: View {
     @State private var file: AtlasFileSelection?
     @State private var addingBookmark = false
     @State private var bookmarkOwner = 0
+    @State private var libraryOwner: Int?
+    @State private var moveSelection: AtlasMoveSelection?
+    @State private var editError: String?
+    private var canOrganize: Bool { libraryOwner == session.ownership && session.canSaveToAtlas }
     private var filter: String { "\(query.type):\(query.scope):\(query.collectionID ?? ""):\(query.text)" }
     private var loadKey: String { "\(query.hashValue):\(session.connection):\(session.atlasRevision):\(reload)" }
 
@@ -62,6 +66,9 @@ struct AtlasView: View {
             }.listRowBackground(Color.clear).listRowSeparator(.hidden)
 
             if loading { HStack(spacing: 12) { ProgressView(); Text("Loading Atlas…").foregroundStyle(.secondary) } }
+            if session.pendingAtlasSave?.isUpdate == true, session.pendingAtlasSave?.status == .sending {
+                HStack(spacing: 12) { ProgressView(); Text("Updating item…").foregroundStyle(.secondary) }
+            }
             if let error {
                 Section {
                     Text(error).foregroundStyle(.secondary)
@@ -77,7 +84,21 @@ struct AtlasView: View {
                 ForEach(library.items) { entry in
                     Button { open(entry) } label: { AtlasEntryRow(entry: entry, project: session.collections.first { $0.id == entry.collectionId }?.name) }
                         .buttonStyle(.plain).accessibilityIdentifier("atlasItem-" + entry.key)
-                        .contextMenu { if let id = entry.sourceRunId { Button("Open source chat", systemImage: "bubble.left") { openConversation(id) } } }
+                        .contextMenu {
+                            if entry.savedIdentity != nil {
+                                Button(entry.isFavorite ? "Remove from favorites" : "Add to favorites", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
+                                    .disabled(!canOrganize)
+                                Button("Move to project", systemImage: "folder") { move(entry) }.disabled(!canOrganize)
+                            }
+                            if let id = entry.sourceRunId { Button("Open source chat", systemImage: "bubble.left") { openConversation(id) } }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if entry.savedIdentity != nil {
+                                Button("Move", systemImage: "folder") { move(entry) }.tint(.blue).disabled(!canOrganize)
+                                Button(entry.isFavorite ? "Unfavorite" : "Favorite", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
+                                    .tint(.orange).disabled(!canOrganize)
+                            }
+                        }
                 }
                 if library.page > 1 || library.hasNext {
                     HStack {
@@ -113,6 +134,19 @@ struct AtlasView: View {
                 query = AtlasQuery(); query.type = "bookmark"; reload += 1
             }, collectionID: query.collectionID)
         }
+        .sheet(item: $moveSelection) { MoveAtlasItemView(session: session, selection: $0) }
+        .alert("Couldn’t update item", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) { Button("OK", role: .cancel) {} } message: { Text(editError ?? "") }
+    }
+    private func favorite(_ entry: AtlasEntry) {
+        guard let owner = libraryOwner, canOrganize else { return }
+        Task {
+            do { _ = try await session.setAtlasFavorite(entry, to: !entry.isFavorite, owner: owner) }
+            catch { if owner == session.ownership { editError = error.localizedDescription } }
+        }
+    }
+    private func move(_ entry: AtlasEntry) {
+        guard let owner = libraryOwner, canOrganize else { return }
+        moveSelection = AtlasMoveSelection(entry: entry, owner: owner)
     }
     private func open(_ entry: AtlasEntry) {
         if let id = entry.pageId { openPage(id) }
@@ -130,7 +164,7 @@ struct AtlasView: View {
             try await Task.sleep(for: .milliseconds(250))
             let result = try await session.atlasLibrary(requested)
             guard readID == ticket, query == requested, owner == session.ownership else { return }
-            library = result
+            libraryOwner = owner; library = result
         } catch {
             if readID == ticket, !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription }
         }

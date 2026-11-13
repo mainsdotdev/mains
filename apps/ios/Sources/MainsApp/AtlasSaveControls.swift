@@ -32,22 +32,82 @@ struct AtlasSaveDeliveryNotice: View {
     let session: BackendSession
     @State private var message: String?
     @State private var failed = false
+    @State private var changed = false
     var body: some View {
         VStack(spacing: 0) {
             if let pending = session.pendingAtlasSave, pending.status == .uncertain {
-                ChatNotice(title: "Atlas save unconfirmed", message: "Check whether \(pending.label) was saved before saving another item.", symbol: "exclamationmark.circle", warning: true, horizontalInset: 12) {
-                    Button("Check save") {
+                ChatNotice(title: pending.isUpdate ? "Atlas change unconfirmed" : "Atlas save unconfirmed",
+                           message: pending.isUpdate ? "Check the change to \(pending.label) before changing another item." : "Check whether \(pending.label) was saved before saving another item.", symbol: "exclamationmark.circle", warning: true, horizontalInset: 12) {
+                    Button(pending.isUpdate ? "Check change" : "Check save") {
                         let owner = session.ownership
+                        changed = pending.isUpdate
                         Task {
                             do { let item = try await session.checkAtlasSaveDelivery(); if owner == session.ownership { failed = false; message = item.title } }
                             catch { if owner == session.ownership { failed = true; message = error.localizedDescription } }
                         }
-                    }.disabled(!session.isConnected).accessibilityIdentifier("checkAtlasSaveDelivery")
+                    }.disabled(!session.isConnected).accessibilityIdentifier(pending.isUpdate ? "checkAtlasItemDelivery" : "checkAtlasSaveDelivery")
                 }.padding(.vertical, 8).background(Color(.systemBackground))
             }
         }
-        .alert(failed ? "Couldn’t check save" : "Saved to Atlas", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) { Button("Done", role: .cancel) {} } message: { Text(message ?? "") }
+        .alert(failed ? "Couldn’t confirm Atlas change" : changed ? "Atlas updated" : "Saved to Atlas", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) { Button("Done", role: .cancel) {} } message: { Text(message ?? "") }
         .onChange(of: session.ownership) { _, _ in message = nil }
+    }
+}
+
+struct AtlasMoveSelection: Identifiable {
+    let id = UUID()
+    let entry: AtlasEntry
+    let owner: Int
+}
+
+struct MoveAtlasItemView: View {
+    let session: BackendSession
+    let selection: AtlasMoveSelection
+    @Environment(\.dismiss) private var dismiss
+    @State private var saving = false
+    @State private var error: String?
+    @State private var visible = true
+    var body: some View {
+        NavigationStack {
+            List {
+                Section { Text(selection.entry.title).font(.headline) }
+                Section("Project") {
+                    destination("No project", id: nil)
+                    ForEach(session.collections) { destination($0.name, id: $0.id) }
+                }
+                if saving { HStack(spacing: 12) { ProgressView(); Text("Moving item…").foregroundStyle(.secondary) } }
+                if let error { Text(error).foregroundStyle(.secondary) }
+                if session.pendingAtlasSave?.status == .uncertain {
+                    Text("The change hasn’t been confirmed. Close this sheet and use Check change to confirm it.").foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Move to project").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }
+        .onDisappear { visible = false }
+        .onChange(of: session.ownership) { _, _ in dismiss() }
+    }
+    private func destination(_ title: String, id: String?) -> some View {
+        let selected = selection.entry.savedProjectID == id
+        return Button {
+            saving = true; error = nil
+            Task {
+                defer { if selection.owner == session.ownership { saving = false } }
+                do {
+                    _ = try await session.moveAtlasItem(selection.entry, to: id, owner: selection.owner)
+                    if selection.owner == session.ownership, visible { dismiss() }
+                } catch { if selection.owner == session.ownership, visible { self.error = error.localizedDescription } }
+            }
+        } label: {
+            HStack {
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                if selected { Image(systemName: "checkmark").foregroundStyle(.tint) }
+            }.frame(minHeight: 44).contentShape(.rect)
+        }
+        .disabled(selected || saving || !session.canSaveToAtlas || selection.owner != session.ownership)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("atlasMove-" + (id ?? "none"))
     }
 }
 

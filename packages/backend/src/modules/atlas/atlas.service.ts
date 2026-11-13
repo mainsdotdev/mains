@@ -593,7 +593,7 @@ export const atlasService = {
     const key = `page:${page.id}:${fileHash(bytes)}:${name}`;
     return once(`${page.accountId}:${key}`, () => store(page.accountId, key, name, bytes, null, page.collectionId));
   },
-  async update(input: AtlasUpdateItem & PagePresentation) {
+  async update(input: AtlasUpdateItem & PagePresentation, validate?: () => void) {
     const item = owned(input);
     if (item.kind === "page" && input.title !== undefined) throw new Error("Rename a Page through its editor");
     const fields: Partial<AtlasRecord> = {};
@@ -611,6 +611,7 @@ export const atlasService = {
       fields.trashedAt = input.trashed ? new Date() : null;
       if (item.kind === "bookmark" && input.trashed) fields.bookmarkJob = atlasBookmarks.retire(owned(input));
     }
+    validate?.();
     atlasRepo.update(item.id, item.accountId, fields, metadata);
     emit(CHANNELS.atlas.changed, {});
     if (item.kind === "bookmark" && input.trashed === false) atlasBookmarks.kick();

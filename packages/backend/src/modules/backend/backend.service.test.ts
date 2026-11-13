@@ -166,6 +166,7 @@ describe("backendService", () => {
       expect([...PAIRED_DEVICE_COMMANDS].sort()).toEqual([
         "atlas:saveMobileBookmark",
         "atlas:saveMobileFile",
+        "atlas:updateMobileItem",
         "providers:updateRunSettings",
         "runs:abort",
         "runs:answerAsyncQuestions",
