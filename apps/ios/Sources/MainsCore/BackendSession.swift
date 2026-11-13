@@ -635,6 +635,16 @@ public final class BackendSession {
         }
     }
 
+    public func availableOutputs(_ runID: String, offset: Int = 0) async throws -> RunOutputsPage {
+        let owner = pairingOwner, current = generation
+        return try await RunOutputsPage.firstAvailable(runID: runID, offset: offset) { cursor in
+            guard owner == self.pairingOwner, current == self.generation else { throw MainsError.changedBackend }
+            let page = try await self.listOutputs(runID, offset: cursor)
+            guard owner == self.pairingOwner, current == self.generation else { throw MainsError.changedBackend }
+            return page
+        }
+    }
+
     public func readOutput(_ output: RunOutput, offset: Int) async throws -> RunOutputChunk {
         guard let transport, isConnected else { throw MainsError.disconnected }
         let current = generation

@@ -25,14 +25,19 @@ struct AppShell: View {
     @State private var searchPageHeight: CGFloat = 0
     @State private var searchExitHeight: CGFloat?
     @State private var collapsedCollections: Set<String> = []
+    @State private var wideSidebarHidden = false
+    @State private var pinnedSidebarVisible = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             GeometryReader { geometry in
-                let width = geometry.size.width * 0.82
-                let offset = min(width, max(0, (drawerOpen ? width : 0) + drag))
-                let progress = width > 0 ? offset / width : 0
+                let width = min(horizontalSizeClass == .regular ? 320 : 360, geometry.size.width * 0.82)
+                let canPin = horizontalSizeClass == .regular && geometry.size.width >= 760 && path.isEmpty && homeRunID == nil && session.pairing != nil
+                let pinned = canPin && !wideSidebarHidden && !searchMounted
+                let offset = pinned ? width : min(width, max(0, (drawerOpen ? width : 0) + drag))
+                let progress = width > 0 && !pinned ? offset / width : 0
                 let pageOffset = searchMounted ? (searchExpanded ? 0 : width) : offset
                 let pageCorner = searchMounted ? (searchExpanded ? 0.0 : 44.0) : 44 * progress
                 ZStack(alignment: .leading) {
@@ -43,7 +48,7 @@ struct AppShell: View {
                             .frame(width: width)
                             .offset(x: searchExpanded ? -width : 0)
                             .allowsHitTesting(!searchExpanded)
-                            .accessibilityHidden(!drawerOpen || searchExpanded)
+                            .accessibilityHidden(!pinned && !drawerOpen || searchExpanded)
                     }
                     ZStack {
                         NavigationStack(path: $path) {
@@ -55,7 +60,10 @@ struct AppShell: View {
                                             ToolbarItem(placement: .topBarLeading) { sidebarButton }
                                         }
                                 } else {
-                                    HomeView(session: session, openSidebar: toggleDrawer, openComputer: showSettings, openPairing: openPairing,
+                                    HomeView(session: session, openSidebar: {
+                                        if canPin { wideSidebarHidden.toggle(); drawerOpen = false }
+                                        else { toggleDrawer() }
+                                    }, openComputer: showSettings, openPairing: openPairing,
                                              onCreated: { id in
                                                  var transaction = Transaction(animation: nil)
                                                  transaction.disablesAnimations = true
@@ -84,12 +92,13 @@ struct AppShell: View {
                         .environment(\.voiceSurfaceVisible, !drawerOpen && !searchMounted)
                         #endif
                         .allowsHitTesting(!searchMounted)
-                        .accessibilityHidden(drawerOpen || searchMounted)
+                        .accessibilityHidden(drawerOpen && !pinned || searchMounted)
                     }
-                    .accessibilityHidden(drawerOpen && !searchMounted)
+                    .frame(width: max(1, geometry.size.width - (pinned ? width : 0)))
+                    .accessibilityHidden(drawerOpen && !pinned && !searchMounted)
                     .overlay { if progress > 0 && !searchMounted { Color.primary.opacity(0.08 * progress).allowsHitTesting(false) } }
                     .overlay(alignment: .leading) {
-                        if drawerOpen && !searchMounted {
+                        if drawerOpen && !pinned && !searchMounted {
                             Button(action: toggleDrawer) { Color.clear.contentShape(.rect) }
                                 .frame(width: max(0, geometry.size.width - offset))
                                 .buttonStyle(.plain).accessibilityLabel("Close sidebar").accessibilityIdentifier("closeSidebar")
@@ -97,11 +106,14 @@ struct AppShell: View {
                     }
                     .clipShape(MainPaneClip(cornerRadius: pageCorner, safeAreaInsets: geometry.safeAreaInsets))
                     .offset(x: pageOffset)
-                    .simultaneousGesture(drawerGesture(width: width), isEnabled: drawerOpen && !searchMounted)
-                    if !drawerOpen && !searchMounted {
+                    .simultaneousGesture(drawerGesture(width: width), isEnabled: drawerOpen && !pinned && !searchMounted)
+                    if !drawerOpen && !pinned && !searchMounted {
                         Color.clear.frame(width: 24).contentShape(.rect).gesture(drawerGesture(width: width))
                             .accessibilityHidden(true)
                     }
+                }.onChange(of: pinned, initial: true) { _, value in
+                    pinnedSidebarVisible = value
+                    if value { drawerOpen = false }
                 }
             }
             // The inactive main pane and sidebar must not follow Search's keyboard.
@@ -145,7 +157,7 @@ struct AppShell: View {
         #endif
         .attachmentOverlayHost()
         .contextPickerOverlayHost(isEnabled: !drawerOpen && !searchMounted)
-        .onChange(of: !searchMounted && (drawerOpen || path.last == .workInbox), initial: true) { _, visible in
+        .onChange(of: !searchMounted && (drawerOpen || pinnedSidebarVisible || path.last == .workInbox), initial: true) { _, visible in
             session.setWorkInboxVisible(visible)
         }
         .onDisappear { session.setWorkInboxVisible(false) }

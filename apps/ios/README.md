@@ -212,6 +212,24 @@ underlying tooling.
 
 ## Current scope
 
+- The conversation workspace adapts to local window size and iPhone Duo folds.
+  With regular width, existing outputs open beside the chat; taller windows put
+  the output above the chat. On iOS 27.1+, active division regions keep the
+  readers on separate sides of the hinge, including the tabletop layout.
+  Narrow windows and accessibility text show the last focused reader. **Outputs**
+  switches readers on a narrow screen and toggles the panel on a wide screen;
+  **Close outputs** releases the preview. Document/image cards and local file
+  links open the same panel. Its menu selects another output, and **Reload file**
+  explicitly downloads the current version. Metadata refreshes preserve the
+  displayed version and reading position. Share and Save to Atlas remain available.
+  A stable layout keeps the conversation, draft, transcript viewport and selected
+  preview mounted across resizing; it does not select a chat or restart its socket.
+  Hidden chat images release decoded thumbnails and hidden panes cannot page or
+  invent follow intent. Output discovery skips empty/missing-file pages with a
+  bounded metadata read and retains one page. Closing/navigating removes temporary
+  downloads. Home pins a collapsible sidebar when space permits, while chat keeps
+  that space for its output. All app profiles support portrait and both landscape
+  directions. Demo uses its prepared PDF/Markdown outputs for the same workflow.
 - Atlas rows show their saved item's tags. **Edit tags** in a row's long-press
   menu loads a fresh selection; choose existing tags, remove them or add a new
   name, then **Save**. Names reuse the desktop's normalization and duplicate

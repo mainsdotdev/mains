@@ -18,12 +18,14 @@ private struct RunFileLinkHost: ViewModifier {
     let session: BackendSession
     let runID: String
     let base: String?
+    @Environment(\.openConversationOutput) private var openCompanion
     @State private var selection: RunLinkedFileSelection?
     func body(content: Content) -> some View {
         content.environment(\.openURL, OpenURLAction { url in
             if ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") { return .systemAction }
             guard RunFileReference(url.relativeString, relativeTo: base) != nil else { return .discarded }
-            selection = RunLinkedFileSelection(runID: runID, href: url.relativeString, base: base, owner: session.ownership)
+            let file = RunLinkedFileSelection(runID: runID, href: url.relativeString, base: base, owner: session.ownership)
+            if !openCompanion(runID, .linkedFile(file)) { selection = file }
             return .handled
         })
         .sheet(item: $selection) { OutputPreviewView(session: session, linkedFile: $0) }

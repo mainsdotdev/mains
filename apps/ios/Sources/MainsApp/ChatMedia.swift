@@ -65,23 +65,24 @@ struct ChatMediaGallery: View {
     let media: [TranscriptMedia]
     var prompt = false
     @State private var selection: TranscriptMedia?
+    @Environment(\.openConversationOutput) private var openCompanion
     private var images: [TranscriptMedia] { media.filter(\.image) }
     var body: some View {
         VStack(alignment: prompt ? .trailing : .leading, spacing: 10) {
             if images.count == 1, let image = images.first {
-                ChatImageTile(session: session, media: image, maxWidth: prompt ? 296 : .infinity, maxHeight: 320, fixedHeight: false) { selection = image }
+                ChatImageTile(session: session, media: image, maxWidth: prompt ? 296 : .infinity, maxHeight: 320, fixedHeight: false) { open(image) }
                     .frame(maxWidth: .infinity, alignment: prompt ? .trailing : .leading)
             } else if !images.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 10) {
                         ForEach(images) { image in
-                            ChatImageTile(session: session, media: image, maxWidth: 260, maxHeight: 170, fixedHeight: true) { selection = image }
+                            ChatImageTile(session: session, media: image, maxWidth: 260, maxHeight: 170, fixedHeight: true) { open(image) }
                         }
                     }
                 }.scrollIndicators(.hidden)
             }
             ForEach(media.filter { !$0.image }) { file in
-                Button { selection = file } label: {
+                Button { open(file) } label: {
                     HStack(spacing: 12) {
                         Image(systemName: file.name.lowercased().hasSuffix(".pdf") ? "doc.richtext" : "doc.text")
                             .font(.title3).foregroundStyle(.secondary).frame(width: 28)
@@ -102,6 +103,9 @@ struct ChatMediaGallery: View {
         .sheet(item: $selection) { OutputPreviewView(session: session, media: $0) }
         .onChange(of: session.ownership) { _, _ in selection = nil }
     }
+    private func open(_ media: TranscriptMedia) {
+        if !openCompanion(media.runID, .media(media)) { selection = media }
+    }
 }
 
 private struct ChatImageTile: View {
@@ -115,6 +119,7 @@ private struct ChatImageTile: View {
     @State private var visible = false
     @State private var error: String?
     @State private var retry = 0
+    @Environment(\.conversationPaneVisible) private var paneVisible
     var body: some View {
         Button {
             if image != nil { open() } else { retry += 1 }
@@ -137,8 +142,8 @@ private struct ChatImageTile: View {
         .buttonStyle(ChatPressStyle()).disabled(!media.available || !session.isConnected)
         .accessibilityLabel(media.name).accessibilityIdentifier("transcriptImage-" + media.id)
         .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
-        .task(id: "\(session.ownership):\(session.isConnected):\(media.runID):\(media.id):\(retry):\(visible)") {
-            if visible { await load() } else { image = nil; error = nil }
+        .task(id: "\(session.ownership):\(session.isConnected):\(media.runID):\(media.id):\(retry):\(visible):\(paneVisible)") {
+            if visible && paneVisible { await load() } else { image = nil; error = nil }
         }
         .onDisappear { image = nil }
     }

@@ -26,7 +26,11 @@ struct ConversationView: View {
     @State private var acceptedCount = 0
     @State private var modelSheet = false
     @State private var optionsSheet = false
-    @State private var outputs = false
+    @State private var companion = ConversationCompanionState()
+    @State private var outputSelection: ConversationOutputSelection?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var expandedWorkspace: Bool { horizontalSizeClass == .regular && !dynamicTypeSize.isAccessibilitySize }
     @State private var outputPresence: (owner: Int, runID: String, available: Bool)?
     @State private var selectedFile: TurnFileSelection?
     @State private var agentsExpanded = false
@@ -91,70 +95,25 @@ struct ConversationView: View {
     }
 
     var body: some View {
-        ZStack {
-            ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", viewport: $viewport, openFile: { turn, file in
-                selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
-            }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor) {
-                content = ContentReference(id: $0)
+        let displayedOutputID = outputSelection?.id
+        ConversationWorkspace(state: companion) {
+            conversationContent.simultaneousGesture(TapGesture().onEnded {
+                if outputSelection?.id == displayedOutputID { companion.focusConversation() }
+            })
+        } output: {
+            if companion.isOpen {
+                ConversationOutputsPane(session: session, runID: runID, owner: owner ?? session.ownership, selection: $outputSelection) {
+                    companion.close(); outputSelection = nil
+                }.simultaneousGesture(TapGesture().onEnded { companion.focusOutput() })
             }
-            .opacity(focusedVoice ? 0 : 1)
-            .allowsHitTesting(!focusedVoice)
-            .accessibilityHidden(focusedVoice)
-            #if MAINS_GPT_LIVE
-            if focusedVoice {
-                VoiceFocusStage(voice: session.voice)
-                    .background { KeyboardDismissBackground(color: Color(.systemBackground)) }
-                    .transition(.opacity)
-            }
-            #endif
         }
         .background(Color(.systemBackground))
-        .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(focusedVoice || showsConnectionPill ? "" : run?.displayTitle ?? "Conversation")
         .toolbarRole(.editor)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
-            if showsConnectionPill {
-                ToolbarItem(placement: .principal) {
-                    ConnectionPill(session: session, action: openComputer)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            } else if session.isDemo && !focusedVoice {
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 1) {
-                        Text(run?.displayTitle ?? "Conversation").font(.headline).lineLimit(1)
-                        Text("Demo · On this iPhone").font(.caption2).foregroundStyle(.secondary)
-                    }.accessibilityIdentifier("conversationDemoStatus")
-                }
-            }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                #if MAINS_GPT_LIVE
-                if ownsVoice { VoicePresentationMenu() }
-                #endif
-                if hasOutputs && !focusedVoice {
-                    Button("Outputs", systemImage: "doc.on.doc") { outputs = true }.accessibilityIdentifier("conversationOutputs")
-                }
-                if !focusedVoice {
-                    Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
-                    Menu {
-                        Label(session.isDemo ? "Demo Mode · On this iPhone" : session.connection.label, systemImage: session.isConnected ? "checkmark.circle" : "wifi.slash")
-                        if run?.isReplica != true {
-                            Button(action: prepareFork) {
-                                Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
-                            }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
-                        }
-                        Button("Sync now", systemImage: "arrow.clockwise") {
-                            Task { await session.refresh(); if session.viewingRunID == runID { await session.loadHistory(direction: "refresh") } }
-                        }.disabled(!session.isConnected)
-                        if !session.isConnected {
-                            Button("Reconnect", systemImage: "arrow.clockwise") { session.retry() }
-                                .disabled(session.connection.isBusy || [.unauthorized, .incompatible].contains(session.connection))
-                        }
-                    } label: { Image(systemName: "ellipsis") }
-                    .accessibilityLabel("Conversation options").accessibilityIdentifier("conversationOptions")
-                }
-            }
+            conversationToolbar
         }
         .task(id: historyEntry) {
             owner = session.ownership
@@ -179,6 +138,11 @@ struct ConversationView: View {
         .task(id: "\(run?.providerId ?? ""):\(session.isConnected)") {
             if let run { await session.loadModels(run.providerId, force: true) }
         }
+        .onChange(of: expandedWorkspace, initial: true) { _, _ in adaptCompanion() }
+        .onChange(of: hasOutputs) { _, _ in adaptCompanion() }
+        .onChange(of: draft.text) { _, _ in companion.focusConversation() }
+        .onChange(of: focusedVoice) { _, focused in if focused { companion.close(); outputSelection = nil } }
+        .onChange(of: session.ownership) { _, _ in companion.close(); outputSelection = nil }
         .onDisappear { if selectedFile == nil { session.leaveConversation(runID) } }
         .navigationDestination(item: $selectedFile) { selection in
             TurnFileDiffView(session: session, selection: selection, close: { selectedFile = nil })
@@ -197,11 +161,90 @@ struct ConversationView: View {
         }
         .effortOverlay(isPresented: $modelSheet, session: session, context: run.map { ComposerContext(run: $0) })
         .sheet(isPresented: $optionsSheet) { if let run { RunOptionsSheet(session: session, context: ComposerContext(run: run)) } }
-        .sheet(isPresented: $outputs) { OutputsView(session: session, runID: runID) }
         .sheet(item: $selectedAgent) { SubagentDetailSheet(session: session, selection: $0) }
         .onChange(of: agents.isEmpty) { _, empty in if empty { agentsExpanded = false } }
         .sensoryFeedback(.impact(weight: .light), trigger: acceptedCount)
         .runFileLinks(session: session, runID: runID)
+        .environment(\.openConversationOutput, OpenConversationOutputAction { requestedRun, source in
+            guard requestedRun == runID, owner == session.ownership, session.viewingRunID == runID else { return false }
+            outputSelection = ConversationOutputSelection(source: source, owner: session.ownership)
+            companion.open()
+            return true
+        })
+    }
+
+    private func adaptCompanion() { if !focusedVoice { companion.adapt(expanded: expandedWorkspace, hasOutputs: hasOutputs) } }
+    private func toggleCompanion() {
+        if companion.isOpen && expandedWorkspace { companion.close(); outputSelection = nil }
+        else if companion.isOpen && companion.focus == .output { companion.focusConversation() }
+        else { companion.open() }
+    }
+
+    private var conversationContent: some View {
+        ZStack {
+            ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", viewport: $viewport, openFile: { turn, file in
+                selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
+            }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor) {
+                content = ContentReference(id: $0)
+            }
+            .opacity(focusedVoice ? 0 : 1)
+            .allowsHitTesting(!focusedVoice)
+            .accessibilityHidden(focusedVoice)
+            #if MAINS_GPT_LIVE
+            if focusedVoice {
+                VoiceFocusStage(voice: session.voice)
+                    .background { KeyboardDismissBackground(color: Color(.systemBackground)) }
+                    .transition(.opacity)
+            }
+            #endif
+        }
+        .background(Color(.systemBackground))
+        .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
+    }
+
+    @ToolbarContentBuilder private var conversationToolbar: some ToolbarContent {
+            if showsConnectionPill {
+                ToolbarItem(placement: .principal) {
+                    ConnectionPill(session: session, action: openComputer)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else if session.isDemo && !focusedVoice {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text(run?.displayTitle ?? "Conversation").font(.headline).lineLimit(1)
+                        Text("Demo · On this iPhone").font(.caption2).foregroundStyle(.secondary)
+                    }.accessibilityIdentifier("conversationDemoStatus")
+                }
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                #if MAINS_GPT_LIVE
+                if ownsVoice { VoicePresentationMenu() }
+                #endif
+                if (hasOutputs || companion.isOpen) && !focusedVoice {
+                    Button(companion.isOpen && !expandedWorkspace && companion.focus == .output ? "Show conversation" : "Outputs",
+                           systemImage: companion.isOpen && !expandedWorkspace && companion.focus == .output ? "bubble.left" : "doc.on.doc", action: toggleCompanion)
+                        .accessibilityIdentifier("conversationOutputs")
+                }
+                if !focusedVoice {
+                    Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
+                    Menu {
+                        Label(session.isDemo ? "Demo Mode · On this iPhone" : session.connection.label, systemImage: session.isConnected ? "checkmark.circle" : "wifi.slash")
+                        if run?.isReplica != true {
+                            Button(action: prepareFork) {
+                                Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
+                            }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
+                        }
+                        Button("Sync now", systemImage: "arrow.clockwise") {
+                            Task { await session.refresh(); if session.viewingRunID == runID { await session.loadHistory(direction: "refresh") } }
+                        }.disabled(!session.isConnected)
+                        if !session.isConnected {
+                            Button("Reconnect", systemImage: "arrow.clockwise") { session.retry() }
+                                .disabled(session.connection.isBusy || [.unauthorized, .incompatible].contains(session.connection))
+                        }
+                    } label: { Image(systemName: "ellipsis") }
+                    .accessibilityLabel("Conversation options").accessibilityIdentifier("conversationOptions")
+                }
+            }
     }
 
     private var composerArea: some View {

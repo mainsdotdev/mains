@@ -41,6 +41,10 @@ public struct TranscriptViewport: Sendable {
         previousOffset = geometry.offset
         direction = 0
     }
+    /// Hiding a retained pane ends its gesture without inventing follow intent.
+    public mutating func interruptInteraction() {
+        interacting = false; previousOffset = nil; direction = 0
+    }
     @discardableResult public mutating func update(_ next: TranscriptGeometry, hasNewer: Bool, hasOlder: Bool = false) -> TranscriptPageDirection? {
         // Inset, keyboard and content-size corrections must not create scroll intent.
         let layoutChanged = geometry.content != next.content || geometry.frame != next.frame

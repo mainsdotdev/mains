@@ -94,6 +94,7 @@
 		A77DCE413E6EC6E33449692EAD313BA8 /* WorkInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1875F72005B82148E77DE3E6AAB3FB6 /* WorkInbox.swift */; };
 		6D575D7EC469702B0C572C519C575987 /* WorkInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95489360F16BBE3C3799CEA347E713CD /* WorkInboxView.swift */; };
 		E3FC157998BCB0DCCC24860A25A3D4F7 /* Atlas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 427411C1A144C684E1F9C5A961891B49 /* Atlas.swift */; };
+		3E787B7B00ED842B5E14D90C23E9A30D /* ConversationPaneLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4122420188D593C781548D63879C13D2 /* ConversationPaneLayout.swift */; };
 		844662272A7AD96C143F2F6B6CB7E99F /* DemoAtlas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BD59A6B9A74B03FBAD06CA053FFBD7B /* DemoAtlas.swift */; };
 		18EE9AED8519F7DEAC608D15AB3AD8B5 /* AtlasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BA48913EFDE51CD66B715AAB71ED7E /* AtlasView.swift */; };
 		27B72038650772FB9CAC21F859EF4D03 /* AtlasSaving.swift in Sources */ = {isa = PBXBuildFile; fileRef = 936CF73F786C5D3D9BADF8C7F44B88E6 /* AtlasSaving.swift */; };
@@ -101,6 +102,8 @@
 		7CD228D6F11A09C03E18D015DF8C0276 /* BookmarkEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317452162624C74E418A2A90E03E6376 /* BookmarkEditing.swift */; };
 		1ABC23266DB4589BE89CA7BF52E1549A /* AtlasBookmarkEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 659863D227B33393165A134B0C2295EF /* AtlasBookmarkEditor.swift */; };
 		011960D6CBE1F56E86DC8FF88C506BD7 /* AtlasTrashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C54881473FDFBAC9AB61E76B3B8A54 /* AtlasTrashView.swift */; };
+		03AAACBB41DF88C2E503C59EC0D56BC2 /* ConversationOutputsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8805B061DDDF879303644607B01F6534 /* ConversationOutputsPane.swift */; };
+		C5E4254CCB2EF488787D7737072FAC3F /* ConversationWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81BFE32B11D3D3FB719C75FC41244502 /* ConversationWorkspace.swift */; };
 		1F27E0100FA5E69B3E03D6510DCAD87C /* AtlasTagsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0757C059013D18F682414EC3759CC540 /* AtlasTagsView.swift */; };
 /* End PBXBuildFile section */
 
@@ -215,6 +218,7 @@
 		E1875F72005B82148E77DE3E6AAB3FB6 /* WorkInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkInbox.swift; sourceTree = "<group>"; };
 		95489360F16BBE3C3799CEA347E713CD /* WorkInboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkInboxView.swift; sourceTree = "<group>"; };
 		427411C1A144C684E1F9C5A961891B49 /* Atlas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Atlas.swift; sourceTree = "<group>"; };
+		4122420188D593C781548D63879C13D2 /* ConversationPaneLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationPaneLayout.swift; sourceTree = "<group>"; };
 		9BD59A6B9A74B03FBAD06CA053FFBD7B /* DemoAtlas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAtlas.swift; sourceTree = "<group>"; };
 		71BA48913EFDE51CD66B715AAB71ED7E /* AtlasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasView.swift; sourceTree = "<group>"; };
 		936CF73F786C5D3D9BADF8C7F44B88E6 /* AtlasSaving.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasSaving.swift; sourceTree = "<group>"; };
@@ -222,6 +226,8 @@
 		317452162624C74E418A2A90E03E6376 /* BookmarkEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkEditing.swift; sourceTree = "<group>"; };
 		659863D227B33393165A134B0C2295EF /* AtlasBookmarkEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasBookmarkEditor.swift; sourceTree = "<group>"; };
 		35C54881473FDFBAC9AB61E76B3B8A54 /* AtlasTrashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasTrashView.swift; sourceTree = "<group>"; };
+		8805B061DDDF879303644607B01F6534 /* ConversationOutputsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationOutputsPane.swift; sourceTree = "<group>"; };
+		81BFE32B11D3D3FB719C75FC41244502 /* ConversationWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkspace.swift; sourceTree = "<group>"; };
 		0757C059013D18F682414EC3759CC540 /* AtlasTagsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasTagsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -306,6 +312,8 @@
 			isa = PBXGroup;
 			children = (
 				35C54881473FDFBAC9AB61E76B3B8A54 /* AtlasTrashView.swift */,
+				8805B061DDDF879303644607B01F6534 /* ConversationOutputsPane.swift */,
+				81BFE32B11D3D3FB719C75FC41244502 /* ConversationWorkspace.swift */,
 				0757C059013D18F682414EC3759CC540 /* AtlasTagsView.swift */,
 				659863D227B33393165A134B0C2295EF /* AtlasBookmarkEditor.swift */,
 				3A2DF0099301CFA2DC3B12E48DDDF1F2 /* AtlasSaveControls.swift */,
@@ -375,6 +383,7 @@
 				936CF73F786C5D3D9BADF8C7F44B88E6 /* AtlasSaving.swift */,
 				9BD59A6B9A74B03FBAD06CA053FFBD7B /* DemoAtlas.swift */,
 				427411C1A144C684E1F9C5A961891B49 /* Atlas.swift */,
+				4122420188D593C781548D63879C13D2 /* ConversationPaneLayout.swift */,
 				E1875F72005B82148E77DE3E6AAB3FB6 /* WorkInbox.swift */,
 				561FCC9918AE91F89CD868D6F3EA73AD /* AgentActivity.swift */,
 				7B97DDA0E6DD029C45D063FAB732403E /* ApprovalToolPreview.swift */,
@@ -523,6 +532,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				011960D6CBE1F56E86DC8FF88C506BD7 /* AtlasTrashView.swift in Sources */,
+				03AAACBB41DF88C2E503C59EC0D56BC2 /* ConversationOutputsPane.swift in Sources */,
+				C5E4254CCB2EF488787D7737072FAC3F /* ConversationWorkspace.swift in Sources */,
 				1F27E0100FA5E69B3E03D6510DCAD87C /* AtlasTagsView.swift in Sources */,
 				1ABC23266DB4589BE89CA7BF52E1549A /* AtlasBookmarkEditor.swift in Sources */,
 				7CD228D6F11A09C03E18D015DF8C0276 /* BookmarkEditing.swift in Sources */,
@@ -531,6 +542,7 @@
 				18EE9AED8519F7DEAC608D15AB3AD8B5 /* AtlasView.swift in Sources */,
 				844662272A7AD96C143F2F6B6CB7E99F /* DemoAtlas.swift in Sources */,
 				E3FC157998BCB0DCCC24860A25A3D4F7 /* Atlas.swift in Sources */,
+				3E787B7B00ED842B5E14D90C23E9A30D /* ConversationPaneLayout.swift in Sources */,
 				6D575D7EC469702B0C572C519C575987 /* WorkInboxView.swift in Sources */,
 				A77DCE413E6EC6E33449692EAD313BA8 /* WorkInbox.swift in Sources */,
 				15BEB9DA8126AD56F1E75FC5553023ED /* AgentActivity.swift in Sources */,

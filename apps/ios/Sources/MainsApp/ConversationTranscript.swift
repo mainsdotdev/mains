@@ -11,6 +11,7 @@ struct ConversationTranscript: View {
     var searchCursor: HistoryCursor? = nil
     let readContent: (Int) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.conversationPaneVisible) private var paneVisible
     @State private var scrollPosition = ScrollPosition(idType: String.self)
     @State private var sectionFrames: [String: TranscriptFrame] = [:]
     @State private var navigationID: UUID?
@@ -139,6 +140,7 @@ struct ConversationTranscript: View {
         .defaultScrollAnchor(.top, for: .alignment)
         .defaultScrollAnchor(nil, for: .sizeChanges)
         .onScrollPhaseChange { _, phase in
+            guard paneVisible else { return }
             if phase == .tracking || phase == .interacting {
                 if !viewport.interacting { viewport.beginInteraction() }
             } else if phase == .idle {
@@ -156,11 +158,15 @@ struct ConversationTranscript: View {
             let followed = viewport.following
             let direction = viewport.update(next, hasNewer: page?.hasNewer == true, hasOlder: page?.hasOlder == true)
             if viewport.following != followed { session.setHistoryFollowing(viewport.following) }
-            if let direction, session.historyError == nil { navigate(direction.rawValue) }
-            if viewport.chasing && page?.hasNewer != true &&
+            if paneVisible, let direction, session.historyError == nil { navigate(direction.rawValue) }
+            if paneVisible && viewport.chasing && page?.hasNewer != true &&
                 (old.content != next.content || old.frame != next.frame || old.topInset != next.topInset || old.bottomInset != next.bottomInset) {
                 scrollPosition.scrollTo(edge: .bottom)
             }
+        }
+        .onChange(of: paneVisible) { _, visible in
+            if !visible { viewport.interruptInteraction() }
+            else if viewport.chasing && page?.hasNewer != true { scrollPosition.scrollTo(edge: .bottom) }
         }
         .overlay(alignment: .bottom) {
             if viewport.showsJump(hasNewer: page?.hasNewer == true) {

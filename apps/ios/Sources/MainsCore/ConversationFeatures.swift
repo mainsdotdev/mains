@@ -15,6 +15,22 @@ public struct RunOutputsPage: Decodable, Sendable {
     public let items: [RunOutput]
     public let nextOffset: Int?
 
+    /// Skip missing-file pages without collecting descriptors or touching history.
+    @MainActor public static func firstAvailable(runID: String, offset: Int = 0, read: (Int) async throws -> Self) async throws -> Self {
+        guard offset >= 0 else { throw MainsError.invalidReply }
+        var cursor = offset
+        for _ in 0..<128 {
+            try Task.checkCancellation()
+            let page = try await read(cursor)
+            try Task.checkCancellation()
+            guard page.items.count <= 100, Set(page.items.map(\.id)).count == page.items.count,
+                  page.items.allSatisfy({ $0.runId == runID }), page.nextOffset.map({ $0 > cursor }) ?? true else { throw MainsError.invalidReply }
+            if !page.items.isEmpty || page.nextOffset == nil { return page }
+            cursor = page.nextOffset!
+        }
+        throw MainsError.server("Open this conversation’s older outputs on your computer.")
+    }
+
     /// Missing files can leave an empty descriptor page before a later output.
     /// Presence checks read metadata only, never the files themselves.
     @MainActor public static func containsOutput(read: (Int) async throws -> Self) async throws -> Bool {

@@ -67,9 +67,10 @@ struct OutputPreviewView: View {
     private let output: RunOutput?
     private let media: TranscriptMedia?
     private let linkedFile: RunLinkedFileSelection?
-    init(session: BackendSession, output: RunOutput) { self.session = session; self.output = output; media = nil; linkedFile = nil }
-    init(session: BackendSession, media: TranscriptMedia) { self.session = session; self.media = media; output = nil; linkedFile = nil }
-    init(session: BackendSession, linkedFile: RunLinkedFileSelection) { self.session = session; self.linkedFile = linkedFile; output = nil; media = nil }
+    private let embedded: Bool
+    init(session: BackendSession, output: RunOutput, embedded: Bool = false) { self.session = session; self.output = output; media = nil; linkedFile = nil; self.embedded = embedded }
+    init(session: BackendSession, media: TranscriptMedia, embedded: Bool = false) { self.session = session; self.media = media; output = nil; linkedFile = nil; self.embedded = embedded }
+    init(session: BackendSession, linkedFile: RunLinkedFileSelection, embedded: Bool = false) { self.session = session; self.linkedFile = linkedFile; output = nil; media = nil; self.embedded = embedded }
     private var runID: String { output?.runId ?? media?.runID ?? linkedFile?.runID ?? "" }
     private var name: String { downloadedName ?? output?.name ?? media?.name ?? linkedFile.flatMap { RunFileReference($0.href)?.name } ?? "File" }
     @Environment(\.dismiss) private var dismiss
@@ -85,8 +86,40 @@ struct OutputPreviewView: View {
     @State private var atlasSource: AtlasSaveSource?
     @State private var loadedOwner: Int?
     var body: some View {
-        NavigationStack {
-            Group {
+        Group {
+            if embedded {
+                previewContent.safeAreaInset(edge: .bottom, spacing: 0) {
+                    HStack {
+                        if let url { ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up").frame(minHeight: 44).contentShape(.rect) }.accessibilityIdentifier("shareOutput") }
+                        Spacer()
+                        if let atlasSource, let loadedOwner { AtlasSaveButton(session: session, source: atlasSource, owner: loadedOwner).frame(minHeight: 44).contentShape(.rect) }
+                        Button { retry += 1 } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44).contentShape(.rect) }
+                            .accessibilityLabel("Reload file").disabled(!session.isConnected)
+                    }.font(.footnote).padding(.horizontal, 16).frame(minHeight: 48).background(.bar)
+                }
+            } else {
+                NavigationStack {
+                    previewContent
+                        .navigationTitle(name).navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) { Button("Close preview", systemImage: "xmark") { dismiss() } }
+                            ToolbarItem(placement: .topBarTrailing) {
+                                if let url { ShareLink(item: url) { Label("Share output", systemImage: "square.and.arrow.up") }.accessibilityIdentifier("shareOutput") }
+                            }
+                            ToolbarItem(placement: .bottomBar) {
+                                if let atlasSource, let loadedOwner { AtlasSaveButton(session: session, source: atlasSource, owner: loadedOwner) }
+                            }
+                        }
+                }
+            }
+        }
+        .runFileLinks(session: session, runID: runID, relativeTo: relativePath)
+        .task(id: retry) { await download() }
+        .onDisappear { loadID = UUID(); cleanup() }
+        .onChange(of: session.ownership) { _, _ in loadID = UUID(); cleanup(); if !embedded { dismiss() } }
+    }
+    private var previewContent: some View {
+        Group {
                 if let url {
                     if ["text", "markdown"].contains(previewType) { LocalTextFilePreview(url: url, markdown: previewType == "markdown") }
                     else if previewType != "unsupported", QLPreviewController.canPreview(url as NSURL) { OutputQuickLook(url: url).accessibilityIdentifier("outputPreview") }
@@ -105,22 +138,7 @@ struct OutputPreviewView: View {
                         Label("Couldn’t open file", systemImage: "doc.badge.ellipsis")
                     } description: { Text(error) } actions: { Button("Try again") { retry += 1 } }
                 } else { VStack(spacing: 16) { ProgressView(value: progress).frame(maxWidth: 180); Text("Opening \(name)…").font(.footnote).foregroundStyle(.secondary) } }
-            }
-            .navigationTitle(name).navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Close preview", systemImage: "xmark") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) {
-                    if let url { ShareLink(item: url) { Label("Share output", systemImage: "square.and.arrow.up") }.accessibilityIdentifier("shareOutput") }
-                }
-                ToolbarItem(placement: .bottomBar) {
-                    if let atlasSource, let loadedOwner { AtlasSaveButton(session: session, source: atlasSource, owner: loadedOwner) }
-                }
-            }
         }
-        .runFileLinks(session: session, runID: runID, relativeTo: relativePath)
-        .task(id: retry) { await download() }
-        .onDisappear { loadID = UUID(); cleanup() }
-        .onChange(of: session.ownership) { _, _ in loadID = UUID(); cleanup(); dismiss() }
     }
     private func cleanup() { if let folder { try? FileManager.default.removeItem(at: folder) }; folder = nil; url = nil }
     private func download() async {

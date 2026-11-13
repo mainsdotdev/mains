@@ -11,10 +11,9 @@ struct WorkInboxView: View {
             let live = session.isConnected && session.workInboxIsCurrent
             let groups = snapshot.groups(now: clock.date, live: live)
             List {
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(session.isDemo ? "Across your Demo Mac" : "Across all spaces")
-                            .font(.subheadline.weight(.medium))
+                if !session.isConnected || session.workInboxError != nil || session.workInboxLoading && !live {
+                  Section {
+                    VStack(alignment: .leading, spacing: 4) {
                         if !session.isConnected {
                             Text("Saved activity. Connect to check requests and update your work.")
                                 .font(.footnote).foregroundStyle(.secondary)
@@ -24,11 +23,10 @@ struct WorkInboxView: View {
                             Button("Try again") { Task { await session.refreshWorkInbox() } }.font(.footnote.weight(.medium))
                         } else if session.workInboxLoading && !live {
                             HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Checking your work…").font(.footnote).foregroundStyle(.secondary) }
-                        } else if let date = snapshot.updatedAt {
-                            Text("Updated \(conversationAge(date, now: clock.date))").font(.footnote).foregroundStyle(.secondary)
                         }
-                    }.padding(.vertical, 4)
-                }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                    }
+                  }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                }
 
                 inboxSection("Needs you", items: groups.needsYou, kind: .waiting, now: clock.date, live: live)
                 inboxSection("Running", items: groups.running, kind: .running, now: clock.date, live: live)
@@ -47,17 +45,13 @@ struct WorkInboxView: View {
                 }
             }
             .listStyle(.insetGrouped).scrollContentBackground(.hidden)
+            .listSectionSpacing(.compact)
+            .environment(\.defaultMinListRowHeight, 44)
             .background(Color(.systemBackground))
             .accessibilityIdentifier("workInboxList")
         }
-        .navigationTitle("Activity").navigationBarTitleDisplayMode(.large)
+        .navigationTitle("Activity").navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Refresh activity", systemImage: "arrow.clockwise") { Task { await session.refreshWorkInbox() } }
-                    .disabled(!session.isConnected || session.workInboxLoading).accessibilityIdentifier("refreshWorkInbox")
-            }
-        }
         .refreshable { await session.refreshWorkInbox() }
     }
 
@@ -68,6 +62,7 @@ struct WorkInboxView: View {
                 ForEach(items) { item in
                     WorkInboxRow(session: session, item: item, kind: kind, now: now, live: live) { openConversation(item.id) }
                         .listRowBackground(Color(.secondarySystemBackground))
+                        .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
                 }
             } header: {
                 HStack { Text(title); Spacer(); Text(items.count, format: .number).monospacedDigit() }
@@ -84,6 +79,7 @@ private struct WorkInboxRow: View {
     let now: Date
     let live: Bool
     let open: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var run: Conversation { item.run }
     private var status: String {
         if kind == .waiting { return item.requestCount == 1 ? (item.hasQuestion ? "Answer needed" : "Approval needed") : "\(item.requestCount) requests waiting" }
@@ -105,29 +101,35 @@ private struct WorkInboxRow: View {
         case .finished: .secondary
         }
     }
-    private var context: String {
+    private var projectName: String? {
         let target = session.workspaces.first { $0.id == run.workspaceId }?.name ?? session.collections.first { $0.id == run.collectionId }?.name
-        return [Provider.name(run.providerId), Experience.label(run.mode), target].compactMap { $0 }.joined(separator: " · ")
+        guard let name = target?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+        return name
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: 8) {
             Button(action: open) {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: symbol).font(.system(size: 21)).foregroundStyle(tint)
-                        .frame(width: 25, height: 26).accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(run.displayTitle).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(2)
-                        Text(context).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                        HStack(spacing: 5) {
-                            Text(status).foregroundStyle(tint)
-                            Text("· " + conversationAge(run.updatedAt, now: now)).foregroundStyle(.secondary)
-                        }.font(.caption).lineLimit(2)
-                        if run.isReplica == true { Text("Read-only · another computer").font(.caption2).foregroundStyle(.secondary) }
+                HStack(alignment: .center, spacing: 10) {
+                    Image(systemName: symbol).font(.system(size: 17)).foregroundStyle(tint)
+                        .frame(width: 20, height: 22).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(run.displayTitle).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Text([conversationAge(run.updatedAt, now: now), projectName].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                            if run.isReplica == true { Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary) }
+                            Spacer(minLength: 8)
+                            Text(Provider.name(run.providerId)).font(.caption2).foregroundStyle(.secondary).fixedSize()
+                        }
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                }.padding(.vertical, 7).frame(minHeight: 60).contentShape(.rect)
+                }.frame(minHeight: 48).contentShape(.rect)
             }
             .buttonStyle(.plain).accessibilityIdentifier("inboxRun-\(run.id)")
+            .accessibilityLabel([run.displayTitle, Provider.name(run.providerId), projectName, status, conversationAge(run.updatedAt, now: now), run.isReplica == true ? "Read-only · another computer" : nil].compactMap { $0 }.joined(separator: ", "))
             .accessibilityHint(kind == .waiting ? "Open conversation to review and answer" : "Open conversation")
 
             if live && run.isActive && run.isReplica != true {
@@ -141,14 +143,17 @@ private struct WorkInboxRow: View {
                 } label: {
                     Group {
                         if session.stoppingRunID == run.id { ProgressView().controlSize(.small) }
-                        else { Image(systemName: "stop.fill").font(.system(size: 12)) }
-                    }.frame(width: 44, height: 44)
+                        else { Image(systemName: "stop.fill").font(.system(size: 10)) }
+                    }
+                    .frame(width: 36, height: 36).modifier(GlassSurface(radius: 18))
+                    .frame(width: 44, height: 44).contentShape(.circle)
                 }
-                .buttonStyle(.borderless).modifier(GlassSurface(radius: 22))
+                .buttonStyle(.borderless)
                 .disabled(!session.canStopInboxRun(run.id)).accessibilityLabel("Stop \(run.displayTitle)")
                 .accessibilityIdentifier("inboxStop-\(run.id)")
             } else {
                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary).accessibilityHidden(true)
+                    .padding(.leading, 8)
             }
         }
     }

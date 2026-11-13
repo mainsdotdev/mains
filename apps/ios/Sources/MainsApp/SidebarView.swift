@@ -35,7 +35,7 @@ struct SidebarView: View {
                     let count = session.displayedWorkInbox.groups(now: clock.date, live: session.workInboxIsCurrent && session.isConnected).needsYou.count
                     Button(action: openWorkInbox) {
                         HStack(spacing: 10) {
-                            Image(systemName: "tray").font(.system(size: 19)).frame(width: 22)
+                            Image(systemName: "bell").font(.system(size: 19)).frame(width: 22)
                             Text("Activity").font(.body.weight(.medium))
                             Spacer()
                             if count > 0 {
@@ -47,7 +47,8 @@ struct SidebarView: View {
                         .accessibilityValue(count > 0 ? "\(count) conversations need you" : "")
                 }.padding(.horizontal, 16)
                 Button(action: openAtlas) {
-                    Label("Atlas", systemImage: "square.stack").font(.body.weight(.medium))
+                    Label { Text("Atlas") } icon: { RegistryIcon(token: "icon:globe", size: 22, tint: .primary) }
+                        .font(.body.weight(.medium))
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
                 }.buttonStyle(ChatPressStyle()).padding(.horizontal, 16).padding(.bottom, 14)
                     .accessibilityIdentifier("openAtlas")
