@@ -10,7 +10,13 @@ export function serviceTierOptions(tiers: ModelServiceTier[] = []): ModelService
       options.set("default", { ...tier, name: tier.name || "Standard" });
       continue;
     }
-    options.set(tier.id, { ...tier, name: tier.name && tier.name !== tier.id ? tier.name : names[tier.id] ?? tier.id });
+    options.set(tier.id, {
+      ...tier,
+      name: tier.name && tier.name !== tier.id ? tier.name : names[tier.id] ?? tier.id,
+      description: tier.id === "fast" || tier.id === "priority"
+        ? tier.description?.replace(/\b2x(?= speed\b)/, "1.5x")
+        : tier.description,
+    });
   }
   return [...options.values()];
 }
