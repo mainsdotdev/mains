@@ -184,7 +184,7 @@ final class DemoBackend {
             }
             push("runs:updated", ["runId": .string(runID)])
             return .object(runs[index])
-        case "atlas:saveMobileFile" where first["sourceKey"].string == nil:
+        case "atlas:saveMobileFile" where first["sourceKey"].string == nil && first["itemId"].string == nil:
             guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
             try requireRun(runID)
             let file: DemoFile, source: String
@@ -195,7 +195,7 @@ final class DemoBackend {
             guard first["version"].string == file.version else { throw MainsError.server("This demo file changed.") }
             let result = try atlas.save(file, source: source, runID: runID, collectionID: runs.first(where: { $0["id"]?.string == runID })?["collectionId"]?.string)
             push("atlas:changed", [:]); return result
-        case "atlas:mobileLibrary", "atlas:readMobilePage", "atlas:describeMobileFile", "atlas:readMobileFile", "atlas:readMobileImage", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:readMobileBookmark", "atlas:editMobileBookmark", "atlas:mobileTrash", "atlas:setMobileTrash", "atlas:mobileTags", "atlas:readMobileTags", "atlas:setMobileTags":
+        case "atlas:mobileLibrary", "atlas:readMobilePage", "atlas:readMobilePageCover", "atlas:readMobilePageImage", "atlas:describeMobileFile", "atlas:readMobileFile", "atlas:readMobileImage", "atlas:saveMobileFile", "atlas:saveMobileBookmark", "atlas:updateMobileItem", "atlas:readMobileBookmark", "atlas:editMobileBookmark", "atlas:mobileTrash", "atlas:setMobileTrash", "atlas:mobileTags", "atlas:readMobileTags", "atlas:setMobileTags":
             guard first["accountId"].string == seed["account"]["id"].string else { throw MainsError.server("Atlas account not found.") }
             if let project = first["collectionId"].string, !seed["collections"].array.contains(where: { $0["id"].string == project }) { throw MainsError.server("Project unavailable.") }
             let result = try atlas.answer(channel, input: first, runID: runs.first(where: { $0["mode"]?.string == "work" })?["id"]?.string ?? Self.tourID,

@@ -33,6 +33,8 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   // Narrow Atlas readers return identities and bounded content, never host paths.
   CHANNELS.atlas.mobileLibrary,
   CHANNELS.atlas.readMobilePage,
+  CHANNELS.atlas.readMobilePageCover,
+  CHANNELS.atlas.readMobilePageImage,
   CHANNELS.atlas.describeMobileFile,
   CHANNELS.atlas.readMobileFile,
   CHANNELS.atlas.readMobileImage,

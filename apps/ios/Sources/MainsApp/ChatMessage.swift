@@ -167,53 +167,95 @@ private struct MarkdownTable: View {
     #endif
     let table: MessageTable
     var presentation: MarkdownPresentation = .chat
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    private var widths: [CGFloat] {
-        let font = UIFont.preferredFont(forTextStyle: presentation.isAtlas ? .subheadline : .body)
-        return table.header.indices.map { column in
-            let values = [table.header[column]] + table.rows.prefix(40).map { $0[column] }
-            let longest = values.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 80
-            return min(260, max(86, longest + (presentation.isAtlas ? 32 : 24)))
-        }
-    }
+    @ScaledMetric(relativeTo: .body) private var minimumColumnWidth: CGFloat = 86
+    @ScaledMetric(relativeTo: .body) private var maximumColumnWidth: CGFloat = 260
     var body: some View {
-        let widths = widths
-        ScrollView(.horizontal) {
-            VStack(spacing: 0) {
-                row(table.header, widths: widths, header: true)
-                    .background {
-                        // Use a concrete rectangle: the ShapeStyle background overload
-                        // can inherit the surrounding container's rounded shape.
-                        Rectangle().fill(Color.primary.opacity(presentation.isAtlas ? 0.08 : 0.04))
-                    }
-                ForEach(table.rows.indices, id: \.self) { index in
-                    Divider()
-                    row(table.rows[index], widths: widths)
-                }
-            }.fixedSize(horizontal: true, vertical: true)
+        ViewThatFits(in: .horizontal) {
+            grid
+            ScrollView(.horizontal) {
+                grid.fixedSize(horizontal: true, vertical: true)
+            }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: presentation.isAtlas ? 8 : 12))
         .clipShape(.rect(cornerRadius: presentation.isAtlas ? 8 : 12))
         .overlay { RoundedRectangle(cornerRadius: presentation.isAtlas ? 8 : 12).strokeBorder(.primary.opacity(0.08)) }
         .font(presentation.bodyFont)
         .accessibilityElement(children: .contain).accessibilityIdentifier("markdownTable")
     }
-    private func row(_ cells: [String], widths: [CGFloat], header: Bool = false) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            ForEach(table.header.indices, id: \.self) { column in
-                let alignment: Alignment = table.alignments[column] == .center ? .center : table.alignments[column] == .trailing ? .trailing : .leading
-                let value = (try? AttributedString(markdown: cells[column], options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(cells[column])
-                Text(value).fontWeight(header ? .semibold : .regular).lineSpacing(4).textSelection(.enabled)
-                    .multilineTextAlignment(table.alignments[column] == .center ? .center : table.alignments[column] == .trailing ? .trailing : .leading)
-                    .frame(width: max(1, widths[column] - (presentation.isAtlas ? 32 : 24)), alignment: alignment)
-                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, presentation.isAtlas ? 16 : 12).padding(.vertical, 12)
-                    .frame(maxHeight: presentation.isAtlas ? .infinity : nil, alignment: .topLeading)
-                    .overlay(alignment: .trailing) {
-                        if presentation.isAtlas && column < table.header.count - 1 { Rectangle().fill(.primary.opacity(0.12)).frame(width: 0.5) }
-                    }
-                    .accessibilityAddTraits(header ? .isHeader : [])
+    private var grid: some View {
+        MarkdownTableGrid(columns: table.header.count, minimumWidth: minimumColumnWidth, maximumWidth: maximumColumnWidth) {
+            ForEach(0...table.rows.count, id: \.self) { row in
+                ForEach(table.header.indices, id: \.self) { column in
+                    cell(row == 0 ? table.header[column] : table.rows[row - 1][column], row: row, column: column)
+                }
             }
-        }.fixedSize(horizontal: false, vertical: true)
+        }
+    }
+    private func cell(_ source: String, row: Int, column: Int) -> some View {
+        let header = row == 0
+        let alignment: Alignment = table.alignments[column] == .center ? .top : table.alignments[column] == .trailing ? .topTrailing : .topLeading
+        let value = (try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(source)
+        return Text(value).fontWeight(header ? .semibold : .regular).lineSpacing(4).textSelection(.enabled)
+            .multilineTextAlignment(table.alignments[column] == .center ? .center : table.alignments[column] == .trailing ? .trailing : .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, presentation.isAtlas ? 16 : 12).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 44, maxHeight: .infinity, alignment: alignment)
+            .background(alignment: .center) {
+                if header { Rectangle().fill(Color.primary.opacity(presentation.isAtlas ? 0.08 : 0.04)) }
+            }
+            .overlay(alignment: .trailing) {
+                if presentation.isAtlas && column < table.header.count - 1 { Rectangle().fill(.primary.opacity(0.12)).frame(width: 0.5) }
+            }
+            .overlay(alignment: .bottom) {
+                if row < table.rows.count { Rectangle().fill(.primary.opacity(0.12)).frame(height: 0.5) }
+            }
+            .accessibilityAddTraits(header ? .isHeader : [])
+    }
+}
+
+/// Measure the actual styled SwiftUI cells, including header weight, inline
+/// formatting and Dynamic Type, before assigning shared column/row bounds.
+private struct MarkdownTableGrid: Layout {
+    let columns: Int
+    let minimumWidth: CGFloat
+    let maximumWidth: CGFloat
+    private func widths(_ subviews: Subviews, proposedWidth: CGFloat?) -> [CGFloat] {
+        guard columns > 0 else { return [] }
+        var natural = Array(repeating: 0.0, count: columns)
+        for index in subviews.indices.prefix(columns * 41) {
+            natural[index % columns] = max(natural[index % columns], Double(subviews[index].sizeThatFits(.unspecified).width))
+        }
+        return MessageTableSizing.columnWidths(natural, proposedWidth: proposedWidth.map { Double($0) },
+            minimum: Double(minimumWidth), maximum: Double(maximumWidth)).map { CGFloat($0) }
+    }
+    private func heights(_ subviews: Subviews, widths: [CGFloat]) -> [CGFloat] {
+        guard !widths.isEmpty else { return [] }
+        let fitted = subviews.indices.map { index in
+            Double(subviews[index].sizeThatFits(ProposedViewSize(width: widths[index % columns], height: nil)).height)
+        }
+        return MessageTableSizing.rowHeights(fitted, columns: columns).map { CGFloat($0) }
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let widths = widths(subviews, proposedWidth: proposal.width)
+        return CGSize(width: widths.reduce(0, +), height: heights(subviews, widths: widths).reduce(0, +))
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let widths = widths(subviews, proposedWidth: bounds.width)
+        let heights = heights(subviews, widths: widths)
+        guard !widths.isEmpty else { return }
+        var y = bounds.minY
+        for row in heights.indices {
+            var x = bounds.minX
+            for column in widths.indices {
+                let index = row * columns + column
+                guard index < subviews.count else { break }
+                subviews[index].place(at: CGPoint(x: x, y: y), anchor: .topLeading,
+                    proposal: ProposedViewSize(width: widths[column], height: heights[row]))
+                x += widths[column]
+            }
+            y += heights[row]
+        }
     }
 }
 

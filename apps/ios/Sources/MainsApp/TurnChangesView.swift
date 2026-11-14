@@ -26,7 +26,7 @@ struct TurnChangesCard: View {
                         .accessibilityLabel("Turn \((turn.turnIndex ?? 0) + 1). \(changes.undoneAt != nil ? "Changes undone" : "Edited \(count) files")")
                     DiffCounts(additions: changes.additions, deletions: changes.deletions)
                 }.padding(14)
-                    .background {
+                    .background(alignment: .center) {
                         let shape = UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 0,
                                                            bottomTrailingRadius: 0, topTrailingRadius: 16)
                         shape.fill(Color(.secondarySystemBackground))
@@ -197,7 +197,7 @@ private struct NumberedDiffBody: View {
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 8)
                 }.font(.system(.caption, design: .monospaced)).fixedSize(horizontal: false, vertical: true)
                     .padding(.vertical, 2)
-                    .background { Rectangle().fill(line.kind == .context ? Color.clear : hue.opacity(0.12)) }
+                    .background(alignment: .center) { Rectangle().fill(line.kind == .context ? Color.clear : hue.opacity(0.12)) }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("\(line.kind == .add ? "Added" : line.kind == .remove ? "Removed" : "Context"), line \(line.newNo ?? line.oldNo ?? 0): \(line.text)")
             }

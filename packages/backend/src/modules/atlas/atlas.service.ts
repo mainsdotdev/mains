@@ -7,7 +7,7 @@ import type { AtlasAutoTagging, AtlasItemTag, AtlasSaveBookmark, AtlasCreatePage
   AtlasUploadFile, AtlasResolveConflict, AtlasMetadataPatch } from "@mains/contracts/atlas";
 import { CHANNELS } from "@mains/contracts/channels";
 import { emit } from "../../ipc-kit/event-bus";
-import { ATLAS_LIBRARY_PAGE_SIZE } from "@mains/contracts/atlas";
+import { ATLAS_LIBRARY_PAGE_SIZE, isAtlasLibraryItem } from "@mains/contracts/atlas";
 import { collectionsService } from "../collections";
 import { bridgeService } from "../bridge";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
@@ -288,8 +288,7 @@ async function* savedLibraryEntries(options: AtlasLibraryOptions, query: string)
       kind: options.type === "all" ? undefined : options.type, collectionId: options.collectionId,
       trashed: false, ...(options.scope === "favorites" ? { isFavorite: true } : {}) });
     for (const item of items) {
-      // Bundled cover images are presentation, not library content.
-      if (item.sourceKey?.startsWith(ATLAS_COVER_SOURCE_PREFIX)) continue;
+      if (!isAtlasLibraryItem(item)) continue;
       const entry = savedEntry(item);
       if (matchesLibrary(entry, options, query)) yield entry;
     }
@@ -568,6 +567,20 @@ export const atlasService = {
   },
   async saveFile(input: AtlasSaveFile, validate?: () => Promise<void>) {
     const accountId = required(input?.accountId, "Account");
+    if (input.itemId !== undefined) {
+      if (input.runId !== undefined || input.path !== undefined) throw new Error("Invalid Atlas save source");
+      const id = required(input.itemId, "File");
+      await validate?.();
+      // Re-read after validation: preserve current metadata and never resurrect Trash.
+      const item = owned({ accountId, id });
+      if (item.trashedAt || !["file", "image"].includes(item.kind)) throw new Error("Atlas file unavailable");
+      if (item.sourceKey?.startsWith(ATLAS_COVER_SOURCE_PREFIX)) throw new Error("Bundled covers are not library files");
+      if (!isAtlasLibraryItem(format(item))) {
+        atlasRepo.update(item.id, accountId, { metadata: JSON.stringify({ ...readMetadata(item.metadata), savedToLibrary: true }) });
+        emit(CHANNELS.atlas.changed, {});
+      }
+      return format(owned({ accountId, id: item.id }));
+    }
     const requested = required(input?.path, "File path");
     const context = await runContext(input.runId, accountId);
     if (context.run.isReplica) throw new Error("Save this file from its source backend");

@@ -97,7 +97,8 @@ public struct MathMarkdown: Sendable {
                             return "<\(tag) style=\"text-align:\(alignment)\">" + inline(cell) + "</\(tag)>"
                         }.joined() + "</tr>"
                     }
-                    return "<div class=\"table\"><table>" + row(table.header, header: true) + table.rows.map { row($0, header: false) }.joined() + "</table></div>"
+                    return "<div class=\"table\"><table><thead>" + row(table.header, header: true) + "</thead><tbody>"
+                        + table.rows.map { row($0, header: false) }.joined() + "</tbody></table></div>"
                 }
             }.joined()
         }

@@ -6,7 +6,7 @@ import { ipcMain } from "../../ipc-kit/ipc-main";
 import { atlasService } from "./atlas.service";
 import { atlasBookmarks } from "./atlas.bookmarks";
 import { atlasMobile } from "./atlas.mobile";
-import type { AtlasMobileLibraryOptions, AtlasMobilePageRequest, AtlasMobileFileRequest, AtlasMobileFileRead, AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileUpdateItem, AtlasMobileBookmarkIdentity, AtlasMobileEditBookmark, AtlasMobileTrashOptions, AtlasMobileSetTrash, AtlasMobileTagsOptions, AtlasMobileSetTags } from "@mains/contracts/atlas-mobile";
+import type { AtlasMobileLibraryOptions, AtlasMobilePageRequest, AtlasMobilePageCoverRequest, AtlasMobilePageImageRequest, AtlasMobileFileRequest, AtlasMobileFileRead, AtlasMobileSaveFile, AtlasMobileSaveBookmark, AtlasMobileUpdateItem, AtlasMobileBookmarkIdentity, AtlasMobileEditBookmark, AtlasMobileTrashOptions, AtlasMobileSetTrash, AtlasMobileTagsOptions, AtlasMobileSetTags } from "@mains/contracts/atlas-mobile";
 
 export function registerAtlasIpc() {
   ipcMain.handle(CHANNELS.atlas.mobileTags, handle((input: AtlasMobileTagsOptions) => atlasMobile.tags(input)));
@@ -21,6 +21,8 @@ export function registerAtlasIpc() {
   ipcMain.handle(CHANNELS.atlas.saveMobileBookmark, handle((input: AtlasMobileSaveBookmark) => atlasMobile.saveBookmark(input)));
   ipcMain.handle(CHANNELS.atlas.mobileLibrary, handle((input: AtlasMobileLibraryOptions) => atlasMobile.library(input)));
   ipcMain.handle(CHANNELS.atlas.readMobilePage, handle((input: AtlasMobilePageRequest) => atlasMobile.readPage(input)));
+  ipcMain.handle(CHANNELS.atlas.readMobilePageCover, handle((input: AtlasMobilePageCoverRequest) => atlasMobile.readPageCover(input)));
+  ipcMain.handle(CHANNELS.atlas.readMobilePageImage, handle((input: AtlasMobilePageImageRequest) => atlasMobile.readPageImage(input)));
   ipcMain.handle(CHANNELS.atlas.describeMobileFile, handle((input: AtlasMobileFileRequest) => atlasMobile.describeFile(input)));
   ipcMain.handle(CHANNELS.atlas.readMobileFile, handle((input: AtlasMobileFileRead) => atlasMobile.readFile(input)));
   ipcMain.handle(CHANNELS.atlas.readMobileImage, handle((input: AtlasMobileFileRequest) => atlasMobile.readImage(input)));

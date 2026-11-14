@@ -403,23 +403,26 @@ struct AtlasPageView: View {
     @State private var error: String?
     @State private var reload = 0
     @State private var file: AtlasFileSelection?
-    private var key: String { "\(pageID):\(offset):\(reload):\(session.connection)" }
+    @ScaledMetric(relativeTo: .largeTitle) private var iconSize: CGFloat = 64
+    private var key: String { "\(pageID):\(offset):\(reload):\(session.ownership):\(session.connection)" }
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+        GeometryReader { geometry in
+          ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+              if let content, error == nil { pageHeader(content, width: geometry.size.width) }
+              VStack(alignment: .leading, spacing: 20) {
                 if let error {
                     ContentUnavailableView("Couldn’t read page", systemImage: "doc.text", description: Text(error))
                     Button("Refresh page", action: refresh).frame(maxWidth: .infinity)
                 } else if let content {
-                    HStack(alignment: .top, spacing: 12) {
-                        if let icon = content.icon { RegistryIcon(token: icon, size: 30) }
-                        Text(content.title).font(.largeTitle.bold()).textSelection(.enabled)
-                    }
-                    ChatMessageBody(text: content.markdown, presentation: .atlas).accessibilityIdentifier("atlasPageContent")
-                    if !content.embeddedFiles.isEmpty {
+                    AtlasPageBody(session: session, page: content) { id in
+                        file = AtlasFileSelection(reference: .saved(id), owner: session.ownership)
+                    }.accessibilityIdentifier("atlasPageContent")
+                    let otherFiles = content.embeddedFiles.filter { !content.inlineImageIDs.contains($0) }
+                    if !otherFiles.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Files in this part").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-                            ForEach(Array(content.embeddedFiles.enumerated()), id: \.element) { index, id in
+                            ForEach(Array(otherFiles.enumerated()), id: \.element) { index, id in
                                 Button("Open embedded file \(index + 1)", systemImage: "doc.richtext") {
                                     file = AtlasFileSelection(reference: .saved(id), owner: session.ownership)
                                 }.frame(minHeight: 44)
@@ -430,10 +433,22 @@ struct AtlasPageView: View {
                         Button("Open source chat", systemImage: "bubble.left") { openConversation(id) }
                     }
                 } else { ProgressView("Reading page…").frame(maxWidth: .infinity) }
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
+              }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.bottom, 24)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .id(offset)
+          .ignoresSafeArea(.container, edges: content?.coverFileId != nil && error == nil ? .top : [])
+          .refreshable { refresh() }
         }
-        .id(offset).navigationTitle("Page").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Refresh page", systemImage: "arrow.clockwise", action: refresh) } }
+        .background(Color(.systemBackground))
+        .navigationTitle("").navigationBarTitleDisplayMode(.inline).toolbarRole(.editor)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {} label: { Image(systemName: "ellipsis") }
+                    .disabled(true).accessibilityLabel("Page options").accessibilityIdentifier("atlasPageOptions")
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             if !previous.isEmpty || content?.nextOffset != nil {
                 HStack {
@@ -458,14 +473,156 @@ struct AtlasPageView: View {
         .sheet(item: $file) { AtlasFilePreview(session: session, selection: $0) }
         .task(id: key) {
             content = nil; error = nil
+            let owner = session.ownership
             guard session.isConnected else { error = "Connect to your computer to read this page."; return }
             do {
                 let result = try await session.atlasPage(pageID, offset: offset, version: version)
-                try Task.checkCancellation(); version = result.version; content = result
-            } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+                try Task.checkCancellation()
+                guard owner == session.ownership else { return }
+                version = result.version; content = result
+            } catch { if !Task.isCancelled && owner == session.ownership { self.error = error.localizedDescription } }
+        }
+    }
+    private func pageHeader(_ page: AtlasPageContent, width: CGFloat) -> some View {
+        let icon = page.icon.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        return VStack(alignment: .leading, spacing: 0) {
+            if let cover = page.coverFileId {
+                AtlasPageCoverView(session: session, pageID: pageID, coverFileID: cover)
+                    .frame(height: min(280, max(208, width * 0.56)))
+            }
+            VStack(alignment: .leading, spacing: 20) {
+                if let icon { RegistryIcon(token: icon, size: iconSize, tint: .primary) }
+                Text(page.title).font(.largeTitle.bold()).textSelection(.enabled)
+                    .accessibilityAddTraits(.isHeader).accessibilityIdentifier("atlasPageTitle")
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, page.coverFileId != nil ? (icon != nil ? -28 : 20) : (icon != nil ? 24 : 12))
+            .padding(.bottom, 24)
         }
     }
     private func refresh() { version = nil; offset = 0; previous = []; reload += 1 }
+}
+
+private struct AtlasPageBody: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let page: AtlasPageContent
+    let openImage: (String) -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(page.sections.enumerated()), id: \.offset) { _, section in
+                switch section {
+                case .markdown(let text): ChatMessageBody(text: text, presentation: .atlas)
+                case .image(let reference):
+                    AtlasPageInlineImage(session: session, pageID: page.id, version: page.version, reference: reference) { openImage(reference.fileId) }
+                }
+            }
+        }
+    }
+}
+
+private struct AtlasPageInlineImage: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let pageID: String
+    let version: Int
+    let reference: AtlasPageImageReference
+    let open: () -> Void
+    @State private var visible = false
+    @State private var image: UIImage?
+    @State private var failed = false
+    @State private var retry = 0
+    private var key: String { "\(pageID):\(version):\(reference.fileId):\(session.ownership):\(session.connection):\(visible):\(retry)" }
+    private var label: String { reference.caption.isEmpty ? "Image" : reference.caption }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { if failed { retry += 1 } else { open() } } label: {
+                ChatImageFrame(widthLimit: .infinity, heightLimit: 320, fixedHeight: false) {
+                    ZStack {
+                        Color(.secondarySystemBackground)
+                        if let image { Image(uiImage: image).resizable().scaledToFit() }
+                        else if failed {
+                            VStack(spacing: 8) {
+                                Image(systemName: "photo").font(.title2)
+                                Text("Tap to retry").font(.caption)
+                            }.foregroundStyle(.secondary)
+                        } else { ProgressView() }
+                    }
+                }.clipShape(.rect(cornerRadius: 12))
+            }
+            .buttonStyle(ChatPressStyle()).disabled(!session.isConnected)
+            .accessibilityLabel(label).accessibilityHint(failed ? "Retry image preview" : "Open full image")
+            .accessibilityIdentifier("atlasPageImage-" + reference.fileId)
+            .contextMenu { Button("Open image", systemImage: "arrow.up.right", action: open) }
+            if !reference.caption.isEmpty { Text(reference.caption).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+        }
+        .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
+        .task(id: key) {
+            image = nil; failed = false
+            guard visible, session.isConnected else { return }
+            let owner = session.ownership
+            do {
+                let result = try await session.readAtlasPageImage(pageID, fileID: reference.fileId, version: version)
+                try Task.checkCancellation()
+                guard owner == session.ownership, let data = result.data,
+                      let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      let preview = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 768,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                      ] as CFDictionary) else { throw MainsError.invalidReply }
+                image = UIImage(cgImage: preview)
+            } catch { if !Task.isCancelled && owner == session.ownership { failed = true } }
+        }
+        .onDisappear { image = nil }
+    }
+}
+
+private struct AtlasPageCoverView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let pageID: String
+    let coverFileID: String
+    @State private var visible = false
+    @State private var image: UIImage?
+    private var key: String { "\(pageID):\(coverFileID):\(session.ownership):\(session.connection):\(visible)" }
+    var body: some View {
+        GeometryReader { bounds in
+            ZStack {
+                Color(.secondarySystemBackground)
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                        .frame(width: bounds.size.width, height: bounds.size.height)
+                }
+            }.frame(width: bounds.size.width, height: bounds.size.height).clipped()
+        }
+        .accessibilityHidden(true)
+        .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
+        .task(id: key) {
+            image = nil
+            guard visible, session.isConnected else { return }
+            let owner = session.ownership
+            do {
+                let preview = try await session.readAtlasPageCover(pageID, coverFileID: coverFileID)
+                try Task.checkCancellation()
+                guard owner == session.ownership, let data = preview.data,
+                      let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      let cover = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 768,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                      ] as CFDictionary) else { return }
+                image = UIImage(cgImage: cover)
+            } catch { /* The Page remains readable if its decorative cover cannot load. */ }
+        }
+        .onDisappear { image = nil }
+    }
 }
 
 private struct AtlasBookmarkView: View {
@@ -566,7 +723,7 @@ struct AtlasFilePreview: View {
                     if let id = selection.sourceRunID, let openConversation { Button("Open source chat", systemImage: "bubble.left") { openConversation(id) } }
                 }
                 ToolbarItem(placement: .bottomBar) {
-                    if let file, let source = AtlasSaveSource.generated(file) { AtlasSaveButton(session: session, source: source, owner: selection.owner) }
+                    if let file, let source = AtlasSaveSource.file(file) { AtlasSaveButton(session: session, source: source, owner: selection.owner) }
                 }
             }
         }

@@ -4,14 +4,18 @@ public struct AtlasSaveSource: Codable, Hashable, Sendable {
     public static func supports(_ name: String) -> Bool {
         ["png", "jpg", "jpeg", "webp", "gif", "avif", "svg", "pdf", "md", "markdown", "txt", "csv", "docx", "pptx", "xlsx"].contains((name as NSString).pathExtension.lowercased())
     }
-    public let runId: String
+    public var runId: String? = nil
     public let version: String
     public var artifactId: Int?
     public var attachmentId: String?
     public var sourceKey: String?
+    public var itemId: String?
     public static func output(_ file: RunOutput) -> Self { Self(runId: file.runId, version: file.version, artifactId: file.artifactId) }
     public static func attachment(_ file: RunAttachmentFile) -> Self { Self(runId: file.runId, version: file.version, attachmentId: file.attachmentId) }
-    public static func generated(_ file: AtlasFile) -> Self? {
+    public static func file(_ file: AtlasFile) -> Self? {
+        if file.canSaveToLibrary == true, let itemId = file.reference.itemId {
+            return Self(version: file.version, itemId: itemId)
+        }
         guard let runId = file.reference.runId, let sourceKey = file.reference.sourceKey else { return nil }
         return Self(runId: runId, version: file.version, sourceKey: sourceKey)
     }

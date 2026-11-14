@@ -2,6 +2,16 @@ import Foundation
 import Testing
 @testable import MainsCore
 
+@Test func mathTablesKeepSemanticHeaderAndBodyRowsIncludingEmptyCells() throws {
+    let document = try #require(MathMarkdown.prepare("$x$\n\n| Measure | Current state | Target |\n|---|---|---|\n| | | |"))
+    let html = document.html
+    #expect(html.contains("<table><thead><tr><th"))
+    #expect(html.contains("</tr></thead><tbody><tr><td"))
+    #expect(html.components(separatedBy: "<th style=").count - 1 == 3)
+    #expect(html.components(separatedBy: "<td style=").count - 1 == 3)
+    #expect(html.contains("</tbody></table>"))
+}
+
 @Test func mathRecognizesInlineDisplayAndEscapedDelimitersWithoutConsumingCodeOrCurrency() throws {
     let source = #"Inline $x_1^2$ and \(\frac{a}{b}\). Display: $$\sum_{i=1}^n i$$ and \[\begin{matrix}a&b\\c&d\end{matrix}\]. `code $x$` costs $5 and $10; \$20."#
     let document = try #require(MathMarkdown.prepare(source))

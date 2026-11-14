@@ -7,6 +7,26 @@ public struct MessageTable: Equatable, Sendable {
     public let rows: [[String]]
 }
 
+/// Shared geometry for measured table cells; all rows use one set of columns.
+public enum MessageTableSizing {
+    public static func columnWidths(_ natural: [Double], proposedWidth: Double?, minimum: Double = 86, maximum: Double = 260) -> [Double] {
+        guard !natural.isEmpty else { return [] }
+        let lower = max(1, minimum), upper = max(lower, maximum)
+        let widths = natural.map { min(upper, max(lower, $0.isFinite ? $0.rounded(.up) : lower)) }
+        let total = widths.reduce(0, +)
+        let available = proposedWidth.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? total
+        let extra = max(0, available - total) / Double(widths.count)
+        return widths.map { $0 + extra }
+    }
+
+    public static func rowHeights(_ fittedHeights: [Double], columns: Int) -> [Double] {
+        guard columns > 0 else { return [] }
+        return stride(from: 0, to: fittedHeights.count, by: columns).map { start in
+            fittedHeights[start..<min(start + columns, fittedHeights.count)].filter(\.isFinite).max()?.rounded(.up) ?? 0
+        }
+    }
+}
+
 /// Streaming-safe CommonMark/GFM blocks. Inline emphasis, code and links are
 /// interpreted separately; table delimiters never reach the prose renderer.
 public enum MessageBlock: Equatable, Sendable {

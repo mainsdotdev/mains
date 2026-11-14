@@ -102,10 +102,15 @@ public struct AtlasPageContent: Decodable, Sendable {
     public let title: String
     public let icon: String?
     public let version: Int
+    public let coverFileId: String?
     public let markdown: String
     public let offset: Int
     public let nextOffset: Int?
     public let sourceRunId: String?
+    public var sections: [AtlasPageSection] { AtlasPageSection.parse(markdown) }
+    public var inlineImageIDs: Set<String> {
+        Set(sections.compactMap { if case .image(let reference) = $0 { reference.fileId } else { nil } })
+    }
     public var embeddedFiles: [String] {
         guard let pattern = try? NSRegularExpression(pattern: "atlas-file://([A-Za-z0-9_-]{1,128})(?=[\\s)>\\\"'?#]|$)") else { return [] }
         let source = markdown as NSString
@@ -116,6 +121,89 @@ public struct AtlasPageContent: Decodable, Sendable {
         }.prefix(20))
     }
 }
+public struct AtlasPageImageReference: Equatable, Hashable, Sendable {
+    public let fileId: String
+    public let caption: String
+}
+
+/// Keep stored image blocks out of the prose renderer, preserving all remaining
+/// Markdown verbatim so math, tables and code retain their existing readers.
+public enum AtlasPageSection: Equatable, Sendable {
+    case markdown(String), image(AtlasPageImageReference)
+    public static func parse(_ source: String) -> [Self] {
+        guard let pattern = try? NSRegularExpression(pattern: #"^ {0,3}!\[(.*)\]\(\s*<?atlas-file://([A-Za-z0-9_-]{1,128})>?(?:\s+["'][^"']*["'])?\s*\)\s*$"#) else { return [.markdown(source)] }
+        var sections: [Self] = [], lines: [String] = [], fence: (Character, Int)?, mathEnd: String?, imageCount = 0
+        func flush() {
+            let text = lines.joined()
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { sections.append(.markdown(text)) }
+            lines = []
+        }
+        let sourceLines = source.components(separatedBy: "\n")
+        for (index, line) in sourceLines.enumerated() {
+            let separator = index < sourceLines.count - 1 ? "\n" : ""
+            let original = line + separator
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let indented = line.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { $0 + ($1 == "\t" ? 4 : 1) } >= 4
+            if let (mark, count) = fence {
+                lines.append(original)
+                let length = trimmed.prefix(while: { $0 == mark }).count
+                if !indented && length >= count && trimmed.dropFirst(length).allSatisfy(\.isWhitespace) { fence = nil }
+                continue
+            }
+            if let end = mathEnd {
+                lines.append(original)
+                if trimmed.hasSuffix(end) { mathEnd = nil }
+                continue
+            }
+            if !indented, let mark = trimmed.first, mark == "`" || mark == "~", trimmed.prefix(while: { $0 == mark }).count >= 3 {
+                fence = (mark, trimmed.prefix(while: { $0 == mark }).count); lines.append(original); continue
+            }
+            if !indented, trimmed == "\\[" || trimmed.hasPrefix("$$") && !trimmed.dropFirst(2).contains("$$") {
+                mathEnd = trimmed == "\\[" ? "\\]" : "$$"; lines.append(original); continue
+            }
+            let value = line as NSString
+            if imageCount < 20, let match = pattern.firstMatch(in: line, range: NSRange(location: 0, length: value.length)) {
+                flush(); imageCount += 1
+                sections.append(.image(AtlasPageImageReference(fileId: value.substring(with: match.range(at: 2)),
+                    caption: String(value.substring(with: match.range(at: 1)).prefix(240)))))
+                lines.append(separator)
+            } else { lines.append(original) }
+        }
+        flush(); return sections
+    }
+}
+
+public struct AtlasPageEmbeddedImage: Decodable, Sendable {
+    public let pageId: String
+    public let fileId: String
+    public let pageVersion: Int
+    public let version: String
+    public let mime: String
+    public let base64: String
+    public let width: Int
+    public let height: Int
+    public var data: Data? {
+        guard ["image/jpeg", "image/png"].contains(mime), (1...768).contains(width), (1...768).contains(height),
+              version.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+              base64.utf8.count <= 699_052, let data = Data(base64Encoded: base64), (1...524_288).contains(data.count) else { return nil }
+        return data
+    }
+}
+public struct AtlasPageCoverImage: Decodable, Sendable {
+    public let pageId: String
+    public let coverFileId: String
+    public let version: String
+    public let mime: String
+    public let base64: String
+    public let width: Int
+    public let height: Int
+    public var data: Data? {
+        guard ["image/jpeg", "image/png"].contains(mime), (1...768).contains(width), (1...768).contains(height),
+              version.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+              base64.utf8.count <= 699_052, let data = Data(base64Encoded: base64), (1...524_288).contains(data.count) else { return nil }
+        return data
+    }
+}
 public struct AtlasFile: Decodable, Sendable {
     public let reference: AtlasFileReference
     public let name: String
@@ -124,6 +212,7 @@ public struct AtlasFile: Decodable, Sendable {
     public let modifiedAt: Double
     public let version: String
     public let previewType: String
+    public var canSaveToLibrary: Bool? = nil
 }
 
 public struct AtlasImage: Decodable, Sendable {

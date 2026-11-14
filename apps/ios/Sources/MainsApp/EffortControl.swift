@@ -70,7 +70,7 @@ struct EffortControlPanel: View {
             .font(expanded ? .title3 : .subheadline).tint(Provider.accent(context.providerId))
             .padding(.horizontal, expanded ? 0 : 14).padding(.vertical, expanded ? 0 : 10)
             .frame(maxWidth: .infinity)
-            .background {
+            .background(alignment: .center) {
                 if !expanded { RoundedRectangle(cornerRadius: 22).fill(Color(.tertiarySystemFill)) }
                 else {
                     // One material survives slider/menu/toggle and model changes.

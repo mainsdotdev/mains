@@ -959,6 +959,18 @@ public final class BackendSession {
         return file
     }
 
+    public func readAtlasPageCover(_ pageID: String, coverFileID: String) async throws -> AtlasPageCoverImage {
+        let image = try await atlasRead("atlas:readMobilePageCover", fields: ["id": .string(pageID), "coverFileId": .string(coverFileID)]).decode(AtlasPageCoverImage.self)
+        guard image.pageId == pageID, image.coverFileId == coverFileID, image.data != nil else { throw MainsError.invalidReply }
+        return image
+    }
+
+    public func readAtlasPageImage(_ pageID: String, fileID: String, version: Int) async throws -> AtlasPageEmbeddedImage {
+        let image = try await atlasRead("atlas:readMobilePageImage", fields: ["id": .string(pageID), "fileId": .string(fileID), "version": .number(Double(version))]).decode(AtlasPageEmbeddedImage.self)
+        guard image.pageId == pageID, image.fileId == fileID, image.pageVersion == version, image.data != nil else { throw MainsError.invalidReply }
+        return image
+    }
+
     public func readAtlasImage(_ reference: AtlasFileReference) async throws -> AtlasImage {
         let image = try await atlasRead("atlas:readMobileImage", fields: ["reference": try .encode(reference)]).decode(AtlasImage.self)
         guard image.reference == reference, image.data != nil else { throw MainsError.invalidReply }

@@ -2,12 +2,18 @@ import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { AtlasListOptions, AtlasMetadataPatch, AtlasItemTag, AtlasTag } from "@mains/contracts/atlas";
 import { ATLAS_LIBRARY_PAGE_SIZE } from "@mains/contracts/atlas";
+import { ATLAS_COVER_SOURCE_PREFIX } from "@mains/contracts/atlas-covers";
 import { getDb } from "../../db/client";
 import { atlasItems, atlasPageRevisions, atlasPageFileRefs, atlasTags, atlasItemTags, runs } from "../../db/schema";
 import { mergeMetadata, readMetadata } from "./atlas.metadata";
 
 export type AtlasRecord = typeof atlasItems.$inferSelect;
 export type RevisionRecord = typeof atlasPageRevisions.$inferSelect;
+
+// Mirrors isAtlasLibraryItem for aggregate reads, without loading file inventory.
+const libraryItem = sql`coalesce(substr(${atlasItems.sourceKey},1,${ATLAS_COVER_SOURCE_PREFIX.length}) <> ${ATLAS_COVER_SOURCE_PREFIX},1)
+  AND (coalesce(substr(${atlasItems.sourceKey},1,5) <> 'page:',1)
+    OR CASE WHEN json_valid(${atlasItems.metadata}) THEN json_extract(${atlasItems.metadata},'$.savedToLibrary')=1 ELSE 0 END)`;
 
 export const atlasRepo = {
   saveBookmark(id: string, accountId: string, fields: Partial<AtlasRecord> & { title: string }, tags?: string[]) {
@@ -36,7 +42,7 @@ export const atlasRepo = {
   },
   listTags(accountId: string, options?: { query: string; offset: number; limit: number }): AtlasTag[] {
     const query = getDb().select({ id: atlasTags.id, name: atlasTags.name,
-      count: sql<number>`count(CASE WHEN ${atlasItems.trashedAt} IS NULL AND ${atlasItemTags.isExcluded}=0 THEN ${atlasItems.id} END)` })
+      count: sql<number>`count(CASE WHEN ${atlasItems.trashedAt} IS NULL AND ${atlasItemTags.isExcluded}=0 AND ${libraryItem} THEN ${atlasItems.id} END)` })
       .from(atlasTags).leftJoin(atlasItemTags, eq(atlasTags.id, atlasItemTags.tagId))
       .leftJoin(atlasItems, and(eq(atlasItems.id, atlasItemTags.itemId), eq(atlasItems.accountId, accountId)))
       .where(and(eq(atlasTags.accountId, accountId), options?.query ? sql`instr(${atlasTags.normalizedName}, ${options.query}) > 0` : undefined))
@@ -133,7 +139,7 @@ export const atlasRepo = {
     return query.all();
   },
   imageIdentities(accountId: string, collectionId?: string) {
-    const conditions = [eq(atlasItems.accountId, accountId), eq(atlasItems.kind, "image"), isNull(atlasItems.trashedAt)];
+    const conditions = [eq(atlasItems.accountId, accountId), eq(atlasItems.kind, "image"), isNull(atlasItems.trashedAt), libraryItem];
     if (collectionId) conditions.push(eq(atlasItems.collectionId, collectionId));
     // Image identity is small; do not load storage paths, Page previews or the
     // rest of the account's inventory merely to prefer permanent copies.

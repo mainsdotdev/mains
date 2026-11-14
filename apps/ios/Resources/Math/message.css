@@ -31,8 +31,9 @@ body.atlas { line-height:1.85; }
 .dark.atlas blockquote { color:#ccc; }
 .atlas .table { margin:16px 0; border:1px solid #8884; border-radius:8px; }
 .atlas table { border-collapse:separate; border-spacing:0; min-width:100%; }
-.atlas th,.atlas td { border:0; border-right:1px solid #8884; border-bottom:1px solid #8884; padding:12px 16px; }
+.atlas th,.atlas td { border:0; border-right:1px solid #8884; border-bottom:1px solid #8884; padding:12px 16px; min-width:3.6em; vertical-align:top; line-height:1.5; overflow-wrap:normal; word-break:normal; hyphens:none; }
 .atlas th { background:#8882; font-weight:600; }
+.atlas td:empty::before { content:"\00a0"; }
 .atlas tr > :last-child { border-right:0; }
 .atlas tbody tr:last-child td { border-bottom:0; }
 .atlas thead tr:first-child th:first-child { border-top-left-radius:7px; }

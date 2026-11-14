@@ -3,6 +3,36 @@ import Testing
 @testable import MainsCore
 
 @Suite struct AtlasSaveTests {
+    @Test @MainActor func pageAttachmentsStayUnlistedUntilExplicitlySavedWithTheSameIdentity() async throws {
+        let backend = try DemoBackend(), probe = AtlasSaveProbe(), storage = MemoryStorage()
+        let session = BackendSession(storage: storage, makeTransport: { _ in AtlasSaveTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let id = "demo-atlas-page-file", owner = session.ownership
+        #expect(try await session.atlasLibrary(AtlasQuery()).items.allSatisfy { $0.id != id })
+        let page = try await session.atlasPage("demo-atlas-page")
+        #expect(page.markdown.contains("atlas-file://" + id))
+        let file = try await session.describeAtlasFile(.saved(id))
+        #expect(file.canSaveToLibrary == true)
+        let source = try #require(AtlasSaveSource.file(file))
+        #expect(source.itemId == id && source.runId == nil && source.sourceKey == nil && source.artifactId == nil && source.attachmentId == nil)
+        probe.loseACK = true
+        await #expect(throws: MainsError.self) { try await session.saveAtlasFile(source, owner: owner) }
+        #expect(session.pendingAtlasSave?.status == .uncertain && !session.canSaveToAtlas)
+        let saved = try await session.checkAtlasSaveDelivery()
+        #expect(saved.id == id && session.pendingAtlasSave == nil)
+        let calls = probe.calls.filter { $0.0 == "atlas:saveMobileFile" }
+        #expect(calls.count == 2 && calls[0].1 == calls[1].1 && calls[0].2 == calls[1].2)
+        let again = try await session.saveAtlasFile(source, owner: owner)
+        #expect(again.id == id)
+        #expect(try await session.atlasLibrary(AtlasQuery()).items.filter { $0.id == id }.count == 1)
+        let listed = try await session.describeAtlasFile(.saved(id))
+        #expect(listed.version == file.version && listed.canSaveToLibrary == false && AtlasSaveSource.file(listed) == nil)
+        #expect(try await session.atlasPage("demo-atlas-page").markdown == page.markdown)
+        #expect(session.viewingRunID == nil && session.transcript.rows.isEmpty && storage.snapshot == nil)
+    }
+
     @Test @MainActor func atlasTagsCanBeCreatedReusedRemovedAndFilteredWithoutMovingTheConversation() async throws {
         let backend = try DemoBackend(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })

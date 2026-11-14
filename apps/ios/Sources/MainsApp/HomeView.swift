@@ -50,7 +50,7 @@ struct HomeView: View {
             #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background { KeyboardDismissBackground(color: Color(.systemBackground)) }
+        .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let space {

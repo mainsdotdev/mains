@@ -54,6 +54,27 @@ import Darwin
                       (report["mathFont"] as? String)?.contains("KaTeX") == true else { throw NSError(domain: "MathCheck", code: 1, userInfo: [NSLocalizedDescriptionKey: String(describing: report)]) }
                 try await Task.sleep(for: .milliseconds(100))
                 guard sawLink, sawHeight else { throw NSError(domain: "MathCheck", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing height/link bridge"]) }
+                let table = "<div class=\"table\"><table><thead><tr><th>Measure</th><th>Current state</th><th>Target</th></tr></thead><tbody><tr><td></td><td></td><td></td></tr></tbody></table></div>"
+                _ = try await view.callAsyncJavaScript("return await window.renderMessage(html, 'check', 15, true, true)", arguments: ["html": table], in: nil, contentWorld: .page)
+                let tableReport = try await view.callAsyncJavaScript(#"""
+                    const headers = [...document.querySelectorAll('th')], cells = [...document.querySelectorAll('td')];
+                    const table = document.querySelector('table').getBoundingClientRect();
+                    const head = document.querySelector('thead').getBoundingClientRect();
+                    const style = getComputedStyle(headers[0]);
+                    const range = document.createRange(); range.selectNodeContents(headers[0]);
+                    return { fillsHeader: Math.abs(table.width - head.width) < .5,
+                      aligned: headers.every((header, index) => Math.abs(header.getBoundingClientRect().width - cells[index].getBoundingClientRect().width) < .5),
+                      emptyRowHeight: cells[0].getBoundingClientRect().height,
+                      wordLines: range.getClientRects().length, wrapping: style.overflowWrap, hyphens: style.hyphens };
+                    """#, arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+                guard let tableReport, tableReport["fillsHeader"] as? Bool == true,
+                      tableReport["aligned"] as? Bool == true,
+                      (tableReport["emptyRowHeight"] as? Double ?? 0) >= 40,
+                      tableReport["wordLines"] as? Int == 1, tableReport["wrapping"] as? String == "normal",
+                      tableReport["hyphens"] as? String == "none" else {
+                    throw NSError(domain: "MathCheck", code: 3, userInfo: [NSLocalizedDescriptionKey: String(describing: tableReport)])
+                }
+                print("PASS: Atlas table header/body alignment, unbroken header words and empty row height")
                 print("PASS: offline KaTeX, fractions/matrices, fonts, height/link bridge, CSP and untrusted commands")
                 exit(0)
             } catch { print("FAIL: \(error)"); exit(1) }

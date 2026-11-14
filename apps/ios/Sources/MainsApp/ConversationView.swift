@@ -207,7 +207,7 @@ struct ConversationView: View {
             #if MAINS_GPT_LIVE
             if focusedVoice {
                 VoiceFocusStage(voice: session.voice)
-                    .background { KeyboardDismissBackground(color: Color(.systemBackground)) }
+                    .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }
                     .transition(.opacity)
             }
             #endif

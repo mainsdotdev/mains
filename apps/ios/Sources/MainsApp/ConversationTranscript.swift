@@ -112,7 +112,7 @@ struct ConversationTranscript: View {
             // Short conversations still need a tappable blank area below the
             // messages. Keep the content top-aligned and leave controls above it.
             .frame(minHeight: minimumHeight, alignment: .top)
-            .background { KeyboardDismissBackground() }
+            .background(alignment: .center) { KeyboardDismissBackground() }
             .coordinateSpace(name: "transcript-content")
             .animation(nil, value: rows)
         }

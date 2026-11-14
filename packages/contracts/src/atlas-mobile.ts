@@ -38,13 +38,23 @@ export interface AtlasMobilePageRequest {
 /** Offsets count Unicode scalars; each response contains at most 16,384 scalars. */
 export interface AtlasMobilePage {
   id: string; title: string; icon: string | null; version: number;
+  /** Optional on older computers. A stored image identity, never a host path. */
+  coverFileId?: string | null;
   markdown: string; offset: number; nextOffset: number | null;
   sourceRunId: string | null;
 }
+export interface AtlasMobilePageCoverRequest { accountId: string; id: string; coverFileId: string }
+/** Fixed 768-pixel Page cover, at most 512 KiB; selected by its owning Page. */
+export interface AtlasMobilePageCover extends Omit<AtlasMobileImage, "reference"> { pageId: string; coverFileId: string }
+/** Read one stored image from the pinned Page revision, without returning blocks or paths. */
+export interface AtlasMobilePageImageRequest { accountId: string; id: string; fileId: string; version: number }
+export interface AtlasMobilePageImage extends Omit<AtlasMobileImage, "reference"> { pageId: string; fileId: string; pageVersion: number }
 export interface AtlasMobileFileRequest { accountId: string; reference: AtlasMobileFileReference }
 export interface AtlasMobileFile {
   reference: AtlasMobileFileReference; name: string; mimeType: string; byteSize: number;
   modifiedAt: number; version: string; previewType: OutputPreviewType;
+  /** Page assets are stored but unlisted until explicitly saved; absent on older hosts. */
+  canSaveToLibrary?: boolean;
 }
 export interface AtlasMobileFileRead extends AtlasMobileFileRequest { offset: number; version: string }
 /** Fixed 128-pixel thumbnail, at most 128 KiB decoded; never the original file. */
@@ -53,10 +63,12 @@ export interface AtlasMobileImage {
   mime: "image/jpeg" | "image/png"; base64: string; width: number; height: number;
 }
 
-/** Exactly one conversation-owned identity; paths and uploaded bytes are never accepted. */
+/** Exactly one stored or conversation-owned identity; no paths or uploaded bytes. */
 export interface AtlasMobileSaveFile {
-  accountId: string; runId: string; version: string;
+  accountId: string; runId?: string; version: string;
   artifactId?: number; attachmentId?: string; sourceKey?: string;
+  /** Exclusive with conversation-owned identities. Promotes this stored file in place. */
+  itemId?: string;
 }
 export interface AtlasMobileSaveBookmark { accountId: string; url: string; collectionId?: string | null }
 export interface AtlasMobileSavedItem { id: string; title: string; kind: AtlasKind }

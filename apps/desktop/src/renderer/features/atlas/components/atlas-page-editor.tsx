@@ -9,13 +9,13 @@ import {
 } from "react";
 import { useNavigate } from "react-router-dom";
 import type { AtlasPage, AtlasItem } from "@mains/contracts/atlas";
-import type { PartialBlock } from "@blocknote/core";
-import { useCreateBlockNote } from "@blocknote/react";
+import { blockHasType, type PartialBlock } from "@blocknote/core";
+import { FormattingToolbar, FormattingToolbarController, getFormattingToolbarItems, useBlockNoteEditor, useComponentsContext, useCreateBlockNote, useEditorState } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/shadcn";
 import "@blocknote/shadcn/style.css";
 import { PageShell } from "@/components/layout/page-shell";
 import { Button, Input, Modal, Muted, Text, Textarea, toast } from "@/components/ui";
-import { Undo } from "@/components/ui/icons";
+import { Library, Undo } from "@/components/ui/icons";
 import {
   useAtlasPageQuery,
   useAtlasRevisionsQuery,
@@ -23,6 +23,7 @@ import {
   useRestoreAtlasPageMutation,
   useResolveAtlasConflictMutation,
   useSaveAtlasPageMutation,
+  useSaveToAtlasMutation,
   useUpdateAtlasItemMutation,
   useUploadAtlasFileMutation,
 } from "@/lib/redux/api/atlasApi";
@@ -50,6 +51,32 @@ export interface AtlasPageEditorHandle {
   flush: () => Promise<boolean>;
   collectionId: string | null;
   performAction: (action: AtlasPageAction) => Promise<void>;
+}
+
+/** Uses BlockNote's native file selection and toolbar; text controls stay intact. */
+function SavePageFileButton({ accountId, current }: { accountId: string; current: () => boolean }) {
+  const editor = useBlockNoteEditor();
+  const components = useComponentsContext()!;
+  const [save, state] = useSaveToAtlasMutation();
+  const [savedID, setSavedID] = useState<string>();
+  const itemId = useEditorState({ editor, selector: ({ editor }) => {
+    const blocks = editor.getSelection()?.blocks ?? [editor.getTextCursorPosition().block];
+    const block = blocks.length === 1 ? blocks[0] : undefined;
+    if (!block || !["image", "file", "video", "audio"].includes(block.type)
+      || !blockHasType(block, editor, block.type, { url: "string" })) return undefined;
+    const match = /^atlas-file:\/\/([A-Za-z0-9_-]+)$/.exec(block.props.url);
+    return match?.[1];
+  } });
+  if (!itemId) return null;
+  return <components.FormattingToolbar.Button className="bn-button" label="Save to Atlas" mainTooltip="Save to Atlas"
+    icon={<Library className="size-4" />} isDisabled={state.isLoading || savedID === itemId || !current()}
+    onClick={() => {
+      if (!current() || state.isLoading) return;
+      void save({ accountId, itemId }).unwrap().then(() => {
+        if (!current()) return;
+        setSavedID(itemId); toast.success("Saved to Atlas");
+      }).catch((error: unknown) => { if (current()) toast.error(atlasError(error)); });
+    }} />;
 }
 interface AtlasPageEditorProps {
   accountId: string;
@@ -233,6 +260,10 @@ function PageEditor({
     trashed: !!page.item.trashedAt,
     onState: setPageState,
   }));
+  const formattingToolbar = useCallback(() => <FormattingToolbar>
+    {getFormattingToolbarItems()}
+    <SavePageFileButton accountId={accountId} current={() => lifecycle.canEdit && getTransport() === mountedTransport} />
+  </FormattingToolbar>, [accountId, lifecycle, mountedTransport]);
   useLayoutEffect(() => {
     lifecycle.activate();
     return () => { void lifecycle.flush(); lifecycle.deactivate(); };
@@ -549,8 +580,11 @@ function PageEditor({
               editor={editor}
               theme={useIsDarkMode() ? "dark" : "light"}
               editable={pageState.editable && !page.item.trashedAt}
+              formattingToolbar={false}
               onChange={() => schedule()}
-            />
+            >
+              <FormattingToolbarController formattingToolbar={formattingToolbar} />
+            </BlockNoteView>
           </div>
         </div>
       </div>

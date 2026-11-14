@@ -3,7 +3,7 @@ import ImageIO
 
 /// Compute the preview's final size in the layout pass, before any image bytes
 /// arrive. No measured-width state or decoded aspect ratio can move later rows.
-private struct ChatImageFrame: Layout {
+struct ChatImageFrame: Layout {
     let widthLimit: CGFloat
     let heightLimit: CGFloat
     let fixedHeight: Bool

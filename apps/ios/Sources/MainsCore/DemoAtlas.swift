@@ -42,7 +42,8 @@ import CryptoKit
         let source = String(repeating: "a", count: 64)
         let imageFile = DemoFile(name: "sample-image.jpg", mime: image["mime"].string ?? "image/jpeg", preview: "image",
                                  bytes: Data(base64Encoded: image["base64"].string ?? "") ?? Data(), version: String(repeating: "3", count: 64))
-        let files = ["demo-atlas-doc": DemoFile.pdf, "demo-atlas-image": imageFile, "demo-atlas-generated": DemoFile.notes]
+        let files = ["demo-atlas-doc": DemoFile.pdf, "demo-atlas-image": imageFile, "demo-atlas-generated": DemoFile.notes,
+                     "demo-atlas-page-file": DemoFile.notes]
         func entry(_ id: String, kind: String, title: String, favorite: Bool = false, generated: Bool = false) -> JSONValue {
             .object(["key": .string(id), "kind": .string(kind), "title": .string(title), "date": .string("2026-11-12T10:00:00.000Z"),
                      "collectionId": collectionID.map(JSONValue.string) ?? .null, "isFavorite": .bool(favorite),
@@ -172,6 +173,16 @@ import CryptoKit
             saved[id] = row; sources[key] = id
             return summary(row)
         case "atlas:saveMobileFile":
+            if let id = input["itemId"].string {
+                guard id == "demo-atlas-page-file", edits[id]?["trashedAt"]?.string == nil,
+                      input["version"].string == DemoFile.notes.version,
+                      ["runId", "sourceKey", "artifactId", "attachmentId"].allSatisfy({ input.objectValue[$0] == nil }) else {
+                    throw MainsError.server("Demo Atlas source changed.")
+                }
+                let row = saved[id] ?? entry(id, kind: "file", title: DemoFile.notes.name)
+                saved[id] = row
+                return summary(row)
+            }
             guard input["sourceKey"].string == source, input["runId"].string == runID, input["version"].string == DemoFile.notes.version else { throw MainsError.server("Demo Atlas source changed.") }
             return try save(.notes, source: "generated:" + runID, runID: runID, collectionID: collectionID)
         case "atlas:mobileLibrary":
@@ -189,10 +200,30 @@ import CryptoKit
         case "atlas:readMobilePage":
             guard edits["demo-atlas-page"]?["trashedAt"]?.string == nil else { throw MainsError.server("Atlas page not found or in Trash") }
             guard input["id"].string == "demo-atlas-page", input["version"].number == nil || input["version"].number == 1 else { throw MainsError.server("This demo page is unavailable. Refresh it to read again.") }
-            let markdown = "# Your library, on iPhone\n\nAtlas brings **Pages, documents, images and bookmarks** together.\n\n- Search your library\n- Filter by project or favorites\n- Preview and share a file\n\n[Open the sample report](atlas-file://demo-atlas-doc)\n\nEverything here is prepared sample data. No computer or AI service was contacted."
+            let markdown = "# Your library, on iPhone\n\nAtlas brings **Pages, documents, images and bookmarks** together.\n\n![Sample image](atlas-file://demo-atlas-image)\n\n- Search your library\n- Filter by project or favorites\n- Preview and share a file\n\n[Open the sample report](atlas-file://demo-atlas-doc)\n\n[Open the page attachment](atlas-file://demo-atlas-page-file)\n\nEverything here is prepared sample data. No computer or AI service was contacted."
             guard input["offset"].number == nil || input["offset"].number == 0 else { throw MainsError.invalidReply }
             return .object(["id": .string("demo-atlas-page"), "title": .string("Explore Atlas"), "icon": .string("emoji:🗺️"), "version": .number(1),
+                            "coverFileId": edits["demo-atlas-image"]?["trashedAt"]?.string == nil ? .string("demo-atlas-image") : .null,
                             "markdown": .string(markdown), "offset": .number(0), "nextOffset": .null, "sourceRunId": .string(runID)])
+        case "atlas:readMobilePageCover":
+            guard input["id"].string == "demo-atlas-page", input["coverFileId"].string == "demo-atlas-image",
+                  edits["demo-atlas-page"]?["trashedAt"]?.string == nil, edits["demo-atlas-image"]?["trashedAt"]?.string == nil else {
+                throw MainsError.server("Page cover changed or is unavailable")
+            }
+            var cover = DemoFile.atlasThumbnail.objectValue
+            cover.removeValue(forKey: "reference"); cover["pageId"] = .string("demo-atlas-page")
+            cover["coverFileId"] = .string("demo-atlas-image"); cover["version"] = .string(imageFile.version)
+            return .object(cover)
+        case "atlas:readMobilePageImage":
+            guard input["id"].string == "demo-atlas-page", input["fileId"].string == "demo-atlas-image", input["version"].number == 1,
+                  edits["demo-atlas-page"]?["trashedAt"]?.string == nil, edits["demo-atlas-image"]?["trashedAt"]?.string == nil else {
+                throw MainsError.server("Page image changed or is unavailable")
+            }
+            var preview = DemoFile.atlasThumbnail.objectValue
+            preview.removeValue(forKey: "reference"); preview["pageId"] = .string("demo-atlas-page")
+            preview["fileId"] = .string("demo-atlas-image"); preview["pageVersion"] = .number(1)
+            preview["version"] = .string(imageFile.version)
+            return .object(preview)
         case "atlas:describeMobileFile", "atlas:readMobileFile", "atlas:readMobileImage":
             let reference = input["reference"]
             let id = reference["itemId"].string ?? (reference["runId"].string == runID && reference["sourceKey"].string == source ? "demo-atlas-generated" : "")
@@ -206,6 +237,7 @@ import CryptoKit
             }
             if channel == "atlas:readMobileFile" { return try file.chunk(input) }
             var row = file.descriptor(runID: runID).objectValue; row.removeValue(forKey: "runId"); row["reference"] = reference
+            row["canSaveToLibrary"] = .bool(id == "demo-atlas-page-file" && saved[id] == nil)
             return .object(row)
         default: throw MainsError.invalidReply
         }

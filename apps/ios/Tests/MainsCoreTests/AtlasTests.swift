@@ -3,7 +3,7 @@ import Testing
 @testable import MainsCore
 
 @Suite struct AtlasTests {
-    @Test(arguments: ["atlas:mobileTags", "atlas:readMobileTags", "atlas:readMobileImage"]) @MainActor func atlasReadsRetiredByReconnectionCannotReturnToTheNewConnection(channel: String) async throws {
+    @Test(arguments: ["atlas:mobileTags", "atlas:readMobileTags", "atlas:readMobileImage", "atlas:readMobilePageCover", "atlas:readMobilePageImage"]) @MainActor func atlasReadsRetiredByReconnectionCannotReturnToTheNewConnection(channel: String) async throws {
         let backend = try DemoBackend(), probe = AtlasProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
         session.restore(); session.setActive(true); try session.startDemo()
@@ -13,6 +13,8 @@ import Testing
         let read = Task {
             if channel == "atlas:mobileTags" { _ = try await session.atlasTags() }
             else if channel == "atlas:readMobileTags" { _ = try await session.readAtlasTags("demo-atlas-page") }
+            else if channel == "atlas:readMobilePageCover" { _ = try await session.readAtlasPageCover("demo-atlas-page", coverFileID: "demo-atlas-image") }
+            else if channel == "atlas:readMobilePageImage" { _ = try await session.readAtlasPageImage("demo-atlas-page", fileID: "demo-atlas-image", version: 1) }
             else { _ = try await session.readAtlasImage(.saved("demo-atlas-image")) }
         }
         try await eventually { probe.held != nil }
@@ -21,6 +23,51 @@ import Testing
         probe.release()
         await #expect(throws: MainsError.self) { try await read.value }
         #expect(try await session.readAtlasTags("demo-atlas-page").tags.count == 1)
+    }
+
+    @Test @MainActor func pageCoversUsePreparedBytesAndDoNotChangeTheSelectedChatOrDiskSnapshot() async throws {
+        let storage = MemoryStorage(), backend = try DemoBackend()
+        let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let space = session.selectedSpaceID
+        let page = try await session.atlasPage("demo-atlas-page")
+        let coverID = try #require(page.coverFileId)
+        let cover = try await session.readAtlasPageCover(page.id, coverFileID: coverID)
+        #expect(cover.data != nil && cover.width <= 768 && cover.height <= 768)
+        let inline = try await session.readAtlasPageImage(page.id, fileID: "demo-atlas-image", version: page.version)
+        #expect(inline.data != nil && inline.pageVersion == page.version && page.inlineImageIDs == ["demo-atlas-image"])
+        await #expect(throws: MainsError.self) { try await session.readAtlasPageImage(page.id, fileID: "wrong-image", version: page.version) }
+        await #expect(throws: MainsError.self) { try await session.readAtlasPageCover(page.id, coverFileID: "wrong-cover") }
+        #expect(session.viewingRunID == nil && session.transcript.rows.isEmpty && session.selectedSpaceID == space && storage.snapshot == nil)
+    }
+
+    @Test func pagesFromOlderComputersRemainReadableWithoutCoverMetadata() throws {
+        let value: JSONValue = .object(["id": .string("old-page"), "title": .string("Notes"), "version": .number(1),
+            "icon": .null, "markdown": .string("Content"), "offset": .number(0), "nextOffset": .null, "sourceRunId": .null])
+        let page = try value.decode(AtlasPageContent.self)
+        #expect(page.coverFileId == nil && page.icon == nil && page.title == "Notes")
+    }
+
+    @Test(arguments: ["page", "cover", "size", "bytes", "mime", "version"]) @MainActor func malformedPageCoversAreRejected(field: String) async throws {
+        let backend = try DemoBackend(), probe = AtlasProbe()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        probe.corruptCover = field
+        await #expect(throws: MainsError.self) { try await session.readAtlasPageCover("demo-atlas-page", coverFileID: "demo-atlas-image") }
+    }
+
+    @Test(arguments: ["page", "file", "pageVersion", "size", "bytes", "mime", "version"]) @MainActor func malformedEmbeddedPageImagesAreRejected(field: String) async throws {
+        let backend = try DemoBackend(), probe = AtlasProbe()
+        let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        probe.corruptPageImage = field
+        await #expect(throws: MainsError.self) { try await session.readAtlasPageImage("demo-atlas-page", fileID: "demo-atlas-image", version: 1) }
     }
 
     @Test @MainActor func atlasThumbnailsStayBoundedAndUsePreparedDemoBytesWithoutChangingTheTranscript() async throws {
@@ -66,7 +113,7 @@ import Testing
         let entry = try #require(try await isolated.atlasLibrary(query).items.first)
         let page = try await isolated.atlasPage(try #require(entry.pageId))
         #expect(page.markdown.contains("Atlas") && page.nextOffset == nil)
-        #expect(page.embeddedFiles == ["demo-atlas-doc"])
+        #expect(page.embeddedFiles == ["demo-atlas-image", "demo-atlas-doc", "demo-atlas-page-file"])
         #expect(isolated.selectedSpaceID == space && isolated.viewingRunID == nil && isolated.transcript.rows.isEmpty)
         #expect(storage.snapshot == nil)
         let pdf = try #require(all.items.first { $0.key == "demo-atlas-doc" }?.file)
@@ -124,6 +171,8 @@ import Testing
     var held: CheckedContinuation<Void, Never>?
     var corruptChunk = false
     var corruptImage: String?
+    var corruptCover: String?
+    var corruptPageImage: String?
     var unsupported = false
     func release() { let continuation = held; held = nil; continuation?.resume() }
 }
@@ -146,6 +195,27 @@ import Testing
             if field == "size" { row["width"] = .number(129) }
             if field == "bytes" { row["base64"] = .string(String(repeating: "A", count: 174_768)) }
             if field == "mime" { row["mime"] = .string("text/html") }
+            value = .object(row)
+        }
+        if channel == "atlas:readMobilePageCover", let field = probe.corruptCover {
+            var row = value.objectValue
+            if field == "page" { row["pageId"] = .string("another-page") }
+            if field == "cover" { row["coverFileId"] = .string("another-cover") }
+            if field == "size" { row["width"] = .number(769) }
+            if field == "bytes" { row["base64"] = .string(String(repeating: "A", count: 699_056)) }
+            if field == "mime" { row["mime"] = .string("text/html") }
+            if field == "version" { row["version"] = .string("not-a-version") }
+            value = .object(row)
+        }
+        if channel == "atlas:readMobilePageImage", let field = probe.corruptPageImage {
+            var row = value.objectValue
+            if field == "page" { row["pageId"] = .string("another-page") }
+            if field == "file" { row["fileId"] = .string("another-file") }
+            if field == "pageVersion" { row["pageVersion"] = .number(2) }
+            if field == "size" { row["height"] = .number(769) }
+            if field == "bytes" { row["base64"] = .string(String(repeating: "A", count: 699_056)) }
+            if field == "mime" { row["mime"] = .string("text/html") }
+            if field == "version" { row["version"] = .string("not-a-version") }
             value = .object(row)
         }
         return value

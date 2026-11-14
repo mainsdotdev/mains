@@ -111,7 +111,7 @@ private struct EffortOverlayView: View {
                 controls
                     .frame(width: geometry.size.width)
                     .onGeometryChange(for: CGSize.self) { $0.size } action: { panelSize = $0 }
-                    .background {
+                    .background(alignment: .center) {
                         Group {
                             if reduceTransparency { RoundedRectangle(cornerRadius: 36).fill(Color(.secondarySystemBackground)).padding(.horizontal, 16) }
                             else {

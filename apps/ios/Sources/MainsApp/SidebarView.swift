@@ -225,7 +225,7 @@ struct SidebarView: View {
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                     .padding(.horizontal, selected ? 14 : 11)
                     .frame(minWidth: 44, minHeight: 40).clipped()
-                    .background {
+                    .background(alignment: .center) {
                         if selected {
                             Color.clear.modifier(GlassSurface(radius: 20))
                                 .matchedGeometryEffect(id: "mode", in: modeSelection)
