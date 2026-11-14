@@ -67,6 +67,45 @@ import Testing
         #expect(ConversationPanePlan.make(size: CGSize(width: 900, height: 640), expanded: true, state: state).showsOutput)
     }
 
+    @Test func outputsButtonSwitchesRetainedReadersAfterFoldingWithoutClosingTheFile() {
+        var state = ConversationCompanionState()
+        #expect(state.outputsAction(twoReaders: false) == .browse)
+        #expect(state.outputsAction(twoReaders: true) == .open)
+        state.open()
+        #expect(state.outputsAction(twoReaders: true) == .close)
+        for (size, expanded, accessible) in [
+            (CGSize(width: 390, height: 750), false, false),
+            (CGSize(width: 440, height: 800), true, false),
+            (CGSize(width: 1000, height: 800), true, true),
+        ] {
+            let output = ConversationPanePlan.make(size: size, expanded: expanded, accessibilityText: accessible, state: state)
+            let both = output.showsConversation && output.showsOutput
+            #expect(!both && state.outputsAction(twoReaders: both) == .showConversation)
+            state.focusConversation()
+            let conversation = ConversationPanePlan.make(size: size, expanded: expanded, accessibilityText: accessible, state: state)
+            #expect(conversation.mode == .conversation && state.outputsAction(twoReaders: both) == .showOutput)
+            state.focusOutput()
+            #expect(state.isOpen && state.focus == .output)
+        }
+        state.close()
+        state.adapt(expanded: true, hasOutputs: true)
+        #expect(!state.isOpen && state.outputsAction(twoReaders: false) == .browse)
+    }
+
+    @Test func aVeryShortWindowNeverOffersAnEmptySecondReader() {
+        var state = ConversationCompanionState(); state.open()
+        for height in [120.0, 240.0] {
+            let size = CGSize(width: 620, height: height)
+            let output = ConversationPanePlan.make(size: size, expanded: true, state: state)
+            #expect(output.mode == .output && output.output.size == size)
+            #expect(state.outputsAction(twoReaders: output.showsConversation && output.showsOutput) == .showConversation)
+            state.focusConversation()
+            let conversation = ConversationPanePlan.make(size: size, expanded: true, state: state)
+            #expect(conversation.mode == .conversation && conversation.conversation.size == size)
+            state.focusOutput()
+        }
+    }
+
     @Test func aBookFoldKeepsBothReadersAndTheirControlsClearOfTheReservedRegion() {
         var state = ConversationCompanionState(); state.open()
         let size = CGSize(width: 900, height: 640), fold = CGRect(x: 432, y: 0, width: 36, height: 640)

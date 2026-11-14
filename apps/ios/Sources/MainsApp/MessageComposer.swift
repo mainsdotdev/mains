@@ -37,6 +37,7 @@ struct MessageComposer: View {
     @State private var fileOwner = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.conversationPaneVisible) private var paneVisible
     @State private var attachmentError: String?
     private var settings: ComposerSettings { context.settings(session) }
     private var selectedModel: ModelChoice? { context.model(session) }
@@ -87,6 +88,9 @@ struct MessageComposer: View {
         .attachmentOverlay(isPresented: attachmentsOpen, id: attachmentPresentationID, accent: Provider.accent(context.providerId),
                            maxCount: 5 - draft.attachments.count, maxBytes: remainingBytes, add: addFromPanel, close: closeAttachments)
         .onChange(of: session.ownership) { _, _ in attachmentsOpen = false; file = false; pluginsOpen = false }
+        .onChange(of: paneVisible) { _, visible in
+            if !visible { focused = false; attachmentsOpen = false; pluginsOpen = false }
+        }
     #if MAINS_GPT_LIVE
         .onChange(of: session.voice.runID) { _, id in
             if let id, context.runID == nil, voiceStartOwner == session.ownership, session.selectedSpaceID == context.spaceID { voiceCreated?(id) }

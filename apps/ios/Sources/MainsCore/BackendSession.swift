@@ -966,6 +966,16 @@ public final class BackendSession {
         return page
     }
 
+    public func exportAtlasPageMarkdown(_ page: AtlasPageContent, owner: Int, to url: URL) async throws {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        let current = generation
+        try await AtlasPageMarkdownExport.save(id: page.id, version: page.version, to: url, validate: {
+            guard owner == self.pairingOwner, current == self.generation, self.active, self.isConnected else { throw MainsError.changedBackend }
+        }, read: { offset in
+            try await self.atlasPage(page.id, offset: offset, version: page.version)
+        })
+    }
+
     public func describeAtlasFile(_ reference: AtlasFileReference) async throws -> AtlasFile {
         let file = try await atlasRead("atlas:describeMobileFile", fields: ["reference": try .encode(reference)]).decode(AtlasFile.self)
         guard file.reference == reference, (0...RunFilePolicy.maxBytes).contains(file.byteSize), !file.version.isEmpty else { throw MainsError.invalidReply }

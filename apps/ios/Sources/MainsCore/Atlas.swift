@@ -98,6 +98,9 @@ public struct AtlasTrashPage: Decodable, Sendable {
     public let page: Int
     public let hasNext: Bool
 }
+public struct AtlasPageOrganization: Decodable, Sendable {
+    public let collectionId: String?
+}
 public struct AtlasPageContent: Decodable, Sendable {
     public let id: String
     public let title: String
@@ -108,6 +111,21 @@ public struct AtlasPageContent: Decodable, Sendable {
     public let offset: Int
     public let nextOffset: Int?
     public let sourceRunId: String?
+    public var organization: AtlasPageOrganization? = nil
+    public var organizationEntry: AtlasEntry {
+        AtlasEntry(key: id, kind: "page", title: title, date: "", collectionId: organization?.collectionId,
+            isFavorite: false, savedItemId: nil, savedCollectionId: nil, origin: "saved", sourceRunId: sourceRunId,
+            file: nil, pageId: id, icon: icon, url: nil, description: nil, note: nil, tags: nil,
+            fileName: nil, mimeType: nil, byteSize: nil, preview: nil)
+    }
+    public var exportFileName: String {
+        var name = ""
+        for scalar in TranscriptMedia.fileName(title).components(separatedBy: .controlCharacters).joined().unicodeScalars {
+            guard name.utf8.count + scalar.utf8.count <= 180 else { break }
+            name.unicodeScalars.append(scalar)
+        }
+        return (name.isEmpty ? "Page" : name) + (name.lowercased().hasSuffix(".md") ? "" : ".md")
+    }
     public var sections: [AtlasPageSection] { AtlasPageSection.parse(markdown) }
     public var inlineImageIDs: Set<String> {
         Set(sections.compactMap { if case .image(let reference) = $0 { reference.fileId } else { nil } })
@@ -122,6 +140,36 @@ public struct AtlasPageContent: Decodable, Sendable {
         }.prefix(20))
     }
 }
+enum AtlasPageMarkdownExport {
+    /// Stream the full pinned revision, keeping one scalar-safe part in memory.
+    @MainActor static func save(id: String, version: Int, to url: URL, validate: () throws -> Void,
+                               read: (Int) async throws -> AtlasPageContent) async throws {
+        try Task.checkCancellation(); try validate()
+        try await RunFileTransfer.save(to: url) { write in
+            var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
+            #if os(iOS)
+            attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
+            #endif
+            try FileManager.default.setAttributes(attributes, ofItemAtPath: url.path)
+            var offset = 0, bytes = 0
+            for _ in 0..<128 {
+                try Task.checkCancellation(); try validate()
+                let part = try await read(offset)
+                try Task.checkCancellation(); try validate()
+                let count = part.markdown.unicodeScalars.count
+                let data = Data(part.markdown.utf8)
+                guard part.id == id, part.version == version, part.offset == offset, count <= 16_384,
+                      part.nextOffset == nil || part.nextOffset == offset + count && count > 0,
+                      bytes + data.count <= 2 * 1024 * 1024 else { throw MainsError.invalidReply }
+                try write(data); bytes += data.count
+                guard let next = part.nextOffset else { return }
+                offset = next
+            }
+            throw MainsError.invalidReply
+        }
+    }
+}
+
 public struct AtlasPageImageReference: Equatable, Hashable, Sendable {
     public let fileId: String
     public let caption: String

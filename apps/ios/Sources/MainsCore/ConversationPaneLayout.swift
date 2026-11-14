@@ -2,6 +2,7 @@ import Foundation
 
 public struct ConversationCompanionState: Equatable, Sendable {
     public enum Focus: Equatable, Sendable { case conversation, output }
+    public enum OutputsAction: Equatable, Sendable { case browse, open, close, showConversation, showOutput }
     public private(set) var isOpen = false
     public private(set) var focus = Focus.conversation
     private var explicitChoice = false
@@ -14,6 +15,12 @@ public struct ConversationCompanionState: Equatable, Sendable {
     public mutating func close() { isOpen = false; focus = .conversation; explicitChoice = true }
     public mutating func focusConversation() { focus = .conversation }
     public mutating func focusOutput() { if isOpen { focus = .output } }
+
+    public func outputsAction(twoReaders: Bool) -> OutputsAction {
+        if twoReaders { return isOpen ? .close : .open }
+        guard isOpen else { return .browse }
+        return focus == .output ? .showConversation : .showOutput
+    }
 }
 
 /// Local view geometry, never a device name, orientation or global screen size.
@@ -53,7 +60,7 @@ public struct ConversationPanePlan: Equatable, Sendable {
                 let left = CGRect(x: 0, y: 0, width: half, height: bounds.height)
                 let right = CGRect(x: half, y: 0, width: bounds.width - half, height: bounds.height)
                 return Self(mode: .sideBySide, conversation: rightToLeft ? right : left, output: rightToLeft ? left : right)
-            } else if bounds.width >= 500 {
+            } else if bounds.width >= 500, bounds.height > 240 {
                 // Keep the same axis when a keyboard reduces the available height.
                 let previewHeight = min(bounds.height * 0.45, max(0, bounds.height - 240))
                 return Self(mode: .stacked,

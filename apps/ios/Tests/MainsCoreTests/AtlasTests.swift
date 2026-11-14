@@ -1,5 +1,8 @@
 import Foundation
 import Testing
+#if canImport(ImageIO)
+import ImageIO
+#endif
 @testable import MainsCore
 
 @Suite struct AtlasTests {
@@ -35,9 +38,24 @@ import Testing
         let page = try await session.atlasPage("demo-atlas-page")
         let coverID = try #require(page.coverFileId)
         let cover = try await session.readAtlasPageCover(page.id, coverFileID: coverID)
-        #expect(cover.data != nil && cover.width <= 768 && cover.height <= 768)
+        let coverData = try #require(cover.data)
+        #expect(cover.width == 768 && cover.height == 512 && coverData.count <= 64 * 1024)
         let inline = try await session.readAtlasPageImage(page.id, fileID: "demo-atlas-image", version: page.version)
-        #expect(inline.data != nil && inline.pageVersion == page.version && page.inlineImageIDs == ["demo-atlas-image"])
+        #expect(inline.data == coverData && inline.width == 768 && inline.height == 512
+                && inline.pageVersion == page.version && page.inlineImageIDs == ["demo-atlas-image"])
+        let file = try await session.describeAtlasFile(.saved(coverID))
+        #expect(file.name == "clouds.jpg" && file.byteSize <= 256 * 1024 && file.version == cover.version)
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("demo-atlas-clouds-" + UUID().uuidString + ".jpg")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try await session.downloadAtlasFile(file, owner: session.ownership, to: temporary)
+        #if canImport(ImageIO)
+        let originalSource = try #require(CGImageSourceCreateWithURL(temporary as CFURL, nil))
+        let original = try #require(CGImageSourceCopyPropertiesAtIndex(originalSource, 0, nil) as? [CFString: Any])
+        #expect(original[kCGImagePropertyPixelWidth] as? Int == 1536 && original[kCGImagePropertyPixelHeight] as? Int == 1024)
+        let coverSource = try #require(CGImageSourceCreateWithData(coverData as CFData, nil))
+        let coverProperties = try #require(CGImageSourceCopyPropertiesAtIndex(coverSource, 0, nil) as? [CFString: Any])
+        #expect(coverProperties[kCGImagePropertyPixelWidth] as? Int == cover.width && coverProperties[kCGImagePropertyPixelHeight] as? Int == cover.height)
+        #endif
         await #expect(throws: MainsError.self) { try await session.readAtlasPageImage(page.id, fileID: "wrong-image", version: page.version) }
         await #expect(throws: MainsError.self) { try await session.readAtlasPageCover(page.id, coverFileID: "wrong-cover") }
         #expect(session.viewingRunID == nil && session.transcript.rows.isEmpty && session.selectedSpaceID == space && storage.snapshot == nil)
@@ -47,7 +65,99 @@ import Testing
         let value: JSONValue = .object(["id": .string("old-page"), "title": .string("Notes"), "version": .number(1),
             "icon": .null, "markdown": .string("Content"), "offset": .number(0), "nextOffset": .null, "sourceRunId": .null])
         let page = try value.decode(AtlasPageContent.self)
-        #expect(page.coverFileId == nil && page.icon == nil && page.title == "Notes")
+        #expect(page.coverFileId == nil && page.icon == nil && page.title == "Notes" && page.organization == nil)
+    }
+
+    @Test @MainActor func pageActionsExportTheFullMarkdownAndOrganizeTheSameSavedPage() async throws {
+        let storage = MemoryStorage(), backend = try DemoBackend()
+        let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        let page = try await session.atlasPage("demo-atlas-page")
+        let project = try #require(session.collections.first?.id)
+        #expect(page.organization != nil && page.organizationEntry.savedIdentity == page.id)
+        _ = try await session.moveAtlasItem(page.organizationEntry, to: nil, owner: session.ownership)
+        #expect(try await session.atlasPage(page.id).organization?.collectionId == nil)
+        _ = try await session.moveAtlasItem(page.organizationEntry, to: project, owner: session.ownership)
+        let moved = try await session.atlasPage(page.id)
+        #expect(moved.organizationEntry.savedProjectID == project)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".md")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await session.exportAtlasPageMarkdown(moved, owner: session.ownership, to: url)
+        #expect(try String(contentsOf: url, encoding: .utf8) == moved.markdown)
+        #expect(page.exportFileName == "Explore Atlas.md" && session.viewingRunID == nil && storage.snapshot == nil)
+        _ = try await session.trashAtlasItem(moved.organizationEntry, owner: session.ownership)
+        await #expect(throws: MainsError.self) { try await session.atlasPage(page.id) }
+        #expect(try await session.atlasTrash().items.contains { $0.id == page.id })
+    }
+
+    @Test @MainActor func markdownExportJoinsScalarSafePartsWithoutAddingOrDroppingContent() async throws {
+        let first = String(repeating: "x", count: 16_383) + "😀", last = "İstanbul 🌍\n\n[File](atlas-file://sample)"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        var offsets: [Int] = []
+        try await AtlasPageMarkdownExport.save(id: "page", version: 3, to: url, validate: {}) { offset in
+            offsets.append(offset)
+            return AtlasPageContent(id: "page", title: "Notes", icon: nil, version: 3, coverFileId: nil,
+                markdown: offset == 0 ? first : last, offset: offset, nextOffset: offset == 0 ? 16_384 : nil, sourceRunId: nil)
+        }
+        let exported = try String(contentsOf: url, encoding: .utf8)
+        #expect(offsets == [0, 16_384] && exported == first + last)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
+
+    @Test(arguments: ["version", "identity", "offset", "cursor", "owner", "cancel"]) @MainActor
+    func invalidOrRetiredMarkdownExportsRemovePartialFiles(fault: String) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        var current = true
+        let task = Task {
+            try await AtlasPageMarkdownExport.save(id: "page", version: 1, to: url, validate: {
+                if !current { throw MainsError.changedBackend }
+            }) { offset in
+                if offset > 0, fault == "owner" { current = false }
+                if offset > 0, fault == "cancel" { withUnsafeCurrentTask { $0?.cancel() } }
+                return AtlasPageContent(id: offset > 0 && fault == "identity" ? "foreign" : "page", title: "Notes", icon: nil,
+                    version: offset > 0 && fault == "version" ? 2 : 1, coverFileId: nil, markdown: "x",
+                    offset: offset > 0 && fault == "offset" ? 0 : offset,
+                    nextOffset: offset == 0 ? 1 : fault == "cursor" ? offset : nil, sourceRunId: nil)
+            }
+        }
+        await #expect(throws: (any Error).self) { try await task.value }
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test(arguments: ["bytes", "parts", "partLength"]) @MainActor func markdownExportsEnforceReadAndByteBounds(fault: String) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        var reads = 0
+        await #expect(throws: MainsError.self) {
+            try await AtlasPageMarkdownExport.save(id: "page", version: 1, to: url, validate: {}) { offset in
+                reads += 1
+                let text = fault == "parts" ? "x" : String(repeating: fault == "bytes" ? "😀" : "x", count: fault == "bytes" ? 16_384 : 16_385)
+                return AtlasPageContent(id: "page", title: "Notes", icon: nil, version: 1, coverFileId: nil,
+                    markdown: text, offset: offset, nextOffset: offset + text.unicodeScalars.count, sourceRunId: nil)
+            }
+        }
+        #expect(reads <= 128 && !FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test @MainActor func markdownExportNeverOverwritesAnExistingFile() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data("Keep me".utf8).write(to: url)
+        var reads = 0
+        await #expect(throws: (any Error).self) {
+            try await AtlasPageMarkdownExport.save(id: "page", version: 1, to: url, validate: {}) { offset in
+                reads += 1
+                return AtlasPageContent(id: "page", title: "Notes", icon: nil, version: 1, coverFileId: nil,
+                    markdown: "New content", offset: offset, nextOffset: nil, sourceRunId: nil)
+            }
+        }
+        let original = try String(contentsOf: url, encoding: .utf8)
+        #expect(reads == 0 && original == "Keep me")
     }
 
     @Test(arguments: ["page", "cover", "size", "bytes", "mime", "version"]) @MainActor func malformedPageCoversAreRejected(field: String) async throws {
@@ -81,7 +191,7 @@ import Testing
         #expect(rows.first { $0.key == "demo-atlas-doc" }?.mimeType == "application/pdf")
         let reference = try #require(rows.first { $0.kind == "image" }?.file)
         let thumbnail = try await session.readAtlasImage(reference)
-        #expect(thumbnail.width == 128 && thumbnail.height == 85)
+        #expect(thumbnail.width == 128 && thumbnail.height == 86)
         #expect(try #require(thumbnail.data).count <= 131_072)
         await #expect(throws: MainsError.self) { try await session.readAtlasImage(.saved("demo-atlas-doc")) }
         #expect(session.viewingRunID == nil && session.transcript.rows.isEmpty && storage.snapshot == nil)

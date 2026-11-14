@@ -89,6 +89,7 @@ struct AtlasMoveSelection: Identifiable {
     let id = UUID()
     let entry: AtlasEntry
     let owner: Int
+    var projectKnown = true
 }
 
 struct MoveAtlasItemView: View {
@@ -122,7 +123,7 @@ struct MoveAtlasItemView: View {
         .onChange(of: session.ownership) { _, _ in dismiss() }
     }
     private func destination(_ title: String, id: String?) -> some View {
-        let selected = selection.entry.savedProjectID == id
+        let selected = selection.projectKnown && selection.entry.savedProjectID == id
         return Button {
             saving = true; error = nil
             Task {

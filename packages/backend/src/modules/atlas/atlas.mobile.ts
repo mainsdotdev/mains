@@ -246,6 +246,7 @@ export const atlasMobile = {
     const end = Math.min(offset + 16_384, scalars.length);
     const cover = page.item.metadata?.coverFileId ? atlasService.get({ accountId, id: page.item.metadata.coverFileId }) : null;
     return { id: page.item.id, title: page.item.title, icon: page.item.metadata?.icon ?? null, version: page.item.version,
+      organization: { collectionId: page.item.collectionId },
       coverFileId: cover?.kind === "image" && !cover.trashedAt ? cover.id : null,
       markdown: scalars.slice(offset, end).join(""), offset, nextOffset: end < scalars.length ? end : null,
       sourceRunId: page.item.sourceRunId };

@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.iOS("26.0"), .macOS(.v14)],
     products: [.library(name: "MainsCore", targets: ["MainsCore"])],
     targets: [
-        .target(name: "MainsCore", resources: [.copy("Resources/DemoSnapshot.json")]),
+        .target(name: "MainsCore", resources: [.copy("Resources/DemoSnapshot.json"), .copy("Resources/DemoMedia")]),
         .testTarget(name: "MainsCoreTests", dependencies: ["MainsCore"]),
     ]
 )

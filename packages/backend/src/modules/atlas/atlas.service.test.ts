@@ -806,6 +806,11 @@ describe("Atlas phone library", { timeout: 15000 }, () => {
     expect(first.markdown.endsWith("😀")).toBe(true); expect(first.nextOffset).toBe(16_384);
     const second = atlasMobile.readPage({ accountId: "default", id: page.item.id, offset: first.nextOffset!, version: first.version });
     expect(first.markdown + second.markdown).toBe(markdown); expect(second.nextOffset).toBeNull();
+    expect(first.organization).toEqual({ collectionId: null });
+    db.insert(collections).values({ id: "page-project", accountId: "default", name: "Research" }).run();
+    await atlasMobile.updateItem({ accountId: "default", id: page.item.id, collectionId: "page-project" });
+    expect(atlasMobile.readPage({ accountId: "default", id: page.item.id, version: first.version }).organization)
+      .toEqual({ collectionId: "page-project" });
     expect(() => atlasMobile.readPage({ accountId: "default", id: page.item.id, offset: 16_384 })).toThrow("position");
     expect(() => atlasMobile.readPage({ accountId: "default", id: page.item.id, version: 2 })).toThrow("changed");
     expect(() => atlasMobile.readPage({ accountId: "other", id: page.item.id })).toThrow("not found");

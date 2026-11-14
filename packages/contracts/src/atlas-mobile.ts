@@ -42,6 +42,8 @@ export interface AtlasMobilePage {
   id: string; title: string; icon: string | null; version: number;
   /** Optional on older computers. A stored image identity, never a host path. */
   coverFileId?: string | null;
+  /** Fresh project membership; absent on older computers. */
+  organization?: { collectionId: string | null };
   markdown: string; offset: number; nextOffset: number | null;
   sourceRunId: string | null;
 }

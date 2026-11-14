@@ -23,7 +23,7 @@ final class DemoBackend {
     private var spaces: [[String: JSONValue]]
     private var images: [Int: JSONValue] = [:]
     private var attachments: [String: DemoFile] = [:]
-    private let atlas = DemoAtlas()
+    private let atlas: DemoAtlas
     private var attachmentBytes = 0
     private var nextID = 10_000_000
     private let stepDelay: Duration
@@ -70,6 +70,7 @@ final class DemoBackend {
     }
 
     init(stepDelay: Duration = .milliseconds(450), streamDelay: Duration = .milliseconds(35), decisionLifetime: TimeInterval = 300) throws {
+        atlas = try DemoAtlas()
         #if SWIFT_PACKAGE
         let bundle = Bundle.module
         #else

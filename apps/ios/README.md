@@ -260,6 +260,11 @@ underlying tooling.
 
 ## Current scope
 
+- Demo Atlas bundles the supplied cloud artwork as a 1536 × 1024 JPEG for
+  full-screen previews/export, a separate 768 × 512 Page cover/inline image and
+  a 128 × 86 library thumbnail. All three images together are about 165 KiB;
+  they load offline from `Sources/MainsCore/Resources/DemoMedia`. Covers never
+  upscale the library thumbnail. Both the Swift package and app ship the folder.
 - The conversation workspace adapts to local window size and iPhone Duo folds.
   With regular width, existing outputs open beside the chat; taller windows put
   the output above the chat. On iOS 27.1+, active division regions keep the
@@ -278,6 +283,16 @@ underlying tooling.
   downloads. Home pins a collapsible sidebar when space permits, while chat keeps
   that space for its output. All app profiles support portrait and both landscape
   directions. Demo uses its prepared PDF/Markdown outputs for the same workflow.
+- Page options include **Move to project**, **Export as Markdown** and **Move to Trash**.
+  Project selection reads current membership, while older computers leave every
+  destination available. Trash uses the same recoverable, receipt-backed operation
+  as the library and returns to Atlas after confirmation. Lost acknowledgements
+  keep **Check change** available without issuing another command.
+  Markdown export saves the entire displayed revision, including all numbered
+  parts, through the iOS Files picker. It preserves Markdown and Atlas file links;
+  it does not bundle embedded file bytes. Reads retain one part at a time, with
+  a 2 MiB/128-part bound; changed versions, reconnection and cancellation discard
+  partial files. Temporary exports stay protected and are removed after the picker.
 - Atlas rows show their saved item's tags. **Edit tags** in a row's long-press
   menu loads a fresh selection; choose existing tags, remove them or add a new
   name, then **Save**. Names reuse the desktop's normalization and duplicate
@@ -491,7 +506,12 @@ underlying tooling.
   Selections keep the catalogue's original model ids for settings and requests.
   Run-options lists use compact rows. Effort opens as a large floating
   control with a soft material halo confined to the component; the rest of the
-  conversation stays visible and mounted. Its position follows the live keyboard
+  conversation stays visible and mounted. The model wheel, close button and effort
+  control share a maximum width of 520 points, centered at the bottom of the chat
+  pane (or Home content area). Narrow screens use their available width. The halo
+  stays local to that component; a companion file pane remains usable. Short panes
+  allow vertical scrolling without changing the model/effort controls' reserved
+  heights, and hiding the chat dismisses its picker. Its position follows the live keyboard
   safe area, moving back down when the keyboard closes. Opening effort preserves the
   composer's keyboard focus and positions the control just above the keyboard. It grows from the composer’s model
   button, with an opacity transition for Reduce Motion. The current model sits
@@ -735,6 +755,23 @@ QR camera capture and real-device LAN/privacy prompts need physical-device QA.
 Keyboard tests require the software keyboard to be visible on the QA simulator.
 In Device Hub, select that simulator and use **Device → Keyboard → Toggle Software
 Keyboard** if only the hardware-keyboard accessory bar appears.
+
+Manual Duo/adaptive workspace checks (prepared demo files work offline):
+
+- Open a conversation with outputs at regular width; check chat and file side by
+  side, and output above chat for a tabletop division.
+- Read part of a PDF or Markdown file, then narrow the window while it is focused.
+  **Show conversation** must return to the chat; **Outputs** must restore the same
+  pinned file and reading position. Close outputs explicitly to discard it.
+- Repeat while reading old messages with a draft written. Resizing must preserve
+  both, without sending, paging history or jumping to the latest message.
+- Show/hide the keyboard, use a narrow regular-width window and accessibility text.
+  Check that the active reader is usable, hidden controls are absent from VoiceOver
+  and hiding the chat releases its keyboard without losing the draft.
+- Open another file from a chat card or local link, use its options menu, and close
+  it. At compact width without a retained panel, files use the full-screen viewer.
+- Check the Home sidebar can pin/collapse on wide windows and becomes a drawer on
+  narrow ones without navigating away or reconnecting.
 
 The attachment UI test needs at least five library photos. Before running it,
 seed only your dedicated QA simulator and grant that test app library access:

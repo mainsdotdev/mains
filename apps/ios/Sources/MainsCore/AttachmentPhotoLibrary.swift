@@ -43,24 +43,29 @@ final class PreviewExportFile: Identifiable, @unchecked Sendable {
     let id = UUID()
     let url: URL
     private let directory: URL
-    init(copying source: URL) throws {
+    convenience init(copying source: URL) throws {
         let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
         guard source.isFileURL, values.isRegularFile == true, values.isSymbolicLink != true,
               let size = values.fileSize, (0...100 * 1024 * 1024).contains(size) else {
             throw MainsError.server("This file is unavailable or exceeds the 100 MB export limit.")
         }
+        try self.init(name: source.lastPathComponent)
+        do {
+            try FileManager.default.copyItem(at: source, to: url)
+            #if os(iOS)
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
+            #endif
+        } catch { try? FileManager.default.removeItem(at: directory); throw error }
+    }
+    init(name: String) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("mains-export-" + UUID().uuidString, isDirectory: true)
-        url = directory.appendingPathComponent(TranscriptMedia.fileName(source.lastPathComponent))
+        url = directory.appendingPathComponent(TranscriptMedia.fileName(name))
         do {
             var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
             #if os(iOS)
             attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
             #endif
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: attributes)
-            try FileManager.default.copyItem(at: source, to: url)
-            #if os(iOS)
-            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
-            #endif
         } catch { try? FileManager.default.removeItem(at: directory); throw error }
     }
     deinit { try? FileManager.default.removeItem(at: directory) }

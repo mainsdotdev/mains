@@ -8,38 +8,26 @@ struct ConversationWorkspace<ConversationContent: View, OutputContent: View>: Vi
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    let state: ConversationCompanionState
+    let plan: ConversationPanePlan
     let conversation: ConversationContent
     let output: OutputContent
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.layoutDirection) private var layoutDirection
 
-    init(state: ConversationCompanionState, @ViewBuilder conversation: () -> ConversationContent, @ViewBuilder output: () -> OutputContent) {
-        self.state = state; self.conversation = conversation(); self.output = output()
+    init(plan: ConversationPanePlan, @ViewBuilder conversation: () -> ConversationContent, @ViewBuilder output: () -> OutputContent) {
+        self.plan = plan; self.conversation = conversation(); self.output = output()
     }
     var body: some View {
-        GeometryReader { geometry in
-            let plan = ConversationPanePlan.make(size: geometry.size, expanded: horizontalSizeClass == .regular,
-                                                 accessibilityText: dynamicTypeSize.isAccessibilitySize, rightToLeft: layoutDirection == .rightToLeft,
-                                                 state: state, divisions: divisions(in: geometry))
-            ConversationReaderLayout(plan: plan) {
-                ZStack { conversation }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                    .environment(\.conversationPaneVisible, plan.showsConversation)
-                    .opacity(plan.showsConversation ? 1 : 0).allowsHitTesting(plan.showsConversation)
-                    .accessibilityHidden(!plan.showsConversation)
-                ZStack { output }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                    .opacity(plan.showsOutput ? 1 : 0).allowsHitTesting(plan.showsOutput)
-                    .accessibilityHidden(!plan.showsOutput)
-            }
-            .accessibilityIdentifier("conversationWorkspace-\(String(describing: plan.mode))")
+        ConversationReaderLayout(plan: plan) {
+            ZStack { conversation }
+                .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
+                .environment(\.conversationPaneVisible, plan.showsConversation)
+                .opacity(plan.showsConversation ? 1 : 0).allowsHitTesting(plan.showsConversation)
+                .accessibilityHidden(!plan.showsConversation)
+            ZStack { output }
+                .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
+                .opacity(plan.showsOutput ? 1 : 0).allowsHitTesting(plan.showsOutput)
+                .accessibilityHidden(!plan.showsOutput)
         }
-    }
-    private func divisions(in proxy: GeometryProxy) -> [CGRect] {
-        if #available(iOS 27.1, *) { return proxy.reservedRegions(kind: .division).map(\.frame) }
-        return []
+        .accessibilityIdentifier("conversationWorkspace-\(String(describing: plan.mode))")
     }
 }
 

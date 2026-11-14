@@ -91,3 +91,12 @@ import Testing
     file = nil
     #expect(!FileManager.default.fileExists(atPath: copied.path))
 }
+
+@Test @MainActor func generatedMarkdownExportsKeepTheirOwnedFileUntilThePickerReleasesIt() throws {
+    var file: PreviewExportFile? = try PreviewExportFile(name: "../Notes.md")
+    let url = try #require(file?.url)
+    try Data("# Notes\n\nPrepared Markdown".utf8).write(to: url)
+    #expect(url.lastPathComponent == "Notes.md" && FileManager.default.fileExists(atPath: url.path))
+    file = nil
+    #expect(!FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path))
+}

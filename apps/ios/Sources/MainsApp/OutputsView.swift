@@ -353,7 +353,7 @@ struct FileOptionsMenu: View {
     }
 }
 
-private struct DocumentFileExport: UIViewControllerRepresentable {
+struct DocumentFileExport: UIViewControllerRepresentable {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif

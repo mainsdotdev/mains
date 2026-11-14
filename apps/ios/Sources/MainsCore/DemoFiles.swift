@@ -1,4 +1,37 @@
 import Foundation
+import CryptoKit
+
+/// Prepared derivatives of the supplied cloud artwork. Never scale a list
+/// thumbnail up into a Page cover or export it in place of the full demo image.
+struct DemoAtlasMedia: Sendable {
+    let file: DemoFile
+    let cover: JSONValue
+    let thumbnail: JSONValue
+
+    init() throws {
+        #if SWIFT_PACKAGE
+        let bundle = Bundle.module
+        #else
+        let bundle = Bundle.main
+        #endif
+        func bytes(_ name: String, limit: Int) throws -> Data {
+            guard let url = bundle.url(forResource: name, withExtension: "jpg", subdirectory: "DemoMedia"),
+                  let data = try? Data(contentsOf: url), data.starts(with: [0xff, 0xd8]), data.count <= limit else {
+                throw MainsError.server("The demo sample images are missing or invalid.")
+            }
+            return data
+        }
+        func preview(_ data: Data, width: Int, height: Int) -> JSONValue {
+            .object(["mime": .string("image/jpeg"), "width": .number(Double(width)), "height": .number(Double(height)),
+                     "base64": .string(data.base64EncodedString())])
+        }
+        let original = try bytes("atlas-clouds", limit: 256 * 1024)
+        let version = SHA256.hash(data: original).map { String(format: "%02x", $0) }.joined()
+        file = DemoFile(name: "clouds.jpg", mime: "image/jpeg", preview: "image", bytes: original, version: version)
+        cover = preview(try bytes("atlas-clouds-cover", limit: 64 * 1024), width: 768, height: 512)
+        thumbnail = preview(try bytes("atlas-clouds-thumbnail", limit: 16 * 1024), width: 128, height: 86)
+    }
+}
 
 /// Bundled bytes and explicitly imported demo attachments, never host file paths.
 struct DemoFile: Sendable {

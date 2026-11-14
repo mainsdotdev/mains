@@ -1,8 +1,8 @@
 import SwiftUI
 
 extension View {
-    func effortOverlay(isPresented: Binding<Bool>, session: BackendSession, context: ComposerContext?) -> some View {
-        modifier(EffortOverlayModifier(isPresented: isPresented, session: session, context: context))
+    func effortOverlay(isPresented: Binding<Bool>, session: BackendSession, context: ComposerContext?, withinPane: Bool = false) -> some View {
+        modifier(EffortOverlayModifier(isPresented: isPresented, session: session, context: context, withinPane: withinPane))
     }
 }
 
@@ -21,16 +21,21 @@ private struct EffortOverlayModifier: ViewModifier {
     @Binding var isPresented: Bool
     let session: BackendSession
     let context: ComposerContext?
+    let withinPane: Bool
     @State private var sourceFrame = CGRect.zero
+    @Environment(\.conversationPaneVisible) private var paneVisible
     func body(content: Content) -> some View {
         content
             .onPreferenceChange(EffortSourceFrameKey.self) { sourceFrame = $0 }
+            .onChange(of: paneVisible) { _, visible in
+                if withinPane && !visible { isPresented = false }
+            }
             .overlay {
                 if isPresented, let context {
                     EffortOverlayView(session: session, context: context, sourceFrame: sourceFrame,
                         currentSourceFrame: { sourceFrame }, close: { isPresented = false })
                         .id("\(session.ownership):\(context.providerId):\(context.spaceID ?? ""):\(context.runID ?? "")")
-                        .ignoresSafeArea(.container)
+                        .ignoresSafeArea(withinPane ? [] : .container)
                         .accessibilityElement(children: .contain)
                         .accessibilityAddTraits(.isModal)
                 }
@@ -100,19 +105,28 @@ private struct EffortOverlayView: View {
     }
     var body: some View {
         GeometryReader { geometry in
+            let panelWidth = min(520, geometry.size.width)
+            let availableHeight = max(1, geometry.size.height - 36)
+            let panelHeight = min(panelSize.height, availableHeight)
             let center = CGPoint(x: geometry.size.width / 2,
-                                 y: max(panelSize.height / 2 + 24, geometry.size.height - 12 - panelSize.height / 2))
+                                 y: max(panelHeight / 2 + 24, geometry.size.height - 12 - panelHeight / 2))
             let frame = geometry.frame(in: .global)
             let target = closing ? returnFrame : sourceFrame
             let origin = target.isEmpty ? CGPoint(x: center.x, y: center.y + 60)
                 : CGPoint(x: target.midX - frame.minX, y: target.midY - frame.minY)
-            let initialScale = target.isEmpty ? 0.3 : min(0.8, max(0.18, target.width / max(1, geometry.size.width)))
+            let initialScale = target.isEmpty ? 0.3 : min(0.8, max(0.18, target.width / max(1, panelWidth)))
             ZStack {
-                Color.clear.contentShape(.rect).ignoresSafeArea(.container)
+                Color.clear.contentShape(.rect)
                     .onTapGesture(perform: requestClose).accessibilityHidden(true)
-                controls
-                    .frame(width: geometry.size.width)
-                    .onGeometryChange(for: CGSize.self) { $0.size } action: { panelSize = $0 }
+                ScrollView(.vertical) {
+                    controls
+                        .frame(width: panelWidth)
+                        .onGeometryChange(for: CGSize.self) { $0.size } action: { panelSize = $0 }
+                }
+                    .scrollIndicators(.hidden)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollDismissesKeyboard(.never)
+                    .frame(width: panelWidth, height: panelSize.height > 0 ? panelHeight : availableHeight)
                     .background(alignment: .center) {
                         Group {
                             if reduceTransparency { RoundedRectangle(cornerRadius: 36).fill(backdropColor).padding(.horizontal, 16) }

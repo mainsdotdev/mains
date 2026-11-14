@@ -55,6 +55,9 @@ voice_previews.last_known_file_type = 'folder'
 app.resources_build_phase.add_file_reference(voice_previews) if voice_enabled
 demo = project.main_group.new_file('Sources/MainsCore/Resources/DemoSnapshot.json')
 app.resources_build_phase.add_file_reference(demo)
+demo_media = project.main_group.new_file('Sources/MainsCore/Resources/DemoMedia')
+demo_media.last_known_file_type = 'folder'
+app.resources_build_phase.add_file_reference(demo_media)
 project.main_group.new_file('Info.plist')
 project.main_group.new_file('Info.Debug.plist')
 project.main_group.new_file('Info.Voice.plist')

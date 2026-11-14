@@ -2,11 +2,14 @@ import Foundation
 import CryptoKit
 
 @MainActor final class DemoAtlas {
+    private let media: DemoAtlasMedia
     private var saved: [String: JSONValue] = [:]
     private var storedFiles: [String: DemoFile] = [:]
     private var sources: [String: String] = [:]
     private var edits: [String: [String: JSONValue]] = [:]
     private var tagNames = ["demo-tag-research": "Research", "demo-tag-work": "Work"]
+
+    init() throws { media = try DemoAtlasMedia() }
 
     private func tagsDocument(_ row: JSONValue, account: JSONValue) throws -> JSONValue {
         let tags = row["tags"].array.sorted { ($0["id"].string ?? "") < ($1["id"].string ?? "") }
@@ -47,8 +50,8 @@ import CryptoKit
 
     func answer(_ channel: String, input: JSONValue, runID: String, collectionID: String?, image: JSONValue) throws -> JSONValue {
         let source = String(repeating: "a", count: 64)
-        let imageFile = DemoFile(name: "sample-image.jpg", mime: image["mime"].string ?? "image/jpeg", preview: "image",
-                                 bytes: Data(base64Encoded: image["base64"].string ?? "") ?? Data(), version: String(repeating: "3", count: 64))
+        let imageFile = media.file
+        let legacyImageBytes = Data(base64Encoded: image["base64"].string ?? "")
         let files = ["demo-atlas-doc": DemoFile.pdf, "demo-atlas-image": imageFile, "demo-atlas-generated": DemoFile.notes,
                      "demo-atlas-page-file": DemoFile.notes]
         func entry(_ id: String, kind: String, title: String, favorite: Bool = false, generated: Bool = false) -> JSONValue {
@@ -220,6 +223,7 @@ import CryptoKit
             let markdown = "# Your library, on iPhone\n\nAtlas brings **Pages, documents, images and bookmarks** together.\n\n![Sample image](atlas-file://demo-atlas-image)\n\n- Search your library\n- Filter by project or favorites\n- Preview and share a file\n\n[Open the sample report](atlas-file://demo-atlas-doc)\n\n[Open the page attachment](atlas-file://demo-atlas-page-file)\n\nEverything here is prepared sample data. No computer or AI service was contacted."
             guard input["offset"].number == nil || input["offset"].number == 0 else { throw MainsError.invalidReply }
             return .object(["id": .string("demo-atlas-page"), "title": .string("Explore Atlas"), "icon": .string("emoji:🗺️"), "version": .number(1),
+                            "organization": .object(["collectionId": edits["demo-atlas-page"]?["collectionId"] ?? collectionID.map(JSONValue.string) ?? .null]),
                             "coverFileId": edits["demo-atlas-image"]?["trashedAt"]?.string == nil ? .string("demo-atlas-image") : .null,
                             "markdown": .string(markdown), "offset": .number(0), "nextOffset": .null, "sourceRunId": .string(runID)])
         case "atlas:readMobilePageCover":
@@ -227,7 +231,7 @@ import CryptoKit
                   edits["demo-atlas-page"]?["trashedAt"]?.string == nil, edits["demo-atlas-image"]?["trashedAt"]?.string == nil else {
                 throw MainsError.server("Page cover changed or is unavailable")
             }
-            var cover = DemoFile.atlasThumbnail.objectValue
+            var cover = media.cover.objectValue
             cover.removeValue(forKey: "reference"); cover["pageId"] = .string("demo-atlas-page")
             cover["coverFileId"] = .string("demo-atlas-image"); cover["version"] = .string(imageFile.version)
             return .object(cover)
@@ -236,7 +240,7 @@ import CryptoKit
                   edits["demo-atlas-page"]?["trashedAt"]?.string == nil, edits["demo-atlas-image"]?["trashedAt"]?.string == nil else {
                 throw MainsError.server("Page image changed or is unavailable")
             }
-            var preview = DemoFile.atlasThumbnail.objectValue
+            var preview = media.cover.objectValue
             preview.removeValue(forKey: "reference"); preview["pageId"] = .string("demo-atlas-page")
             preview["fileId"] = .string("demo-atlas-image"); preview["pageVersion"] = .number(1)
             preview["version"] = .string(imageFile.version)
@@ -246,14 +250,14 @@ import CryptoKit
             let id = reference["itemId"].string ?? (reference["runId"].string == runID && reference["sourceKey"].string == source ? "demo-atlas-generated" : "")
             guard edits[id]?["trashedAt"]?.string == nil else { throw MainsError.server("Atlas file not found or in Trash") }
             if channel == "atlas:readMobileImage", id == "demo-atlas-bookmark" {
-                var thumbnail = DemoFile.atlasThumbnail.objectValue
+                var thumbnail = media.thumbnail.objectValue
                 thumbnail["reference"] = reference; thumbnail["version"] = .string(imageFile.version)
                 return .object(thumbnail)
             }
             guard let file = files[id] ?? storedFiles[id] else { throw MainsError.server("Demo Atlas file not found.") }
             if channel == "atlas:readMobileImage" {
-                guard file.preview == "image", file.bytes == imageFile.bytes else { throw MainsError.server("No prepared thumbnail for this demo file.") }
-                var thumbnail = DemoFile.atlasThumbnail.objectValue
+                guard file.preview == "image", file.bytes == imageFile.bytes || file.bytes == legacyImageBytes else { throw MainsError.server("No prepared thumbnail for this demo file.") }
+                var thumbnail = (file.bytes == imageFile.bytes ? media.thumbnail : DemoFile.atlasThumbnail).objectValue
                 thumbnail["reference"] = reference; thumbnail["version"] = .string(file.version)
                 return .object(thumbnail)
             }

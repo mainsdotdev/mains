@@ -213,6 +213,20 @@ class ReleaseTest < Minitest::Test
     assert_equal false, config[:skip_certificate_verification]
   end
 
+  def test_demo_cloud_images_are_shipped_with_bounded_file_sizes
+    project = Xcodeproj::Project.open(File.join(MainsRelease::ROOT, 'Mains.xcodeproj'))
+    app = project.targets.find { |target| target.name == 'Mains' }
+    reference = app.resources_build_phase.files_references.find { |file| file.path == 'Sources/MainsCore/Resources/DemoMedia' }
+    refute_nil reference
+    assert_equal 'folder', reference.last_known_file_type
+    { 'atlas-clouds.jpg' => 256 * 1024, 'atlas-clouds-cover.jpg' => 64 * 1024, 'atlas-clouds-thumbnail.jpg' => 16 * 1024 }.each do |name, limit|
+      file = File.join(reference.real_path, name)
+      assert File.file?(file), "Missing demo image: #{name}"
+      assert_operator File.size(file), :<=, limit
+      assert_equal "\xFF\xD8".b, File.binread(file, 2)
+    end
+  end
+
   def test_privacy_manifest_is_a_shipped_resource_with_required_api_reasons
     project = Xcodeproj::Project.open(File.join(MainsRelease::ROOT, 'Mains.xcodeproj'))
     app = project.targets.find { |target| target.name == 'Mains' }

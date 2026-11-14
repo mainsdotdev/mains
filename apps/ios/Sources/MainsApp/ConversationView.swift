@@ -36,6 +36,7 @@ struct ConversationView: View {
     @State private var outputsSheet = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.layoutDirection) private var layoutDirection
     private var expandedWorkspace: Bool { horizontalSizeClass == .regular && !dynamicTypeSize.isAccessibilitySize }
     @State private var outputPresence: (owner: Int, runID: String, available: Bool)?
     @State private var selectedFile: TurnFileSelection?
@@ -101,8 +102,25 @@ struct ConversationView: View {
     }
 
     var body: some View {
+        GeometryReader { geometry in workspace(in: geometry) }
+    }
+
+    private func workspace(in geometry: GeometryProxy) -> some View {
+        let divisions: [CGRect]
+        if #available(iOS 27.1, *) { divisions = geometry.reservedRegions(kind: .division).map(\.frame) }
+        else { divisions = [] }
+        // Use the same geometry for reader placement, automatic opening and actions.
+        // A regular size class can still be too narrow for two usable readers.
+        var openState = companion
+        openState.open()
+        let available = ConversationPanePlan.make(size: geometry.size, expanded: expandedWorkspace,
+            rightToLeft: layoutDirection == .rightToLeft, state: openState, divisions: divisions)
+        let twoReaders = available.showsConversation && available.showsOutput
+        let plan = ConversationPanePlan.make(size: geometry.size, expanded: expandedWorkspace,
+            rightToLeft: layoutDirection == .rightToLeft, state: companion, divisions: divisions)
+        let action = companion.outputsAction(twoReaders: twoReaders)
         let displayedOutputID = outputSelection?.id
-        ConversationWorkspace(state: companion) {
+        return ConversationWorkspace(plan: plan) {
             conversationContent.simultaneousGesture(TapGesture().onEnded {
                 if outputSelection?.id == displayedOutputID { companion.focusConversation() }
             })
@@ -118,9 +136,6 @@ struct ConversationView: View {
         .navigationTitle(focusedVoice || showsConnectionPill ? "" : run?.displayTitle ?? "Conversation")
         .toolbarRole(.editor)
         .toolbar(.visible, for: .navigationBar)
-        .toolbar {
-            conversationToolbar
-        }
         .task(id: historyEntry) {
             owner = session.ownership
             if initialCursor != nil, initializedHistoryEntry != historyEntry {
@@ -144,8 +159,6 @@ struct ConversationView: View {
         .task(id: "\(run?.providerId ?? ""):\(session.isConnected)") {
             if let run { await session.loadModels(run.providerId, force: true) }
         }
-        .onChange(of: expandedWorkspace, initial: true) { _, _ in adaptCompanion() }
-        .onChange(of: hasOutputs) { _, _ in adaptCompanion() }
         .onChange(of: draft.text) { _, _ in companion.focusConversation() }
         .onChange(of: focusedVoice) { _, focused in if focused { companion.close(); outputSelection = nil } }
         .onChange(of: session.ownership) { _, _ in companion.close(); outputSelection = nil; outputsSheet = false }
@@ -174,27 +187,32 @@ struct ConversationView: View {
         .sheet(item: $content) { reference in
             NavigationStack { FullMessageView(session: session, artifactID: reference.id) }
         }
-        .effortOverlay(isPresented: $modelSheet, session: session, context: run.map { ComposerContext(run: $0) })
         .sheet(isPresented: $optionsSheet) { if let run { RunOptionsSheet(session: session, context: ComposerContext(run: run)) } }
         .sheet(isPresented: $outputsSheet) { OutputsView(session: session, runID: runID) }
         .sheet(item: $selectedAgent) { SubagentDetailSheet(session: session, selection: $0) }
         .onChange(of: agents.isEmpty) { _, empty in if empty { agentsExpanded = false } }
         .sensoryFeedback(.impact(weight: .light), trigger: acceptedCount)
         .runFileLinks(session: session, runID: runID)
+        .toolbar { conversationToolbar(outputsAction: action) }
+        .onChange(of: twoReaders, initial: true) { _, _ in adaptCompanion(twoReaders: twoReaders) }
+        .onChange(of: hasOutputs) { _, _ in adaptCompanion(twoReaders: twoReaders) }
         .environment(\.openConversationOutput, OpenConversationOutputAction { requestedRun, source in
-            guard expandedWorkspace, requestedRun == runID, owner == session.ownership, session.viewingRunID == runID else { return false }
+            guard twoReaders || companion.isOpen, requestedRun == runID, owner == session.ownership, session.viewingRunID == runID else { return false }
             outputSelection = ConversationOutputSelection(source: source, owner: session.ownership)
             companion.open()
             return true
         })
     }
 
-    private func adaptCompanion() { if !focusedVoice { companion.adapt(expanded: expandedWorkspace, hasOutputs: hasOutputs) } }
-    private func toggleCompanion() {
-        if !expandedWorkspace { outputsSheet = true }
-        else if companion.isOpen { companion.close(); outputSelection = nil }
-        else if companion.isOpen && companion.focus == .output { companion.focusConversation() }
-        else { companion.open() }
+    private func adaptCompanion(twoReaders: Bool) { if !focusedVoice { companion.adapt(expanded: twoReaders, hasOutputs: hasOutputs) } }
+    private func performOutputsAction(_ action: ConversationCompanionState.OutputsAction) {
+        switch action {
+        case .browse: outputsSheet = true
+        case .open: companion.open()
+        case .close: companion.close(); outputSelection = nil
+        case .showConversation: companion.focusConversation()
+        case .showOutput: companion.focusOutput()
+        }
     }
 
     private var conversationContent: some View {
@@ -217,9 +235,10 @@ struct ConversationView: View {
         }
         .background(Color(.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
+        .effortOverlay(isPresented: $modelSheet, session: session, context: run.map { ComposerContext(run: $0) }, withinPane: true)
     }
 
-    @ToolbarContentBuilder private var conversationToolbar: some ToolbarContent {
+    @ToolbarContentBuilder private func conversationToolbar(outputsAction: ConversationCompanionState.OutputsAction) -> some ToolbarContent {
             if showsConnectionPill {
                 ToolbarItem(placement: .principal) {
                     ConnectionPill(session: session, action: openComputer)
@@ -238,8 +257,8 @@ struct ConversationView: View {
                 if ownsVoice { VoicePresentationMenu() }
                 #endif
                 if (hasOutputs || companion.isOpen) && !focusedVoice {
-                    Button(companion.isOpen && !expandedWorkspace && companion.focus == .output ? "Show conversation" : "Outputs",
-                           systemImage: companion.isOpen && !expandedWorkspace && companion.focus == .output ? "bubble.left" : "doc.on.doc", action: toggleCompanion)
+                    Button(outputsAction == .showConversation ? "Show conversation" : "Outputs",
+                           systemImage: outputsAction == .showConversation ? "bubble.left" : "doc.on.doc") { performOutputsAction(outputsAction) }
                         .accessibilityIdentifier("conversationOutputs")
                 }
                 if !focusedVoice {

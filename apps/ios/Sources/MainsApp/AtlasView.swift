@@ -433,8 +433,22 @@ struct AtlasPageView: View {
     @State private var error: String?
     @State private var reload = 0
     @State private var file: AtlasFileSelection?
+    @State private var pageOwner: Int?
+    @State private var moveSelection: AtlasMoveSelection?
+    @State private var confirmingTrash = false
+    @State private var working = false
+    @State private var exporting = false
+    @State private var actionError: String?
+    @State private var awaitingTrashID: String?
+    @State private var exportFile: PreviewExportFile?
+    @State private var exportTask: Task<Void, Never>?
+    @State private var operation = UUID()
+    @State private var visible = true
+    @Environment(\.dismiss) private var dismiss
     @ScaledMetric(relativeTo: .largeTitle) private var iconSize: CGFloat = 64
     private var key: String { "\(pageID):\(offset):\(reload):\(session.ownership):\(session.connection)" }
+    private var canRead: Bool { content != nil && error == nil && pageOwner == session.ownership && session.isConnected && !working && !exporting }
+    private var canManage: Bool { canRead && session.canSaveToAtlas }
     var body: some View {
         GeometryReader { geometry in
           ScrollView {
@@ -475,11 +489,33 @@ struct AtlasPageView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {} label: { Image(systemName: "ellipsis") }
-                    .disabled(true).accessibilityLabel("Page options").accessibilityIdentifier("atlasPageOptions")
+                Menu {
+                    Button("Move to project", systemImage: "folder", action: moveToProject)
+                        .disabled(!canManage).accessibilityIdentifier("moveAtlasPage")
+                    Button("Export as Markdown", systemImage: "square.and.arrow.up", action: exportMarkdown)
+                        .disabled(!canRead).accessibilityIdentifier("exportAtlasPageMarkdown")
+                    if let pending = session.pendingAtlasSave, pending.id == awaitingTrashID, pending.status == .uncertain {
+                        Button("Check change", systemImage: "arrow.clockwise", action: checkTrash)
+                            .disabled(working || !session.isConnected).accessibilityIdentifier("checkAtlasPageTrash")
+                    }
+                    Divider()
+                    Button(role: .destructive) { confirmingTrash = true } label: {
+                        Label { Text("Move to Trash") } icon: {
+                            Image(uiImage: (UIImage(systemName: "trash") ?? UIImage())
+                                .withTintColor(.systemRed, renderingMode: .alwaysOriginal)).renderingMode(.original)
+                        }
+                    }.disabled(!canManage).accessibilityIdentifier("trashAtlasPage")
+                } label: { Label("Page options", systemImage: "ellipsis") }
+                    .menuOrder(.fixed).labelStyle(.iconOnly).buttonBorderShape(.circle)
+                    .accessibilityIdentifier("atlasPageOptions")
             }
         }
         .safeAreaInset(edge: .bottom) {
+          VStack(spacing: 0) {
+            if working || exporting {
+                HStack(spacing: 10) { ProgressView(); Text(exporting ? "Preparing Markdown…" : "Updating page…").font(.footnote).foregroundStyle(.secondary) }
+                    .padding(12).frame(maxWidth: .infinity).background(.bar)
+            }
             if !previous.isEmpty || content?.nextOffset != nil {
                 HStack {
                     Button("Previous") { if let last = previous.popLast() { offset = last } }.disabled(previous.isEmpty || content == nil)
@@ -489,6 +525,7 @@ struct AtlasPageView: View {
                     Button("Next") { if let next = content?.nextOffset { previous.append(offset); offset = next } }.disabled(content?.nextOffset == nil)
                 }.padding().background(.bar)
             }
+          }
         }
         .environment(\.openURL, OpenURLAction { url in
             if let link = AtlasLink(url) {
@@ -501,16 +538,93 @@ struct AtlasPageView: View {
             return ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
         })
         .fullScreenCover(item: $file) { AtlasFilePreview(session: session, selection: $0) }
+        .sheet(item: $moveSelection) { MoveAtlasItemView(session: session, selection: $0) }
+        .sheet(item: $exportFile) { item in DocumentFileExport(file: item, finished: { exportFile = nil }) }
+        .confirmationDialog("Move this page to Trash?", isPresented: $confirmingTrash, titleVisibility: .visible) {
+            Button("Move to Trash", role: .destructive, action: trashPage)
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("You can restore it from Atlas Trash.") }
+        .alert("Couldn’t complete action", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(actionError ?? "") }
+        .onAppear { visible = true }
+        .onDisappear { visible = false; operation = UUID(); exportTask?.cancel(); exportTask = nil; exporting = false; working = false; exportFile = nil }
+        .onChange(of: session.ownership) { _, _ in exportTask?.cancel(); exportFile = nil; moveSelection = nil; dismiss() }
+        .task(id: "\(awaitingTrashID ?? ""):\(session.atlasRevision):\(session.connection)") {
+            guard awaitingTrashID != nil, session.pendingAtlasSave == nil, let owner = pageOwner, owner == session.ownership else { return }
+            do {
+                _ = try await session.atlasPage(pageID)
+                try Task.checkCancellation()
+                if visible, owner == session.ownership { awaitingTrashID = nil }
+            } catch {
+                guard !Task.isCancelled, visible, owner == session.ownership else { return }
+                if case MainsError.server(let message) = error, ["Atlas page not found", "Atlas page not found or in Trash"].contains(message) { dismiss() }
+                else { actionError = error.localizedDescription }
+            }
+        }
         .task(id: key) {
-            content = nil; error = nil
+            content = nil; error = nil; pageOwner = nil
             let owner = session.ownership
             guard session.isConnected else { error = "Connect to your computer to read this page."; return }
             do {
                 let result = try await session.atlasPage(pageID, offset: offset, version: version)
                 try Task.checkCancellation()
                 guard owner == session.ownership else { return }
-                version = result.version; content = result
+                version = result.version; content = result; pageOwner = owner
             } catch { if !Task.isCancelled && owner == session.ownership { self.error = error.localizedDescription } }
+        }
+    }
+    private func moveToProject() {
+        guard canManage, let owner = pageOwner else { return }
+        let ticket = UUID(); operation = ticket; working = true
+        Task {
+            defer { if operation == ticket { working = false } }
+            do {
+                let current = try await session.atlasPage(pageID)
+                guard visible, operation == ticket, owner == session.ownership else { return }
+                moveSelection = AtlasMoveSelection(entry: current.organizationEntry, owner: owner, projectKnown: current.organization != nil)
+            } catch { if visible, operation == ticket, owner == session.ownership { actionError = error.localizedDescription } }
+        }
+    }
+    private func trashPage() {
+        guard canManage, let page = content, let owner = pageOwner else { return }
+        working = true
+        Task {
+            defer { if owner == session.ownership { working = false } }
+            do {
+                _ = try await session.trashAtlasItem(page.organizationEntry, owner: owner)
+                if visible, owner == session.ownership { dismiss() }
+            } catch {
+                if visible, owner == session.ownership {
+                    if let pending = session.pendingAtlasSave, pending.isTrashChange { awaitingTrashID = pending.id }
+                    actionError = error.localizedDescription
+                }
+            }
+        }
+    }
+    private func checkTrash() {
+        guard !working, pageOwner == session.ownership, let pending = session.pendingAtlasSave,
+              pending.id == awaitingTrashID, pending.status == .uncertain else { return }
+        let owner = session.ownership
+        working = true
+        Task {
+            defer { if owner == session.ownership { working = false } }
+            do { _ = try await session.checkAtlasSaveDelivery() }
+            catch { if visible, owner == session.ownership { actionError = error.localizedDescription } }
+        }
+    }
+    private func exportMarkdown() {
+        guard canRead, let page = content, let owner = pageOwner else { return }
+        let ticket = UUID(); operation = ticket; exporting = true
+        exportTask = Task {
+            defer { if operation == ticket { exporting = false; exportTask = nil } }
+            do {
+                let file = try PreviewExportFile(name: page.exportFileName)
+                try await session.exportAtlasPageMarkdown(page, owner: owner, to: file.url)
+                try Task.checkCancellation()
+                guard visible, operation == ticket, owner == session.ownership else { return }
+                exportFile = file
+            } catch { if !Task.isCancelled, visible, operation == ticket, owner == session.ownership { actionError = error.localizedDescription } }
         }
     }
     private func pageHeader(_ page: AtlasPageContent, width: CGFloat) -> some View {
