@@ -108,9 +108,12 @@ struct AppShell: View {
                     .frame(width: sidebar.contentWidth)
                     .accessibilityHidden(sidebar.blocksContent && !searchMounted)
                     .overlay {
-                        if progress > 0 && !searchMounted {
-                            Color.primary.opacity(0.08 * progress).ignoresSafeArea(edges: .vertical).allowsHitTesting(false)
-                        }
+                        // Follow the sliding state so mounting/retiring Search cannot
+                        // abruptly remove or restore the drawer's dimming layer.
+                        Color.primary.opacity(searchExpanded ? 0 : 0.08 * progress)
+                            .ignoresSafeArea(edges: .vertical)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
                     }
                     .overlay(alignment: .leading) {
                         if sidebar.blocksContent && !searchMounted {

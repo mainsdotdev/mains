@@ -33,37 +33,38 @@ struct SidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             header.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
-            if session.pairing != nil {
-                TimelineView(.periodic(from: .now, by: 15)) { clock in
-                    let live = session.workInboxIsCurrent && session.isConnected
-                    let groups = session.displayedWorkInbox.groups(now: clock.date, live: live)
-                    let waitingCount = groups.needsYou.count
-                    let runningCount = live ? groups.running.count : 0
-                    Button(action: openWorkInbox) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "bell").font(.system(size: 19)).frame(width: 22)
-                            Text("Activity").font(.body.weight(.medium))
-                            Spacer()
-                            HStack(spacing: 6) {
-                                activityBadge(waitingCount, tint: .orange)
-                                activityBadge(runningCount, tint: .blue)
-                            }
-                        }.frame(minHeight: 44).contentShape(.rect)
-                    }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openWorkInbox")
-                        .accessibilityValue([
-                            waitingCount > 0 ? "\(waitingCount) conversations need you" : nil,
-                            runningCount > 0 ? "\(runningCount) running conversations" : nil
-                        ].compactMap { $0 }.joined(separator: ", "))
-                }.padding(.horizontal, 16)
-                Button(action: openAtlas) {
-                    Label { Text("Atlas") } icon: { RegistryIcon(token: "icon:globe", size: 22, tint: .primary) }
-                        .font(.body.weight(.medium))
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
-                }.buttonStyle(ChatPressStyle()).padding(.horizontal, 16).padding(.bottom, 14)
-                    .accessibilityIdentifier("openAtlas")
-            }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    if session.pairing != nil {
+                        TimelineView(.periodic(from: .now, by: 15)) { clock in
+                            let live = session.workInboxIsCurrent && session.isConnected
+                            let groups = session.displayedWorkInbox.groups(now: clock.date, live: live)
+                            let waitingCount = groups.needsYou.count
+                            let runningCount = live ? groups.running.count : 0
+                            Button(action: openWorkInbox) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "bell").font(.system(size: 19)).frame(width: 22)
+                                    Text("Activity").font(.body.weight(.medium))
+                                    Spacer()
+                                    HStack(spacing: 6) {
+                                        activityBadge(waitingCount, tint: .orange)
+                                        activityBadge(runningCount, tint: .blue)
+                                    }
+                                }.frame(minHeight: 44).contentShape(.rect)
+                            }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openWorkInbox")
+                                .accessibilityValue([
+                                    waitingCount > 0 ? "\(waitingCount) conversations need you" : nil,
+                                    runningCount > 0 ? "\(runningCount) running conversations" : nil
+                                ].compactMap { $0 }.joined(separator: ", "))
+                        }
+                        Button(action: openAtlas) {
+                            Label { Text("Atlas") } icon: { RegistryIcon(token: "icon:globe", size: 22, tint: .primary) }
+                                .font(.body.weight(.medium))
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
+                        }.buttonStyle(ChatPressStyle())
+                            .accessibilityIdentifier("openAtlas")
+                        Divider().padding(.vertical, 16).accessibilityHidden(true)
+                    }
                     if space?.mode == "developer" {
                         sectionTitle("Workspaces")
                         if session.workspaces.isEmpty { empty("No workspaces yet.") }
