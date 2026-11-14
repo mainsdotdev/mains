@@ -148,11 +148,18 @@ import Testing
         await #expect(throws: MainsError.self) { try await session.manageConversation(id, action: .moveToProject(nil)) }
         probe.runOverrides[id] = ["isReplica": .bool(true)]
         await session.refresh()
+        // refresh() can join an already scheduled snapshot read. Wait for the
+        // requested metadata, rather than asserting against the previous row.
+        try await eventually { session.conversations.first { $0.id == id }?.isReplica == true }
         #expect(!session.canManageConversation(id, action: .delete))
         probe.runOverrides[id] = ["status": .string("running")]
         await session.refresh()
+        try await eventually { session.conversations.first { $0.id == id }?.status == "running" }
         #expect(!session.canManageConversation(id, action: .archive))
         probe.runOverrides = [:]; await session.refresh()
+        try await eventually {
+            session.conversations.contains { $0.id == id && $0.status == "succeeded" && $0.isReplica != true }
+        }
         session.setActive(false)
         #expect(!session.canManageConversation(id, action: .delete))
         #expect(probe.calls.isEmpty)

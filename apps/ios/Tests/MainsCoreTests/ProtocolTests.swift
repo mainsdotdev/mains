@@ -2,6 +2,17 @@ import Foundation
 import Testing
 @testable import MainsCore
 
+@Test func conversationTitlesMatchDesktopWhitespaceAndUntitledFallback() throws {
+    for (title, expected) in [(nil, "Untitled chat"), ("", "Untitled chat"), (" \n\t", "Untitled chat"),
+                              ("  Hallo  ", "Hallo"), ("Hey, naber", "Hey, naber"), ("🌍 İstanbul", "🌍 İstanbul")] as [(String?, String)] {
+        let run = Conversation(id: "chat", accountId: "account", providerId: "codex", mode: "work", spaceId: nil,
+            title: title, status: "succeeded", model: nil, isArchived: false, isReplica: false,
+            lastError: nil, createdAt: Date(), updatedAt: Date())
+        let decoded = try JSONValue.encode(run).decode(Conversation.self)
+        #expect(decoded.displayTitle == expected)
+    }
+}
+
 @Test func openCodeModelLabelsKeepDesktopGroupsAndOriginalSelectionIdentities() throws {
     let names = [
         ("github-copilot/raw-sonnet", "github-copilot/Claude Sonnet 5.5"),

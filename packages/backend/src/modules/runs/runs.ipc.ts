@@ -88,10 +88,11 @@ export function registerRunsIpc(): void {
     handle(() => runsService.listArchivedRuns()),
   );
 
-  ipcMain.handle(
-    CHANNELS.runs.listActive,
-    handle(() => runsService.listActiveRuns()),
-  );
+  const listActive = handle(() => runsService.listActiveRuns());
+  ipcMain.handle(CHANNELS.runs.listActive, async (ctx: IpcInvokeContext) => {
+    const result = await listActive(ctx);
+    return ctx?.deviceId && result.success ? ok(result.data.map(runForPairedDevice)) : result;
+  });
 
   ipcMain.handle(
     CHANNELS.runs.getExecutionRoot,

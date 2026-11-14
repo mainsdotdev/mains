@@ -66,7 +66,10 @@ public struct Conversation: Codable, Equatable, Identifiable, Sendable {
     public let lastError: String?
     public let createdAt: Date
     public let updatedAt: Date
-    public var displayTitle: String { title?.isEmpty == false ? title! : "New conversation" }
+    public var displayTitle: String {
+        let label = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return label.isEmpty ? "Untitled chat" : label
+    }
     public var isActive: Bool { status == "queued" || status == "running" }
     public var supportsSteering: Bool { ["codex", "claude_code"].contains(providerId) }
     public var canSteer: Bool { status == "running" && supportsSteering && isReplica != true }

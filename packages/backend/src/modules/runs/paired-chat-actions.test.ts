@@ -3,17 +3,35 @@ import { CHANNELS } from "@mains/contracts/channels";
 import { invokeHandler } from "../../ipc-kit/handler-registry";
 import { registerRunsIpc, unregisterRunsIpc } from "./runs.ipc";
 
-const service = vi.hoisted(() => ({ archiveRun: vi.fn(), deleteRun: vi.fn(), moveRunToCollection: vi.fn() }));
+const service = vi.hoisted(() => ({ archiveRun: vi.fn(), deleteRun: vi.fn(), moveRunToCollection: vi.fn(),
+  getAllRuns: vi.fn(), getRunById: vi.fn(), listActiveRuns: vi.fn() }));
 vi.mock("./runs.service", () => ({ runsService: service }));
 vi.mock("./user-decision-runtime", () => ({ openUserDecisions: vi.fn() }));
 vi.mock("./user-input-broker", () => ({ handleToolApprovalResponse: vi.fn(), listPendingApprovals: vi.fn() }));
 
-describe("paired chat actions at the real IPC seam", () => {
+describe("paired chat metadata and actions at the real IPC seam", () => {
   beforeEach(() => registerRunsIpc());
   afterEach(() => { unregisterRunsIpc(); vi.resetAllMocks(); });
-  const run = { id: "chat", accountId: "account", mode: "work", isArchived: false, collectionId: "project",
+  const run = { id: "chat", accountId: "account", mode: "work", title: "Chat", isArchived: false, collectionId: "project",
     goal: "private prompt", systemPrompt: "private policy", toolPolicySnapshot: { secret: "private" },
     configSnapshot: { credential: "private", effortLevel: "high" } };
+
+  it.each([CHANNELS.runs.getAll, CHANNELS.runs.getById, CHANNELS.runs.listActive])(
+    "uses the desktop fallback label in phone metadata from %s", async (channel) => {
+      const row = { ...run, title: null, goal: "\n Hey, naber \nprivate prompt body" };
+      const single = channel === CHANNELS.runs.getById;
+      const read = single ? service.getRunById : channel === CHANNELS.runs.getAll ? service.getAllRuns : service.listActiveRuns;
+      read.mockResolvedValue(single ? row : [row]);
+      const args = single ? ["chat"] : channel === CHANNELS.runs.getAll ? [100] : [];
+      const phone = await invokeHandler(channel, args, { deviceId: "phone" });
+      const expected = { ...row, title: "Hey, naber", goal: null, systemPrompt: null, toolPolicySnapshot: null,
+        configSnapshot: { effortLevel: "high" } };
+      expect(phone).toEqual({ success: true, data: single ? expected : [expected] });
+      const desktop = await invokeHandler(channel, args, {});
+      expect(desktop).toEqual({ success: true, data: single ? row : [row] });
+      expect(JSON.stringify(phone)).not.toContain("private");
+    },
+  );
 
   it("moves through the existing payload and projects only phone metadata", async () => {
     service.moveRunToCollection.mockResolvedValue(run);

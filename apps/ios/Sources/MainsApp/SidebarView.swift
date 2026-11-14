@@ -35,19 +35,25 @@ struct SidebarView: View {
             header.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
             if session.pairing != nil {
                 TimelineView(.periodic(from: .now, by: 15)) { clock in
-                    let count = session.displayedWorkInbox.groups(now: clock.date, live: session.workInboxIsCurrent && session.isConnected).needsYou.count
+                    let live = session.workInboxIsCurrent && session.isConnected
+                    let groups = session.displayedWorkInbox.groups(now: clock.date, live: live)
+                    let waitingCount = groups.needsYou.count
+                    let runningCount = live ? groups.running.count : 0
                     Button(action: openWorkInbox) {
                         HStack(spacing: 10) {
                             Image(systemName: "bell").font(.system(size: 19)).frame(width: 22)
                             Text("Activity").font(.body.weight(.medium))
                             Spacer()
-                            if count > 0 {
-                                Text(count, format: .number).font(.caption.weight(.semibold)).monospacedDigit()
-                                    .padding(.horizontal, 8).padding(.vertical, 3).background(.orange.opacity(0.15), in: .capsule).foregroundStyle(.orange)
+                            HStack(spacing: 6) {
+                                activityBadge(waitingCount, tint: .orange)
+                                activityBadge(runningCount, tint: .blue)
                             }
                         }.frame(minHeight: 44).contentShape(.rect)
                     }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openWorkInbox")
-                        .accessibilityValue(count > 0 ? "\(count) conversations need you" : "")
+                        .accessibilityValue([
+                            waitingCount > 0 ? "\(waitingCount) conversations need you" : nil,
+                            runningCount > 0 ? "\(runningCount) running conversations" : nil
+                        ].compactMap { $0 }.joined(separator: ", "))
                 }.padding(.horizontal, 16)
                 Button(action: openAtlas) {
                     Label { Text("Atlas") } icon: { RegistryIcon(token: "icon:globe", size: 22, tint: .primary) }
@@ -95,6 +101,14 @@ struct SidebarView: View {
         .onChange(of: space?.id) { _, _ in providersExpanded = false }
         .onChange(of: session.ownership) { _, _ in providersExpanded = false; pendingMode = nil }
         .onDisappear { providersExpanded = false }
+    }
+    @ViewBuilder private func activityBadge(_ count: Int, tint: Color) -> some View {
+        if count > 0 {
+            Text(count, format: .number).font(.caption.weight(.semibold)).monospacedDigit()
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(tint.opacity(0.15), in: .capsule).foregroundStyle(tint)
+                .fixedSize().accessibilityHidden(true)
+        }
     }
     private var header: some View {
         GeometryReader { geometry in
