@@ -75,9 +75,19 @@ struct AtlasView: View {
                                 Button("Edit tags", systemImage: "tag") {
                                     if let id = entry.savedIdentity, let owner = libraryOwner { tagEdit = AtlasTagEditSelection(itemID: id, owner: owner) }
                                 }.disabled(!canOrganize)
-                                Button("Move to Trash", systemImage: "trash", role: .destructive) { trash(entry) }.disabled(!canOrganize)
                             }
-                            if let id = entry.sourceRunId { Button("Open source chat", systemImage: "bubble.left") { openConversation(id) } }
+                            if let id = entry.sourceRunId { Button("Open chat with source", systemImage: "bubble.left") { openConversation(id) } }
+                            if entry.savedIdentity != nil {
+                                Button(role: .destructive) { trash(entry) } label: {
+                                    Label {
+                                        Text("Move to Trash")
+                                    } icon: {
+                                        Image(uiImage: (UIImage(systemName: "trash") ?? UIImage())
+                                            .withTintColor(.systemRed, renderingMode: .alwaysOriginal))
+                                            .renderingMode(.original)
+                                    }
+                                }.disabled(!canOrganize)
+                            }
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             if entry.savedIdentity != nil {
@@ -109,16 +119,17 @@ struct AtlasView: View {
             ToolbarSpacer(.flexible, placement: .bottomBar)
             ToolbarItem(placement: .bottomBar) {
                 Menu {
-                    Button("New bookmark", systemImage: "bookmark.badge.plus") { bookmarkOwner = session.ownership; addingBookmark = true }
-                        .disabled(!session.canSaveToAtlas).accessibilityIdentifier("newAtlasBookmark")
-                    Button("Trash", systemImage: "trash") { trashOwner = session.ownership; showingTrash = true }
-                        .accessibilityIdentifier("openAtlasTrash")
-                    Divider()
                     Button("Refresh", systemImage: "arrow.clockwise") { reload += 1 }
                         .disabled(loading || !session.isConnected)
+                    Button("New bookmark", systemImage: "bookmark") { bookmarkOwner = session.ownership; addingBookmark = true }
+                        .disabled(!session.canSaveToAtlas).accessibilityIdentifier("newAtlasBookmark")
+                    Divider()
+                    Button("Go to Trash", systemImage: "trash") { trashOwner = session.ownership; showingTrash = true }
+                        .accessibilityIdentifier("openAtlasTrash")
                 } label: {
                     Label("Atlas options", systemImage: "ellipsis")
                 }
+                .menuOrder(.fixed)
                 .labelStyle(.iconOnly)
                 .buttonBorderShape(.circle)
                 .accessibilityIdentifier("atlasOptions")
@@ -128,7 +139,7 @@ struct AtlasView: View {
         .task(id: loadKey) { await load() }
         .refreshable { await load() }
         .onChange(of: filter) { _, _ in query.page = 1 }
-        .sheet(item: $file) { AtlasFilePreview(session: session, selection: $0, openConversation: { id in file = nil; openConversation(id) }) }
+        .fullScreenCover(item: $file) { AtlasFilePreview(session: session, selection: $0, openConversation: { id in file = nil; openConversation(id) }) }
         .sheet(item: $bookmark) { entry in
             AtlasBookmarkView(session: session, entry: entry, owner: libraryOwner ?? session.ownership, openConversation: { id in bookmark = nil; openConversation(id) })
         }
@@ -297,6 +308,16 @@ private struct AtlasEntryRow: View {
     let entry: AtlasEntry
     let project: String?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var documentIcon: String {
+        let suffix = ((entry.fileName ?? entry.title) as NSString).pathExtension.lowercased()
+        let types = ["pdf": "pdf", "docx": "docx", "xlsx": "xlsx", "pptx": "pptx", "md": "md", "markdown": "md", "txt": "txt"]
+        let mimes = ["application/pdf": "pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+                     "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+                     "text/markdown": "md", "text/plain": "txt"]
+        let mime = entry.mimeType?.split(separator: ";").first?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+        return (types[suffix] ?? mimes[mime]).map { "atlas-document-" + $0 } ?? "atlas-file"
+    }
     private var detail: String? {
         if entry.kind == "bookmark", let host = entry.webURL?.host?.lowercased() {
             return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
@@ -322,6 +343,7 @@ private struct AtlasEntryRow: View {
                 if entry.kind == "image", let reference = entry.file {
                     AtlasListImage(session: session, reference: reference, revision: entry.date)
                 }
+                else if entry.kind == "file" { RegistryIcon(token: "icon:" + documentIcon, size: 22, tint: .secondary) }
                 else if let icon = entry.icon { RegistryIcon(token: icon, size: 22, tint: .secondary) }
                 else { RegistryIcon(token: "icon:" + (atlasTypes.first { $0.0 == entry.kind }?.2 ?? "document"), size: 22, tint: .secondary) }
             }.frame(width: 36, height: 36).accessibilityHidden(true)
@@ -430,7 +452,7 @@ struct AtlasPageView: View {
                         }
                     }
                     if let id = content.sourceRunId {
-                        Button("Open source chat", systemImage: "bubble.left") { openConversation(id) }
+                        Button("Open chat with source", systemImage: "bubble.left") { openConversation(id) }
                     }
                 } else { ProgressView("Reading page…").frame(maxWidth: .infinity) }
               }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.bottom, 24)
@@ -470,7 +492,7 @@ struct AtlasPageView: View {
             }
             return ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
         })
-        .sheet(item: $file) { AtlasFilePreview(session: session, selection: $0) }
+        .fullScreenCover(item: $file) { AtlasFilePreview(session: session, selection: $0) }
         .task(id: key) {
             content = nil; error = nil
             let owner = session.ownership
@@ -634,13 +656,26 @@ private struct AtlasBookmarkView: View {
     let owner: Int
     let openConversation: (String) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var current: AtlasBookmarkDocument?
     @State private var editing: AtlasBookmarkEditSelection?
     @State private var refresh = 0
     @State private var error: String?
+    @State private var loading = false
+    @State private var working = false
+    @State private var confirmingTrash = false
+    @State private var confirmedFavorite: Bool?
+    @State private var awaitingTrashID: String?
+    @State private var visible = true
+    @State private var readID = UUID()
+    private enum Action { case favorite, trash, check }
     private var title: String { current?.title ?? entry.title }
     private var description: String { current?.description ?? entry.description ?? "" }
     private var note: String { current?.note ?? entry.note ?? "" }
+    private var isFavorite: Bool { current?.isFavorite ?? confirmedFavorite ?? entry.isFavorite }
+    private var tags: [AtlasTag] { current?.tags ?? entry.tags ?? [] }
+    private var projectID: String? { current?.isFavorite != nil ? current?.collectionId : entry.savedProjectID }
+    private var editable: Bool { current != nil && error == nil && !loading && !working && session.canSaveToAtlas && owner == session.ownership }
     private var webURL: URL? {
         guard let current else { return entry.webURL }
         guard let url = URL(string: current.url), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return nil }
@@ -650,36 +685,165 @@ private struct AtlasBookmarkView: View {
         NavigationStack {
             List {
                 Section {
-                    Text(title).font(.title2.bold()).textSelection(.enabled)
-                    if !description.isEmpty { Text(description).textSelection(.enabled) }
-                    if let url = webURL {
-                        Link(url.host ?? url.absoluteString, destination: url)
-                        ShareLink(item: url) { Label("Share link", systemImage: "square.and.arrow.up") }
+                    if dynamicTypeSize.isAccessibilitySize {
+                        VStack(alignment: .leading, spacing: 16) { preview; heading }
+                    } else {
+                        HStack(alignment: .top, spacing: 16) { preview; heading }
+                    }
+                }.listRowSeparator(.hidden)
+                if !note.isEmpty { Section("Note") { Text(note).textSelection(.enabled) } }
+                if !tags.isEmpty {
+                    Section("Tags") {
+                        Text(tags.map { "#" + $0.name }.joined(separator: "  "))
+                            .font(.subheadline).textSelection(.enabled).accessibilityIdentifier("bookmarkTags")
                     }
                 }
-                if !note.isEmpty { Section("Notes") { Text(note).textSelection(.enabled) } }
-                if let error { Text(error).font(.footnote).foregroundStyle(.secondary) }
-                if let id = entry.sourceRunId { Button("Open source chat", systemImage: "bubble.left") { openConversation(id) } }
-            }.navigationTitle("Bookmark").navigationBarTitleDisplayMode(.inline)
+                if let project = session.collections.first(where: { $0.id == projectID }) {
+                    Section("Project") { Label(project.name, systemImage: "folder") }
+                }
+                if let url = webURL {
+                    Section("URL") {
+                        Link(destination: url) { Text(url.absoluteString).font(.subheadline).textSelection(.enabled) }
+                            .accessibilityIdentifier("bookmarkURL")
+                    }
+                }
+                Section {
+                    Button { perform(.favorite) } label: {
+                        Label(isFavorite ? "Remove from favorites" : "Add to favorites", systemImage: isFavorite ? "star.fill" : "star")
+                            .foregroundStyle(isFavorite ? Color.yellow : Color.primary)
+                    }.disabled(!editable).accessibilityIdentifier("favoriteAtlasBookmark")
+                    if let url = webURL { ShareLink(item: url) { Label("Share link", systemImage: "square.and.arrow.up") } }
+                    if let id = entry.sourceRunId { Button("Open chat with source", systemImage: "bubble.left") { openConversation(id) } }
+                    Button(role: .destructive) { confirmingTrash = true } label: {
+                        Label {
+                            Text("Move to Trash")
+                        } icon: {
+                            Image(uiImage: (UIImage(systemName: "trash") ?? UIImage()).withTintColor(.systemRed, renderingMode: .alwaysOriginal))
+                                .renderingMode(.original)
+                        }
+                    }.disabled(!editable).accessibilityIdentifier("trashAtlasBookmark")
+                }
+                if loading || working { HStack(spacing: 12) { ProgressView(); Text(working ? "Updating bookmark…" : "Loading bookmark…").foregroundStyle(.secondary) } }
+                if let error {
+                    Section {
+                        Text(error).font(.footnote).foregroundStyle(.secondary)
+                        Button("Try again") { refresh += 1 }.disabled(loading || working || !session.isConnected)
+                    }
+                }
+                if let pending = session.pendingAtlasSave, pending.status == .uncertain {
+                    Section {
+                        Text("The change hasn’t been confirmed.").foregroundStyle(.secondary)
+                        Button("Check change") { perform(.check) }.disabled(working || !session.isConnected)
+                    }
+                }
+            }.listStyle(.insetGrouped).listSectionSpacing(.compact).contentMargins(.top, 8, for: .scrollContent)
+                .navigationTitle("Bookmark").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { Button("Close", systemImage: "xmark") { dismiss() } }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Edit") { if let id = entry.savedIdentity { editing = AtlasBookmarkEditSelection(itemID: id, owner: owner) } }
-                            .disabled(!session.canSaveToAtlas || owner != session.ownership).accessibilityIdentifier("editAtlasBookmark")
+                            .disabled(!editable).accessibilityIdentifier("editAtlasBookmark")
                     }
                 }
         }
         .sheet(item: $editing) { AtlasBookmarkEditor(session: session, selection: $0, onSaved: { refresh += 1 }) }
-        .task(id: "\(session.connection):\(session.atlasRevision):\(refresh)") {
-            error = nil
-            do {
-                guard owner == session.ownership, let id = entry.savedIdentity else { throw MainsError.changedBackend }
-                let item = try await session.readAtlasBookmark(id)
-                try Task.checkCancellation(); guard owner == session.ownership else { return }
-                current = item
-            } catch { if !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription } }
+        .confirmationDialog("Move this bookmark to Trash?", isPresented: $confirmingTrash, titleVisibility: .visible) {
+            Button("Move to Trash", role: .destructive) { perform(.trash) }
         }
+        .task(id: "\(session.connection):\(session.atlasRevision):\(refresh)") { await load() }
+        .onAppear { visible = true }
+        .onDisappear { visible = false; readID = UUID() }
         .onChange(of: session.ownership) { _, _ in dismiss() }
+    }
+    private var preview: some View {
+        AtlasBookmarkImage(session: session, itemID: current?.id ?? entry.savedIdentity ?? entry.key,
+                           owner: owner, enabled: current?.hasImage == true)
+    }
+    private var heading: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.title3.weight(.semibold)).textSelection(.enabled)
+            if !description.isEmpty { Text(description).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled) }
+        }.fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func load(dismissIfMissing: Bool = false) async {
+        let ticket = UUID(); readID = ticket; loading = true; error = nil
+        defer { if readID == ticket { loading = false } }
+        do {
+            guard owner == session.ownership, let id = entry.savedIdentity else { throw MainsError.changedBackend }
+            let item = try await session.readAtlasBookmark(id)
+            try Task.checkCancellation(); guard readID == ticket, visible, owner == session.ownership else { return }
+            current = item
+        } catch {
+            if readID == ticket, !Task.isCancelled, visible, owner == session.ownership {
+                if dismissIfMissing, case MainsError.server(let message) = error, message == "Bookmark not found or in Trash" { dismiss() }
+                else { self.error = error.localizedDescription }
+            }
+        }
+    }
+    private func perform(_ action: Action) {
+        guard owner == session.ownership, !working, action == .check || editable else { return }
+        let favorite = !isFavorite
+        let checkingTrash = action == .check && awaitingTrashID != nil && awaitingTrashID == session.pendingAtlasSave?.id
+        working = true; error = nil
+        Task {
+            defer { if owner == session.ownership { working = false } }
+            do {
+                let result: AtlasSavedItem
+                switch action {
+                case .favorite: result = try await session.setAtlasFavorite(entry, to: favorite, owner: owner)
+                case .trash: result = try await session.trashAtlasItem(entry, owner: owner)
+                case .check: result = try await session.checkAtlasSaveDelivery()
+                }
+                guard visible, owner == session.ownership else { return }
+                if result.id == entry.savedIdentity, action == .trash { dismiss(); return }
+                if action == .favorite { confirmedFavorite = favorite }
+                // A recovered Trash receipt may predate a restore on another
+                // device. Re-read current membership before closing the detail.
+                await load(dismissIfMissing: checkingTrash && result.id == entry.savedIdentity)
+            } catch {
+                if visible, owner == session.ownership {
+                    if action == .trash, let pending = session.pendingAtlasSave, pending.isTrashChange { awaitingTrashID = pending.id }
+                    self.error = error.localizedDescription
+                }
+            }
+        }
+    }
+}
+
+private struct AtlasBookmarkImage: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let itemID: String
+    let owner: Int
+    let enabled: Bool
+    @State private var image: UIImage?
+    @State private var visible = false
+    var body: some View {
+        ZStack {
+            Color(.tertiarySystemGroupedBackground)
+            if let image { Image(uiImage: image).resizable().scaledToFill() }
+            else { RegistryIcon(token: "icon:atlas-bookmark", size: 28, tint: .secondary) }
+        }
+        .frame(width: 80, height: 80).clipShape(.rect(cornerRadius: 14)).accessibilityHidden(true)
+        .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
+        .task(id: "\(itemID):\(owner):\(enabled):\(session.connection):\(session.atlasRevision):\(visible)") {
+            image = nil
+            guard visible, enabled, owner == session.ownership, session.isConnected else { return }
+            do {
+                let preview = try await session.readAtlasImage(.saved(itemID))
+                try Task.checkCancellation()
+                guard owner == session.ownership, let data = preview.data,
+                      let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 128,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                      ] as CFDictionary) else { return }
+                image = UIImage(cgImage: thumbnail)
+            } catch { /* Keep the bookmark icon when no stored preview is available. */ }
+        }
+        .onDisappear { image = nil }
     }
 }
 
@@ -705,26 +869,20 @@ struct AtlasFilePreview: View {
     @State private var retry = 0
     @State private var readID = UUID()
     var body: some View {
-        NavigationStack {
+        FilePreviewNavigation(name: file?.name ?? "Atlas file", url: url, previewType: file?.previewType ?? "unsupported",
+                              session: session, source: file.flatMap(AtlasSaveSource.file), owner: selection.owner,
+                              savedInAtlas: file != nil && selection.reference.itemId != nil && file?.canSaveToLibrary != true,
+                              openSourceChat: selection.sourceRunID.flatMap { id in openConversation.map { open in { open(id) } } },
+                              reload: { retry += 1 }) {
             Group {
                 if let url, let file {
-                    if ["markdown", "text"].contains(file.previewType) { LocalTextFilePreview(url: url, markdown: file.previewType == "markdown") }
+                    if file.previewType == "image" { FullScreenFileImage(url: url) }
+                    else if ["markdown", "text"].contains(file.previewType) { LocalTextFilePreview(url: url, markdown: file.previewType == "markdown") }
                     else if file.previewType != "unsupported", QLPreviewController.canPreview(url as NSURL) { OutputQuickLook(url: url).accessibilityIdentifier("atlasFilePreview") }
                     else { ContentUnavailableView("File ready", systemImage: "doc", description: Text("Use Share to save or open this file in another app.")) }
                 } else if let error {
                     ContentUnavailableView { Label("Couldn’t open file", systemImage: "doc") } description: { Text(error) } actions: { Button("Try again") { retry += 1 } }
                 } else { VStack(spacing: 16) { ProgressView(value: progress).frame(maxWidth: 180); Text("Opening file…").foregroundStyle(.secondary) } }
-            }
-            .navigationTitle(file?.name ?? "Atlas file").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Close", systemImage: "xmark") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) { if let url { ShareLink(item: url) { Label("Share or save", systemImage: "square.and.arrow.up") } } }
-                ToolbarItem(placement: .bottomBar) {
-                    if let id = selection.sourceRunID, let openConversation { Button("Open source chat", systemImage: "bubble.left") { openConversation(id) } }
-                }
-                ToolbarItem(placement: .bottomBar) {
-                    if let file, let source = AtlasSaveSource.file(file) { AtlasSaveButton(session: session, source: source, owner: selection.owner) }
-                }
             }
         }
         .environment(\.openURL, OpenURLAction { url in ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded })

@@ -50,7 +50,7 @@ struct OutputsView: View {
             }.scrollContentBackground(.hidden).refreshable { await load() }.task(id: offset) { await load() }
         }
         .presentationDetents([.large])
-        .sheet(item: $selection) { output in OutputPreviewView(session: session, output: output) }
+        .fullScreenCover(item: $selection) { output in OutputPreviewView(session: session, output: output) }
     }
     private func load() async {
         let owner = session.ownership
@@ -94,28 +94,17 @@ struct OutputPreviewView: View {
     var body: some View {
         Group {
             if embedded {
-                previewContent.safeAreaInset(edge: .bottom, spacing: 0) {
-                    HStack {
-                        if let url { ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up").frame(minHeight: 44).contentShape(.rect) }.accessibilityIdentifier("shareOutput") }
-                        Spacer()
-                        if let atlasSource, let loadedOwner { AtlasSaveButton(session: session, source: atlasSource, owner: loadedOwner).frame(minHeight: 44).contentShape(.rect) }
-                        Button { retry += 1 } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44).contentShape(.rect) }
-                            .accessibilityLabel("Reload file").disabled(!session.isConnected)
-                    }.font(.footnote).padding(.horizontal, 16).frame(minHeight: 48).background(.bar)
+                previewContent.overlay(alignment: .topTrailing) {
+                    if let url, let loadedOwner {
+                        FileOptionsMenu(url: url, image: previewType == "image", session: session, owner: loadedOwner,
+                                        source: atlasSource, reload: { retry += 1 })
+                            .buttonStyle(.glass).padding(12)
+                    }
                 }
             } else {
-                NavigationStack {
+                FilePreviewNavigation(name: name, url: url, previewType: previewType, session: session,
+                                      source: atlasSource, owner: loadedOwner ?? session.ownership, reload: { retry += 1 }) {
                     previewContent
-                        .navigationTitle(name).navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) { Button("Close preview", systemImage: "xmark") { dismiss() } }
-                            ToolbarItem(placement: .topBarTrailing) {
-                                if let url { ShareLink(item: url) { Label("Share output", systemImage: "square.and.arrow.up") }.accessibilityIdentifier("shareOutput") }
-                            }
-                            ToolbarItem(placement: .bottomBar) {
-                                if let atlasSource, let loadedOwner { AtlasSaveButton(session: session, source: atlasSource, owner: loadedOwner) }
-                            }
-                        }
                 }
             }
         }
@@ -127,7 +116,8 @@ struct OutputPreviewView: View {
     private var previewContent: some View {
         Group {
                 if let url {
-                    if ["text", "markdown"].contains(previewType) { LocalTextFilePreview(url: url, markdown: previewType == "markdown") }
+                    if previewType == "image" && !embedded { FullScreenFileImage(url: url) }
+                    else if ["text", "markdown"].contains(previewType) { LocalTextFilePreview(url: url, markdown: previewType == "markdown") }
                     else if previewType != "unsupported", QLPreviewController.canPreview(url as NSURL) { OutputQuickLook(url: url).accessibilityIdentifier("outputPreview") }
                     else {
                         ContentUnavailableView {
@@ -229,5 +219,156 @@ struct OutputQuickLook: UIViewControllerRepresentable {
         init(url: URL) { self.url = url }
         func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
         func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> any QLPreviewItem { url as NSURL }
+    }
+}
+
+/// A full-screen file reader, with local export separate from permanent Atlas storage.
+struct FilePreviewNavigation<Content: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let name: String
+    let url: URL?
+    let previewType: String
+    let session: BackendSession
+    let source: AtlasSaveSource?
+    let owner: Int
+    var savedInAtlas = false
+    var openSourceChat: (() -> Void)? = nil
+    var reload: (() -> Void)? = nil
+    @ViewBuilder let content: Content
+    @Environment(\.dismiss) private var dismiss
+    private var image: Bool { previewType == "image" }
+    var body: some View {
+        NavigationStack {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(image ? Color.black : Color(.systemBackground))
+                .navigationTitle(image ? "" : name).navigationBarTitleDisplayMode(.inline)
+                .toolbarBackground(image ? .hidden : .automatic, for: .navigationBar)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) { Button("Close preview", systemImage: "xmark") { dismiss() } }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if let url { FileOptionsMenu(url: url, image: image, session: session, owner: owner, source: source, savedInAtlas: savedInAtlas, openSourceChat: openSourceChat, reload: reload) }
+                    }
+                }
+        }.preferredColorScheme(image ? .dark : nil)
+    }
+}
+
+struct FileOptionsMenu: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let url: URL
+    let image: Bool
+    let session: BackendSession
+    let owner: Int
+    var source: AtlasSaveSource? = nil
+    var savedInAtlas = false
+    var openSourceChat: (() -> Void)? = nil
+    var reload: (() -> Void)? = nil
+    @State private var retention: Bool?
+    @State private var retentionError: String?
+    @State private var retryRetention = 0
+    private var readKey: String { "\(String(describing: source)):\(owner):\(session.ownership):\(session.isConnected):\(session.atlasRevision):\(retryRetention)" }
+    @State private var photos = PreviewPhotoSaver()
+    @State private var export: PreviewExportFile?
+    @State private var preparing = false
+    @State private var error: String?
+    @State private var permissionDenied = false
+    @State private var operation = UUID()
+    var body: some View {
+        Menu {
+            if image {
+                Button(photos.saving ? "Saving…" : photos.savedURL == url ? "Saved to Photos" : "Save image to Photos",
+                       systemImage: photos.savedURL == url ? "checkmark" : "arrow.down.to.line") { savePhoto() }
+                    .disabled(photos.saving || preparing || photos.savedURL == url)
+                    .accessibilityIdentifier("saveImageToPhotos")
+            }
+            Button(preparing ? "Preparing…" : "Save to Files", systemImage: "folder") { exportFile() }
+                .disabled(photos.saving || preparing).accessibilityIdentifier("saveFileToFiles")
+            ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }.accessibilityIdentifier("shareOutput")
+            if let source {
+                if retentionError != nil {
+                    Button("Retry Atlas check", systemImage: "arrow.clockwise") { retryRetention += 1 }.disabled(!session.isConnected)
+                } else if let retention {
+                    AtlasSaveButton(session: session, source: source, owner: owner, knownSaved: retention,
+                                    onFailure: { permissionDenied = false; error = $0 })
+                } else {
+                    Button("Checking Atlas…", systemImage: "square.stack.badge.plus") {}.disabled(true)
+                }
+            } else if savedInAtlas { Label("Saved in Atlas", systemImage: "checkmark") }
+            if let openSourceChat { Button("Open chat with source", systemImage: "bubble.left", action: openSourceChat) }
+            if let reload { Button("Reload file", systemImage: "arrow.clockwise", action: reload).disabled(!session.isConnected) }
+        } label: {
+            Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44).contentShape(.circle)
+        }
+        .accessibilityLabel("File options").accessibilityIdentifier("fileOptions")
+        .disabled(owner != session.ownership)
+        .task(id: readKey) {
+            guard let source, owner == session.ownership else { return }
+            retentionError = nil
+            do {
+                let saved = try await session.atlasSaveStatus(source, owner: owner)
+                try Task.checkCancellation()
+                if owner == session.ownership { retention = saved ?? false }
+            } catch { if !Task.isCancelled, owner == session.ownership { retentionError = error.localizedDescription } }
+        }
+        .sheet(item: $export) { file in DocumentFileExport(file: file) { export = nil } }
+        .alert(permissionDenied ? "Photo access needed" : "Couldn’t save file", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            if permissionDenied { Button("Open Settings") { if let settings = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(settings) } } }
+            if image { Button("Save to Files") { exportFile() } }
+            Button("OK", role: .cancel) {}
+        } message: { Text(error ?? "") }
+        .sensoryFeedback(.success, trigger: photos.savedURL)
+        .onDisappear { operation = UUID() }
+        .onChange(of: session.ownership) { _, _ in operation = UUID(); export = nil; error = nil }
+    }
+    private func savePhoto() {
+        guard owner == session.ownership, !photos.saving else { return }
+        let ticket = UUID(); operation = ticket; permissionDenied = false
+        Task {
+            do { try await photos.save(url) { operation == ticket && owner == session.ownership } }
+            catch {
+                guard operation == ticket, owner == session.ownership, !(error is CancellationError) else { return }
+                permissionDenied = (error as? PhotoLibrarySaveError) == .denied
+                self.error = error is PhotoLibrarySaveError ? error.localizedDescription : "This image couldn’t be saved to Photos. You can save the original to Files instead."
+            }
+        }
+    }
+    private func exportFile() {
+        guard owner == session.ownership, !preparing else { return }
+        let ticket = UUID(); operation = ticket; preparing = true; permissionDenied = false
+        Task {
+            defer { if operation == ticket { preparing = false } }
+            do {
+                let file = try await Task.detached(priority: .userInitiated) { try PreviewExportFile(copying: url) }.value
+                guard operation == ticket, owner == session.ownership else { return }
+                export = file
+            } catch { if operation == ticket, owner == session.ownership { self.error = error.localizedDescription } }
+        }
+    }
+}
+
+private struct DocumentFileExport: UIViewControllerRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let file: PreviewExportFile
+    let finished: () -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(file: file, finished: finished) }
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forExporting: [file.url], asCopy: true)
+        picker.delegate = context.coordinator
+        return picker
+    }
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let file: PreviewExportFile
+        let finished: () -> Void
+        init(file: PreviewExportFile, finished: @escaping () -> Void) { self.file = file; self.finished = finished }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { finished() }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { finished() }
     }
 }

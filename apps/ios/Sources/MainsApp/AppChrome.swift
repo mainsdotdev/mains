@@ -143,12 +143,12 @@ struct RegistryIcon: View {
     var body: some View {
         Group {
             if let token, token.hasPrefix("emoji:") {
-                Text(String(token.dropFirst(6))).font(.system(size: size))
+                Text(String(token.dropFirst(6))).font(.system(size: size)).fixedSize()
             } else if let name = parts.first, UIImage(named: "registry-" + name.lowercased()) != nil {
                 Image("registry-" + name.lowercased()).renderingMode(.template).resizable().scaledToFit()
                     .foregroundStyle(resolvedTint)
             } else if let token, !token.hasPrefix("icon:"), token.unicodeScalars.contains(where: { $0.properties.isEmoji && $0.value > 127 }) {
-                Text(token).font(.system(size: size))
+                Text(token).font(.system(size: size)).fixedSize()
             } else { Image(systemName: fallback).resizable().scaledToFit().foregroundStyle(resolvedTint) }
         }.frame(width: size, height: size).accessibilityHidden(true)
     }

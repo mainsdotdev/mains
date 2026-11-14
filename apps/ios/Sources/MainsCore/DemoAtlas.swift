@@ -27,6 +27,11 @@ import CryptoKit
         return summary(row)
     }
 
+    func hasSavedCopy(source: String) -> Bool {
+        guard let id = sources[source], saved[id] != nil else { return false }
+        return edits[id]?["trashedAt"]?.string == nil
+    }
+
     private func summary(_ row: JSONValue) -> JSONValue { .object(["id": row["key"], "title": row["title"], "kind": row["kind"]]) }
 
     private func bookmark(_ row: JSONValue, account: JSONValue, requestedID: String) throws -> JSONValue {
@@ -35,7 +40,9 @@ import CryptoKit
         let content: JSONValue = .array([account, .string(id), .string(url), row["title"], .string(description), .string(note)])
         let revision = SHA256.hash(data: try JSONEncoder().encode(content)).map { String(format: "%02x", $0) }.joined()
         return .object(["id": .string(id), "requestedId": .string(requestedID), "kind": .string("bookmark"), "title": row["title"],
-                        "url": .string(url), "description": .string(description), "note": .string(note), "revision": .string(revision)])
+                        "url": .string(url), "description": .string(description), "note": .string(note), "revision": .string(revision),
+                        "isFavorite": row["isFavorite"], "collectionId": row["collectionId"], "tags": row["tags"],
+                        "hasImage": .bool(id == "demo-atlas-bookmark")])
     }
 
     func answer(_ channel: String, input: JSONValue, runID: String, collectionID: String?, image: JSONValue) throws -> JSONValue {
@@ -172,6 +179,15 @@ import CryptoKit
                 "file": .null, "pageId": .null, "icon": .null, "url": .string(url), "description": .null, "note": .null])
             saved[id] = row; sources[key] = id
             return summary(row)
+        case "atlas:readMobileSaveStatus":
+            if let id = input["itemId"].string {
+                guard let file = files[id] ?? storedFiles[id], input["version"].string == file.version,
+                      edits[id]?["trashedAt"]?.string == nil else { throw MainsError.server("Demo Atlas source changed.") }
+                return .object(["saved": .bool(id != "demo-atlas-page-file" || saved[id] != nil)])
+            }
+            guard input["sourceKey"].string == source, input["runId"].string == runID,
+                  input["version"].string == DemoFile.notes.version else { throw MainsError.server("Demo Atlas source changed.") }
+            return .object(["saved": .bool(hasSavedCopy(source: "generated:" + runID))])
         case "atlas:saveMobileFile":
             if let id = input["itemId"].string {
                 guard id == "demo-atlas-page-file", edits[id]?["trashedAt"]?.string == nil,
@@ -228,6 +244,11 @@ import CryptoKit
             let reference = input["reference"]
             let id = reference["itemId"].string ?? (reference["runId"].string == runID && reference["sourceKey"].string == source ? "demo-atlas-generated" : "")
             guard edits[id]?["trashedAt"]?.string == nil else { throw MainsError.server("Atlas file not found or in Trash") }
+            if channel == "atlas:readMobileImage", id == "demo-atlas-bookmark" {
+                var thumbnail = DemoFile.atlasThumbnail.objectValue
+                thumbnail["reference"] = reference; thumbnail["version"] = .string(imageFile.version)
+                return .object(thumbnail)
+            }
             guard let file = files[id] ?? storedFiles[id] else { throw MainsError.server("Demo Atlas file not found.") }
             if channel == "atlas:readMobileImage" {
                 guard file.preview == "image", file.bytes == imageFile.bytes else { throw MainsError.server("No prepared thumbnail for this demo file.") }

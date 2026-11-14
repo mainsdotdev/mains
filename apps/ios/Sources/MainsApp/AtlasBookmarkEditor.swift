@@ -21,6 +21,7 @@ struct AtlasBookmarkEditor: View {
     @State private var error: String?
     @State private var visible = true
     @State private var readID = UUID()
+    @State private var tagEdit: AtlasTagEditSelection?
     private var canSave: Bool {
         guard let original else { return false }
         return !loading && !saving && session.canSaveToAtlas && selection.owner == session.ownership
@@ -37,6 +38,11 @@ struct AtlasBookmarkEditor: View {
                         Section("Description") { TextField("Description", text: $draft.description, axis: .vertical).lineLimit(2...6).accessibilityIdentifier("editBookmarkDescription") }
                         Section("Note") { TextEditor(text: $draft.note).frame(minHeight: 160).accessibilityIdentifier("editBookmarkNote") }
                     }.disabled(loading || saving || session.pendingAtlasSave != nil)
+                    Section {
+                        Button("Edit tags", systemImage: "tag") { tagEdit = AtlasTagEditSelection(itemID: original.id, owner: selection.owner) }
+                            .disabled(loading || saving || !session.canSaveToAtlas || selection.owner != session.ownership)
+                            .accessibilityIdentifier("editBookmarkTags")
+                    }
                     if let validation = draft.validationError { Text(validation).font(.caption).foregroundStyle(.secondary) }
                 }
                 if let error {
@@ -63,6 +69,7 @@ struct AtlasBookmarkEditor: View {
             }
         }
         .task { await load() }
+        .sheet(item: $tagEdit) { AtlasTagsEditor(session: session, selection: $0) }
         .onDisappear { visible = false; readID = UUID() }
         .onChange(of: session.ownership) { _, _ in dismiss() }
     }

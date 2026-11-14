@@ -35,6 +35,58 @@ beforeEach(() => {
 afterEach(async () => { await atlasBookmarks.stop(); cleanup(); restore(); fs.rmSync(directory, { recursive: true, force: true }); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Atlas bookmarks", () => {
+  it("includes fresh phone detail metadata without exposing image paths or changing the edit revision", async () => {
+    const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/details", title: "Article", description: "Description", note: "My note", tags: ["Research"] });
+    const before = atlasMobile.readBookmark({ accountId, id: item.id });
+    const resolve = vi.spyOn(atlasService, "resolveFile");
+    await atlasMobile.updateItem({ accountId, id: item.id, isFavorite: true });
+    const current = atlasMobile.readBookmark({ accountId, id: item.id });
+    expect(current).toMatchObject({ title: "Article", description: "Description", note: "My note", isFavorite: true,
+      collectionId: null, tags: [{ name: "Research" }], hasImage: false, revision: before.revision });
+    expect(resolve).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(JSON.stringify(current)).not.toContain(directory);
+    expect(current).not.toHaveProperty("bookmarkImagePath");
+    expect(current).not.toHaveProperty("metadata");
+  });
+
+  it("reads only a bounded stored bookmark preview without enabling file downloads or fetching the website", async () => {
+    const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/preview" });
+    atlasBookmarks.start(); await waitForReady(item.id);
+    const resize = vi.fn(async () => ({ bytes: Buffer.from("thumbnail"), mime: "image/png" as const, width: 128, height: 96 }));
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize } });
+    try {
+      const reference = { itemId: item.id }, calls = vi.mocked(fetch).mock.calls.length;
+      expect(atlasMobile.readBookmark({ accountId, id: item.id }).hasImage).toBe(true);
+      const result = await atlasMobile.readImage({ accountId, reference });
+      expect(result).toMatchObject({ reference, width: 128, height: 96, version: expect.stringMatching(/^[a-f0-9]{64}$/) });
+      expect(resize).toHaveBeenCalledWith(expect.any(Buffer), 128, true);
+      expect(fetch).toHaveBeenCalledTimes(calls);
+      expect(JSON.stringify(result)).not.toContain(directory);
+      await expect(atlasMobile.describeFile({ accountId, reference })).rejects.toThrow("not found");
+      await expect(atlasMobile.readFile({ accountId, reference, offset: 0, version: result.version })).rejects.toThrow("not found");
+      await expect(atlasMobile.readImage({ accountId: "other", reference })).rejects.toThrow("not found");
+      await atlasMobile.setTrash({ accountId, id: item.id, trashed: true });
+      await expect(atlasMobile.readImage({ accountId, reference })).rejects.toThrow("not found");
+    } finally { reset(); }
+  });
+
+  it.each(["changed", "trashed", "removed", "oversized"])("rejects a bookmark preview that becomes %s while loading", async condition => {
+    const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/preview-race" });
+    atlasBookmarks.start(); await waitForReady(item.id);
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize: async () => {
+      if (condition === "changed") {
+        const image = atlasService.get({ accountId, id: item.id })!.bookmarkImagePath!;
+        fs.chmodSync(image, 0o600); fs.writeFileSync(image, "changed preview");
+      }
+      if (condition === "trashed") await atlasMobile.setTrash({ accountId, id: item.id, trashed: true });
+      if (condition === "removed") atlasRepo.update(item.id, accountId, { storageKey: null });
+      return { bytes: condition === "oversized" ? Buffer.alloc(128 * 1024 + 1) : Buffer.from("thumbnail"), mime: "image/png", width: 128, height: 96 };
+    } } });
+    try { await expect(atlasMobile.readImage({ accountId, reference: { itemId: item.id } })).rejects.toThrow(); }
+    finally { reset(); }
+  });
+
   it("restores a phone-trashed bookmark through the existing enrichment lifecycle without losing authored fields", async () => {
     const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/trash-phone", title: "Authored", description: "Keep description", note: "Keep note", tags: ["Research"] });
     await atlasMobile.setTrash({ accountId, id: item.id, trashed: true });

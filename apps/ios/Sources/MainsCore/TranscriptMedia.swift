@@ -34,6 +34,38 @@ public struct TranscriptMedia: Identifiable, Equatable, Sendable {
                     byteSize: metadata["byteSize"].number.flatMap { $0.isFinite && $0 >= 0 && $0 <= 100 * 1024 * 1024 ? Int($0) : nil },
                     mimeType: metadata["mimeType"].string)
     }
+
+    /// Match desktop's generated-image copy projection. Only hide the generated
+    /// original once the same turn has a saved deliverable with identical bytes.
+    /// The retained history and file identities remain unchanged.
+    static func hiddenGeneratedImageCopies(in artifacts: [Artifact]) -> Set<Int> {
+        struct Identity: Hashable { let runID: String; let hash: String }
+        func identity(_ artifact: Artifact) -> (key: Identity, generated: Bool)? {
+            let metadata = artifact.metadata ?? .null
+            guard artifact.kind == "image", let hash = artifact.contentHash, !hash.isEmpty,
+                  let path = metadata["path"].string ?? artifact.path else { return nil }
+            return (Identity(runID: artifact.runId, hash: hash),
+                    metadata["source"].string == "codex_image_generation" || path.contains("/.codex/generated_images/"))
+        }
+        // Output discovery appends artifacts to history; partition only after
+        // restoring the same chronological order used by the transcript rows.
+        let ordered = artifacts.filter { ($0.metadata ?? .null)["voice"].bool || AgentActivity.foreground($0.metadata ?? .null) }
+            .sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt }
+        var hidden = Set<Int>()
+        for turn in ordered.split(whereSeparator: { $0.kind == "user-prompt" }) {
+            let saved = Set(turn.compactMap { artifact -> Identity? in
+                let metadata = artifact.metadata ?? .null
+                guard let image = identity(artifact), !image.generated,
+                      !metadata["working"].bool, !metadata["viewed"].bool else { return nil }
+                return image.key
+            })
+            for artifact in turn {
+                if let image = identity(artifact), image.generated, saved.contains(image.key) { hidden.insert(artifact.id) }
+            }
+        }
+        return hidden
+    }
+
     public static func fileName(_ path: String) -> String {
         let name = path.replacingOccurrences(of: "\\", with: "/").components(separatedBy: "/").last ?? "Attachment"
         return name.isEmpty || [".", ".."].contains(name) ? "Attachment" : String(name.prefix(240))

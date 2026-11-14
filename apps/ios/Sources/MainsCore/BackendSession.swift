@@ -843,6 +843,8 @@ public final class BackendSession {
         let item = try await atlasRead("atlas:readMobileBookmark", fields: ["id": .string(id)]).decode(AtlasBookmarkDocument.self)
         guard item.requestedId == id, !item.id.isEmpty, item.id.utf8.count <= 256, item.kind == "bookmark",
               item.title.utf16.count <= 240, item.url.utf16.count <= 4096, item.description.utf16.count <= 2000, item.note.utf16.count <= 10000,
+              item.collectionId.map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true,
+              item.tags.map({ validAtlasTags($0, limit: 60) }) ?? true,
               item.revision.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw MainsError.invalidReply }
         return item
     }
@@ -877,6 +879,17 @@ public final class BackendSession {
         guard owner == pairingOwner else { throw MainsError.changedBackend }
         if conversations.first(where: { $0.id == source.runId })?.isReplica == true { throw MainsError.server("Save this file to Atlas from its source computer.") }
         return try await beginAtlasSave("atlas:saveMobileFile", fields: try JSONValue.encode(source).objectValue, label: "the file")
+    }
+
+    public func atlasSaveStatus(_ source: AtlasSaveSource, owner: Int) async throws -> Bool? {
+        guard owner == pairingOwner else { throw MainsError.changedBackend }
+        do {
+            let value = try await atlasRead("atlas:readMobileSaveStatus", fields: try JSONValue.encode(source).objectValue)
+            guard case .bool(let saved) = value["saved"] else { throw MainsError.invalidReply }
+            return saved
+        } catch MainsError.server(let message) where message.contains("Update Mains on your computer") {
+            return nil // Older computers can still accept the existing explicit save command.
+        }
     }
 
     public func saveAtlasBookmark(_ url: String, collectionID: String?, owner: Int) async throws -> AtlasSavedItem {

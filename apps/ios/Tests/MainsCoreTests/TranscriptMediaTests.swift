@@ -49,6 +49,98 @@ import ImageIO
     #expect(section.breakout.flatMap(\.media).map(\.name) == ["result.png", "report.pdf"])
 }
 
+@Suite struct TranscriptImageDeduplicationTests {
+    private func artifact(_ id: Int, kind: String = "image", path: String? = nil, hash: String? = nil,
+                          metadata: [String: JSONValue] = [:]) throws -> Artifact {
+        var value: [String: JSONValue] = ["id": .number(Double(id)), "runId": .string("run"), "kind": .string(kind),
+            "content": .string(kind == "image" ? "" : "Message"), "createdAt": .number(Double(id * 1000))]
+        var fields = metadata
+        if let path { fields["path"] = .string(path); value["path"] = .string(path) }
+        value["metadata"] = .object(fields)
+        if let hash { value["contentHash"] = .string(hash) }
+        return try JSONValue.object(value).decode(Artifact.self)
+    }
+    private func transcript(_ artifacts: [Artifact]) -> Transcript {
+        var transcript = Transcript()
+        transcript.replace(HistoryPage(artifacts: artifacts, toolCalls: [], turns: [], start: nil, end: nil, last: nil, hasOlder: false, hasNewer: false))
+        return transcript
+    }
+    private let generatedPath = "/Users/me/.codex/generated_images/session/flag.png"
+    private let savedPath = "/Users/me/Library/Application Support/mains/runs/run/work/turkey-flag.png"
+
+    @Test func sameTurnKeepsTheSavedCopyAndPreservesWireHistory() throws {
+        let prompt = try artifact(1, kind: "user-prompt")
+        let generated = try artifact(2, path: generatedPath, hash: "sha256:same")
+        let saved = try artifact(3, path: savedPath, hash: "sha256:same")
+        let reply = try artifact(4, kind: "report")
+        // Selected outputs arrive after the bounded history artifacts, rather
+        // than in display order. Exercise the same wire decoding and grouping.
+        let view = transcript([prompt, reply, saved, generated])
+        #expect(view.rows.map(\.id) == ["artifact:1", "artifact:3", "artifact:4"])
+        let displayed = TranscriptSection.build(view.rows).flatMap { TranscriptGroup.build($0.displayedRows(expanded: false)) }
+        #expect(displayed.flatMap(\.rows).flatMap(\.media).map(\.source) == [.artifact(3)])
+        #expect(view.page?.artifacts == [prompt, reply, saved, generated])
+        let cached = try Wire.decoder().decode(Artifact.self, from: Wire.encoder().encode(generated))
+        let encoded = try Wire.decoder().decode(JSONValue.self, from: Wire.encoder().encode(cached))
+        #expect(encoded["contentHash"].string == "sha256:same")
+    }
+
+    @Test func inlineGenerationUsesTheSameSavedCopyRule() throws {
+        let generated = try artifact(1, path: "/mains/generated-images/run/inline.png", hash: "sha256:same",
+                                     metadata: ["source": .string("codex_image_generation")])
+        let saved = try artifact(2, path: savedPath, hash: "sha256:same")
+        #expect(transcript([generated, saved]).rows.flatMap(\.media).map(\.source) == [.artifact(2)])
+    }
+
+    @Test func distinctOrUnidentifiedImagesAndSeparateTurnsStayVisible() throws {
+        let generated = try artifact(1, path: generatedPath, hash: "sha256:same")
+        let different = try artifact(2, path: savedPath, hash: "sha256:different")
+        let unknown = try artifact(3, path: savedPath)
+        let nextPrompt = try artifact(4, kind: "user-prompt")
+        let repeated = try artifact(5, path: savedPath, hash: "sha256:same")
+        #expect(transcript([repeated, unknown, nextPrompt, different, generated]).rows.flatMap(\.media).map(\.source)
+                == [.artifact(1), .artifact(2), .artifact(3), .artifact(5)])
+    }
+
+    @Test func generationRemainsUntilItsDeliverableArrives() throws {
+        let generated = try artifact(1, path: generatedPath, hash: "sha256:same")
+        var view = transcript([generated])
+        #expect(view.rows.flatMap(\.media).map(\.source) == [.artifact(1)])
+        let saved = try artifact(2, path: savedPath, hash: "sha256:same")
+        view.replace(try #require(transcript([generated, saved]).page))
+        #expect(view.rows.flatMap(\.media).map(\.source) == [.artifact(2)])
+    }
+
+    @Test func workingOrViewedImagesCannotHideTheGeneratedResult() throws {
+        let generated = try artifact(1, path: generatedPath, hash: "sha256:same")
+        let working = try artifact(2, path: savedPath, hash: "sha256:same", metadata: ["working": .bool(true)])
+        let viewed = try artifact(3, path: savedPath, hash: "sha256:same", metadata: ["viewed": .bool(true)])
+        #expect(transcript([generated, working, viewed]).rows.flatMap(\.media).map(\.source) == [.artifact(1), .artifact(2), .artifact(3)])
+    }
+
+    @Test func childOutputCannotHideTheForegroundGeneratedResult() throws {
+        let generated = try artifact(1, path: generatedPath, hash: "sha256:same")
+        let child = try artifact(2, path: savedPath, hash: "sha256:same", metadata: ["isFromSubagent": .bool(true)])
+        #expect(transcript([generated, child]).rows.flatMap(\.media).map(\.source) == [.artifact(1)])
+    }
+
+    @Test func ordinaryDeliverablesWithTheSameBytesStaySeparateLikeDesktop() throws {
+        let first = try artifact(1, path: savedPath, hash: "sha256:same")
+        let second = try artifact(2, path: "/work/another-flag.png", hash: "sha256:same")
+        #expect(transcript([first, second]).rows.flatMap(\.media).map(\.source) == [.artifact(1), .artifact(2)])
+    }
+
+    @Test func olderHistoryMayOmitOrExplicitlyClearTheContentHash() throws {
+        let legacy = try artifact(1, path: generatedPath)
+        #expect(legacy.contentHash == nil)
+        for hash in [JSONValue.null, .object(["$undefined": .bool(true)])] {
+            var fields = try Wire.decoder().decode(JSONValue.self, from: Wire.encoder().encode(legacy)).objectValue
+            fields["contentHash"] = hash
+            #expect(try JSONValue.object(fields).decode(Artifact.self).contentHash == nil)
+        }
+    }
+}
+
 @Test func toolRowsPreserveWireDetailsDeferredContentAndRealErrors() throws {
     let raw = #"{"id":42,"toolName":"Bash","status":"error","input":{"command":"npm test"},"output":{"type":"mains/deferred-tool-output","preview":"Failure details","chars":40000},"error":"Command failed with exit code 1","createdAt":{"$date":"2026-11-10T12:00:00Z"},"startedAt":{"$undefined":true},"endedAt":null,"parentToolCallId":null}"#
     let call = try Wire.decoder().decode(ToolCall.self, from: Data(raw.utf8))

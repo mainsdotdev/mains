@@ -860,6 +860,24 @@ describe("Atlas phone library", { timeout: 15000 }, () => {
   });
 });
 describe("Atlas Page asset visibility", { timeout: 15000 }, () => {
+  it("distinguishes automatically listed files from permanent copies without saving or returning paths", async () => {
+    output("report.pdf");
+    const entry = (await atlasMobile.library({ accountId: "default" })).items[0];
+    const file = await atlasMobile.describeFile({ accountId: "default", reference: entry.file! });
+    const source = { accountId: "default", runId: "conversation", sourceKey: entry.key, version: file.version };
+    expect(await atlasMobile.saveStatus(source)).toEqual({ saved: false });
+    expect(atlasService.list({ accountId: "default" })).toEqual([]);
+    const saved = await atlasMobile.saveFile(source);
+    expect(await atlasMobile.saveStatus(source)).toEqual({ saved: true });
+    expect((await atlasMobile.library({ accountId: "default" })).items).toHaveLength(1);
+    await expect(atlasMobile.saveStatus({ ...source, version: "0".repeat(64) })).rejects.toThrow("changed");
+    await expect(atlasMobile.saveStatus({ ...source, path: "/private/file" } as never)).rejects.toThrow("source");
+    createAccount(db, { id: "other" });
+    await expect(atlasMobile.saveStatus({ ...source, accountId: "other" })).rejects.toThrow("not found");
+    await atlasService.update({ accountId: "default", id: saved.id, trashed: true });
+    expect(await atlasMobile.saveStatus(source)).toEqual({ saved: false });
+  });
+
   it("keeps existing Page uploads usable but out of every library view until explicitly saved", async () => {
     const page = await atlasService.createPage({ accountId: "default", title: "Notes" });
     const upload = { accountId: "default", pageId: page.item.id, fileName: "embedded.pdf", data: Buffer.from("page attachment").toString("base64") };
@@ -901,6 +919,7 @@ describe("Atlas Page asset visibility", { timeout: 15000 }, () => {
     const file = await atlasService.uploadFile({ accountId: "default", pageId: page.item.id, fileName: "photo.png", data: Buffer.from("image").toString("base64") });
     const version = (await atlasMobile.describeFile({ accountId: "default", reference: { itemId: file.id } })).version;
     const input = { accountId: "default", itemId: file.id, version };
+    expect(await atlasMobile.saveStatus(input)).toEqual({ saved: false });
     await expect(atlasMobile.saveFile({ ...input, version: "0".repeat(64) })).rejects.toThrow("changed");
     await expect(atlasMobile.saveFile({ ...input, runId: "unexpected" })).rejects.toThrow("source");
     await expect(atlasMobile.saveFile({ ...input, path: file.path } as never)).rejects.toThrow("source");
@@ -908,6 +927,7 @@ describe("Atlas Page asset visibility", { timeout: 15000 }, () => {
     await expect(atlasMobile.saveFile({ ...input, accountId: "other" })).rejects.toThrow("not found");
     expect((await atlasMobile.library({ accountId: "default", type: "image" })).items).toEqual([]);
     expect(await atlasMobile.saveFile(input)).toMatchObject({ id: file.id, kind: "image" });
+    expect(await atlasMobile.saveStatus(input)).toEqual({ saved: true });
     expect(await atlasMobile.saveFile(input)).toMatchObject({ id: file.id });
     expect((await atlasMobile.library({ accountId: "default", type: "image" })).items.map(entry => entry.key)).toEqual([file.id]);
     await atlasService.update({ accountId: "default", id: file.id, trashed: true });

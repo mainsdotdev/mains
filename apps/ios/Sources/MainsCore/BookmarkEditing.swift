@@ -9,6 +9,10 @@ public struct AtlasBookmarkDocument: Decodable, Sendable {
     public let description: String
     public let note: String
     public let revision: String
+    public var isFavorite: Bool? = nil
+    public var collectionId: String? = nil
+    public var tags: [AtlasTag]? = nil
+    public var hasImage: Bool? = nil
     public var draft: AtlasBookmarkDraft { AtlasBookmarkDraft(title: title, description: description, note: note) }
 }
 

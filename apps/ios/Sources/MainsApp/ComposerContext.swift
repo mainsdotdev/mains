@@ -70,7 +70,10 @@ struct ComposerModelLabel: View {
         if let model {
             HStack(spacing: 5) {
                 ComposerModelIcon(name: model.displayName, providerID: providerID)
-                Text(model.label(for: providerID)).fontWeight(.semibold)
+                ComposerModelNameLayout {
+                    Text(model.label(for: providerID)).fontWeight(.semibold)
+                        .lineLimit(1).truncationMode(.tail)
+                }
             }
         } else if loading {
             HStack(spacing: 6) {
@@ -83,6 +86,22 @@ struct ComposerModelLabel: View {
                 Text("Select model").fontWeight(.semibold)
             }
         }
+    }
+}
+
+/// A ceiling, not a reserved slot: short names hug their text and long names
+/// still accept less space when effort and permission controls need it.
+private struct ComposerModelNameLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let name = subviews.first else { return .zero }
+        let natural = name.sizeThatFits(.unspecified)
+        let width = max(0, min(natural.width, 128, proposal.width ?? 128))
+        let fitted = name.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+        return CGSize(width: width, height: fitted.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
     }
 }
 

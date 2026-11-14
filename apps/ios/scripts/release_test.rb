@@ -242,6 +242,7 @@ class ReleaseTest < Minitest::Test
     app.build_configurations.each do |config|
       refute_includes config.build_settings.fetch('SWIFT_ACTIVE_COMPILATION_CONDITIONS'), 'MAINS_GPT_LIVE'
       plist = Xcodeproj::Plist.read_from_path(File.join(MainsRelease::ROOT, config.build_settings.fetch('INFOPLIST_FILE')))
+      assert_match(/Save an image/, plist.fetch('NSPhotoLibraryAddUsageDescription'))
       refute plist.key?('NSMicrophoneUsageDescription')
       refute_includes Array(plist['UIBackgroundModes']), 'audio'
     end

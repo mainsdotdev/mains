@@ -36,6 +36,7 @@ struct MessageComposer: View {
     @State private var panelOwner = 0
     @State private var fileOwner = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var attachmentError: String?
     private var settings: ComposerSettings { context.settings(session) }
     private var selectedModel: ModelChoice? { context.model(session) }
@@ -135,29 +136,40 @@ struct MessageComposer: View {
                     Color.clear.preference(key: AttachmentSourceFrameKey.self, value: geometry.frame(in: .global))
                 })
                 .disabled(draft.isSending).accessibilityLabel("Add attachment").accessibilityIdentifier("addAttachment")
-                ScrollView(.horizontal) {
-                    HStack(spacing: 12) {
-                        Button(action: model) {
-                            HStack(spacing: 5) {
-                                ComposerModelLabel(model: selectedModel, loading: context.modelsLoading(session), providerID: context.providerId)
-                                if let effort { Text(effort).foregroundStyle(.secondary) }
-                            }.lineLimit(1).frame(minHeight: 44)
-                        }
-                        .background(GeometryReader { geometry in
-                            Color.clear.preference(key: EffortSourceFrameKey.self, value: geometry.frame(in: .global))
-                        })
-                        .disabled(!session.isConnected || session.sending || context.saving(session)).accessibilityIdentifier("chooseModel")
-                        if let label = optionsLabel {
-                            Button(label, action: options).fontWeight(.semibold).frame(minHeight: 44)
-                                .disabled(!session.isConnected || session.sending || context.saving(session)).accessibilityIdentifier("runOptions")
-                        }
-                    }.font(.footnote).foregroundStyle(.secondary)
-                }.scrollIndicators(.hidden).fixedSize(horizontal: false, vertical: true)
+                Group {
+                    if dynamicTypeSize.isAccessibilitySize {
+                        ScrollView(.horizontal) { configurationControls }.scrollIndicators(.hidden)
+                    } else {
+                        configurationControls
+                    }
+                }.fixedSize(horizontal: false, vertical: true)
                 composerActions
             }
             .buttonStyle(.plain)
         }
         .padding(8).modifier(GlassSurface(radius: 34, interactive: false)).padding(.horizontal, 12)
+    }
+
+    private var configurationControls: some View {
+        HStack(spacing: 12) {
+            Button(action: model) {
+                HStack(spacing: 5) {
+                    ComposerModelLabel(model: selectedModel, loading: context.modelsLoading(session), providerID: context.providerId)
+                        .layoutPriority(-1)
+                    if let effort { Text(effort).foregroundStyle(.secondary).fixedSize(horizontal: true, vertical: false) }
+                }.lineLimit(1).frame(minHeight: 44)
+            }
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: EffortSourceFrameKey.self, value: geometry.frame(in: .global))
+            })
+            .disabled(!session.isConnected || session.sending || context.saving(session)).accessibilityIdentifier("chooseModel")
+            if let label = optionsLabel {
+                Button(label, action: options).fontWeight(.semibold).frame(minHeight: 44)
+                    .fixedSize(horizontal: true, vertical: false).layoutPriority(1)
+                    .disabled(!session.isConnected || session.sending || context.saving(session)).accessibilityIdentifier("runOptions")
+            }
+            Spacer(minLength: 0)
+        }.font(.footnote).foregroundStyle(.secondary)
     }
 
     private var voiceBlocksSending: Bool {

@@ -38,6 +38,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan a pairing code or attach a photo to your message.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save an image you choose to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Browse recent photos and attach the photos you select to a message.</string>
 	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>

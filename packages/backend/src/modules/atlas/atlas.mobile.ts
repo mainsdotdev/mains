@@ -11,10 +11,11 @@ import type { AtlasMobileEntry, AtlasMobileFile, AtlasMobileFileRead, AtlasMobil
 import { MOBILE_OUTPUT_MAX_BYTES, outputFileType, type RunOutputChunk } from "@mains/contracts/run-outputs";
 import { readRunFileChunk } from "../../../shared/file-chunks";
 import { atlasService, generatedForRun } from "./atlas.service";
-import { atlasRoot, inspectSource } from "./atlas.storage";
+import { atlasRoot, inspectSource, sourceKey } from "./atlas.storage";
 import { readImagePreview } from "../imageProxy";
 import type { ArtifactImage } from "@mains/contracts/runs";
-import { isAtlasLibraryItem } from "@mains/contracts/atlas";
+import { isAtlasLibraryItem, type AtlasSaveFile } from "@mains/contracts/atlas";
+import { atlasRepo } from "./atlas.repo";
 
 function required(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.length > 256 || value.includes("\0")) throw new Error("Invalid Atlas identity");
@@ -32,6 +33,55 @@ function referenceOf(value: AtlasMobileFileReference): AtlasMobileFileReference 
 }
 const signature = (accountId: string, reference: AtlasMobileFileReference, stat: Stats) => createHash("sha256")
   .update(JSON.stringify([accountId, reference, stat.size, stat.mtimeMs, stat.ctimeMs, stat.ino, stat.dev])).digest("hex");
+
+async function resolveSaveSource(input: AtlasMobileSaveFile): Promise<{ input: AtlasSaveFile; validate: () => Promise<void> }> {
+    const accountId = required(input?.accountId);
+    if (typeof input.version !== "string" || !/^[a-f0-9]{64}$/.test(input.version)
+      || Object.keys(input).some(key => !["accountId", "runId", "version", "artifactId", "attachmentId", "sourceKey", "itemId"].includes(key))) throw new Error("Invalid Atlas save source");
+    if (input.itemId !== undefined) {
+      if ([input.runId, input.artifactId, input.attachmentId, input.sourceKey].some(value => value !== undefined)) throw new Error("Invalid Atlas save source");
+      const itemId = required(input.itemId);
+      const validate = async () => {
+        const file = await atlasMobile.describeFile({ accountId, reference: { itemId } });
+        if (file.version !== input.version) throw new Error("This file changed. Open it again before saving to Atlas.");
+      };
+      return { input: { accountId, itemId }, validate };
+    }
+    const runId = required(input.runId);
+    if (
+      [input.artifactId, input.attachmentId, input.sourceKey].filter((value) => value !== undefined).length !== 1
+      || input.artifactId !== undefined && (!Number.isSafeInteger(input.artifactId) || input.artifactId === 0)
+      || input.attachmentId !== undefined && !/^[a-f0-9]{64}$/.test(input.attachmentId)
+      || input.sourceKey !== undefined && !/^[a-f0-9]{64}$/.test(input.sourceKey)) throw new Error("Invalid Atlas save source");
+    const { runsService } = await import("../runs");
+    const resolve = async () => {
+      const run = await runsService.getRunById(runId);
+      if (!run || run.accountId !== accountId) throw new Error("Conversation not found");
+      if (run.isReplica) throw new Error("Save this file to Atlas from its source computer");
+      let path: string, version: string;
+      if (input.attachmentId !== undefined) {
+        const file = await runsService.describeAttachmentFile({ runId, attachmentId: input.attachmentId });
+        path = await runsService.resolveAttachmentPath({ runId, attachmentId: input.attachmentId }); version = file.version;
+      } else if (input.artifactId !== undefined) {
+        const file = (await runsService.listOutputs({ runId, artifactId: input.artifactId })).items[0];
+        const artifact = (await runsService.getOutputArtifacts(runId)).find((row) => row.id === input.artifactId);
+        const selectedPath = artifact?.path ?? artifact?.metadata?.path;
+        if (!file || typeof selectedPath !== "string") throw new Error("File is no longer a selected output of this conversation");
+        path = selectedPath; version = file.version;
+      } else {
+        const reference = { runId, sourceKey: input.sourceKey! };
+        const selected = await selectGenerated(accountId, reference);
+        const file = await atlasMobile.describeFile({ accountId, reference });
+        path = selected.selected.path; version = file.version;
+      }
+      if (version !== input.version) throw new Error("This file changed. Open it again before saving to Atlas.");
+      return path;
+    };
+    const path = await resolve();
+    return { input: { accountId, runId, path }, validate: async () => {
+      if (await resolve() !== path) throw new Error("This file changed. Open it again before saving to Atlas.");
+    } };
+}
 
 export const atlasMobile = {
   tags(input: AtlasMobileTagsOptions): AtlasMobileTagsPage {
@@ -88,7 +138,8 @@ export const atlasMobile = {
     if (!item || item.kind !== "bookmark" || item.trashedAt || !item.url) throw new Error("Bookmark not found or in Trash");
     const description = item.description ?? "", note = item.note ?? "";
     const revision = createHash("sha256").update(JSON.stringify([accountId, item.id, item.url, item.title, description, note])).digest("hex");
-    return { id: item.id, requestedId: id, title: item.title, kind: "bookmark", url: item.url, description, note, revision };
+    return { id: item.id, requestedId: id, title: item.title, kind: "bookmark", url: item.url, description, note, revision,
+      isFavorite: item.isFavorite, collectionId: item.collectionId, tags: (item.tags ?? []).slice(0, 60), hasImage: !!item.bookmarkImagePath };
   },
 
   async editBookmark(input: AtlasMobileEditBookmark): Promise<AtlasMobileBookmarkEditResult> {
@@ -134,53 +185,20 @@ export const atlasMobile = {
     return { id: item.id, title: item.title, kind: item.kind };
   },
 
+  async saveStatus(input: AtlasMobileSaveFile): Promise<{ saved: boolean }> {
+    const selection = await resolveSaveSource(input);
+    const source = selection.input;
+    const key = source.itemId === undefined ? sourceKey(source.runId, await fs.realpath(source.path)) : null;
+    await selection.validate();
+    const item = source.itemId !== undefined ? atlasService.get({ accountId: source.accountId, id: source.itemId })
+      : atlasRepo.bySource(source.accountId, key!);
+    return { saved: !!item && !item.trashedAt && isAtlasLibraryItem({ sourceKey: item.sourceKey,
+      metadata: typeof item.metadata === "string" ? JSON.parse(item.metadata) : item.metadata }) };
+  },
+
   async saveFile(input: AtlasMobileSaveFile): Promise<AtlasMobileSavedItem> {
-    const accountId = required(input?.accountId);
-    if (typeof input.version !== "string" || !/^[a-f0-9]{64}$/.test(input.version)
-      || Object.keys(input).some(key => !["accountId", "runId", "version", "artifactId", "attachmentId", "sourceKey", "itemId"].includes(key))) throw new Error("Invalid Atlas save source");
-    if (input.itemId !== undefined) {
-      if ([input.runId, input.artifactId, input.attachmentId, input.sourceKey].some(value => value !== undefined)) throw new Error("Invalid Atlas save source");
-      const itemId = required(input.itemId);
-      const item = await atlasService.saveFile({ accountId, itemId }, async () => {
-        const file = await this.describeFile({ accountId, reference: { itemId } });
-        if (file.version !== input.version) throw new Error("This file changed. Open it again before saving to Atlas.");
-      });
-      return { id: item.id, title: item.title, kind: item.kind };
-    }
-    const runId = required(input.runId);
-    if (
-      [input.artifactId, input.attachmentId, input.sourceKey].filter((value) => value !== undefined).length !== 1
-      || input.artifactId !== undefined && (!Number.isSafeInteger(input.artifactId) || input.artifactId === 0)
-      || input.attachmentId !== undefined && !/^[a-f0-9]{64}$/.test(input.attachmentId)
-      || input.sourceKey !== undefined && !/^[a-f0-9]{64}$/.test(input.sourceKey)) throw new Error("Invalid Atlas save source");
-    const { runsService } = await import("../runs");
-    const resolve = async () => {
-      const run = await runsService.getRunById(runId);
-      if (!run || run.accountId !== accountId) throw new Error("Conversation not found");
-      if (run.isReplica) throw new Error("Save this file to Atlas from its source computer");
-      let path: string, version: string;
-      if (input.attachmentId !== undefined) {
-        const file = await runsService.describeAttachmentFile({ runId, attachmentId: input.attachmentId });
-        path = await runsService.resolveAttachmentPath({ runId, attachmentId: input.attachmentId }); version = file.version;
-      } else if (input.artifactId !== undefined) {
-        const file = (await runsService.listOutputs({ runId, artifactId: input.artifactId })).items[0];
-        const artifact = (await runsService.getOutputArtifacts(runId)).find((row) => row.id === input.artifactId);
-        const selectedPath = artifact?.path ?? artifact?.metadata?.path;
-        if (!file || typeof selectedPath !== "string") throw new Error("File is no longer a selected output of this conversation");
-        path = selectedPath; version = file.version;
-      } else {
-        const reference = { runId, sourceKey: input.sourceKey! };
-        const selected = await selectGenerated(accountId, reference);
-        const file = await this.describeFile({ accountId, reference });
-        path = selected.selected.path; version = file.version;
-      }
-      if (version !== input.version) throw new Error("This file changed. Open it again before saving to Atlas.");
-      return path;
-    };
-    const path = await resolve();
-    const item = await atlasService.saveFile({ accountId, runId, path }, async () => {
-      if (await resolve() !== path) throw new Error("This file changed. Open it again before saving to Atlas.");
-    });
+    const selection = await resolveSaveSource(input);
+    const item = await atlasService.saveFile(selection.input, selection.validate);
     return { id: item.id, title: item.title, kind: item.kind };
   },
 
@@ -264,12 +282,12 @@ export const atlasMobile = {
   },
 
   async readImage(input: AtlasMobileFileRequest): Promise<AtlasMobileImage> {
-    const selection = await resolveFile(input);
+    const selection = await resolveFile(input, undefined, { bookmarkPreview: true });
     if (selection.file.previewType !== "image") throw new Error("Not an Atlas image");
     const image = await selection.image();
     // Recheck ownership, membership, Trash and version after asynchronous decoding,
     // including cache hits and hydrated replica files.
-    const current = await resolveFile(input);
+    const current = await resolveFile(input, undefined, { bookmarkPreview: true });
     if (current.file.version !== selection.file.version) throw new Error("Atlas image changed while loading");
     if (!["image/jpeg", "image/png"].includes(image.mime) || image.base64.length > 174_764
       || !image.base64.length || Buffer.from(image.base64, "base64").length > 128 * 1024
@@ -344,7 +362,8 @@ async function selectGenerated(accountId: string, reference: AtlasMobileFileRefe
   return { run, selected, runsService };
 }
 
-async function resolveFile(input: AtlasMobileFileRequest, generated?: Awaited<ReturnType<typeof selectGenerated>>): Promise<{
+async function resolveFile(input: AtlasMobileFileRequest, generated?: Awaited<ReturnType<typeof selectGenerated>>,
+  { bookmarkPreview = false }: { bookmarkPreview?: boolean } = {}): Promise<{
   file: AtlasMobileFile; read: (offset: number, version: string) => Promise<RunOutputChunk>; image: (maxSide?: number) => Promise<ArtifactImage>;
 }> {
   const accountId = required(input?.accountId), reference = referenceOf(input?.reference);
@@ -352,7 +371,7 @@ async function resolveFile(input: AtlasMobileFileRequest, generated?: Awaited<Re
   let canSaveToLibrary = false;
   if (reference.itemId) {
     const item = atlasService.get({ accountId, id: reference.itemId });
-    if (!item || item.trashedAt || !["file", "image"].includes(item.kind)) throw new Error("Atlas file not found");
+    if (!item || item.trashedAt || !["file", "image", ...(bookmarkPreview ? ["bookmark"] : [])].includes(item.kind)) throw new Error("Atlas file not found");
     canSaveToLibrary = item.sourceKey?.startsWith("page:") === true && !isAtlasLibraryItem(item);
     sourcePath = (await inspectSource(await atlasService.resolveFile({ accountId, id: reference.itemId }), [atlasRoot()])).real;
   } else {

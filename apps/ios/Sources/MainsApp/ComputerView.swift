@@ -27,7 +27,7 @@ struct ComputerView: View {
 
     var body: some View {
         List {
-            SettingsSection(session.isDemo ? "Demo Mode" : "Connected computer") {
+            SettingsSection(session.isDemo ? "Demo Mode" : "Connected computer", headerLeadingInset: 0) {
                 if session.isDemo {
                     SettingsRow(title: "Demo Mac", subtitle: "Runs on this iPhone. No AI service is contacted. Demo changes reset when the app restarts.", value: "Demo")
                     Button { pair = true } label: { SettingsRow(title: "Pair a computer", subtitle: "Connect to Mains with a pairing code", symbol: "chevron.right") }
@@ -37,6 +37,8 @@ struct ComputerView: View {
                     SettingsRow(title: "Mains version", value: descriptor?.appVersion ?? "—")
                     timestampRow("Paired", date: pairing.pairedAt, empty: "—")
                     timestampRow("Last synced", date: session.lastSyncedAt, empty: "Not yet")
+                    Button(role: .destructive) { forget = true } label: { SettingsRow(title: "Forget this computer", destructive: true) }
+                        .accessibilityIdentifier("forgetComputer")
                 } else {
                     SettingsRow(title: "No computer paired", subtitle: "Start Mains on your computer, then scan its pairing code.")
                     Button { pair = true } label: { SettingsRow(title: "Scan pairing code", symbol: "chevron.right") }
@@ -117,15 +119,10 @@ struct ComputerView: View {
                 externalRow("Support", subtitle: "Email team@mains.dev", url: "mailto:team@mains.dev?subject=Mains%20Mobile%20Support", symbol: "envelope")
                 externalRow("Open Source Licenses", subtitle: "Open-source software used by the app", url: "https://mains.dev/license")
             }
-            if session.pairing != nil {
+            if session.isDemo && session.pairing != nil {
                 SettingsSection {
-                    if session.isDemo {
-                        Button(role: .destructive) { session.exitDemo(); dismiss() } label: { SettingsRow(title: "Exit Demo Mode", destructive: true) }
-                            .accessibilityIdentifier("exitDemo")
-                    } else {
-                        Button(role: .destructive) { forget = true } label: { SettingsRow(title: "Forget this computer", destructive: true) }
-                            .accessibilityIdentifier("forgetComputer")
-                    }
+                    Button(role: .destructive) { session.exitDemo(); dismiss() } label: { SettingsRow(title: "Exit Demo Mode", destructive: true) }
+                        .accessibilityIdentifier("exitDemo")
                 }
             }
         }
@@ -331,11 +328,17 @@ private struct SettingsSection<Content: View>: View {
     @ObserveHotReload private var hotReload
     #endif
     var title: String? = nil
+    var headerLeadingInset: CGFloat? = nil
     @ViewBuilder let content: Content
-    init(_ title: String? = nil, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
+    init(_ title: String? = nil, headerLeadingInset: CGFloat? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title; self.headerLeadingInset = headerLeadingInset; self.content = content()
+    }
     var body: some View {
         Section { content } header: {
-            if let title { Text(title).font(.title3.weight(.semibold)).foregroundStyle(.primary).textCase(nil).padding(.bottom, 4) }
+            if let title {
+                Text(title).font(.title3.weight(.semibold)).foregroundStyle(.primary).textCase(nil).padding(.bottom, 4)
+                    .listRowInsets(.leading, headerLeadingInset)
+            }
         }
         .listRowBackground(Color(.secondarySystemBackground))
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))

@@ -109,7 +109,7 @@ struct ChatMediaGallery: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: prompt ? .trailing : .leading)
-        .sheet(item: $selection) { OutputPreviewView(session: session, media: $0) }
+        .fullScreenCover(item: $selection) { OutputPreviewView(session: session, media: $0) }
         .onChange(of: session.ownership) { _, _ in selection = nil }
     }
     private func open(_ media: TranscriptMedia) {
@@ -175,5 +175,87 @@ private struct ChatImageTile: View {
                   ] as CFDictionary) else { throw MainsError.invalidReply }
             image = UIImage(cgImage: thumbnail)
         } catch { if !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription } }
+    }
+}
+
+struct FullScreenFileImage: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let url: URL
+    @State private var image: UIImage?
+    @State private var unsupported = false
+    var body: some View {
+        Group {
+            if let image { ZoomableFileImage(image: image) }
+            else if unsupported { OutputQuickLook(url: url) }
+            else { ProgressView().tint(.white) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black).ignoresSafeArea(.container)
+        .accessibilityLabel(url.lastPathComponent)
+        .task(id: url) {
+            image = nil; unsupported = false
+            let thumbnail = await Task.detached(priority: .userInitiated) {
+                guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil as CGImage? }
+                return CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 4096, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary)
+            }.value
+            guard !Task.isCancelled else { return }
+            image = thumbnail.map { UIImage(cgImage: $0) }; unsupported = thumbnail == nil
+        }
+        .onDisappear { image = nil }
+    }
+}
+
+private struct ZoomableFileImage: UIViewRepresentable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let image: UIImage
+    func makeUIView(context: Context) -> FileImageScrollView { FileImageScrollView() }
+    func updateUIView(_ view: FileImageScrollView, context: Context) {
+        guard view.imageView.image !== image else { return }
+        view.imageView.image = image; view.viewport = .zero; view.setNeedsLayout()
+    }
+}
+
+private final class FileImageScrollView: UIScrollView, UIScrollViewDelegate {
+    let imageView = UIImageView()
+    var viewport = CGSize.zero
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black; delegate = self
+        minimumZoomScale = 1; maximumZoomScale = 6; bouncesZoom = true
+        showsHorizontalScrollIndicator = false; showsVerticalScrollIndicator = false
+        contentInsetAdjustmentBehavior = .never
+        imageView.contentMode = .scaleAspectFit; addSubview(imageView)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(doubleTap(_:))); tap.numberOfTapsRequired = 2
+        addGestureRecognizer(tap)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0, bounds.height > 0, let image = imageView.image else { return }
+        if viewport != bounds.size {
+            viewport = bounds.size; setZoomScale(1, animated: false)
+            let scale = min(bounds.width / max(1, image.size.width), bounds.height / max(1, image.size.height))
+            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            imageView.frame = CGRect(origin: .zero, size: size); contentSize = size
+        }
+        centerImage()
+    }
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImage() }
+    private func centerImage() {
+        let horizontal = max(0, (bounds.width - contentSize.width) / 2), vertical = max(0, (bounds.height - contentSize.height) / 2)
+        contentInset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+    }
+    @objc private func doubleTap(_ gesture: UITapGestureRecognizer) {
+        if zoomScale > 1.01 { setZoomScale(1, animated: !UIAccessibility.isReduceMotionEnabled) }
+        else {
+            let point = gesture.location(in: imageView), scale: CGFloat = 2.5
+            zoom(to: CGRect(x: point.x - bounds.width / scale / 2, y: point.y - bounds.height / scale / 2,
+                            width: bounds.width / scale, height: bounds.height / scale), animated: !UIAccessibility.isReduceMotionEnabled)
+        }
     }
 }

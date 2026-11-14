@@ -36,6 +36,11 @@ try {
         'atlas-image': require('./src/renderer/components/ui/icons/picture.tsx').default,
         'atlas-bookmark': require('./src/renderer/components/ui/icons/space/bookmark.tsx').default,
       };
+      // Use the same document-type marks as desktop's Atlas rows, independently
+      // of the generic Docs navigation icon.
+      const { DOC_TYPE_ICONS } = require('./src/renderer/features/workspace/components/document-viewer/doc-type-icons.ts');
+      const documentIcons = Object.fromEntries(Object.entries(DOC_TYPE_ICONS)
+        .map(([type, Icon]) => ['atlas-document-' + type, Icon]));
       const modelIcons = {
         'model-muse': require('./src/renderer/components/ui/icons/muse.tsx').default,
         'model-deepseek': require('./src/renderer/components/ui/icons/deep-seek.tsx').default,
@@ -47,7 +52,7 @@ try {
         'model-zai': require('./src/renderer/components/ui/icons/zai.tsx').default,
         'model-bot': require('./src/renderer/components/ui/icons/bot.tsx').default,
       };
-      module.exports = Object.fromEntries(Object.entries({ ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill, ...atlasIcons, ...modelIcons })
+      module.exports = Object.fromEntries(Object.entries({ ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill, ...atlasIcons, ...documentIcons, ...modelIcons })
         .map(([name, Icon]) => [name, renderToStaticMarkup(React.createElement(Icon))]));
     `, resolveDir: desktopRoot, loader: 'tsx' },
     bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic',

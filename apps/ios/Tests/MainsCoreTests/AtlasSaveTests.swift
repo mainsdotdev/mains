@@ -3,6 +3,38 @@ import Testing
 @testable import MainsCore
 
 @Suite struct AtlasSaveTests {
+    @Test @MainActor func bookmarkDetailsFollowFavoritesTagsAndTrashWithoutChangingTheChat() async throws {
+        let storage = MemoryStorage(), backend = try DemoBackend()
+        let session = BackendSession(storage: storage, makeTransport: { _ in DemoTransport(backend: backend) })
+        session.restore(); session.setActive(true); try session.startDemo()
+        defer { session.exitDemo(); backend.shutdown() }
+        try await eventually { session.isConnected }
+        var query = AtlasQuery(); query.type = "bookmark"
+        let entry = try #require(try await session.atlasLibrary(query).items.first)
+        let original = try await session.readAtlasBookmark("demo-atlas-bookmark")
+        #expect(original.hasImage == true && original.isFavorite == false && original.tags?.count == 1)
+        #expect(original.collectionId == entry.collectionId && !original.description.isEmpty && !original.note.isEmpty)
+        let thumbnail = try await session.readAtlasImage(.saved(original.id))
+        #expect(thumbnail.data != nil && thumbnail.width <= 128 && thumbnail.height <= 128)
+        _ = try await session.setAtlasFavorite(entry, to: true, owner: session.ownership)
+        let tags = try await session.readAtlasTags(original.id)
+        _ = try await session.setAtlasTags(tags, tags: [], owner: session.ownership)
+        let changed = try await session.readAtlasBookmark(original.id)
+        #expect(changed.isFavorite == true && changed.tags?.isEmpty == true && changed.revision == original.revision)
+        _ = try await session.trashAtlasItem(entry, owner: session.ownership)
+        await #expect(throws: MainsError.self) { try await session.readAtlasBookmark(original.id) }
+        await #expect(throws: MainsError.self) { try await session.readAtlasImage(.saved(original.id)) }
+        #expect(session.viewingRunID == nil && storage.snapshot == nil)
+    }
+
+    @Test func olderBookmarkDetailsRemainReadableWithoutOrganizationOrImages() throws {
+        let value: JSONValue = .object(["id": .string("bookmark"), "requestedId": .string("bookmark"), "kind": .string("bookmark"),
+            "title": .string("Old host"), "url": .string("https://example.com"), "description": .string(""), "note": .string(""),
+            "revision": .string(String(repeating: "a", count: 64))])
+        let item = try value.decode(AtlasBookmarkDocument.self)
+        #expect(item.title == "Old host" && item.tags == nil && item.isFavorite == nil && item.hasImage == nil)
+    }
+
     @Test @MainActor func pageAttachmentsStayUnlistedUntilExplicitlySavedWithTheSameIdentity() async throws {
         let backend = try DemoBackend(), probe = AtlasSaveProbe(), storage = MemoryStorage()
         let session = BackendSession(storage: storage, makeTransport: { _ in AtlasSaveTransport(backend, probe) })
@@ -16,12 +48,14 @@ import Testing
         let file = try await session.describeAtlasFile(.saved(id))
         #expect(file.canSaveToLibrary == true)
         let source = try #require(AtlasSaveSource.file(file))
+        #expect(try await session.atlasSaveStatus(source, owner: owner) == false)
         #expect(source.itemId == id && source.runId == nil && source.sourceKey == nil && source.artifactId == nil && source.attachmentId == nil)
         probe.loseACK = true
         await #expect(throws: MainsError.self) { try await session.saveAtlasFile(source, owner: owner) }
         #expect(session.pendingAtlasSave?.status == .uncertain && !session.canSaveToAtlas)
         let saved = try await session.checkAtlasSaveDelivery()
         #expect(saved.id == id && session.pendingAtlasSave == nil)
+        #expect(try await session.atlasSaveStatus(source, owner: owner) == true)
         let calls = probe.calls.filter { $0.0 == "atlas:saveMobileFile" }
         #expect(calls.count == 2 && calls[0].1 == calls[1].1 && calls[0].2 == calls[1].2)
         let again = try await session.saveAtlasFile(source, owner: owner)
@@ -319,7 +353,9 @@ import Testing
         try await eventually { session.isConnected }
         let owner = session.ownership, space = session.selectedSpaceID
         let output = try #require(try await session.listOutputs(DemoBackend.tourID).items.first)
+        #expect(try await session.atlasSaveStatus(.output(output), owner: owner) == false)
         let saved = try await session.saveAtlasFile(.output(output), owner: owner)
+        #expect(try await session.atlasSaveStatus(.output(output), owner: owner) == true)
         let same = try await session.saveAtlasFile(.output(output), owner: owner)
         #expect(saved.id == same.id && saved.kind == "file")
         let bookmark = try await session.saveAtlasBookmark("https://example.org/notes?utm_source=mail", collectionID: nil, owner: owner)

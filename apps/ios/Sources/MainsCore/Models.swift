@@ -120,15 +120,18 @@ public struct Artifact: Codable, Equatable, Identifiable, Sendable {
     public let metadata: JSONValue?
     public let createdAt: Date
     public var path: String? = nil
-    public init(id: Int, runId: String, kind: String, content: String?, metadata: JSONValue?, createdAt: Date, path: String? = nil) {
+    public var contentHash: String? = nil
+    public init(id: Int, runId: String, kind: String, content: String?, metadata: JSONValue?, createdAt: Date, path: String? = nil, contentHash: String? = nil) {
         self.id = id; self.runId = runId; self.kind = kind; self.content = content; self.metadata = metadata; self.createdAt = createdAt; self.path = path
+        self.contentHash = contentHash
     }
-    private enum CodingKeys: String, CodingKey { case id, runId, kind, content, metadata, createdAt, path }
+    private enum CodingKeys: String, CodingKey { case id, runId, kind, content, metadata, createdAt, path, contentHash }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id); runId = try c.decode(String.self, forKey: .runId); kind = try c.decode(String.self, forKey: .kind)
         content = try c.decodeWireIfPresent(String.self, forKey: .content); metadata = try c.decodeIfPresent(JSONValue.self, forKey: .metadata)
         createdAt = try c.decode(Date.self, forKey: .createdAt); path = try c.decodeWireIfPresent(String.self, forKey: .path)
+        contentHash = try c.decodeWireIfPresent(String.self, forKey: .contentHash)
     }
 }
 

@@ -31,7 +31,7 @@ private struct RunFileLinkHost: ViewModifier {
             if !openCompanion(runID, .linkedFile(file)) { selection = file }
             return .handled
         })
-        .sheet(item: $selection) { OutputPreviewView(session: session, linkedFile: $0) }
+        .fullScreenCover(item: $selection) { OutputPreviewView(session: session, linkedFile: $0) }
         .onChange(of: session.ownership) { _, _ in selection = nil }
     }
 }

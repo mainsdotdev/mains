@@ -208,10 +208,11 @@ public struct Transcript: Sendable {
     }
 
     public var rows: [TranscriptRow] {
+        let hiddenImageCopies = TranscriptMedia.hiddenGeneratedImageCopies(in: page?.artifacts ?? [])
         var rows = (page?.artifacts ?? []).compactMap { artifact -> TranscriptRow? in
             let metadata = artifact.metadata ?? .null
             guard (metadata["voice"].bool || AgentActivity.foreground(metadata)), !AgentActivity.thinking(kind: artifact.kind, metadata: metadata),
-                  artifact.kind != "prompt_suggestion" else { return nil }
+                  artifact.kind != "prompt_suggestion", !hiddenImageCopies.contains(artifact.id) else { return nil }
             if artifact.kind == "report", voiceNarration(metadata) { return nil }
             var text = artifact.content ?? ""
             let kind: TranscriptRow.Kind

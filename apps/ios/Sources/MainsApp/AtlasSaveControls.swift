@@ -7,25 +7,48 @@ struct AtlasSaveButton: View {
     let session: BackendSession
     let source: AtlasSaveSource
     let owner: Int
+    var knownSaved: Bool? = nil
+    var onFailure: ((String) -> Void)? = nil
     @State private var saving = false
     @State private var saved = false
     @State private var error: String?
     @State private var operation = UUID()
+    @State private var checking = true
+    @State private var statusError: String?
+    @State private var retryStatus = 0
+    private var isSaved: Bool { saved || knownSaved == true }
+    private var isChecking: Bool { knownSaved == nil && checking }
+    private var readKey: String { "\(source):\(owner):\(session.ownership):\(session.isConnected):\(session.atlasRevision):\(retryStatus)" }
     var body: some View {
         Button {
+            if statusError != nil { retryStatus += 1; return }
             let ticket = UUID(); operation = ticket
             saving = true
             Task {
                 defer { if owner == session.ownership, operation == ticket { saving = false } }
                 do { _ = try await session.saveAtlasFile(source, owner: owner); if owner == session.ownership, operation == ticket { saved = true } }
-                catch { if owner == session.ownership, operation == ticket { self.error = error.localizedDescription } }
+                catch {
+                    if owner == session.ownership, operation == ticket {
+                        if let onFailure { onFailure(error.localizedDescription) }
+                        else { self.error = error.localizedDescription }
+                    }
+                }
             }
         } label: {
-            Label(saving ? "Saving…" : saved ? "Saved to Atlas" : "Save to Atlas", systemImage: saved ? "checkmark" : "square.stack.badge.plus")
+            Label(saving ? "Keeping…" : isChecking ? "Checking Atlas…" : statusError != nil ? "Retry Atlas check" : isSaved ? "Saved in Atlas" : "Keep in Atlas", systemImage: isSaved ? "checkmark" : "square.stack.badge.plus")
         }
-        .disabled(saved || saving || !session.canSaveToAtlas || owner != session.ownership || session.conversations.first(where: { $0.id == source.runId })?.isReplica == true)
+        .disabled(isSaved || saving || isChecking || !session.canSaveToAtlas || owner != session.ownership || session.conversations.first(where: { $0.id == source.runId })?.isReplica == true)
         .accessibilityIdentifier("saveToAtlas")
         .onChange(of: source) { _, _ in operation = UUID(); saved = false; saving = false; error = nil }
+        .task(id: readKey) {
+            guard knownSaved == nil, !saving, owner == session.ownership, session.isConnected else { checking = false; return }
+            checking = true; statusError = nil
+            do {
+                let value = try await session.atlasSaveStatus(source, owner: owner)
+                try Task.checkCancellation()
+                if owner == session.ownership { saved = value ?? saved; checking = false }
+            } catch { if !Task.isCancelled, owner == session.ownership { statusError = error.localizedDescription; checking = false } }
+        }
         .alert("Couldn’t save to Atlas", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK", role: .cancel) {} } message: { Text(error ?? "") }
     }
 }

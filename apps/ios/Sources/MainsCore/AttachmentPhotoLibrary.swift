@@ -37,3 +37,78 @@ final class AttachmentPhotoLibrary {
         assets.append(contentsOf: (assets.count..<end).map { result.object(at: $0) })
     }
 }
+
+/// Owns a protected export copy independently of the preview's download lifetime.
+final class PreviewExportFile: Identifiable, @unchecked Sendable {
+    let id = UUID()
+    let url: URL
+    private let directory: URL
+    init(copying source: URL) throws {
+        let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard source.isFileURL, values.isRegularFile == true, values.isSymbolicLink != true,
+              let size = values.fileSize, (0...100 * 1024 * 1024).contains(size) else {
+            throw MainsError.server("This file is unavailable or exceeds the 100 MB export limit.")
+        }
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("mains-export-" + UUID().uuidString, isDirectory: true)
+        url = directory.appendingPathComponent(TranscriptMedia.fileName(source.lastPathComponent))
+        do {
+            var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
+            #if os(iOS)
+            attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
+            #endif
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: attributes)
+            try FileManager.default.copyItem(at: source, to: url)
+            #if os(iOS)
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
+            #endif
+        } catch { try? FileManager.default.removeItem(at: directory); throw error }
+    }
+    deinit { try? FileManager.default.removeItem(at: directory) }
+}
+
+enum PhotoLibrarySaveError: LocalizedError, Equatable {
+    case denied, restricted
+    var errorDescription: String? {
+        switch self {
+        case .denied: "Allow Mains to add photos in Settings, or save this image to Files instead."
+        case .restricted: "Adding photos is restricted on this iPhone. You can save this image to Files instead."
+        }
+    }
+}
+
+/// Requests add-only access only after an explicit save, never while previewing.
+@MainActor @Observable final class PreviewPhotoSaver {
+    private(set) var saving = false
+    private(set) var savedURL: URL?
+    private let authorization: () -> PHAuthorizationStatus
+    private let requestAuthorization: () async -> PHAuthorizationStatus
+    private let write: (URL) async throws -> Void
+    init(authorization: @escaping () -> PHAuthorizationStatus = { PHPhotoLibrary.authorizationStatus(for: .addOnly) },
+         requestAuthorization: @escaping () async -> PHAuthorizationStatus = { await PHPhotoLibrary.requestAuthorization(for: .addOnly) },
+         write: @escaping (URL) async throws -> Void = { url in
+             try await PHPhotoLibrary.shared().performChanges {
+                 PHAssetCreationRequest.forAsset().addResource(with: .photo, fileURL: url, options: nil)
+             }
+         }) {
+        self.authorization = authorization; self.requestAuthorization = requestAuthorization; self.write = write
+    }
+    func save(_ url: URL, isCurrent: () -> Bool) async throws {
+        guard !saving, savedURL != url, isCurrent() else { return }
+        saving = true
+        defer { saving = false }
+        var status = authorization()
+        if status == .notDetermined { status = await requestAuthorization() }
+        try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
+        guard status == .authorized || status == .limited else {
+            throw status == .restricted ? PhotoLibrarySaveError.restricted : PhotoLibrarySaveError.denied
+        }
+        let export = try await Task.detached(priority: .userInitiated) { try PreviewExportFile(copying: url) }.value
+        try Task.checkCancellation()
+        guard isCurrent() else { throw CancellationError() }
+        try await write(export.url)
+        withExtendedLifetime(export) {}
+        guard isCurrent() else { return }
+        savedURL = url
+    }
+}

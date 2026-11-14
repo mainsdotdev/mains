@@ -33,6 +33,7 @@ struct ConversationView: View {
     @State private var confirmDelete = false
     @State private var companion = ConversationCompanionState()
     @State private var outputSelection: ConversationOutputSelection?
+    @State private var outputsSheet = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var expandedWorkspace: Bool { horizontalSizeClass == .regular && !dynamicTypeSize.isAccessibilitySize }
@@ -147,7 +148,7 @@ struct ConversationView: View {
         .onChange(of: hasOutputs) { _, _ in adaptCompanion() }
         .onChange(of: draft.text) { _, _ in companion.focusConversation() }
         .onChange(of: focusedVoice) { _, focused in if focused { companion.close(); outputSelection = nil } }
-        .onChange(of: session.ownership) { _, _ in companion.close(); outputSelection = nil }
+        .onChange(of: session.ownership) { _, _ in companion.close(); outputSelection = nil; outputsSheet = false }
         .sheet(isPresented: $projectSheet) {
             ConversationProjectSheet(session: session, runID: runID, owner: owner ?? -1)
         }
@@ -175,12 +176,13 @@ struct ConversationView: View {
         }
         .effortOverlay(isPresented: $modelSheet, session: session, context: run.map { ComposerContext(run: $0) })
         .sheet(isPresented: $optionsSheet) { if let run { RunOptionsSheet(session: session, context: ComposerContext(run: run)) } }
+        .sheet(isPresented: $outputsSheet) { OutputsView(session: session, runID: runID) }
         .sheet(item: $selectedAgent) { SubagentDetailSheet(session: session, selection: $0) }
         .onChange(of: agents.isEmpty) { _, empty in if empty { agentsExpanded = false } }
         .sensoryFeedback(.impact(weight: .light), trigger: acceptedCount)
         .runFileLinks(session: session, runID: runID)
         .environment(\.openConversationOutput, OpenConversationOutputAction { requestedRun, source in
-            guard requestedRun == runID, owner == session.ownership, session.viewingRunID == runID else { return false }
+            guard expandedWorkspace, requestedRun == runID, owner == session.ownership, session.viewingRunID == runID else { return false }
             outputSelection = ConversationOutputSelection(source: source, owner: session.ownership)
             companion.open()
             return true
@@ -189,7 +191,8 @@ struct ConversationView: View {
 
     private func adaptCompanion() { if !focusedVoice { companion.adapt(expanded: expandedWorkspace, hasOutputs: hasOutputs) } }
     private func toggleCompanion() {
-        if companion.isOpen && expandedWorkspace { companion.close(); outputSelection = nil }
+        if !expandedWorkspace { outputsSheet = true }
+        else if companion.isOpen { companion.close(); outputSelection = nil }
         else if companion.isOpen && companion.focus == .output { companion.focusConversation() }
         else { companion.open() }
     }

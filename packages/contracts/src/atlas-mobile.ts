@@ -57,7 +57,7 @@ export interface AtlasMobileFile {
   canSaveToLibrary?: boolean;
 }
 export interface AtlasMobileFileRead extends AtlasMobileFileRequest { offset: number; version: string }
-/** Fixed 128-pixel thumbnail, at most 128 KiB decoded; never the original file. */
+/** Fixed 128-pixel file or stored bookmark thumbnail, at most 128 KiB; never the original file. */
 export interface AtlasMobileImage {
   reference: AtlasMobileFileReference; version: string;
   mime: "image/jpeg" | "image/png"; base64: string; width: number; height: number;
@@ -72,12 +72,16 @@ export interface AtlasMobileSaveFile {
 }
 export interface AtlasMobileSaveBookmark { accountId: string; url: string; collectionId?: string | null }
 export interface AtlasMobileSavedItem { id: string; title: string; kind: AtlasKind }
+/** Read-only permanence check for the same version-checked identity used by Save. */
+export interface AtlasMobileSaveStatus { saved: boolean }
 export interface AtlasMobileUpdateItem {
   accountId: string; id: string; isFavorite?: boolean; collectionId?: string | null;
 }
 export interface AtlasMobileItemState extends AtlasMobileSavedItem { requestedId: string; isFavorite: boolean; collectionId: string | null }
 export interface AtlasMobileBookmark extends AtlasMobileSavedItem {
   kind: "bookmark"; requestedId: string; url: string; description: string; note: string; revision: string;
+  /** Fresh detail metadata, optional on older computers. No preview URLs or storage paths. */
+  isFavorite?: boolean; collectionId?: string | null; tags?: AtlasItemTag[]; hasImage?: boolean;
 }
 export interface AtlasMobileBookmarkIdentity { accountId: string; id: string }
 export interface AtlasMobileEditBookmark extends AtlasMobileBookmarkIdentity {

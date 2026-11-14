@@ -18,6 +18,7 @@ export function registerAtlasIpc() {
   ipcMain.handle(CHANNELS.atlas.editMobileBookmark, handle((input: AtlasMobileEditBookmark) => atlasMobile.editBookmark(input)));
   ipcMain.handle(CHANNELS.atlas.updateMobileItem, handle((input: AtlasMobileUpdateItem) => atlasMobile.updateItem(input)));
   ipcMain.handle(CHANNELS.atlas.saveMobileFile, handle((input: AtlasMobileSaveFile) => atlasMobile.saveFile(input)));
+  ipcMain.handle(CHANNELS.atlas.readMobileSaveStatus, handle((input: AtlasMobileSaveFile) => atlasMobile.saveStatus(input)));
   ipcMain.handle(CHANNELS.atlas.saveMobileBookmark, handle((input: AtlasMobileSaveBookmark) => atlasMobile.saveBookmark(input)));
   ipcMain.handle(CHANNELS.atlas.mobileLibrary, handle((input: AtlasMobileLibraryOptions) => atlasMobile.library(input)));
   ipcMain.handle(CHANNELS.atlas.readMobilePage, handle((input: AtlasMobilePageRequest) => atlasMobile.readPage(input)));
