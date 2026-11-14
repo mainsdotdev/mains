@@ -415,7 +415,7 @@ struct AtlasPageView: View {
                         if let icon = content.icon { RegistryIcon(token: icon, size: 30) }
                         Text(content.title).font(.largeTitle.bold()).textSelection(.enabled)
                     }
-                    ChatMessageBody(text: content.markdown).accessibilityIdentifier("atlasPageContent")
+                    ChatMessageBody(text: content.markdown, presentation: .atlas).accessibilityIdentifier("atlasPageContent")
                     if !content.embeddedFiles.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Files in this part").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)

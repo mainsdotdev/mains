@@ -7,15 +7,17 @@ struct MathMarkdownView: View {
     #endif
     let document: MathMarkdown
     let source: String
+    var presentation: MarkdownPresentation = .chat
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var openURL
     @ScaledMetric private var fontSize = 17.0
+    @ScaledMetric(relativeTo: .subheadline) private var atlasFontSize = 15.0
     @State private var height = 40.0
     @State private var failed = false
     var body: some View {
         if failed { Text(source).textSelection(.enabled) }
         else {
-            MathWebView(html: document.html, fontSize: fontSize, dark: colorScheme == .dark, height: $height, failed: $failed, open: { openURL($0) })
+            MathWebView(html: document.html, fontSize: presentation.isAtlas ? atlasFontSize : fontSize, atlas: presentation.isAtlas, dark: colorScheme == .dark, height: $height, failed: $failed, open: { openURL($0) })
                 .frame(height: height).accessibilityIdentifier("mathMarkdown")
         }
     }
@@ -27,6 +29,7 @@ private struct MathWebView: UIViewRepresentable {
     #endif
     let html: String
     let fontSize: Double
+    let atlas: Bool
     let dark: Bool
     @Binding var height: Double
     @Binding var failed: Bool
@@ -63,12 +66,12 @@ private struct MathWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { ready = true; render() }
         func render() {
             guard ready, !retired, let webView else { return }
-            let fingerprint = parent.html + "\(parent.fontSize):\(parent.dark)"
+            let fingerprint = parent.html + "\(parent.fontSize):\(parent.dark):\(parent.atlas)"
             guard rendered != fingerprint else { return }
             rendered = fingerprint; id = UUID().uuidString
             let ticket = id
-            webView.callAsyncJavaScript("return await window.renderMessage(html, id, fontSize, dark)",
-                arguments: ["html": parent.html, "id": id, "fontSize": parent.fontSize, "dark": parent.dark], in: nil, in: .page) { [weak self] result in
+            webView.callAsyncJavaScript("return await window.renderMessage(html, id, fontSize, dark, atlas)",
+                arguments: ["html": parent.html, "id": id, "fontSize": parent.fontSize, "dark": parent.dark, "atlas": parent.atlas], in: nil, in: .page) { [weak self] result in
                     if case .failure = result, let self, !self.retired, self.id == ticket { self.parent.failed = true }
                 }
         }

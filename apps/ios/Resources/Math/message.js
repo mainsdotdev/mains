@@ -12,9 +12,9 @@
     requestAnimationFrame(send);
     setTimeout(send, 50); // Inactive/offscreen WebKit may suspend animation frames.
   }
-  window.renderMessage = async (html, id, fontSize, dark) => {
+  window.renderMessage = async (html, id, fontSize, dark, atlas = false) => {
     documentId = id;
-    document.body.className = dark ? "dark" : "";
+    document.body.className = [dark ? "dark" : "", atlas ? "atlas" : ""].filter(Boolean).join(" ");
     document.body.style.fontSize = fontSize + "px";
     root.innerHTML = html; // Only escaped, application-generated Markdown HTML.
     for (const element of root.querySelectorAll("[data-math]")) {

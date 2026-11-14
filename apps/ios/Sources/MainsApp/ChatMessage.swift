@@ -84,23 +84,40 @@ private struct PromptBubble: View {
     }
 }
 
+/// Atlas mirrors document-content.css while chat retains its reading styles.
+enum MarkdownPresentation: Equatable {
+    case chat, atlas
+    var isAtlas: Bool { self == .atlas }
+    var bodyFont: Font { isAtlas ? .system(.subheadline) : .body }
+    func headingFont(_ level: Int) -> Font {
+        guard isAtlas else { return level == 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline }
+        switch level {
+        case 1: return .system(.title3).weight(.bold)
+        case 2: return .system(.body).weight(.semibold)
+        case 3: return .system(.subheadline).weight(.semibold)
+        default: return .system(.footnote).weight(.semibold)
+        }
+    }
+}
+
 /// Native Markdown uses an isolated, offline KaTeX surface only when it contains math.
 struct ChatMessageBody: View, Equatable {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let text: String
-    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text }
+    var presentation: MarkdownPresentation = .chat
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text && lhs.presentation == rhs.presentation }
     var body: some View {
-        if let document = MathMarkdown.prepare(text) { MathMarkdownView(document: document, source: text) }
+        if let document = MathMarkdown.prepare(text) { MathMarkdownView(document: document, source: text, presentation: presentation) }
         else { nativeBody }
     }
     private var nativeBody: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: presentation.isAtlas ? 8 : 16) {
             ForEach(Array(MessageBlock.parse(text).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .paragraph(let value): prose(value)
-                case .heading(let level, let value): prose(value).font(level == 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
+                case .heading(let level, let value): prose(value).font(presentation.headingFont(level)).padding(.top, presentation.isAtlas ? (level == 1 ? 16 : 8) : 0)
                 case .list(let marker, let value, let depth):
                     HStack(alignment: .firstTextBaseline, spacing: 9) {
                         Text(marker).foregroundStyle(.secondary).frame(minWidth: 12, alignment: .trailing)
@@ -108,23 +125,39 @@ struct ChatMessageBody: View, Equatable {
                     }.padding(.leading, 12 + CGFloat(depth) * 12)
                 case .task(let checked, let value, let depth):
                     HStack(alignment: .firstTextBaseline, spacing: 9) {
-                        Image(systemName: checked ? "checkmark.square" : "square").foregroundStyle(.secondary)
-                            .accessibilityLabel(checked ? "Completed" : "Not completed")
+                        Group {
+                            if presentation.isAtlas {
+                                RoundedRectangle(cornerRadius: 4).fill(checked ? Color.primary : Color(.tertiarySystemFill))
+                                    .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(.primary.opacity(0.12)) }
+                                    .overlay { if checked { Image(systemName: "checkmark").font(.caption2.bold()).foregroundStyle(Color(.systemBackground)) } }
+                                    .frame(width: 16, height: 16)
+                            } else {
+                                Image(systemName: checked ? "checkmark.square" : "square").foregroundStyle(.secondary)
+                            }
+                        }.accessibilityLabel(checked ? "Completed" : "Not completed")
                         prose(value).frame(maxWidth: .infinity, alignment: .leading)
                     }.padding(.leading, 12 + CGFloat(depth) * 12)
                 case .quote(let value):
-                    HStack(spacing: 12) { Rectangle().fill(.secondary.opacity(0.3)).frame(width: 3); AnyView(ChatMessageBody(text: value)).foregroundStyle(.secondary) }
+                    HStack(spacing: 12) { Rectangle().fill(.secondary.opacity(0.3)).frame(width: presentation.isAtlas ? 4 : 3); AnyView(ChatMessageBody(text: value, presentation: presentation)).foregroundStyle(.secondary).italic(presentation.isAtlas) }
                         .fixedSize(horizontal: false, vertical: true)
-                case .code(let language, let value): CodeBlock(language: language, code: value)
-                case .table(let table): MarkdownTable(table: table)
+                case .code(let language, let value): CodeBlock(language: language, code: value, presentation: presentation)
+                case .table(let table): MarkdownTable(table: table, presentation: presentation)
                 case .rule: Divider()
                 }
             }
-        }.font(.body).tint(.blue).accessibilityElement(children: .contain)
+        }.font(presentation.bodyFont).tint(.blue).accessibilityElement(children: .contain)
     }
     private func prose(_ source: String) -> some View {
         let rendered = (try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(source)
-        return Text(rendered).lineSpacing(4).textSelection(.enabled)
+        let styled: AttributedString
+        if presentation.isAtlas {
+            var result = rendered
+            for run in rendered.runs where run.inlinePresentationIntent?.contains(.code) == true {
+                result[run.range].backgroundColor = Color(.tertiarySystemFill)
+            }
+            styled = result
+        } else { styled = rendered }
+        return Text(styled).lineSpacing(presentation.isAtlas ? 7 : 4).textSelection(.enabled)
     }
 }
 
@@ -133,13 +166,14 @@ private struct MarkdownTable: View {
     @ObserveHotReload private var hotReload
     #endif
     let table: MessageTable
+    var presentation: MarkdownPresentation = .chat
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var widths: [CGFloat] {
-        let font = UIFont.preferredFont(forTextStyle: .body)
+        let font = UIFont.preferredFont(forTextStyle: presentation.isAtlas ? .subheadline : .body)
         return table.header.indices.map { column in
             let values = [table.header[column]] + table.rows.prefix(40).map { $0[column] }
             let longest = values.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 80
-            return min(260, max(86, longest + 24))
+            return min(260, max(86, longest + (presentation.isAtlas ? 32 : 24)))
         }
     }
     var body: some View {
@@ -147,16 +181,21 @@ private struct MarkdownTable: View {
         ScrollView(.horizontal) {
             VStack(spacing: 0) {
                 row(table.header, widths: widths, header: true)
-                    .background(Color.primary.opacity(0.04))
+                    .background {
+                        // Use a concrete rectangle: the ShapeStyle background overload
+                        // can inherit the surrounding container's rounded shape.
+                        Rectangle().fill(Color.primary.opacity(presentation.isAtlas ? 0.08 : 0.04))
+                    }
                 ForEach(table.rows.indices, id: \.self) { index in
                     Divider()
                     row(table.rows[index], widths: widths)
                 }
             }.fixedSize(horizontal: true, vertical: true)
         }
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
-        .clipShape(.rect(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.08)) }
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: presentation.isAtlas ? 8 : 12))
+        .clipShape(.rect(cornerRadius: presentation.isAtlas ? 8 : 12))
+        .overlay { RoundedRectangle(cornerRadius: presentation.isAtlas ? 8 : 12).strokeBorder(.primary.opacity(0.08)) }
+        .font(presentation.bodyFont)
         .accessibilityElement(children: .contain).accessibilityIdentifier("markdownTable")
     }
     private func row(_ cells: [String], widths: [CGFloat], header: Bool = false) -> some View {
@@ -166,11 +205,15 @@ private struct MarkdownTable: View {
                 let value = (try? AttributedString(markdown: cells[column], options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(cells[column])
                 Text(value).fontWeight(header ? .semibold : .regular).lineSpacing(4).textSelection(.enabled)
                     .multilineTextAlignment(table.alignments[column] == .center ? .center : table.alignments[column] == .trailing ? .trailing : .leading)
-                    .frame(width: max(1, widths[column] - 24), alignment: alignment)
-                    .fixedSize(horizontal: false, vertical: true).padding(12)
+                    .frame(width: max(1, widths[column] - (presentation.isAtlas ? 32 : 24)), alignment: alignment)
+                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, presentation.isAtlas ? 16 : 12).padding(.vertical, 12)
+                    .frame(maxHeight: presentation.isAtlas ? .infinity : nil, alignment: .topLeading)
+                    .overlay(alignment: .trailing) {
+                        if presentation.isAtlas && column < table.header.count - 1 { Rectangle().fill(.primary.opacity(0.12)).frame(width: 0.5) }
+                    }
                     .accessibilityAddTraits(header ? .isHeader : [])
             }
-        }
+        }.fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -180,6 +223,7 @@ private struct CodeBlock: View {
     #endif
     let language: String
     let code: String
+    var presentation: MarkdownPresentation = .chat
     private var title: String {
         guard !language.isEmpty else { return "Code" }
         return language.replacingOccurrences(of: "\\", with: "/").split(separator: "/").last.map(String.init) ?? language
@@ -195,12 +239,12 @@ private struct CodeBlock: View {
                     .labelStyle(.iconOnly).font(.caption).frame(width: 44, height: 44)
             }.padding(.leading, 14).padding(.trailing, 6)
             ScrollView(.horizontal) {
-                Text(code).font(.system(.callout, design: .monospaced)).lineSpacing(4).textSelection(.enabled)
+                Text(code).font(.system(presentation.isAtlas ? .footnote : .callout, design: .monospaced)).lineSpacing(4).textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: false).padding(.horizontal, 14).padding(.bottom, 14)
             }
         }
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 14))
-        .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(.primary.opacity(0.05)) }
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: presentation.isAtlas ? 12 : 14))
+        .overlay { RoundedRectangle(cornerRadius: presentation.isAtlas ? 12 : 14).strokeBorder(.primary.opacity(0.05)) }
     }
 }
 
