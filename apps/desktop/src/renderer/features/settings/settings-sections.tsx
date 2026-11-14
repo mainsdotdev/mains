@@ -108,7 +108,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   // Hidden for now: connections are managed from the /tasks sidebar. The section
   // stays registered (its modals are shared), but Settings.tsx redirects it away.
   { id: "connections", label: "Connections", icon: Connect, showInNav: false, Component: ConnectionsSettings },
-  { id: "backends", label: "Mains Connect", icon: Relay, showInNav: true, Component: BackendsSettings },
+  { id: "backends", label: "Connect", icon: Relay, showInNav: true, Component: BackendsSettings },
   { id: "dashboard", label: "Dashboard", icon: Chart, showInNav: true, Component: DashboardPage },
   { id: "archive", label: "Archive", icon: Archive, showInNav: true, Component: ArchiveSettings },
 

@@ -395,7 +395,7 @@ export default function BackendsSettings() {
   // page; adding/switching backends is a desktop-app concern.
   if (isWeb) {
     return (
-      <SettingsPageShell title="Mains Connect">
+      <SettingsPageShell title="Connect">
         <Muted>
           This web client is connected to the Mains server at{" "}
           <code>{window.location.host}</code>. Add or switch servers from the
@@ -406,7 +406,7 @@ export default function BackendsSettings() {
   }
 
   return (
-    <SettingsPageShell title="Mains Connect">
+    <SettingsPageShell title="Connect">
       <Muted className="mb-6 block">
         Run on this machine or connect to Mains running somewhere else. You can
         also make this machine available to your other devices.
