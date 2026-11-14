@@ -3,6 +3,41 @@ import Testing
 @testable import MainsCore
 
 @Suite struct ConversationPaneLayoutTests {
+    @Test(arguments: [760.0, 900.0, 1200.0]) func aWideOpenSidebarKeepsTheWholeConversationInsideTheWindow(width: Double) {
+        for open in [false, true] {
+            for drag in [-400.0, -120.0, 0.0, 120.0, 400.0] {
+                let plan = SidebarPanePlan.make(width: width, regular: true, pinned: false, open: open, drag: drag)
+                #expect(plan.sidebarWidth == 320 && plan.contentWidth >= 440)
+                #expect(plan.contentOffset + plan.contentWidth == CGFloat(width))
+                #expect(!plan.blocksContent && plan.overlayProgress == 0)
+            }
+        }
+    }
+
+    @Test func phonesAndNarrowRegularWindowsKeepTheExistingDrawerBehavior() {
+        for (width, regular) in [(390.0, false), (900.0, false), (740.0, true)] {
+            let plan = SidebarPanePlan.make(width: width, regular: regular, pinned: false, open: true)
+            #expect(plan.contentWidth == width && plan.contentOffset == plan.sidebarWidth)
+            #expect(plan.blocksContent && !plan.isInline && plan.overlayProgress == 1)
+        }
+        let pinned = SidebarPanePlan.make(width: 900, regular: true, pinned: true, open: false)
+        #expect(pinned.isInline && pinned.contentWidth == 580 && pinned.contentOffset == 320 && !pinned.blocksContent)
+    }
+
+    @Test func openingAndClosingAWideSidebarAdaptsRetainedReadersWithoutChangingFocusOrFollowing() {
+        var companion = ConversationCompanionState(); companion.open()
+        var viewport = TranscriptViewport()
+        viewport.beginPage(); viewport.finishPage(latestConfirmed: false)
+        for (open, expected) in [(false, ConversationPanePlan.Mode.sideBySide), (true, .stacked), (false, .sideBySide)] {
+            let sidebar = SidebarPanePlan.make(width: 900, regular: true, pinned: false, open: open)
+            let readers = ConversationPanePlan.make(size: CGSize(width: sidebar.contentWidth, height: 800), expanded: true, state: companion)
+            #expect(readers.mode == expected && readers.showsConversation && readers.showsOutput)
+            #expect(companion.isOpen && companion.focus == .output)
+            #expect(viewport.update(TranscriptGeometry(offset: 600, content: 4000, frame: readers.conversation.height), hasNewer: true, hasOlder: true) == nil)
+            #expect(!viewport.following && !viewport.paging)
+        }
+    }
+
     @Test @MainActor func companionOutputReadsSkipMissingFilesAndKeepOnlyOneDescriptorPage() async throws {
         let output = RunOutput(artifactId: 1, runId: "chat", name: "Report.pdf", mimeType: "application/pdf", byteSize: 10,
                                version: String(repeating: "a", count: 64), previewType: "pdf")

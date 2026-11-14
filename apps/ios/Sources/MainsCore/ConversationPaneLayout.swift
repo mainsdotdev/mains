@@ -1,5 +1,27 @@
 import Foundation
 
+/// Keeps a wide drawer and its retained navigation pane inside the local window.
+public struct SidebarPanePlan: Equatable, Sendable {
+    public let sidebarWidth: CGFloat
+    public let contentOffset: CGFloat
+    public let contentWidth: CGFloat
+    public let overlayProgress: CGFloat
+    public let blocksContent: Bool
+    public let isInline: Bool
+
+    public static func supportsInline(width: CGFloat, regular: Bool) -> Bool { regular && width >= 760 }
+
+    public static func make(width: CGFloat, regular: Bool, pinned: Bool, open: Bool, drag: CGFloat = 0) -> Self {
+        let width = max(1, width)
+        let sidebarWidth = min(regular ? 320 : 360, width * 0.82)
+        let offset = pinned ? sidebarWidth : min(sidebarWidth, max(0, (open ? sidebarWidth : 0) + drag))
+        let inline = pinned || supportsInline(width: width, regular: regular)
+        return Self(sidebarWidth: sidebarWidth, contentOffset: offset, contentWidth: width - (inline ? offset : 0),
+                    overlayProgress: inline ? 0 : offset / sidebarWidth, blocksContent: open && !inline,
+                    isInline: inline && offset > 0)
+    }
+}
+
 public struct ConversationCompanionState: Equatable, Sendable {
     public enum Focus: Equatable, Sendable { case conversation, output }
     public enum OutputsAction: Equatable, Sendable { case browse, open, close, showConversation, showOutput }

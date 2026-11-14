@@ -280,8 +280,12 @@ underlying tooling.
   Hidden chat images release decoded thumbnails and hidden panes cannot page or
   invent follow intent. Output discovery skips empty/missing-file pages with a
   bounded metadata read and retains one page. Closing/navigating removes temporary
-  downloads. Home pins a collapsible sidebar when space permits, while chat keeps
-  that space for its output. All app profiles support portrait and both landscape
+  downloads. Home pins a collapsible sidebar when space permits. At regular widths of at
+  least 760 points, opening the chat sidebar reserves up to 320 points while the
+  retained conversation/output workspace fits the remaining width. Chat, composer,
+  keyboard and mentions stay usable beside it; gallery/table swipes do not close
+  it. Navigation keeps an opened wide sidebar visible. Compact/narrow drawers
+  retain their sliding overlay, dimming and tap-to-close behavior. All app profiles support portrait and both landscape
   directions. Demo uses its prepared PDF/Markdown outputs for the same workflow.
 - Page options include **Move to project**, **Export as Markdown** and **Move to Trash**.
   Project selection reads current membership, while older computers leave every
@@ -770,8 +774,12 @@ Manual Duo/adaptive workspace checks (prepared demo files work offline):
   and hiding the chat releases its keyboard without losing the draft.
 - Open another file from a chat card or local link, use its options menu, and close
   it. At compact width without a retained panel, files use the full-screen viewer.
-- Check the Home sidebar can pin/collapse on wide windows and becomes a drawer on
-  narrow ones without navigating away or reconnecting.
+- Check the Home sidebar can pin/collapse on wide windows. Open the chat sidebar:
+  messages and Send must fit on screen, typing/mentions and gallery/table swipes
+  must work, and selecting another chat must keep the wide sidebar open. Close it
+  with the sidebar button, its trailing-edge swipe or the accessibility Escape
+  action. Narrow windows must use the old blocking drawer without navigating away
+  or reconnecting.
 
 The attachment UI test needs at least five library photos. Before running it,
 seed only your dedicated QA simulator and grant that test app library access:
