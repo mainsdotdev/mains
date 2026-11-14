@@ -59,11 +59,13 @@ private struct EffortOverlayView: View {
     @State private var returnFrame = CGRect.zero
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .title2) private var modelRowHeight: CGFloat = 52
     @ScaledMetric(relativeTo: .subheadline) private var effortCaptionHeight: CGFloat = 24
     @ScaledMetric(relativeTo: .body) private var effortControlHeight: CGFloat = 76
     private var settings: ComposerSettings { context.settings(session) }
+    private var backdropColor: Color { Color(white: colorScheme == .dark ? 0.025 : 0.965) }
     private var selected: ModelChoice? { context.model(session) }
     private var presentedModel: ModelChoice? { pendingModel ?? selected }
     private var presentedSettings: ComposerSettings { pendingSettings ?? settings }
@@ -113,9 +115,10 @@ private struct EffortOverlayView: View {
                     .onGeometryChange(for: CGSize.self) { $0.size } action: { panelSize = $0 }
                     .background(alignment: .center) {
                         Group {
-                            if reduceTransparency { RoundedRectangle(cornerRadius: 36).fill(Color(.secondarySystemBackground)).padding(.horizontal, 16) }
+                            if reduceTransparency { RoundedRectangle(cornerRadius: 36).fill(backdropColor).padding(.horizontal, 16) }
                             else {
                                 Rectangle().fill(.ultraThinMaterial)
+                                    .overlay { backdropColor.opacity(0.85) }
                                     .mask { RoundedRectangle(cornerRadius: 44).padding(24).blur(radius: 24) }
                                     .padding(-44)
                             }
