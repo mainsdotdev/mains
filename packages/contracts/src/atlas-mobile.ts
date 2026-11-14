@@ -30,6 +30,8 @@ export interface AtlasMobileEntry {
   byteSize?: number | null;
   /** At most 240 Unicode scalars of display-only Page text. */
   preview?: string | null;
+  /** Bookmark preview availability, including a metadata image not yet stored locally. */
+  hasImage?: boolean;
 }
 export interface AtlasMobileLibraryPage { items: AtlasMobileEntry[]; page: number; hasNext: boolean }
 export interface AtlasMobilePageRequest {

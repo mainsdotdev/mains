@@ -296,14 +296,16 @@ struct FileOptionsMenu: View {
                     AtlasSaveButton(session: session, source: source, owner: owner, knownSaved: retention,
                                     onFailure: { permissionDenied = false; error = $0 })
                 } else {
-                    Button("Checking Atlas…", systemImage: "square.stack.badge.plus") {}.disabled(true)
+                    Button {} label: { Label("Checking Atlas…", image: "registry-globe") }.disabled(true)
                 }
             } else if savedInAtlas { Label("Saved in Atlas", systemImage: "checkmark") }
             if let openSourceChat { Button("Open chat with source", systemImage: "bubble.left", action: openSourceChat) }
             if let reload { Button("Reload file", systemImage: "arrow.clockwise", action: reload).disabled(!session.isConnected) }
         } label: {
-            Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44).contentShape(.circle)
+            Label("File options", systemImage: "ellipsis")
         }
+        .labelStyle(.iconOnly)
+        .buttonBorderShape(.circle)
         .accessibilityLabel("File options").accessibilityIdentifier("fileOptions")
         .disabled(owner != session.ownership)
         .task(id: readKey) {

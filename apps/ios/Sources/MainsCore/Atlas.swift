@@ -46,6 +46,7 @@ public struct AtlasEntry: Decodable, Identifiable, Sendable {
     public let mimeType: String?
     public let byteSize: Int?
     public let preview: String?
+    public var hasImage: Bool? = nil
     public var savedIdentity: String? {
         savedItemId ?? pageId ?? file?.itemId ?? (kind == "bookmark" && origin == "saved" ? key : nil)
     }

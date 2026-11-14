@@ -13,6 +13,7 @@ import { atlasMobile } from "./atlas.mobile";
 import { appSettingsService } from "../appSettings";
 import { atlasBookmarks } from "./atlas.bookmarks";
 import { bookmarkUrl, extractBookmarkMetadata, fetchBookmarkResource } from "./atlas.bookmark-metadata";
+import { assertPublicHttpUrl } from "../imageProxy";
 
 const ai = vi.hoisted(() => ({ generate: vi.fn(), models: vi.fn(async () => [{ id: "cheap", displayName: "Small model" }]) }));
 let db: DatabaseInstance, cleanup: () => void, restore: () => void, directory: string;
@@ -68,6 +69,60 @@ describe("Atlas bookmarks", () => {
       await expect(atlasMobile.readImage({ accountId: "other", reference })).rejects.toThrow("not found");
       await atlasMobile.setTrash({ accountId, id: item.id, trashed: true });
       await expect(atlasMobile.readImage({ accountId, reference })).rejects.toThrow("not found");
+    } finally { reset(); }
+  });
+
+  it("shows an owned bookmark's metadata image even when no local preview was retained", async () => {
+    const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/remote-preview" });
+    atlasRepo.update(item.id, accountId, { metadata: JSON.stringify({ bookmark: { imageUrl: "https://example.com/cover.png" } }) });
+    const resize = vi.fn(async () => ({ bytes: Buffer.from("thumbnail"), mime: "image/png" as const, width: 128, height: 96 }));
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize } });
+    try {
+      expect(atlasMobile.readBookmark({ accountId, id: item.id }).hasImage).toBe(true);
+      expect((await atlasMobile.library({ accountId })).items.find(row => row.key === item.id)).toMatchObject({ hasImage: true });
+      const result = await atlasMobile.readImage({ accountId, reference: { itemId: item.id } });
+      expect(result).toMatchObject({ width: 128, height: 96, version: expect.stringMatching(/^[a-f0-9]{64}$/) });
+      expect(resize).toHaveBeenCalledWith(Buffer.from([137, 80, 78, 71]), 128, true);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(result)).not.toContain("https://");
+      expect(atlasService.get({ accountId, id: item.id })?.bookmarkImagePath).toBeNull();
+      expect(atlasService.list({ accountId })).toHaveLength(1);
+    } finally { reset(); }
+  });
+
+  it.each(["image-changed", "trashed", "ownership", "stored-copy", "oversized", "dimensions"])(
+    "refuses metadata-only bookmark pixels when their source becomes %s during decoding", async condition => {
+      const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/remote-race" });
+      const metadata = { bookmark: { imageUrl: "https://example.com/cover.png" } };
+      atlasRepo.update(item.id, accountId, { metadata: JSON.stringify(metadata) });
+      createAccount(db, { id: "other" });
+      const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize: async () => {
+        if (condition === "image-changed") atlasRepo.update(item.id, accountId, { metadata: JSON.stringify({ bookmark: { imageUrl: "https://example.com/new-cover.png" } }) });
+        if (condition === "trashed") await atlasMobile.setTrash({ accountId, id: item.id, trashed: true });
+        if (condition === "ownership") atlasRepo.update(item.id, accountId, { accountId: "other" });
+        if (condition === "stored-copy") atlasRepo.update(item.id, accountId, { storageKey: `${item.id}/preview.png` });
+        return { bytes: condition === "oversized" ? Buffer.alloc(128 * 1024 + 1) : Buffer.from("thumbnail"),
+          mime: "image/png", width: condition === "dimensions" ? 129 : 128, height: 96 };
+      } } });
+      try { await expect(atlasMobile.readImage({ accountId, reference: { itemId: item.id } })).rejects.toThrow(); }
+      finally { reset(); }
+    },
+  );
+
+  it("authorizes metadata-only previews before fetching and keeps the bookmark SSRF guard", async () => {
+    const item = await atlasService.saveBookmark({ accountId, url: "https://example.com/remote-owner" });
+    atlasRepo.update(item.id, accountId, { metadata: JSON.stringify({ bookmark: { imageUrl: "https://example.com/cover.png" } }) });
+    const resize = vi.fn(async () => ({ bytes: Buffer.from("thumbnail"), mime: "image/png" as const, width: 128, height: 96 }));
+    const reset = installTestBackendRuntime({ getPath: () => directory, imagePreview: { resize } });
+    try {
+      await expect(atlasMobile.readImage({ accountId: "foreign", reference: { itemId: item.id } })).rejects.toThrow("not found");
+      expect(fetch).not.toHaveBeenCalled();
+      vi.mocked(assertPublicHttpUrl).mockRejectedValueOnce(new Error("Blocked private image destination"));
+      await expect(atlasMobile.readImage({ accountId, reference: { itemId: item.id } })).rejects.toThrow("Blocked private");
+      expect(fetch).not.toHaveBeenCalled(); expect(resize).not.toHaveBeenCalled();
+      await atlasMobile.setTrash({ accountId, id: item.id, trashed: true });
+      await expect(atlasMobile.readImage({ accountId, reference: { itemId: item.id } })).rejects.toThrow("not found");
+      expect(fetch).not.toHaveBeenCalled();
     } finally { reset(); }
   });
 

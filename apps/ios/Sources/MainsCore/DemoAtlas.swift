@@ -84,6 +84,7 @@ import CryptoKit
                     value["byteSize"] = .number(Double(file.bytes.count))
                 }
                 if id == "demo-atlas-page" { value["preview"] = .string("Pages, documents, images and bookmarks together in your library.") }
+                if row["kind"].string == "bookmark" { value["hasImage"] = .bool(id == "demo-atlas-bookmark") }
                 return .object(value)
             }
         }

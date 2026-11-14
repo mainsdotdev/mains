@@ -35,7 +35,9 @@ struct AtlasSaveButton: View {
                 }
             }
         } label: {
-            Label(saving ? "Keeping…" : isChecking ? "Checking Atlas…" : statusError != nil ? "Retry Atlas check" : isSaved ? "Saved in Atlas" : "Keep in Atlas", systemImage: isSaved ? "checkmark" : "square.stack.badge.plus")
+            let title = saving ? "Keeping…" : isChecking ? "Checking Atlas…" : statusError != nil ? "Retry Atlas check" : isSaved ? "Saved in Atlas" : "Keep in Atlas"
+            if isSaved { Label(title, systemImage: "checkmark") }
+            else { Label(title, image: "registry-globe") }
         }
         .disabled(isSaved || saving || isChecking || !session.canSaveToAtlas || owner != session.ownership || session.conversations.first(where: { $0.id == source.runId })?.isReplica == true)
         .accessibilityIdentifier("saveToAtlas")

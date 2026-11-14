@@ -12,7 +12,7 @@ import Testing
         var query = AtlasQuery(); query.type = "bookmark"
         let entry = try #require(try await session.atlasLibrary(query).items.first)
         let original = try await session.readAtlasBookmark("demo-atlas-bookmark")
-        #expect(original.hasImage == true && original.isFavorite == false && original.tags?.count == 1)
+        #expect(entry.hasImage == true && original.hasImage == true && original.isFavorite == false && original.tags?.count == 1)
         #expect(original.collectionId == entry.collectionId && !original.description.isEmpty && !original.note.isEmpty)
         let thumbnail = try await session.readAtlasImage(.saved(original.id))
         #expect(thumbnail.data != nil && thumbnail.width <= 128 && thumbnail.height <= 128)

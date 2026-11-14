@@ -343,6 +343,9 @@ private struct AtlasEntryRow: View {
                 if entry.kind == "image", let reference = entry.file {
                     AtlasListImage(session: session, reference: reference, revision: entry.date)
                 }
+                else if entry.kind == "bookmark", entry.hasImage != false, let id = entry.savedIdentity {
+                    AtlasListImage(session: session, reference: .saved(id), revision: entry.date, fallbackIcon: "atlas-bookmark")
+                }
                 else if entry.kind == "file" { RegistryIcon(token: "icon:" + documentIcon, size: 22, tint: .secondary) }
                 else if let icon = entry.icon { RegistryIcon(token: icon, size: 22, tint: .secondary) }
                 else { RegistryIcon(token: "icon:" + (atlasTypes.first { $0.0 == entry.kind }?.2 ?? "document"), size: 22, tint: .secondary) }
@@ -378,20 +381,25 @@ private struct AtlasListImage: View {
     let session: BackendSession
     let reference: AtlasFileReference
     let revision: String
+    var fallbackIcon = "atlas-image"
+    var side: CGFloat = 36
+    var enabled = true
+    var owner: Int? = nil
     @State private var visible = false
     @State private var image: UIImage?
-    private var loadKey: String { "\(reference.hashValue):\(revision):\(session.ownership):\(session.connection):\(session.atlasRevision):\(visible)" }
+    private var loadKey: String { "\(reference.hashValue):\(revision):\(session.ownership):\(owner ?? session.ownership):\(session.connection):\(session.atlasRevision):\(enabled):\(visible)" }
     var body: some View {
         ZStack {
             Color(.tertiarySystemGroupedBackground)
             if let image { Image(uiImage: image).resizable().scaledToFill() }
-            else { RegistryIcon(token: "icon:atlas-image", size: 22, tint: .secondary) }
+            else { RegistryIcon(token: "icon:" + fallbackIcon, size: side > 36 ? 28 : 22, tint: .secondary) }
         }
-        .frame(width: 36, height: 36).clipShape(.rect(cornerRadius: 8))
+        .frame(width: side, height: side).clipShape(.rect(cornerRadius: min(14, side * 2 / 9)))
+        .onAppear { visible = true }
         .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
         .task(id: loadKey) {
             image = nil
-            guard visible, session.isConnected else { return }
+            guard visible, enabled, (owner ?? session.ownership) == session.ownership, session.isConnected else { return }
             let owner = session.ownership
             do {
                 let preview = try await session.readAtlasImage(reference)
@@ -406,7 +414,7 @@ private struct AtlasListImage: View {
                 image = UIImage(cgImage: thumbnail)
             } catch { /* Keep the category icon when a preview is unavailable. */ }
         }
-        .onDisappear { image = nil }
+        .onDisappear { visible = false; image = nil }
     }
 }
 
@@ -718,9 +726,9 @@ private struct AtlasBookmarkView: View {
                         Label {
                             Text("Move to Trash")
                         } icon: {
-                            Image(uiImage: (UIImage(systemName: "trash") ?? UIImage()).withTintColor(.systemRed, renderingMode: .alwaysOriginal))
-                                .renderingMode(.original)
+                            Image(systemName: "trash").symbolRenderingMode(.monochrome).foregroundStyle(.red)
                         }
+                        .foregroundStyle(.red)
                     }.disabled(!editable).accessibilityIdentifier("trashAtlasBookmark")
                 }
                 if loading || working { HStack(spacing: 12) { ProgressView(); Text(working ? "Updating bookmark…" : "Loading bookmark…").foregroundStyle(.secondary) } }
@@ -756,8 +764,10 @@ private struct AtlasBookmarkView: View {
         .onChange(of: session.ownership) { _, _ in dismiss() }
     }
     private var preview: some View {
-        AtlasBookmarkImage(session: session, itemID: current?.id ?? entry.savedIdentity ?? entry.key,
-                           owner: owner, enabled: current?.hasImage == true)
+        AtlasListImage(session: session, reference: .saved(current?.id ?? entry.savedIdentity ?? entry.key),
+                       revision: current?.revision ?? entry.date, fallbackIcon: "atlas-bookmark", side: 80,
+                       enabled: (current?.hasImage ?? entry.hasImage) != false, owner: owner)
+            .accessibilityHidden(true)
     }
     private var heading: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -807,43 +817,6 @@ private struct AtlasBookmarkView: View {
                 }
             }
         }
-    }
-}
-
-private struct AtlasBookmarkImage: View {
-    #if DEBUG && targetEnvironment(simulator)
-    @ObserveHotReload private var hotReload
-    #endif
-    let session: BackendSession
-    let itemID: String
-    let owner: Int
-    let enabled: Bool
-    @State private var image: UIImage?
-    @State private var visible = false
-    var body: some View {
-        ZStack {
-            Color(.tertiarySystemGroupedBackground)
-            if let image { Image(uiImage: image).resizable().scaledToFill() }
-            else { RegistryIcon(token: "icon:atlas-bookmark", size: 28, tint: .secondary) }
-        }
-        .frame(width: 80, height: 80).clipShape(.rect(cornerRadius: 14)).accessibilityHidden(true)
-        .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
-        .task(id: "\(itemID):\(owner):\(enabled):\(session.connection):\(session.atlasRevision):\(visible)") {
-            image = nil
-            guard visible, enabled, owner == session.ownership, session.isConnected else { return }
-            do {
-                let preview = try await session.readAtlasImage(.saved(itemID))
-                try Task.checkCancellation()
-                guard owner == session.ownership, let data = preview.data,
-                      let source = CGImageSourceCreateWithData(data as CFData, nil),
-                      let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                        kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 128,
-                        kCGImageSourceCreateThumbnailWithTransform: true,
-                      ] as CFDictionary) else { return }
-                image = UIImage(cgImage: thumbnail)
-            } catch { /* Keep the bookmark icon when no stored preview is available. */ }
-        }
-        .onDisappear { image = nil }
     }
 }
 

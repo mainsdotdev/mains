@@ -16,6 +16,8 @@ import { readImagePreview } from "../imageProxy";
 import type { ArtifactImage } from "@mains/contracts/runs";
 import { isAtlasLibraryItem, type AtlasSaveFile } from "@mains/contracts/atlas";
 import { atlasRepo } from "./atlas.repo";
+import { bookmarkUrl, fetchBookmarkResource } from "./atlas.bookmark-metadata";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 function required(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.length > 256 || value.includes("\0")) throw new Error("Invalid Atlas identity");
@@ -139,7 +141,8 @@ export const atlasMobile = {
     const description = item.description ?? "", note = item.note ?? "";
     const revision = createHash("sha256").update(JSON.stringify([accountId, item.id, item.url, item.title, description, note])).digest("hex");
     return { id: item.id, requestedId: id, title: item.title, kind: "bookmark", url: item.url, description, note, revision,
-      isFavorite: item.isFavorite, collectionId: item.collectionId, tags: (item.tags ?? []).slice(0, 60), hasImage: !!item.bookmarkImagePath };
+      isFavorite: item.isFavorite, collectionId: item.collectionId, tags: (item.tags ?? []).slice(0, 60),
+      hasImage: !!(item.bookmarkImagePath || item.metadata?.bookmark?.imageUrl) };
   },
 
   async editBookmark(input: AtlasMobileEditBookmark): Promise<AtlasMobileBookmarkEditResult> {
@@ -221,6 +224,7 @@ export const atlasMobile = {
           ? saved ? { itemId: saved.id } : generated ? { runId: generated.runId, sourceKey: generated.sourceKey } : null : null,
         pageId: entry.kind === "page" ? saved?.id ?? null : null, icon: saved?.metadata?.icon ?? null,
         url: saved?.url ?? null, description: saved?.description ?? null, note: saved?.note ?? null, tags: (saved?.tags ?? []).slice(0, 60),
+        ...(entry.kind === "bookmark" ? { hasImage: !!(saved?.bookmarkImagePath || saved?.metadata?.bookmark?.imageUrl) } : {}),
         fileName: (saved?.fileName ?? generated?.fileName)?.split(/[/\\]/).pop()?.slice(0, 240).replace(/[\uD800-\uDBFF]$/u, "") ?? null,
         mimeType: saved?.mimeType ?? generated?.mimeType ?? null,
         byteSize: saved?.byteSize ?? generated?.byteSize ?? null, preview: previews.get(entry.key) ?? null };
@@ -282,6 +286,9 @@ export const atlasMobile = {
   },
 
   async readImage(input: AtlasMobileFileRequest): Promise<AtlasMobileImage> {
+    const accountId = required(input?.accountId), reference = referenceOf(input?.reference);
+    const item = reference.itemId ? atlasService.get({ accountId, id: reference.itemId }) : null;
+    if (item?.kind === "bookmark" && !item.bookmarkImagePath) return readRemoteBookmarkImage(accountId, reference);
     const selection = await resolveFile(input, undefined, { bookmarkPreview: true });
     if (selection.file.previewType !== "image") throw new Error("Not an Atlas image");
     const image = await selection.image();
@@ -289,12 +296,7 @@ export const atlasMobile = {
     // including cache hits and hydrated replica files.
     const current = await resolveFile(input, undefined, { bookmarkPreview: true });
     if (current.file.version !== selection.file.version) throw new Error("Atlas image changed while loading");
-    if (!["image/jpeg", "image/png"].includes(image.mime) || image.base64.length > 174_764
-      || !image.base64.length || Buffer.from(image.base64, "base64").length > 128 * 1024
-      || !Number.isInteger(image.width) || !Number.isInteger(image.height)
-      || image.width! < 1 || image.height! < 1 || image.width! > 128 || image.height! > 128) throw new Error("Invalid Atlas thumbnail");
-    return { reference: selection.file.reference, version: selection.file.version,
-      mime: image.mime as AtlasMobileImage["mime"], base64: image.base64, width: image.width!, height: image.height! };
+    return mobileThumbnail(selection.file.reference, selection.file.version, image);
   },
 
   async readFile(input: AtlasMobileFileRead): Promise<RunOutputChunk> {
@@ -351,6 +353,36 @@ async function pageImagePreview(request: AtlasMobileFileRequest, checkPage: () =
     || image.width! < 1 || image.height! < 1 || image.width! > 768 || image.height! > 768) throw new Error("Invalid Page image preview");
   return { version: selection.file.version, mime: image.mime as AtlasMobilePageImage["mime"],
     base64: image.base64, width: image.width!, height: image.height! };
+}
+
+function mobileThumbnail(reference: AtlasMobileFileReference, version: string, image: ArtifactImage): AtlasMobileImage {
+  if (!["image/jpeg", "image/png"].includes(image.mime) || image.base64.length > 174_764
+    || !image.base64.length || Buffer.from(image.base64, "base64").length > 128 * 1024
+    || !Number.isInteger(image.width) || !Number.isInteger(image.height)
+    || image.width! < 1 || image.height! < 1 || image.width! > 128 || image.height! > 128) throw new Error("Invalid Atlas thumbnail");
+  return { reference, version, mime: image.mime as AtlasMobileImage["mime"], base64: image.base64, width: image.width!, height: image.height! };
+}
+
+/** Desktop can display the persisted Open Graph URL before a local copy exists.
+ * Resolve only that owned bookmark's image on the host, never a caller URL. */
+async function readRemoteBookmarkImage(accountId: string, reference: AtlasMobileFileReference): Promise<AtlasMobileImage> {
+  const item = atlasService.get({ accountId, id: reference.itemId! });
+  if (!item || item.kind !== "bookmark" || item.trashedAt || item.bookmarkImagePath) throw new Error("Bookmark preview not found");
+  const imageUrl = bookmarkUrl(item.metadata?.bookmark?.imageUrl).url;
+  const codec = getBackendRuntime().imagePreview;
+  if (!codec) throw new Error("Image previews are unavailable on this backend");
+  // Existing bookmark fetching bounds input to 5 MB/12 seconds and checks
+  // public HTTP destinations on every redirect, without credentials.
+  const resource = await fetchBookmarkResource(imageUrl, true);
+  const preview = await codec.resize(resource.bytes, 128, true);
+  const current = atlasService.get({ accountId, id: item.id });
+  if (!current || current.kind !== "bookmark" || current.trashedAt || current.url !== item.url
+    || current.bookmarkImagePath !== item.bookmarkImagePath
+    || current.metadata?.bookmark?.imageUrl !== item.metadata?.bookmark?.imageUrl) throw new Error("Bookmark preview changed while loading");
+  if (!preview || preview.bytes.length > 128 * 1024) throw new Error("Invalid Atlas thumbnail");
+  const version = createHash("sha256").update(JSON.stringify([accountId, item.id, imageUrl,
+    createHash("sha256").update(resource.bytes).digest("hex")])).digest("hex");
+  return mobileThumbnail(reference, version, { mime: preview.mime, base64: preview.bytes.toString("base64"), width: preview.width, height: preview.height });
 }
 
 async function selectGenerated(accountId: string, reference: AtlasMobileFileReference) {
