@@ -76,6 +76,7 @@ import { resolveReplicaFile, useAtlasFilePath } from "../hooks/use-atlas-file-pa
 import { AtlasImagePreview } from "./atlas-image-preview";
 import { useAtlasOwnerKey } from "../hooks/use-atlas-tabs";
 import { AtlasBookmarkEditor } from "./atlas-bookmark-editor";
+import { openAtlasBookmark } from "../lib/bookmark-modal-bridge";
 import { AtlasBookmarkCard } from "./atlas-bookmark-card";
 import { AtlasItemRow } from "./atlas-item-row";
 import { AtlasItemTags } from "./atlas-item-tags";
@@ -161,7 +162,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const rawPage = Number(params.get("page") ?? 1);
   const page = Number.isSafeInteger(rawPage) && rawPage > 0 && rawPage <= 100000 ? rawPage : 1;
   const [preview, setPreview] = useState<Entry | null>(null);
-  const [bookmarkEditor, setBookmarkEditor] = useState<AtlasItem | "new" | null>(null);
+  const [bookmarkEditor, setBookmarkEditor] = useState<AtlasItem | null>(null);
   const [tagEditor, setTagEditor] = useState<AtlasItem | null>(null);
   const [managingTags, setManagingTags] = useState(false);
   const { data: tags = [] } = useListAtlasTagsQuery({ accountId });
@@ -534,7 +535,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               />
             </div>
             {type === "bookmark" ? (
-              <Button variant="primary" className="inline-flex gap-2" onClick={() => setBookmarkEditor("new")}>
+              <Button variant="primary" className="inline-flex gap-2" onClick={() => openAtlasBookmark({ accountId, collectionId: collectionId || undefined })}>
                 <Bookmark aria-hidden="true" className="size-4" />
                 Add bookmark
               </Button>
@@ -562,7 +563,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               >
                 {(close) => (
                   <>
-                    <DropdownMenuItem onClick={() => { close(); setBookmarkEditor("new"); }}><Bookmark className="size-4" />New bookmark</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => { close(); openAtlasBookmark({ accountId, collectionId: collectionId || undefined }); }}><Bookmark className="size-4" />New bookmark</DropdownMenuItem>
                     {type === "all" && provider.supportsAtlas && <DropdownMenuItem
                       onClick={() => { close(); navigate(atlasImageCreatorHref(collectionId)); }}>
                       <Picture className="size-4" />New image
@@ -754,7 +755,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                       ? "Create a page to start collecting your work."
                       : "Files from your conversations will appear here. Save to Atlas to keep a permanent copy."}
             </Muted>
-            {!searchValue && type === "bookmark" && scope === "all" && <Button variant="primary" className="mt-6" onClick={() => setBookmarkEditor("new")}>Save a bookmark</Button>}
+            {!searchValue && type === "bookmark" && scope === "all" && <Button variant="primary" className="mt-6" onClick={() => openAtlasBookmark({ accountId, collectionId: collectionId || undefined })}>Save a bookmark</Button>}
             {provider.supportsAtlas && !searchValue &&
               scope === "all" &&
               (type === "page" || type === "all") && (
@@ -848,7 +849,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
         <AtlasImagePreview accountId={preview.saved?.accountId} id={preview.saved?.id} title={preview.title} path={preview.path}
           generated={preview.saved ? undefined : preview.generated} onClose={() => setPreview(null)} />
       )}
-      {bookmarkEditor && <AtlasBookmarkEditor accountId={accountId} item={bookmarkEditor === "new" ? undefined : bookmarkEditor} collectionId={collectionId} onClose={() => setBookmarkEditor(null)} />}
+      {bookmarkEditor && <AtlasBookmarkEditor accountId={accountId} item={bookmarkEditor} collectionId={collectionId} onClose={() => setBookmarkEditor(null)} />}
       {tagEditor?.accountId === accountId && <AtlasTagEditor key={tagEditor.id} item={tagEditor} onClose={() => setTagEditor(null)} />}
       {managingTags && <AtlasOrganization accountId={accountId} onClose={() => setManagingTags(false)} />}
     </PageShell>

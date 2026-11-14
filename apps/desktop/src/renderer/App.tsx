@@ -54,6 +54,7 @@ import { useAppearanceFonts } from "./hooks/use-appearance-fonts";
 import { useAppTheme } from "./hooks/use-app-theme";
 import { getProviderVariant } from "./lib/provider-variants";
 import { CommandMenu } from "./features/command-menu/command-menu";
+import { AtlasBookmarkModal } from "./features/atlas/components/atlas-bookmark-modal";
 import { useAppshots } from "./hooks/use-appshots";
 import { useRunMessageQueueController } from "./features/workspace/hooks/use-run-message-queue-controller";
 import { useRunActivityLifecycle } from "./features/workspace/hooks/use-run-activity";
@@ -332,6 +333,7 @@ function AppContent() {
     <>
       <Toaster />
       <CommandMenu />
+      <AtlasBookmarkModal />
       {isMobile && (
         <div className="fixed bottom-5 left-5 z-(--z-overlay)">
           <RealtimeVoiceDock />
