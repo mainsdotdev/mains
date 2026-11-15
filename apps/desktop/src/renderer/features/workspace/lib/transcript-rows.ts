@@ -584,7 +584,7 @@ export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
     const metadata = group.events[0]?.metadata;
     const workId = typeof metadata?.voiceWorkId === "string" ? metadata.voiceWorkId : null;
     const speech = group.events.some((event) => event.metadata?.voice === true || event.metadata?.kind === "voice-task");
-    const asyncQuestions = group.events.some((event) => event.metadata?.source === "codex_async_questions");
+    const asyncQuestions = group.events.some((event) => event.metadata?.source === "codex_async_questions" || event.metadata?.source === "assistant_welcome" || event.metadata?.source === "assistant_assignment");
     if (group.type !== "context_compaction" && !workId && !speech && !asyncQuestions) continue;
     flushRegular(regularStart, index);
     regularStart = index + 1;

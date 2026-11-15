@@ -17,13 +17,14 @@
 
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { appApi, appEvents } from "@/lib/transport";
-import type { Run, RunEvent } from "../types";
+import type { Run } from "../types";
 import type { ModeId } from "../../../../shared/modes";
 import { toast } from "@/components/ui";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { runsApi, useArchiveRunMutation } from "@/lib/redux/api";
 import { clearPendingRunId, setActiveTab } from "@/lib/redux/slices/workspaceSlice";
 import { createRunCache } from "../lib/run-cache";
+import { mergeTranscriptStreams } from "../lib/merge-transcript-streams";
 import { omitCompletedCodexPreviews } from "../lib/run-event-mappers";
 import { useRunOperations } from "./use-run-operations";
 import { useRunSync } from "./use-run-sync";
@@ -376,60 +377,7 @@ export function useWorkspaceRuns(
   const combinedEvents = useMemo(() => {
     const dbEvents = activeRunId
       ? omitCompletedCodexPreviews(runEvents[activeRunId] || [], activeRunId) : [];
-    if (history.historical || streamingEvents.length === 0) return dbEvents;
-
-    // Prefer a native stream identity when the provider persists one. The final
-    // text can differ from the last delta, or repeat a previous turn's text.
-    const dbArtifactStreamIds = new Set(
-      dbEvents.filter((e) => e.type === "artifact").map((e) => e.metadata?.streamId),
-    );
-    // Providers without a persisted stream identity still reconcile by content.
-    const dbArtifactContents = new Set(
-      dbEvents
-        .filter((e) => e.type === "artifact" && e.metadata?.kind === "report")
-        .map((e) => e.content.trim()),
-    );
-
-    const activeStreams = streamingEvents.filter(
-      (se) => !dbArtifactStreamIds.has(se.streamId) &&
-        (se.metadata?.streamId === se.streamId || !dbArtifactContents.has(se.content.trim())),
-    );
-
-    if (activeStreams.length === 0) return dbEvents;
-
-    const streamRunEvents: RunEvent[] = activeStreams.map((se) => {
-      // Command progress and provider thoughts stay out of assistant bubbles;
-      // command stdout must never be mistaken for a reasoning summary.
-      const kind =
-        se.kind === "user-prompt" ? "user-prompt"
-          : se.kind === "image_generation" ? "image_generation"
-          : se.kind === "thinking" ? "thinking"
-          : se.kind === "tool_progress" ? "tool_progress"
-          : se.streamId.startsWith("cursor-think-") ? "thinking"
-          : se.streamId.startsWith("codex-cmd-") ? "tool_progress"
-          : se.streamId.startsWith("claude-think-") ? "thinking"
-          : "report";
-      return {
-        id: se.id,
-        type: "artifact" as const,
-        content: se.content,
-        timestamp: new Date(se.timestamp),
-        metadata: {
-          ...se.metadata,
-          kind,
-          streaming: se.metadata?.streaming !== false,
-          streamId: se.streamId,
-        },
-      };
-    });
-
-    const merged = [...dbEvents, ...streamRunEvents];
-    // A spoken message stays where speech began, even if work artifacts finish
-    // before its final transcript. Persisted voice messages keep this timestamp.
-    if (activeStreams.some((event) => event.metadata?.voice === true)) {
-      merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-    }
-    return merged;
+    return mergeTranscriptStreams(dbEvents, streamingEvents, history.historical);
   }, [activeRunId, runEvents, streamingEvents, history.historical]);
   const currentEvents = combinedEvents;
 

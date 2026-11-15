@@ -6,6 +6,7 @@ import {
   useCallback,
   type MouseEvent,
 } from "react";
+import { AssistantTaskCard } from "@/features/assistants/components/assistant-task-card";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import type { EventGroup } from "../../lib/group-events";
 import { Code, Globe } from "@/components/ui/icons/space";
@@ -223,6 +224,9 @@ function InfoGroupImpl({
   if (replica && event.type === "artifact" && ["image", "document", "file", "visualization", "image_generation"].includes(String(event.metadata?.kind))) {
     return <Text as="div" size="xs" tone="muted" className="my-3">File available on {replica.label}</Text>;
   }
+  if (event.type === "artifact" && event.metadata?.source === "assistant_assignment" && typeof event.metadata.assignmentId === "string") {
+    return replica ? <Text size="xs" tone="subtle">Assistant task available on {replica.label}</Text> : <AssistantTaskCard assignmentId={event.metadata.assignmentId} runId={runId} />;
+  }
   if (event.type === "artifact" && event.metadata?.kind === "voice-task") {
     const task = event.metadata.voiceTask as VoiceTaskLink | undefined;
     return task && typeof task.id === "string" ? (
@@ -273,7 +277,8 @@ function InfoGroupImpl({
     );
     const reviewComments = readReviewComments(event.metadata?.reviewComments);
     const documentAnnotations = [...readDocumentAnnotations(event.metadata?.documentAnnotations), ...readDocumentAnnotations(event.metadata?.presentationAnnotations)];
-    const skills = (event.metadata?.skills ?? []) as PromptMarkdownSkill[];
+    const mentions = (event.metadata?.assistantMentions ?? []) as Array<{ id: string; name: string; token: string }>;
+    const skills = [...((event.metadata?.skills ?? []) as PromptMarkdownSkill[]), ...mentions.map(m => ({ name: m.id, displayName: m.name, token: m.token, scope: "assistant" }))];
 
     if (isReview) {
       const reviewTarget = event.metadata?.reviewTarget as string | undefined;
@@ -532,6 +537,10 @@ function InfoGroupImpl({
     return (
       <VisualizationArtifact absPath={absPath} title={title} mode={mode} />
     );
+  }
+
+  if (event.type === "artifact" && event.metadata?.source === "assistant_welcome") {
+    return <div className="py-3 text-primary-900 dark:text-primary-100"><AgentMarkdown>{event.content}</AgentMarkdown></div>;
   }
 
   // Codex delivers async questions on agentMessage items. Their report

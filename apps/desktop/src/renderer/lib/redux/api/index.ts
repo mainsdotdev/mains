@@ -39,3 +39,5 @@ export * from "./syncApi";
 export * from "./toolsApi";
 export * from "./updatesApi";
 export * from "./workspaceApi";
+
+export * from "./assistantsApi";

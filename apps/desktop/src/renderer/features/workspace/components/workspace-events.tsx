@@ -427,6 +427,7 @@ function AgentTurnMessagesAccordion({
 }
 
 interface WorkspaceEventsProps {
+  mode?: Run["mode"];
   runs: Run[];
   activeTab: "editor" | string;
   currentEvents: RunEvent[];
@@ -447,6 +448,7 @@ interface WorkspaceEventsProps {
 }
 
 export function WorkspaceEvents({
+  mode,
   runs,
   activeTab,
   currentEvents,
@@ -601,7 +603,7 @@ export function WorkspaceEvents({
     [activeRun, onForkRun],
   );
 
-  const { showTurnChanges } = useModeConfig();
+  const { showTurnChanges } = useModeConfig(mode);
   const turnRenderRows = useMemo(
     () => buildTurnRenderRows(eventGroups),
     [eventGroups],

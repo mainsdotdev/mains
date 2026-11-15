@@ -1,3 +1,5 @@
+import type { Assistant } from "@mains/contracts/assistants";
+import { AssistantAvatar } from "@/features/assistants/components/assistant-avatar";
 import { ReactNode, RefObject, useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { Button, DropdownWrapper, Text } from "@/components/ui";
 import { useClickOutside } from "@/hooks/use-click-outside";
@@ -192,6 +194,7 @@ function RowButton({
 }
 
 type FlatRow =
+  | { kind: "assistant"; assistant: Assistant }
   | { kind: "skill"; skill: SkillInfo; bucket: "plugins" | "mac_apps" | "skills" }
   | { kind: "file"; entry: DirEntry; dirPath: string }
   | { kind: "issue"; item: IssueWithEntity }
@@ -207,6 +210,8 @@ interface UnifiedContextDropdownProps {
   workspacePath?: string;
   projectId?: string;
   commands: CommandInfo[];
+  assistants?: Assistant[];
+  onSelectAssistant?: (assistant: Assistant) => void;
   skills: SkillInfo[];
   isLoadingSkills?: boolean;
   onSelectCommand: (command: CommandInfo) => void;
@@ -301,6 +306,8 @@ export function UnifiedContextDropdown({
   projectId,
   commands,
   skills,
+  assistants = [],
+  onSelectAssistant,
   isLoadingSkills = false,
   onSelectCommand,
   onSelectSkill,
@@ -501,7 +508,8 @@ export function UnifiedContextDropdown({
   }, [filteredFileEntries, isWorkspaceFileSearch, workspacePath]);
 
   const sections = useMemo(() => {
-    return buildSections(
+    const assistantRows: FlatRow[] = trigger === "@" && !pluginsOnly ? assistants.filter(a => !a.isArchived && `${a.name} ${a.description}`.toLocaleLowerCase().includes(filterText.toLocaleLowerCase())).map(assistant => ({ kind: "assistant", assistant })) : [];
+    return [...(assistantRows.length ? [{ title: "Assistants", rows: assistantRows }] : []), ...buildSections(
       wantsSkills ? pluginSkills : [],
       wantsSkills && !pluginsOnly ? [...matchingMacApps, ...macSkills] : [],
       wantsSkills && !pluginsOnly ? regularSkills : [],
@@ -510,8 +518,9 @@ export function UnifiedContextDropdown({
       wantsFiles,
       wantsIssues ? filteredIssues : [],
       wantsCommands ? filteredCommands : [],
-    );
+    )];
   }, [
+    assistants, trigger, filterText,
     wantsSkills,
     pluginsOnly,
     pluginSkills,
@@ -544,6 +553,10 @@ export function UnifiedContextDropdown({
       const row = flatRows[index];
       if (!row) return;
       switch (row.kind) {
+        case "assistant":
+          onSelectAssistant?.(row.assistant);
+          onClose();
+          break;
         case "command":
           onSelectCommand(row.command);
           onClose();
@@ -571,7 +584,7 @@ export function UnifiedContextDropdown({
         }
       }
     },
-    [flatRows, onClose, onSelectCommand, onSelectFile, onSelectIssue, onSelectSkill],
+    [flatRows, onSelectAssistant, onClose, onSelectCommand, onSelectFile, onSelectIssue, onSelectSkill],
   );
 
   const navigateToDirectory = useCallback(
@@ -679,6 +692,9 @@ export function UnifiedContextDropdown({
                       onHover: () => setActiveIndex(idx),
                       onSelect: () => selectRowAt(idx),
                     };
+                    if (row.kind === "assistant") return <RowButton key={`assistant-${row.assistant.id}`} {...rowProps} ariaLabel={`Call ${row.assistant.name}`}>
+                      <div className="flex items-center gap-2.5"><AssistantAvatar avatar={row.assistant.avatar} seed={row.assistant.id} className="size-7" /><div className="min-w-0"><Text as="div" size="xs" weight="medium">{row.assistant.name}</Text><Text as="div" size="xxs" tone="subtle" className="truncate">{row.assistant.description}</Text></div></div>
+                    </RowButton>;
                     if (row.kind === "skill") {
                       const skill = row.skill;
                       const title = skill.displayName || skill.name;

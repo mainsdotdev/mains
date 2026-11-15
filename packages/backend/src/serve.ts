@@ -1,3 +1,4 @@
+import { registerAssistantsIpc, unregisterAssistantsIpc, assistantWork } from "./modules/assistants";
 import { shutdownUserDecisions } from "./modules/runs";
 import { shutdownRecordLifecycles } from "./runtime/record-lifecycle";
 import { createResourceLifecycle } from "./runtime/resource-lifecycle";
@@ -142,6 +143,7 @@ interface BackendRegistration {
 }
 
 const BACKEND_REGISTRATIONS: readonly BackendRegistration[] = [
+  { register: registerAssistantsIpc, unregister: unregisterAssistantsIpc },
   { register: registerBridgeIpc, unregister: unregisterBridgeIpc },
   { register: registerAccountIpc, unregister: unregisterAccountIpc },
   { register: registerBackendIpc, unregister: unregisterBackendIpc },
@@ -248,6 +250,8 @@ export function startBackendServer(options: ServeOptions = {}): Promise<BackendS
     scope.defer(async () => { await Promise.all([shutdownWorkspaceIntakes(), shutdownRecordLifecycles(), shutdownGitFlow(), shutdownFileWrites(), shutdownWorkspaceDiffs(), shutdownConnections(), shutdownSourceSync(), shutdownUserDecisions(), shutdownAtlasBookmarks()]); });
     scope.assertActive();
     scope.defer(async () => { await Promise.all([automationsService.stop(), pulseService.stop()]); });
+    scope.defer(() => assistantWork.stop());
+    assistantWork.start();
     automationsService.start();
     pulseService.start();
     console.log(`[serve] mains backend listening on ws://${host}:${wsHost.port}`);

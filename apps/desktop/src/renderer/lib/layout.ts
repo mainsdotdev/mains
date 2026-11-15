@@ -5,6 +5,10 @@ export function isWorkspaceRoute(pathname: string): boolean {
     pathname === "/code" || pathname.startsWith("/code/");
 }
 
+export function isAssistantsRoute(pathname: string): boolean {
+  return pathname === "/assistants" || pathname.startsWith("/assistants/");
+}
+
 export function isSettingsRoute(pathname: string): boolean {
   return pathname === "/settings" || pathname.startsWith("/settings/");
 }
@@ -22,6 +26,7 @@ export function hasSidebarPanel(pathname: string): boolean {
   return (
     isWorkspaceRoute(pathname) ||
     isSettingsRoute(pathname) ||
+    isAssistantsRoute(pathname) ||
     isAtlasRoute(pathname) ||
     isTasksRoute(pathname)
   );
@@ -35,7 +40,7 @@ export function shouldHideRightPanel(pathname: string): boolean {
 
 /** Atlas keeps document/browser previews, but never workspace tool panels. */
 export function shouldHideWorkspacePanels(pathname: string): boolean {
-  return isAtlasRoute(pathname) || shouldHideRightPanel(pathname);
+  return isAtlasRoute(pathname) || isAssistantsRoute(pathname) || shouldHideRightPanel(pathname);
 }
 
 /**

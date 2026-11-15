@@ -445,6 +445,13 @@ esac
     await driver.shutdown?.();
   });
 
+  it("isolates welcome generation from tools, MCP, settings and hooks while honoring the profile", async () => {
+    const driver = createClaudeDriver({ settingSources: ["user", "project"], permissionMode: "bypassPermissions" });
+    expect(await driver.generateText!("welcome profile", { model: "chosen-model", effort: "high", isolated: true })).toBe("ok");
+    expect(sdk.query.mock.calls[0][0].options).toMatchObject({ model: "chosen-model", effort: "high", thinking: { type: "adaptive" }, permissionMode: "dontAsk", tools: [], allowedTools: [], disallowedTools: ["*"], mcpServers: {}, hooks: {}, plugins: [], settingSources: [] });
+    await driver.shutdown?.();
+  });
+
   it("uses the bundled executable for runs, the live catalogue, commands and account probes", async () => {
     const driver = createClaudeDriver({ settingSources: [] });
     expect(resolveClaudeRuntime()).toEqual({ path: bundled, source: "bundled" });

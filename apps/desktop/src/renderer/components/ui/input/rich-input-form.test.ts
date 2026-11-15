@@ -465,6 +465,33 @@ describe("RichInputForm file mentions", () => {
   });
 });
 
+describe("RichInputForm assistant mentions", () => {
+  it("restores a selected assistant, keeps its name readable and serializes its stable token", () => {
+    const onQueryChange = vi.fn();
+    const token = "@assistant-123";
+    const assistant = { name: token, displayName: "TestFlight", token };
+    const props = { query: `${token} check build 42`, onQueryChange, onSubmit: vi.fn() };
+    const view = render(createElement(RichInputForm, { ...props, skillChipMap: new Map() }));
+
+    view.rerender(createElement(RichInputForm, { ...props, skillChipMap: new Map([[token, assistant]]) }));
+    const editor = screen.getByRole("textbox");
+    const chip = editor.querySelector('[data-skill-chip="true"]');
+    expect(chip?.textContent).toBe("TestFlight");
+    expect(chip?.getAttribute("data-skill-token")).toBe(token);
+    pastePlainText(editor, " please");
+    expect(onQueryChange).toHaveBeenLastCalledWith(`${token} check build 42 please`);
+  });
+
+  it("leaves unsupported draft tokens as text without entering an empty-regex loop", () => {
+    render(createElement(RichInputForm, {
+      query: "assistant-123 check build 42", onQueryChange: vi.fn(), onSubmit: vi.fn(),
+      skillChipMap: new Map([["assistant-123", { name: "assistant-123", displayName: "TestFlight" }]]),
+    }));
+    expect(screen.getByRole("textbox").textContent).toBe("assistant-123 check build 42");
+    expect(screen.getByRole("textbox").querySelector('[data-skill-chip="true"]')).toBeNull();
+  });
+});
+
 describe("RichInputForm Mac app mentions", () => {
   it("renders and serializes a selected app as @Name without the menu capability label", () => {
     const onQueryChange = vi.fn();

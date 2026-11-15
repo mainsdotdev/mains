@@ -18,7 +18,7 @@ import { resolveRunSpaceTarget } from "../lib/background-runs";
 /** What a jump needs to know about a run: where it lives, and under which agent. */
 export type RunJumpTarget = Pick<
   ActiveRun,
-  "id" | "spaceId" | "providerId" | "mode" | "workspaceId" | "collectionId"
+  "id" | "spaceId" | "providerId" | "mode" | "workspaceId" | "collectionId" | "assistantId"
 >;
 
 /**
@@ -35,6 +35,10 @@ export function useJumpToRun(): (run: RunJumpTarget) => Promise<void> {
 
   return useCallback(
     async (run: RunJumpTarget) => {
+      if (run.assistantId) {
+        navigate(`/assistants?${new URLSearchParams({ assistant: run.assistantId, run: run.id })}`);
+        return;
+      }
       // The page shows one provider and one mode at a time, so landing on the
       // workspace is only half the jump — without the right space, the run is
       // filtered out of the tab list and the page falls back to the newest one

@@ -60,6 +60,7 @@ export const baseApi = createApi({
   refetchOnFocus: true,
   refetchOnReconnect: true,
   tagTypes: [
+    'Assistants', 'AssistantChats',
     'Bridge',
     'ConnectionState',
     'Connection',

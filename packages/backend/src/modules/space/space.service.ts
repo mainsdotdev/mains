@@ -136,7 +136,11 @@ export const spaceService = {
     if (!existing) throw new Error("Space not found");
 
     if (isSeededSpaceId(spaceId)) await spaceRepo.archive(spaceId);
-    else await spaceRepo.delete(spaceId);
+    else {
+      const { assistantsService } = await import("../assistants/assistants.service");
+      if (assistantsService.usesSpace(spaceId)) throw new Error("This Space belongs to an assistant. Archive it instead of deleting it");
+      await spaceRepo.delete(spaceId);
+    }
   },
 
   async archive(spaceId: string): Promise<void> {

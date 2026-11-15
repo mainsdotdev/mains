@@ -166,6 +166,7 @@ interface SDKOptions {
   executable?: "node" | "bun" | "deno";
   executableArgs?: string[];
   env?: Record<string, string | undefined>;
+  tools?: string[];
   allowedTools?: string[];
   disallowedTools?: string[];
   permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
@@ -3282,10 +3283,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     rootPath: string | null,
     runId: string | null,
     mode?: ModeId,
+    assistant = false,
   ): any {
     const ctx: MainsToolContext = { workspaceId, rootPath, runId };
 
-    const tools = toClaudeTools(ctx, mode);
+    const tools = toClaudeTools(ctx, mode, assistant);
     if (tools.length === 0) return null;
     return createSdkMcpServerFn!({
       name: "mains",
@@ -3445,7 +3447,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     const mcpServers = readMcpServersFromSettings(settingSources, workspacePath);
     if (!mcpServers["mains"] && createSdkMcpServerFn && toolFn) {
-      const mainsServer = buildMainsMcpServer(workspaceId ?? null, workspacePath ?? null, runId ?? null, mode);
+      const mainsServer = buildMainsMcpServer(workspaceId ?? null, workspacePath ?? null, runId ?? null, mode, !!args.configSnapshot?.assistantId);
       if (mainsServer) {
         mcpServers["mains"] = mainsServer;
         logInfo("Injected mains MCP server (in-process)");
@@ -4006,17 +4008,34 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
    */
   async function generateOneShotText(
     prompt: string,
-    opts?: { system?: string; model?: string },
+    opts?: { system?: string; model?: string; effort?: string; signal?: AbortSignal; isolated?: boolean },
   ): Promise<string> {
     const controller = new AbortController();
     const owner = queryLifecycle.open({ cancel: () => controller.abort() });
+    const cancel = () => controller.abort();
+    opts?.signal?.addEventListener("abort", cancel, { once: true });
+    if (opts?.signal?.aborted) cancel();
     let text = "";
     try {
       await owner.run(ensureSDK);
       const options = await owner.run(() => buildOptions({
         model: opts?.model ?? "claude-haiku-4-5-20251001", abortController: controller,
       }));
+      if (opts?.signal?.aborted) throw new Error("Text generation canceled");
       options.maxTurns = 6;
+      if (opts?.effort) {
+        options.thinking = { type: "adaptive" };
+        options.effort = opts.effort as NonNullable<typeof options.effort>;
+      }
+      if (opts?.isolated) {
+        options.tools = [];
+        options.permissionMode = "dontAsk";
+        options.allowDangerouslySkipPermissions = false;
+        options.settings = { ultracode: false };
+        options.settingSources = [];
+        options.hooks = {};
+        options.plugins = [];
+      }
       options.allowedTools = [];
       options.disallowedTools = ["*"];
       options.mcpServers = {};
@@ -4038,8 +4057,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         // Retain text from SDK error results; cancellation cannot become success.
         if (!owner.active || !text.trim()) throw error;
       }
+      if (opts?.signal?.aborted) throw new Error("Text generation canceled");
       return text.trim();
     } finally {
+      opts?.signal?.removeEventListener("abort", cancel);
       await owner.close();
     }
   }
@@ -4950,7 +4971,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     async generateText(
       prompt: string,
-      opts?: { system?: string; model?: string },
+      opts?: { system?: string; model?: string; effort?: string; signal?: AbortSignal; isolated?: boolean },
     ): Promise<string> {
       return generateOneShotText(prompt, opts);
     },

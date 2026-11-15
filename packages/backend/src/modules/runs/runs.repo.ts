@@ -223,6 +223,7 @@ export const runsRepo = {
           eq(runs.accountId, options.accountId),
           eq(runs.mode, options.mode),
           eq(runs.isArchived, false),
+          sql`${runs.assistantId} IS NULL`,
           options.spaceId ? eq(runs.spaceId, options.spaceId) : undefined,
           options.atlasPageId
             ? sql`json_extract(${runs.configSnapshot}, '$.atlasPageId') = ${options.atlasPageId}`
@@ -337,6 +338,7 @@ export const runsRepo = {
     await db.insert(runs).values({
       ownerBackendId: getLocalBackendId(db),
       id: payload.id,
+      assistantId: payload.assistantId,
       accountId: payload.accountId,
       workspaceId: payload.workspaceId,
       collectionId: payload.collectionId,
@@ -524,6 +526,9 @@ export const runsRepo = {
     return rows[0] ? mapArtifactRowToResponse(rows[0]) : null;
   },
 
+  async findAssistantTaskArtifact(runId: string, assignmentId: string) {
+    return getDb().select({ id: runArtifacts.id }).from(runArtifacts).where(and(eq(runArtifacts.runId, runId), sql`json_extract(${runArtifacts.metadata}, '$.source') = 'assistant_assignment'`, sql`json_extract(${runArtifacts.metadata}, '$.assignmentId') = ${assignmentId}`)).limit(1).get();
+  },
   async findInputArtifact(runId: string, clientUserMessageId: string): Promise<RunArtifactResponse | null> {
     const rows = await getDb().select().from(runArtifacts).where(and(
       eq(runArtifacts.runId, runId),
@@ -1164,6 +1169,7 @@ function mapRunRowToResponse(row: typeof runs.$inferSelect): RunResponse {
   return {
     ...ownershipOf(row.ownerBackendId),
     id: row.id,
+    assistantId: row.assistantId,
     accountId: row.accountId,
     workspaceId: row.workspaceId,
     collectionId: row.collectionId,

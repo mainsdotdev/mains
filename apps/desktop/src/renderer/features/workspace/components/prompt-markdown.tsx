@@ -15,6 +15,7 @@ import { useOpenFileInEditor } from "../hooks/use-open-file-in-editor";
 import { composerSkillDestination } from "../lib/composer-mention";
 
 export interface PromptMarkdownSkill {
+  token?: string;
   name: string;
   path?: string;
   mentionPath?: string;
@@ -287,7 +288,7 @@ export function PromptMarkdown({
   const openSkillMention = useOpenComposerMention(skills, providerId);
   const skillsByToken = useMemo(
     () => new Map(skills.map((skill) => [
-      skill.scope === "computer" ? `@${skill.displayName || skill.name}` : `$${skill.name}`,
+      skill.token ?? (skill.scope === "computer" ? `@${skill.displayName || skill.name}` : `$${skill.name}`),
       skill,
     ])),
     [skills],

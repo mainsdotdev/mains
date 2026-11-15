@@ -654,6 +654,8 @@ function rebuildContent(
     // Negative lookahead allows path chars (`.`, `/`, `-`, `_`, word) so we don't partial-match a longer path.
     parts.push(`@(?<file>${filePaths.map(escapeRegExp).join("|")})(?![\\w./-])`);
   }
+  // Unsupported or stale token keys must never create an empty global regex.
+  if (parts.length === 0) return;
   const re = new RegExp(parts.join("|"), "g");
 
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -707,14 +709,18 @@ function rebuildContent(
   }
 }
 
-/** Find a raw file mention that became eligible for a chip after context arrived. */
-function hasUnrenderedFileToken(
+/** Find a raw mention that became eligible for a chip after context arrived. */
+function hasUnrenderedContextToken(
   root: HTMLElement,
   fileChipMap?: ReadonlyMap<string, RichFileChipData>,
+  skillChipMap?: ReadonlyMap<string, RichSkillChipData>,
 ): boolean {
-  if (!fileChipMap?.size) return false;
-  const paths = Array.from(fileChipMap.keys());
-  const token = new RegExp(`@(?:${paths.map(escapeRegExp).join("|")})(?![\\w./#-])`);
+  const tokens = [
+    ...Array.from(fileChipMap?.keys() ?? [], path => `@${path}`),
+    ...Array.from(skillChipMap?.keys() ?? []).filter(key => key.startsWith("@") || key.startsWith("$")),
+  ];
+  if (!tokens.length) return false;
+  const token = new RegExp(`(?:${tokens.map(escapeRegExp).join("|")})(?![\\w./#-])`);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node: Node | null;
   while ((node = walker.nextNode())) {
@@ -928,6 +934,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
     const lastFileChipsRef = useRef<string>("");
     const lastCodeChipsRef = useRef<string>("");
     const lastFileChipMapRef = useRef(fileChipMap);
+    const lastSkillChipMapRef = useRef(skillChipMap);
 
     const fireCaretContext = useCallback(() => {
       if (!onCaretContextChange) return;
@@ -989,16 +996,18 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       fireCaretContext();
     }, [onQueryChange, onSkillChipsChange, onFileChipsChange, onCodeChipsChange, query, fireCaretContext]);
 
-    // Sync external query changes and restore raw file mentions when their context arrives later.
+    // Sync external query changes and restore raw mentions when their context arrives later.
     // Typing leaves the query and DOM in lockstep, so ordinary edits do not rebuild the editor.
     useEffect(() => {
       const root = editorRef.current;
       if (!root) return;
       const fileMapChanged = fileChipMap !== lastFileChipMapRef.current;
+      const skillMapChanged = skillChipMap !== lastSkillChipMapRef.current;
       lastFileChipMapRef.current = fileChipMap;
+      lastSkillChipMapRef.current = skillChipMap;
       if (
         query === lastSerializedRef.current &&
-        !(fileMapChanged && hasUnrenderedFileToken(root, fileChipMap))
+        !((fileMapChanged || skillMapChanged) && hasUnrenderedContextToken(root, fileChipMap, skillChipMap))
       ) return;
       rebuildContent(root, query, skillChipMap, fileChipMap, codeChipMap);
       lastSerializedRef.current = query;

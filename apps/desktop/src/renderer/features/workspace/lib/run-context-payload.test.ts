@@ -263,3 +263,9 @@ describe("buildRunContextPayload", () => {
     ]);
   });
 });
+
+it("persists assistant mention identities separately from skills", () => {
+  const payload = buildRunContextPayload([{ kind: "assistant", id: "selection-1", assistantId: "testflight", name: "TestFlight", token: "@assistant-testflight" }]);
+  expect(payload.contextSkills).toBeUndefined();
+  expect(payload.initialContext).toEqual([{ kind: "note", ref: "TestFlight", metadata: { source: "assistant_mention", assistantId: "testflight", name: "TestFlight", token: "@assistant-testflight", requestId: "selection-1" } }]);
+});

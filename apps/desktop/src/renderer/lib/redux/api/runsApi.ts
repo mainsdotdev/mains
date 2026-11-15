@@ -39,6 +39,7 @@ export type RunArtifactKind =
   | "visualization";
 
 export interface Run extends Partial<BackendOwnership> {
+  assistantId?: string | null;
   id: string;
   accountId: string;
   workspaceId: string | null;

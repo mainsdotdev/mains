@@ -4,6 +4,7 @@ import { SidebarHeader } from "./sidebar-header";
 import { SidebarFooter } from "./sidebar-footer";
 import { SidebarContent } from "./sidebar-content";
 import { NavigationRail } from "./navigation-rail";
+import { AssistantsSidebar } from "@/features/assistants/components/assistants-sidebar";
 import { AtlasSidebar } from "@/features/atlas/components/atlas-sidebar";
 import { TasksSidebar } from "@/features/tasks/components/tasks-sidebar";
 import DeleteConfirmationModal from "./delete-confirmation-modal";
@@ -48,6 +49,7 @@ import {
   SIDEBAR_WIDTH_DEFAULT,
   hasSidebarPanel,
   isAtlasRoute,
+  isAssistantsRoute,
   isSettingsRoute,
   isTasksRoute,
   isWorkspaceRoute,
@@ -80,6 +82,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   const { spaces, activeSpaceId, activeSpace } = useActiveSpace();
   const [updateSpace] = useUpdateSpaceMutation();
   const spaceProvider = useSpaceProviderVariant();
+  const assistantsRoute = isAssistantsRoute(location.pathname);
   const atlasRoute = isAtlasRoute(location.pathname);
 
   const { searchQuery } = useSidebarSearch();
@@ -324,13 +327,15 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         }}
         role="complementary"
         aria-label={
-          atlasRoute ? "Atlas sidebar" : showTasksSidebar ? "Tasks sidebar" : "Workspace sidebar"
+          assistantsRoute ? "Assistants sidebar" : atlasRoute ? "Atlas sidebar" : showTasksSidebar ? "Tasks sidebar" : "Workspace sidebar"
         }
         aria-hidden={panelHidden}
         inert={panelHidden}
       >
         {isSettingsOpen ? (
           <SettingsView onClose={handleCloseSettings} />
+        ) : assistantsRoute ? (
+          <AssistantsSidebar />
         ) : atlasRoute ? (
           <AtlasSidebar />
         ) : showTasksSidebar ? (

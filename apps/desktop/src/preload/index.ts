@@ -106,6 +106,23 @@ interface BrowserClearDataOptions {
 
 // Expose IPC methods to renderer process
 const api = {
+  assistants: {
+    assignment: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.assignment, accountId, id),
+    prepareWelcome: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.prepareWelcome, accountId, id),
+    respondWelcome: (accountId: string, id: string, answer: string | null) => ipcRenderer.invoke(CHANNELS.assistants.respondWelcome, accountId, id, answer),
+    overview: (accountId: string): Promise<ServiceResponse<import("@mains/contracts/assistants").AssistantOverview>> => ipcRenderer.invoke(CHANNELS.assistants.overview, accountId),
+    create: (payload: import("@mains/contracts/assistants").CreateAssistant) => ipcRenderer.invoke(CHANNELS.assistants.create, payload),
+    createTeam: (payload: { accountId: string; name: string }) => ipcRenderer.invoke(CHANNELS.assistants.createTeam, payload),
+    archive: (accountId: string, id: string, archived: boolean) => ipcRenderer.invoke(CHANNELS.assistants.archive, accountId, id, archived),
+    conversations: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.conversations, accountId, id),
+    send: (payload: import("@mains/contracts/assistants").SendAssistantMessage) => ipcRenderer.invoke(CHANNELS.assistants.send, payload),
+    saveMemory: (payload: import("@mains/contracts/assistants").SaveAssistantMemory) => ipcRenderer.invoke(CHANNELS.assistants.saveMemory, payload),
+    removeMemory: (accountId: string, id: string, revision: number) => ipcRenderer.invoke(CHANNELS.assistants.removeMemory, accountId, id, revision),
+    assign: (payload: import("@mains/contracts/assistants").AssignAssistantTask) => ipcRenderer.invoke(CHANNELS.assistants.assign, payload),
+    cancel: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.cancel, accountId, id),
+    reconcile: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.reconcile, accountId, id),
+    followup: (accountId: string, id: string, messageId: string, message: string) => ipcRenderer.invoke(CHANNELS.assistants.followup, accountId, id, messageId, message),
+  },
   // Entity operations (canonical content)
   entities: {
     getAll: (options?: {

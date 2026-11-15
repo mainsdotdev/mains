@@ -415,7 +415,7 @@ export function createCodexSessionAcquisition(
       ...settings,
       ...(model ? { model } : {}),
       ...buildDeveloperInstructionsParam(request.extraInstructions),
-      dynamicTools: toCodexDynamicTools(request.mode),
+      dynamicTools: toCodexDynamicTools(request.mode, !!request.configSnapshot?.assistantId),
     };
 
     logger.info(
@@ -527,7 +527,7 @@ export function createCodexSessionAcquisition(
         ...settings,
         ...(model ? { model } : {}),
         ...buildDeveloperInstructionsParam(request.extraInstructions),
-        dynamicTools: toCodexDynamicTools(request.mode),
+        dynamicTools: toCodexDynamicTools(request.mode, !!request.configSnapshot?.assistantId),
       };
       const threadResult = await server.sendRequest(
         "thread/start",
@@ -806,7 +806,7 @@ export function createCodexSessionAcquisition(
           model = resolveSessionModel(model, resumed.model, "thread/resume");
         } catch (error) { throw normalizeCodexResumeError(error); }
       } else {
-        const started = await server.sendRequest("thread/start", { ...params, dynamicTools: toCodexDynamicTools(request.mode) });
+        const started = await server.sendRequest("thread/start", { ...params, dynamicTools: toCodexDynamicTools(request.mode, !!request.configSnapshot?.assistantId) });
         model = resolveSessionModel(model, started.model, "thread/start");
         threadId = started.thread.id;
         if (!threadId) throw new Error("Codex did not create a conversation for voice chat.");

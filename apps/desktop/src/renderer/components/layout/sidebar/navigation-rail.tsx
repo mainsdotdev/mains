@@ -2,6 +2,7 @@ import type { CSSProperties, MouseEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui";
 import {
+  Bot,
   Bridge,
   Home,
   Plugin,
@@ -64,6 +65,7 @@ export function NavigationRail({
   const destinations: Array<{
     label: string; path: string; Icon: typeof Plugin; disabled?: boolean;
   }> = [
+    { label: "Assistants", path: "/assistants", Icon: Bot },
     { label: "Atlas", path: "/atlas", Icon: Globe },
     {
       label: "Plugins",
@@ -128,7 +130,7 @@ export function NavigationRail({
             >
               <Icon
                 className={`size-5 ${label === "Plugins" ? "-rotate-45" : ""}`}
-                filled={active}
+                filled={Icon === Bot ? undefined : active}
                 aria-hidden
               />
             </Button>

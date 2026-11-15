@@ -1,0 +1,83 @@
+.particle-avatar {
+  --avatar-cycle: 3.6s;
+  --avatar-swell: 1.07;
+  --avatar-eye: #fff8eb;
+  --avatar-eye-tint: color-mix(in srgb, #fff8eb 82%, var(--avatar-light));
+  color: var(--avatar-fill);
+}
+.dark .particle-avatar {
+  color: color-mix(in srgb, var(--avatar-fill) 92%, var(--avatar-light));
+}
+.particle-avatar[data-working="true"] { --avatar-cycle: 2.2s; --avatar-swell: 1.1; }
+.particle-avatar__body {
+  transform-box: view-box;
+  transform-origin: 32px 32px;
+  animation: avatar-breathe 8s ease-in-out var(--avatar-delay) infinite;
+}
+.particle-avatar__particle {
+  /* The silhouette stays present underneath both traveling light waves. */
+  opacity: calc(var(--particle-opacity) * 0.78);
+}
+.particle-avatar__wave {
+  fill: var(--avatar-light);
+  opacity: 0;
+  animation: avatar-particle-wave var(--avatar-cycle) cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+.particle-avatar__wave--forward {
+  animation-delay: calc(var(--avatar-cycle) * var(--particle-wave-forward));
+}
+.particle-avatar__wave--return {
+  animation-delay: calc(var(--avatar-cycle) * var(--particle-wave-return));
+}
+.particle-avatar__look { animation: avatar-look 9.8s ease-in-out var(--avatar-eye-delay) infinite; }
+.particle-avatar__eye {
+  fill: var(--avatar-eye);
+  stroke: color-mix(in srgb, #101418 85%, var(--avatar-ink));
+  stroke-width: 0.65;
+  paint-order: stroke fill;
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: rotate(-20deg) scale(0.82, 1.4);
+  animation: avatar-blink 7.6s ease-in-out var(--avatar-eye-delay) infinite, avatar-eye-tint 11s ease-in-out var(--avatar-eye-delay) infinite;
+}
+.particle-avatar[data-working="true"] .particle-avatar__look { animation-duration: 5.2s; }
+@media (hover: hover) and (pointer: fine) {
+  .particle-avatar:not([data-working="true"]):hover, button:hover .particle-avatar:not([data-working="true"]) { --avatar-cycle: 2.8s; --avatar-swell: 1.08; }
+  .particle-avatar:hover .particle-avatar__look, button:hover .particle-avatar__look {
+    animation: none;
+    translate: var(--avatar-look-x, 0px) var(--avatar-look-y, 0px);
+    transition: translate 180ms ease-out;
+  }
+}
+button:focus-visible .particle-avatar__look { animation: none; translate: 0 -0.5px; }
+.particle-avatar[data-paused="true"] * { animation-play-state: paused; }
+.particle-avatar[data-animated="false"] * { animation: none; transition: none; }
+.particle-avatar[data-animated="false"] .particle-avatar__look { translate: 0 0; }
+.particle-avatar[data-animated="false"] .particle-avatar__particle { opacity: var(--particle-opacity); }
+
+@keyframes avatar-breathe {
+  0%, 100% { transform: translateY(0) rotate(-1deg) scale(0.985); }
+  50% { transform: translateY(-0.8px) rotate(1deg) scale(1.015); }
+}
+@keyframes avatar-particle-wave {
+  0%, 48%, 100% { transform: scale(0.88); opacity: 0; }
+  24% { transform: scale(var(--avatar-swell)); opacity: calc(var(--particle-opacity) * 0.9); }
+}
+@keyframes avatar-look {
+  0%, 16%, 46%, 90%, 100% { translate: 0 0; }
+  23%, 35% { translate: 1.8px -0.5px; }
+  61%, 74% { translate: -1.6px 0.4px; }
+}
+@keyframes avatar-blink {
+  0%, 38%, 42%, 70%, 74%, 100% { transform: rotate(-20deg) scale(0.82, 1.4); }
+  40%, 72% { transform: rotate(-20deg) scale(0.95, 0.2); }
+}
+@keyframes avatar-eye-tint {
+  0%, 38%, 80%, 100% { fill: var(--avatar-eye); }
+  52%, 64% { fill: var(--avatar-eye-tint); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .particle-avatar * { animation: none !important; transition: none !important; }
+  .particle-avatar__look { translate: 0 0 !important; }
+  .particle-avatar__particle { opacity: var(--particle-opacity); }
+}

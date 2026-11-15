@@ -107,8 +107,11 @@ export interface ContextMcpAppItem {
   structuredContent?: Record<string, unknown>;
 }
 
+export type ContextAssistantItem = { kind: "assistant"; id: string; assistantId: string; name: string; token: string };
+
 export type ContextItem =
   | ContextFileItem
+  | ContextAssistantItem
   | ContextIssueItem
   | ContextSignalItem
   | ContextSkillItem
@@ -144,6 +147,7 @@ export function contextItemKey(item: ContextItem): string {
     case "presentation":
     case "document":
     case "mcp-app":
+    case "assistant":
       return item.id;
   }
 }
@@ -155,6 +159,7 @@ export function contextItemKey(item: ContextItem): string {
  */
 export function isSameContextItem(a: ContextItem, b: ContextItem): boolean {
   if (a.kind !== b.kind) return false;
+  if (a.kind === "assistant" && b.kind === "assistant") return a.assistantId === b.assistantId;
   if (a.kind === "code" && b.kind === "code") {
     return (
       a.filePath === b.filePath &&
@@ -180,6 +185,7 @@ export function withoutSubmittedContext(current: readonly ContextItem[], submitt
 
 /** Read-only by contract: these are views onto store state, never buffers. */
 export interface GroupedContext {
+  readonly assistants: readonly ContextAssistantItem[];
   readonly files: readonly ContextFileItem[];
   readonly issues: readonly ContextIssueItem[];
   readonly signals: readonly ContextSignalItem[];
@@ -202,6 +208,7 @@ type MutableGroupedContext = {
  * shared instance keeps that case identity-stable.
  */
 const EMPTY_GROUPED: GroupedContext = Object.freeze({
+  assistants: [],
   files: [],
   issues: [],
   signals: [],
@@ -223,6 +230,7 @@ const EMPTY_GROUPED: GroupedContext = Object.freeze({
 export function groupContextItems(items: readonly ContextItem[]): GroupedContext {
   if (items.length === 0) return EMPTY_GROUPED;
   const grouped: MutableGroupedContext = {
+    assistants: [],
     files: [],
     issues: [],
     signals: [],
@@ -236,6 +244,9 @@ export function groupContextItems(items: readonly ContextItem[]): GroupedContext
   };
   for (const item of items) {
     switch (item.kind) {
+      case "assistant":
+        grouped.assistants.push(item);
+        break;
       case "file":
         grouped.files.push(item);
         break;

@@ -4,6 +4,13 @@
 // channel string literally, so a typo at any site is a compile-time error and a renamed
 // channel is a single edit. See CONTEXT.md for the IPC seam vocabulary.
 export const CHANNELS = {
+  assistants: {
+    assignment: "assistants:assignment", prepareWelcome: "assistants:prepareWelcome", respondWelcome: "assistants:respondWelcome",
+    overview: "assistants:overview", create: "assistants:create", createTeam: "assistants:createTeam",
+    archive: "assistants:archive", saveMemory: "assistants:saveMemory", removeMemory: "assistants:removeMemory",
+    conversations: "assistants:conversations", send: "assistants:send", assign: "assistants:assign",
+    reconcile: "assistants:reconcile", followup: "assistants:followup", cancel: "assistants:cancel", changed: "assistants:changed",
+  },
   account: {
     get: "account:get",
     update: "account:update",

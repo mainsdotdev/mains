@@ -738,7 +738,7 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
    */
   generateText?(
     prompt: string,
-    opts?: { system?: string; model?: string },
+    opts?: { system?: string; model?: string; effort?: string; signal?: AbortSignal; isolated?: boolean },
   ): Promise<string>;
 
   /**
@@ -985,7 +985,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   generateTitle?(goal: string, context?: WorkRunContextItem[]): Promise<string>;
   generateText?(
     prompt: string,
-    opts?: { system?: string; model?: string },
+    opts?: { system?: string; model?: string; effort?: string; signal?: AbortSignal; isolated?: boolean },
   ): Promise<string>;
   getRateLimits?(): Promise<RateLimitInfo | null>;
   listRealtimeVoices?(): Promise<RealtimeVoiceCatalog>;

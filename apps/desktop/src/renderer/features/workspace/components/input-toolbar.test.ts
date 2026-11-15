@@ -324,3 +324,18 @@ describe("single primary composer button", () => {
     expect((screen.getByRole("button", { name: "Send prompt" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+
+describe("frozen assistant composer", () => {
+  it("keeps uploads and Send while removing profile-changing controls", () => {
+    const props = { ...nativeToolbarProps(), fixedProfileLabel: "Release model · high effort" };
+    render(createElement(InputToolbar, props));
+    expect(screen.getByText("Release model · high effort")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Permission mode" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Select model/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send prompt" }));
+    expect(props.primaryAction.onClick).toHaveBeenCalledOnce();
+    expect(props.onModelChange).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Upload files")).toBeTruthy();
+  });
+});

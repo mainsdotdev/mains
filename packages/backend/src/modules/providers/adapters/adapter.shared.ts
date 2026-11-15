@@ -570,6 +570,7 @@ export async function emitUserPromptArtifact(
     model?: string;
   },
 ): Promise<void> {
+  const assistantMentions = options?.context?.flatMap(item => item.metadata?.source === "assistant_mention" ? [{ id: item.metadata.assistantId, name: item.metadata.name, token: item.metadata.token }] : []) ?? [];
   const reviewComments = readReviewComments((options?.context ?? []).flatMap(({ metadata }) => metadata?.source === "review" ? [metadata] : []));
   const documentAnnotations = readDocumentAnnotations((options?.context ?? []).flatMap(({ metadata }) => metadata?.source === "document" ? [metadata] : []))
     .map((annotation) => {
@@ -631,6 +632,7 @@ export async function emitUserPromptArtifact(
       attachments: options?.attachments?.map(({ attachmentId, name, type, mimeType, byteSize }) => ({
         attachmentId, name, type, mimeType, byteSize,
       })),
+      ...(assistantMentions.length ? { assistantMentions } : {}),
       issues: options?.contextIssues,
       signals: options?.contextSignals,
       files: options?.contextFiles,

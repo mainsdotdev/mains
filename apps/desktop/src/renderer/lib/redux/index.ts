@@ -13,6 +13,7 @@ import appSettingsReducer from "./slices/appSettingsSlice";
 import workspaceReducer from "./slices/workspaceSlice";
 import backendsReducer from "./slices/backendsSlice";
 import runQueueReducer from "./slices/runQueueSlice";
+import assistantsReducer from "./slices/assistantsSlice";
 import atlasReducer from "./slices/atlasSlice";
 import terminalReducer from "./slices/terminalSlice";
 import previewReducer from "./slices/previewSlice";
@@ -119,6 +120,14 @@ const persistedAtlasReducer = persistReducer({
   whitelist: ["coverPositions"],
 }, atlasReducer);
 
+// Assistant tabs are scoped to backend/account/assistant and contain IDs only.
+const persistedAssistantsReducer = persistReducer({
+  key: "assistants",
+  storage,
+  version: 1,
+  whitelist: ["views"],
+}, assistantsReducer);
+
 export const store = configureStore({
   reducer: {
     [baseApi.reducerPath]: baseApi.reducer,
@@ -128,6 +137,7 @@ export const store = configureStore({
     // Unsent messages and their delivery mode live only in this renderer.
     runQueue: runQueueReducer,
     atlas: persistedAtlasReducer,
+    assistants: persistedAssistantsReducer,
     terminal: terminalReducer,
     preview: previewReducer,
   },

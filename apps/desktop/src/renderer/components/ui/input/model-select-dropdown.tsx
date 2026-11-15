@@ -111,6 +111,9 @@ interface ModelSelectDropdownProps {
   isLoading?: boolean;
   variant?: ProviderVariant;
   iconOnly?: boolean;
+  allowUltracode?: boolean;
+  /** Bound both model and effort lists; compact forms can use a shorter menu. */
+  maxMenuHeight?: number;
 }
 
 export function ModelSelectDropdown({
@@ -130,6 +133,8 @@ export function ModelSelectDropdown({
   isLoading = false,
   variant,
   iconOnly = false,
+  allowUltracode = true,
+  maxMenuHeight = 320,
 }: ModelSelectDropdownProps) {
   const modelList = selectableModelNames(models, variant);
   const noModels = !isLoading && modelList.length === 0;
@@ -194,7 +199,7 @@ export function ModelSelectDropdown({
   const hoveredModelHasEffortMenu =
     !!hoveredModel && modelHasEffortMenu(hoveredModel);
   const hoveredModelSupportsUltracode =
-    variant === "claude" &&
+    allowUltracode && variant === "claude" &&
     hoveredModelEffortLevels.includes("xhigh");
   const hoveredModelHasSelectedUltracode =
     hoveredModel === model &&
@@ -462,7 +467,8 @@ export function ModelSelectDropdown({
         dropdownRef={mainMenuRef}
       >
         <div
-          className="max-h-80 overflow-auto noscrollbar p-1"
+          className="overflow-y-auto overscroll-contain noscrollbar p-1"
+          style={{ maxHeight: `min(${maxMenuHeight}px, calc(100dvh - 6rem))` }}
           onMouseMove={(e) => {
             pointerRef.current = { x: e.clientX, y: e.clientY };
           }}
@@ -542,10 +548,11 @@ export function ModelSelectDropdown({
               clearEffortCloseTimer();
             }}
             onMouseLeave={scheduleEffortMenuClose}
-            className={`fixed z-(--z-dropdown-sub) overflow-hidden rounded-2xl glass-card animate-dropdown-in p-1 ${iconOnly ? "w-40" : "min-w-36"}`}
+            className={`fixed z-(--z-dropdown-sub) overflow-y-auto overscroll-contain noscrollbar rounded-2xl glass-card animate-dropdown-in p-1 ${iconOnly ? "w-40" : "min-w-36"}`}
             style={{
               top: effortMenuPosition.top,
               left: effortMenuPosition.left,
+              maxHeight: `min(${maxMenuHeight}px, calc(100dvh - 1rem))`,
             }}
             role="menu"
             aria-label={`${hoveredModelDisplayName} ${

@@ -23,6 +23,7 @@ import {
   isSettingsRoute,
   isWorkspaceRoute,
   isAtlasRoute,
+  isAssistantsRoute,
   isTasksRoute,
   NAV_RAIL_WIDTH,
 } from "./lib/layout";
@@ -130,6 +131,7 @@ function AppContent() {
   const sidebarPanelRoute = hasSidebarPanel(location.pathname);
   const settingsRoute = isSettingsRoute(location.pathname);
   const workspaceRoute = isWorkspaceRoute(location.pathname);
+  const assistantsRoute = isAssistantsRoute(location.pathname);
   const atlasRoute = isAtlasRoute(location.pathname);
   const tasksRoute = isTasksRoute(location.pathname);
   useRealtimeVoiceLifecycle();
@@ -144,7 +146,7 @@ function AppContent() {
   const preview = usePreviewPanel();
   const docViewer = useDocumentViewer();
   const modeConfig = useModeConfig();
-  const showBrowserToggle = atlasRoute || variant !== "default";
+  const showBrowserToggle = assistantsRoute || atlasRoute || variant !== "default";
   const dispatch = useAppDispatch();
   const sidebarCollapsed = useAppSelector(
     (state) => state.appSettings.sidebarCollapsed,
@@ -256,7 +258,7 @@ function AppContent() {
 
   useKeyboardShortcut("app.toggleSidebar", () => {
     dispatch(setSidebarCollapsed(!sidebarCollapsed));
-  }, { enabled: isMobile || workspaceRoute || atlasRoute || tasksRoute, allowInEditable: true });
+  }, { enabled: isMobile || workspaceRoute || atlasRoute || assistantsRoute || tasksRoute, allowInEditable: true });
   useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
     enabled:
       showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
@@ -358,7 +360,7 @@ function AppContent() {
             aria-hidden
           />
         )}
-        {(isMobile || workspaceRoute || atlasRoute || tasksRoute) && !(
+        {(isMobile || workspaceRoute || atlasRoute || assistantsRoute || tasksRoute) && !(
           isMobile &&
           (rightPanelVisible || browserPanel.isOpen || docViewer.isOpen || mcpAppPanel?.isOpen)
         ) && (

@@ -35,6 +35,7 @@ interface ToolApprovalDialogProps {
     value: string;
     onChange: (value: string) => void;
     submitLabel?: string;
+    dismissLabel?: string;
     busy?: boolean;
     readOnly?: boolean;
     error?: string;
@@ -351,7 +352,7 @@ function ToolApprovalDialogContents({
   // skipped outcome, which is approval with no answer. Claude and Copilot
   // dismissals are not skips, and an async question card only closes locally.
   const skipQuestion = request.kind === "ask_user" && !questionControls && (variant === "codex" || variant === "cursor");
-  const questionDismissLabel = skipQuestion ? "Skip" : "Dismiss";
+  const questionDismissLabel = questionControls?.dismissLabel ?? (skipQuestion ? "Skip" : "Dismiss");
   const handleQuestionDismiss = useCallback(() => {
     if (questionControls?.busy) return;
     if (variant === "cursor" && !questionControls) {

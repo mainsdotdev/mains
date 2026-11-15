@@ -26,7 +26,7 @@ const CTX: MainsToolContext = {
 
 /** Tools the registry marks available to a given provider. */
 function expectedFor(provider: string): string[] {
-  return MAINS_TOOLS.filter((t) => !t.scope && (!t.modes || t.modes.includes("developer")) && t.providers.includes(provider as any))
+  return MAINS_TOOLS.filter((t) => !t.scope && !t.assistantOnly && (!t.modes || t.modes.includes("developer")) && t.providers.includes(provider as any))
     .map((t) => t.name)
     .sort();
 }
@@ -261,5 +261,18 @@ describe("mains tool registry — mode dimension", () => {
         expect(["developer", "work", "chat"]).toContain(mode);
       }
     }
+  });
+});
+
+
+describe("assistant tool scope", () => {
+  it("exposes task tools in ordinary Code and keeps private tools in assistant conversations", () => {
+    for (const mode of ["developer", "work"] as const) {
+      expect(toCodexDynamicTools(mode, true).some(t => "name" in t && t.name === "AssignAssistantTask")).toBe(true);
+      expect(toClaudeTools(CTX, mode, true).some(t => t.name === "SaveAssistantMemory")).toBe(true);
+      expect(toCodexDynamicTools(mode).some(t => "name" in t && t.name === "AssignAssistantTask")).toBe(mode === "developer");
+      expect(toClaudeTools(CTX, mode).some(t => t.name === "SaveAssistantMemory")).toBe(false);
+    }
+    expect(toCodexDynamicTools("chat", true).some(t => "name" in t && t.name === "AssignAssistantTask")).toBe(false);
   });
 });

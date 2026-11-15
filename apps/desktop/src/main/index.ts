@@ -1,3 +1,4 @@
+import { registerAssistantsIpc, unregisterAssistantsIpc, assistantWork } from "@mains/backend/modules/assistants";
 import { shutdownUserDecisions } from "@mains/backend/modules/runs";
 import { createResourceLifecycle, type ResourceScope } from "@mains/backend/runtime/resource-lifecycle";
 import { shutdownRecordLifecycles } from "@mains/backend/runtime/record-lifecycle";
@@ -905,6 +906,7 @@ async function initializeAppResources(scope: ResourceScope) {
     registerWorkspaceIpc();
     registerWorkspaceDialogIpc();
     registerProjectsIpc();
+    registerAssistantsIpc();
     registerCollectionsIpc();
     registerAtlasIpc();
     registerRunsIpc();
@@ -941,6 +943,7 @@ async function initializeAppResources(scope: ResourceScope) {
     void localBackendService.restore();
     automationsService.start();
     pulseService.start();
+    assistantWork.start();
 
     // Shell utilities
     ipcMain.handle(CHANNELS.shell.openExternal, async (_, url: string) => {
@@ -1245,6 +1248,7 @@ function cleanupApp(): Promise<void> { return appLifecycle.close(); }
 async function cleanupAppResources() {
   try {
     console.log("Cleaning up application...");
+    await assistantWork.stop();
     await Promise.all([automationsService.stop(), pulseService.stop(), sshService.closeAllTunnels(), shutdownAtlasBookmarks(), appshotsService.stop(), keyboardShortcutsService.stop()]);
 
     // Destroy tray and the Dock menu's status feed
@@ -1282,6 +1286,7 @@ async function cleanupAppResources() {
     unregisterWorkspaceIpc();
     unregisterWorkspaceDialogIpc();
     unregisterProjectsIpc();
+    unregisterAssistantsIpc();
     unregisterCollectionsIpc();
     await unregisterAtlasIpc();
     await stopAttachmentMaintenance();

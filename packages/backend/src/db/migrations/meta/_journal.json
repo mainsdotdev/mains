@@ -302,6 +302,27 @@
       "when": 1794049872903,
       "tag": "0042_atlas_bookmarks",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1794690803311,
+      "tag": "0043_assistants",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1794727510593,
+      "tag": "0044_assistant_welcome",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1794732556571,
+      "tag": "0045_assistant_execution_avatar",
+      "breakpoints": true
     }
   ]
 }

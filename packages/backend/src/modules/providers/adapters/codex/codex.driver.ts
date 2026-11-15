@@ -1161,8 +1161,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
 
     async generateText(
       prompt: string,
-      opts?: { system?: string; model?: string },
+      opts?: { system?: string; model?: string; effort?: string; signal?: AbortSignal; isolated?: boolean },
     ): Promise<string> {
+      if (opts?.signal?.aborted) throw new Error("Text generation canceled");
       const binaryPath = findCodexBinary();
       const fullPrompt = opts?.system
         ? `${opts.system}\n\n${prompt}`
@@ -1207,12 +1208,17 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
           "--model", opts?.model ?? titleGenerationModel,
           // Same overrides as title generation — see comment there.
           "--ignore-user-config",
-          "-c", "model_reasoning_effort=medium",
+          "-c", `model_reasoning_effort=${JSON.stringify(opts?.effort || "medium")}`,
+          ...(opts?.isolated ? [
+            "-c", 'web_search="disabled"', "-c", "include_apply_patch_tool=false",
+            "-c", "project_doc_max_bytes=0", "-c", "mcp_servers={}",
+            ...["shell_tool", "unified_exec", "apps", "plugins", "multi_agent", "multi_agent_v2", "image_generation", "computer_use", "browser_use", "browser_use_external", "in_app_browser", "code_mode", "code_mode_host", "goals", "memories", "hooks", "skill_search", "tool_suggest", "workspace_dependencies", "view_image"].flatMap(feature => ["-c", `features.${feature}=false`]),
+          ] : []),
           "-",
         ];
 
         const child = spawn(binaryPath, args, {
-          cwd: os.homedir(),
+          cwd: opts?.isolated ? tmpDir : os.homedir(),
           env,
           stdio: ["pipe", "pipe", "pipe"],
         });
@@ -1229,9 +1235,16 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
+          opts?.signal?.removeEventListener("abort", cancel);
           fn();
         }
 
+        function cancel() {
+          try { killProviderProcess(child); } catch { /* already exited */ }
+          finish(() => { cleanup(); reject(new Error("Text generation canceled")); });
+        }
+        opts?.signal?.addEventListener("abort", cancel, { once: true });
+        if (opts?.signal?.aborted) cancel();
         child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
         child.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
         child.on("error", (err) => {

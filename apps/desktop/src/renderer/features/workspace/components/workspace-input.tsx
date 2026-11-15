@@ -1,3 +1,6 @@
+import { useGetAccountQuery } from "@/lib/redux/api";
+import { useAssistantOverviewQuery } from "@/lib/redux/api/assistantsApi";
+import type { Assistant } from "@mains/contracts/assistants";
 import { isAbsoluteFilePath } from "@/lib/file-path";
 
 import {
@@ -132,6 +135,9 @@ interface UnifiedMenuState {
 export type { ComposerSendTarget } from "../lib/composer-send-target";
 
 interface WorkspaceInputProps {
+  /** A frozen assistant profile uses the ordinary composer with a static settings label. */
+  fixedProfileLabel?: string;
+  mode?: Run["mode"];
   runQueue?: ComposerRunQueue;
   goal: string;
   onGoalChange: (value: string) => void;
@@ -182,6 +188,8 @@ interface WorkspaceInputProps {
 }
 
 export function WorkspaceInput({
+  fixedProfileLabel,
+  mode,
   runQueue,
   goal,
   onGoalChange,
@@ -239,6 +247,7 @@ export function WorkspaceInput({
     files: contextFiles,
     items: contextItems,
     skills: contextSkills,
+    assistants: contextAssistants,
     codeSelections: contextCodeSelections,
     browserSelections: contextBrowserSelections,
     add: addContext,
@@ -246,12 +255,15 @@ export function WorkspaceInput({
   } = useComposerContext();
 
   const spaceProvider = useSpaceProviderVariant();
-  const providerVariant = spaceProvider.variant;
   const activeProviderId = providerId ?? spaceProvider.providerId;
+  const providerVariant = (getProviderVariantById(activeProviderId) ?? spaceProvider).variant;
   const openFile = useOpenFileInEditor();
   const openSkillMention = useOpenComposerMention(contextSkills, activeProviderId);
   // Empty-state backlight: the centered composer glows in the accent.
-  const { composerPlaceholder } = useModeConfig();
+  const { composerPlaceholder, mode: effectiveMode } = useModeConfig(mode);
+  const { data: account } = useGetAccountQuery();
+  const { currentData: assistantOverview } = useAssistantOverviewQuery(account?.id ?? "", { skip: !account || effectiveMode !== "developer" || suspended });
+
   // Built outside the JSX on purpose: calling the helper inline in `style`
   // makes the React Compiler bail on this component's manual memoization.
 
@@ -367,6 +379,16 @@ export function WorkspaceInput({
     },
     { visible: false, filter: "", trigger: "@", bucket: null },
   );
+
+  const selectAssistant = (assistant: Assistant) => {
+    const token = `@assistant-${assistant.id}`;
+    if (!contextAssistants.some(a => a.assistantId === assistant.id)) addContext({ kind: "assistant", id: crypto.randomUUID(), assistantId: assistant.id, name: assistant.name, token });
+    const replaced = inputRef.current?.replaceTokenWithSkillChip("@", { name: token, displayName: assistant.name, token, clickable: false, scope: "assistant" }, false);
+    if (!replaced) {
+      const next = replaceMentionInGoal(goal, "@", unifiedMenu.filter, `${token} `);
+      if (next !== null) onGoalChange(next);
+    }
+  };
 
   // The toolbar plugin picker is a Codex-only capability. Other providers may
   // still expose skills through the context menu, but they do not show this button.
@@ -590,6 +612,7 @@ export function WorkspaceInput({
 
   const skillChipMap = useMemo(() => {
     const m = new Map<string, RichSkillChipData>();
+    for (const assistant of contextAssistants) m.set(assistant.token, { name: assistant.token, displayName: assistant.name, token: assistant.token, clickable: false, scope: "assistant" });
     for (const s of contextSkills) {
       m.set(skillMentionToken(s), {
         name: s.name,
@@ -603,7 +626,7 @@ export function WorkspaceInput({
       });
     }
     return m;
-  }, [contextSkills]);
+  }, [contextSkills, contextAssistants]);
 
   const fileChipMap = useMemo(() => {
     const m = new Map<string, RichFileChipData>();
@@ -650,11 +673,12 @@ export function WorkspaceInput({
   const handleSkillChipsChange = useCallback(
     (names: string[]) => {
       const present = new Set(names);
+      for (const assistant of contextAssistants) if (!present.has(assistant.token)) removeContext(assistant);
       for (const skill of contextSkillsRef.current) {
         if (!present.has(skill.name)) removeContext(skill);
       }
     },
-    [removeContext],
+    [removeContext, contextAssistants],
   );
 
   const handleFileChipsChange = useCallback(
@@ -941,6 +965,7 @@ export function WorkspaceInput({
       : handleSubmit;
   const toolbar = (
     <InputToolbar
+      fixedProfileLabel={fixedProfileLabel}
       primaryAction={{ ...controls.primary, onClick: handlePrimaryAction }}
       voiceMute={controls.mute && { ...controls.mute, onToggle: voice.toggleMute }}
       floatingChatMode={floatingChatMode}
@@ -1124,6 +1149,8 @@ export function WorkspaceInput({
               workspacePath={workspacePath}
               projectId={projectId}
               commands={providerCommands}
+              assistants={effectiveMode === "developer" ? assistantOverview?.assistants : undefined}
+              onSelectAssistant={selectAssistant}
               skills={providerSkills}
               isLoadingSkills={isLoadingSkills}
               onSelectCommand={handleSlashCommandSelect}

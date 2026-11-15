@@ -1,0 +1,552 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { eq } from "drizzle-orm";
+import { createTestDb } from "../../../test/setup-db";
+import { createAccount, createProvider, createSpace, createRun, createWorkspace } from "../../../test/factories";
+import { installTestBackendRuntime } from "../../../test/backend-runtime";
+import type { DatabaseInstance } from "../../db/types";
+import { spaces, providers, appSettings, assistants as assistantProfiles, runs } from "../../db/schema";
+let db: DatabaseInstance;
+vi.mock("../../db/client", () => ({ getDb: () => db }));
+vi.mock("../providers/adapters", async () => ({
+    createWorkAdapter: vi.fn(), couldModifyFiles: () => false,
+    emitUserPromptArtifact: (await import("../providers/adapters/adapter.shared")).emitUserPromptArtifact,
+}));
+import { assistantsService } from "./assistants.service";
+import { assistantsRepo } from "./assistants.repo";
+import { assistantWelcome } from "./assistant-welcome";
+import { assistantWork } from "./assistant-work";
+import { providersService } from "../providers";
+import { runsService } from "../runs";
+import { insertRunInputArtifact } from "../runs/run-input-artifact";
+import { createWorkAdapter } from "../providers/adapters";
+import { createFakeDriver } from "../providers/adapters/fake.driver";
+import { createWorkRunAdapter } from "../providers/adapters/work-run-core";
+import { auditBridgeSchema } from "../bridge/bridge.records";
+import type { Assistant } from "@mains/contracts/assistants";
+let cleanup: () => void, restore: () => void, root: string;
+let driver: ReturnType<typeof createFakeDriver>;
+let teamId: string;
+async function makeAssistant(name: string, providerId: "codex" | "claude_code" = "codex") {
+    return assistantsService.create({ accountId: "default", teamId, name, description: `${name} responsibility`, instructions: `Own ${name}.`, spaceId: providerId, model: "test-model", effort: "high" });
+}
+async function settled(runId: string) {
+    await vi.waitFor(async () => expect((await runsService.getRunById(runId))?.status).toBe("succeeded"));
+}
+beforeEach(() => {
+    ({ db, cleanup } = createTestDb());
+    root = mkdtempSync(join(tmpdir(), "mains-assistants-"));
+    restore = installTestBackendRuntime({ getPath: name => join(root, name) });
+    createAccount(db);
+    for (const id of ["codex", "claude_code"] as const) {
+        createProvider(db, { id, isEnabled: true, config: JSON.stringify({ defaultModel: "provider-default", permissionMode: "default" }) });
+        createSpace(db, { id, providerId: id, mode: "work", systemPrompt: "Original Space instructions" });
+    }
+    vi.spyOn(providersService, "getModels").mockResolvedValue([{ id: "test-model", displayName: "Test model", supportedEffortLevels: ["low", "high"] }]);
+    driver = createFakeDriver();
+    driver.enable("resumeSession");
+    driver.enable("forkSession");
+    driver.enable("canResumeSession");
+    const resume = driver.driver.resumeSession!;
+    driver.driver.resumeSession = async (request) => {
+        const acquired = await resume(request);
+        if (request.clientUserMessageId) {
+            await insertRunInputArtifact(request.runId, { type: "artifact", kind: "user-prompt", content: request.message, metadata: { clientUserMessageId: request.clientUserMessageId } });
+            await request.onInputAccepted?.(`accepted-${request.clientUserMessageId}`);
+        }
+        return acquired;
+    };
+    // Native Claude/Codex acknowledge and persist queued input themselves.
+    driver.driver.steerRun = async () => ({ turnId: "fake-steer" });
+    vi.mocked(createWorkAdapter).mockReturnValue(createWorkRunAdapter(driver.driver));
+    teamId = assistantsService.createTeam({ accountId: "default", name: "Release team" }).id;
+});
+afterEach(async () => {
+    await assistantWork.stop();
+    restore();
+    cleanup();
+    rmSync(root, { recursive: true, force: true });
+    vi.restoreAllMocks();
+});
+describe("assistant profiles and shared knowledge", () => {
+    it("persists new particle colors and reads legacy avatar shapes without rewriting stored settings", async () => {
+        const assistant = await assistantsService.create({ accountId: "default", name: "Particle assistant", instructions: "Help with releases", spaceId: "codex", model: "test-model", effort: "high", avatar: { shape: "cube", color: "rose" } });
+        expect(assistant.avatar).toEqual({ shape: "cube", color: "rose" });
+        for (const [legacy, current] of [["circle", "sphere"], ["square", "cube"]]) {
+            db.update(assistantProfiles).set({ avatar: JSON.stringify({ shape: legacy, color: "mint" }) }).where(eq(assistantProfiles.id, assistant.id)).run();
+            expect(assistantsService.get(assistant.id, "default")?.avatar).toEqual({ shape: current, color: "mint" });
+            expect(JSON.parse(db.select().from(assistantProfiles).where(eq(assistantProfiles.id, assistant.id)).get()!.avatar).shape).toBe(legacy);
+        }
+        await expect(assistantsService.create({ accountId: "default", name: "Invalid", instructions: "Help", spaceId: "codex", model: "test-model", effort: "high", avatar: { shape: "cube", color: "unknown" } })).rejects.toThrow("available avatar");
+    });
+    it("projects direct and delegated running conversations into account-scoped avatar activity", async () => {
+        const assistant = await makeAssistant("Coordinator"), idle = await makeAssistant("Idle");
+        createAccount(db, { id: "another-account" });
+        createRun(db, { id: "active-chat", accountId: "default", assistantId: assistant.id, status: "running" });
+        createRun(db, { id: "queued-chat", accountId: "default", assistantId: assistant.id, status: "queued" });
+        createRun(db, { id: "finished-chat", accountId: "default", assistantId: idle.id, status: "succeeded" });
+        createRun(db, { id: "foreign-chat", accountId: "another-account", assistantId: idle.id, status: "running" });
+        expect(assistantsService.overview("default").activeAssistantIds).toEqual([assistant.id]);
+        db.update(runs).set({ status: "succeeded" }).where(eq(runs.accountId, "default")).run();
+        expect(assistantsService.overview("default").activeAssistantIds).toEqual([]);
+    });
+    it("pins Space, model and effort across starts, continuations and forks", async () => {
+        const assistant = await makeAssistant("Coordinator");
+        db.update(spaces).set({ systemPrompt: "Changed globally", mode: "chat", providerId: "claude_code" }).where(eq(spaces.id, assistant.spaceId)).run();
+        db.update(providers).set({ config: JSON.stringify({ defaultModel: "different", modelReasoningEffort: "low" }) }).where(eq(providers.id, "codex")).run();
+        db.insert(appSettings).values({ id: "default", accountId: "default", activeSpaceId: "claude_code" }).run();
+        const { runId } = await runsService.executeRun({ accountId: "default", assistantId: assistant.id, providerId: "claude_code", goal: "Prepare release", model: "different", conversationSettings: { model: "different", config: { modelReasoningEffort: "low" } } });
+        await settled(runId);
+        const request = driver.calls.createSession[0];
+        expect(request.model).toBe("test-model");
+        expect(request.mode).toBe("work");
+        expect(request.configSnapshot?.modelReasoningEffort).toBe("high");
+        expect(request.extraInstructions).toContain("Original Space instructions");
+        expect(request.extraInstructions).not.toContain("Changed globally");
+        await runsService.continueRun({ runId, accountId: "default", message: "Next step", model: "different", conversationSettings: { model: "different", config: { modelReasoningEffort: "low" } } });
+        await settled(runId);
+        expect(driver.calls.resumeSession[0].model).toBe("test-model");
+        expect(driver.calls.resumeSession[0].configSnapshot?.modelReasoningEffort).toBe("high");
+        const fork = await runsService.forkRun({ sourceRunId: runId, accountId: "default", message: "Explore a variant" });
+        await settled(fork.runId);
+        expect((await runsService.getRunById(fork.runId))?.assistantId).toBe(assistant.id);
+        expect(driver.calls.forkSession[0].configSnapshot?.modelReasoningEffort).toBe("high");
+        await expect(runsService.updateConversationSettings(runId, { model: "different", config: {} })).rejects.toThrow("fixed");
+        await expect(runsService.updateRun(runId, { model: "different" })).rejects.toThrow("fixed");
+        await expect(runsService.createRun({ id: "forged", accountId: "default", providerId: "claude_code", assistantId: assistant.id })).rejects.toThrow("assistant conversation endpoint");
+        expect(assistantsService.conversations(assistant.id, "default").filter(chat => chat.id !== `assistant-welcome-${assistant.id}`)).toHaveLength(2);
+        expect(await runsService.listRecentRuns({ accountId: "default", providerId: "codex", mode: "work" })).toHaveLength(0);
+    });
+    it("sends ordinary composer context and attachments through the frozen assistant profile", async () => {
+        const assistant = await makeAssistant("Release");
+        const { runId } = await assistantWork.sendChat("default", assistant.id, "Use this release brief", "composer-context-start", undefined, undefined, {
+            initialContext: [{ kind: "note", content: "Ship the verified commit" }],
+            attachments: [{ name: "brief.txt", type: "document", mimeType: "text/plain", data: "cmVsZWFzZQ==" }],
+        });
+        await settled(runId);
+        expect((await runsService.getContextByRun(runId)).some(row => row.content === "Ship the verified commit")).toBe(true);
+        expect(driver.calls.createSession[0].model).toBe("test-model");
+        await assistantWork.sendChat("default", assistant.id, "Add the checklist", "composer-context-next", runId, undefined, {
+            initialContext: [{ kind: "note", content: "Verify signing before distribution" }],
+        });
+        await settled(runId);
+        expect((await runsService.getContextByRun(runId)).some(row => row.content === "Verify signing before distribution")).toBe(true);
+        expect(driver.calls.resumeSession[0].model).toBe("test-model");
+    });
+    it("rejects unsupported model/effort and execution-profile edits", async () => {
+        await expect(assistantsService.create({ accountId: "default", teamId, name: "No", instructions: "Work", spaceId: "codex", model: "test-model", effort: "unsupported" })).rejects.toThrow("effort");
+        await expect(assistantsService.create({ accountId: "default", teamId, name: "No", instructions: "Work", spaceId: "codex", model: "missing", effort: "high" })).rejects.toThrow("model");
+        await expect(assistantsService.create({ accountId: "default", teamId, name: "No", instructions: "Work", spaceId: "codex", model: "test-model", effort: "high", sandboxMode: "danger-full-access" })).rejects.toThrow("Unknown assistant field");
+    });
+    it("shares team facts, isolates private notes and rejects stale writes", async () => {
+        const a = await makeAssistant("Build"), b = await makeAssistant("Website");
+        const shared = assistantsService.saveMemory({ accountId: "default", teamId, title: "Release policy", content: "Use internal TestFlight first", pinned: true });
+        assistantsService.saveMemory({ accountId: "default", teamId, assistantId: a.id, title: "Private", content: "Private build preference" });
+        expect(assistantsService.context(b.id, "default", "release")).toContain("internal TestFlight");
+        expect(assistantsService.context(b.id, "default", "release")).not.toContain("Private build preference");
+        expect(shared.revision).toBe(1);
+    });
+    it("keeps immutable source/revision evidence and enforces account boundaries", async () => {
+        const a = await makeAssistant("Build");
+        const row = assistantsService.saveMemory({ accountId: "default", teamId, assistantId: a.id, title: "Decision", content: "First" }, "source-run");
+        const next = assistantsService.saveMemory({ accountId: "default", teamId, assistantId: a.id, id: row.id, title: "Decision", content: "Second", expectedRevision: row.revision }, "next-run");
+        expect(next.revision).toBe(2);
+        expect(next.sourceRunId).toBe("next-run");
+        expect(() => assistantsService.saveMemory({ accountId: "default", teamId, assistantId: a.id, id: row.id, title: "Decision", content: "Stale", expectedRevision: row.revision })).toThrow("changed");
+        createAccount(db, { id: "other" });
+        expect(assistantsService.get(a.id, "other")).toBeNull();
+        expect(() => assistantsService.removeMemory("other", row.id, next.revision)).toThrow("not found");
+    });
+    it("classifies assistant tables and identity as local in Bridge", () => { expect(() => auditBridgeSchema()).not.toThrow(); });
+});
+describe("durable assistant delegation", () => {
+    async function parentAndWorker(): Promise<{
+        parent: Assistant;
+        worker: Assistant;
+        runId: string;
+    }> {
+        const parent = await makeAssistant("Coordinator"), worker = await makeAssistant("Website", "claude_code");
+        const { runId } = await assistantWork.sendChat("default", parent.id, "Prepare release", "initial-message-key");
+        await settled(runId);
+        return { parent, worker, runId };
+    }
+    it("deduplicates delegation and executes the target's own profile", async () => {
+        const { worker, runId } = await parentAndWorker();
+        const input = { accountId: "default", toAssistantId: worker.id, taskKey: "website", title: "Update website", prompt: "Prepare the release page" };
+        const task = await assistantWork.assign(input, runId);
+        expect((await assistantWork.assign(input, runId)).id).toBe(task.id);
+        await expect(assistantWork.assign({ ...input, prompt: "Different work" }, runId)).rejects.toThrow("new task key");
+        assistantWork.start();
+        await vi.waitFor(() => expect(driver.calls.createSession).toHaveLength(2));
+        await settled(task.workerRunId!);
+        const child = await runsService.getRunById(task.workerRunId!);
+        expect(child?.providerId).toBe("claude_code");
+        expect(child?.assistantId).toBe(worker.id);
+        expect(driver.calls.createSession[1].configSnapshot?.effortLevel).toBe("high");
+        await vi.waitFor(() => expect(assistantsRepo.assignment(task.id)?.status).toBe("blocked"));
+    });
+    it("reports evidence back to the requesting conversation exactly once", async () => {
+        const { worker, runId } = await parentAndWorker();
+        const task = await assistantWork.assign({ accountId: "default", toAssistantId: worker.id, taskKey: "page", title: "Page", prompt: "Prepare page" }, runId);
+        assistantWork.start();
+        await vi.waitFor(async () => expect(await runsService.getRunById(task.workerRunId!)).not.toBeNull());
+        await settled(task.workerRunId!);
+        await expect(assistantWork.report(task.workerRunId!, { assignmentId: task.id, status: "completed", result: "Prepared", evidence: [] })).rejects.toThrow("evidence");
+        const report = { assignmentId: task.id, status: "completed", result: "Prepared", evidence: ["preview:release-page"] };
+        await assistantWork.report(task.workerRunId!, report);
+        await assistantWork.report(task.workerRunId!, report);
+        await vi.waitFor(() => expect(driver.calls.resumeSession.filter(r => r.message.includes("preview:release-page"))).toHaveLength(1));
+        await settled(runId);
+        expect(assistantsRepo.assignment(task.id)?.status).toBe("completed");
+    });
+    it("rejects team crossings and cycles in delegated work", async () => {
+        const { parent, worker, runId } = await parentAndWorker();
+        const foreignTeam = assistantsService.createTeam({ accountId: "default", name: "Other team" }).id;
+        const other = await assistantsService.create({ accountId: "default", teamId: foreignTeam, name: "Other", instructions: "Other work", spaceId: "codex", model: "test-model", effort: "low" });
+        await expect(assistantWork.assign({ accountId: "default", toAssistantId: other.id, taskKey: "other", title: "Other", prompt: "Other" }, runId)).rejects.toThrow("own team");
+        const task = await assistantWork.assign({ accountId: "default", toAssistantId: worker.id, taskKey: "page", title: "Page", prompt: "Prepare" }, runId);
+        createRun(db, { id: task.workerRunId!, assistantId: worker.id, providerId: worker.providerId, mode: "work", status: "succeeded" });
+        await expect(assistantWork.assign({ accountId: "default", toAssistantId: parent.id, taskKey: "back", title: "Back", prompt: "Do it" }, task.workerRunId!)).rejects.toThrow("cycle");
+        assistantWork.start();
+    await expect(assistantWork.tool(task.workerRunId!, "ReadAssistantHistory", { runId })).rejects.toThrow("only this assistant");
+    });
+    it("recovers pre-dispatch requests and reconciles existing worker identities", async () => {
+        const { worker, runId } = await parentAndWorker();
+        const first = await assistantWork.assign({ accountId: "default", toAssistantId: worker.id, taskKey: "first", title: "First", prompt: "First" }, runId);
+        const second = await assistantWork.assign({ accountId: "default", toAssistantId: worker.id, taskKey: "second", title: "Second", prompt: "Second" }, runId);
+        assistantsRepo.patchMessage(`request-${first.id}`, { status: "dispatching" });
+        assistantsRepo.patchMessage(`request-${second.id}`, { status: "dispatching" });
+        createRun(db, { id: second.workerRunId!, assistantId: worker.id, providerId: worker.providerId, mode: "work", status: "succeeded" });
+        await assistantWork.recover();
+        expect(assistantsRepo.message(`request-${first.id}`)?.status).toBe("queued");
+        expect(assistantsRepo.message(`request-${second.id}`)?.status).toBe("delivered");
+        expect(driver.calls.createSession).toHaveLength(1);
+    });
+    it("does not automatically resend uncertain follow-ups after restart", async () => {
+        const { worker, runId } = await parentAndWorker();
+        const task = await assistantWork.assign({ accountId: "default", toAssistantId: worker.id, taskKey: "once", title: "Once", prompt: "Once" }, runId);
+        createRun(db, { id: task.workerRunId!, assistantId: worker.id, providerId: worker.providerId, mode: "work", status: "succeeded" });
+        assistantsRepo.addMessage({ id: "uncertain-message", assignmentId: task.id, targetRunId: task.workerRunId, kind: "followup", content: "Publish", status: "dispatching" });
+        vi.spyOn(runsService, "getInputStatus").mockResolvedValue({ accepted: false });
+        await assistantWork.recover();
+        expect(assistantsRepo.message("uncertain-message")?.status).toBe("uncertain");
+        expect(assistantsRepo.assignment(task.id)?.status).toBe("uncertain");
+        expect(driver.calls.resumeSession).toHaveLength(0);
+    });
+    it("cancels queued work before it reaches a provider", async () => {
+        const worker = await makeAssistant("Release");
+        const task = await assistantWork.assign({ accountId: "default", toAssistantId: worker.id, taskKey: "cancel", title: "Canceled", prompt: "Do not run" });
+        await assistantWork.cancel("default", task.id);
+        expect(assistantsRepo.assignment(task.id)?.status).toBe("canceled");
+        expect(assistantsRepo.message(`request-${task.id}`)?.status).toBe("canceled");
+        expect(driver.calls.createSession).toHaveLength(0);
+    });
+});
+describe("assistant shutdown and restart boundaries", () => {
+    it("retires profile creation before a delayed model catalog can write", async () => {
+        assistantWork.start();
+        let release!: (value: never[]) => void;
+        vi.mocked(providersService.getModels).mockReturnValue(new Promise(resolve => { release = resolve as typeof release; }));
+        const creating = assistantsService.create({ accountId: "default", teamId, name: "Delayed", instructions: "Work", spaceId: "codex", model: "test-model", effort: "high" }, assistantWork.guard());
+        await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+        await assistantWork.stop();
+        release([{ id: "test-model", displayName: "Test", supportedEffortLevels: ["high"] }] as never[]);
+        await expect(creating).rejects.toThrow("shutting down");
+        expect(assistantsService.overview("default").assistants).toHaveLength(0);
+    });
+    it("marks an orphaned native turn interrupted without replaying it", async () => {
+        const assistant = await makeAssistant("Interrupted");
+        const old = createRun(db, { assistantId: assistant.id, providerId: assistant.providerId, mode: "work", status: "running" });
+        await assistantWork.recover();
+        const restored = await runsService.getRunById(old.id);
+        expect(restored?.status).toBe("failed");
+        expect(restored?.lastError).toContain("interrupted");
+        expect(driver.calls.createSession).toHaveLength(0);
+    });
+});
+
+
+describe("assignment message ordering", () => {
+  it("keeps a request before a follow-up created in the same second", async () => {
+    const assistant = await makeAssistant("Release");
+    const task = await assistantWork.assign({ accountId: "default", toAssistantId: assistant.id, taskKey: "ordered", title: "Release", prompt: "Prepare" });
+    await assistantWork.followup("default", task.id, "clarification", "Use the preview channel");
+    expect(assistantsRepo.messages().filter(m => m.assignmentId === task.id).map(m => m.kind)).toEqual(["request", "followup"]);
+  });
+  it("does not send a later message past an unconfirmed delivery", async () => {
+    const assistant = await makeAssistant("Release");
+    const task = await assistantWork.assign({ accountId: "default", toAssistantId: assistant.id, taskKey: "barrier", title: "Release", prompt: "Prepare" });
+    createRun(db, { id: task.workerRunId!, assistantId: assistant.id, providerId: assistant.providerId, mode: "work", status: "succeeded" });
+    assistantsRepo.patchMessage(`request-${task.id}`, { status: "delivered" });
+    assistantsRepo.addMessage({ id: "earlier", assignmentId: task.id, kind: "followup", targetRunId: task.workerRunId, content: "Publish", status: "uncertain" });
+    assistantsRepo.addMessage({ id: "later", assignmentId: task.id, kind: "followup", targetRunId: task.workerRunId, content: "Another instruction" });
+    assistantWork.start();
+    await assistantWork.drain();
+    await vi.waitFor(() => expect(assistantsRepo.assignment(task.id)?.status).toBe("uncertain"));
+    expect(driver.calls.resumeSession).toHaveLength(0);
+    expect(assistantsRepo.message("later")?.status).toBe("queued");
+  });
+});
+
+
+describe("dispatcher shutdown", () => {
+  it("cancels its own pending native input before joining dispatch", async () => {
+    const assistant = await makeAssistant("Release");
+    const task = await assistantWork.assign({ accountId: "default", toAssistantId: assistant.id, taskKey: "shutdown", title: "Release", prompt: "Prepare" });
+    createRun(db, { id: task.workerRunId!, assistantId: assistant.id, providerId: assistant.providerId, mode: "work", status: "succeeded" });
+    assistantsRepo.patchMessage(`request-${task.id}`, { status: "delivered" });
+    await assistantWork.followup("default", task.id, "pending-ack", "Continue");
+    let reject!: (error: Error) => void;
+    const continuing = vi.spyOn(runsService, "continueRun").mockImplementation(() => new Promise((_resolve, rejectPromise) => { reject = rejectPromise; }));
+    const aborting = vi.spyOn(runsService, "abortRun").mockImplementation(async () => { reject(new Error("Stopped before input acceptance")); });
+    assistantWork.start();
+    await vi.waitFor(() => expect(continuing).toHaveBeenCalledTimes(1));
+    await assistantWork.stop();
+    expect(aborting).toHaveBeenCalledWith(task.workerRunId);
+    expect(assistantsRepo.message(`${task.id}:pending-ack`)?.status).toBe("uncertain");
+    expect(() => assistantWork.guard()()).toThrow("shutting down");
+  });
+});
+
+
+describe("stopped requesters", () => {
+  it("retains a teammate report without restarting a chat the user stopped", async () => {
+    const parent = await makeAssistant("Coordinator"), worker = await makeAssistant("Release");
+    const { runId } = await assistantWork.sendChat("default", parent.id, "Prepare release", "stopped-parent-key");
+    await settled(runId);
+    const task = await assistantWork.assign({ accountId: "default", toAssistantId: worker.id, taskKey: "prepare", title: "Prepare", prompt: "Prepare a draft" }, runId);
+    createRun(db, { id: task.workerRunId!, assistantId: worker.id, providerId: worker.providerId, mode: "work", status: "succeeded" });
+    await runsService.cancelRun(runId);
+    await assistantWork.report(task.workerRunId!, { assignmentId: task.id, status: "completed", result: "Draft prepared", evidence: ["draft-reference"] });
+    assistantWork.start();
+    await vi.waitFor(() => expect(assistantsRepo.messages()).toHaveLength(0));
+    expect(driver.calls.resumeSession).toHaveLength(0);
+    expect(assistantsRepo.assignment(task.id)?.result).toBe("Draft prepared");
+    expect((await runsService.getRunById(runId))?.status).toBe("canceled");
+  });
+});
+
+describe("one-time assistant welcome", () => {
+    const question = { header: "First step", question: "I'm your release assistant. Where shall we start?", options: [
+        { label: "Check TestFlight", description: "Review the current build." },
+        { label: "Prepare release notes", description: "Summarize the changes." },
+        { label: "Review the release", description: "Inspect readiness." },
+    ], idleMessage: "Message me whenever you're ready." };
+    async function ready(name = "Release") {
+        const generate = vi.fn().mockResolvedValue(JSON.stringify(question));
+        driver.driver.generateText = generate;
+        vi.mocked(createWorkAdapter).mockReturnValue(createWorkRunAdapter(driver.driver));
+        const assistant = await makeAssistant(name);
+        assistantWork.start();
+        await vi.waitFor(() => expect(assistantsService.welcome(assistant.id, "default")?.state).toBe("ready"));
+        return { assistant, generate, welcome: assistantsService.welcome(assistant.id, "default")! };
+    }
+    it("generates one role-based question with frozen model/effort without starting a native run", async () => {
+        const { assistant, generate, welcome } = await ready();
+        expect(driver.calls.createSession).toHaveLength(0);
+        expect(welcome.question).toEqual(question);
+        expect(generate).toHaveBeenCalledWith(expect.stringContaining('"name":"Release"'), expect.objectContaining({ model: "test-model", effort: "high", isolated: true, signal: expect.any(AbortSignal) }));
+        expect(assistantsService.overview("default").welcomes?.[0]).not.toHaveProperty("setupPrompt");
+        expect(assistantsRepo.welcome(assistant.id)?.setupPrompt).toContain("untrusted reference data");
+        await assistantWork.stop();
+        assistantWork.start();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(generate).toHaveBeenCalledTimes(1);
+        expect(assistantsService.conversations(assistant.id, "default").map(chat => chat.id)).toEqual([welcome.runId]);
+        expect(driver.calls.createSession).toHaveLength(0);
+    });
+    it("skips without work and persists a friendly idle message across restart", async () => {
+        const { assistant, welcome } = await ready();
+        await assistantWelcome.respond("default", assistant.id, null);
+        await assistantWelcome.respond("default", assistant.id, null);
+        await assistantWork.stop();
+        assistantWork.start();
+        const saved = assistantsService.welcome(assistant.id, "default")!;
+        expect(saved.state).toBe("skipped");
+        expect(saved.question?.idleMessage).toBe(question.idleMessage);
+        expect(driver.calls.createSession).toHaveLength(0);
+        expect(await runsService.getRunById(welcome.runId)).toBeNull();
+    });
+    it("starts the chosen request exactly once, with the welcome ahead of the first real user message", async () => {
+        const { assistant, welcome } = await ready();
+        const [first, duplicate] = await Promise.all([
+            assistantWelcome.respond("default", assistant.id, "Check TestFlight"),
+            assistantWelcome.respond("default", assistant.id, "Check TestFlight"),
+        ]);
+        expect(first).toEqual(duplicate);
+        expect(first.runId).toBe(welcome.runId);
+        await settled(first.runId);
+        expect(driver.calls.createSession).toHaveLength(1);
+        expect(driver.calls.createSession[0].goal).toBe("Check TestFlight");
+        const history = await runsService.getHistoryPage({ runId: first.runId, direction: "latest" });
+        const reports = history.artifacts.filter(a => a.kind === "report");
+        expect(reports[0]?.content).toBe(question.question);
+        expect(history.artifacts.filter(a => String(a.kind) === "user-prompt").map(a => a.content)).toEqual(["Check TestFlight"]);
+        expect((await runsService.getContextByRun(first.runId)).some(row => row.metadata?.origin === "assistant_setup")).toBe(true);
+        await assistantWelcome.respond("default", assistant.id, "Check TestFlight");
+        await expect(assistantWelcome.respond("default", assistant.id, "Different task")).rejects.toThrow("already answered");
+        expect(driver.calls.createSession).toHaveLength(1);
+        expect(assistantsService.conversations(assistant.id, "default").map(chat => chat.id)).toEqual([first.runId]);
+    });
+    it("allows ordinary free text and attachments after skip, with idempotent delivery", async () => {
+        const { assistant, welcome } = await ready();
+        await assistantWelcome.respond("default", assistant.id, null);
+        const key = `welcome-${assistant.id}`;
+        const first = await assistantWork.sendChat("default", assistant.id, "Review this brief", key, welcome.runId, assistantWork.guard(), { initialContext: [{ kind: "note", content: "Verified release brief" }] });
+        await settled(first.runId);
+        await assistantWork.sendChat("default", assistant.id, "Review this brief", key, welcome.runId, assistantWork.guard());
+        expect(driver.calls.createSession).toHaveLength(1);
+        expect((await runsService.getContextByRun(first.runId)).some(row => row.content === "Verified release brief")).toBe(true);
+        const next = await assistantWork.sendChat("default", assistant.id, "A different conversation", "welcome-new-chat");
+        await settled(next.runId);
+        expect(next.runId).not.toBe(first.runId);
+        expect(assistantsService.welcome(assistant.id, "default")?.state).toBe("started");
+    });
+    it("retries malformed generation without ever creating an interactive run", async () => {
+        const generate = vi.fn().mockResolvedValueOnce("invalid JSON").mockResolvedValue(JSON.stringify(question));
+        driver.driver.generateText = generate;
+        vi.mocked(createWorkAdapter).mockReturnValue(createWorkRunAdapter(driver.driver));
+        const assistant = await makeAssistant("Release");
+        assistantWork.start();
+        await vi.waitFor(() => expect(assistantsService.welcome(assistant.id, "default")?.state).toBe("failed"));
+        assistantWelcome.retry("default", assistant.id);
+        await vi.waitFor(() => expect(assistantsService.welcome(assistant.id, "default")?.state).toBe("ready"));
+        expect(generate).toHaveBeenCalledTimes(2);
+        expect(driver.calls.createSession).toHaveLength(0);
+    });
+    it("cancels generation on shutdown and safely retries only the question after restart", async () => {
+        const generate = vi.fn().mockImplementationOnce((_prompt, options) => new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("canceled")), { once: true }))).mockResolvedValue(JSON.stringify(question));
+        driver.driver.generateText = generate;
+        vi.mocked(createWorkAdapter).mockReturnValue(createWorkRunAdapter(driver.driver));
+        const assistant = await makeAssistant("Release");
+        assistantWork.start();
+        await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+        await assistantWork.stop();
+        expect(assistantsService.welcome(assistant.id, "default")?.state).toBe("generating");
+        assistantWork.start();
+        await vi.waitFor(() => expect(assistantsService.welcome(assistant.id, "default")?.state).toBe("ready"));
+        expect(generate).toHaveBeenCalledTimes(2);
+        expect(driver.calls.createSession).toHaveLength(0);
+    });
+    it("reconciles a lost dispatch response using its existing run, without replaying it", async () => {
+        const { assistant, welcome } = await ready();
+        await assistantWelcome.respond("default", assistant.id, "Check TestFlight");
+        await settled(welcome.runId);
+        assistantsRepo.patchWelcome(assistant.id, { state: "starting" });
+        await assistantWork.stop();
+        assistantWork.start();
+        expect(assistantsService.welcome(assistant.id, "default")?.state).toBe("started");
+        expect(driver.calls.createSession).toHaveLength(1);
+    });
+    it("does not generate a welcome for archived assistants or another account", async () => {
+        const assistant = await makeAssistant("Release");
+        assistantsService.archive(assistant.id, "default", true);
+        const generate = vi.fn();
+        driver.driver.generateText = generate;
+        vi.mocked(createWorkAdapter).mockReturnValue(createWorkRunAdapter(driver.driver));
+        assistantWork.start();
+        await expect(assistantWelcome.respond("another-account", assistant.id, null)).rejects.toThrow("unavailable");
+        expect(generate).not.toHaveBeenCalled();
+    });
+});
+
+describe("task-local execution and Code assistant calls", () => {
+    function workspace(id: string, accountId = "default") {
+        const rootPath = join(root, id); mkdirSync(rootPath, { recursive: true });
+        return createWorkspace(db, { id, accountId, rootPath });
+    }
+    it("creates a Work assistant from a Code Space without a team or workspace choice and saves its avatar", async () => {
+        db.update(spaces).set({ mode: "developer" }).where(eq(spaces.id, "codex")).run();
+        const assistant = await assistantsService.create({ accountId: "default", name: "Trip planner", description: "Plan trips", instructions: "Plan practical trips.", spaceId: "codex", model: "test-model", effort: "high", avatar: { shape: "cube", color: "mint" } });
+        expect(assistant).not.toHaveProperty("workspaceId");
+        expect(assistant).not.toHaveProperty("mode");
+        expect(assistant.avatar).toEqual({ shape: "cube", color: "mint" });
+        const result = await assistantWork.sendChat("default", assistant.id, "Plan a trip", "task-local-work-chat");
+        await settled(result.runId);
+        const run = await runsService.getRunById(result.runId);
+        expect(run).toMatchObject({ mode: "work", workspaceId: null });
+        expect(driver.calls.createSession.at(-1)?.execution.cwd).toContain(join("runs", result.runId, "work"));
+    });
+    it("runs one assistant against two task workspaces and preserves each conversation on resume", async () => {
+        const a = workspace("app"), b = workspace("landing"), assistant = await makeAssistant("Release");
+        const first = await assistantWork.sendChat("default", assistant.id, "Check the app", "task-local-code-app", undefined, undefined, {}, { mode: "developer", workspaceId: a.id });
+        await settled(first.runId);
+        const second = await assistantWork.sendChat("default", assistant.id, "Check landing", "task-local-code-web", undefined, undefined, {}, { mode: "developer", workspaceId: b.id });
+        await settled(second.runId);
+        expect((await runsService.getRunById(first.runId))?.workspaceId).toBe(a.id);
+        expect((await runsService.getRunById(second.runId))?.workspaceId).toBe(b.id);
+        db.update(spaces).set({ mode: "chat" }).where(eq(spaces.id, "codex")).run();
+        await assistantWork.sendChat("default", assistant.id, "Check again", "task-local-followup", first.runId);
+        await settled(first.runId);
+        expect(driver.calls.resumeSession.at(-1)).toMatchObject({ mode: "developer", model: "test-model", execution: { workspaceId: a.id, cwd: a.rootPath } });
+    });
+    it("lets ordinary Code chats delegate, keeping private memory and unrelated tasks isolated", async () => {
+        const w = workspace("normal-code"), assistant = await makeAssistant("TestFlight");
+        const source = createRun(db, { id: "normal-code-source", workspaceId: w.id, accountId: "default", providerId: "codex", mode: "developer", status: "succeeded" });
+        const other = createRun(db, { id: "other-code-source", workspaceId: w.id, accountId: "default", providerId: "codex", mode: "developer", status: "succeeded" });
+        const task = await assistantWork.assign({ accountId: "default", toAssistantId: assistant.id, taskKey: "ordinary-call", title: "TestFlight check", prompt: "Check signing" }, source.id);
+        expect(task.execution).toEqual({ mode: "developer", workspaceId: w.id });
+        expect(task.fromAssistantId).toBeNull();
+        assistantWork.start();
+        await vi.waitFor(() => expect(assistantsRepo.assignment(task.id)?.status).toBe("blocked"));
+        expect((await runsService.getRunById(task.workerRunId!))?.workspaceId).toBe(w.id);
+        expect(await assistantWork.tool(source.id, "ReadAssistantTask", { assignmentId: task.id })).toMatchObject({ id: task.id });
+        await expect(assistantWork.tool(other.id, "ReadAssistantTask", { assignmentId: task.id })).rejects.toThrow("does not belong");
+        await expect(assistantWork.tool(source.id, "RecallAssistantMemory", {})).rejects.toThrow("assistant conversation");
+        await assistantWork.report(task.workerRunId!, { assignmentId: task.id, status: "completed", result: "Signing verified", evidence: ["Build 42 passed"] });
+        const history = await runsService.getHistoryPage({ runId: source.id });
+        expect(history.artifacts.some(a => a.metadata?.source === "assistant_assignment" && a.metadata.assignmentId === task.id)).toBe(true);
+    });
+    it("dispatches a structured @ selection only after its exact prompt is accepted and deduplicates replayed context", async () => {
+        const w = workspace("mention-code"), assistant = await makeAssistant("TestFlight");
+        const source = createRun(db, { id: "mention-source", workspaceId: w.id, accountId: "default", providerId: "codex", mode: "developer", status: "succeeded" });
+        const { prepareAssistantMentions } = await import("./assistant-mentions");
+        const prepared = prepareAssistantMentions({ accountId: "default", mode: "developer", prompt: "Check the current build", promptId: "accepted-mention-message", context: { initialContext: [
+            { kind: "note", metadata: { source: "assistant_mention", assistantId: assistant.id, token: `@assistant-${assistant.id}`, requestId: "stable-mention-request" } },
+            { kind: "note", content: "Check build 42 only" },
+        ] } });
+        for (const item of prepared.items ?? []) await runsService.addContext({ runId: source.id, ...item });
+        assistantWork.start();
+        await assistantWork.drain();
+        expect(assistantsRepo.assignments("default")).toHaveLength(0);
+        await insertRunInputArtifact(source.id, { type: "artifact", kind: "user-prompt", content: "A different message with the same receipt", metadata: { clientPromptId: prepared.promptId } });
+        await assistantWork.drain();
+        expect(assistantsRepo.assignments("default")).toHaveLength(0);
+        await insertRunInputArtifact(source.id, { type: "artifact", kind: "user-prompt", content: "Check the current build", metadata: { clientPromptId: prepared.promptId } });
+        await assistantWork.drain();
+        await vi.waitFor(() => expect(assistantsRepo.assignments("default")).toHaveLength(1));
+        const task = assistantsRepo.assignments("default")[0];
+        await settled(task.workerRunId!);
+        expect((await runsService.getContextByRun(task.workerRunId!)).some(item => item.content === "Check build 42 only")).toBe(true);
+        for (const item of prepared.items ?? []) await runsService.addContext({ runId: source.id, ...item });
+        await assistantWork.drain();
+        await assistantWork.stop(); assistantWork.start(); await assistantWork.drain();
+        expect(assistantsRepo.assignments("default")).toHaveLength(1);
+        expect(driver.calls.createSession.filter(c => c.runId === task.workerRunId)).toHaveLength(1);
+    });
+    it("rejects foreign and archived workspace targets before admitting work", async () => {
+        const foreign = workspace("foreign", "another-account"), archived = workspace("archived"), assistant = await makeAssistant("TestFlight");
+        db.update((await import("../../db/schema")).workspaces).set({ isArchived: true }).where(eq((await import("../../db/schema")).workspaces.id, archived.id)).run();
+        for (const id of [foreign.id, archived.id]) await expect(assistantWork.assign({ accountId: "default", toAssistantId: assistant.id, taskKey: id, title: "Check", prompt: "Check", execution: { mode: "developer", workspaceId: id } })).rejects.toThrow("Workspace is unavailable");
+        expect(assistantsRepo.assignments("default")).toHaveLength(0);
+    });
+});
+
+it("connects a real Code submission to its accepted @ task and keeps mention names readable", async () => {
+    const rootPath = join(root, "submitted-code"); mkdirSync(rootPath);
+    const workspace = createWorkspace(db, { id: "submitted-code", rootPath });
+    const assistant = await makeAssistant("TestFlight");
+    assistantWork.start();
+    const source = await runsService.executeRun({ accountId: "default", providerId: "codex", spaceId: "codex", mode: "developer", workspaceId: workspace.id,
+        goal: `@assistant-${assistant.id} Check build 42`, clientPromptId: "code-source-message", initialContext: [{ kind: "note", metadata: { source: "assistant_mention", assistantId: assistant.id, token: `@assistant-${assistant.id}`, requestId: "selected-assistant" } }] });
+    await settled(source.runId);
+    await vi.waitFor(() => expect(assistantsRepo.assignments("default").some(t => t.fromRunId === source.runId)).toBe(true));
+    const task = assistantsRepo.assignments("default").find(t => t.fromRunId === source.runId)!;
+    expect(task.prompt).toBe("@TestFlight Check build 42");
+    expect(task.execution).toEqual({ mode: "developer", workspaceId: workspace.id });
+    const history = await runsService.getHistoryPage({ runId: source.runId });
+    const prompt = history.artifacts.find(a => String(a.kind) === "user-prompt");
+    expect(prompt?.metadata?.assistantMentions).toEqual([{ id: assistant.id, name: "TestFlight", token: `@assistant-${assistant.id}` }]);
+});

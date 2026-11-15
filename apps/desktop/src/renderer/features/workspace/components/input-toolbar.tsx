@@ -28,6 +28,7 @@ import type { ModelServiceTier } from "@mains/contracts/run-settings";
 import type { ProviderVariant } from "@/lib/provider-variants";
 
 interface InputToolbarProps {
+  fixedProfileLabel?: string;
   primaryAction: ComposerPrimaryAction & { onClick: () => void };
   voiceMute?: { muted: boolean; disabled: boolean; onToggle: () => void };
   variant: ProviderVariant;
@@ -83,6 +84,7 @@ interface InputToolbarProps {
 }
 
 export function InputToolbar({
+  fixedProfileLabel,
   primaryAction,
   voiceMute,
   variant,
@@ -229,6 +231,19 @@ export function InputToolbar({
   const speedControl = serviceTiers && serviceTiers.length > 1 && onServiceTierChange
     ? <ServiceTierSelect value={serviceTier ?? "default"} options={serviceTiers} onChange={onServiceTierChange} compact={layout === "floating"} />
     : supportsFastMode ? <FastModeButton fastMode={fastMode} onToggle={onFastModeToggle} compact={layout === "floating"} /> : null;
+
+  if (fixedProfileLabel) {
+    return (
+      <div className="flex min-w-0 items-center justify-between gap-3 px-3 pt-6">
+        <div className="flex min-w-0 items-center gap-2">
+          {uploadButton}
+          {uploadInput}
+          <span className="truncate text-xs text-primary-500" title={fixedProfileLabel}>{fixedProfileLabel}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">{actionButtons}</div>
+      </div>
+    );
+  }
 
   if (layout === "floating") {
     return (

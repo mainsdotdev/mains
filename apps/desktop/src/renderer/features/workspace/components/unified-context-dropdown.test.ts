@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UnifiedContextDropdown } from "./unified-context-dropdown";
 import type { SkillInfo } from "@/lib/redux/api/providersApi";
+import type { Assistant } from "@mains/contracts/assistants";
 
 const getMentionableApps = vi.hoisted(() => vi.fn());
 
@@ -25,9 +26,10 @@ const directory = {
   hasChildren: true,
 };
 
-function renderDropdown(overrides: { filterText?: string; providerId?: string; workspacePath?: string; skills?: SkillInfo[]; isLoadingSkills?: boolean } = {}) {
+function renderDropdown(overrides: { filterText?: string; providerId?: string; workspacePath?: string; skills?: SkillInfo[]; isLoadingSkills?: boolean; assistants?: Assistant[] } = {}) {
   const onSelectFile = vi.fn();
   const onSelectSkill = vi.fn();
+  const onSelectAssistant = vi.fn();
   const onNavigateFile = vi.fn();
   const onClose = vi.fn();
 
@@ -40,6 +42,8 @@ function renderDropdown(overrides: { filterText?: string; providerId?: string; w
       workspacePath: overrides.workspacePath ?? "/repo",
       commands: [],
       skills: overrides.skills ?? [],
+      assistants: overrides.assistants,
+      onSelectAssistant,
       isLoadingSkills: overrides.isLoadingSkills,
       onSelectCommand: vi.fn(),
       onSelectSkill,
@@ -51,7 +55,7 @@ function renderDropdown(overrides: { filterText?: string; providerId?: string; w
     }),
   );
 
-  return { onSelectFile, onSelectSkill, onNavigateFile, onClose };
+  return { onSelectFile, onSelectSkill, onSelectAssistant, onNavigateFile, onClose };
 }
 
 beforeEach(() => {
@@ -101,6 +105,28 @@ describe("UnifiedContextDropdown Mac app mentions", () => {
 
     expect(screen.queryByText("Computer use")).toBeNull();
     expect(getMentionableApps).toHaveBeenCalledWith("raycast", { skip: true });
+  });
+});
+
+describe("UnifiedContextDropdown assistant calls", () => {
+  it("finds assistants by responsibility, excludes archived profiles and selects their exact identity by keyboard", async () => {
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { fileExplorer: { listDir: vi.fn(), searchFiles: vi.fn().mockResolvedValue({ success: true, data: [] }) } },
+    });
+    const assistant: Assistant = {
+      id: "testflight", accountId: "default", teamId: "team", name: "Beta checker", description: "TestFlight release checks", instructions: "Verify builds",
+      providerId: "codex", spaceId: "codex", model: "model", effort: "high", isArchived: false, avatar: { shape: "cube", color: "mint" },
+      conversationSettings: { model: "model", config: {} }, spaceSnapshot: { id: "codex", accountId: "default", name: "Codex", providerId: "codex", mode: "developer", systemPrompt: null },
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    const { onSelectAssistant, onSelectSkill, onClose } = renderDropdown({ filterText: "testflight", assistants: [assistant, { ...assistant, id: "archived", name: "Archived checker", isArchived: true }] });
+    expect(screen.getByRole("menuitem", { name: "Call Beta checker" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Call Archived checker" })).toBeNull();
+    await userEvent.setup().keyboard("{Enter}");
+    expect(onSelectAssistant).toHaveBeenCalledExactlyOnceWith(assistant);
+    expect(onSelectSkill).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });
 
