@@ -16,6 +16,7 @@ import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantMemoryPanel } from "./assistant-memory";
 import { AssistantAssignments } from "./assistant-assignments";
 import { AssistantChatsPanel } from "./assistant-chats-panel";
+import { AssistantRoutines } from "./assistant-routines";
 import { errorText } from "../lib/assistant-ui";
 
 function AssistantTeamSelect({ assistant, teams, disabled }: { assistant: Assistant; teams: AssistantOverview["teams"]; disabled: boolean }) {
@@ -44,8 +45,8 @@ export function AssistantInfoPanel({ assistant, overview, chats, selectedRunId, 
   onSelectChat(runId: string): void;
   onRetryChats(): void;
   isOpen: boolean;
-  tab: "profile" | "chats" | "memory" | "tasks";
-  onTabChange(tab: "profile" | "chats" | "memory" | "tasks"): void;
+  tab: "profile" | "chats" | "memory" | "tasks" | "routines";
+  onTabChange(tab: "profile" | "chats" | "memory" | "tasks" | "routines"): void;
   onClose(): void;
   onToggleArchive(): void;
   archiving: boolean;
@@ -82,10 +83,11 @@ export function AssistantInfoPanel({ assistant, overview, chats, selectedRunId, 
       </div>
       <div className="shrink-0 overflow-x-auto px-4 pb-4 noscrollbar">
         <SegmentedTabs aria-label="Assistant information" variant="plain" panelId="assistant-info-content" value={tab} onChange={onTabChange}
-          options={[{ value: "profile", label: "Details" }, { value: "chats", label: "Chats" }, { value: "memory", label: "Memory" }, { value: "tasks", label: activeTasks ? `Assignments · ${activeTasks}` : "Assignments" }]} />
+          options={[{ value: "profile", label: "Details" }, { value: "chats", label: "Chats" }, { value: "memory", label: "Memory" }, { value: "tasks", label: activeTasks ? `Assignments · ${activeTasks}` : "Assignments" }, { value: "routines", label: "Routines" }]} />
       </div>
-      <div id="assistant-info-content" role="tabpanel" aria-label={tab === "chats" ? "Chats" : tab === "memory" ? "Memory" : tab === "tasks" ? "Assignments" : "Details"} className="scroll-bounce min-h-0 flex-1 overflow-y-auto px-5 pb-6">
-        {tab === "chats" ? <AssistantChatsPanel chats={chats} selectedRunId={selectedRunId} error={chatsError} disabled={assistant.isArchived} onSelect={onSelectChat} onRetry={onRetryChats} />
+      <div id="assistant-info-content" role="tabpanel" aria-label={tab === "routines" ? "Routines" : tab === "chats" ? "Chats" : tab === "memory" ? "Memory" : tab === "tasks" ? "Assignments" : "Details"} className="scroll-bounce min-h-0 flex-1 overflow-y-auto px-5 pb-6">
+        {tab === "routines" ? <AssistantRoutines assistant={assistant} onOpenChat={onSelectChat} />
+          : tab === "chats" ? <AssistantChatsPanel chats={chats} selectedRunId={selectedRunId} error={chatsError} disabled={assistant.isArchived} onSelect={onSelectChat} onRetry={onRetryChats} />
           : tab === "memory" ? <AssistantMemoryPanel key={assistant.id} assistant={assistant} memories={overview.memories} />
           : tab === "tasks" ? <AssistantAssignments assistant={assistant} assignments={tasks} assistants={overview.assistants} openAssistant={openAssistant} />
           : <div className="space-y-5 pt-2">

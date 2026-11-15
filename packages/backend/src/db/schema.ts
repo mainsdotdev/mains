@@ -1664,6 +1664,10 @@ export const pulses = sqliteTable(
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
 
+    // Assistant identities and assignments stay local to the owning backend.
+    assistantId: text("assistant_id"),
+    lastAssignmentId: text("last_assignment_id"),
+
     // Developer pulses run in a workspace; work/chat pulses run workspace-less
     // (managed execution dir) and may target a collection instead.
     workspaceId: text("workspace_id").references(() => workspaces.id, {
@@ -1720,6 +1724,7 @@ export const pulses = sqliteTable(
   },
   (t) => [
     index("idx_pulses_account").on(t.accountId),
+    index("idx_pulses_assistant").on(t.assistantId),
     index("idx_pulses_workspace").on(t.workspaceId),
     index("idx_pulses_active_next_run").on(t.isActive, t.nextRunAt),
     check(

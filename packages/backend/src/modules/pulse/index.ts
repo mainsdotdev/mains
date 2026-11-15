@@ -4,5 +4,6 @@ export type {
   Pulse,
   PulseFrequency,
   CreatePulseInput,
+  CreateAssistantRoutineInput,
   UpdatePulseInput,
 } from "./pulse.dto";

@@ -1498,6 +1498,8 @@ const api = {
     getById: (id: string) => ipcRenderer.invoke(CHANNELS.pulse.getById, id),
     create: (accountId: string, input: unknown) =>
       ipcRenderer.invoke(CHANNELS.pulse.create, accountId, input),
+    createRoutine: (accountId: string, assistantId: string, input: unknown) =>
+      ipcRenderer.invoke(CHANNELS.pulse.createRoutine, accountId, assistantId, input),
     update: (id: string, input: unknown) =>
       ipcRenderer.invoke(CHANNELS.pulse.update, id, input),
     delete: (id: string) => ipcRenderer.invoke(CHANNELS.pulse.delete, id),

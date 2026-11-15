@@ -9,6 +9,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const { openFile, openDocument } = vi.hoisted(() => ({ openFile: vi.fn(), openDocument: vi.fn() }));
 vi.mock("../hooks/use-open-file-in-editor", () => ({ useOpenFileInEditor: () => openFile }));
 vi.mock("@/hooks/use-document-viewer", () => ({ useDocumentViewer: () => ({ open: openDocument }) }));
+vi.mock("@/lib/redux/api/accountApi", () => ({ useGetAccountQuery: () => ({ data: { id: "default" } }) }));
+vi.mock("@/lib/redux/api/assistantsApi", () => ({ useAssistantOverviewQuery: () => ({ currentData: { assistants: [
+  { id: "123", accountId: "default", avatar: { shape: "cube", color: "mint" } },
+] } }) }));
 import { appApi } from "@/lib/transport";
 
 import {
@@ -29,6 +33,9 @@ describe("PromptMarkdown", () => {
       skills: [{ name: "123", token: "@assistant-123", displayName: "TestFlight", scope: "assistant" }],
     }, "@assistant-123 check build 42")));
     expect(screen.getByText("TestFlight")).toBeTruthy();
+    const chip = screen.getByTitle("TestFlight");
+    expect(chip.style.color).toBe("rgb(66, 174, 149)");
+    expect(chip.querySelector('[data-avatar-shape="cube"] rect')).not.toBeNull();
     expect(screen.queryByText(/@assistant-123/)).toBeNull();
     fireEvent.click(screen.getByText("TestFlight"));
     expect(openDocument).not.toHaveBeenCalled();

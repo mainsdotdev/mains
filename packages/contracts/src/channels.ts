@@ -408,6 +408,7 @@ export const CHANNELS = {
   },
   pulse: {
     create: "pulse:create",
+    createRoutine: "pulse:createRoutine",
     delete: "pulse:delete",
     getAll: "pulse:getAll",
     getById: "pulse:getById",

@@ -219,7 +219,7 @@ export const BRIDGE_TABLES: Readonly<Record<string, BridgeTableDefinition>> = {
     class: "backend-owned", primaryKey: ["id"], idKind: "text", stream: "account",
     ownerRoot: "pulses", primaryRegister: "row",
     registers: {"row": ["id", "owner_backend_id", "account_id", "workspace_id", "collection_id", "mode", "provider_id", "model", "title", "prompt", "frequency", "day_of_week", "hour", "minute", "timezone", "thinking_mode", "effort_level", "is_active", "last_run_at", "next_run_at", "last_run_id", "last_error", "created_at", "updated_at"]},
-    localColumns: [], references: {"account_id": {"table": "accounts", "class": "required"}, "workspace_id": {"table": "workspaces", "class": "required"}, "collection_id": {"table": "collections", "class": "required"}, "provider_id": {"table": "providers", "class": "seeded"}, "last_run_id": {"table": "runs", "class": "required"}},
+    localColumns: ["assistant_id", "last_assignment_id"], references: {"account_id": {"table": "accounts", "class": "required"}, "workspace_id": {"table": "workspaces", "class": "required"}, "collection_id": {"table": "collections", "class": "required"}, "provider_id": {"table": "providers", "class": "seeded"}, "last_run_id": {"table": "runs", "class": "required"}},
     uniqueIndexes: {}, blobColumns: [],
   },
   "review_findings": {

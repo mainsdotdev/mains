@@ -13,6 +13,7 @@ import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useOpenComposerMention } from "../hooks/use-open-composer-mention";
 import { useOpenFileInEditor } from "../hooks/use-open-file-in-editor";
 import { composerSkillDestination } from "../lib/composer-mention";
+import { AssistantMention } from "@/features/assistants/components/assistant-mention";
 
 export interface PromptMarkdownSkill {
   token?: string;
@@ -312,6 +313,7 @@ export function PromptMarkdown({
         const context = parseContextHref(href);
         if (context?.kind === "skill") {
           const skill = skillsByToken.get(context.value);
+          if (skill?.scope === "assistant") return <AssistantMention id={skill.name} name={skill.displayName || skill.name} />;
           if (skill) return <PromptSkillChip skill={skill} onOpen={openSkillMention} />;
         }
         if (context?.kind === "file") {

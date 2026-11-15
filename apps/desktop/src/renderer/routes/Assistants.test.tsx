@@ -6,6 +6,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Assistant, AssistantConversation, AssistantTeam } from "@mains/contracts/assistants";
+import type { Pulse } from "@/lib/redux/api/pulseApi";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
 import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
 import assistantsReducer from "@/lib/redux/slices/assistantsSlice";
@@ -13,7 +14,7 @@ import workspaceReducer from "@/lib/redux/slices/workspaceSlice";
 import { AssistantsSidebar } from "@/features/assistants/components/assistants-sidebar";
 import AssistantsPage from "./Assistants";
 
-const mocks = vi.hoisted(() => ({ chats: [] as AssistantConversation[], assistants: [] as Assistant[], teams: [] as AssistantTeam[], changeTeam: vi.fn(), changingTeam: false, teamError: undefined as unknown, loadingChats: false, chatsError: undefined as unknown, refetchChats: vi.fn(), websiteChats: [{ id: "website-first", title: "Website announcement", goal: "Page", status: "succeeded", mode: "work", workspaceId: null, workspaceName: null, projectName: null, createdAt: new Date(0), updatedAt: new Date(0) }] }));
+const mocks = vi.hoisted(() => ({ routines: [] as Pulse[], chats: [] as AssistantConversation[], assistants: [] as Assistant[], teams: [] as AssistantTeam[], changeTeam: vi.fn(), changingTeam: false, teamError: undefined as unknown, loadingChats: false, chatsError: undefined as unknown, refetchChats: vi.fn(), websiteChats: [{ id: "website-first", title: "Website announcement", goal: "Page", status: "succeeded", mode: "work", workspaceId: null, workspaceName: null, projectName: null, createdAt: new Date(0), updatedAt: new Date(0) }] }));
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 vi.mock("@/lib/redux/api", () => ({ useGetAccountQuery: () => ({ data: { id: "account" } }) }));
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
@@ -21,6 +22,10 @@ vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantConversationsQuery: ({ id }: { id: string }) => ({ currentData: mocks.loadingChats ? undefined : id === "website" ? mocks.websiteChats : mocks.chats, error: mocks.chatsError, refetch: mocks.refetchChats }),
   useArchiveAssistantMutation: () => [vi.fn(), {}],
   useChangeAssistantTeamMutation: () => [mocks.changeTeam, { isLoading: mocks.changingTeam, error: mocks.teamError }],
+}));
+vi.mock("@/lib/redux/api/pulseApi", () => ({
+  useGetPulsesQuery: () => ({ currentData: mocks.routines, refetch: vi.fn() }),
+  useDeletePulseMutation: () => [vi.fn(), {}], useTogglePulseMutation: () => [vi.fn(), {}], useRunPulseNowMutation: () => [vi.fn(), {}],
 }));
 vi.mock("@/features/assistants/hooks/use-assistant-updates", () => ({ useAssistantUpdates() {} }));
 vi.mock("@/features/assistants/components/assistant-chat", () => ({ AssistantChat: ({ selectedRunId, onSelectRun, onOpenDetails }: { selectedRunId: string | null; onSelectRun(id: string): void; onOpenDetails(): void }) => <div>{!selectedRunId && <button aria-label="Center assistant monogram" onClick={onOpenDetails}>R</button>}<output data-testid="conversation">{selectedRunId ?? "draft"}</output><button onClick={() => { mocks.chats = [{ id: "third", title: "Third release", goal: "Third", status: "succeeded", mode: "work", workspaceId: null, workspaceName: null, projectName: null, createdAt: new Date(), updatedAt: new Date() }, ...mocks.chats]; onSelectRun("third"); }}>Send draft</button></div> }));
@@ -45,6 +50,7 @@ beforeEach(() => {
   mocks.changeTeam.mockReset().mockResolvedValue({ data: {} });
   mocks.changingTeam = false;
   mocks.teamError = undefined;
+  mocks.routines = [];
   mocks.loadingChats = false;
   mocks.chatsError = undefined;
   mocks.refetchChats.mockReset();
@@ -57,6 +63,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView; else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
 
 describe("assistant profile and conversation", () => {
+  it("opens Routines and its last task without closing the panel or losing chat selection", async () => {
+    mocks.routines = [{ id: "routine", accountId: "account", assistantId: "release", title: "Daily release check", prompt: "Check the release", frequency: "daily", hour: 9, minute: 0, timezone: "Europe/Istanbul", isActive: true, mode: "work", lastRunId: "second" } as Pulse];
+    setup("/assistants?assistant=release&run=first&tab=routines");
+    const panel = screen.getByRole("tabpanel", { name: "Routines" });
+    expect(within(panel).getByRole("article", { name: "Daily release check" })).toBeTruthy();
+    expect(screen.getByTestId("conversation").textContent).toBe("first");
+    fireEvent.click(within(panel).getByRole("button", { name: "Open last chat" }));
+    await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("second"));
+    expect(screen.getByRole("tabpanel", { name: "Routines" })).toBe(panel);
+    expect(new URLSearchParams(screen.getByTestId("location").textContent ?? "").get("tab")).toBe("routines");
+  });
   it("opens previous chats with location and activity while keeping the Chats panel open", async () => {
     const { store } = setup();
     fireEvent.click(screen.getByRole("button", { name: "Release profile" }));

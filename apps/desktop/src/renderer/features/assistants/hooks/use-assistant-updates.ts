@@ -15,7 +15,7 @@ export function useAssistantUpdates() {
       if (timer) return;
       timer = setTimeout(() => {
         timer = undefined;
-        if (attached) dispatch(assistantsApi.util.invalidateTags(["Assistants", "AssistantChats"]));
+        if (attached) dispatch(assistantsApi.util.invalidateTags(["Assistants", "AssistantChats", "Pulse"]));
       }, 150);
     };
     const off = [CHANNELS.assistants.changed, CHANNELS.runs.statusChanged, CHANNELS.runs.updated].map(channel => transport.subscribe(channel, refresh));

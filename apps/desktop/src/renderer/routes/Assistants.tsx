@@ -97,7 +97,7 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
     </div>
     {selected && overview && <AssistantInfoPanel key={selected.id} assistant={selected} overview={overview} isOpen={panelOpen}
       chats={chats} selectedRunId={runId} chatsError={chatsError} onSelectChat={openChat} onRetryChats={() => void refetchChats()}
-      tab={tab === "chats" || tab === "memory" || tab === "tasks" ? tab : "profile"} onTabChange={changeTab} onClose={closeInfoPanel}
+      tab={tab === "routines" || tab === "chats" || tab === "memory" || tab === "tasks" ? tab : "profile"} onTabChange={changeTab} onClose={closeInfoPanel}
       onToggleArchive={() => void toggleArchive()} archiving={archiving.isLoading} error={failure}
       openAssistant={(id, chatId) => navigate(assistantHref(id, chatId))} />}
   </div>;

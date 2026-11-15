@@ -12,11 +12,15 @@ export const AVATAR_COLORS = {
   rose: { label: "Rose", fill: "#D96CA4" },
 } as const;
 
+export function assistantAvatarColor(avatar?: Avatar): string {
+  return AVATAR_COLORS[normalizeAssistantAvatar(avatar).color].fill;
+}
+
 export function AssistantAvatar({ avatar, className }: { avatar?: Avatar; className?: string }) {
   const selected = normalizeAssistantAvatar(avatar);
   return <span aria-hidden="true" data-avatar-shape={selected.shape}
     className={cn("inline-flex shrink-0 items-center justify-center", className)}
-    style={{ color: AVATAR_COLORS[selected.color].fill }}>
+    style={{ color: assistantAvatarColor(selected) }}>
     <svg viewBox="0 0 64 64" className="h-full w-full" fill="currentColor" focusable="false">
       {selected.shape === "sphere" ? <circle cx="32" cy="32" r="24" /> : <rect x="8" y="8" width="48" height="48" rx="8" />}
     </svg>

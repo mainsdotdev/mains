@@ -6,8 +6,12 @@ import { runsService } from "../runs/runs.service";
 import { appSettingsService } from "../appSettings";
 import { spaceService } from "../space";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
+import { randomUUID } from "node:crypto";
+import { assistantsService } from "../assistants";
+import { computeRoutineNextRunAt } from "./routine-schedule";
 import type {
   CreatePulseInput,
+  CreateAssistantRoutineInput,
   Pulse,
   PulseFrequency,
   UpdatePulseInput,
@@ -104,6 +108,24 @@ export function computeNextRunAt(spec: ScheduleSpec, from: Date): Date {
 // ─────────────────────────────────────────────────────────────
 
 const lifecycle = createSchedulerLifecycle<Pulse>();
+const nextTime = (pulse: CreatePulseInput, from: Date) => pulse.assistantId ? computeRoutineNextRunAt(pulse, from) : computeNextRunAt(pulse, from);
+
+function routineProfile(accountId: string, input: CreatePulseInput): CreatePulseInput {
+  if (input.assistantId != null && !input.assistantId.trim()) throw new Error("Assistant is required");
+  if (!input.assistantId) return input;
+  const assistant = assistantsService.require(input.assistantId, accountId);
+  if (input.collectionId) throw new Error("Assistant routines do not target a collection");
+  if (input.mode === "chat") throw new Error("Assistant routines run in Work or Developer mode");
+  if (input.title?.length > 200 || input.prompt?.length > 24_000) throw new Error("Routine names allow 200 characters and tasks allow 24000 characters");
+  if (!Number.isInteger(input.hour) || !Number.isInteger(input.minute) || input.dayOfWeek != null && !Number.isInteger(input.dayOfWeek)) throw new Error("Choose a valid routine time");
+  if (input.workspaceId) {
+    const workspace = pulseRepo.routineWorkspace(input.workspaceId);
+    if (!workspace || workspace.accountId !== accountId || workspace.isArchived) throw new Error("Workspace is unavailable");
+  }
+  try { new Intl.DateTimeFormat("en-US", { timeZone: input.timezone }).format(); }
+  catch { throw new Error("Choose a valid routine timezone"); }
+  return { ...input, mode: input.mode ?? (input.workspaceId ? "developer" : "work"), providerId: assistant.providerId, model: assistant.model, effortLevel: assistant.effort || null, thinkingMode: false };
+}
 
 function clearNextTimer() {
   lifecycle.cancel("next");
@@ -168,32 +190,64 @@ export const pulseService = {
   },
 
   create(accountId: string, input: CreatePulseInput): Pulse {
+    input = routineProfile(accountId, input);
     const validationError = validateCreate(input);
     if (validationError) throw new Error(validationError);
 
     if (input.workspaceId) assertOwnedRecord("workspaces", input.workspaceId);
-    const nextRunAt = computeNextRunAt(input, new Date());
+    const nextRunAt = nextTime(input, new Date());
     const pulse = pulseRepo.create(accountId, input, nextRunAt);
     scheduleNext();
     return pulse;
+  },
+
+  createRoutine(accountId: string, assistantId: string, input: CreateAssistantRoutineInput): Pulse {
+    if (!assistantId?.trim()) throw new Error("Assistant is required");
+    // A distinct command prevents older backends from silently creating an unbound Pulse.
+    return this.create(accountId, { ...input, assistantId, providerId: "", model: "" });
   },
 
   update(id: string, input: UpdatePulseInput): Pulse | null {
     assertOwnedRecord("pulses", id);
     const existing = pulseRepo.findById(id);
     if (!existing) throw new Error("Pulse not found");
+    if ("assistantId" in input || "mode" in input) throw new Error("A pulse keeps its original assistant and mode");
+    const allowed = new Set(["workspaceId", "collectionId", "providerId", "model", "title", "prompt", "frequency", "dayOfWeek", "hour", "minute", "timezone", "thinkingMode", "effortLevel", "isActive"]);
+    if (Object.keys(input).some(key => !allowed.has(key))) throw new Error("Unknown pulse setting");
+    if (existing.assistantId) {
+      if (input.isActive !== false) assistantsService.require(existing.assistantId, existing.accountId);
+      for (const key of ["providerId", "model", "effortLevel", "thinkingMode", "collectionId"] as const) {
+        if (input[key] !== undefined && input[key] !== existing[key]) throw new Error("This routine uses its assistant's fixed profile");
+      }
+      if (input.timezone !== undefined) {
+        try { new Intl.DateTimeFormat("en-US", { timeZone: input.timezone }).format(); }
+        catch { throw new Error("Choose a valid routine timezone"); }
+      }
+      if (input.workspaceId) {
+        const workspace = pulseRepo.routineWorkspace(input.workspaceId);
+        if (!workspace || workspace.accountId !== existing.accountId || workspace.isArchived) throw new Error("Workspace is unavailable");
+      }
+      if (input.title != null && input.title.length > 200 || input.prompt != null && input.prompt.length > 24_000) throw new Error("Routine names allow 200 characters and tasks allow 24000 characters");
+      if (input.hour != null && !Number.isInteger(input.hour) || input.minute != null && !Number.isInteger(input.minute) || input.dayOfWeek != null && !Number.isInteger(input.dayOfWeek)) throw new Error("Choose a valid routine time");
+    }
 
     if (input.workspaceId) assertOwnedRecord("workspaces", input.workspaceId);
     const merged = { ...existing, ...input };
     const validationError = validateUpdate(merged);
     if (validationError) throw new Error(validationError);
+    if (existing.assistantId) {
+      const routineError = validateCreate(merged);
+      if (routineError) throw new Error(routineError);
+    }
 
     // Recompute nextRunAt if any scheduling field changed
     const scheduleChanged =
       input.frequency !== undefined ||
       input.hour !== undefined ||
       input.minute !== undefined ||
-      input.dayOfWeek !== undefined;
+      input.dayOfWeek !== undefined ||
+      !!existing.assistantId && input.timezone !== undefined ||
+      input.isActive === true && !existing.isActive;
 
     // Mode is fixed at creation; an update must keep the target shape
     // consistent with it (developer ⇄ workspace, work/chat ⇄ collection).
@@ -206,7 +260,7 @@ export const pulseService = {
       throw new Error("workspaceId is only allowed for developer pulses");
     }
     const nextRunAt = scheduleChanged
-      ? computeNextRunAt(merged, new Date())
+      ? nextTime(merged, new Date())
       : undefined;
 
     const pulse = pulseRepo.update(id, input, nextRunAt);
@@ -226,16 +280,21 @@ export const pulseService = {
     return this.update(id, { isActive });
   },
 
+  pauseAssistantRoutines(assistantId: string): void {
+    for (const id of pulseRepo.pauseAssistantRoutines(assistantId)) lifecycle.invalidate(id);
+    scheduleNext();
+  },
+
   // ── Execution ──
 
-  async executePulse(id: string): Promise<Pulse | null> {
+  async executePulse(id: string, manualTaskKey?: string): Promise<Pulse | null> {
     return lifecycle.run(id, async (current) => {
       assertOwnedRecord("pulses", id);
       const pulse = pulseRepo.findById(id);
       if (!pulse) throw new Error("Pulse not found");
 
       const now = new Date();
-      const nextRunAt = computeNextRunAt(pulse, now);
+      const nextRunAt = nextTime(pulse, now);
 
       // Claim the pulse synchronously BEFORE awaiting anything so that a
       // concurrent scheduleNext()/tick() pass cannot see it as still due
@@ -244,6 +303,25 @@ export const pulseService = {
 
       let launched = false;
       try {
+        if (pulse.assistantId) {
+          const { assistantWork } = await import("../assistants");
+          if (!current()) return null;
+          assistantsService.require(pulse.assistantId, pulse.accountId);
+          const previous = pulse.lastAssignmentId ? assistantsService.assignment(pulse.accountId, pulse.lastAssignmentId) : null;
+          if (previous && !["completed", "failed", "canceled"].includes(previous.status)) {
+            throw new Error("The previous routine task is still open. Review it before starting another run.");
+          }
+          const occurrence = pulse.nextRunAt?.getTime() ?? now.getTime();
+          const task = await assistantWork.assign({
+            accountId: pulse.accountId, toAssistantId: pulse.assistantId,
+            taskKey: manualTaskKey ?? `pulse:${pulse.id}:${occurrence}`,
+            title: pulse.title, prompt: pulse.prompt,
+            execution: pulse.mode === "developer" ? { mode: "developer", workspaceId: pulse.workspaceId } : { mode: "work" },
+          }, undefined, () => { if (!current()) throw new Error("Routine changed before dispatch"); });
+          launched = true;
+          pulseRepo.markRun(id, { lastRunAt: now, nextRunAt: current() ? nextRunAt : undefined, lastAssignmentId: task.id, lastError: null });
+          return pulseRepo.findById(id) ?? null;
+        }
         const settings = await appSettingsService.getSettings();
         if (!current()) return null;
         const configSnapshot = buildConfigSnapshot(pulse.providerId, pulse);
@@ -292,6 +370,7 @@ export const pulseService = {
         });
         return pulseRepo.findById(id) ?? null;
       } catch (err: any) {
+        if (!launched && !current()) return null;
         const message = err?.message ?? String(err);
         pulseRepo.markRun(id, { lastRunAt: now, nextRunAt: current() ? nextRunAt : undefined, lastError: message });
         throw err instanceof Error ? err : new Error(message);
@@ -302,7 +381,7 @@ export const pulseService = {
   },
 
   async runNow(id: string): Promise<Pulse | null> {
-    return this.executePulse(id);
+    return this.executePulse(id, `pulse:${id}:manual:${randomUUID()}`);
   },
 
   async tick(): Promise<void> {

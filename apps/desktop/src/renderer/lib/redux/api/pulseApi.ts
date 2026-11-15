@@ -7,6 +7,9 @@ export type PulseFrequency = 'hourly' | 'daily' | 'weekdays' | 'weekly';
 export interface Pulse {
   id: string;
   accountId: string;
+  assistantId?: string | null;
+  lastAssignmentId?: string | null;
+  lastAssignmentStatus?: string | null;
   /** Set for developer pulses; work/chat pulses run workspace-less. */
   workspaceId: string | null;
   /** Optional collection target for work/chat pulses. */
@@ -34,6 +37,7 @@ export interface Pulse {
 }
 
 export interface CreatePulseInput {
+  assistantId?: string | null;
   workspaceId?: string | null;
   collectionId?: string | null;
   mode?: ModeId;
@@ -54,15 +58,20 @@ export interface CreatePulseInput {
 // `mode` is create-only — a pulse's mode is its execution shape, not a
 // setting to flip later.
 export type UpdatePulseInput = Partial<
-  Omit<CreatePulseInput, 'workspaceId' | 'collectionId' | 'providerId' | 'mode'>
+  Omit<CreatePulseInput, 'assistantId' | 'workspaceId' | 'collectionId' | 'providerId' | 'mode'>
 > & {
   workspaceId?: string | null;
   collectionId?: string | null;
   providerId?: string;
 };
+export type CreateAssistantRoutineInput = Omit<CreatePulseInput, 'assistantId' | 'providerId' | 'model' | 'collectionId' | 'thinkingMode' | 'effortLevel'>;
 
 export const pulseApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
+    createAssistantRoutine: builder.mutation<Pulse, { accountId: string; assistantId: string; input: CreateAssistantRoutineInput }>({
+      query: ({ accountId, assistantId, input }) => ({ handler: CHANNELS.pulse.createRoutine, args: [accountId, assistantId, input] }),
+      invalidatesTags: ['Pulse'],
+    }),
     getPulses: builder.query<Pulse[], void>({
       query: () => ({ handler: CHANNELS.pulse.getAll }),
       providesTags: ['Pulse'],
@@ -113,13 +122,14 @@ export const pulseApi = baseApi.injectEndpoints({
 
     runPulseNow: builder.mutation<Pulse, string>({
       query: (id) => ({ handler: CHANNELS.pulse.runNow, args: [id] }),
-      invalidatesTags: ['Pulse', 'Runs'],
+      invalidatesTags: ['Pulse', 'Runs', 'Assistants', 'AssistantChats'],
     }),
   }),
   overrideExisting: false,
 });
 
 export const {
+  useCreateAssistantRoutineMutation,
   useGetPulsesQuery,
   useLazyGetPulsesQuery,
   useGetPulseByIdQuery,

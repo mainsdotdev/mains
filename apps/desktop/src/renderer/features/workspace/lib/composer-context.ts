@@ -19,6 +19,7 @@
 import type { ReviewComment } from "@mains/contracts/review-comments";
 import type { PresentationAnnotation } from "@mains/contracts/presentation-annotations";
 import type { DocumentAnnotation } from "@mains/contracts/document-annotations";
+import type { AssistantAvatar } from "@mains/contracts/assistants";
 import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { AppshotCapture } from "../../../../shared/appshots";
 import type { BrowserSelectionElement } from "../../../../shared/browser-annotation";
@@ -107,7 +108,7 @@ export interface ContextMcpAppItem {
   structuredContent?: Record<string, unknown>;
 }
 
-export type ContextAssistantItem = { kind: "assistant"; id: string; assistantId: string; name: string; token: string };
+export type ContextAssistantItem = { kind: "assistant"; id: string; assistantId: string; name: string; token: string; avatar?: AssistantAvatar };
 
 export type ContextItem =
   | ContextFileItem

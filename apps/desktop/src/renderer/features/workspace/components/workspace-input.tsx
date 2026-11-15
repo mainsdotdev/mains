@@ -1,6 +1,7 @@
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery } from "@/lib/redux/api/assistantsApi";
 import type { Assistant } from "@mains/contracts/assistants";
+import { AssistantAvatar, assistantAvatarColor } from "@/features/assistants/components/assistant-avatar";
 import { isAbsoluteFilePath } from "@/lib/file-path";
 
 import {
@@ -78,6 +79,11 @@ import { addComposerUploads } from "../lib/composer-uploads";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 const EMPTY_DIRECTORIES: string[] = [];
+
+function assistantChip(token: string, name: string, avatar?: Assistant["avatar"]): RichSkillChipData {
+  return { name: token, displayName: name, token, clickable: false, scope: "assistant",
+    icon: <AssistantAvatar avatar={avatar} className="size-full" />, color: assistantAvatarColor(avatar) };
+}
 
 function directoryName(folderPath: string): string {
   return folderPath.replace(/\/+$/, "").split("/").pop() || folderPath;
@@ -266,7 +272,7 @@ export function WorkspaceInput({
   // Empty-state backlight: the centered composer glows in the accent.
   const { composerPlaceholder, mode: effectiveMode } = useModeConfig(mode);
   const { data: account } = useGetAccountQuery();
-  const { currentData: assistantOverview } = useAssistantOverviewQuery(account?.id ?? "", { skip: !account || effectiveMode !== "developer" || suspended });
+  const { currentData: assistantOverview, error: assistantOverviewError } = useAssistantOverviewQuery(account?.id ?? "", { skip: !account || effectiveMode !== "developer" || suspended });
 
   // Built outside the JSX on purpose: calling the helper inline in `style`
   // makes the React Compiler bail on this component's manual memoization.
@@ -386,8 +392,8 @@ export function WorkspaceInput({
 
   const selectAssistant = (assistant: Assistant) => {
     const token = `@assistant-${assistant.id}`;
-    if (!contextAssistants.some(a => a.assistantId === assistant.id)) addContext({ kind: "assistant", id: crypto.randomUUID(), assistantId: assistant.id, name: assistant.name, token });
-    const replaced = inputRef.current?.replaceTokenWithSkillChip("@", { name: token, displayName: assistant.name, token, clickable: false, scope: "assistant" }, false);
+    if (!contextAssistants.some(a => a.assistantId === assistant.id)) addContext({ kind: "assistant", id: crypto.randomUUID(), assistantId: assistant.id, name: assistant.name, token, avatar: assistant.avatar });
+    const replaced = inputRef.current?.replaceTokenWithSkillChip("@", assistantChip(token, assistant.name, assistant.avatar), false);
     if (!replaced) {
       const next = replaceMentionInGoal(goal, "@", unifiedMenu.filter, `${token} `);
       if (next !== null) onGoalChange(next);
@@ -616,7 +622,12 @@ export function WorkspaceInput({
 
   const skillChipMap = useMemo(() => {
     const m = new Map<string, RichSkillChipData>();
-    for (const assistant of contextAssistants) m.set(assistant.token, { name: assistant.token, displayName: assistant.name, token: assistant.token, clickable: false, scope: "assistant" });
+    for (const assistant of contextAssistants) {
+      const profile = assistantOverview?.assistants.find(item => item.id === assistant.assistantId);
+      // Older drafts have no appearance snapshot; restore their chip when the profile arrives.
+      if (!assistant.avatar && !assistantOverview && !assistantOverviewError) continue;
+      m.set(assistant.token, assistantChip(assistant.token, assistant.name, profile?.avatar ?? assistant.avatar));
+    }
     for (const s of contextSkills) {
       m.set(skillMentionToken(s), {
         name: s.name,
@@ -630,7 +641,7 @@ export function WorkspaceInput({
       });
     }
     return m;
-  }, [contextSkills, contextAssistants]);
+  }, [contextSkills, contextAssistants, assistantOverview, assistantOverviewError]);
 
   const fileChipMap = useMemo(() => {
     const m = new Map<string, RichFileChipData>();

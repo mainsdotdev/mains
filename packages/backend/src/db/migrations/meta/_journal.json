@@ -330,6 +330,13 @@
       "when": 1794769762117,
       "tag": "0046_assistant_welcome_execution",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1794777784919,
+      "tag": "0047_assistant_routines",
+      "breakpoints": true
     }
   ]
 }

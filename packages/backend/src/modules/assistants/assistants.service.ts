@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { pulseService } from "../pulse";
 import { assistantTaskActivity } from "./assistant-task-messages";
 import { assistantsRepo } from "./assistants.repo";
 import { object, onlyKeys, text, execution } from "./assistants.validation";
@@ -97,6 +98,7 @@ export const assistantsService = {
         if (archived && assistantsRepo.hasPendingRun(id))
             throw new Error("Stop this assistant’s running conversations before archiving");
         assistantsRepo.archive(id, archived);
+        if (archived) pulseService.pauseAssistantRoutines(id);
     },
     changeTeam(input: unknown): Assistant {
         const value = object(input);

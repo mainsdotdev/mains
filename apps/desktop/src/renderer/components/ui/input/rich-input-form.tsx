@@ -25,6 +25,10 @@ export interface RichSkillChipData {
   /** Whether this mention has a destination supplied by the caller. */
   clickable?: boolean;
   displayName?: string;
+  /** Caller-owned artwork for mentions that do not use an image file. */
+  icon?: ReactNode;
+  /** Exact identity tint; brandColor retains its existing blended treatment. */
+  color?: string;
   iconSmall?: string;
   iconLarge?: string;
   brandColor?: string;
@@ -276,7 +280,9 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
     "group/chip inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline " +
     " cursor-default";
-  if (skill.brandColor) {
+  if (skill.color) {
+    chip.style.color = skill.color;
+  } else if (skill.brandColor) {
     chip.style.color = `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))`;
   }
 
@@ -285,7 +291,9 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   const { iconSlot, glyph } = createChipIconSlot(labelText);
   const iconPath = skill.iconLarge || skill.iconSmall;
   const fallbackIconMarkup = ["plugin", "mac", "mac_app", "computer"].includes((skill.scope || "").toLowerCase()) ? pluginIconMarkup : sparklesIconMarkup;
-  if (iconPath) {
+  if (skill.icon) {
+    glyph.innerHTML = renderToStaticMarkup(<>{skill.icon}</>);
+  } else if (iconPath) {
     const img = document.createElement("img");
     img.alt = "";
     img.className = "size-full object-contain";
