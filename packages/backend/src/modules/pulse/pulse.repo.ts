@@ -39,6 +39,14 @@ export const pulseRepo = {
       .where(eq(pulses.id, id)).get();
   },
 
+  findForAssistant(accountId: string, assistantId: string, offset = 0): Pulse[] {
+    return getDb().select(pulseColumns).from(pulses)
+      .leftJoin(assistantAssignments, eq(assistantAssignments.id, pulses.lastAssignmentId))
+      .leftJoin(runs, eq(runs.id, assistantAssignments.workerRunId))
+      .where(and(eq(pulses.accountId, accountId), eq(pulses.assistantId, assistantId), ownedHere(pulses.ownerBackendId)))
+      .orderBy(asc(pulses.createdAt), asc(pulses.id)).limit(101).offset(offset).all();
+  },
+
   findDueActive(now: Date): Pulse[] {
     const db = getDb();
     return db
@@ -59,9 +67,8 @@ export const pulseRepo = {
       .get();
   },
 
-  create(accountId: string, input: CreatePulseInput, nextRunAt: Date): Pulse {
+  create(accountId: string, input: CreatePulseInput, nextRunAt: Date, id = nanoid()): Pulse {
     const db = getDb();
-    const id = nanoid();
     db.insert(pulses)
       .values({
       ownerBackendId: getLocalBackendId(db),

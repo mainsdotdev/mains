@@ -547,7 +547,7 @@ describe("codex.driver / app-server protocol", () => {
     expect(dispatch).toHaveBeenCalledTimes(mode === "work" ? 3 : 0);
   });
 
-  it.each(["work", "developer"] as const)("routes %s assistant reporting through start, resume and fork", async mode => {
+  it.each((["work", "developer"] as const).flatMap(mode => ["ReportAssistantTask", "CreateAssistantRoutine"].map(tool => ({ mode, tool }))))("routes $mode assistant $tool through start, resume and fork", async ({ mode, tool }) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-assistant-tools-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
@@ -564,13 +564,14 @@ describe("codex.driver / app-server protocol", () => {
       expect(reply?.result).toEqual({ success: true, contentItems: [{ type: "inputText", text: "assistant-result" }] });
       expect(dispatch).toHaveBeenLastCalledWith(tool, expect.any(Object), { workspaceId: base.execution.workspaceId, rootPath: base.execution.cwd, runId });
     };
-    await execute(await driver.createSession({ ...base, goal: "dynamic tool ReportAssistantTask" }), "ReportAssistantTask", base.runId);
-    await execute(await driver.resumeSession!({ ...base, message: "dynamic tool ReportAssistantTask" }), "ReportAssistantTask", base.runId);
-    await execute(await driver.forkSession!({ ...base, runId: "assistant-tools-fork", sourceRunId: base.runId, message: "dynamic tool ReportAssistantTask" }), "ReportAssistantTask", "assistant-tools-fork");
+    await execute(await driver.createSession({ ...base, goal: `dynamic tool ${tool}` }), tool, base.runId);
+    await execute(await driver.resumeSession!({ ...base, message: `dynamic tool ${tool}` }), tool, base.runId);
+    await execute(await driver.forkSession!({ ...base, runId: "assistant-tools-fork", sourceRunId: base.runId, message: `dynamic tool ${tool}` }), tool, "assistant-tools-fork");
     const started = readProtocolLog(logPath).find(entry => entry.method === "thread/start");
     expect(started?.params).toMatchObject({ dynamicTools: expect.arrayContaining([
       expect.objectContaining({ name: "ListAssistants" }), expect.objectContaining({ name: "ListAssistantTasks" }), expect.objectContaining({ name: "RecallAssistantMemory" }),
       expect.objectContaining({ name: "ReportAssistantTask" }),
+      expect.objectContaining({ name: "CreateAssistantRoutine" }), expect.objectContaining({ name: "ListAssistantRoutines" }),
     ]) });
     expect(dispatch).toHaveBeenCalledTimes(3);
   });

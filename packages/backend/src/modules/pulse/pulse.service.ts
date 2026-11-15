@@ -6,7 +6,7 @@ import { runsService } from "../runs/runs.service";
 import { appSettingsService } from "../appSettings";
 import { spaceService } from "../space";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { assistantsService } from "../assistants";
 import { computeRoutineNextRunAt } from "./routine-schedule";
 import type {
@@ -113,6 +113,7 @@ const nextTime = (pulse: CreatePulseInput, from: Date) => pulse.assistantId ? co
 function routineProfile(accountId: string, input: CreatePulseInput): CreatePulseInput {
   if (input.assistantId != null && !input.assistantId.trim()) throw new Error("Assistant is required");
   if (!input.assistantId) return input;
+  if (input.isActive !== undefined && typeof input.isActive !== "boolean") throw new Error("Routine activity must be true or false");
   const assistant = assistantsService.require(input.assistantId, accountId);
   if (input.collectionId) throw new Error("Assistant routines do not target a collection");
   if (input.mode === "chat") throw new Error("Assistant routines run in Work or Developer mode");
@@ -189,22 +190,38 @@ export const pulseService = {
     return pulseRepo.findNextScheduled() ?? null;
   },
 
-  create(accountId: string, input: CreatePulseInput): Pulse {
+  create(accountId: string, input: CreatePulseInput, requestKey?: string): Pulse {
     input = routineProfile(accountId, input);
     const validationError = validateCreate(input);
     if (validationError) throw new Error(validationError);
 
     if (input.workspaceId) assertOwnedRecord("workspaces", input.workspaceId);
+    const id = requestKey ? `routine-${createHash("sha256").update(JSON.stringify([accountId, input.assistantId, requestKey])).digest("hex")}` : undefined;
+    const existing = id ? pulseRepo.findById(id) : undefined;
+    if (existing) {
+      assertOwnedRecord("pulses", existing.id);
+      if (existing.accountId !== accountId || existing.assistantId !== input.assistantId) throw new Error("Routine request belongs to another assistant");
+      for (const key of ["title", "prompt", "frequency", "hour", "minute", "timezone", "mode"] as const) {
+        if (existing[key] !== input[key]) throw new Error("This routine request already exists with different settings. Read and update it instead.");
+      }
+      if (existing.workspaceId !== (input.workspaceId ?? null) || existing.dayOfWeek !== (input.dayOfWeek ?? null) || existing.isActive !== (input.isActive ?? true)) throw new Error("This routine request already exists with different settings. Read and update it instead.");
+      return existing;
+    }
     const nextRunAt = nextTime(input, new Date());
-    const pulse = pulseRepo.create(accountId, input, nextRunAt);
+    const pulse = pulseRepo.create(accountId, input, nextRunAt, id);
     scheduleNext();
     return pulse;
   },
 
-  createRoutine(accountId: string, assistantId: string, input: CreateAssistantRoutineInput): Pulse {
+  createRoutine(accountId: string, assistantId: string, input: CreateAssistantRoutineInput, requestKey?: string): Pulse {
     if (!assistantId?.trim()) throw new Error("Assistant is required");
     // A distinct command prevents older backends from silently creating an unbound Pulse.
-    return this.create(accountId, { ...input, assistantId, providerId: "", model: "" });
+    return this.create(accountId, { ...input, assistantId, providerId: "", model: "" }, requestKey);
+  },
+
+  forAssistant(accountId: string, assistantId: string, offset = 0): Pulse[] {
+    assistantsService.require(assistantId, accountId);
+    return pulseRepo.findForAssistant(accountId, assistantId, offset);
   },
 
   update(id: string, input: UpdatePulseInput): Pulse | null {
@@ -215,6 +232,7 @@ export const pulseService = {
     const allowed = new Set(["workspaceId", "collectionId", "providerId", "model", "title", "prompt", "frequency", "dayOfWeek", "hour", "minute", "timezone", "thinkingMode", "effortLevel", "isActive"]);
     if (Object.keys(input).some(key => !allowed.has(key))) throw new Error("Unknown pulse setting");
     if (existing.assistantId) {
+      if (input.isActive !== undefined && typeof input.isActive !== "boolean") throw new Error("Routine activity must be true or false");
       if (input.isActive !== false) assistantsService.require(existing.assistantId, existing.accountId);
       for (const key of ["providerId", "model", "effortLevel", "thinkingMode", "collectionId"] as const) {
         if (input[key] !== undefined && input[key] !== existing[key]) throw new Error("This routine uses its assistant's fixed profile");

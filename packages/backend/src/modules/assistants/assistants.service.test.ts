@@ -28,6 +28,7 @@ import { auditBridgeSchema } from "../bridge/bridge.records";
 import type { Assistant, AssistantAssignment } from "@mains/contracts/assistants";
 import { createCodexRequestBroker } from "../providers/adapters/codex/codex-request-broker";
 import { pulseService } from "../pulse";
+import { dispatchMainsTool } from "../providers/adapters/mains-tools.registry";
 let cleanup: () => void, restore: () => void, root: string;
 let driver: ReturnType<typeof createFakeDriver>;
 let teamId: string;
@@ -182,6 +183,106 @@ describe("scheduled assistant routines", () => {
         expect(assistantsRepo.assignments("default")).toHaveLength(0);
     });
 });
+describe("conversational assistant routines", () => {
+    const input = { requestId: "morning-check", title: "Morning check", prompt: "Review the release checklist and report findings with evidence.", frequency: "daily", hour: 9, minute: 0, timezone: "Europe/Istanbul" };
+    const conversation = (assistant: Assistant, overrides: Record<string, unknown> = {}) => createRun(db, { assistantId: assistant.id, providerId: assistant.providerId, mode: "work", status: "succeeded", ...overrides });
+    beforeEach(() => { pulseService.start(); assistantWork.start(); });
+
+    it("creates a routine through the real Codex tool broker, deduplicates retries after restart, and runs it through Pulse", async () => {
+        const assistant = await makeAssistant("Release"), source = conversation(assistant);
+        const call = async () => {
+            const broker = createCodexRequestBroker({ getRunState: () => ({ mode: "work", assistantId: assistant.id, fileChangeItems: new Map() }),
+                getMainsToolContext: () => ({ runId: source.id, workspaceId: null, rootPath: null }) });
+            const respondToRequest = vi.fn(), respondToRequestError = vi.fn();
+            await broker.handleRequest({ runId: source.id, runIsDead: false, id: 42, method: "item/tool/call", params: { tool: "CreateAssistantRoutine", arguments: JSON.stringify(input) }, server: { respondToRequest, respondToRequestError } });
+            expect(respondToRequestError).not.toHaveBeenCalled();
+            const reply = respondToRequest.mock.calls[0][1];
+            expect(reply.success).toBe(true);
+            return JSON.parse(reply.contentItems[0].text);
+        };
+        const saved = await call();
+        expect(saved).toMatchObject({ title: "Morning check", hour: 9, timezone: "Europe/Istanbul", mode: "work", workspaceId: null, isActive: true });
+        await pulseService.stop(); await assistantWork.stop(); assistantWork.start(); pulseService.start();
+        expect((await call()).id).toBe(saved.id);
+        expect(pulseService.getAll()).toHaveLength(1);
+        const fired = await pulseService.runNow(saved.id);
+        const task = assistantsRepo.assignment(fired!.lastAssignmentId!)!;
+        await settled(task.workerRunId!);
+        await assistantWork.tool(task.workerRunId!, "ReportAssistantTask", { assignmentId: task.id, status: "completed", result: "Checklist reviewed", evidence: ["checklist.log"] });
+        expect(await assistantWork.tool(source.id, "ReadAssistantRoutine", { routineId: saved.id })).toMatchObject({ lastAssignmentStatus: "completed", lastRunId: task.workerRunId });
+        expect(driver.calls.createSession.find(call => call.runId === task.workerRunId)).toMatchObject({ mode: "work", model: "test-model", configSnapshot: { assistantId: assistant.id, modelReasoningEffort: "high" } });
+    });
+
+    it("reads, reschedules, pauses, resumes and deletes the same panel-visible record without changing its execution", async () => {
+        const assistant = await makeAssistant("Release"), repo = workspace("scheduled-repo"), source = conversation(assistant, { mode: "developer", workspaceId: repo.id });
+        const saved = await assistantWork.tool(source.id, "CreateAssistantRoutine", { ...input, frequency: "weekly", dayOfWeek: 1 }) as { id: string };
+        expect(pulseService.getAll()[0]).toMatchObject({ id: saved.id, assistantId: assistant.id, mode: "developer", workspaceId: repo.id });
+        const changed = await assistantWork.tool(source.id, "UpdateAssistantRoutine", { routineId: saved.id, frequency: "daily", hour: 10, minute: 30 }) as { nextRunAt: Date };
+        expect(changed).toMatchObject({ frequency: "daily", dayOfWeek: null, hour: 10, minute: 30, timezone: input.timezone, prompt: input.prompt, mode: "developer", workspaceId: repo.id });
+        expect(await assistantWork.tool(source.id, "UpdateAssistantRoutine", { routineId: saved.id, isActive: false })).toMatchObject({ isActive: false });
+        expect(await assistantWork.tool(source.id, "UpdateAssistantRoutine", { routineId: saved.id, isActive: true })).toMatchObject({ isActive: true });
+        expect(await assistantWork.tool(source.id, "DeleteAssistantRoutine", { routineId: saved.id })).toMatchObject({ deleted: true, id: saved.id });
+        expect(pulseService.getById(saved.id)).toBeNull();
+    });
+
+    it("keeps other assistants, accounts, generic pulses and replicas outside this assistant's management scope", async () => {
+        const assistant = await makeAssistant("Release"), colleague = await makeAssistant("Other"), source = conversation(assistant);
+        const saved = await assistantWork.tool(source.id, "CreateAssistantRoutine", input) as { id: string };
+        const base = pulseService.getById(saved.id)!;
+        createAccount(db, { id: "foreign" });
+        db.insert(pulses).values([
+            { ...base, id: "colleague-routine", assistantId: colleague.id },
+            { ...base, id: "foreign-routine", accountId: "foreign" },
+            { ...base, id: "generic-pulse", assistantId: null },
+            { ...base, id: "replica-routine", ownerBackendId: "another-backend" },
+        ]).run();
+        const listed = await assistantWork.tool(source.id, "ListAssistantRoutines", {}) as { routines: Array<{ id: string }> };
+        expect(listed.routines.map(r => r.id)).toEqual([saved.id]);
+        for (const routineId of ["colleague-routine", "foreign-routine", "generic-pulse", "replica-routine"]) {
+            await expect(assistantWork.tool(source.id, "ReadAssistantRoutine", { routineId })).rejects.toThrow();
+            await expect(assistantWork.tool(source.id, "UpdateAssistantRoutine", { routineId, isActive: false })).rejects.toThrow();
+            await expect(assistantWork.tool(source.id, "DeleteAssistantRoutine", { routineId })).rejects.toThrow();
+        }
+        const ordinary = createRun(db, { mode: "developer", workspaceId: workspace("ordinary-code").id });
+        await expect(assistantWork.tool(ordinary.id, "CreateAssistantRoutine", input)).rejects.toThrow("assistant conversation");
+        db.update(assistantProfiles).set({ isArchived: true }).where(eq(assistantProfiles.id, assistant.id)).run();
+        await expect(assistantWork.tool(source.id, "ListAssistantRoutines", {})).rejects.toThrow("unavailable");
+    });
+
+    it("keeps retry keys scoped to the conversation and rejects conflicting or forged settings", async () => {
+        const assistant = await makeAssistant("Release"), first = conversation(assistant), second = conversation(assistant);
+        const created = await assistantWork.tool(first.id, "CreateAssistantRoutine", input) as { id: string };
+        await expect(assistantWork.tool(first.id, "CreateAssistantRoutine", { ...input, hour: 12 })).rejects.toThrow("different settings");
+        expect((await assistantWork.tool(second.id, "CreateAssistantRoutine", input) as { id: string }).id).not.toBe(created.id);
+        await expect(assistantWork.tool(first.id, "CreateAssistantRoutine", { ...input, assistantId: "forged" })).rejects.toThrow("Unknown assistant field");
+        await expect(assistantWork.tool(first.id, "UpdateAssistantRoutine", { routineId: created.id, workspaceId: "forged" })).rejects.toThrow("Unknown assistant field");
+        await expect(assistantWork.tool(first.id, "UpdateAssistantRoutine", { routineId: created.id })).rejects.toThrow("setting to update");
+        for (const extra of [{ timezone: "Mars/Olympus" }, { hour: 9.5 }, { isActive: "yes" }, { frequency: "weekly" }]) {
+            await expect(assistantWork.tool(first.id, "CreateAssistantRoutine", { ...input, ...extra, requestId: "invalid" })).rejects.toThrow();
+        }
+        const ctx = { workspaceId: null, rootPath: null, runId: first.id };
+        await expect(dispatchMainsTool("CreateAssistantRoutine", { ...input, accountId: "forged" }, ctx)).rejects.toThrow("Invalid arguments");
+        await expect(dispatchMainsTool("CreateAssistantRoutine", { ...input, minute: 80 }, ctx)).rejects.toThrow("Invalid arguments");
+    });
+
+    it("returns bounded paged summaries and an explicit timezone while preserving full prompts for reads", async () => {
+        const assistant = await makeAssistant("Release"), source = conversation(assistant);
+        const created = await assistantWork.tool(source.id, "CreateAssistantRoutine", { ...input, prompt: "a".repeat(1000), timezone: undefined }) as { id: string; timezone: string };
+        expect(created.timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+        const base = pulseService.getById(created.id)!;
+        db.insert(pulses).values(Array.from({ length: 101 }, (_, index) => ({ ...base, id: `extra-${String(index).padStart(3, "0")}` }))).run();
+        const first = await assistantWork.tool(source.id, "ListAssistantRoutines", {}) as { nextOffset: number; routines: Array<{ id: string; prompt: string }> };
+        expect(first.routines).toHaveLength(100);
+        expect(first.routines.every(r => r.prompt.length === 600)).toBe(true);
+        expect(first.nextOffset).toBe(100);
+        expect(await assistantWork.tool(source.id, "ListAssistantRoutines", { offset: first.nextOffset })).toMatchObject({ nextOffset: null, routines: expect.any(Array) });
+        expect(await assistantWork.tool(source.id, "ReadAssistantRoutine", { routineId: created.id })).toMatchObject({ prompt: "a".repeat(1000) });
+        await assistantWork.stop();
+        await expect(assistantWork.tool(source.id, "DeleteAssistantRoutine", { routineId: created.id })).rejects.toThrow("shutting down");
+        expect(pulseService.getById(created.id)).not.toBeNull();
+    });
+});
+
 describe("assistant profiles and shared knowledge", () => {
     it("lists an assistant’s latest activity first across repositories and Work without exposing archived or foreign chats", async () => {
         const assistant = await makeAssistant("History"), other = await makeAssistant("Other");

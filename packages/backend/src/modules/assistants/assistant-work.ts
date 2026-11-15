@@ -6,6 +6,7 @@ import { readTaskContext } from "./assistant-mentions";
 import { assistantWelcome } from "./assistant-welcome";
 import { assistantTaskRequestPrompt } from "./assistant-task-messages";
 import { assistantsService } from "./assistants.service";
+import { ASSISTANT_ROUTINE_TOOLS, assistantRoutineTool } from "./assistant-routines";
 import { object, onlyKeys, text, execution } from "./assistants.validation";
 import type { AssistantAssignment, AssistantMessageContext } from "@mains/contracts/assistants";
 let open = false;
@@ -433,6 +434,11 @@ export const assistantWork = {
         }
         const { assistant, run } = await actor(runId), args = object(input);
         assertCurrent();
+        if (ASSISTANT_ROUTINE_TOOLS.includes(name)) {
+            const result = assistantRoutineTool(run, assistant.id, name, args);
+            if (!["ListAssistantRoutines", "ReadAssistantRoutine"].includes(name)) changed();
+            return result;
+        }
         if (name === "RecallAssistantMemory")
             return assistantsService.memories(assistant.id, run.accountId, text(args.query, "Query", 1000, true));
         if (name === "SaveAssistantMemory") {

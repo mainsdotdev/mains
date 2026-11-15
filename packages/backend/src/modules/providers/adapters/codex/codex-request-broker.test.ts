@@ -497,7 +497,7 @@ describe("Codex request broker", () => {
     },
   );
 
-  it.each(["ListAssistants", "ListAssistantTasks", "RecallAssistantMemory"])(
+  it.each(["ListAssistants", "ListAssistantTasks", "RecallAssistantMemory", "ListAssistantRoutines"])(
     "dispatches the advertised %s tool for a Work assistant",
     async (tool) => {
       const { broker, dispatchTool, runState } = createHarness();
@@ -541,6 +541,11 @@ describe("Codex request broker", () => {
     ["work", "ListAssistants"],
     ["work", "RecallAssistantMemory"],
     ["developer", "RecallAssistantMemory"],
+    ["developer", "CreateAssistantRoutine"],
+    ["work", "CreateAssistantRoutine"],
+    ["chat", "CreateAssistantRoutine"],
+    ["developer", "UpdateAssistantRoutine"],
+    ["work", "DeleteAssistantRoutine"],
   ] as const)("rejects %s calls to %s outside the run's tool list", async (mode, tool) => {
     const { broker, dispatchTool, runState } = createHarness();
     runState.mode = mode;

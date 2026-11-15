@@ -20,6 +20,7 @@ export function AssistantRoutines({ assistant, onOpenChat }: { assistant: Assist
     <div>
       <h3 className="text-lg font-medium">Routines</h3>
       <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-400">Give this assistant work on a schedule. Each run creates a task with its own chat.</p>
+      <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-400">You can also create or change routines by asking this assistant in chat.</p>
       {editing === undefined && <Button variant="primary" className="mt-4 inline-flex gap-2" disabled={assistant.isArchived} onClick={() => setEditing(null)}><Plus className="size-4" />New routine</Button>}
     </div>
     {editing !== undefined && <RoutineForm key={editing?.id ?? "new"} assistant={assistant} pulse={editing} onClose={() => setEditing(undefined)} />}

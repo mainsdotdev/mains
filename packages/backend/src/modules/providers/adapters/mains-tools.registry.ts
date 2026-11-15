@@ -37,6 +37,7 @@ import {
 } from "./mains-tools.core";
 import {
   AtlasReadPageSchema, AtlasCreatePageSchema, AtlasUpdatePageSchema, AtlasListCoversSchema,
+  ListAssistantRoutinesSchema, ReadAssistantRoutineSchema, CreateAssistantRoutineSchema, UpdateAssistantRoutineSchema, DeleteAssistantRoutineSchema,
   SaveReviewSchema,
   SaveFindingSchema,
   SaveFindingsSchema,
@@ -149,6 +150,11 @@ const assistantToolDefs: MainsToolDef[] = [
   assistantTool("SendAssistantTaskMessage", "Send a scoped clarification or user-requested continuation to an existing assignment. Keep messageId unchanged on retries. An uncertain result must be inspected, never retried with a fresh identity.", z.object({ assignmentId: z.string(), messageId: z.string().max(200), message: z.string().max(24000) })),
   assistantTool("ListAssistantConversations", "List this assistant's own recent conversations to find earlier decisions. Other assistants' private conversations are not included.", z.object({})),
   assistantTool("ReadAssistantHistory", "Read the latest bounded history window of one of this assistant's conversations. Shared decisions should be saved to team memory.", z.object({ runId: z.string() })),
+  assistantTool("ListAssistantRoutines", "List this assistant's scheduled Pulse routines, including paused routines, next runs and last task status. Call before creating or changing schedules; reuse an existing matching routine. Returns the default IANA timezone and this conversation's execution target. Use nextOffset for more results.", ListAssistantRoutinesSchema),
+  assistantTool("ReadAssistantRoutine", "Read this assistant's complete routine prompt and saved schedule before editing it. List summaries truncate prompts; never replace task instructions from a summary.", ReadAssistantRoutineSchema),
+  assistantTool("CreateAssistantRoutine", "Create a persistent scheduled routine only when the user explicitly asks for recurring work, for example every morning at 9. List existing routines first. Binds to this assistant's fixed profile and inherits this conversation's Work or repository execution. Returns the saved schedule; confirm its time, timezone and task to the user only after success. Uses Pulse, never provider-native cron or schedule tools. Mains or its owning server must stay running.", CreateAssistantRoutineSchema),
+  assistantTool("UpdateAssistantRoutine", "Update this assistant's existing routine after reading it. Send only changed fields. Use isActive=false to pause and true to resume. The identity and execution target stay fixed. Changes affect future runs; already accepted tasks continue. Confirm only the saved result.", UpdateAssistantRoutineSchema),
+  assistantTool("DeleteAssistantRoutine", "Delete one of this assistant's routines when the user asks. Read/list to identify the exact routine; clarify ambiguous matches. Stops future runs and preserves already accepted tasks and chats.", DeleteAssistantRoutineSchema),
 ];
 
 export const MAINS_TOOLS: MainsToolDef[] = [
