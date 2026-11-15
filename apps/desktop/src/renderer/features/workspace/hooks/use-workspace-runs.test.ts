@@ -41,7 +41,7 @@ vi.mock("@/lib/transport", () => ({
 vi.mock("@/lib/redux/hooks", () => ({
   useAppDispatch: () => mocks.dispatch,
   useAppSelector: (selector: (state: unknown) => unknown) =>
-    selector({ workspace: { pendingRunId: null } }),
+    selector({ workspace: { pendingRunId: null }, backends: { activeBackendId: null } }),
 }));
 vi.mock("@/lib/redux/api", () => ({
   runsApi: { util: { invalidateTags: vi.fn() } },
@@ -115,6 +115,40 @@ beforeEach(() => {
 });
 
 describe("working chats created from voice", () => {
+  it("keeps assistant chats out of stale workspace lists and live update notifications", async () => {
+    const assistantChat = { ...runA, id: "assistant-chat", assistantId: "testflight" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [assistantChat, runA] });
+    mocks.getById.mockResolvedValue({ success: true, data: assistantChat });
+    const view = renderHook(() => useWorkspaceRuns("ws-a", "codex", "developer"));
+    await waitFor(() => expect(view.result.current.runsLoaded).toBe(true));
+    expect(view.result.current.runs.map(run => run.id)).toEqual([runA.id]);
+    await act(async () => { for (const listener of runUpdates) listener({ runId: assistantChat.id }); });
+    expect(view.result.current.runs.map(run => run.id)).toEqual([runA.id]);
+    expect(mocks.getHistory).not.toHaveBeenCalledWith(expect.objectContaining({ runId: assistantChat.id }));
+    view.unmount();
+  });
+  it("closes a saved assistant tab without archiving its chat or restoring its transcript into the workspace", async () => {
+    const assistantChat = { ...runA, id: "saved-assistant", assistantId: "testflight" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [runA] });
+    mocks.getById.mockResolvedValue({ success: true, data: assistantChat });
+    const view = renderHook(() => useWorkspaceRuns("ws-a", "codex", "developer", undefined, [], { retainedRunIds: [assistantChat.id] }));
+    await waitFor(() => expect(mocks.dispatch).toHaveBeenCalledWith({ type: "workspace/detachAssistantRun", payload: { backendId: "local", runId: assistantChat.id } }));
+    expect(view.result.current.runs.map(run => run.id)).toEqual([runA.id]);
+    expect(mocks.getHistory).not.toHaveBeenCalledWith(expect.objectContaining({ runId: assistantChat.id }));
+    view.unmount();
+  });
+  it("checks ownership before selecting an unknown assistant chat", async () => {
+    const assistantChat = { ...runA, id: "unseen-assistant", assistantId: "testflight" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [runA] });
+    mocks.getById.mockResolvedValue({ success: true, data: assistantChat });
+    const view = renderHook(() => useWorkspaceRuns("ws-a", "codex", "developer"));
+    await waitFor(() => expect(view.result.current.runsLoaded).toBe(true));
+    await act(async () => { view.result.current.selectTab(assistantChat.id); });
+    expect(view.result.current.activeRunId).toBe(runA.id);
+    expect(view.result.current.runs.map(run => run.id)).toEqual([runA.id]);
+    expect(mocks.getHistory).not.toHaveBeenCalledWith(expect.objectContaining({ runId: assistantChat.id }));
+    view.unmount();
+  });
   it("restores explicitly opened chats outside the recent page without admitting another workspace", async () => {
     mocks.getByWorkspace.mockResolvedValue({ success: true, data: [runA] });
     const older = { ...runA, id: "older-open-chat" };

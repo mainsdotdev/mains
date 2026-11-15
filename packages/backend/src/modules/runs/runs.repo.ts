@@ -1,7 +1,7 @@
 import { getLocalBackendId } from "../../db/backend-identity";
 import { ownedHere, ownershipOf } from "../bridge";
 import { randomUUID } from "crypto";
-import { eq, desc, and, sql, asc, gt, gte, inArray, getTableColumns } from "drizzle-orm";
+import { eq, desc, and, sql, asc, gt, gte, inArray, isNull, getTableColumns } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
 import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload, RunHistoryContentPage, RunHistoryCursor } from "@mains/contracts/runs";
@@ -286,7 +286,8 @@ export const runsRepo = {
     options: WorkspaceRunListOptions & { includeArchived?: boolean } = {},
   ): Promise<RunResponse[]> {
     const db = getDb();
-    const conditions = [eq(runs.workspaceId, workspaceId)];
+    // Assistant execution may use this repo, while its conversation stays in the assistant surface.
+    const conditions = [eq(runs.workspaceId, workspaceId), isNull(runs.assistantId)];
     if (!options.includeArchived) conditions.push(eq(runs.isArchived, false));
     if (options.providerId) conditions.push(eq(runs.providerId, options.providerId));
     if (options.mode) conditions.push(eq(runs.mode, options.mode));

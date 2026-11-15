@@ -62,6 +62,8 @@ function fileChanges(value: unknown): Array<{ path: string; kind: string; diff?:
 export function formatCodexError(error: unknown, fallback = "Codex request failed"): string {
   const payload = objectRecord(error);
   const data = objectRecord(payload?.data);
+  const message = optionalString(payload?.nativeMessage) ?? optionalString(payload?.message) ?? optionalString(error);
+  if (message && /\bthread\b[^\n]*\balready has an active writer\b/i.test(message)) return "This conversation is open in another Codex application. Release that session there, then check delivery before continuing in Mains.";
   if (data?.type === "modelProviderMismatch") return "This Codex chat belongs to a different model provider. Switch back to its saved provider, or fork the chat to continue with the current provider.";
   if (data?.reason === "serverShuttingDown") return "Codex is shutting down. Wait for it to restart, then retry.";
   switch (payload?.codexErrorInfo ?? payload?.codex_error_info) {

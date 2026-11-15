@@ -8,6 +8,25 @@ import { createAccount, createWorkspace, createRun } from "../../../test/factori
 import type { DatabaseInstance } from "../../db/types";
 
 describe("assistant execution migration", () => {
+    it("adds an unbound welcome default while preserving accepted answers and existing conversations", () => {
+        const sqlite = new Database(":memory:"); sqlite.pragma("foreign_keys = ON");
+        const dir = resolve(__dirname, "../../db/migrations");
+        const journal = JSON.parse(readFileSync(resolve(dir, "meta/_journal.json"), "utf8"));
+        const apply = (tag: string) => readFileSync(resolve(dir, `${tag}.sql`), "utf8").split("--> statement-breakpoint").map(s => s.trim()).filter(Boolean).forEach(sql => sqlite.exec(sql));
+        try {
+            for (const entry of journal.entries) { if (entry.tag === "0046_assistant_welcome_execution") break; apply(entry.tag); }
+            const db = drizzle(sqlite, { schema }) as DatabaseInstance;
+            createAccount(db);
+            sqlite.prepare("INSERT INTO assistant_teams (id, account_id, name) VALUES ('team', 'default', 'Mains')").run();
+            sqlite.prepare("INSERT INTO assistants (id, account_id, team_id, name, instructions, space_id, provider_id, mode, model, effort, settings, space_snapshot) VALUES ('assistant', 'default', 'team', 'Release', 'Check builds', 'codex', 'codex', 'work', 'model', 'high', '{}', '{}')").run();
+            createRun(db, { id: "welcome-run", assistantId: "assistant", mode: "work", status: "succeeded" });
+            sqlite.prepare("INSERT INTO assistant_welcomes (assistant_id, run_id, state, question, answer) VALUES ('assistant', 'welcome-run', 'starting', '{}', 'Check the release')").run();
+            apply("0046_assistant_welcome_execution");
+            expect(sqlite.prepare("SELECT state, answer, execution, run_id FROM assistant_welcomes").get()).toEqual({ state: "starting", answer: "Check the release", execution: '{"mode":"work"}', run_id: "welcome-run" });
+            expect(sqlite.prepare("SELECT count(*) as n FROM runs WHERE id = 'welcome-run'").get()).toEqual({ n: 1 });
+            expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+        } finally { sqlite.close(); }
+    });
     it("keeps accepted Code jobs on their original workspace while adding avatar defaults without deleting children", () => {
         const sqlite = new Database(":memory:"); sqlite.pragma("foreign_keys = ON");
         const dir = resolve(__dirname, "../../db/migrations");

@@ -1221,7 +1221,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           className={`w-full text-sm outline-none whitespace-pre-wrap wrap-break-word [&>p]:my-2 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0 overflow-y-auto noscrollbar dark:text-primary-300 text-primary-700 ${compact
-            ? "min-h-8 max-h-40 py-1.5"
+            ? "min-h-8 max-h-40 py-1.5 leading-5 [&_:is([data-skill-chip],[data-file-chip],[data-code-chip])]:h-5 [&_:is([data-skill-chip],[data-file-chip],[data-code-chip])]:mb-0 [&_:is([data-skill-chip],[data-file-chip],[data-code-chip])]:align-bottom"
             : dense
               ? "min-h-9 max-h-40 rounded-2xl px-5 pt-3"
               : "min-h-12 max-h-80 rounded-2xl pl-5 pr-24 pt-4 pb-1 @max-[480px]/composer:pr-5"}`}

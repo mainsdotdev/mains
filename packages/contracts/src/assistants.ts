@@ -56,6 +56,11 @@ export interface CreateAssistant {
     teamId?: string;
     avatar?: AssistantAvatar;
 }
+export interface ChangeAssistantTeam {
+    accountId: string;
+    id: string;
+    teamId: string;
+}
 export interface AssistantMemory {
     id: string;
     accountId: string;
@@ -81,6 +86,26 @@ export interface SaveAssistantMemory {
 }
 export const ASSIGNMENT_STATUSES = ["queued", "running", "blocked", "completed", "failed", "canceled", "uncertain"] as const;
 export type AssignmentStatus = typeof ASSIGNMENT_STATUSES[number];
+export type AssistantTaskMessageKind = "request" | "followup" | "status" | "result";
+export interface AssistantTaskInput {
+    assignmentId: string;
+    messageId: string;
+    kind: AssistantTaskMessageKind;
+}
+export function readAssistantTaskInput(value: unknown): AssistantTaskInput | null {
+    if (!value || typeof value !== "object") return null;
+    const item = value as Record<string, unknown>;
+    if (typeof item.assignmentId !== "string" || !item.assignmentId || typeof item.messageId !== "string" || !item.messageId || !["request", "followup", "status", "result"].includes(String(item.kind))) return null;
+    return { assignmentId: item.assignmentId, messageId: item.messageId, kind: item.kind as AssistantTaskMessageKind };
+}
+export interface AssistantTaskActivity {
+    id: string;
+    kind: AssistantTaskMessageKind;
+    content: string;
+    deliveryStatus: "queued" | "dispatching" | "delivered" | "uncertain" | "canceled";
+    error: string | null;
+    createdAt: Date;
+}
 export interface AssistantAssignment {
     id: string;
     accountId: string;
@@ -100,6 +125,7 @@ export interface AssistantAssignment {
     error: string | null;
     createdAt: Date;
     updatedAt: Date;
+    activity?: AssistantTaskActivity[];
 }
 export interface AssignAssistantTask {
     accountId: string;
@@ -114,7 +140,12 @@ export interface AssistantConversation {
     title: string | null;
     goal: string | null;
     status: string;
+    mode: ModeId;
+    workspaceId: string | null;
+    workspaceName: string | null;
+    projectName: string | null;
     createdAt: Date;
+    updatedAt: Date;
 }
 export interface AssistantOverview {
     activeAssistantIds?: string[];
@@ -159,5 +190,6 @@ export interface AssistantWelcome {
     question: AssistantWelcomeQuestion | null;
     answer: string | null;
     error: string | null;
+    execution?: AssistantExecution;
     createdAt: Date;
 }

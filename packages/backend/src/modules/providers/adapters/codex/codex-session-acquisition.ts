@@ -444,6 +444,7 @@ export function createCodexSessionAcquisition(
       threadId: threadId ?? null,
       mode: request.mode,
       mainsCtx: mainsContext(runId, request.execution),
+      assistantId: typeof request.configSnapshot?.assistantId === "string" ? request.configSnapshot.assistantId : null,
     });
 
     const { effort, serviceTier } = turnSettingsFor(overrides);
@@ -517,7 +518,7 @@ export function createCodexSessionAcquisition(
         throw normalizeCodexResumeError(resumeError);
       }
       if (!isCodexMissingThreadError(resumeError)) {
-        throw resumeError;
+        throw normalizeCodexResumeError(resumeError);
       }
       logger.warn(
         `Thread resume failed (${codexErrorMessage(resumeError)}), starting new thread`,
@@ -551,6 +552,7 @@ export function createCodexSessionAcquisition(
       threadId,
       mode: request.mode,
       mainsCtx: mainsContext(runId, request.execution),
+      assistantId: typeof request.configSnapshot?.assistantId === "string" ? request.configSnapshot.assistantId : null,
       subAgents: persistedSubAgents,
     });
     const interruptedSubAgents =
@@ -660,6 +662,7 @@ export function createCodexSessionAcquisition(
       threadId: forkedThreadId,
       mode: request.mode,
       mainsCtx: mainsContext(runId, request.execution),
+      assistantId: typeof request.configSnapshot?.assistantId === "string" ? request.configSnapshot.assistantId : null,
     });
 
     const { effort, serviceTier } = turnSettingsFor(forkOverrides);
@@ -817,6 +820,7 @@ export function createCodexSessionAcquisition(
         runId: request.runId, threadId,
         mode: request.mode,
         mainsCtx: { workspaceId: request.execution.workspaceId, rootPath: request.execution.cwd, runId: request.runId },
+        assistantId: typeof request.configSnapshot?.assistantId === "string" ? request.configSnapshot.assistantId : null,
         subAgents: !runCoordinator.hasSessionSubAgentState(request.runId)
           ? await findPersistedSubAgents?.(request.runId)
           : [],

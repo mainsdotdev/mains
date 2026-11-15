@@ -135,6 +135,8 @@ interface UnifiedMenuState {
 export type { ComposerSendTarget } from "../lib/composer-send-target";
 
 interface WorkspaceInputProps {
+  /** Assistant chats use one growing input row with upload and send controls. */
+  appearance?: "default" | "assistant";
   /** A frozen assistant profile uses the ordinary composer with a static settings label. */
   fixedProfileLabel?: string;
   mode?: Run["mode"];
@@ -188,6 +190,7 @@ interface WorkspaceInputProps {
 }
 
 export function WorkspaceInput({
+  appearance = "default",
   fixedProfileLabel,
   mode,
   runQueue,
@@ -234,6 +237,7 @@ export function WorkspaceInput({
 }: WorkspaceInputProps) {
   const compactFloating = layout === "floating" && (!expandFloatingToolbar || floatingChatMode !== "details");
   const denseFloating = layout === "floating" && !compactFloating;
+  const inlineComposer = appearance === "assistant" || compactFloating;
   const voice = useRealtimeVoice();
   const inputRef = useRef<RichInputFormHandle>(null);
   useEffect(() => {
@@ -1003,7 +1007,7 @@ export function WorkspaceInput({
       onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
       attachmentMode={attachmentMode}
       uploadInputRef={uploadInputRef}
-      layout={compactFloating ? "floating" : "default"}
+      layout={appearance === "assistant" ? "assistant" : compactFloating ? "floating" : "default"}
       dense={denseFloating}
     />
   );
@@ -1042,7 +1046,7 @@ export function WorkspaceInput({
       {layout !== "floating" && runQueue && <ComposerQueueCard controls={runQueue} isRunning={isRunning} />}
       <div
         className={`@container/composer relative mx-auto flex min-w-0 w-full max-w-210 flex-col cursor-pointer transition-all
-        ${layout === "floating"
+        ${appearance === "assistant" ? "rounded-2xl glass-surface text-primary-950 dark:text-primary-50" : layout === "floating"
           ? `rounded-[28px] text-primary-950 dark:text-primary-50 ${compactFloating ? "" : "pb-2"}`
           : "rounded-[28px] glass-surface pb-2"}
         ${layout === "default" ? "mb-4" : ""}
@@ -1104,13 +1108,13 @@ export function WorkspaceInput({
         <ComposerAttachments
           files={uploadedFiles}
           onRemove={handleRemoveUploadedFile}
-          className={compactFloating ? "pl-8 pr-3" : undefined}
+          className={appearance === "assistant" ? "px-4 pt-3" : compactFloating ? "pl-8 pr-3" : undefined}
         />
         {/* The compact row reserves each control's actual width, including speed labels. */}
-        <div className={compactFloating
-          ? "relative grid grid-cols-[2rem_minmax(0,1fr)_auto] items-end gap-x-1 px-3 py-2"
+        <div className={inlineComposer
+          ? `relative grid grid-cols-[2rem_minmax(0,1fr)_auto] items-end ${appearance === "assistant" ? "gap-x-2 p-2" : "gap-x-1 px-3 py-2"}`
           : "relative"}>
-          <div className={compactFloating ? "relative col-start-2 row-start-1 min-w-0" : "contents"}>
+          <div className={inlineComposer ? "relative col-start-2 row-start-1 min-w-0" : "contents"}>
             <RichInputForm
               ref={inputRef}
               query={goal}
@@ -1136,8 +1140,8 @@ export function WorkspaceInput({
                     kind={activeRun?.status === "queued" ? "circle" : "square"}
                   />
                 : undefined}
-              focusShortcutLabel={layout === "floating" ? undefined : focusComposerShortcut}
-              compact={compactFloating}
+              focusShortcutLabel={inlineComposer || layout === "floating" ? undefined : focusComposerShortcut}
+              compact={inlineComposer}
               dense={denseFloating}
             />
             <UnifiedContextDropdown
@@ -1163,9 +1167,9 @@ export function WorkspaceInput({
               triggerRef={pluginsButtonRef}
             />
           </div>
-          {compactFloating && toolbar}
+          {inlineComposer && toolbar}
         </div>
-        {!compactFloating && toolbar}
+        {!inlineComposer && toolbar}
       </div>
     </>
   );

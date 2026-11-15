@@ -497,12 +497,50 @@ describe("Codex request broker", () => {
     },
   );
 
+  it.each(["ListAssistants", "ListAssistantTasks", "RecallAssistantMemory"])(
+    "dispatches the advertised %s tool for a Work assistant",
+    async (tool) => {
+      const { broker, dispatchTool, runState } = createHarness();
+      Object.assign(runState, { mode: "work", assistantId: "assistant-1" });
+      const responder = createResponder();
+      const args = tool === "RecallAssistantMemory" ? { query: "project repository" } : {};
+
+      await handle(broker, responder.server, "item/tool/call", { tool, arguments: args });
+
+      expect(dispatchTool).toHaveBeenCalledWith(tool, args, {
+        workspaceId: "workspace-1", rootPath: "/workspace", runId: "run-1",
+      });
+      expect(responder.errors).toEqual([]);
+      expect(responder.responses[0]?.result).toMatchObject({ success: true });
+    },
+  );
+
+  it.each(["developer", "work"] as const)("requires the assistant scope for a %s task report", async mode => {
+    const { broker, dispatchTool, runState } = createHarness();
+    runState.mode = mode;
+    const args = { assignmentId: "881f747c-f0b6-456b-83ff-1bb1e75da729", status: "completed", result: "Check complete: NOT READY", evidence: ["/tmp/mains-swift-test-recheck.log"] };
+    const unscoped = createResponder();
+    await handle(broker, unscoped.server, "item/tool/call", { tool: "ReportAssistantTask", arguments: args });
+    expect(unscoped.errors).toEqual([{ id: 42, code: -32601, message: "Unknown dynamic tool: ReportAssistantTask" }]);
+    expect(dispatchTool).not.toHaveBeenCalled();
+
+    runState.assistantId = "testflight-ready";
+    const scoped = createResponder();
+    await handle(broker, scoped.server, "item/tool/call", { tool: "ReportAssistantTask", arguments: JSON.stringify(args) });
+    expect(scoped.errors).toEqual([]);
+    expect(scoped.responses[0]?.result).toMatchObject({ success: true });
+    expect(dispatchTool).toHaveBeenCalledExactlyOnceWith("ReportAssistantTask", args, { workspaceId: "workspace-1", rootPath: "/workspace", runId: "run-1" });
+  });
+
   it.each([
     ["developer", "AtlasUpdatePage"],
     ["chat", "AtlasCreatePage"],
     ["chat", "AtlasUpdatePage"],
     ["work", "CheckPackage"],
     ["chat", "CheckPackage"],
+    ["work", "ListAssistants"],
+    ["work", "RecallAssistantMemory"],
+    ["developer", "RecallAssistantMemory"],
   ] as const)("rejects %s calls to %s outside the run's tool list", async (mode, tool) => {
     const { broker, dispatchTool, runState } = createHarness();
     runState.mode = mode;

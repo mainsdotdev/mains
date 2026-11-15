@@ -148,6 +148,24 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it("explains another client's writer lock without starting a turn or replacing the thread", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-writer-lock-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    vi.stubEnv("MAINS_CODEX_FIXTURE_RPC_ERROR", JSON.stringify({ method: "thread/resume", code: -32600, message: "thread thread-1 already has an active writer" }));
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const created = await driver.createSession(request("writer-conflict"));
+    await driver.cleanup?.(created.session);
+    await expect(driver.resumeSession!({
+      ...request("writer-conflict"), message: "Continue the existing task", clientUserMessageId: "same-delivery-id",
+    })).rejects.toThrow("another Codex application");
+    const messages = readProtocolLog(logPath);
+    expect(messages.filter(message => message.method === "thread/start")).toHaveLength(1);
+    expect(messages.some(message => message.method === "turn/start")).toBe(false);
+  });
+
   it("sends named permissions without legacy sandbox overrides on create, resume, and fork", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-permission-profiles-"));
     tempDirs.push(tempDir);
@@ -527,6 +545,34 @@ describe("codex.driver / app-server protocol", () => {
     await execute(await driver.resumeSession!({ ...base, mode, message }), runId);
     await execute(await driver.forkSession!({ ...base, runId: `${runId}-fork`, sourceRunId: runId, mode, message }), `${runId}-fork`);
     expect(dispatch).toHaveBeenCalledTimes(mode === "work" ? 3 : 0);
+  });
+
+  it.each(["work", "developer"] as const)("routes %s assistant reporting through start, resume and fork", async mode => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-assistant-tools-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const dispatch = vi.spyOn(mainsTools, "dispatchMainsTool").mockResolvedValue({ content: [{ type: "text", text: "assistant-result" }] });
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const base = { ...request("assistant-tools"), mode, configSnapshot: { assistantId: "assistant-1" } };
+    const execute = async (acquired: Awaited<ReturnType<typeof driver.createSession>>, tool: string, runId: string) => {
+      const outcome = await driver.executePrompt(acquired.session, acquired.prompt, async () => undefined, new AbortController().signal);
+      expect(outcome.status).toBe("succeeded");
+      const reply = readProtocolLog(logPath).filter(entry => typeof entry.id === "number" && entry.id >= 1000 && !entry.method).at(-1);
+      expect(reply?.error).toBeUndefined();
+      expect(reply?.result).toEqual({ success: true, contentItems: [{ type: "inputText", text: "assistant-result" }] });
+      expect(dispatch).toHaveBeenLastCalledWith(tool, expect.any(Object), { workspaceId: base.execution.workspaceId, rootPath: base.execution.cwd, runId });
+    };
+    await execute(await driver.createSession({ ...base, goal: "dynamic tool ReportAssistantTask" }), "ReportAssistantTask", base.runId);
+    await execute(await driver.resumeSession!({ ...base, message: "dynamic tool ReportAssistantTask" }), "ReportAssistantTask", base.runId);
+    await execute(await driver.forkSession!({ ...base, runId: "assistant-tools-fork", sourceRunId: base.runId, message: "dynamic tool ReportAssistantTask" }), "ReportAssistantTask", "assistant-tools-fork");
+    const started = readProtocolLog(logPath).find(entry => entry.method === "thread/start");
+    expect(started?.params).toMatchObject({ dynamicTools: expect.arrayContaining([
+      expect.objectContaining({ name: "ListAssistants" }), expect.objectContaining({ name: "ListAssistantTasks" }), expect.objectContaining({ name: "RecallAssistantMemory" }),
+      expect.objectContaining({ name: "ReportAssistantTask" }),
+    ]) });
+    expect(dispatch).toHaveBeenCalledTimes(3);
   });
 
   it("starts fresh voice on an empty thread without a synthetic text turn or goal", async () => {

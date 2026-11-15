@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assistantTaskActivity } from "./assistant-task-messages";
 import { assistantsRepo } from "./assistants.repo";
 import { object, onlyKeys, text, execution } from "./assistants.validation";
 import { workspaceService } from "../workspace";
@@ -11,7 +12,7 @@ export const assistantsService = {
     overview(accountId: string): AssistantOverview {
         text(accountId, "Account");
         const teams = assistantsRepo.teams(accountId);
-        return { teams, activeAssistantIds: assistantsRepo.activeAssistantIds(accountId), assistants: assistantsRepo.list(accountId), memories: teams.flatMap(t => assistantsRepo.memories(accountId, t.id)), assignments: assistantsRepo.assignments(accountId), welcomes: assistantsRepo.welcomes(accountId).map(({ setupPrompt: _setup, updatedAt: _updated, ...row }) => ({ ...row, question: row.question ? JSON.parse(row.question) : null })) };
+        return { teams, activeAssistantIds: assistantsRepo.activeAssistantIds(accountId), assistants: assistantsRepo.list(accountId), memories: teams.flatMap(t => assistantsRepo.memories(accountId, t.id)), assignments: assistantsRepo.assignments(accountId), welcomes: assistantsRepo.welcomes(accountId).map(({ setupPrompt: _setup, updatedAt: _updated, ...row }) => ({ ...row, execution: execution(JSON.parse(row.execution)), question: row.question ? JSON.parse(row.question) : null })) };
     },
     get(id: string, accountId: string): Assistant | null { return assistantsRepo.get(text(id, "Assistant"), text(accountId, "Account")); },
     require(id: string, accountId: string): Assistant {
@@ -97,6 +98,23 @@ export const assistantsService = {
             throw new Error("Stop this assistant’s running conversations before archiving");
         assistantsRepo.archive(id, archived);
     },
+    changeTeam(input: unknown): Assistant {
+        const value = object(input);
+        onlyKeys(value, ["accountId", "id", "teamId"]);
+        const accountId = text(value.accountId, "Account"), id = text(value.id, "Assistant"), teamId = text(value.teamId, "Team");
+        return assistantsRepo.transaction(() => {
+            const assistant = this.require(id, accountId);
+            if (!assistantsRepo.team(teamId, accountId)) throw new Error("Team not found");
+            if (assistant.teamId === teamId) return assistant;
+            if (assistantsRepo.hasPendingRun(id)) throw new Error("Stop this assistant’s running conversations before changing teams");
+            if (assistantsRepo.hasPendingTeamWork(id)) throw new Error("Finish or cancel this assistant’s assignments and pending deliveries before changing teams");
+            const welcome = assistantsRepo.welcome(id);
+            if (welcome && ["generating", "starting"].includes(welcome.state)) throw new Error("Wait for this assistant’s welcome to finish before changing teams");
+            // Private notes follow their owner; shared memories and task history keep their original team.
+            assistantsRepo.changeTeam(id, accountId, teamId);
+            return this.require(id, accountId);
+        });
+    },
     saveMemory(input: unknown, sourceRunId: string | null = null) {
         const value = object(input);
         onlyKeys(value, ["accountId", "teamId", "assistantId", "id", "title", "content", "pinned", "expectedRevision"]);
@@ -164,7 +182,7 @@ export const assistantsService = {
     },
     assignment(accountId: string, id: string) {
         const task = assistantsRepo.assignment(text(id, "Assignment"));
-        return task?.accountId === text(accountId, "Account") ? task : null;
+        return task?.accountId === text(accountId, "Account") ? { ...task, activity: assistantTaskActivity(task.id) } : null;
     },
     usesSpace(spaceId: string): boolean { return assistantsRepo.usesSpace(spaceId); },
     welcome(id: string, accountId: string): AssistantWelcome | null {
@@ -172,14 +190,18 @@ export const assistantsService = {
         const row = assistantsRepo.welcome(id);
         if (!row) return null;
         const { setupPrompt: _setup, updatedAt: _updated, ...value } = row;
-        return { ...value, question: row.question ? JSON.parse(row.question) : null };
+        return { ...value, execution: execution(JSON.parse(row.execution)), question: row.question ? JSON.parse(row.question) : null };
     },
     conversations(id: string, accountId: string) {
         const assistant = this.require(id, accountId);
         const chats: AssistantConversation[] = assistantsRepo.conversations(id, accountId);
         const welcome = assistantsRepo.welcome(id);
-        if (welcome && welcome.state !== "started" && !chats.some(chat => chat.id === welcome.runId))
-            chats.unshift({ id: welcome.runId, title: assistant.name, goal: null, status: "idle", createdAt: welcome.createdAt });
+        if (welcome && welcome.state !== "started" && !chats.some(chat => chat.id === welcome.runId)) {
+            const target = execution(JSON.parse(welcome.execution));
+            chats.push({ id: welcome.runId, title: assistant.name, goal: null, status: "idle", mode: target.mode, workspaceId: target.workspaceId ?? null, workspaceName: null, projectName: null, createdAt: welcome.createdAt, updatedAt: welcome.updatedAt });
+            chats.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id));
+            return chats.slice(0, 100);
+        }
         return chats;
     },
 };

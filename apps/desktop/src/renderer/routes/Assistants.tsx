@@ -13,7 +13,7 @@ import { AssistantInfoPanel } from "@/features/assistants/components/assistant-i
 import { AssistantChat } from "@/features/assistants/components/assistant-chat";
 import { useAssistantUpdates } from "@/features/assistants/hooks/use-assistant-updates";
 import { assistantHref } from "@/features/assistants/lib/assistant-navigation";
-import { errorText, isAssistantWorking } from "@/features/assistants/lib/assistant-ui";
+import { errorText } from "@/features/assistants/lib/assistant-ui";
 
 export default function AssistantsPage() {
   const backendId = useAppSelector(state => state.backends.activeBackendId ?? "local");
@@ -33,14 +33,18 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
   const runId = runParam && runParam !== "new" ? runParam : null;
   const tab = params.get("tab");
   const creating = params.get("new") === "1";
-  const { currentData: chats } = useAssistantConversationsQuery({ accountId, id: selectedId ?? "" }, { skip: !selected });
+  const { currentData: chats, error: chatsError, refetch: refetchChats } = useAssistantConversationsQuery({ accountId, id: selectedId ?? "" }, { skip: !selected });
   const ownerKey = assistantConversationOwner(backendId, accountId, selectedId ?? "");
   const savedView = useAppSelector(state => state.assistants.views[ownerKey]);
+  const navigateChat = useCallback((id: string, replace = false) => {
+    if (!selectedId) return;
+    setParams(previous => { const next = new URLSearchParams(previous); next.set("assistant", selectedId); next.set("run", id); next.delete("new"); return next; }, { replace });
+  }, [selectedId, setParams]);
   const openChat = useCallback((id: string) => {
     if (!selectedId) return;
     if (chats) dispatch(visitAssistantConversation({ ownerKey, runId: id, initialIds: chats.map(chat => chat.id) }));
-    navigate(assistantHref(selectedId, id));
-  }, [dispatch, ownerKey, selectedId, chats, navigate]);
+    navigateChat(id);
+  }, [dispatch, ownerKey, selectedId, chats, navigateChat]);
   const visitedRoute = useRef("");
   useEffect(() => {
     if (!selected || !chats || !runParam) return;
@@ -66,9 +70,8 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
     changeTab();
     document.getElementById("assistant-profile-trigger")?.focus({ preventScroll: true });
   }, [changeTab]);
-  const working = selected ? isAssistantWorking(overview, selected.id) : false;
-  const header = useMemo(() => !creating && selected ? <AssistantProfileHeader assistant={selected} working={working} isPanelOpen={panelOpen} onOpenDetails={() => changeTab(panelOpen ? undefined : "profile")} /> : null,
-    [creating, selected, working, panelOpen, changeTab]);
+  const header = useMemo(() => !creating && selected ? <AssistantProfileHeader assistant={selected} isPanelOpen={panelOpen} onOpenDetails={() => changeTab(panelOpen ? undefined : "profile")} /> : null,
+    [creating, selected, panelOpen, changeTab]);
   useSetMainHeader(header, false, !creating && isLoading);
   const closeCreation = () => setParams(previous => { const next = new URLSearchParams(previous); next.delete("new"); return next; });
   const toggleArchive = async () => {
@@ -86,14 +89,15 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
         if (!id) { openChat("new"); return; }
         if (!runId) dispatch(replaceAssistantConversationDraft({ ownerKey, runId: id }));
         else dispatch(visitAssistantConversation({ ownerKey, runId: id, initialIds: chats?.map(chat => chat.id) ?? [] }));
-        navigate(assistantHref(selected.id, id), { replace: !runId });
+        navigateChat(id, !runId);
       }} /> : <div className="flex flex-1 items-center justify-center text-sm text-primary-500">Loading conversation…</div>}
     </> : <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
       {error ? <><p role="alert" className="text-sm text-danger">{errorText(error)}</p><Button variant="ghost" onClick={() => void refetch()}>Retry</Button></> : isLoading ? <p className="text-sm text-primary-500">Loading assistants…</p> : <><Bot className="size-8 text-primary-400" /><h1 className="text-xl font-medium">{selectedId ? "Assistant unavailable" : "Your assistants"}</h1><p className="max-w-sm text-sm text-primary-500">{selectedId ? "Choose an assistant from the sidebar." : "Create an assistant, then start a conversation. Your team can share memory and work together."}</p><Button variant="subtle" onClick={() => setParams({ new: "1" })}><New className="size-4" />New assistant</Button></>}
     </div>}
     </div>
     {selected && overview && <AssistantInfoPanel key={selected.id} assistant={selected} overview={overview} isOpen={panelOpen}
-      tab={tab === "memory" || tab === "tasks" ? tab : "profile"} onTabChange={changeTab} onClose={closeInfoPanel}
+      chats={chats} selectedRunId={runId} chatsError={chatsError} onSelectChat={openChat} onRetryChats={() => void refetchChats()}
+      tab={tab === "chats" || tab === "memory" || tab === "tasks" ? tab : "profile"} onTabChange={changeTab} onClose={closeInfoPanel}
       onToggleArchive={() => void toggleArchive()} archiving={archiving.isLoading} error={failure}
       openAssistant={(id, chatId) => navigate(assistantHref(id, chatId))} />}
   </div>;

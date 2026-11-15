@@ -369,6 +369,7 @@ body[data-resizing] aside,
 body[data-resizing] main,
 body[data-resizing] [data-layout-toggle],
 body[data-resizing] [data-browser-panel],
+body[data-resizing] [data-assistant-info-panel],
 body[data-resizing] [data-mcp-app-panel] {
   transition: none !important;
 }

@@ -3,6 +3,7 @@ import { runsRepo } from "./runs.repo";
 import type { RunArtifactKind } from "./runs.dto";
 import { createHash } from "node:crypto";
 import { asyncQuestionMessageId, readAsyncQuestionReply } from "@mains/contracts/async-questions";
+import { assistantTaskInput } from "../assistants";
 
 const pendingInputs = new Map<string, Promise<boolean>>();
 
@@ -26,6 +27,11 @@ export async function insertRunInputArtifact(
       return false;
     }
     if (prepare) event = await prepare();
+    if (event.kind === "user-prompt") {
+      const taskInput = assistantTaskInput(runId, event.content, event.metadata);
+      // Preserve the actual prompt and turn boundary; presentation uses the correlated task identity.
+      if (taskInput) event.metadata = { ...event.metadata, assistantTaskInput: taskInput };
+    }
     const artifactId = await runsRepo.insertArtifact({
       runId,
       kind: event.kind as RunArtifactKind,

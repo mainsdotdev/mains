@@ -1,4 +1,4 @@
-import { prepareAssistantMentions, withAssistantMentionFiles } from "../assistants";
+import { prepareAssistantMentions, withAssistantMentionFiles, annotateAssistantTaskPrompts } from "../assistants";
 import { assistantsService } from "../assistants/assistants.service";
 import { assertNoPlanDecisionPatch } from "@mains/contracts/plan-decision";
 import { assertPlanContinuationCurrent, decidePlan } from "./plan-decision-lifecycle";
@@ -1919,7 +1919,7 @@ export const runsService = {
     const page = runsRepo.findHistoryPage(payload);
     const result = {
       ...page,
-      artifacts: await selectedArtifacts(run, page.artifacts, page),
+      artifacts: annotateAssistantTaskPrompts(run.id, await selectedArtifacts(run, page.artifacts, page)),
     };
     if (payload.profile === "mobile") {
       // Deliverable discovery may hydrate images that the bounded repo query
@@ -2731,7 +2731,8 @@ export const runsService = {
             execution,
             message,
             providerTurnLineage: payload.providerTurnLineage,
-            clientPromptId: payload.clientPromptId,
+            // Every provider keeps the application delivery identity, including those without native queued-input receipts.
+            clientPromptId: payload.clientPromptId ?? payload.clientUserMessageId,
             asyncQuestionReply: payload.asyncQuestionReply,
             ...(waitForInput
               ? {

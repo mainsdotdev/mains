@@ -238,9 +238,11 @@ function ModelChangeNotice({
 function SessionTimeBar({
   info,
   onFork,
+  revealOnHover = false,
 }: {
   info: SessionInfo;
   onFork?: (responseContent: string) => void;
+  revealOnHover?: boolean;
 }) {
   const handleFork = useCallback(() => {
     if (onFork) {
@@ -254,7 +256,7 @@ function SessionTimeBar({
   const hasUsage = turn && (turn.inputTokens || turn.outputTokens || turn.cacheReadTokens || turn.cacheWriteTokens || turn.costMicros);
 
   return (
-    <Text as="div" size="s" tone="muted" className="flex items-center gap-2 -mt-1">
+    <Text as="div" size="s" tone="muted" className={`flex items-center gap-2 -mt-1 ${revealOnHover ? "opacity-0 pointer-events-none transition-opacity duration-150 group-hover/agent-turn:opacity-100 group-hover/agent-turn:pointer-events-auto group-focus-within/agent-turn:opacity-100 group-focus-within/agent-turn:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto motion-reduce:transition-none" : ""}`}>
       {hasUsage ? (
         <Tooltip
           content={<UsageTooltipContent turn={turn} />}
@@ -289,7 +291,7 @@ function SessionTimeBar({
         </>
       )}
       {info.receivedAt && Number.isFinite(info.receivedAt.getTime()) && (
-        <Text as="span" size="xs" tone="faint" className="ml-1 shrink-0 select-none whitespace-nowrap tabular-nums opacity-0 transition-opacity group-hover/agent-turn:opacity-100 group-focus-within/agent-turn:opacity-100 motion-reduce:transition-none">
+        <Text as="span" size="xs" tone="faint" className={`ml-1 shrink-0 select-none whitespace-nowrap tabular-nums ${revealOnHover ? "" : "opacity-0 transition-opacity group-hover/agent-turn:opacity-100 group-focus-within/agent-turn:opacity-100 motion-reduce:transition-none"}`}>
           <time dateTime={info.receivedAt.toISOString()} title={formatAbsoluteDate(info.receivedAt)}>
             {messageTimeFormatter.format(info.receivedAt)}
           </time>
@@ -427,6 +429,7 @@ function AgentTurnMessagesAccordion({
 }
 
 interface WorkspaceEventsProps {
+  appearance?: "default" | "assistant";
   mode?: Run["mode"];
   runs: Run[];
   activeTab: "editor" | string;
@@ -448,6 +451,7 @@ interface WorkspaceEventsProps {
 }
 
 export function WorkspaceEvents({
+  appearance = "default",
   mode,
   runs,
   activeTab,
@@ -688,6 +692,7 @@ export function WorkspaceEvents({
               {sessionBarForThis && (
                 <SessionTimeBar
                   info={sessionBarForThis}
+                  revealOnHover={appearance === "assistant"}
                   onFork={index === lastSessionIndex && isRunCompleted && onForkRun ? handleFork : undefined}
                 />
               )}
@@ -739,6 +744,7 @@ export function WorkspaceEvents({
           ) : (
             <InfoGroup
               group={group}
+              bubble={appearance === "assistant"}
               runId={activeRun?.id}
               providerId={activeRun?.providerId ?? getProviderVariant(variant).providerId}
               floatingChat={floatingChat}
@@ -748,6 +754,7 @@ export function WorkspaceEvents({
           {group.type !== "prompt_suggestion" && sessionBarForThis && (
             <SessionTimeBar
               info={sessionBarForThis}
+              revealOnHover={appearance === "assistant"}
               onFork={index === lastSessionIndex && isRunCompleted && onForkRun ? handleFork : undefined}
             />
           )}
@@ -755,6 +762,7 @@ export function WorkspaceEvents({
       );
     },
     [
+      appearance,
       showTurnChanges,
       activeRun,
       eventGroups,

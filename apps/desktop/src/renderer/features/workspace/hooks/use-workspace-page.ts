@@ -192,7 +192,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     mode,
     visibleRunId,
     switchableWorkspaceIds,
-    { retainedRunIds: [...(singleChatTab && chatTabRunId ? [chatTabRunId] : []), ...(pendingRunId ? [pendingRunId] : [])] },
+    { retainedRunIds: [...openRunIds, ...(singleChatTab && chatTabRunId ? [chatTabRunId] : []), ...(pendingRunId ? [pendingRunId] : [])] },
   );
 
   const tabRuns = useMemo(() => {

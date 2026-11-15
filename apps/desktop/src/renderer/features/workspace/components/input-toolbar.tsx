@@ -78,7 +78,7 @@ interface InputToolbarProps {
   onUploadedFilesChange: (files: UploadedFile[]) => void;
   attachmentMode?: "all" | "images";
   uploadInputRef?: RefObject<HTMLInputElement | null>;
-  layout?: "default" | "floating";
+  layout?: "default" | "floating" | "assistant";
   dense?: boolean;
   floatingChatMode?: FloatingChatMode;
 }
@@ -203,7 +203,8 @@ export function InputToolbar({
   ) : (
     <FileUploadDropdown isOpen={showFileDropdown} onToggle={() => setShowFileDropdown(!showFileDropdown)}
       onImageUpload={handleImageUpload} onDocumentUpload={handleDocumentUpload} dropdownRef={fileDropdownRef}
-      openUpward compact={layout === "floating"} />
+      openUpward compact={layout !== "default"}
+      icon={layout === "assistant" ? <Plus className="size-5 text-primary-700 dark:text-primary-300" /> : undefined} />
   );
   const uploadInput = <Input variant="bare" ref={fileInputRef} type="file" className="hidden"
     aria-label={attachmentMode === "images" ? "Upload images" : "Upload files"}
@@ -223,7 +224,7 @@ export function InputToolbar({
         stopDisabled={primaryAction.disabled}
         icon={<Microphone aria-hidden="true" />}
         showCustomIcon={primaryAction.kind === "voice"}
-        compact={layout === "floating"}
+        compact={layout !== "default"}
       />
     </>
   );
@@ -231,6 +232,17 @@ export function InputToolbar({
   const speedControl = serviceTiers && serviceTiers.length > 1 && onServiceTierChange
     ? <ServiceTierSelect value={serviceTier ?? "default"} options={serviceTiers} onChange={onServiceTierChange} compact={layout === "floating"} />
     : supportsFastMode ? <FastModeButton fastMode={fastMode} onToggle={onFastModeToggle} compact={layout === "floating"} /> : null;
+
+  if (layout === "assistant") {
+    return <div className="contents">
+      <div className="col-start-1 row-start-1 flex h-8 items-center">
+        {uploadButton}{uploadInput}
+      </div>
+      <div className="col-start-3 row-start-1 flex h-8 items-center gap-1">
+        {actionButtons}
+      </div>
+    </div>;
+  }
 
   if (fixedProfileLabel) {
     return (

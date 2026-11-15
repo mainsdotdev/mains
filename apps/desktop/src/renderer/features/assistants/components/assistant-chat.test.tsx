@@ -1,0 +1,129 @@
+// @vitest-environment jsdom
+import type { ReactNode } from "react";
+import { configureStore } from "@reduxjs/toolkit";
+import { Provider } from "react-redux";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Assistant, AssistantWelcome } from "@mains/contracts/assistants";
+import type { Workspace } from "@/lib/redux/api";
+import { Textarea } from "@/components/ui";
+import assistantsReducer, { assistantConversationOwner } from "@/lib/redux/slices/assistantsSlice";
+import workspaceReducer from "@/lib/redux/slices/workspaceSlice";
+import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
+import { AssistantChat } from "./assistant-chat";
+
+const mocks = vi.hoisted(() => ({
+  send: vi.fn(), respond: vi.fn(), refetch: vi.fn(), load: vi.fn(),
+  run: undefined as Record<string, unknown> | undefined,
+  workspace: undefined as Workspace | undefined,
+  context: { items: [] }, history: { historical: false }, events: [],
+  transport: { subscribe: () => () => {}, onStatusChange: () => () => {} },
+}));
+vi.mock("@/lib/redux/api", () => ({
+  useGetRunByIdQuery: () => ({ currentData: mocks.run, refetch: mocks.refetch }),
+  useGetWorkspaceQuery: () => ({ currentData: mocks.workspace }),
+  useAbortRunMutation: () => [vi.fn()],
+}));
+vi.mock("@/lib/redux/api/assistantsApi", () => ({
+  useSendAssistantMessageMutation: () => [mocks.send, { isLoading: false }],
+  useRespondAssistantWelcomeMutation: () => [mocks.respond, { isLoading: false }],
+  usePrepareAssistantWelcomeMutation: () => [vi.fn(), { isLoading: false }],
+}));
+vi.mock("@/lib/transport", () => ({ getTransport: () => mocks.transport, onTransportChange: () => () => {} }));
+vi.mock("@/features/workspace/hooks/use-run-history", () => ({ useRunHistory: () => ({ runEvents: {}, runTurns: {}, load: mocks.load, history: mocks.history }) }));
+vi.mock("@/features/workspace/hooks/use-streaming-events", () => ({ useStreamingEvents: () => ({ streamingEvents: mocks.events, clearTurnStreams: vi.fn() }) }));
+vi.mock("@/features/workspace/hooks/use-tool-approval", () => ({ useToolApproval: () => ({ pendingApprovals: [], respond: vi.fn() }) }));
+vi.mock("@/features/workspace/hooks/use-composer-context", () => ({ useComposerContext: () => mocks.context }));
+vi.mock("@/features/workspace/hooks/use-transient-uploads", () => ({ useTransientUploads: () => [[], vi.fn()] }));
+vi.mock("@/features/workspace/hooks/use-plugin-logos", () => ({ PluginLogoProvider: ({ children }: { children: ReactNode }) => children }));
+vi.mock("@/features/workspace/components/tools/async-question-dialog", () => ({ AsyncQuestionDialogProvider: ({ children }: { children: ReactNode }) => children, ComposerSlot: ({ children }: { children: ReactNode }) => children }));
+vi.mock("@/features/workspace/components/workspace-events", () => ({ WorkspaceEvents: () => <div>Existing transcript</div> }));
+vi.mock("@/features/workspace/components/workspace-input", () => ({ WorkspaceInput: ({ goal, onGoalChange, onSubmit, disabled, sendDisabled, workspacePath, mode }: {
+  goal: string; onGoalChange(text: string): void; onSubmit(): void; disabled: boolean; sendDisabled: boolean; workspacePath?: string; mode: string;
+}) => <div><Textarea aria-label="Message" value={goal} onChange={event => onGoalChange(event.target.value)} disabled={disabled} /><button disabled={disabled || sendDisabled} onClick={onSubmit}>Send</button><output data-testid="composer-workspace">{workspacePath ?? ""}</output><output data-testid="composer-mode">{mode}</output></div> }));
+vi.mock("./assistant-welcome-card", () => ({ AssistantWelcomeCard: ({ onAnswer }: { onAnswer(answer: string | null): Promise<void> }) => <div><button onClick={() => void onAnswer("Review the project")}>Start welcome</button><button onClick={() => void onAnswer(null)}>Skip welcome</button></div> }));
+
+const assistant = { id: "assistant", accountId: "account", name: "Release", providerId: "codex", model: "model", effort: "high", conversationSettings: { config: {} }, avatar: { shape: "sphere", color: "blue" } } as Assistant;
+const ownerKey = assistantConversationOwner("local", "account", assistant.id);
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+beforeEach(() => {
+  mocks.send.mockReset().mockReturnValue({ unwrap: () => Promise.resolve({ runId: "new-run" }) });
+  mocks.respond.mockReset().mockReturnValue({ unwrap: () => Promise.resolve({ runId: "welcome-run" }) });
+  mocks.run = undefined; mocks.workspace = undefined;
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+});
+afterEach(() => { cleanup(); if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView; else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
+
+function setup(options: { selectedRunId?: string; welcome?: AssistantWelcome; seedWorkspaceId?: string } = {}) {
+  const legacyState = { ...assistantsReducer(undefined, { type: "init" }), draftExecutionByOwner: options.seedWorkspaceId ? { [ownerKey]: { mode: "developer", workspaceId: options.seedWorkspaceId } } : {} };
+  const store = configureStore({ reducer: { assistants: assistantsReducer, workspace: workspaceReducer, appSettings: appSettingsReducer, backends: () => ({ activeBackendId: "local" }) }, preloadedState: { assistants: legacyState } });
+  const selected = vi.fn();
+  const view = render(<Provider store={store}><AssistantChat assistant={assistant} selectedRunId={options.selectedRunId ?? null} welcome={options.welcome} onSelectRun={selected} onOpenDetails={vi.fn()} /></Provider>);
+  return { store, selected, ...view };
+}
+describe("assistant task location", () => {
+  it.each([undefined, "repo", "deleted-repo"])("starts standalone chats in Work while ignoring legacy repo preferences: %s", async seedWorkspaceId => {
+    const user = userEvent.setup(); setup({ seedWorkspaceId });
+    expect(screen.queryByRole("button", { name: "Repo / workspace" })).toBeNull();
+    expect(screen.getByTestId("composer-workspace").textContent).toBe("");
+    expect(screen.getByTestId("composer-mode").textContent).toBe("work");
+    await user.type(screen.getByLabelText("Message"), "Plan a trip");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ message: "Plan a trip", execution: { mode: "work" } })));
+  });
+  it("keeps Work execution and request identity while checking a lost delivery", async () => {
+    mocks.send.mockReturnValueOnce({ unwrap: () => Promise.reject(new Error("Lost response")) });
+    const user = userEvent.setup(); setup({ seedWorkspaceId: "repo" });
+    await user.type(screen.getByLabelText("Message"), "Review the repo");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("Lost response");
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Check delivery" }));
+    await waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2));
+    expect(mocks.send.mock.calls[1][0]).toEqual(mocks.send.mock.calls[0][0]);
+    expect(mocks.send.mock.calls[1][0].execution).toEqual({ mode: "work" });
+  });
+  it("starts the welcome's first task in Work", async () => {
+    const user = userEvent.setup();
+    setup({ selectedRunId: "welcome-run", seedWorkspaceId: "repo", welcome: { assistantId: assistant.id, runId: "welcome-run", state: "ready", answer: null } as AssistantWelcome });
+    expect(screen.queryByRole("button", { name: "Repo / workspace" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Start welcome" }));
+    await waitFor(() => expect(mocks.respond).toHaveBeenCalledWith({ accountId: "account", id: assistant.id, answer: "Review the project", execution: { mode: "work" } }));
+  });
+  it("starts a typed first task in Work after skipping the welcome", async () => {
+    const user = userEvent.setup();
+    setup({ selectedRunId: "welcome-run", welcome: { assistantId: assistant.id, runId: "welcome-run", state: "skipped", answer: null } as AssistantWelcome });
+    await user.type(screen.getByLabelText("Message"), "Review the repo");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ requestId: `welcome-${assistant.id}`, runId: "welcome-run", execution: { mode: "work" } })));
+  });
+  it("retains an already accepted Developer welcome target when checking its delivery", async () => {
+    const user = userEvent.setup();
+    setup({ selectedRunId: "welcome-run", welcome: { assistantId: assistant.id, runId: "welcome-run", state: "failed", answer: "Review the project", execution: { mode: "developer", workspaceId: "repo" } } as AssistantWelcome });
+    await user.click(screen.getByRole("button", { name: "Start welcome" }));
+    await waitFor(() => expect(mocks.respond).toHaveBeenCalledWith(expect.objectContaining({ execution: { mode: "developer", workspaceId: "repo" } })));
+  });
+  it("keeps an existing chat's repo fixed and opens a fresh draft for another task", async () => {
+    mocks.run = { id: "existing", assistantId: assistant.id, mode: "developer", workspaceId: "repo", status: "succeeded", createdAt: new Date(), goal: "Review" };
+    mocks.workspace = { id: "repo", accountId: "account", projectId: "project", name: "main", rootPath: "/repos/mains", isArchived: false } as Workspace;
+    const user = userEvent.setup(), { selected } = setup({ selectedRunId: "existing", seedWorkspaceId: "different-repo" });
+    expect(screen.queryByRole("button", { name: "Repo / workspace" })).toBeNull();
+    expect(screen.getByText("Existing transcript")).toBeTruthy();
+    expect(screen.getByTestId("composer-mode").textContent).toBe("developer");
+    expect(screen.getByTestId("composer-workspace").textContent).toBe("/repos/mains");
+    await user.type(screen.getByLabelText("Message"), "Continue");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ runId: "existing", message: "Continue" })));
+    expect(mocks.send.mock.calls[0][0]).not.toHaveProperty("execution");
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(selected).toHaveBeenLastCalledWith(null);
+  });
+  it("keeps an existing Work chat unbound when another repo is selected in its draft", () => {
+    mocks.run = { id: "existing-work", assistantId: assistant.id, mode: "work", workspaceId: null, status: "succeeded", createdAt: new Date(), goal: "Plan" };
+    setup({ selectedRunId: "existing-work", seedWorkspaceId: "repo" });
+    expect(screen.getByTestId("composer-workspace").textContent).toBe("");
+    expect(screen.getByTestId("composer-mode").textContent).toBe("work");
+    expect(screen.queryByRole("button", { name: "Repo / workspace" })).toBeNull();
+  });
+});

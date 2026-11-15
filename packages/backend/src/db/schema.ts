@@ -1867,6 +1867,7 @@ export const assistantWelcomes = sqliteTable("assistant_welcomes", {
   state: text("state", { enum: ["pending", "generating", "ready", "skipped", "starting", "started", "failed"] }).notNull().default("pending"),
   wasSkipped: integer("was_skipped", { mode: "boolean" }).notNull().default(false),
   question: text("question"), setupPrompt: text("setup_prompt"), answer: text("answer"), error: text("error"),
+  execution: text("execution").notNull().default('{"mode":"work"}'),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 }, (t) => [uniqueIndex("uniq_assistant_welcomes_run").on(t.runId), check("check_assistant_welcome_question_json", sql`json_valid(${t.question}) OR ${t.question} IS NULL`)]);

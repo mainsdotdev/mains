@@ -693,7 +693,7 @@ export function UnifiedContextDropdown({
                       onSelect: () => selectRowAt(idx),
                     };
                     if (row.kind === "assistant") return <RowButton key={`assistant-${row.assistant.id}`} {...rowProps} ariaLabel={`Call ${row.assistant.name}`}>
-                      <div className="flex items-center gap-2.5"><AssistantAvatar avatar={row.assistant.avatar} seed={row.assistant.id} className="size-7" /><div className="min-w-0"><Text as="div" size="xs" weight="medium">{row.assistant.name}</Text><Text as="div" size="xxs" tone="subtle" className="truncate">{row.assistant.description}</Text></div></div>
+                      <div className="flex items-center gap-2.5"><AssistantAvatar avatar={row.assistant.avatar} className="size-7" /><div className="min-w-0"><Text as="div" size="xs" weight="medium">{row.assistant.name}</Text><Text as="div" size="xxs" tone="subtle" className="truncate">{row.assistant.description}</Text></div></div>
                     </RowButton>;
                     if (row.kind === "skill") {
                       const skill = row.skill;

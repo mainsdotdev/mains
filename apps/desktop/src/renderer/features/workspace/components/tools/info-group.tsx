@@ -7,6 +7,7 @@ import {
   type MouseEvent,
 } from "react";
 import { AssistantTaskCard } from "@/features/assistants/components/assistant-task-card";
+import { readAssistantTaskInput } from "@mains/contracts/assistants";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import type { EventGroup } from "../../lib/group-events";
 import { Code, Globe } from "@/components/ui/icons/space";
@@ -183,7 +184,10 @@ interface InfoGroupProps {
   runId?: string;
   providerId?: string;
   floatingChat?: boolean;
+  bubble?: boolean;
 }
+
+const MESSAGE_BUBBLE = "w-fit min-w-0 max-w-full rounded-2xl bg-primary-100/80 px-4 py-3 dark:bg-primary/8";
 
 function PromptFileAttachment({ file }: { file: PromptMarkdownFile & { displayName: string } }) {
   const openFile = useOpenFileInEditor();
@@ -206,6 +210,7 @@ function InfoGroupImpl({
   runId,
   providerId,
   floatingChat = false,
+  bubble = false,
 }: InfoGroupProps) {
   const replica = useReplicaView();
   const event = group.events[0];
@@ -226,6 +231,12 @@ function InfoGroupImpl({
   }
   if (event.type === "artifact" && event.metadata?.source === "assistant_assignment" && typeof event.metadata.assignmentId === "string") {
     return replica ? <Text size="xs" tone="subtle">Assistant task available on {replica.label}</Text> : <AssistantTaskCard assignmentId={event.metadata.assignmentId} runId={runId} />;
+  }
+  const taskInput = event.type === "artifact" ? readAssistantTaskInput(event.metadata?.assistantTaskInput) : null;
+  if (taskInput) {
+    // The canonical task card owns delivery/status activity; keep these native prompt boundaries out of user bubbles.
+    if (taskInput.kind !== "request") return null;
+    return replica ? <Text size="xs" tone="subtle">Assistant task available on {replica.label}</Text> : <AssistantTaskCard assignmentId={taskInput.assignmentId} runId={runId} />;
   }
   if (event.type === "artifact" && event.metadata?.kind === "voice-task") {
     const task = event.metadata.voiceTask as VoiceTaskLink | undefined;
@@ -540,7 +551,7 @@ function InfoGroupImpl({
   }
 
   if (event.type === "artifact" && event.metadata?.source === "assistant_welcome") {
-    return <div className="py-3 text-primary-900 dark:text-primary-100"><AgentMarkdown>{event.content}</AgentMarkdown></div>;
+    return <div className={`${bubble ? MESSAGE_BUBBLE : "py-3"} text-primary-900 dark:text-primary-100`}><AgentMarkdown>{event.content}</AgentMarkdown></div>;
   }
 
   // Codex delivers async questions on agentMessage items. Their report
@@ -582,6 +593,7 @@ function InfoGroupImpl({
     return (
       <ArtifactBody
         content={content}
+        bubble={bubble}
         isStreaming={isStreaming}
         interrupted={event.metadata?.interrupted === true}
         previewAtt={previewAtt}
@@ -995,12 +1007,14 @@ function ImageArtifact({
 
 function ArtifactBody({
   content,
+  bubble,
   isStreaming,
   interrupted,
   previewAtt,
   onPreview,
 }: {
   content: string;
+  bubble: boolean;
   isStreaming: boolean;
   interrupted: boolean;
   previewAtt: { name: string; dataUrl: string } | null;
@@ -1012,7 +1026,7 @@ function ArtifactBody({
   const isRevealing = isStreaming || displayContent !== content;
 
   return (
-    <div className="overflow-hidden">
+    <div className={`overflow-hidden ${bubble ? MESSAGE_BUBBLE : ""}`}>
       <div className="prose prose-sm dark:prose-invert max-w-none relative">
         <AgentMarkdown
           className={isRevealing ? "streaming-text" : undefined}
