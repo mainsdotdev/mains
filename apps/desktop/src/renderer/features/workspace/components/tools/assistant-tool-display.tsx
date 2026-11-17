@@ -12,6 +12,7 @@ const LABELS: Record<string, string> = {
   prompt: "Request", status: "Status", result: "Result", evidence: "Evidence", error: "Error",
   execution: "Execution", mode: "Mode", workspaceId: "Workspace", content: "Content",
   message: "Message", query: "Search", scope: "Scope", revision: "Revision", pinned: "Pinned",
+  question: "Question", header: "Heading", options: "Options", label: "Choice", answer: "Answer",
   source: "Source", expectedRevision: "Expected revision", shortDescription: "Description",
   routines: "Routines", defaultTimezone: "Default timezone", defaultExecution: "Run in",
   schedule: "Schedule", frequency: "Frequency", dayOfWeek: "Day of week", hour: "Hour", minute: "Minute", timezone: "Timezone",
@@ -66,6 +67,7 @@ export function AssistantToolDisplay({ toolName, params, output, isCompact = fal
   const label = ASSISTANT_TOOL_LABELS[toolName] ?? toolName;
   const record = result && typeof result === "object" && !Array.isArray(result) ? result as Record<string, unknown> : null;
   const summary = typeof params?.title === "string" ? params.title : typeof params?.query === "string" ? params.query
+    : typeof params?.question === "string" ? params.question
     : Array.isArray(result) ? `${result.length} ${result.length === 1 ? "item" : "items"}`
     : typeof record?.title === "string" ? record.title : "";
   const hasDetails = !!params && Object.keys(params).length > 0 || result != null;

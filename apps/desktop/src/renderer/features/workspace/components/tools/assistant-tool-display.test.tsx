@@ -9,6 +9,21 @@ import { ToolCallItem } from "./tool-call-item";
 vi.mock("../../hooks", () => ({ usePluginLogoMap: () => new Map(), renderPluginIcon: () => null, normalizeSlug: (name: string) => name }));
 afterEach(cleanup);
 
+it.each([
+  { status: "answered", answer: "İstanbul → Tokyo, 1 week" },
+  { status: "canceled", message: "No answer was received; the destination is still missing." },
+])("shows a blocking question and its $status outcome without JSON", result => {
+  const question = "Where would you like to travel?";
+  const event = mapToolCallToEvent({ id: 5, runId: "r", toolName: "AskAssistantQuestion", status: "done",
+    input: JSON.stringify({ question }), output: JSON.stringify([{ type: "inputText", text: JSON.stringify({ ...result, question }) }]) })!;
+  const { container } = render(<ToolCallItem event={event} isCompact={false} />);
+  fireEvent.click(screen.getByText("Asked a question"));
+  expect(screen.getAllByText(question).length).toBeGreaterThan(0);
+  expect(screen.getByText(result.status)).toBeTruthy();
+  expect(screen.getByText(result.answer ?? result.message!)).toBeTruthy();
+  expect(container.querySelector("pre")).toBeNull();
+});
+
 it.each(Object.keys(ASSISTANT_TOOL_LABELS))("keeps %s separate from native Task for both providers", name => {
   for (const wire of [name, `mcp__mains__${name}`]) {
     expect(resolveTool(wire)).toMatchObject({ category: "Assistants", groupKey: name.toLowerCase(), displayName: name });

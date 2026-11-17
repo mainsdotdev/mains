@@ -215,7 +215,7 @@ describe("createWorkRunAdapter", () => {
     expect(result.status).toBe("canceled");
     expect(fake.calls.createSession).toHaveLength(0);
     expect(fake.calls.cleanup).toHaveLength(0);
-    expect(cancelPendingRequestsMock).toHaveBeenCalledExactlyOnceWith(request.runId);
+    expect(cancelPendingRequestsMock).toHaveBeenCalledWith(request.runId);
   });
 
   it("finishes an admitted session-id write before cleaning up a canceled preparation", async () => {
@@ -647,6 +647,20 @@ describe("createWorkRunAdapter", () => {
   });
 
   describe("abortRun", () => {
+    it("releases a question waiter on Stop before waiting for the driver to finish", async () => {
+      const fake = createFakeDriver();
+      let release!: () => void;
+      const answer = new Promise<void>(resolve => { release = resolve; });
+      const executing = vi.fn(async () => { await answer; return { status: "succeeded" as const }; });
+      fake.driver.executePrompt = executing;
+      cancelPendingRequestsMock.mockImplementationOnce(() => release());
+      const adapter = createWorkRunAdapter(fake.driver);
+      const pending = adapter.startRun(makeStartReq({ runId: "waiting-question" }), () => {});
+      await vi.waitFor(() => expect(executing).toHaveBeenCalledOnce());
+      await adapter.abortRun!("waiting-question");
+      await expect(pending).resolves.toMatchObject({ status: "canceled" });
+      expect(fake.calls.cleanup).toHaveLength(1);
+    });
     it("fires the AbortSignal Driver received in executePrompt", async () => {
       const fake = createFakeDriver({
         awaitAbort: true,

@@ -2,7 +2,7 @@
 import type { ReactNode } from "react";
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Assistant, AssistantWelcome } from "@mains/contracts/assistants";
@@ -104,10 +104,10 @@ describe("assistant task location", () => {
     await user.click(screen.getByRole("button", { name: "Start welcome" }));
     await waitFor(() => expect(mocks.respond).toHaveBeenCalledWith(expect.objectContaining({ execution: { mode: "developer", workspaceId: "repo" } })));
   });
-  it("keeps an existing chat's repo fixed and opens a fresh draft for another task", async () => {
+  it("keeps an existing chat's repo fixed when continuing the conversation", async () => {
     mocks.run = { id: "existing", assistantId: assistant.id, mode: "developer", workspaceId: "repo", status: "succeeded", createdAt: new Date(), goal: "Review" };
     mocks.workspace = { id: "repo", accountId: "account", projectId: "project", name: "main", rootPath: "/repos/mains", isArchived: false } as Workspace;
-    const user = userEvent.setup(), { selected } = setup({ selectedRunId: "existing", seedWorkspaceId: "different-repo" });
+    const user = userEvent.setup(); setup({ selectedRunId: "existing", seedWorkspaceId: "different-repo" });
     expect(screen.queryByRole("button", { name: "Repo / workspace" })).toBeNull();
     expect(screen.getByText("Existing transcript")).toBeTruthy();
     expect(screen.getByTestId("composer-mode").textContent).toBe("developer");
@@ -116,8 +116,6 @@ describe("assistant task location", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ runId: "existing", message: "Continue" })));
     expect(mocks.send.mock.calls[0][0]).not.toHaveProperty("execution");
-    fireEvent.click(screen.getByRole("button", { name: "New task" }));
-    expect(selected).toHaveBeenLastCalledWith(null);
   });
   it("keeps an existing Work chat unbound when another repo is selected in its draft", () => {
     mocks.run = { id: "existing-work", assistantId: assistant.id, mode: "work", workspaceId: null, status: "succeeded", createdAt: new Date(), goal: "Plan" };

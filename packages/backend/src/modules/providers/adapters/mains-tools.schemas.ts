@@ -11,6 +11,15 @@
 
 import { z } from "zod";
 
+export const AskAssistantQuestionSchema = z.object({
+  question: z.string().trim().min(1).max(4000).describe("The required clarification. Closely related details may be asked together."),
+  header: z.string().trim().min(1).max(80).optional().describe("Optional short heading for the question form."),
+  options: z.array(z.object({
+    label: z.string().trim().min(1).max(200),
+    description: z.string().trim().min(1).max(1000).optional(),
+  }).strict()).min(2).max(5).optional().describe("Optional distinct choices. The user can always type a custom answer. Omit for free text."),
+}).strict();
+
 export const RegisterDeliverableSchema = z.object({
   path: z.string().trim().min(1).max(4096).describe("Existing file path, absolute or relative to this conversation's working directory"),
   role: z.enum(["deliverable", "working", "preview"]).optional().describe("Defaults to deliverable. Working material and render previews are excluded from final outputs."),

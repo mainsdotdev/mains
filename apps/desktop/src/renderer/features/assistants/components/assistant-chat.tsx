@@ -138,20 +138,14 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
   }
   const stop = useCallback(() => { if (chatRunId) void abort(chatRunId).unwrap().catch(error => { if (bound.current) setFailure(errorText(error)); }); }, [chatRunId, abort]);
   const variant = assistant.providerId === "codex" ? "codex" : "claude";
-  const composer = <>
-    {chatRunId && run && belongs && <div className="mx-auto mb-2 flex w-full max-w-210 items-center justify-between gap-3">
-        <span className="min-w-0 truncate text-xs text-primary-600 dark:text-primary-300" title={workspace?.rootPath}>{run.mode === "developer" ? workspace?.name ?? "Workspace unavailable" : "Work"}</span>
-        <Button variant="ghost" onClick={() => onSelectRun(null)}>New task</Button>
-    </div>}
-    <WorkspaceInput assistantComposer goal={pending?.message ?? message} onGoalChange={setMessage} onSubmit={() => void submit()} onStop={stop}
+  const composer = <WorkspaceInput assistantComposer goal={pending?.message ?? message} onGoalChange={setMessage} onSubmit={() => void submit()} onStop={stop}
     isLoading={preparing || sending.isLoading} disabled={!!pending || !belongs} sendDisabled={!!pending} activeRun={visibleRun}
     canResume={!!chatRunId} providerId={assistant.providerId} mode={run?.mode ?? "work"} selectedModel={assistant.model}
     onModelChange={keepProfile} settingsConfig={assistant.conversationSettings.config} onSettingsConfigChange={keepProfile}
     allowVoice={false} showGoalButton={false}
     workspacePath={chatRunId ? workspace?.rootPath : undefined} uploadedFiles={files} onUploadedFilesChange={setFiles}
     placeholder={`Message ${assistant.name}…`} inputLabel={`Message ${assistant.name}`} isNewRunTabActive={!chatRunId}
-    layout={chatRunId || waitingWelcome ? "default" : "centered"} />
-  </>;
+    layout={chatRunId || waitingWelcome ? "default" : "centered"} />;
   return <PluginLogoProvider providerId={assistant.providerId}>
     <AsyncQuestionDialogProvider ownerKey={ownerKey} runId={chatRunId} runStatus={run?.status} turns={turns} events={events} historical={history.historical}>
       <div className="relative flex min-h-0 flex-1 flex-col">

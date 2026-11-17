@@ -266,6 +266,15 @@ describe("mains tool registry — mode dimension", () => {
 
 
 describe("assistant tool scope", () => {
+  it("exposes blocking questions only in Work/Developer assistant conversations", () => {
+    for (const mode of ["developer", "work", "chat"] as const) {
+      for (const assistant of [false, true]) {
+        const expected = assistant && mode !== "chat";
+        expect(toCodexDynamicTools(mode, assistant).some(tool => tool.name === "AskAssistantQuestion")).toBe(expected);
+        expect(toClaudeTools(CTX, mode, assistant).some(tool => tool.name === "AskAssistantQuestion")).toBe(expected);
+      }
+    }
+  });
   it("exposes routine management to Work/Developer assistants on both supported providers", () => {
     const names = ["ListAssistantRoutines", "ReadAssistantRoutine", "CreateAssistantRoutine", "UpdateAssistantRoutine", "DeleteAssistantRoutine"];
     for (const mode of ["developer", "work"] as const) {

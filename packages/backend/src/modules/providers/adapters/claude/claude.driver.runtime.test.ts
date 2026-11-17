@@ -27,12 +27,14 @@ const sdk = vi.hoisted(() => ({
   getSessionMessages: vi.fn(),
   deleteSession: vi.fn(),
   getSessionInfo: undefined as ReturnType<typeof vi.fn> | undefined,
+  createSdkMcpServer: undefined as ReturnType<typeof vi.fn> | undefined,
+  tool: undefined as ReturnType<typeof vi.fn> | undefined,
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: sdk.query,
-  createSdkMcpServer: undefined,
-  tool: undefined,
+  get createSdkMcpServer() { return sdk.createSdkMcpServer; },
+  get tool() { return sdk.tool; },
   get getSessionInfo() { return sdk.getSessionInfo; },
   deleteSession: sdk.deleteSession,
   getSessionMessages: sdk.getSessionMessages,
@@ -58,6 +60,8 @@ describe("Claude runtime without a system CLI", () => {
     vi.clearAllMocks();
     sdk.deleteSession.mockReset().mockResolvedValue(undefined);
     sdk.getSessionInfo = undefined;
+    sdk.createSdkMcpServer = undefined;
+    sdk.tool = undefined;
     vi.spyOn(runsRepo, "findClaudeTaskAnchorsByRun").mockResolvedValue([]);
     clearClaudeCliCache();
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), "mains-claude-runtime-"));
@@ -136,6 +140,19 @@ esac
     await driver.executePrompt(prepared.session, prepared.prompt, () => {}, new AbortController().signal);
     return prepared;
   }
+
+  it.each([false, true])("keeps the MCP timeout long enough for an assistant question (assistant=%s)", async assistant => {
+    sdk.createSdkMcpServer = vi.fn(() => ({ type: "sdk", name: "mains", instance: {} }));
+    sdk.tool = vi.fn((name, description, shape, handler) => ({ name, description, shape, handler }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    try {
+      const prepared = await driver.createSession({ runId: "question-timeout", accountId: "account-1", goal: "Plan a trip", mode: "work",
+        execution: { workspaceId: null, cwd: fixture }, configSnapshot: assistant ? { assistantId: "gezici" } : {} });
+      const mains = (prepared.session as any).options.mcpServers.mains;
+      expect(mains.timeout).toBe(assistant ? 360_000 : undefined);
+      expect(sdk.tool.mock.calls.some(call => call[0] === "AskAssistantQuestion")).toBe(assistant);
+    } finally { await driver.shutdown?.(); }
+  });
 
   it.each([undefined, "0"])("opts model runs into native MCP tasks while preserving override %s", async (override) => {
     vi.stubEnv("CLAUDE_AUTO_BACKGROUND_TASKS", override);

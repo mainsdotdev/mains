@@ -125,6 +125,9 @@ export function createWorkRunLifecycle(options: {
         abort() {
           if (phase !== "acquiring" && phase !== "executing" && phase !== "canceling") return;
           phase = "canceling"; controller.abort();
+          // A driver may be waiting for a question tool before it can exit.
+          // Release those waiters now; close also drains any late requests.
+          options.cancelRequests(runId);
         },
         close() {
           if (closing) return closing;

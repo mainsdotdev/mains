@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -19,7 +20,8 @@ import { assistantsRepo } from "./assistants.repo";
 import { assistantWelcome } from "./assistant-welcome";
 import { assistantWork } from "./assistant-work";
 import { providersService } from "../providers";
-import { runsService } from "../runs";
+import { runsService, listPendingApprovals, handleToolApprovalResponse } from "../runs";
+import { clearAllPendingRequests } from "../runs/user-input-broker";
 import { insertRunInputArtifact } from "../runs/run-input-artifact";
 import { createWorkAdapter } from "../providers/adapters";
 import { createFakeDriver } from "../providers/adapters/fake.driver";
@@ -28,7 +30,7 @@ import { auditBridgeSchema } from "../bridge/bridge.records";
 import type { Assistant, AssistantAssignment } from "@mains/contracts/assistants";
 import { createCodexRequestBroker } from "../providers/adapters/codex/codex-request-broker";
 import { pulseService } from "../pulse";
-import { dispatchMainsTool } from "../providers/adapters/mains-tools.registry";
+import { dispatchMainsTool, toClaudeTools } from "../providers/adapters/mains-tools.registry";
 let cleanup: () => void, restore: () => void, root: string;
 let driver: ReturnType<typeof createFakeDriver>;
 let teamId: string;
@@ -71,12 +73,114 @@ beforeEach(() => {
     teamId = assistantsService.createTeam({ accountId: "default", name: "Release team" }).id;
 });
 afterEach(async () => {
+    clearAllPendingRequests();
     await pulseService.stop();
     await assistantWork.stop();
     restore();
     cleanup();
     rmSync(root, { recursive: true, force: true });
     vi.restoreAllMocks();
+});
+
+describe("blocking assistant questions", () => {
+    const input = { question: "Where and when would you like to travel?", header: "Trip details" };
+    const conversation = async (assistant: Assistant) => {
+        const { runId } = await assistantWork.sendChat("default", assistant.id, "Plan a trip", `question-${randomUUID()}`);
+        await vi.waitFor(() => expect(driver.calls.executePrompt.some(call => (call.session as { id: string }).id === runId)).toBe(true));
+        return { id: runId };
+    };
+    beforeEach(() => { driver.script({ awaitAbort: true }); assistantWork.start(); });
+    afterEach(async () => {
+        clearAllPendingRequests();
+        await Promise.all((await runsService.listActiveRuns()).map(run => runsService.abortRun(run.id)));
+        await vi.waitFor(async () => expect(await runsService.listActiveRuns()).toEqual([]));
+    });
+
+    it.each(["codex", "claude_code"] as const)("waits for an actual answer through the %s tool seam", async providerId => {
+        const assistant = await makeAssistant("Gezici", providerId), source = await conversation(assistant);
+        const ctx = { runId: source.id, workspaceId: null, rootPath: null };
+        const responded = vi.fn(), respondToRequestError = vi.fn();
+        let result: Promise<unknown>;
+        if (providerId === "codex") {
+            const broker = createCodexRequestBroker({ getRunState: () => ({ mode: "work", assistantId: assistant.id, fileChangeItems: new Map() }), getMainsToolContext: () => ctx });
+            result = broker.handleRequest({ runId: source.id, runIsDead: false, id: 42, method: "item/tool/call", params: {
+                tool: "AskAssistantQuestion", arguments: JSON.stringify(input),
+            }, server: { respondToRequest: responded, respondToRequestError } }).then(() => {
+                expect(respondToRequestError).not.toHaveBeenCalled();
+                expect(responded).toHaveBeenCalledWith(42, expect.objectContaining({ success: true }));
+                return JSON.parse(responded.mock.calls[0][1].contentItems[0].text);
+            });
+        } else {
+            const tool = toClaudeTools(ctx, "work", true).find(tool => tool.name === "AskAssistantQuestion")!;
+            result = tool.handler(input).then(reply => JSON.parse(reply.content[0].text));
+        }
+        const finished = vi.fn();
+        void result.then(finished, finished);
+        await vi.waitFor(() => expect(listPendingApprovals(source.id)).toHaveLength(1));
+        const request = listPendingApprovals(source.id)[0];
+        expect(request).toMatchObject({ runId: source.id, kind: "ask_user", toolName: "AskAssistantQuestion", question: input.question, isOther: true });
+        expect(finished).not.toHaveBeenCalled();
+        expect(responded).not.toHaveBeenCalled();
+        const answer = "İstanbul → Tokyo, yılbaşı haftası\n2 kişi, toplam 1.000 €";
+        handleToolApprovalResponse({ requestId: request.requestId, approvalToken: request.approvalToken, approved: true, answer });
+        await expect(result).resolves.toEqual({ status: "answered", question: input.question, answer });
+        expect(listPendingApprovals(source.id)).toEqual([]);
+        expect(assistantsService.context(assistant.id, "default", "trip")).toContain("use AskAssistantQuestion and wait for its result");
+    });
+
+    it("returns a selected option and keeps questions in other runs pending when one is stopped", async () => {
+        const assistant = await makeAssistant("Gezici"), first = await conversation(assistant), second = await conversation(assistant);
+        const ask = (runId: string) => assistantWork.tool(runId, "AskAssistantQuestion", { ...input, options: [{ label: "Tokyo", description: "A week in Japan" }, { label: "Paris" }] });
+        const canceled = ask(first.id), answered = ask(second.id);
+        await vi.waitFor(() => expect(listPendingApprovals().filter(request => [first.id, second.id].includes(request.runId))).toHaveLength(2));
+        await runsService.abortRun(first.id);
+        await expect(canceled).resolves.toMatchObject({ status: "canceled", message: expect.stringContaining("Do not assume an answer") });
+        const remaining = listPendingApprovals(second.id)[0];
+        expect(remaining.options).toEqual([{ label: "Tokyo", description: "A week in Japan" }, { label: "Paris" }]);
+        handleToolApprovalResponse({ requestId: remaining.requestId, approvalToken: remaining.approvalToken, approved: true, answer: "Tokyo" });
+        await expect(answered).resolves.toMatchObject({ status: "answered", answer: "Tokyo" });
+    });
+
+    it.each([{ approved: false }, { approved: true }, { approved: true, answer: "  " }])("never substitutes a default answer after %j", async response => {
+        const assistant = await makeAssistant("Gezici"), source = await conversation(assistant);
+        const result = assistantWork.tool(source.id, "AskAssistantQuestion", { ...input, options: [{ label: "Tokyo" }, { label: "Paris" }] });
+        await vi.waitFor(() => expect(listPendingApprovals(source.id)).toHaveLength(1));
+        const request = listPendingApprovals(source.id)[0];
+        handleToolApprovalResponse({ ...response, requestId: request.requestId, approvalToken: request.approvalToken });
+        const reply = await result;
+        expect(reply).toMatchObject({ status: "canceled", question: input.question });
+        expect(reply).not.toHaveProperty("answer");
+    });
+
+    it("returns an unanswered outcome at the broker deadline without inventing an answer", async () => {
+        const assistant = await makeAssistant("Gezici"), source = await conversation(assistant);
+        vi.useFakeTimers();
+        try {
+            const result = assistantWork.tool(source.id, "AskAssistantQuestion", input);
+            await vi.waitFor(() => expect(listPendingApprovals(source.id)).toHaveLength(1));
+            const finished = vi.fn();
+            void result.then(finished, finished);
+            await vi.advanceTimersByTimeAsync(299_000);
+            expect(finished).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1000);
+            const reply = await result;
+            expect(reply).toMatchObject({ status: "canceled", message: expect.stringContaining("expired") });
+            expect(reply).not.toHaveProperty("answer");
+            expect(listPendingApprovals(source.id)).toEqual([]);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it("rejects malformed choices, missing questions and unavailable conversations before opening a form", async () => {
+        const assistant = await makeAssistant("Gezici"), source = await conversation(assistant);
+        for (const invalid of [{ question: "  " }, { ...input, options: [] }, { ...input, options: [{ label: "Tokyo" }, { label: "Tokyo" }] }, { ...input, options: [{ label: "" }, { label: "Paris" }] }]) {
+            await expect(dispatchMainsTool("AskAssistantQuestion", invalid, { runId: source.id, workspaceId: null, rootPath: null })).rejects.toThrow();
+        }
+        for (const overrides of [{ assistantId: null }, { isArchived: true }, { ownerBackendId: "another-backend" }, { mode: "chat" as const }, { status: "succeeded" as const }]) {
+            const unavailable = createRun(db, { assistantId: assistant.id, providerId: "codex", mode: "work", status: "succeeded", ...overrides });
+            await expect(assistantWork.tool(unavailable.id, "AskAssistantQuestion", input)).rejects.toThrow();
+        }
+        expect(listPendingApprovals(source.id)).toEqual([]);
+    });
 });
 
 describe("scheduled assistant routines", () => {

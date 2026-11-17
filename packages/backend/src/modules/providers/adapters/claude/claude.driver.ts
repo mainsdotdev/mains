@@ -3289,13 +3289,16 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     const tools = toClaudeTools(ctx, mode, assistant);
     if (tools.length === 0) return null;
-    return createSdkMcpServerFn!({
+    const server = createSdkMcpServerFn!({
       name: "mains",
       version: "1.0.0",
       tools: tools.map((t) =>
         toolFn!(t.name, t.description, t.shape, t.handler),
       ),
     });
+    // The question broker may wait five minutes for the user. Keep the
+    // assistant's MCP call alive long enough to receive that answer/outcome.
+    return assistant ? { ...server, timeout: 6 * 60_000 } : server;
   }
 
   // ─────────────────────────────────────────────────────────────
