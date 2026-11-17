@@ -97,7 +97,7 @@ function AppContent() {
     }}>
     <PreviewToolbar aria-label="App controls" className="justify-end">
       {panel.ownerKey !== composerKey && <Button variant="ghost" className="glass-card text-xs" onClick={() => {
-        if (panel.runId) dispatch(setPendingRunId(panel.runId));
+        if (panel.runId && !panel.scope?.assistantId) dispatch(setPendingRunId(panel.runId));
         if (panel.scope) navigate(mcpAppConversationPath(panel.scope, panel.runId));
       }}>Open app conversation</Button>}
       <Button variant="icon" className="glass-card" onClick={reload} tooltip="Reload app" aria-label="Reload app">

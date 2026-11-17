@@ -8,8 +8,9 @@ import {
 } from "react";
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery } from "@/lib/redux/api/assistantsApi";
+import { AssistantProfileSetupHistory } from "@/features/assistants/components/assistant-profile-setup";
 import { AssistantTaskCard } from "@/features/assistants/components/assistant-task-card";
-import { readAssistantTaskInput } from "@mains/contracts/assistants";
+import { readAssistantTaskInput, type AssistantWelcomeQuestion } from "@mains/contracts/assistants";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import type { EventGroup } from "../../lib/group-events";
 import { Code, Globe } from "@/components/ui/icons/space";
@@ -189,7 +190,8 @@ interface InfoGroupProps {
   bubble?: boolean;
 }
 
-const MESSAGE_BUBBLE = "w-fit min-w-0 max-w-full rounded-2xl bg-primary-100/80 px-4 py-3 dark:bg-primary/8";
+const MESSAGE_WIDTH = "max-w-[min(85%,var(--container-xl))]";
+const MESSAGE_BUBBLE = `w-fit min-w-0 ${MESSAGE_WIDTH} rounded-[20px] bg-primary-100/80 px-4 py-3 dark:bg-primary/8`;
 
 function PromptFileAttachment({ file }: { file: PromptMarkdownFile & { displayName: string } }) {
   const openFile = useOpenFileInEditor();
@@ -343,7 +345,7 @@ function InfoGroupImpl({
     return (
       <div className="w-full overflow-hidden">
         <div className="w-full py-2 flex justify-end">
-          <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-2">
+          <div className={`flex min-w-0 flex-col items-end gap-2 ${bubble ? `w-fit ${MESSAGE_WIDTH}` : "max-w-[80%]"}`}>
             {!!event.metadata?.voiceDelegation && (
               <Text
                 as="span"
@@ -555,6 +557,11 @@ function InfoGroupImpl({
   }
 
   if (event.type === "artifact" && event.metadata?.source === "assistant_welcome") {
+    const setup = (event.metadata.question as AssistantWelcomeQuestion | undefined)?.profileSetup;
+    if (setup?.saved) return <div className="space-y-3 text-sm text-primary-900 dark:text-primary-100">
+      <AssistantProfileSetupHistory setup={setup} />
+      <div className={bubble ? MESSAGE_BUBBLE : "py-3"}><AgentMarkdown>{event.content}</AgentMarkdown></div>
+    </div>;
     return <div className={`${bubble ? MESSAGE_BUBBLE : "py-3"} text-primary-900 dark:text-primary-100`}><AgentMarkdown>{event.content}</AgentMarkdown></div>;
   }
 

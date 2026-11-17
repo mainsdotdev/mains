@@ -1,35 +1,64 @@
 // @vitest-environment jsdom
-import type { ReactNode } from "react";
+import { useLayoutEffect, type ReactNode } from "react";
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Assistant, AssistantConversation, AssistantTeam } from "@mains/contracts/assistants";
 import type { Pulse } from "@/lib/redux/api/pulseApi";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
+import { useAppDispatch } from "@/lib/redux/hooks";
 import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
 import assistantsReducer from "@/lib/redux/slices/assistantsSlice";
-import workspaceReducer from "@/lib/redux/slices/workspaceSlice";
+import workspaceReducer, { setComposerContextKey } from "@/lib/redux/slices/workspaceSlice";
+import previewReducer, { openPreviewTab, setPreviewOpen, type PreviewTab } from "@/lib/redux/slices/previewSlice";
+import { composerOwnerKey } from "@/features/workspace/lib/ui-context";
+import { runOwnerKey } from "../../shared/ui-state-keys";
 import { AssistantsSidebar } from "@/features/assistants/components/assistants-sidebar";
 import AssistantsPage from "./Assistants";
 
 const mocks = vi.hoisted(() => ({ routines: [] as Pulse[], chats: [] as AssistantConversation[], assistants: [] as Assistant[], teams: [] as AssistantTeam[], changeTeam: vi.fn(), changingTeam: false, teamError: undefined as unknown, loadingChats: false, chatsError: undefined as unknown, refetchChats: vi.fn(), websiteChats: [{ id: "website-first", title: "Website announcement", goal: "Page", status: "succeeded", mode: "work", workspaceId: null, workspaceName: null, projectName: null, createdAt: new Date(0), updatedAt: new Date(0) }] }));
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
-vi.mock("@/lib/redux/api", () => ({ useGetAccountQuery: () => ({ data: { id: "account" } }) }));
+const createTeam = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/redux/api", () => ({
+  useGetAccountQuery: () => ({ data: { id: "account" } }),
+  useGetProvidersQuery: () => ({ data: [{ id: "codex", isEnabled: true }] }),
+  useGetSpacesQuery: () => ({ data: [{ id: "codex", accountId: "account", providerId: "codex", isArchived: false }] }),
+  useGetProviderModelsQuery: () => ({ currentData: [{ id: "model", displayName: "Test model" }], isFetching: false }),
+}));
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments: [], memories: [] }, refetch: vi.fn() }),
   useAssistantConversationsQuery: ({ id }: { id: string }) => ({ currentData: mocks.loadingChats ? undefined : id === "website" ? mocks.websiteChats : mocks.chats, error: mocks.chatsError, refetch: mocks.refetchChats }),
   useArchiveAssistantMutation: () => [vi.fn(), {}],
   useChangeAssistantTeamMutation: () => [mocks.changeTeam, { isLoading: mocks.changingTeam, error: mocks.teamError }],
+  useCreateAssistantMutation: () => [vi.fn(), {}],
+  useCreateAssistantTeamMutation: () => [createTeam, {}],
 }));
 vi.mock("@/lib/redux/api/pulseApi", () => ({
   useGetPulsesQuery: () => ({ currentData: mocks.routines, refetch: vi.fn() }),
   useDeletePulseMutation: () => [vi.fn(), {}], useTogglePulseMutation: () => [vi.fn(), {}], useRunPulseNowMutation: () => [vi.fn(), {}],
 }));
 vi.mock("@/features/assistants/hooks/use-assistant-updates", () => ({ useAssistantUpdates() {} }));
-vi.mock("@/features/assistants/components/assistant-chat", () => ({ AssistantChat: ({ selectedRunId, onSelectRun, onOpenDetails }: { selectedRunId: string | null; onSelectRun(id: string): void; onOpenDetails(): void }) => <div>{!selectedRunId && <button aria-label="Center assistant monogram" onClick={onOpenDetails}>R</button>}<output data-testid="conversation">{selectedRunId ?? "draft"}</output><button onClick={() => { mocks.chats = [{ id: "third", title: "Third release", goal: "Third", status: "succeeded", mode: "work", workspaceId: null, workspaceName: null, projectName: null, createdAt: new Date(), updatedAt: new Date() }, ...mocks.chats]; onSelectRun("third"); }}>Send draft</button></div> }));
-vi.mock("@/features/assistants/components/assistant-profile-form", () => ({ AssistantProfileForm: ({ onClose }: { onClose(): void }) => <form aria-label="Create assistant"><button type="button" onClick={onClose}>Cancel</button></form> }));
+vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ mode: "developer" }) }));
+vi.mock("@/features/assistants/components/assistant-chat", () => ({
+  AssistantChat: ({ assistant, selectedRunId, onSelectRun, onOpenDetails }: {
+    assistant: Assistant; selectedRunId: string | null; onSelectRun(id: string): void; onOpenDetails(): void;
+  }) => {
+    const dispatch = useAppDispatch();
+    const owner = composerOwnerKey({ backendId: "local", assistantId: assistant.id, spaceId: assistant.spaceId,
+      providerId: assistant.providerId, mode: assistant.spaceSnapshot.mode }, selectedRunId);
+    useLayoutEffect(() => { dispatch(setComposerContextKey(owner)); }, [dispatch, owner]);
+    return <div>{!selectedRunId && <button aria-label="Center assistant monogram" onClick={onOpenDetails}>R</button>}
+      <output data-testid="conversation">{selectedRunId ?? "draft"}</output>
+      <button onClick={() => {
+        mocks.chats = [{ id: "third", title: "Third release", goal: "Third", status: "succeeded", mode: "work", workspaceId: null,
+          workspaceName: null, projectName: null, createdAt: new Date(), updatedAt: new Date() }, ...mocks.chats];
+        onSelectRun("third");
+      }}>Send draft</button>
+    </div>;
+  },
+}));
 vi.mock("@/features/assistants/components/assistant-memory", () => ({ AssistantMemoryPanel: () => null }));
 vi.mock("@/features/assistants/components/assistant-assignments", () => ({ AssistantAssignments: () => null }));
 vi.mock("@/hooks/use-suppress-browser-view", () => ({ useSuppressBrowserView() {} }));
@@ -37,17 +66,22 @@ vi.mock("@/lib/platform", () => ({ useIsMobile: () => false, useCapabilities: ()
 
 function HeaderOutlet() { return <header aria-label="Assistant header">{useMainHeader().header}</header>; }
 function Location() { return <output data-testid="location">{useLocation().search}</output>; }
-function setup(initial = "/assistants?assistant=release&run=first") {
+const releaseChatOwner = runOwnerKey("local", "first");
+const browserPreview: PreviewTab = { kind: "browser", id: "browser", title: "New tab", faviconUrl: null, isLoading: false, isCrashed: false };
+function setup(initial = "/assistants?assistant=release&run=first", openPreview?: PreviewTab) {
   const store = configureStore({ reducer: {
-    appSettings: appSettingsReducer, workspace: workspaceReducer, assistants: assistantsReducer,
+    appSettings: appSettingsReducer, workspace: workspaceReducer, assistants: assistantsReducer, preview: previewReducer,
     backends: () => ({ activeBackendId: "local" }),
   } });
+  if (openPreview) store.dispatch(openPreviewTab({ ownerKey: releaseChatOwner, tab: openPreview }));
   const Wrapper = ({ children }: { children: ReactNode }) => <Provider store={store}><MemoryRouter initialEntries={[initial]}><MainHeaderProvider>{children}</MainHeaderProvider></MemoryRouter></Provider>;
   return { store, ...render(<Wrapper><AssistantsSidebar /><AssistantsPage /><HeaderOutlet /><Location /></Wrapper>) };
 }
 beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
   mocks.changeTeam.mockReset().mockResolvedValue({ data: {} });
+  createTeam.mockReset().mockImplementation((input: Pick<AssistantTeam, "accountId" | "name">) =>
+    ({ unwrap: () => Promise.resolve({ ...input, id: "new-team", createdAt: new Date(0) }) }));
   mocks.changingTeam = false;
   mocks.teamError = undefined;
   mocks.routines = [];
@@ -158,6 +192,30 @@ describe("assistant profile and conversation", () => {
     expect(mocks.changeTeam).not.toHaveBeenCalled();
   });
 
+  it("lets an assistant leave a team from Details without leaving its conversation", async () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
+    const panel = await screen.findByRole("complementary", { name: "About Release" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Team" }));
+    fireEvent.click(await screen.findByRole("option", { name: "No team" }));
+    expect(mocks.changeTeam).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "release", teamId: null });
+    expect(screen.getByTestId("conversation").textContent).toBe("first");
+  });
+
+  it("joins the first team when it is created from a teamless assistant’s Details", async () => {
+    mocks.teams = [];
+    mocks.assistants[0].teamId = null;
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
+    const panel = await screen.findByRole("complementary", { name: "About Release" });
+    expect(within(panel).getByRole("button", { name: "Team" }).textContent).toContain("No team");
+    fireEvent.click(within(panel).getByRole("button", { name: "New team" }));
+    fireEvent.change(within(panel).getByLabelText("Team name"), { target: { value: "Releases" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Create team" }));
+    await waitFor(() => expect(mocks.changeTeam).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "release", teamId: "new-team" }));
+    expect(createTeam).toHaveBeenCalledExactlyOnceWith({ accountId: "account", name: "Releases" });
+  });
+
   it("resizes the information panel live and saves its width on release", async () => {
     const { store } = setup();
     fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
@@ -188,6 +246,39 @@ describe("assistant profile and conversation", () => {
     expect(store.getState().appSettings.assistantInfoPanelWidth).toBe(416);
   });
 
+  it("centers the profile tab over the rendered chat column throughout panel changes", async () => {
+    let syncChatWidth: (() => void) | undefined;
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private readonly onResize: () => void) {}
+      observe(target: Element) {
+        if (target.hasAttribute("data-assistant-chat-column")) syncChatWidth = this.onResize;
+      }
+      unobserve() {}
+      disconnect() {}
+    });
+    const { container } = setup();
+    const chat = container.querySelector<HTMLElement>("[data-assistant-chat-column]")!;
+    const profile = screen.getByRole("button", { name: "Release profile" });
+    const track = profile.closest<HTMLElement>("[data-assistant-header-track]")!;
+    const bounds = vi.spyOn(chat, "getBoundingClientRect");
+    const resizeChat = (width: number) => {
+      bounds.mockReturnValue(new DOMRect(0, 0, width, 700));
+      syncChatWidth?.();
+      expect(track.style.width).toBe(`${width}px`);
+    };
+
+    resizeChat(1000);
+    fireEvent.click(profile);
+    const panel = await screen.findByRole("complementary", { name: "About Release" });
+    resizeChat(579);
+    resizeChat(445);
+    fireEvent.click(within(panel).getByRole("button", { name: "Close assistant panel" }));
+    resizeChat(1000);
+    fireEvent.click(screen.getByRole("button", { name: "New assistant" }));
+    const creationTrack = screen.getByRole("heading", { name: "New assistant" }).closest<HTMLElement>("[data-assistant-header-track]");
+    expect(creationTrack?.style.width).toBe("");
+  });
+
   it("opens assistant information from the header profile and keeps the selected chat", async () => {
     setup();
     const header = within(screen.getByRole("banner", { name: "Assistant header" }));
@@ -200,6 +291,7 @@ describe("assistant profile and conversation", () => {
     const panel = await screen.findByRole("complementary", { name: "About Release" });
     const trigger = header.getByRole("button", { name: "Release profile" });
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(panel.classList.contains("rounded-2xl")).toBe(true);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(within(panel).getByText("Verify the release before distribution.")).toBeTruthy();
     expect(within(panel).getByText("model", { exact: true })).toBeTruthy();
@@ -217,6 +309,34 @@ describe("assistant profile and conversation", () => {
     await screen.findByRole("complementary", { name: "About Release" });
     fireEvent.click(trigger);
     expect(screen.queryByRole("complementary", { name: "About Release" })).toBeNull();
+  });
+
+  it.each([
+    browserPreview,
+    { kind: "document", id: "report", doc: { path: "/tmp/report.pdf", fileName: "Report.pdf", docType: "pdf" } },
+    { kind: "app", id: "app", title: "Canvas" },
+    { kind: "pull-request", id: "pr", title: "PR #1", prRef: { provider: "github", owner: "acme", repo: "app", number: 1 }, url: "https://github.com/acme/app/pull/1" },
+  ] satisfies PreviewTab[])("gives the right lane to a $kind preview and keeps Details closed after hiding it", async tab => {
+    const { store, container } = setup("/assistants?assistant=release&run=first&tab=profile");
+    await screen.findByRole("complementary", { name: "About Release" });
+    act(() => store.dispatch(openPreviewTab({ ownerKey: releaseChatOwner, tab })));
+    expect(container.querySelector("[data-assistant-info-panel]")).toBeNull();
+    expect(new URLSearchParams(screen.getByTestId("location").textContent ?? "").has("tab")).toBe(false);
+    act(() => store.dispatch(setPreviewOpen({ ownerKey: releaseChatOwner, open: false })));
+    expect(screen.queryByRole("complementary", { name: "About Release" })).toBeNull();
+  });
+
+  it("replaces an open preview with Details and keeps the preview tab available", async () => {
+    const { store } = setup(undefined, browserPreview);
+    fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
+    await screen.findByRole("complementary", { name: "About Release" });
+    expect(store.getState().preview.byOwner[releaseChatOwner]).toMatchObject({ open: false, tabs: [browserPreview] });
+  });
+
+  it("honors a Routines link even if that conversation has an open preview", async () => {
+    const { store } = setup("/assistants?assistant=release&tab=routines", browserPreview);
+    await screen.findByRole("tabpanel", { name: "Routines" });
+    expect(store.getState().preview.byOwner[releaseChatOwner].open).toBe(false);
   });
 
   it("filters only the assistant list without switching the current chat", async () => {
@@ -241,12 +361,33 @@ describe("assistant profile and conversation", () => {
     setup("/assistants?assistant=release&run=second");
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("second"));
     fireEvent.click(screen.getByRole("button", { name: "New assistant" }));
-    expect(screen.getByRole("form", { name: "Create assistant" })).toBeTruthy();
+    const form = screen.getByRole("form", { name: "Create assistant" });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByTestId("conversation")).toBeNull();
-    expect(within(screen.getByRole("banner", { name: "Assistant header" })).queryByRole("button")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const header = screen.getByRole("banner", { name: "Assistant header" });
+    expect(within(header).getByRole("heading", { name: "New assistant" })).toBeTruthy();
+    expect(header.querySelector("[data-avatar-shape='sphere']")).toBeTruthy();
+
+    const name = within(form).getByLabelText("Name");
+    fireEvent.change(name, { target: { value: "Travel planner" } });
+    expect(within(header).getByRole("heading", { name: "Travel planner" })).toBeTruthy();
+    fireEvent.change(name, { target: { value: "" } });
+    expect(within(header).getByRole("heading", { name: "New assistant" })).toBeTruthy();
+
+    const sphere = within(form).getByRole("radio", { name: "Sphere" });
+    const swallow = within(form).getByRole("radio", { name: "Swallow" });
+    fireEvent.keyDown(sphere, { key: "End" });
+    expect(document.activeElement).toBe(swallow);
+    expect(swallow.getAttribute("aria-checked")).toBe("true");
+    const avatar = header.querySelector<HTMLElement>("[data-avatar-shape='swallow']")!;
+    const previousColor = avatar.style.getPropertyValue("--avatar-base");
+    fireEvent.click(within(form).getByRole("radio", { name: "Rose" }));
+    expect(avatar.style.getPropertyValue("--avatar-base")).not.toBe(previousColor);
+
+    fireEvent.click(within(header).getByRole("button", { name: "Close new assistant" }));
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("second"));
+    expect(within(header).queryByRole("button", { name: "Close new assistant" })).toBeNull();
+    expect(within(header).getByRole("button", { name: "Release profile" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /^Website/ }));
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("website-first"));
     expect(screen.getByRole("button", { name: "Website profile" })).toBeTruthy();

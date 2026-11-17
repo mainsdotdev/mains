@@ -19,7 +19,14 @@ export const assistantsRepo = {
     list(accountId: string) { return getDb().select().from(assistants).where(eq(assistants.accountId, accountId)).orderBy(assistants.createdAt).limit(200).all().map(assistant); },
     get(id: string, accountId: string) { const row = getDb().select().from(assistants).where(and(eq(assistants.id, id), eq(assistants.accountId, accountId))).get(); return row ? assistant(row) : null; },
     create(row: typeof assistants.$inferInsert) { getDb().insert(assistants).values(row).run(); },
-    createWelcome(id: string) { getDb().insert(assistantWelcomes).values({ assistantId: id, runId: `assistant-welcome-${id}` }).run(); },
+    createWelcome(id: string, question?: string) {
+        getDb().insert(assistantWelcomes).values({ assistantId: id, runId: `assistant-welcome-${id}`,
+            ...(question ? { state: "ready", question } : {}) }).run();
+    },
+    saveProfile(id: string, accountId: string, description: string, instructions: string) {
+        getDb().update(assistants).set({ description, instructions, updatedAt: new Date() })
+            .where(and(eq(assistants.id, id), eq(assistants.accountId, accountId))).run();
+    },
     welcomeOwner(id: string) { return getDb().select({ accountId: assistants.accountId, isArchived: assistants.isArchived }).from(assistants).where(eq(assistants.id, id)).get() ?? null; },
     welcome(id: string) { return getDb().select().from(assistantWelcomes).where(eq(assistantWelcomes.assistantId, id)).get() ?? null; },
     welcomes(accountId?: string) { return getDb().select({ welcome: assistantWelcomes }).from(assistantWelcomes).innerJoin(assistants, eq(assistants.id, assistantWelcomes.assistantId)).where(accountId ? eq(assistants.accountId, accountId) : undefined).all().map(row => row.welcome); },
@@ -33,15 +40,19 @@ export const assistantsRepo = {
                 sql`EXISTS (SELECT 1 FROM assistant_messages m WHERE m.assignment_id = ${assistantAssignments.id} AND m.status IN ('queued', 'dispatching', 'uncertain'))`),
         )).limit(1).get();
     },
-    changeTeam(id: string, accountId: string, teamId: string) {
+    changeTeam(id: string, accountId: string, teamId: string | null) {
         const updatedAt = new Date();
         getDb().update(assistants).set({ teamId, updatedAt }).where(and(eq(assistants.id, id), eq(assistants.accountId, accountId))).run();
         getDb().update(assistantMemories).set({ teamId, updatedAt, revision: sql`${assistantMemories.revision} + 1` })
             .where(and(eq(assistantMemories.assistantId, id), eq(assistantMemories.accountId, accountId))).run();
     },
     archive(id: string, archived: boolean) { getDb().update(assistants).set({ isArchived: archived, updatedAt: new Date() }).where(eq(assistants.id, id)).run(); },
-    memories(accountId: string, teamId: string, assistantId?: string | null) {
-        return getDb().select().from(assistantMemories).where(and(eq(assistantMemories.accountId, accountId), eq(assistantMemories.teamId, teamId), assistantId === undefined ? undefined : or(isNull(assistantMemories.assistantId), eq(assistantMemories.assistantId, assistantId ?? ""))))
+    memories(accountId: string, assistant?: Pick<Assistant, "id" | "teamId">) {
+        const scope = assistant && or(
+            eq(assistantMemories.assistantId, assistant.id),
+            assistant.teamId ? and(eq(assistantMemories.teamId, assistant.teamId), isNull(assistantMemories.assistantId)) : undefined,
+        );
+        return getDb().select().from(assistantMemories).where(and(eq(assistantMemories.accountId, accountId), scope))
             .orderBy(desc(assistantMemories.pinned), desc(assistantMemories.updatedAt), assistantMemories.id).limit(200).all();
     },
     memory(id: string) { return getDb().select().from(assistantMemories).where(eq(assistantMemories.id, id)).get() ?? null; },

@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantTeam } from "@mains/contracts/assistants";
 import { AssistantProfileForm } from "./assistant-profile-form";
 const mocks = vi.hoisted(() => ({ create: vi.fn(), createTeam: vi.fn(), teams: [] as AssistantTeam[] }));
 vi.mock("@/lib/redux/api", () => ({
+  useGetProvidersQuery: () => ({ data: [{ id: "codex", isEnabled: true }] }),
   useGetSpacesQuery: () => ({ data: [{ id: "codex", accountId: "account", providerId: "codex", mode: "developer", isArchived: false }] }),
   useGetProviderModelsQuery: () => ({ currentData: [{ id: "model", displayName: "Test model", supportedEffortLevels: ["low", "medium", "high"] }], isFetching: false }),
 }));
@@ -26,18 +27,21 @@ afterEach(cleanup);
 
 async function fillProfile(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText("Name"), "Trip planner");
-  await user.type(screen.getByLabelText("What should this assistant help with?"), "Plan practical trips");
-  await user.type(screen.getByLabelText("Instructions"), "Ask about dates and budget.");
 }
 
 describe("assistant creation", () => {
-  it("keeps all six avatar shapes and model settings while assigning the default team", async () => {
+  it("offers the nine mosaic shapes and saves shape, color and model settings independently", async () => {
     const user = userEvent.setup(), created = vi.fn();
     render(<AssistantProfileForm accountId="account" onCreated={created} onClose={vi.fn()} />);
-    expect(screen.getAllByRole("radio")).toHaveLength(14);
+    const shapes = within(screen.getByRole("radiogroup", { name: "Avatar shape" }));
+    expect(shapes.getAllByRole("radio").map(option => option.getAttribute("aria-label"))).toEqual([
+      "Steps", "Sphere", "Block", "Flower", "Weave", "Lantern", "Arch", "Kite", "Swallow",
+    ]);
+    expect(within(screen.getByRole("radiogroup", { name: "Avatar color" })).getAllByRole("radio")).toHaveLength(8);
     expect(screen.queryByLabelText("Workspace")).toBeNull();
-    expect(screen.getByRole("button", { name: "Team" }).textContent).toContain("Mains");
-    await user.click(screen.getByRole("radio", { name: "Flower" }));
+    expect(screen.queryByLabelText("Instructions")).toBeNull();
+    expect(screen.getByRole("button", { name: "Team" }).textContent).toContain("No team");
+    await user.click(shapes.getByRole("radio", { name: "Kite" }));
     await user.click(screen.getByRole("radio", { name: "Rose" }));
     await fillProfile(user);
     await user.click(screen.getByRole("button", { name: /Test model.*Medium/i }));
@@ -45,7 +49,7 @@ describe("assistant creation", () => {
     await user.click(screen.getByRole("menuitemradio", { name: /^high$/i }));
     await user.click(screen.getByRole("button", { name: "Create assistant" }));
     await waitFor(() => expect(created).toHaveBeenCalledWith("created-assistant"));
-    expect(mocks.create).toHaveBeenCalledWith({ accountId: "account", teamId: "mains", spaceId: "codex", name: "Trip planner", description: "Plan practical trips", instructions: "Ask about dates and budget.", model: "model", effort: "high", avatar: { shape: "flower", color: "rose" } });
+    expect(mocks.create).toHaveBeenCalledWith({ accountId: "account", teamId: null, spaceId: "codex", name: "Trip planner", profileSetup: true, model: "model", effort: "high", avatar: { shape: "kite", color: "rose" } });
   });
 
   it("creates the assistant in an existing selected team", async () => {
@@ -86,14 +90,16 @@ describe("assistant creation", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Team" }).textContent).toContain("Launch team"));
   });
 
-  it("lets a fresh account create its first assistant with the automatic Mains team", async () => {
+  it("starts profile setup on a fresh account without creating a team", async () => {
     mocks.teams = [];
     const user = userEvent.setup();
     render(<AssistantProfileForm accountId="account" onCreated={vi.fn()} onClose={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "Team" }).textContent).toContain("Mains");
+    expect(screen.queryByText("Advanced")).toBeNull();
+    expect(screen.getByRole("button", { name: "Team" }).textContent).toContain("No team");
+    expect(screen.getByRole("button", { name: "Assistant provider" }).textContent).toContain("Codex");
     await fillProfile(user);
     await user.click(screen.getByRole("button", { name: "Create assistant" }));
-    await waitFor(() => expect(mocks.create).toHaveBeenCalledOnce());
-    expect(mocks.create.mock.calls[0][0]).not.toHaveProperty("teamId");
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ teamId: null, profileSetup: true })));
+    expect(mocks.createTeam).not.toHaveBeenCalled();
   });
 });

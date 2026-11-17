@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { Assistant } from "@mains/contracts/assistants";
 import { Button, Text } from "@/components/ui";
-import { New } from "@/components/ui/icons";
+import { Plus } from "@/components/ui/icons";
 import NewButton from "@/components/layout/sidebar/new-button";
 import SearchBar from "@/components/layout/sidebar/search-bar";
 import { SidebarItemHoverCard } from "@/components/layout/sidebar/sidebar-item-hover-card";
@@ -32,15 +32,15 @@ export function AssistantsSidebar() {
   const assistants = overview?.assistants.filter(a => !a.isArchived && (!query || `${a.name} ${a.description}`.toLocaleLowerCase().includes(query))) ?? [];
   return (
     <div className="flex h-full flex-col text-primary-900 dark:text-primary-100">
-      <div className="relative mx-3 mb-2 mt-12 h-8 shrink-0 md:mt-2">
+      <div className="relative mx-3 mb-2.5 mt-12 h-8 shrink-0 md:mt-2">
         <div inert={searchExpanded} className={`pr-9 transition-opacity duration-150 motion-reduce:transition-none ${searchExpanded ? "opacity-0" : "opacity-100"}`}>
-          <NewButton title="assistant" icon={<New className="size-3.5" />} onClick={() => { const next = new URLSearchParams(params); next.delete("tab"); next.set("new", "1"); open(`/assistants?${next}`); }} />
+          <NewButton title="assistant" icon={<Plus className="size-3.5" />} onClick={() => { const next = new URLSearchParams(params); next.delete("tab"); next.set("new", "1"); open(`/assistants?${next}`); }} />
         </div>
         <div className={`absolute inset-y-0 right-0 flex items-center justify-end transition-[width] duration-200 ease-out motion-reduce:transition-none ${searchExpanded ? "w-full" : "w-8"}`}>
           <SearchBar isExpanded={searchExpanded} searchQuery={searchQuery} searchLabel="Search assistants" onToggle={() => setSearchExpanded(true)} onSearchChange={setSearchQuery} onClear={() => { setSearchQuery(""); setSearchExpanded(false); }} />
         </div>
       </div>
-      <nav aria-label="Assistants" className="scroll-bounce min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4 noscrollbar">
+      <nav aria-label="Assistants" className="scroll-bounce min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 pb-4 noscrollbar">
         {!!error && <div className="px-2 py-3 text-xs text-danger">{errorText(error)}<Button variant="ghost" onClick={() => void refetch()}>Retry</Button></div>}
         {!overview && !error && <p className="px-2 py-3 text-xs text-primary-500">Loading assistants…</p>}
         {overview && !assistants.length && <p className="px-2 py-3 text-xs text-primary-500">{query ? "No matching assistants" : "Your assistants will appear here."}</p>}
@@ -58,10 +58,13 @@ function AssistantItem({ assistant, working, active, open, onOpenDetails }: {
   return (
     <div>
       <SidebarItemHoverCard title={assistant.name} description={assistant.description} updatedAt={assistant.updatedAt} actions={[]}>
-        <div className={`group/assistant flex items-center gap-2 rounded-[10px] px-2.5 py-2 transition-colors ${active ? "glass-outline-soft glass-outline bg-primary/50 dark:bg-primary/5" : "hover:bg-primary/50 dark:hover:bg-primary/5"}`}>
+        <div className={`group/assistant flex items-center gap-2 rounded-2xl px-2.5 py-2.5 transition-colors ${active ? "glass-outline-soft glass-outline bg-primary/50 dark:bg-primary/5" : "hover:bg-primary/50 dark:hover:bg-primary/5"}`}>
           <AssistantMonogram avatar={assistant.avatar} name={assistant.name} providerId={assistant.providerId} working={working} onClick={onOpenDetails} />
           <Button variant="bare" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" aria-current={active ? "page" : undefined} onClick={() => open(assistantHref(assistant.id))}>
-            <span className="min-w-0 flex-1"><Text as="span" size="s" weight="medium" className="block truncate">{assistant.name}</Text><span className="block truncate text-xs text-primary-500">{assistant.description || assistant.spaceSnapshot.name}</span></span>
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <Text as="span" size="s" weight="medium" className="truncate">{assistant.name}</Text>
+              <span className="truncate text-xs text-primary-500">{assistant.description || assistant.spaceSnapshot.name}</span>
+            </span>
           </Button>
         </div>
       </SidebarItemHoverCard>

@@ -6,8 +6,64 @@ import { resolve } from "node:path";
 import * as schema from "../../db/schema";
 import { createAccount, createProvider, createWorkspace, createRun } from "../../../test/factories";
 import type { DatabaseInstance } from "../../db/types";
+import { migrateDatabase } from "../../db/migrate";
 
 describe("assistant execution migration", () => {
+    it("allows independent assistants while preserving existing memberships and dependent records", () => {
+        const sqlite = new Database(":memory:");
+        sqlite.pragma("foreign_keys = ON");
+        const dir = resolve(__dirname, "../../db/migrations");
+        const journal = JSON.parse(readFileSync(resolve(dir, "meta/_journal.json"), "utf8")) as { entries: { tag: string; when: number }[] };
+        try {
+            const migration = journal.entries.findIndex(entry => entry.tag === "0048_assistant_optional_teams");
+            expect(migration).toBeGreaterThan(0);
+            const previous = journal.entries.slice(0, migration);
+            for (const { tag } of previous) {
+                for (const sql of readFileSync(resolve(dir, `${tag}.sql`), "utf8").split("--> statement-breakpoint")) {
+                    if (sql.trim()) sqlite.exec(sql);
+                }
+            }
+            const db = drizzle(sqlite, { schema }) as DatabaseInstance;
+            createAccount(db);
+            createProvider(db, { id: "codex" });
+            sqlite.exec(`
+                INSERT INTO assistant_teams (id, account_id, name) VALUES ('team', 'default', 'Mains');
+                INSERT INTO assistants (id, account_id, team_id, name, instructions, space_id, provider_id, mode, model, effort, settings, space_snapshot)
+                    VALUES ('assistant', 'default', 'team', 'Release', 'Check builds', 'codex', 'codex', 'work', 'model', 'high', '{}', '{}');
+                INSERT INTO assistant_welcomes (assistant_id, run_id) VALUES ('assistant', 'welcome-run');
+                INSERT INTO assistant_memories (id, account_id, team_id, assistant_id, title, content, revision)
+                    VALUES ('memory', 'default', 'team', 'assistant', 'Preference', 'Check signing', 4);
+                INSERT INTO assistant_assignments (id, account_id, team_id, to_assistant_id, task_key, dedupe_key, title, prompt, status, result)
+                    VALUES ('task', 'default', 'team', 'assistant', 'request', 'request', 'Release', 'Check', 'completed', 'Signed');
+                INSERT INTO assistant_messages (id, assignment_id, kind, content, status)
+                    VALUES ('message', 'task', 'request', 'Check', 'delivered');
+                INSERT INTO pulses (id, account_id, owner_backend_id, mode, provider_id, model, title, prompt, frequency, hour, minute, timezone, assistant_id, last_assignment_id)
+                    VALUES ('routine', 'default', 'local-backend', 'work', 'codex', 'model', 'Check', 'Check', 'daily', 9, 0, 'Europe/Istanbul', 'assistant', 'task');
+                CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY, hash TEXT NOT NULL, created_at numeric);
+            `);
+            createRun(db, { id: "legacy-run", assistantId: "assistant", mode: "work" });
+            sqlite.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES ('previous', ?)").run(previous.at(-1)!.when);
+
+            migrateDatabase(db, sqlite, dir);
+
+            expect(sqlite.prepare("SELECT team_id FROM assistants WHERE id = 'assistant'").get()).toEqual({ team_id: "team" });
+            expect(sqlite.prepare("SELECT team_id, revision FROM assistant_memories WHERE id = 'memory'").get()).toEqual({ team_id: "team", revision: 4 });
+            expect(sqlite.prepare("SELECT team_id, result FROM assistant_assignments WHERE id = 'task'").get()).toEqual({ team_id: "team", result: "Signed" });
+            expect(sqlite.prepare("SELECT status FROM assistant_messages WHERE id = 'message'").get()).toEqual({ status: "delivered" });
+            expect(sqlite.prepare("SELECT run_id FROM assistant_welcomes WHERE assistant_id = 'assistant'").get()).toEqual({ run_id: "welcome-run" });
+            expect(sqlite.prepare("SELECT assistant_id FROM runs WHERE id = 'legacy-run'").get()).toEqual({ assistant_id: "assistant" });
+            expect(sqlite.prepare("SELECT assistant_id, last_assignment_id FROM pulses WHERE id = 'routine'").get()).toEqual({ assistant_id: "assistant", last_assignment_id: "task" });
+            sqlite.exec(`
+                UPDATE assistants SET team_id = NULL WHERE id = 'assistant';
+                UPDATE assistant_memories SET team_id = NULL WHERE id = 'memory';
+                INSERT INTO assistant_assignments (id, account_id, to_assistant_id, task_key, dedupe_key, title, prompt)
+                    VALUES ('independent-task', 'default', 'assistant', 'new-request', 'new-request', 'Release', 'Check');
+            `);
+            expect(() => sqlite.exec("UPDATE assistant_memories SET assistant_id = NULL WHERE id = 'memory'")).toThrow("check_assistant_memory_owner");
+            expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+            expect(sqlite.pragma("foreign_keys", { simple: true })).toBe(1);
+        } finally { sqlite.close(); }
+    });
     it("adds optional routine links without changing existing Pulse schedules or run history", () => {
         const sqlite = new Database(":memory:"); sqlite.pragma("foreign_keys = ON");
         const dir = resolve(__dirname, "../../db/migrations");

@@ -113,6 +113,7 @@ export { default as Fork } from "./fork";
 export { default as Stop } from "./stop";
 export { default as Play } from "./play";
 export { default as Bot } from "./bot";
+export { default as AssistantSteps } from "./assistant-steps";
 export { default as Test } from "./test";
 export { default as Bug } from "./bug";
 export { default as Sentry } from "./sentry";

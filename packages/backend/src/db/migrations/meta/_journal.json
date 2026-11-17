@@ -337,6 +337,13 @@
       "when": 1794777784919,
       "tag": "0047_assistant_routines",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1794950076682,
+      "tag": "0048_assistant_optional_teams",
+      "breakpoints": true
     }
   ]
 }

@@ -55,6 +55,44 @@ it("handles a single visible tool and the tools-hidden setting", () => {
   expect(view.queryByText("npm test")).toBeNull();
 });
 
+it("shows assistant messages as a conversation without technical groups or activity labels", () => {
+  const first: RunEvent = { id: "first", type: "artifact", content: "I will compare the options", timestamp: new Date(1500), metadata: { kind: "report", messagePhase: "commentary" } };
+  const last: RunEvent = { ...first, id: "last", content: "Here is your travel plan", timestamp: new Date(4000), metadata: { kind: "report", messagePhase: "final_answer" } };
+  const finished = { ...run, status: "succeeded" as const };
+  const currentEvents = [prompt, first, read, command, last];
+  const view = render(<WorkspaceEvents {...props} runs={[finished]} currentEvents={currentEvents} />);
+  expect(view.queryAllByRole("button").length).toBeGreaterThan(0);
+  view.rerender(<WorkspaceEvents {...props} appearance="assistant" runs={[finished]} currentEvents={currentEvents} />);
+  expect(view.getByText("I will compare the options")).toBeTruthy();
+  expect(view.getByText("Here is your travel plan")).toBeTruthy();
+  expect(view.queryByText("npm test")).toBeNull();
+  expect(view.queryByText(/tool calls?/i)).toBeNull();
+  expect(view.queryByText(/read a file/i)).toBeNull();
+  expect(view.queryByRole("button", { name: /messages?|tool calls?/i })).toBeNull();
+  expect(view.getByRole("button", { name: "Copy response" })).toBeTruthy();
+});
+
+it("shows the active assistant's avatar and live activity until a reply streams or input is required", () => {
+  const assistant = { id: "gezici", name: "Gezici", avatar: { shape: "kite", color: "lime" } } as const;
+  const assistantProps = { ...props, appearance: "assistant" as const, assistant };
+  const view = render(<WorkspaceEvents {...assistantProps} />);
+  const status = view.getByRole("status", { name: "Gezici is responding" });
+  const avatar = status.querySelector('[data-avatar-shape="kite"][data-animated="true"]');
+  expect(avatar?.querySelectorAll("[data-eye]")).toHaveLength(2);
+  expect(view.queryByText(/npm test/)).toBeNull();
+  const thought: RunEvent = { id: "thought", type: "artifact", content: "**Comparing travel options**", timestamp: new Date(3500), metadata: { kind: "thinking", streaming: true } };
+  view.rerender(<WorkspaceEvents {...assistantProps} currentEvents={[prompt, command, thought]} />);
+  expect(view.getByText("Comparing travel options").closest('[role="status"]')).toBe(status);
+  expect(status.querySelector('[data-avatar-shape="kite"]')).toBe(avatar);
+  view.rerender(<WorkspaceEvents {...assistantProps} currentEvents={[prompt, command, thought]} hasPendingUserInput />);
+  expect(view.queryByRole("status", { name: "Gezici is responding" })).toBeNull();
+  const reply: RunEvent = { id: "reply", type: "artifact", content: "Here is the plan", timestamp: new Date(4000), metadata: { kind: "report", streaming: true } };
+  view.rerender(<WorkspaceEvents {...assistantProps} currentEvents={[prompt, command, thought, reply]} />);
+  expect(view.getByText("Here is the plan")).toBeTruthy();
+  expect(view.queryByRole("status", { name: "Gezici is responding" })).toBeNull();
+  expect(view.queryByText("Comparing travel options")).toBeNull();
+});
+
 it("keeps an in-flight row running when thought and progress snapshots arrive", () => {
   const thought: RunEvent = { id: "thought", type: "artifact", content: "Checking exports", timestamp: new Date(4000), metadata: { kind: "thinking", streaming: true } };
   const progress: RunEvent = { ...thought, id: "progress", content: "Compiling", metadata: { kind: "tool_progress", streaming: true } };

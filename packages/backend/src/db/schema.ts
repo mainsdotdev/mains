@@ -1850,7 +1850,7 @@ export const assistantTeams = sqliteTable("assistant_teams", {
 export const assistants = sqliteTable("assistants", {
   id: text("id").primaryKey(),
   accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
-  teamId: text("team_id").notNull().references(() => assistantTeams.id, { onDelete: "restrict" }),
+  teamId: text("team_id").references(() => assistantTeams.id, { onDelete: "restrict" }),
   name: text("name").notNull(), description: text("description").notNull().default(""),
   instructions: text("instructions").notNull(),
   spaceId: text("space_id").notNull(), providerId: text("provider_id").notNull(),
@@ -1880,19 +1880,22 @@ export const assistantWelcomes = sqliteTable("assistant_welcomes", {
 export const assistantMemories = sqliteTable("assistant_memories", {
   id: text("id").primaryKey(),
   accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
-  teamId: text("team_id").notNull().references(() => assistantTeams.id, { onDelete: "cascade" }),
+  teamId: text("team_id").references(() => assistantTeams.id, { onDelete: "cascade" }),
   assistantId: text("assistant_id").references(() => assistants.id, { onDelete: "cascade" }),
   title: text("title").notNull(), content: text("content").notNull(),
   pinned: integer("pinned", { mode: "boolean" }).notNull().default(false), revision: integer("revision").notNull().default(1),
   sourceRunId: text("source_run_id"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
-}, (t) => [index("idx_assistant_memories_scope").on(t.accountId, t.teamId, t.assistantId)]);
+}, (t) => [
+  index("idx_assistant_memories_scope").on(t.accountId, t.teamId, t.assistantId),
+  check("check_assistant_memory_owner", sql`${t.teamId} IS NOT NULL OR ${t.assistantId} IS NOT NULL`),
+]);
 
 export const assistantAssignments = sqliteTable("assistant_assignments", {
   id: text("id").primaryKey(),
   accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
-  teamId: text("team_id").notNull().references(() => assistantTeams.id, { onDelete: "restrict" }),
+  teamId: text("team_id").references(() => assistantTeams.id, { onDelete: "restrict" }),
   fromAssistantId: text("from_assistant_id").references(() => assistants.id),
   toAssistantId: text("to_assistant_id").notNull().references(() => assistants.id),
   fromRunId: text("from_run_id"), parentId: text("parent_id"),

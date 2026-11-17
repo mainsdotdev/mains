@@ -9,7 +9,7 @@ import { assistantsService } from "./assistants.service";
 import { ASSISTANT_ROUTINE_TOOLS, assistantRoutineTool } from "./assistant-routines";
 import { askAssistantQuestion } from "./assistant-questions";
 import { object, onlyKeys, text, execution } from "./assistants.validation";
-import type { AssistantAssignment, AssistantMessageContext } from "@mains/contracts/assistants";
+import { canAccessAssistantAssignment, type AssistantAssignment, type AssistantMessageContext } from "@mains/contracts/assistants";
 let open = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let draining: Promise<void> | undefined;
@@ -52,6 +52,10 @@ function taskFor(accountId: string, id: string) {
     if (!task || task.accountId !== accountId)
         throw new Error("Assignment not found");
     return task;
+}
+function canAccessTask({ assistant, run }: Awaited<ReturnType<typeof requester>>, task: AssistantAssignment) {
+    return task.accountId === run.accountId &&
+        (task.fromRunId === run.id || (assistant !== null && canAccessAssistantAssignment(assistant, task)));
 }
 export const assistantWork = {
     guard() {
@@ -136,10 +140,11 @@ export const assistantWork = {
     async assign(input: unknown, requestingRunId?: string, assertCurrent: () => void = () => { }, source?: { contextId: number; promptId: string; context: AssistantMessageContext }): Promise<AssistantAssignment> {
         const value = object(input);
         onlyKeys(value, ["accountId", "toAssistantId", "taskKey", "title", "prompt", "execution"]);
-        const accountId = text(value.accountId, "Account"), target = assistantsService.require(text(value.toAssistantId, "Assistant"), accountId);
+        const accountId = text(value.accountId, "Account"), target = assistantsService.requireForWork(text(value.toAssistantId, "Assistant"), accountId);
         const taskKey = text(value.taskKey, "Task key", 200), title = text(value.title, "Title", 200), prompt = text(value.prompt, "Task", 24000);
         const caller = requestingRunId ? await requester(requestingRunId) : null;
-        if (caller && (caller.run.accountId !== accountId || caller.assistant && caller.assistant.teamId !== target.teamId))
+        if (caller && (caller.run.accountId !== accountId ||
+            (!source && caller.assistant && (!caller.assistant.teamId || caller.assistant.teamId !== target.teamId))))
             throw new Error("Delegate only to members of your own team");
         if (caller?.assistant?.id === target.id)
             throw new Error("Choose a teammate for delegation");
@@ -177,9 +182,9 @@ export const assistantWork = {
         return taskFor(accountId, id);
     },
     async readForRun(runId: string, taskId: string) {
-        const { assistant, run } = await requester(runId), task = taskFor(run.accountId, taskId);
-        if (assistant ? task.teamId !== assistant.teamId : task.fromRunId !== runId)
-            throw new Error("Assignment does not belong to this team");
+        const caller = await requester(runId), task = taskFor(caller.run.accountId, taskId);
+        if (!canAccessTask(caller, task))
+            throw new Error("Assignment is unavailable in this conversation");
         return task;
     },
     async report(runId: string, input: unknown) {
@@ -216,8 +221,8 @@ export const assistantWork = {
         const task = taskFor(accountId, id);
         if (runId) {
             const caller = await requester(runId);
-            if (caller.run.accountId !== accountId || (caller.assistant ? caller.assistant.teamId !== task.teamId : task.fromRunId !== runId))
-                throw new Error("Assignment does not belong to this team");
+            if (!canAccessTask(caller, task))
+                throw new Error("Assignment is unavailable in this conversation");
         }
         if (terminal(task.status))
             throw new Error("Start a new assignment for completed or canceled work");
@@ -250,7 +255,7 @@ export const assistantWork = {
     },
     async sendChat(accountId: string, assistantId: string, content: string, requestId: string, runId?: string, assertCurrent: () => void = () => { }, context: AssistantMessageContext = {}, requestedExecution?: unknown) {
         const { initialContext, ...promptContext } = context;
-        const assistant = assistantsService.require(assistantId, accountId);
+        const assistant = assistantsService.requireForWork(assistantId, accountId);
         const message = text(content, "Message", 24000), key = text(requestId, "Message key", 100);
         const { runsService } = await import("../runs");
         assertCurrent();
@@ -425,10 +430,13 @@ export const assistantWork = {
         const assertCurrent = this.guard();
         const publicTools = ["ListAssistants", "ListAssistantTasks", "AssignAssistantTask", "ReadAssistantTask", "SendAssistantTaskMessage"];
         if (publicTools.includes(name)) {
-            const { run, assistant } = await requester(runId), args = object(input);
+            const caller = await requester(runId), { run, assistant } = caller, args = object(input);
             assertCurrent();
-            if (name === "ListAssistants") return assistantsRepo.list(run.accountId).filter(a => !a.isArchived && (!assistant || a.teamId === assistant.teamId)).map(a => ({ id: a.id, name: a.name, role: a.description, providerId: a.providerId }));
-            if (name === "ListAssistantTasks") return assistantsRepo.assignments(run.accountId).filter(t => assistant ? t.teamId === assistant.teamId : t.fromRunId === runId).slice(0, 50);
+            if (name === "ListAssistants") {
+                if (assistant && !assistant.teamId) return [];
+                return assistantsRepo.list(run.accountId).filter(a => !a.isArchived && (!assistant || a.teamId === assistant.teamId)).map(a => ({ id: a.id, name: a.name, role: a.description, providerId: a.providerId }));
+            }
+            if (name === "ListAssistantTasks") return assistantsRepo.assignments(run.accountId).filter(task => canAccessTask(caller, task)).slice(0, 50);
             if (name === "AssignAssistantTask") return this.assign({ ...args, accountId: run.accountId }, runId, assertCurrent);
             if (name === "ReadAssistantTask") return this.readForRun(runId, text(args.assignmentId, "Assignment"));
             return this.followup(run.accountId, text(args.assignmentId, "Assignment"), text(args.messageId, "Message key"), text(args.message, "Message", 24000), runId);

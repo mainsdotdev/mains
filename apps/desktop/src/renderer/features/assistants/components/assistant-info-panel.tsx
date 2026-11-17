@@ -1,5 +1,5 @@
-import { useLayoutEffect, useRef, type CSSProperties } from "react";
-import type { Assistant, AssistantConversation, AssistantOverview } from "@mains/contracts/assistants";
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { canAccessAssistantAssignment, type Assistant, type AssistantConversation, type AssistantOverview } from "@mains/contracts/assistants";
 import { Button, Label, Select, SegmentedTabs } from "@/components/ui";
 import { Close } from "@/components/ui/icons";
 import { AgentMarkdown } from "@/components/agent-markdown";
@@ -17,20 +17,32 @@ import { AssistantMemoryPanel } from "./assistant-memory";
 import { AssistantAssignments } from "./assistant-assignments";
 import { AssistantChatsPanel } from "./assistant-chats-panel";
 import { AssistantRoutines } from "./assistant-routines";
+import { AssistantTeamEditor } from "./assistant-team-editor";
 import { errorText, isAssistantWorking } from "../lib/assistant-ui";
 
 function AssistantTeamSelect({ assistant, teams, disabled }: { assistant: Assistant; teams: AssistantOverview["teams"]; disabled: boolean }) {
   const [changeTeam, { isLoading, error }] = useChangeAssistantTeamMutation();
+  const [creating, setCreating] = useState(false);
   const id = `assistant-${assistant.id}-team`;
+  const options = [{ value: "", label: "No team" }, ...teams.filter(team => team.accountId === assistant.accountId).map(team => ({ value: team.id, label: team.name }))];
+  const unavailable = disabled || isLoading || assistant.isArchived;
+  function selectTeam(teamId: string | null) {
+    if (teamId !== assistant.teamId) void changeTeam({ accountId: assistant.accountId, id: assistant.id, teamId });
+  }
   return <div className="rounded-2xl glass-card px-4 py-3.5">
-    <div className="flex items-center justify-between gap-4">
+    <div className="flex items-center justify-between gap-3">
       <Label id={`${id}-label`} as="span" className="shrink-0" size="xs" tone="secondary">Team</Label>
-      <div className="min-w-0 max-w-[75%]">
-        <Select id={id} aria-labelledby={`${id}-label`} size="sm" value={assistant.teamId} disabled={disabled || isLoading || assistant.isArchived}
-          options={teams.filter(team => team.accountId === assistant.accountId).map(team => ({ value: team.id, label: team.name }))}
-          onChange={teamId => { if (teamId !== assistant.teamId) void changeTeam({ accountId: assistant.accountId, id: assistant.id, teamId }); }} />
+      <div className="flex min-w-0 items-stretch gap-2">
+        <div className="min-w-0">
+          <Select id={id} aria-labelledby={`${id}-label`} size="sm" value={assistant.teamId ?? ""} disabled={unavailable || creating}
+            options={options} onChange={teamId => selectTeam(teamId || null)} />
+        </div>
+        <Button className="inline-flex shrink-0 whitespace-nowrap" type="button" variant="primary" disabled={unavailable || creating}
+          aria-expanded={creating} onClick={() => setCreating(true)}>New team</Button>
       </div>
     </div>
+    {creating && <div className="mt-3"><AssistantTeamEditor accountId={assistant.accountId} onCancel={() => setCreating(false)}
+      onCreated={team => { setCreating(false); selectTeam(team.id); }} /></div>}
     {isLoading && <p role="status" className="mt-3 text-xs text-primary-600 dark:text-primary-300">Changing team…</p>}
     {!!error && <p role="alert" className="mt-3 text-sm text-danger">{errorText(error)}</p>}
   </div>;
@@ -60,15 +72,15 @@ export function AssistantInfoPanel({ assistant, overview, chats, selectedRunId, 
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => { if (isOpen && isVisible) closeRef.current?.focus({ preventScroll: true }); }, [isOpen, isVisible]);
-  const tasks = overview.assignments.filter(task => task.teamId === assistant.teamId);
+  const tasks = overview.assignments.filter(task => canAccessAssistantAssignment(assistant, task));
   const activeTasks = tasks.filter(task => !["completed", "failed", "canceled"].includes(task.status)).length;
   if (!isVisible) return null;
   // Size the canvas against the route, so clipping the opening panel never reflows its text.
-  return <div ref={panelRef} data-assistant-info-panel="" className="absolute inset-y-0 right-0 z-(--z-panel) shrink-0 overflow-hidden transition-[width] duration-150 ease-out [--assistant-info-width:100cqw] motion-reduce:transition-none md:relative md:inset-auto md:[--assistant-info-width:min(var(--assistant-info-preferred-width),65cqw)]"
-    style={{ "--assistant-info-preferred-width": `${width}px`, width: isAnimatedIn ? "var(--assistant-info-width)" : "0px" } as CSSProperties}>
+  return <div ref={panelRef} data-assistant-info-panel="" className="absolute inset-y-0 right-0 z-(--z-panel) shrink-0 overflow-hidden transition-[width] duration-150 ease-out [--assistant-info-gap:0px] [--assistant-info-width:100cqw] motion-reduce:transition-none md:relative md:inset-auto md:[--assistant-info-gap:calc(var(--spacing)*1.25)] md:[--assistant-info-width:min(var(--assistant-info-preferred-width),65cqw)]"
+    style={{ "--assistant-info-preferred-width": `${width}px`, width: isAnimatedIn ? "calc(var(--assistant-info-width) + var(--assistant-info-gap))" : "0px" } as CSSProperties}>
     <aside id="assistant-info-panel" aria-label={`About ${assistant.name}`} aria-hidden={!isOpen || undefined} inert={!isOpen}
       onKeyDown={event => { if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); onClose(); } }}
-      className={`flex h-full w-(--assistant-info-width) min-w-0 flex-col overflow-hidden border-l border-primary-200/70 bg-primary text-primary-900 transition-[translate,opacity] duration-150 ease-out motion-reduce:translate-x-0 motion-reduce:transition-none dark:border-primary-800/70 dark:bg-primary-950 dark:text-primary-100 ${isAnimatedIn ? "translate-x-0 opacity-100" : "translate-x-6 opacity-0"}`}>
+      className={`relative ms-(--assistant-info-gap) flex h-full w-(--assistant-info-width) min-w-0 flex-col overflow-hidden rounded-2xl bg-primary text-primary-900 transition-[translate,opacity] duration-150 ease-out motion-reduce:translate-x-0 motion-reduce:transition-none dark:bg-primary-950 dark:text-primary-100 ${isAnimatedIn ? "translate-x-0 opacity-100" : "translate-x-6 opacity-0"}`}>
       <ResizeHandle edge="left" value={width} min={ASSISTANT_INFO_PANEL_WIDTH_MIN} max={ASSISTANT_INFO_PANEL_WIDTH_MAX}
         computeWidth={clientX => (panelRef.current?.getBoundingClientRect().right ?? clientX + width) - clientX}
         onPreview={next => panelRef.current?.style.setProperty("--assistant-info-preferred-width", `${next}px`)}

@@ -1,13 +1,16 @@
 import type { ModeId } from "./modes";
 import type { ConversationSettings } from "./run-settings";
-export const ASSISTANT_AVATAR_SHAPES = ["sphere", "cube", "flower", "cross", "steps", "weave"] as const;
+export const ASSISTANT_AVATAR_SHAPES = ["steps", "sphere", "cube", "flower", "weave", "lantern", "arch", "kite", "swallow"] as const;
 export const ASSISTANT_AVATAR_COLORS = ["coral", "amber", "lime", "mint", "cyan", "blue", "violet", "rose"] as const;
 export interface AssistantAvatar { shape: typeof ASSISTANT_AVATAR_SHAPES[number]; color: typeof ASSISTANT_AVATAR_COLORS[number] }
 export const DEFAULT_ASSISTANT_AVATAR: AssistantAvatar = { shape: "sphere", color: "blue" };
-/** Stored V1 avatars and older backends retain their selected geometry/color. */
+const LEGACY_AVATAR_SHAPES = new Map<string, AssistantAvatar["shape"]>([
+    ["circle", "sphere"], ["square", "cube"], ["cross", "arch"],
+]);
+/** Normalize retired presets from saved profiles and older clients. */
 export function normalizeAssistantAvatar(value: unknown): AssistantAvatar {
     const stored = value && typeof value === "object" ? value as Record<string, unknown> : {};
-    const shape = stored.shape === "square" ? "cube" : stored.shape === "circle" ? "sphere" : stored.shape;
+    const shape = typeof stored.shape === "string" ? LEGACY_AVATAR_SHAPES.get(stored.shape) ?? stored.shape : undefined;
     return {
         shape: ASSISTANT_AVATAR_SHAPES.includes(shape as AssistantAvatar["shape"]) ? shape as AssistantAvatar["shape"] : DEFAULT_ASSISTANT_AVATAR.shape,
         color: ASSISTANT_AVATAR_COLORS.includes(stored.color as AssistantAvatar["color"]) ? stored.color as AssistantAvatar["color"] : DEFAULT_ASSISTANT_AVATAR.color,
@@ -23,7 +26,7 @@ export interface AssistantTeam {
 export interface Assistant {
     id: string;
     accountId: string;
-    teamId: string;
+    teamId: string | null;
     name: string;
     description: string;
     instructions: string;
@@ -49,22 +52,23 @@ export interface CreateAssistant {
     accountId: string;
     name: string;
     description?: string;
-    instructions: string;
+    instructions?: string;
+    profileSetup?: boolean;
     spaceId: string;
     model: string;
     effort: string;
-    teamId?: string;
+    teamId?: string | null;
     avatar?: AssistantAvatar;
 }
 export interface ChangeAssistantTeam {
     accountId: string;
     id: string;
-    teamId: string;
+    teamId: string | null;
 }
 export interface AssistantMemory {
     id: string;
     accountId: string;
-    teamId: string;
+    teamId: string | null;
     assistantId: string | null;
     title: string;
     content: string;
@@ -76,7 +80,7 @@ export interface AssistantMemory {
 }
 export interface SaveAssistantMemory {
     accountId: string;
-    teamId: string;
+    teamId: string | null;
     assistantId?: string | null;
     id?: string;
     title: string;
@@ -109,7 +113,7 @@ export interface AssistantTaskActivity {
 export interface AssistantAssignment {
     id: string;
     accountId: string;
-    teamId: string;
+    teamId: string | null;
     fromAssistantId: string | null;
     toAssistantId: string;
     fromRunId: string | null;
@@ -126,6 +130,13 @@ export interface AssistantAssignment {
     createdAt: Date;
     updatedAt: Date;
     activity?: AssistantTaskActivity[];
+}
+export function canAccessAssistantAssignment(
+    assistant: Pick<Assistant, "id" | "accountId" | "teamId">,
+    task: Pick<AssistantAssignment, "accountId" | "teamId" | "toAssistantId">,
+): boolean {
+    return assistant.accountId === task.accountId &&
+        (task.teamId === null ? task.toAssistantId === assistant.id : task.teamId === assistant.teamId);
 }
 export interface AssignAssistantTask {
     accountId: string;
@@ -175,7 +186,21 @@ export interface SendAssistantMessage {
     execution?: AssistantExecution;
 }
 
+export interface AssistantProfileDraft {
+    description: string;
+    instructions: string;
+}
+export interface AssistantProfileSetup {
+    turns: Array<{ question: string; answer: string }>;
+    draft?: AssistantProfileDraft;
+    saved?: true;
+}
+export type AssistantProfileSetupAction =
+    | { action: "answer"; step: number; answer: string }
+    | { action: "save"; profile: AssistantProfileDraft };
+
 export interface AssistantWelcomeQuestion {
+    profileSetup?: AssistantProfileSetup;
     header: string;
     question: string;
     options: Array<{ label: string; description: string }>;

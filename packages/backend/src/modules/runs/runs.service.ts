@@ -2135,7 +2135,7 @@ export const runsService = {
    * The session owns the lifecycle from here on; this method returns immediately.
    */
   async executeRun(payload: StartRunPayload): Promise<StartRunResponse> {
-    const assistant = payload.assistantId ? assistantsService.require(payload.assistantId, payload.accountId) : null;
+    const assistant = payload.assistantId ? assistantsService.requireForWork(payload.assistantId, payload.accountId) : null;
     if (assistant) payload = { ...payload, providerId: assistant.providerId, spaceId: assistant.spaceId, mode: payload.mode ?? "work", model: assistant.model, collectionId: undefined, conversationSettings: assistant.conversationSettings, systemPrompt: undefined, configSnapshot: { ...assistant.conversationSettings.config, conversationSettings: assistant.conversationSettings }, toolPolicySnapshot: undefined };
     // Before anything is written: a refused attachment must leave no run behind.
     const uploads = sanitizeRunAttachments(
@@ -2272,7 +2272,7 @@ export const runsService = {
       if (assistant) {
         const welcome = assistantsService.welcome(assistant.id, payload.accountId);
         if (welcome?.runId === runId && welcome.question && welcome.answer !== null) {
-          await runsRepo.insertArtifact({ runId, kind: "report", content: welcome.question.question + (welcome.wasSkipped ? `\n\n${welcome.question.idleMessage}` : ""),
+          await runsRepo.insertArtifact({ runId, kind: "report", content: welcome.question.profileSetup?.saved ? welcome.question.idleMessage : welcome.question.question + (welcome.wasSkipped ? `\n\n${welcome.question.idleMessage}` : ""),
             metadata: { source: "assistant_welcome", question: welcome.question, skipped: welcome.wasSkipped } });
         }
       }

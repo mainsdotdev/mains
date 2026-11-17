@@ -14,19 +14,20 @@ export function AssistantMemoryPanel({ assistant, memories }: {
     const [id, setId] = useState("");
     const [title, setTitle] = useState("");
     const [content, setContent] = useState("");
-    const [scope, setScope] = useState("team");
+    const [scope, setScope] = useState("assistant");
     const [pinned, setPinned] = useState(false);
     const [failure, setFailure] = useState("");
     const [save, saving] = useSaveAssistantMemoryMutation();
     const [remove, removing] = useRemoveAssistantMemoryMutation();
-    const visible = memories.filter(m => m.teamId === assistant.teamId && (!m.assistantId || m.assistantId === assistant.id));
+    const visible = memories.filter(m => m.accountId === assistant.accountId &&
+        (m.assistantId ? m.assistantId === assistant.id : m.teamId !== null && m.teamId === assistant.teamId));
     const open = (memory: AssistantMemory | null) => {
         setEditing(memory);
         setCreating(!memory);
         setId(memory?.id ?? crypto.randomUUID());
         setTitle(memory?.title ?? "");
         setContent(memory?.content ?? "");
-        setScope(memory?.assistantId ? "assistant" : "team");
+        setScope(!assistant.teamId || memory?.assistantId ? "assistant" : "team");
         setPinned(memory?.pinned ?? false);
         setFailure("");
     };
@@ -34,7 +35,7 @@ export function AssistantMemoryPanel({ assistant, memories }: {
         event.preventDefault();
         setFailure("");
         try {
-            await save({ id, accountId: assistant.accountId, teamId: assistant.teamId, assistantId: scope === "team" ? null : assistant.id, title, content, pinned,
+            await save({ id, accountId: assistant.accountId, teamId: assistant.teamId, assistantId: assistant.teamId && scope === "team" ? null : assistant.id, title, content, pinned,
                 ...(editing ? { expectedRevision: editing.revision } : {}),
             }).unwrap();
             setCreating(false);
@@ -55,8 +56,8 @@ export function AssistantMemoryPanel({ assistant, memories }: {
     }
     return <section className="space-y-5" aria-label="Assistant memory">
     <div>
-      <h2 className="text-lg font-medium">What the team knows</h2>
-      <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-300">Shared decisions and this assistant’s private notes, with their sources.</p>
+      <h2 className="text-lg font-medium">{assistant.teamId ? "What the team knows" : `What ${assistant.name} remembers`}</h2>
+      {assistant.teamId && <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-300">Shared decisions and this assistant’s private notes, with their sources.</p>}
       <Button variant="primary" className="mt-4 inline-flex whitespace-nowrap" onClick={() => open(null)}>Add memory</Button>
     </div>
     {(creating || editing) && <form onSubmit={submit} className="glass-card space-y-5 rounded-2xl p-5">
@@ -68,11 +69,11 @@ export function AssistantMemoryPanel({ assistant, memories }: {
         <Label as="span">Memory</Label>
         <Textarea className="min-h-28 rounded-2xl" required maxLength={6000} value={content} onChange={e => setContent(e.target.value)} />
       </label>
-      <div className="flex flex-col gap-2.5">
+      {assistant.teamId && <div className="flex flex-col gap-2.5">
         <Label as="span" id={visibilityLabelId}>Visible to</Label>
         <Select aria-labelledby={visibilityLabelId} size="sm" value={scope} disabled={!!editing} onChange={setScope}
           options={[{ value: "team", label: "Whole team" }, { value: "assistant", label: `Only ${assistant.name}` }]} />
-      </div>
+      </div>}
       <label className="flex items-center gap-2.5">
         <Checkbox checked={pinned} onChange={setPinned} />
         <Label as="span">Keep in context</Label>
@@ -80,7 +81,7 @@ export function AssistantMemoryPanel({ assistant, memories }: {
       <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => { setCreating(false); setEditing(null); }}>Cancel</Button><Button type="submit" variant="submit" isLoading={saving.isLoading}>Save memory</Button></div>
     </form>}
     {failure && <p role="alert" className="text-sm text-danger">{failure}</p>}
-    {!visible.length && !creating && <div className="rounded-2xl border border-dashed border-primary-300 px-6 py-12 text-center text-sm text-primary-500 dark:border-primary-700">Save the first decision you want this team to remember.</div>}
+    {!visible.length && !creating && <div className="rounded-2xl border border-dashed border-primary-300 px-6 py-12 text-center text-sm text-primary-500 dark:border-primary-700">Save something you want {assistant.teamId ? "this team" : assistant.name} to remember.</div>}
     {visible.map(memory => <article key={memory.id} className="glass-card rounded-2xl p-5">
       <div className="mb-3 flex items-start justify-between gap-4"><div><div className="mb-1 text-xs text-primary-500">{memory.assistantId ? "Private note" : "Team memory"}{memory.pinned ? " · Kept in context" : ""}</div><h3 className="font-medium">{memory.title}</h3></div><div className="flex gap-1"><Button variant="ghost" onClick={() => open(memory)}>Edit</Button><Button variant="ghost" disabled={removing.isLoading} onClick={() => void forget(memory)}>Remove</Button></div></div>
       <AgentMarkdown>{memory.content}</AgentMarkdown>

@@ -37,6 +37,9 @@ let teamId: string;
 async function makeAssistant(name: string, providerId: "codex" | "claude_code" = "codex") {
     return assistantsService.create({ accountId: "default", teamId, name, description: `${name} responsibility`, instructions: `Own ${name}.`, spaceId: providerId, model: "test-model", effort: "high" });
 }
+function makeIndependentAssistant(name: string) {
+    return assistantsService.create({ accountId: "default", name, instructions: `Own ${name}.`, spaceId: "codex", model: "test-model", effort: "high" });
+}
 async function settled(runId: string) {
     await vi.waitFor(async () => expect((await runsService.getRunById(runId))?.status).toBe("succeeded"));
 }
@@ -292,8 +295,8 @@ describe("conversational assistant routines", () => {
     const conversation = (assistant: Assistant, overrides: Record<string, unknown> = {}) => createRun(db, { assistantId: assistant.id, providerId: assistant.providerId, mode: "work", status: "succeeded", ...overrides });
     beforeEach(() => { pulseService.start(); assistantWork.start(); });
 
-    it("creates a routine through the real Codex tool broker, deduplicates retries after restart, and runs it through Pulse", async () => {
-        const assistant = await makeAssistant("Release"), source = conversation(assistant);
+    it("creates a teamless routine through the Codex tool broker, deduplicates retries, and runs it through Pulse", async () => {
+        const assistant = await makeIndependentAssistant("Release"), source = conversation(assistant);
         const call = async () => {
             const broker = createCodexRequestBroker({ getRunState: () => ({ mode: "work", assistantId: assistant.id, fileChangeItems: new Map() }),
                 getMainsToolContext: () => ({ runId: source.id, workspaceId: null, rootPath: null }) });
@@ -311,6 +314,7 @@ describe("conversational assistant routines", () => {
         expect(pulseService.getAll()).toHaveLength(1);
         const fired = await pulseService.runNow(saved.id);
         const task = assistantsRepo.assignment(fired!.lastAssignmentId!)!;
+        expect(task).toMatchObject({ teamId: null, toAssistantId: assistant.id });
         await settled(task.workerRunId!);
         await assistantWork.tool(task.workerRunId!, "ReportAssistantTask", { assignmentId: task.id, status: "completed", result: "Checklist reviewed", evidence: ["checklist.log"] });
         expect(await assistantWork.tool(source.id, "ReadAssistantRoutine", { routineId: saved.id })).toMatchObject({ lastAssignmentStatus: "completed", lastRunId: task.workerRunId });
@@ -406,15 +410,19 @@ describe("assistant profiles and shared knowledge", () => {
         expect(chats[1]).toMatchObject({ workspaceId: null, workspaceName: null, projectName: null, mode: "work" });
         expect(() => assistantsService.conversations(assistant.id, "foreign-account")).toThrow("unavailable");
     });
-    it("persists new particle colors and reads legacy avatar shapes without rewriting stored settings", async () => {
-        const assistant = await assistantsService.create({ accountId: "default", name: "Particle assistant", instructions: "Help with releases", spaceId: "codex", model: "test-model", effort: "high", avatar: { shape: "cube", color: "rose" } });
-        expect(assistant.avatar).toEqual({ shape: "cube", color: "rose" });
-        for (const [legacy, current] of [["circle", "sphere"], ["square", "cube"]]) {
+    it("saves mosaic avatars and reads legacy shapes without rewriting stored settings", async () => {
+        const input = { accountId: "default", teamId, name: "Release assistant", instructions: "Help with releases", spaceId: "codex", model: "test-model", effort: "high" };
+        const assistant = await assistantsService.create({ ...input, avatar: { shape: "kite", color: "rose" } });
+        expect(assistant.avatar).toEqual({ shape: "kite", color: "rose" });
+        expect(assistantsService.get(assistant.id, "default")?.avatar).toEqual(assistant.avatar);
+        const legacyClient = await assistantsService.create({ ...input, name: "Legacy client", avatar: { shape: "cross", color: "amber" } });
+        expect(legacyClient.avatar).toEqual({ shape: "arch", color: "amber" });
+        for (const [legacy, current] of [["circle", "sphere"], ["square", "cube"], ["cross", "arch"]]) {
             db.update(assistantProfiles).set({ avatar: JSON.stringify({ shape: legacy, color: "mint" }) }).where(eq(assistantProfiles.id, assistant.id)).run();
             expect(assistantsService.get(assistant.id, "default")?.avatar).toEqual({ shape: current, color: "mint" });
             expect(JSON.parse(db.select().from(assistantProfiles).where(eq(assistantProfiles.id, assistant.id)).get()!.avatar).shape).toBe(legacy);
         }
-        await expect(assistantsService.create({ accountId: "default", name: "Invalid", instructions: "Help", spaceId: "codex", model: "test-model", effort: "high", avatar: { shape: "cube", color: "unknown" } })).rejects.toThrow("available avatar");
+        await expect(assistantsService.create({ ...input, name: "Invalid", avatar: { shape: "cube", color: "unknown" } })).rejects.toThrow("available avatar");
     });
     it("projects direct and delegated running conversations into account-scoped avatar activity", async () => {
         const assistant = await makeAssistant("Coordinator"), idle = await makeAssistant("Idle");
@@ -493,6 +501,36 @@ describe("assistant profiles and shared knowledge", () => {
         createAccount(db, { id: "other" });
         expect(assistantsService.get(a.id, "other")).toBeNull();
         expect(() => assistantsService.removeMemory("other", row.id, next.revision)).toThrow("not found");
+    });
+    it("keeps independent assistants isolated and carries private memory through joining and leaving", async () => {
+        const assistant = await makeIndependentAssistant("Build"), other = await makeIndependentAssistant("Website");
+        const chat = createRun(db, { assistantId: assistant.id, status: "succeeded" });
+        const otherChat = createRun(db, { assistantId: other.id, status: "succeeded" });
+        const sharedNote = assistantsService.saveMemory({ accountId: "default", teamId, title: "Release policy", content: "Use the internal track.", pinned: true });
+        assistantWork.start();
+        const privateNote = await assistantWork.tool(chat.id, "SaveAssistantMemory", { scope: "assistant", title: "Preference", content: "Check the build logs.", pinned: true }) as { id: string };
+        await expect(assistantWork.tool(chat.id, "SaveAssistantMemory", { scope: "team", title: "Preference", content: "Check the build logs." })).rejects.toThrow("Join a team");
+        expect(assistantsService.overview("default").memories).toContainEqual(expect.objectContaining({ id: privateNote.id, teamId: null, assistantId: assistant.id }));
+        expect(await assistantWork.tool(otherChat.id, "RecallAssistantMemory", {})).toEqual([]);
+        expect(assistantsService.context(assistant.id, "default", "")).not.toContain("Use the internal track.");
+        expect(assistantsService.context(assistant.id, "default", "")).not.toContain("Website");
+        expect(await assistantWork.tool(chat.id, "ListAssistants", {})).toEqual([]);
+        const request = { toAssistantId: other.id, taskKey: "task", title: "Check", prompt: "Check the build." };
+        await expect(assistantWork.tool(chat.id, "AssignAssistantTask", request)).rejects.toThrow("Delegate only");
+        const task = await assistantWork.assign({ ...request, accountId: "default" });
+        expect(task.teamId).toBeNull();
+        await expect(assistantWork.tool(chat.id, "ReadAssistantTask", { assignmentId: task.id })).rejects.toThrow("unavailable");
+        await expect(assistantWork.tool(chat.id, "SendAssistantTaskMessage", { assignmentId: task.id, messageId: "foreign", message: "Different task" })).rejects.toThrow("unavailable");
+        expect(await assistantWork.tool(chat.id, "ListAssistantTasks", {})).toEqual([]);
+        expect(await assistantWork.tool(otherChat.id, "ListAssistantTasks", {})).toContainEqual(expect.objectContaining({ id: task.id }));
+
+        const membership = { accountId: "default", id: assistant.id };
+        expect(assistantsService.changeTeam({ ...membership, teamId }).teamId).toBe(teamId);
+        expect(assistantsService.memories(assistant.id, "default").map(note => note.id)).toEqual(expect.arrayContaining([privateNote.id, sharedNote.id]));
+        expect(assistantsService.changeTeam({ ...membership, teamId: null }).teamId).toBeNull();
+        expect(assistantsService.memories(assistant.id, "default").map(note => note.id)).toEqual([privateNote.id]);
+        expect(assistantsRepo.memory(sharedNote.id)?.teamId).toBe(teamId);
+        expect(assistantsService.conversations(assistant.id, "default").map(run => run.id)).toContain(chat.id);
     });
     it("changes team with private notes while retaining shared knowledge, history and profile settings", async () => {
         const assistant = await makeAssistant("Build"), teammate = await makeAssistant("Website");
@@ -783,6 +821,43 @@ describe("one-time assistant welcome", () => {
         await vi.waitFor(() => expect(assistantsService.welcome(assistant.id, "default")?.state).toBe("ready"));
         return { assistant, generate, welcome: assistantsService.welcome(assistant.id, "default")! };
     }
+    it("resumes profile setup, saves edited instructions, then starts real work in the reserved conversation", async () => {
+        const generate = vi.fn()
+            .mockResolvedValueOnce(JSON.stringify({ question: "Which release checks should I run?" }))
+            .mockResolvedValueOnce(JSON.stringify({ description: "Check releases", instructions: "Check builds and signing." }));
+        driver.driver.generateText = generate;
+        vi.mocked(createWorkAdapter).mockReturnValue(createWorkRunAdapter(driver.driver));
+        const assistant = await assistantsService.create({ accountId: "default", teamId: null, name: "Release", spaceId: "codex", model: "test-model", effort: "high", profileSetup: true });
+        expect(assistant.teamId).toBeNull();
+        const read = () => assistantsService.welcome(assistant.id, "default")!;
+        const { runId } = read();
+        assistantWork.start();
+        expect(read().state).toBe("ready");
+        expect(generate).not.toHaveBeenCalled();
+        await expect(assistantWork.sendChat("default", assistant.id, "Start work", "early")).rejects.toThrow("Finish setting up");
+        const first = { action: "answer", step: 0, answer: "Help with releases" };
+        assistantWelcome.setupProfile("default", assistant.id, first);
+        await vi.waitFor(() => expect(read().question?.question).toBe("Which release checks should I run?"));
+        assistantWelcome.setupProfile("default", assistant.id, first);
+        expect(generate).toHaveBeenCalledTimes(1);
+        await assistantWork.stop();
+        assistantWork.start();
+        expect(read().question?.profileSetup?.turns).toHaveLength(1);
+        assistantWelcome.setupProfile("default", assistant.id, { action: "answer", step: 1, answer: "Builds and signing" });
+        await vi.waitFor(() => expect(read().question?.profileSetup?.draft?.description).toBe("Check releases"));
+        expect(generate).toHaveBeenLastCalledWith(expect.stringContaining("Builds and signing"), expect.objectContaining({ isolated: true, model: "test-model", effort: "high" }));
+        expect(driver.calls.createSession).toHaveLength(0);
+        const profile = { description: "Release checks", instructions: "Check signing. Ask before uploading." };
+        assistantWelcome.setupProfile("default", assistant.id, { action: "save", profile });
+        assistantWelcome.setupProfile("default", assistant.id, { action: "save", profile });
+        expect(assistantsService.require(assistant.id, "default")).toMatchObject(profile);
+        expect(read()).toMatchObject({ state: "skipped", runId, question: { profileSetup: { saved: true } } });
+        expect(driver.calls.createSession).toHaveLength(0);
+        expect((await assistantWork.sendChat("default", assistant.id, "Check this build", `welcome-${assistant.id}`, runId)).runId).toBe(runId);
+        await settled(runId);
+        expect(driver.calls.createSession).toHaveLength(1);
+    });
+
     it("generates one role-based question with frozen model/effort without starting a native run", async () => {
         const { assistant, generate, welcome } = await ready();
         expect(driver.calls.createSession).toHaveLength(0);
@@ -981,9 +1056,15 @@ describe("task-local execution and Code assistant calls", () => {
         expect(assistantsService.assignment("default", task.id)?.activity?.find(item => item.kind === "result")?.content).toBe("Readiness check complete: NOT READY");
         await settled(source.id);
     });
-    it("creates a Work assistant from a Code Space without a team or workspace choice and saves its avatar", async () => {
+    it("stores missing team membership without creating a default team", async () => {
+        const assistant = await makeIndependentAssistant("Trip planner");
+        const overview = assistantsService.overview("default");
+        expect(overview.teams.map(team => team.id)).toEqual([teamId]);
+        expect(overview.assistants).toEqual([expect.objectContaining({ id: assistant.id, teamId: null })]);
+    });
+    it("creates a Work assistant from a Code Space without a workspace choice and saves its avatar", async () => {
         db.update(spaces).set({ mode: "developer" }).where(eq(spaces.id, "codex")).run();
-        const assistant = await assistantsService.create({ accountId: "default", name: "Trip planner", description: "Plan trips", instructions: "Plan practical trips.", spaceId: "codex", model: "test-model", effort: "high", avatar: { shape: "cube", color: "mint" } });
+        const assistant = await assistantsService.create({ accountId: "default", teamId, name: "Trip planner", description: "Plan trips", instructions: "Plan practical trips.", spaceId: "codex", model: "test-model", effort: "high", avatar: { shape: "cube", color: "mint" } });
         expect(assistant).not.toHaveProperty("workspaceId");
         expect(assistant).not.toHaveProperty("mode");
         expect(assistant.avatar).toEqual({ shape: "cube", color: "mint" });
@@ -1021,7 +1102,7 @@ describe("task-local execution and Code assistant calls", () => {
         await vi.waitFor(() => expect(assistantsRepo.assignment(task.id)?.status).toBe("blocked"));
         expect((await runsService.getRunById(task.workerRunId!))?.workspaceId).toBe(w.id);
         expect(await assistantWork.tool(source.id, "ReadAssistantTask", { assignmentId: task.id })).toMatchObject({ id: task.id });
-        await expect(assistantWork.tool(other.id, "ReadAssistantTask", { assignmentId: task.id })).rejects.toThrow("does not belong");
+        await expect(assistantWork.tool(other.id, "ReadAssistantTask", { assignmentId: task.id })).rejects.toThrow("unavailable");
         await expect(assistantWork.tool(source.id, "RecallAssistantMemory", {})).rejects.toThrow("assistant conversation");
         await assistantWork.report(task.workerRunId!, { assignmentId: task.id, status: "completed", result: "Signing verified", evidence: ["Build 42 passed"] });
         const history = await runsService.getHistoryPage({ runId: source.id });
@@ -1062,16 +1143,17 @@ describe("task-local execution and Code assistant calls", () => {
     });
 });
 
-it("connects a real Code submission to its accepted @ task and keeps mention names readable", async () => {
+it("connects a real Code submission to its teamless @ task and keeps mention names readable", async () => {
     const rootPath = join(root, "submitted-code"); mkdirSync(rootPath);
     const workspace = createWorkspace(db, { id: "submitted-code", rootPath });
-    const assistant = await makeAssistant("TestFlight");
+    const assistant = await makeIndependentAssistant("TestFlight");
     assistantWork.start();
     const source = await runsService.executeRun({ accountId: "default", providerId: "codex", spaceId: "codex", mode: "developer", workspaceId: workspace.id,
         goal: `@assistant-${assistant.id} Check build 42`, clientPromptId: "code-source-message", initialContext: [{ kind: "note", metadata: { source: "assistant_mention", assistantId: assistant.id, token: `@assistant-${assistant.id}`, requestId: "selected-assistant" } }] });
     await settled(source.runId);
     await vi.waitFor(() => expect(assistantsRepo.assignments("default").some(t => t.fromRunId === source.runId)).toBe(true));
     const task = assistantsRepo.assignments("default").find(t => t.fromRunId === source.runId)!;
+    expect(task).toMatchObject({ teamId: null, toAssistantId: assistant.id });
     expect(task.prompt).toBe("@TestFlight Check build 42");
     expect(task.execution).toEqual({ mode: "developer", workspaceId: workspace.id });
     const history = await runsService.getHistoryPage({ runId: source.runId });

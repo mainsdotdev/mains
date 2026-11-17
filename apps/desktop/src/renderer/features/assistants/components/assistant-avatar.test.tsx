@@ -19,14 +19,15 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-describe("particle assistant avatars", () => {
-  it("retains the same two eye particles when the assistant starts working", () => {
+describe("mosaic assistant avatars", () => {
+  it("retains the same tiles and two eyes when the assistant starts working", () => {
     const props = { name: "TestFlight", providerId: "codex", avatar: { shape: "cube", color: "rose" } as const, onClick: vi.fn() };
     const view = render(<AssistantMonogram {...props} />);
     const cells = [...view.container.querySelectorAll(".tool-square")];
     const eyes = [...view.container.querySelectorAll("[data-eye]")];
     expect(eyes).toHaveLength(2);
-    expect(eyes.every(eye => eye.classList.contains("tool-square"))).toBe(true);
+    expect(eyes.every(eye => eye.classList.contains("mosaic-avatar__eye"))).toBe(true);
+    expect(view.container.querySelectorAll(".mosaic-avatar__tile--accent")).toHaveLength(3);
     view.rerender(<AssistantMonogram {...props} working />);
     expect([...view.container.querySelectorAll(".tool-square")]).toEqual(cells);
     expect([...view.container.querySelectorAll("[data-eye]")]).toEqual(eyes);
@@ -47,7 +48,7 @@ describe("particle assistant avatars", () => {
     view.unmount();
     expect(disconnect).toHaveBeenCalledOnce();
   });
-  it("snaps pointer gaze to grid directions without replacing cells", () => {
+  it("snaps pointer gaze to four directions without replacing tiles", () => {
     const view = render(<AssistantAvatar className="size-24" />);
     const avatar = view.container.firstElementChild as HTMLElement;
     vi.spyOn(avatar, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));

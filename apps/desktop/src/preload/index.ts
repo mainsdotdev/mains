@@ -109,6 +109,7 @@ const api = {
   assistants: {
     assignment: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.assignment, accountId, id),
     prepareWelcome: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.prepareWelcome, accountId, id),
+    setupProfile: (accountId: string, id: string, input: import("@mains/contracts/assistants").AssistantProfileSetupAction) => ipcRenderer.invoke(CHANNELS.assistants.setupProfile, accountId, id, input),
     respondWelcome: (accountId: string, id: string, answer: string | null, execution?: import("@mains/contracts/assistants").AssistantExecution) => ipcRenderer.invoke(CHANNELS.assistants.respondWelcome, accountId, id, answer, execution),
     overview: (accountId: string): Promise<ServiceResponse<import("@mains/contracts/assistants").AssistantOverview>> => ipcRenderer.invoke(CHANNELS.assistants.overview, accountId),
     create: (payload: import("@mains/contracts/assistants").CreateAssistant) => ipcRenderer.invoke(CHANNELS.assistants.create, payload),

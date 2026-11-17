@@ -20,6 +20,7 @@ interface McpDisplayProps {
   mcpApp?: McpAppToolMetadata;
   /** Native background tasks return a placeholder, without an app payload. */
   backgroundTask?: boolean;
+  presentation?: "tool" | "card";
 }
 
 function formatCodePayload(raw: string): string {
@@ -79,6 +80,7 @@ export function McpDisplay({
   runId,
   mcpApp,
   backgroundTask = false,
+  presentation = "tool",
 }: McpDisplayProps) {
   const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const resolvedIcon = icon ?? resolveTool(displayName).icon;
@@ -87,14 +89,14 @@ export function McpDisplay({
 
   return (
     <div>
-      <ToolHeader
+      {presentation === "tool" && <ToolHeader
         icon={resolvedIcon}
         verb={displayName}
         hasDetails={hasOutput}
         isExpanded={isExpanded}
         onToggle={() => setIsExpanded((v) => !v)}
         isCompact={isCompact}
-      ></ToolHeader>
+      ></ToolHeader>}
 
       <McpResultNotice output={output} />
 
@@ -110,10 +112,11 @@ export function McpDisplay({
             input={params}
             output={output}
             title={displayName}
+            appearance={presentation === "card" ? "card" : "link"}
           />
         )}
 
-      {hasOutput && (
+      {hasOutput && presentation === "tool" && (
         <ToolCollapse isExpanded={isExpanded}>
           <div className="pt-1">
             <McpDetails output={output} />

@@ -6,6 +6,7 @@ export interface UiContextParts {
   spaceId: string;
   providerId: string;
   mode: string;
+  assistantId?: string;
   workspaceId?: string;
   collectionId?: string | null;
 }
@@ -27,7 +28,7 @@ export function workspaceViewKey(parts: UiContextParts): string {
 
 export function mcpAppConversationKey(parts: UiContextParts, entrypointId: string): string {
   return JSON.stringify([parts.backendId ?? "local", parts.spaceId, parts.providerId,
-    parts.mode, ["mcp-app", entrypointId]]);
+    parts.mode, ...(parts.assistantId ? [["assistant", parts.assistantId]] : []), ["mcp-app", entrypointId]]);
 }
 
 /** A pre-run draft gets a stable owner; its browser tabs move to the run on send. */
@@ -37,6 +38,7 @@ export function composerOwnerKey(
 ): string {
   const backend = parts.backendId ?? "local";
   if (runId && isRunTab(runId)) return runOwnerKey(backend, runId);
+  if (parts.assistantId) return `${backend}:assistant:${parts.assistantId}:draft`;
   return JSON.stringify([
     backend,
     "draft",

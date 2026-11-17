@@ -4,7 +4,7 @@ import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
 import type { UiContextParts } from "./ui-context";
 
 export function previewOwnerKey(scope: UiContextParts, conversationKey: string): string {
-  return scope.mode === "developer" && scope.workspaceId
+  return !scope.assistantId && scope.mode === "developer" && scope.workspaceId
     ? workspaceBrowserExpansionKey(scope.backendId, scope.workspaceId) : conversationKey;
 }
 

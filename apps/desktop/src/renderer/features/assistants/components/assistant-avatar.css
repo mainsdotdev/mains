@@ -1,52 +1,72 @@
-.particle-avatar {
-  --tsq-base: color-mix(in srgb, var(--avatar-fill) 90%, transparent);
-  --tsq-color: var(--avatar-light);
-  --avatar-eye: color-mix(in srgb, var(--avatar-ink) 60%, var(--color-primary-950));
-  color: var(--avatar-fill);
+.mosaic-avatar {
+  position: relative;
+  container-type: inline-size;
+  --avatar-shade: color-mix(in srgb, var(--avatar-base) 67%, var(--avatar-ink));
+  --avatar-eye: color-mix(in srgb, var(--avatar-ink) 20%, #16111a);
+  --tsq-color: color-mix(in srgb, var(--avatar-light) 60%, white);
 }
-.dark .particle-avatar {
-  --tsq-base: color-mix(in srgb, var(--avatar-fill) 80%, transparent);
-  --avatar-eye: color-mix(in srgb, var(--color-primary-50) 85%, var(--avatar-light));
-}
-.particle-avatar__grid {
-  display: grid;
-  width: 82%;
-  height: 82%;
-  gap: 1.5%;
-}
-.particle-avatar__eye {
+
+.mosaic-avatar__body,
+.mosaic-avatar__face {
   position: absolute;
   inset: 0;
-  z-index: 1;
-  border-radius: inherit;
+}
+
+.mosaic-avatar .mosaic-avatar__tile {
+  position: absolute;
+  box-shadow: 0 1.4cqi 0 var(--avatar-ink);
+}
+
+.mosaic-avatar__face {
+  pointer-events: none;
+  animation: mosaicAvatarGaze 10.4s steps(1, end) var(--avatar-eye-delay) infinite;
+}
+
+.mosaic-avatar__eye {
+  position: absolute;
+  width: 10.5%;
+  height: 13%;
+  translate: -50% -50%;
+  border-radius: 20%;
   background: var(--avatar-eye);
-  opacity: var(--eye-center);
-  /* The eyes travel by recoloring whole cells on the very same grid. */
-  animation: avatar-cell-gaze 10.4s steps(1, end) var(--avatar-eye-delay) infinite;
+  animation: mosaicAvatarBlink 10.4s linear var(--avatar-eye-delay) infinite;
 }
-@keyframes avatar-cell-gaze {
-  0%, 17%, 35%, 49%, 55%, 76%, 94%, 100% { opacity: var(--eye-center); }
-  20%, 32% { opacity: var(--eye-right); }
-  52%, 91% { opacity: 0; }
-  60%, 73% { opacity: var(--eye-left); }
-  80%, 87% { opacity: var(--eye-up); }
+
+.mosaic-avatar[data-working="true"] .mosaic-avatar__eye { scale: 1 0.76; }
+
+@keyframes mosaicAvatarGaze {
+  0%, 17%, 35%, 59%, 74%, 92%, 100% { translate: 0 0; }
+  20%, 32% { translate: 2% 0; }
+  60%, 72% { translate: -2% 0; }
+  80%, 87% { translate: 0 -2%; }
 }
+
+@keyframes mosaicAvatarBlink {
+  0%, 50%, 53%, 89%, 92%, 100% { transform: scaleY(1); }
+  51.4%, 90.4% { transform: scaleY(0.14); }
+}
+
 @media (hover: hover) and (pointer: fine) {
-  .particle-avatar[data-gaze] .particle-avatar__eye { animation: none; }
-  .particle-avatar[data-gaze="center"] .particle-avatar__eye { opacity: var(--eye-center); }
-  .particle-avatar[data-gaze="left"] .particle-avatar__eye { opacity: var(--eye-left); }
-  .particle-avatar[data-gaze="right"] .particle-avatar__eye { opacity: var(--eye-right); }
-  .particle-avatar[data-gaze="up"] .particle-avatar__eye { opacity: var(--eye-up); }
-  .particle-avatar[data-gaze="down"] .particle-avatar__eye { opacity: var(--eye-down); }
+  .mosaic-avatar[data-gaze] .mosaic-avatar__face,
+  .mosaic-avatar[data-gaze] .mosaic-avatar__eye { animation: none; }
+  .mosaic-avatar[data-gaze="left"] .mosaic-avatar__face { translate: -2% 0; }
+  .mosaic-avatar[data-gaze="right"] .mosaic-avatar__face { translate: 2% 0; }
+  .mosaic-avatar[data-gaze="up"] .mosaic-avatar__face { translate: 0 -2%; }
+  .mosaic-avatar[data-gaze="down"] .mosaic-avatar__face { translate: 0 2%; }
 }
-.particle-avatar[data-paused="true"] *,
-.particle-avatar[data-paused="true"] *::before,
-.particle-avatar[data-paused="true"] *::after { animation-play-state: paused; }
-.particle-avatar[data-animated="false"] *,
-.particle-avatar[data-animated="false"] *::before,
-.particle-avatar[data-animated="false"] *::after { animation: none; }
-.particle-avatar[data-animated="false"] .particle-avatar__eye { opacity: var(--eye-center); }
+
+.mosaic-avatar[data-paused="true"] *,
+.mosaic-avatar[data-paused="true"] *::before,
+.mosaic-avatar[data-paused="true"] *::after { animation-play-state: paused; }
+
+.mosaic-avatar[data-animated="false"] .mosaic-avatar__face,
+.mosaic-avatar[data-animated="false"] .mosaic-avatar__eye,
+.mosaic-avatar:not([data-working="true"][data-animated="true"]) .mosaic-avatar__tile::before,
+.mosaic-avatar:not([data-working="true"][data-animated="true"]) .mosaic-avatar__tile::after,
+.mosaic-avatar__tile:not(.mosaic-avatar__tile--accent)::before,
+.mosaic-avatar__tile:not(.mosaic-avatar__tile--accent)::after { animation: none; }
+
 @media (prefers-reduced-motion: reduce) {
-  .particle-avatar *, .particle-avatar *::before, .particle-avatar *::after { animation: none !important; }
-  .particle-avatar .particle-avatar__eye { opacity: var(--eye-center) !important; }
+  .mosaic-avatar *, .mosaic-avatar *::before, .mosaic-avatar *::after { animation: none !important; }
+  .mosaic-avatar .mosaic-avatar__face { translate: none !important; }
 }

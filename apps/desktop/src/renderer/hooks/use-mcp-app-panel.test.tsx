@@ -50,13 +50,15 @@ function harness(initialPath = "/code/ws-1", previousPath?: string, strictMode =
   mocks.subscribe.mockImplementation((listener: () => void) => state.subscribe(listener));
   let navigate!: ReturnType<typeof useNavigate>;
   let pathname!: string;
+  let search!: string;
   const hook = renderHook(() => {
     navigate = useNavigate();
-    pathname = useLocation().pathname;
+    const location = useLocation();
+    pathname = location.pathname; search = location.search;
     return useMcpAppPanel()!;
   }, { reactStrictMode: strictMode, wrapper: ({ children }: { children: ReactNode }) =>
     <Provider store={state}><MemoryRouter initialEntries={previousPath ? [previousPath, initialPath] : [initialPath]}><McpAppPanelProvider>{children}<RetainedCanvases /></McpAppPanelProvider><Toaster /></MemoryRouter></Provider> });
-  return { ...hook, state, navigate: (path: string) => navigate(path), back: () => navigate(-1), get pathname() { return pathname; } };
+  return { ...hook, state, navigate: (path: string) => navigate(path), back: () => navigate(-1), get pathname() { return pathname; }, get search() { return search; } };
 }
 async function openDraft(h: ReturnType<typeof harness>, collectionId: string | null = null) {
   const target = { ...scope(), collectionId };
@@ -78,6 +80,90 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); toastStore.dismissAll(); vi.useRealTimers(); });
 describe("shared MCP App panel", () => {
+  it.each(["work", "developer"])("opens an assistant's %s result in its own preview without navigating to Code", async mode => {
+    const h = harness("/assistants?assistant=gezici&run=assistant-run&tab=chats");
+    const target = { ...scope(), assistantId: "gezici", spaceId: "assistant-space", providerId: "claude_code", mode,
+      workspaceId: mode === "developer" ? "assistant-repo" : undefined };
+    const ownerKey = composerOwnerKey(target, "assistant-run");
+    act(() => { h.state.dispatch(setComposerContextKey(ownerKey)); h.result.current.registerConversation({ scope: target, ownerKey, runId: "assistant-run", send: mocks.sends }); });
+    const before = h.state.getState().workspace;
+    act(() => h.result.current.openTool({ runId: "assistant-run", app, title: "Skyscanner", input: { origin: "IST", destination: "TYO" }, output: { structuredContent: { flights: [] } } }));
+    expect(h.pathname).toBe("/assistants");
+    expect(h.search).toBe("?assistant=gezici&run=assistant-run&tab=chats");
+    expect(h.result.current.isOpen).toBe(true);
+    expect(h.result.current.scope).toEqual(target);
+    expect(h.result.current.ownerKey).toBe(ownerKey);
+    expect(h.state.getState().preview.byOwner[ownerKey]?.activeTabId).toBe(h.result.current.document?.id);
+    expect(h.state.getState().workspace.activeWorkspaceId).toBe(before.activeWorkspaceId);
+    expect(h.state.getState().workspace.activeTab).toBe(before.activeTab);
+    expect(h.state.getState().workspace.pendingRunId).toBe(before.pendingRunId);
+    await act(async () => h.result.current.sendMessage([{ type: "text", text: "Show cheaper flights" }]));
+    expect(mocks.sends).toHaveBeenCalledWith("Show cheaper flights", undefined);
+    act(() => h.result.current.close());
+    expect(h.result.current.isOpen).toBe(false);
+    expect(h.pathname).toBe("/assistants");
+  });
+
+  it("does not open a different assistant conversation's result through the global workspace", () => {
+    const h = harness("/assistants?assistant=gezici&run=assistant-run");
+    const target = { ...scope(), assistantId: "gezici", mode: "work", workspaceId: undefined };
+    const ownerKey = composerOwnerKey(target, "assistant-run");
+    act(() => { h.state.dispatch(setComposerContextKey(ownerKey)); h.result.current.registerConversation({ scope: target, ownerKey, runId: "assistant-run", send: mocks.sends }); });
+    act(() => h.result.current.openTool({ runId: "other-run", app, title: "Wrong conversation", output: { structuredContent: {} } }));
+    expect(h.pathname).toBe("/assistants");
+    expect(h.state.getState().preview.byOwner).toEqual({});
+  });
+
+  it("opens a rail app with the visible assistant's frozen provider and conversation", async () => {
+    const h = harness("/assistants?assistant=gezici&run=assistant-run");
+    const target = { ...scope(), assistantId: "gezici", spaceId: "assistant-space", providerId: "claude_code", mode: "work", workspaceId: undefined };
+    const ownerKey = composerOwnerKey(target, "assistant-run");
+    act(() => { h.state.dispatch(setComposerContextKey(ownerKey)); h.result.current.registerConversation({ scope: target, ownerKey, runId: "assistant-run", send: mocks.sends }); });
+    mocks.getById.mockResolvedValueOnce({ success: true, data: { ...target, id: "assistant-run" } });
+    await act(async () => h.result.current.openGlobal(app));
+    expect(mocks.openExtension).toHaveBeenCalledWith({ providerId: "claude_code", entrypointId: app.id });
+    expect(h.pathname).toBe("/assistants");
+    expect(h.search).toBe("?assistant=gezici&run=assistant-run");
+    expect(h.result.current.isOpen).toBe(true);
+    expect(h.result.current.ownerKey).toBe(ownerKey);
+  });
+
+  it("keeps the existing Code preview separate when an assistant opens the same app", async () => {
+    const h = harness();
+    await openDraft(h);
+    const codeDocumentId = h.result.current.document!.id;
+    const codePreviewKey = Object.keys(h.state.getState().preview.byOwner)[0];
+    const target = { ...scope(), assistantId: "gezici", mode: "work", workspaceId: undefined };
+    const ownerKey = composerOwnerKey(target, "assistant-run");
+    act(() => { h.navigate("/assistants?assistant=gezici&run=assistant-run"); h.state.dispatch(setComposerContextKey(ownerKey));
+      h.result.current.registerConversation({ scope: target, ownerKey, runId: "assistant-run", send: mocks.sends }); });
+    expect(h.result.current.document).toBeNull();
+    act(() => h.result.current.openTool({ runId: "assistant-run", app, title: "Flights", output: { structuredContent: {} } }));
+    expect(h.result.current.document?.id).not.toBe(codeDocumentId);
+    expect(h.result.current.isOpen).toBe(true);
+    expect(h.state.getState().preview.byOwner[codePreviewKey].activeTabId).toBe(codeDocumentId);
+    expect(h.state.getState().preview.byOwner[ownerKey].activeTabId).toBe(h.result.current.document?.id);
+  });
+
+  it("starts an app's new assistant chat in Work without changing the selected Code conversation", () => {
+    const h = harness("/assistants?assistant=gezici&run=assistant-run");
+    const target = { ...scope(), assistantId: "gezici", workspaceId: "assistant-repo" };
+    const ownerKey = composerOwnerKey(target, "assistant-run");
+    act(() => { h.state.dispatch(setComposerContextKey(ownerKey)); h.result.current.registerConversation({ scope: target, ownerKey, runId: "assistant-run", send: mocks.sends }); });
+    act(() => h.result.current.openTool({ runId: "assistant-run", app, title: "Flights", output: { structuredContent: {} } }));
+    const activeTab = h.state.getState().workspace.activeTab;
+    act(() => h.result.current.newChat());
+    expect(h.pathname).toBe("/assistants");
+    expect(h.search).toBe("?assistant=gezici&run=new");
+    expect(h.state.getState().workspace.activeTab).toBe(activeTab);
+    const draft = { ...target, mode: "work", workspaceId: undefined, collectionId: null };
+    const draftOwner = composerOwnerKey(draft, null);
+    act(() => { h.state.dispatch(setComposerContextKey(draftOwner)); h.result.current.registerConversation({ scope: draft, ownerKey: draftOwner, send: mocks.sends }); });
+    expect(h.result.current.isOpen).toBe(true);
+    expect(h.result.current.scope).toEqual(draft);
+    expect(h.state.getState().workspace.activeTab).toBe(activeTab);
+  });
+
   it.each([
     { tool: "notion.notion-page-view", linkId: "account-1" },
     { tool: "canva.openai-home", linkId: "synthetic_link::canva" },

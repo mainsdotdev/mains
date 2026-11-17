@@ -5,7 +5,7 @@
 // channel is a single edit. See CONTEXT.md for the IPC seam vocabulary.
 export const CHANNELS = {
   assistants: {
-    assignment: "assistants:assignment", prepareWelcome: "assistants:prepareWelcome", respondWelcome: "assistants:respondWelcome",
+    assignment: "assistants:assignment", prepareWelcome: "assistants:prepareWelcome", respondWelcome: "assistants:respondWelcome", setupProfile: "assistants:setupProfile",
     overview: "assistants:overview", create: "assistants:create", createTeam: "assistants:createTeam",
     changeTeam: "assistants:changeTeam",
     archive: "assistants:archive", saveMemory: "assistants:saveMemory", removeMemory: "assistants:removeMemory",

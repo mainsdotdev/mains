@@ -11,6 +11,7 @@ import { useToolApproval } from "@/features/workspace/hooks/use-tool-approval";
 import { useComposerContext } from "@/features/workspace/hooks/use-composer-context";
 import { PluginLogoProvider } from "@/features/workspace/hooks/use-plugin-logos";
 import { WorkspaceEvents } from "@/features/workspace/components/workspace-events";
+import { AssistantProfileSetupCard } from "./assistant-profile-setup";
 import { AssistantWelcomeCard } from "./assistant-welcome-card";
 import { WorkspaceInput } from "@/features/workspace/components/workspace-input";
 import { AsyncQuestionDialogProvider, ComposerSlot } from "@/features/workspace/components/tools/async-question-dialog";
@@ -29,6 +30,9 @@ import { getTransport, onTransportChange } from "@/lib/transport";
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import { AssistantMonogram } from "./assistant-monogram";
 import { errorText } from "../lib/assistant-ui";
+import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
+import type { McpAppScope } from "@/features/workspace/lib/mcp-app-panel";
+import type { McpAppMessageOptions } from "@/features/workspace/lib/mcp-app-context";
 
 const keepProfile = () => {};
 const EMPTY_EVENTS: RunEvent[] = [];
@@ -47,7 +51,7 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
   const dispatch = useAppDispatch();
   useLayoutEffect(() => { dispatch(setComposerContextKey(ownerKey)); dispatch(setRightPaneContextKey({ ownerKey, browserExpansionKey: ownerKey })); }, [dispatch, ownerKey]);
   const message = useAppSelector(state => state.workspace.draftTextByKey[ownerKey] ?? "");
-  const setMessage = (text: string) => dispatch(setDraftText({ key: ownerKey, text }));
+  const setMessage = useCallback((text: string) => dispatch(setDraftText({ key: ownerKey, text })), [dispatch, ownerKey]);
   const context = useComposerContext();
   const transport = useSyncExternalStore(onTransportChange, getTransport);
   const { currentData: run, refetch: refreshRun, error: runError } = useGetRunByIdQuery(chatRunId ?? "", { skip: !chatRunId });
@@ -73,7 +77,8 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
   const [respondWelcome, welcomeResponse] = useRespondAssistantWelcomeMutation();
   const [prepareWelcome, welcomePreparation] = usePrepareAssistantWelcomeMutation();
   // New standalone work always starts in Work. Already accepted welcomes keep their delivery target.
-  const execution: AssistantExecution = waitingWelcome?.answer != null ? waitingWelcome.execution ?? { mode: "work" } : { mode: "work" };
+  const execution = useMemo<AssistantExecution>(() => waitingWelcome?.answer != null
+    ? waitingWelcome.execution ?? { mode: "work" } : { mode: "work" }, [waitingWelcome]);
   const answerWelcome = async (answer: string | null) => {
     if (sendingRef.current) return;
     sendingRef.current = true;
@@ -115,27 +120,48 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
     startedAt: run.startedAt == null ? undefined : new Date(run.startedAt), endedAt: run.endedAt == null ? undefined : new Date(run.endedAt), createdAt: new Date(run.createdAt),
   } : undefined, [run, belongs]);
   const working = run?.status === "running" || run?.status === "queued";
-  async function submit() {
-    if (sendingRef.current || working && !pending || !belongs || !message.trim() && !files.length && !context.items.length && !pending) return;
+  const appPanel = useMcpAppPanel();
+  const registerAppConversation = appPanel?.registerConversation;
+  const attachAppRun = appPanel?.attachRun;
+  const appContext = appPanel?.appContext;
+  const appScope = useMemo<McpAppScope>(() => ({
+    backendId, assistantId: assistant.id, spaceId: run?.spaceId ?? assistant.spaceId,
+    providerId: run?.providerId ?? assistant.providerId, mode: run?.mode ?? execution.mode,
+    workspaceId: run?.workspaceId ?? (execution.mode === "developer" ? execution.workspaceId : undefined),
+    collectionId: run?.collectionId ?? null,
+  }), [backendId, assistant.id, assistant.spaceId, assistant.providerId, run?.spaceId, run?.providerId, run?.mode, run?.workspaceId, run?.collectionId, execution]);
+  const submit = useCallback(async (appMessage?: string, options?: McpAppMessageOptions): Promise<string | null> => {
+    const content = appMessage ?? message;
+    if (appMessage !== undefined && pending) return null;
+    if (sendingRef.current || working && !pending || !belongs || !content.trim() && !files.length && !context.items.length && !pending) return null;
     sendingRef.current = true;
     setPreparing(true);
     setFailure("");
     const submitted = [...context.items];
     try {
-      const request = pending ?? { accountId: assistant.accountId, assistantId: assistant.id, message: message.trim() || "Use the attached context.", requestId: waitingWelcome ? `welcome-${assistant.id}` : crypto.randomUUID(), ...(selectedRunId ? { runId: selectedRunId } : {}), ...(!chatRunId ? { execution } : {}), context: buildRunContextPayload(submitted, files.length ? await serializeAttachments(files) : undefined) as AssistantMessageContext };
-      if (!bound.current || getTransport() !== transport) return;
+      const newChat = options?.target === "new";
+      const request = pending ?? { accountId: assistant.accountId, assistantId: assistant.id, message: content.trim() || "Use the attached context.", requestId: waitingWelcome && !newChat ? `welcome-${assistant.id}` : crypto.randomUUID(), ...(selectedRunId && !newChat ? { runId: selectedRunId } : {}), ...(!chatRunId || newChat ? { execution } : {}), context: buildRunContextPayload([...submitted, ...(appContext?.(ownerKey) ?? [])], files.length ? await serializeAttachments(files) : undefined) as AssistantMessageContext };
+      if (!bound.current || getTransport() !== transport) return null;
       setPending(request);
       const result = await send(request).unwrap();
-      if (!bound.current || getTransport() !== transport) return;
+      if (!bound.current || getTransport() !== transport) return null;
       setPending(null);
       setMessage("");
       setFiles([]);
       dispatch(setContextItemsForKey({ key: ownerKey, items: withoutSubmittedContext(context.items, submitted) }));
       if (chatRunId) { void refreshRun(); void load(chatRunId, "latest"); }
+      const scope = request.execution ? { ...appScope, mode: request.execution.mode,
+        workspaceId: request.execution.mode === "developer" ? request.execution.workspaceId : undefined, collectionId: null } : appScope;
+      attachAppRun?.(ownerKey, result.runId, scope);
       onSelectRun(result.runId);
-    } catch (error) { if (bound.current) setFailure(errorText(error)); }
+      return result.runId;
+    } catch (error) { if (bound.current) setFailure(errorText(error)); return null; }
     finally { sendingRef.current = false; if (bound.current) setPreparing(false); }
-  }
+  }, [message, pending, working, belongs, files, context.items, assistant.accountId, assistant.id, waitingWelcome, selectedRunId, chatRunId, execution, appContext, ownerKey, transport, send, dispatch, setMessage, setFiles, refreshRun, load, appScope, attachAppRun, onSelectRun]);
+  useLayoutEffect(() => {
+    if (!belongs || waitingWelcome || chatRunId && !run) return;
+    return registerAppConversation?.({ scope: appScope, ownerKey, runId: chatRunId ?? undefined, send: submit });
+  }, [registerAppConversation, belongs, waitingWelcome, chatRunId, run, appScope, ownerKey, submit]);
   const stop = useCallback(() => { if (chatRunId) void abort(chatRunId).unwrap().catch(error => { if (bound.current) setFailure(errorText(error)); }); }, [chatRunId, abort]);
   const variant = assistant.providerId === "codex" ? "codex" : "claude";
   const composer = <WorkspaceInput assistantComposer goal={pending?.message ?? message} onGoalChange={setMessage} onSubmit={() => void submit()} onStop={stop}
@@ -152,8 +178,11 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
         {waitingWelcome ? <div className={`flex min-h-0 flex-1 flex-col justify-end gap-6 overflow-y-auto py-8 ${CONTENT_COLUMN_GUTTER}`}>
           <div className="mx-auto w-full max-w-210">
             <AssistantMonogram name={assistant.name} providerId={assistant.providerId} avatar={assistant.avatar} working={working} onClick={onOpenDetails} />
-            <AssistantWelcomeCard welcome={waitingWelcome} busy={welcomeResponse.isLoading || welcomePreparation.isLoading}
-              onAnswer={answerWelcome} onRetry={retryWelcome} />
+            {waitingWelcome.question?.profileSetup && waitingWelcome.state !== "starting"
+              ? <AssistantProfileSetupCard accountId={assistant.accountId} welcome={waitingWelcome}
+                  busy={welcomePreparation.isLoading} onRetry={retryWelcome} />
+              : <AssistantWelcomeCard welcome={waitingWelcome} busy={welcomeResponse.isLoading || welcomePreparation.isLoading}
+                  onAnswer={answerWelcome} onRetry={retryWelcome} />}
           </div>
           {waitingWelcome.state === "skipped" && <div className="w-full">{composer}</div>}
         </div> : !chatRunId ? <div className={`flex min-h-0 flex-1 flex-col items-center justify-center gap-5 overflow-y-auto py-10 ${CONTENT_COLUMN_GUTTER}`}>
@@ -161,7 +190,7 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
           <div className="w-full">{composer}</div>
         </div> : <>
           <div className="min-h-0 flex-1 overflow-hidden">
-            {belongs ? <WorkspaceEvents appearance="assistant" hideTurnChanges mode={run?.mode ?? "work"} runs={visibleRun ? [visibleRun] : []} activeTab={chatRunId} currentEvents={events} currentWorkspace={workspace ?? null} eventsEndRef={eventsEndRef} history={history} issueTabs={[]} turns={turns} variant={variant} onSuggestionSelect={setMessage} /> : <p role={runError ? "alert" : "status"} className="p-6 text-sm text-primary-500">{runError ? errorText(runError) : run ? "This conversation belongs to another assistant." : "Loading conversation…"}</p>}
+            {belongs ? <WorkspaceEvents appearance="assistant" assistant={assistant} hideTurnChanges hasPendingUserInput={!!approval} mode={run?.mode ?? "work"} runs={visibleRun ? [visibleRun] : []} activeTab={chatRunId} currentEvents={events} currentWorkspace={workspace ?? null} eventsEndRef={eventsEndRef} history={history} issueTabs={[]} turns={turns} variant={variant} onSuggestionSelect={setMessage} /> : <p role={runError ? "alert" : "status"} className="p-6 text-sm text-primary-500">{runError ? errorText(runError) : run ? "This conversation belongs to another assistant." : "Loading conversation…"}</p>}
           </div>
           <div className={CONTENT_COLUMN_GUTTER}>
             <ComposerSlot request={approval} onRespond={respond} variant={variant}>{composer}</ComposerSlot>

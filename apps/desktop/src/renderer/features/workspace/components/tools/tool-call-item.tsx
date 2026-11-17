@@ -52,6 +52,7 @@ import {
 interface ToolCallItemProps {
   event: RunEvent;
   isCompact?: boolean;
+  presentation?: "tool" | "card";
 }
 
 interface Ctx {
@@ -67,6 +68,7 @@ interface Ctx {
   summary: string;
   event: RunEvent;
   isCompact: boolean;
+  presentation: "tool" | "card";
 }
 
 type Renderer = (ctx: Ctx) => ReactNode | null;
@@ -279,6 +281,7 @@ const DISPATCH: Renderer[] = [
         status={eventToolStatus(ctx.event)}
         runId={typeof runId === "string" ? runId : undefined}
         mcpApp={mcpApp}
+        presentation={ctx.presentation}
         backgroundTask={(ctx.event.metadata?.task as TaskMetadata | undefined)?.taskType === "mcp_task"}
       />
     );
@@ -311,7 +314,7 @@ export function ToolCallItem(props: ToolCallItemProps) {
   </TranscriptItemScope>;
 }
 
-function DeferredOutputRow({ event, deferred, isCompact = true }: ToolCallItemProps & { deferred: DeferredToolOutput }) {
+function DeferredOutputRow({ event, deferred, isCompact = true, presentation = "tool" }: ToolCallItemProps & { deferred: DeferredToolOutput }) {
   const [expanded] = useToolExpansion();
   const [loaded, setLoaded] = useState<{ key: string; output: unknown } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -319,7 +322,7 @@ function DeferredOutputRow({ event, deferred, isCompact = true }: ToolCallItemPr
   const key = `${event.id}/${deferred.chars}/${deferred.preview}`;
   const runId = event.metadata?.runId;
   useEffect(() => {
-    if (!expanded) {
+    if (!expanded && presentation !== "card") {
       const timer = setTimeout(() => setLoaded(null), 200);
       return () => clearTimeout(timer);
     }
@@ -336,9 +339,12 @@ function DeferredOutputRow({ event, deferred, isCompact = true }: ToolCallItemPr
       }
     })();
     return () => { canceled = true; };
-  }, [expanded, runId, event.id, key, loaded?.key, attempt]);
+  }, [expanded, runId, event.id, key, loaded?.key, attempt, presentation]);
 
-  if (loaded?.key === key) return <ToolCallBody event={{ ...event, metadata: { ...event.metadata, output: loaded.output } }} isCompact={isCompact} />;
+  if (loaded?.key === key) return <ToolCallBody event={{ ...event, metadata: { ...event.metadata, output: loaded.output } }} isCompact={isCompact} presentation={presentation} />;
+  if (presentation === "card") return <Text as="div" size="xs" tone="subtle">
+    {error ? <button onClick={() => { setError(null); setAttempt(value => value + 1); }}>Retry opening app: {error}</button> : "Loading app…"}
+  </Text>;
   const resolved = resolveTool(event.content);
   return <ToolStatusProvider value={eventToolStatus(event)}>
     <GenericToolDisplay icon={resolved.icon} displayName={resolved.displayName}
@@ -350,7 +356,7 @@ function DeferredOutputRow({ event, deferred, isCompact = true }: ToolCallItemPr
   </ToolStatusProvider>;
 }
 
-function ToolCallBody({ event, isCompact = true }: ToolCallItemProps) {
+function ToolCallBody({ event, isCompact = true, presentation = "tool" }: ToolCallItemProps) {
   const replica = useReplicaView();
   const input = event.metadata?.input;
   const { toolName, params, summary } = typeof event.metadata?.toolName === "string"
@@ -407,12 +413,13 @@ function ToolCallBody({ event, isCompact = true }: ToolCallItemProps) {
   const wrap = (node: ReactNode) => (
     <TranscriptItemScope id={event.id}><ToolStatusProvider value={status}>
       {node}
-      {(task || subagent) && (
+      {presentation === "tool" && (task || subagent) && (
         <TranscriptItemScope id={`${event.id}/task`}><TaskProgressStrip task={task} subagent={subagent} isCompact={isCompact} /></TranscriptItemScope>
       )}
     </ToolStatusProvider></TranscriptItemScope>
   );
 
+  if (replica && presentation === "card") return wrap(<Text size="xs" tone="subtle">App available on {replica.label}</Text>);
   if (replica && resolved.category !== "Assistants") return wrap(<GenericToolDisplay icon={toolIcon} displayName={resolved.displayName} params={metadataInput ?? params}
     output={event.metadata?.output} isCompact={isCompact} />);
   if (isEmptyTool && resolved.category !== "Assistants") {
@@ -449,6 +456,7 @@ function ToolCallBody({ event, isCompact = true }: ToolCallItemProps) {
     summary,
     event,
     isCompact,
+    presentation,
   };
 
   for (const renderer of DISPATCH) {

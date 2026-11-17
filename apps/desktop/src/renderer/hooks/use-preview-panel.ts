@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { useLocation } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { useModeConfig } from "./use-mode-config";
-import { isAtlasRoute, shouldHideRightPanel } from "@/lib/layout";
+import { isAssistantsRoute, isAtlasRoute, shouldHideRightPanel } from "@/lib/layout";
 import { workspaceBrowserExpansionKey } from "../../shared/ui-state-keys";
 import { EMPTY_PREVIEW_GROUP, selectPreviewTab, setPreviewOpen, setPreviewExpanded } from "@/lib/redux/slices/previewSlice";
 import { setRightPanelOpen, setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
@@ -16,8 +16,9 @@ export function usePreviewPanel() {
   const composerKey = useAppSelector((state) => state.workspace.composerContextKey);
   const ready = useAppSelector((state) => state.workspace.composerContextReady);
   const atlas = isAtlasRoute(pathname);
+  const assistants = isAssistantsRoute(pathname);
   const ownerKey = atlas ? JSON.stringify([backendId ?? "local", "atlas-preview"])
-    : mode === "developer" && workspaceId ? workspaceBrowserExpansionKey(backendId, workspaceId) : composerKey;
+    : !assistants && mode === "developer" && workspaceId ? workspaceBrowserExpansionKey(backendId, workspaceId) : composerKey;
   const group = useAppSelector((state) => state.preview.byOwner[ownerKey] ?? EMPTY_PREVIEW_GROUP);
   const activeTab = group.tabs.find((tab) => tab.id === group.activeTabId) ?? null;
   const canOpen = (atlas || ready) && !shouldHideRightPanel(pathname);
@@ -35,6 +36,6 @@ export function usePreviewPanel() {
     if (!atlas) dispatch(setPreviewExpanded({ ownerKey, expanded: !group.expanded }));
   }, [dispatch, ownerKey, group.expanded, atlas]);
   return { ownerKey, group, activeTab, isOpen, canOpen, isExpanded: isOpen && group.expanded && !atlas,
-    workspaceScoped: !atlas && mode === "developer" && !!workspaceId,
+    workspaceScoped: !atlas && !assistants && mode === "developer" && !!workspaceId,
     canExpand: !atlas, select, hide, reveal, toggleExpanded };
 }

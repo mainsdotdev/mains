@@ -13,7 +13,7 @@ describe("Atlas bookmark migration", () => {
       sqlite.pragma("foreign_keys=ON");
       const folder = path.resolve(__dirname, "migrations");
       const journal = JSON.parse(fs.readFileSync(path.join(folder, "meta/_journal.json"), "utf8")) as { entries: { tag: string; when: number }[] };
-      const previous = journal.entries.filter(({ tag }) => tag !== "0042_atlas_bookmarks");
+      const previous = journal.entries.slice(0, journal.entries.findIndex(({ tag }) => tag === "0042_atlas_bookmarks"));
       for (const { tag } of previous) for (const sql of fs.readFileSync(path.join(folder, `${tag}.sql`), "utf8").split("--> statement-breakpoint")) if (sql.trim()) sqlite.exec(sql);
       sqlite.exec(`INSERT INTO accounts(id) VALUES ('default');
         INSERT INTO atlas_items(id,account_id,kind,title,version,is_favorite,metadata) VALUES

@@ -28,7 +28,10 @@ import { DocumentViewerPanel } from "./document-viewer-panel";
 import { PreviewNewTabButton } from "./preview-new-tab-button";
 import { PullRequestPreviewPanel } from "@/features/pull-requests/components/pull-request-preview-panel";
 
-export function PreviewPanel({ reserveLayoutControls = false }: { reserveLayoutControls?: boolean }) {
+export function PreviewPanel({ reserveLayoutControls = false, skipCloseAnimation = false }: {
+  reserveLayoutControls?: boolean;
+  skipCloseAnimation?: boolean;
+}) {
   const preview = usePreviewPanel();
   const dispatch = useAppDispatch();
   const width = useAppSelector((state) => state.appSettings.browserPanelWidth);
@@ -77,7 +80,7 @@ export function PreviewPanel({ reserveLayoutControls = false }: { reserveLayoutC
 
   return <div id="preview-panel" data-preview-panel="" role="complementary" aria-label="Preview panel" aria-hidden={!preview.isOpen}
     inert={!preview.isOpen} className="fixed inset-y-0 right-0 z-(--z-overlay) overflow-hidden overscroll-none transition-[width,transform,opacity] duration-150 ease-out motion-reduce:transition-none"
-    style={{ display: isVisible ? undefined : "none", width: isMobile ? "100vw" : preview.isExpanded
+    style={{ display: isVisible && (preview.isOpen || !skipCloseAnimation) ? undefined : "none", width: isMobile ? "100vw" : preview.isExpanded
       ? "calc(100% - var(--content-left) + var(--spacing) * 1.25)" : `var(${BROWSER_PANEL_WIDTH_VAR})`,
       transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)", opacity: isAnimatedIn ? 1 : 0 }}>
     {!preview.isExpanded && !isMobile && <ResizeHandle edge="left" value={width} min={BROWSER_PANEL_WIDTH_MIN} max={BROWSER_PANEL_WIDTH_MAX}

@@ -132,6 +132,8 @@ function AppContent() {
   const settingsRoute = isSettingsRoute(location.pathname);
   const workspaceRoute = isWorkspaceRoute(location.pathname);
   const assistantsRoute = isAssistantsRoute(location.pathname);
+  const assistantParams = assistantsRoute ? new URLSearchParams(location.search) : null;
+  const assistantDetailsRequested = !!assistantParams?.get("assistant") && !!assistantParams.get("tab") && assistantParams.get("new") !== "1";
   const atlasRoute = isAtlasRoute(location.pathname);
   const tasksRoute = isTasksRoute(location.pathname);
   useRealtimeVoiceLifecycle();
@@ -374,7 +376,7 @@ function AppContent() {
         <MainContent
           marginLeft={contentLeft}
           marginRight={contentRight}
-          transparentSurface={workspaceRoute}
+          transparentSurface={workspaceRoute || assistantsRoute}
           contentInsetRight={contentInsetRight}
           headerActions={operationalAccess && (!isMobile || showTerminalToggle) && !hideWorkspacePanels && !preview.isExpanded && (
             <div className="flex items-center gap-0.5 empty:hidden">
@@ -405,7 +407,7 @@ function AppContent() {
         {operationalAccess && !hideWorkspacePanels && (
           <SubagentPanel shown={subagentPanelShown} laneOffset={rightLaneWidth} />
         )}
-        <PreviewPanel reserveLayoutControls={showLayoutControls} />
+        <PreviewPanel reserveLayoutControls={showLayoutControls} skipCloseAnimation={assistantDetailsRequested} />
         {layoutControls}
       </MainLayout>
     </>

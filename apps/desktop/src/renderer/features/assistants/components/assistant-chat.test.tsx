@@ -2,7 +2,7 @@
 import type { ReactNode } from "react";
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Assistant, AssistantWelcome } from "@mains/contracts/assistants";
@@ -15,6 +15,7 @@ import { AssistantChat } from "./assistant-chat";
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(), respond: vi.fn(), refetch: vi.fn(), load: vi.fn(),
+  registerAppConversation: vi.fn(), attachAppRun: vi.fn(), appContext: vi.fn(),
   run: undefined as Record<string, unknown> | undefined,
   workspace: undefined as Workspace | undefined,
   context: { items: [] }, history: { historical: false }, events: [],
@@ -31,6 +32,9 @@ vi.mock("@/lib/redux/api/assistantsApi", () => ({
   usePrepareAssistantWelcomeMutation: () => [vi.fn(), { isLoading: false }],
 }));
 vi.mock("@/lib/transport", () => ({ getTransport: () => mocks.transport, onTransportChange: () => () => {} }));
+vi.mock("@/hooks/use-mcp-app-panel", () => ({ useMcpAppPanel: () => ({
+  registerConversation: mocks.registerAppConversation, attachRun: mocks.attachAppRun, appContext: mocks.appContext,
+}) }));
 vi.mock("@/features/workspace/hooks/use-run-history", () => ({ useRunHistory: () => ({ runEvents: {}, runTurns: {}, load: mocks.load, history: mocks.history }) }));
 vi.mock("@/features/workspace/hooks/use-streaming-events", () => ({ useStreamingEvents: () => ({ streamingEvents: mocks.events, clearTurnStreams: vi.fn() }) }));
 vi.mock("@/features/workspace/hooks/use-tool-approval", () => ({ useToolApproval: () => ({ pendingApprovals: [], respond: vi.fn() }) }));
@@ -50,6 +54,8 @@ const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 beforeEach(() => {
   mocks.send.mockReset().mockReturnValue({ unwrap: () => Promise.resolve({ runId: "new-run" }) });
   mocks.respond.mockReset().mockReturnValue({ unwrap: () => Promise.resolve({ runId: "welcome-run" }) });
+  mocks.registerAppConversation.mockReset().mockReturnValue(() => {});
+  mocks.attachAppRun.mockReset(); mocks.appContext.mockReset().mockReturnValue([]);
   mocks.run = undefined; mocks.workspace = undefined;
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
@@ -63,6 +69,34 @@ function setup(options: { selectedRunId?: string; welcome?: AssistantWelcome; se
   return { store, selected, ...view };
 }
 describe("assistant task location", () => {
+  it("binds an app to the assistant's conversation and sends its messages through the assistant API", async () => {
+    mocks.run = { id: "existing", assistantId: assistant.id, spaceId: "frozen-space", providerId: "codex", mode: "work",
+      workspaceId: null, status: "succeeded", createdAt: new Date(), goal: "Find flights" };
+    mocks.send.mockReturnValue({ unwrap: () => Promise.resolve({ runId: "existing" }) });
+    mocks.appContext.mockReturnValue([{ kind: "mcp-app", id: "flights:app", sessionId: "flights", appName: "Skyscanner",
+      updateId: "app", label: "Skyscanner", hidden: true, block: { type: "text", text: "Active app: Skyscanner" } }]);
+    const { selected } = setup({ selectedRunId: "existing" });
+    const host = mocks.registerAppConversation.mock.lastCall![0];
+    expect(host).toMatchObject({ runId: "existing", scope: { assistantId: assistant.id, spaceId: "frozen-space", mode: "work", workspaceId: undefined } });
+    let result;
+    await act(async () => { result = await host.send("Show cheaper flights"); });
+    expect(result).toBe("existing");
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ assistantId: assistant.id, runId: "existing", message: "Show cheaper flights" }));
+    expect(mocks.send.mock.calls[0][0]).not.toHaveProperty("execution");
+    expect(JSON.stringify(mocks.send.mock.calls[0][0].context)).toContain("Active app: Skyscanner");
+    expect(selected).toHaveBeenCalledWith("existing");
+  });
+
+  it("keeps an app-requested new chat under the same assistant and starts it in Work", async () => {
+    mocks.run = { id: "existing", assistantId: assistant.id, mode: "developer", workspaceId: "repo", status: "succeeded", createdAt: new Date(), goal: "Check" };
+    setup({ selectedRunId: "existing" });
+    const host = mocks.registerAppConversation.mock.lastCall![0];
+    await act(async () => { await host.send("Compare flights", { target: "new" }); });
+    expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ assistantId: assistant.id, message: "Compare flights", execution: { mode: "work" } }));
+    expect(mocks.send.mock.calls[0][0]).not.toHaveProperty("runId");
+    expect(mocks.attachAppRun).toHaveBeenCalledWith(host.ownerKey, "new-run", expect.objectContaining({ assistantId: assistant.id, mode: "work", workspaceId: undefined }));
+  });
+
   it.each([undefined, "repo", "deleted-repo"])("starts standalone chats in Work while ignoring legacy repo preferences: %s", async seedWorkspaceId => {
     const user = userEvent.setup(); setup({ seedWorkspaceId });
     expect(screen.queryByRole("button", { name: "Repo / workspace" })).toBeNull();

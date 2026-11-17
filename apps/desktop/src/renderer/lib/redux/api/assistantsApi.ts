@@ -1,11 +1,15 @@
 import { CHANNELS } from "@mains/contracts/channels";
-import type { Assistant, AssistantTeam, AssistantOverview, CreateAssistant, ChangeAssistantTeam, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution } from "@mains/contracts/assistants";
+import type { Assistant, AssistantTeam, AssistantOverview, CreateAssistant, ChangeAssistantTeam, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution, AssistantProfileSetupAction } from "@mains/contracts/assistants";
 import { baseApi } from "./baseApi";
 export const assistantsApi = baseApi.injectEndpoints({
     endpoints: (b) => ({
         assistantAssignment: b.query<AssistantAssignment | null, { accountId: string; id: string }>({ query: ({ accountId, id }) => ({ handler: CHANNELS.assistants.assignment, args: [accountId, id] }), providesTags: ["Assistants"] }),
         prepareAssistantWelcome: b.mutation<void, { accountId: string; id: string }>({ query: ({ accountId, id }) => ({ handler: CHANNELS.assistants.prepareWelcome, args: [accountId, id] }), invalidatesTags: ["Assistants"] }),
         respondAssistantWelcome: b.mutation<{ runId: string }, { accountId: string; id: string; answer: string | null; execution?: AssistantExecution }>({ query: ({ accountId, id, answer, execution }) => ({ handler: CHANNELS.assistants.respondWelcome, args: [accountId, id, answer, execution] }), invalidatesTags: ["Assistants", "AssistantChats"] }),
+        setupAssistantProfile: b.mutation<void, { accountId: string; id: string; input: AssistantProfileSetupAction }>({
+            query: ({ accountId, id, input }) => ({ handler: CHANNELS.assistants.setupProfile, args: [accountId, id, input] }),
+            invalidatesTags: ["Assistants", "AssistantChats"],
+        }),
         assistantOverview: b.query<AssistantOverview, string>({ query: accountId => ({ handler: CHANNELS.assistants.overview, args: [accountId] }), providesTags: ["Assistants"] }),
         createAssistantTeam: b.mutation<AssistantTeam, {
             accountId: string;
@@ -48,4 +52,4 @@ export const assistantsApi = baseApi.injectEndpoints({
         }>({ query: ({ accountId, id, messageId, message }) => ({ handler: CHANNELS.assistants.followup, args: [accountId, id, messageId, message] }), invalidatesTags: ["Assistants"] }),
     }),
 });
-export const { useAssistantAssignmentQuery, usePrepareAssistantWelcomeMutation, useRespondAssistantWelcomeMutation, useAssistantOverviewQuery, useCreateAssistantTeamMutation, useCreateAssistantMutation, useChangeAssistantTeamMutation, useArchiveAssistantMutation, useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation, useAssistantConversationsQuery, useSendAssistantMessageMutation, useAssignAssistantTaskMutation, useReconcileAssistantTaskMutation, useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation } = assistantsApi;
+export const { useSetupAssistantProfileMutation, useAssistantAssignmentQuery, usePrepareAssistantWelcomeMutation, useRespondAssistantWelcomeMutation, useAssistantOverviewQuery, useCreateAssistantTeamMutation, useCreateAssistantMutation, useChangeAssistantTeamMutation, useArchiveAssistantMutation, useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation, useAssistantConversationsQuery, useSendAssistantMessageMutation, useAssignAssistantTaskMutation, useReconcileAssistantTaskMutation, useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation } = assistantsApi;
