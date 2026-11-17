@@ -109,10 +109,11 @@ const api = {
   assistants: {
     assignment: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.assignment, accountId, id),
     prepareWelcome: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.prepareWelcome, accountId, id),
-    respondWelcome: (accountId: string, id: string, answer: string | null) => ipcRenderer.invoke(CHANNELS.assistants.respondWelcome, accountId, id, answer),
+    respondWelcome: (accountId: string, id: string, answer: string | null, execution?: import("@mains/contracts/assistants").AssistantExecution) => ipcRenderer.invoke(CHANNELS.assistants.respondWelcome, accountId, id, answer, execution),
     overview: (accountId: string): Promise<ServiceResponse<import("@mains/contracts/assistants").AssistantOverview>> => ipcRenderer.invoke(CHANNELS.assistants.overview, accountId),
     create: (payload: import("@mains/contracts/assistants").CreateAssistant) => ipcRenderer.invoke(CHANNELS.assistants.create, payload),
     createTeam: (payload: { accountId: string; name: string }) => ipcRenderer.invoke(CHANNELS.assistants.createTeam, payload),
+    changeTeam: (payload: import("@mains/contracts/assistants").ChangeAssistantTeam) => ipcRenderer.invoke(CHANNELS.assistants.changeTeam, payload),
     archive: (accountId: string, id: string, archived: boolean) => ipcRenderer.invoke(CHANNELS.assistants.archive, accountId, id, archived),
     conversations: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.conversations, accountId, id),
     send: (payload: import("@mains/contracts/assistants").SendAssistantMessage) => ipcRenderer.invoke(CHANNELS.assistants.send, payload),
@@ -1497,6 +1498,8 @@ const api = {
     getById: (id: string) => ipcRenderer.invoke(CHANNELS.pulse.getById, id),
     create: (accountId: string, input: unknown) =>
       ipcRenderer.invoke(CHANNELS.pulse.create, accountId, input),
+    createRoutine: (accountId: string, assistantId: string, input: unknown) =>
+      ipcRenderer.invoke(CHANNELS.pulse.createRoutine, accountId, assistantId, input),
     update: (id: string, input: unknown) =>
       ipcRenderer.invoke(CHANNELS.pulse.update, id, input),
     delete: (id: string) => ipcRenderer.invoke(CHANNELS.pulse.delete, id),

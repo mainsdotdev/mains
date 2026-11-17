@@ -4,7 +4,7 @@ import { createElement, type ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { WorkspaceProviderPage } from "./workspace-provider-page";
 import { WorkspaceTabs } from "./workspace-tabs";
 import appSettingsReducer, {
@@ -179,6 +179,9 @@ function Header() {
   const { header } = useMainHeader();
   return createElement("header", null, header);
 }
+function AssistantLocation() {
+  return createElement("output", { "data-testid": "assistant-route" }, useLocation().search);
+}
 
 function renderPage(browserChatOnly = false) {
   return render(
@@ -221,8 +224,19 @@ describe("WorkspaceProviderPage while changing spaces", () => {
   const route = () => render(createElement(MemoryRouter, { initialEntries: ["/code/runs/run-1"] },
     createElement(MainHeaderProvider, null, createElement(Routes, null,
       createElement(Route, { path: "/code/runs/:runId", element: createElement(WorkspaceProviderPage, { providerId: "codex", variant: "codex" }) }),
+      createElement(Route, { path: "/assistants", element: createElement(AssistantLocation) }),
     )),
   ));
+
+  it("redirects an old assistant Code link before mounting the workspace composer", async () => {
+    page.state = { runs: [{ id: "run-1", assistantId: "testflight", mode: "developer", workspaceId: "mains" }] };
+    route();
+    const target = await screen.findByTestId("assistant-route");
+    expect(new URLSearchParams(target.textContent ?? "").get("assistant")).toBe("testflight");
+    expect(new URLSearchParams(target.textContent ?? "").get("run")).toBe("run-1");
+    expect(screen.queryByTestId("pinned-input")).toBeNull();
+    expect(screen.queryByTestId("centered-input")).toBeNull();
+  });
 
   it("opens a synced conversation without mounting an interactive composer", async () => {
     page.state = { runs: [{ id: "run-1", isReplica: true, ownerBackendId: "source" }], currentWorkspace: null };

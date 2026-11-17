@@ -1,6 +1,7 @@
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery } from "@/lib/redux/api/assistantsApi";
 import type { Assistant } from "@mains/contracts/assistants";
+import { AssistantAvatar } from "@/features/assistants/components/assistant-avatar";
 import { isAbsoluteFilePath } from "@/lib/file-path";
 
 import {
@@ -79,6 +80,11 @@ import { addComposerUploads } from "../lib/composer-uploads";
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 const EMPTY_DIRECTORIES: string[] = [];
 
+function assistantChip(token: string, name: string, id: string, avatar?: Assistant["avatar"]): RichSkillChipData {
+  return { name: token, displayName: name, token, clickable: false, scope: "assistant", iconSize: "md",
+    icon: <AssistantAvatar avatar={avatar} seed={id} animated={false} className="size-5" /> };
+}
+
 function directoryName(folderPath: string): string {
   return folderPath.replace(/\/+$/, "").split("/").pop() || folderPath;
 }
@@ -135,8 +141,8 @@ interface UnifiedMenuState {
 export type { ComposerSendTarget } from "../lib/composer-send-target";
 
 interface WorkspaceInputProps {
-  /** A frozen assistant profile uses the ordinary composer with a static settings label. */
-  fixedProfileLabel?: string;
+  /** Minimal composer for an assistant with frozen settings. */
+  assistantComposer?: boolean;
   mode?: Run["mode"];
   runQueue?: ComposerRunQueue;
   goal: string;
@@ -188,7 +194,7 @@ interface WorkspaceInputProps {
 }
 
 export function WorkspaceInput({
-  fixedProfileLabel,
+  assistantComposer = false,
   mode,
   runQueue,
   goal,
@@ -232,6 +238,18 @@ export function WorkspaceInput({
   floatingAutoFocus = false,
   floatingStatusPlaceholder,
 }: WorkspaceInputProps) {
+  const assistantEditorRef = useRef<HTMLDivElement>(null);
+  const [assistantMultiline, setAssistantMultiline] = useState(false);
+  useLayoutEffect(() => {
+    if (!assistantComposer) return;
+    const editor = assistantEditorRef.current?.querySelector<HTMLElement>('[role="textbox"]');
+    if (!editor) return;
+    const measure = () => setAssistantMultiline(editor.offsetHeight > 40);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(editor);
+    return () => observer.disconnect();
+  }, [assistantComposer]);
   const compactFloating = layout === "floating" && (!expandFloatingToolbar || floatingChatMode !== "details");
   const denseFloating = layout === "floating" && !compactFloating;
   const voice = useRealtimeVoice();
@@ -383,7 +401,7 @@ export function WorkspaceInput({
   const selectAssistant = (assistant: Assistant) => {
     const token = `@assistant-${assistant.id}`;
     if (!contextAssistants.some(a => a.assistantId === assistant.id)) addContext({ kind: "assistant", id: crypto.randomUUID(), assistantId: assistant.id, name: assistant.name, token });
-    const replaced = inputRef.current?.replaceTokenWithSkillChip("@", { name: token, displayName: assistant.name, token, clickable: false, scope: "assistant" }, false);
+    const replaced = inputRef.current?.replaceTokenWithSkillChip("@", assistantChip(token, assistant.name, assistant.id, assistant.avatar), false);
     if (!replaced) {
       const next = replaceMentionInGoal(goal, "@", unifiedMenu.filter, `${token} `);
       if (next !== null) onGoalChange(next);
@@ -612,7 +630,7 @@ export function WorkspaceInput({
 
   const skillChipMap = useMemo(() => {
     const m = new Map<string, RichSkillChipData>();
-    for (const assistant of contextAssistants) m.set(assistant.token, { name: assistant.token, displayName: assistant.name, token: assistant.token, clickable: false, scope: "assistant" });
+    for (const assistant of contextAssistants) m.set(assistant.token, assistantChip(assistant.token, assistant.name, assistant.assistantId, assistantOverview?.assistants.find(a => a.id === assistant.assistantId)?.avatar));
     for (const s of contextSkills) {
       m.set(skillMentionToken(s), {
         name: s.name,
@@ -626,7 +644,7 @@ export function WorkspaceInput({
       });
     }
     return m;
-  }, [contextSkills, contextAssistants]);
+  }, [contextSkills, contextAssistants, assistantOverview]);
 
   const fileChipMap = useMemo(() => {
     const m = new Map<string, RichFileChipData>();
@@ -965,7 +983,8 @@ export function WorkspaceInput({
       : handleSubmit;
   const toolbar = (
     <InputToolbar
-      fixedProfileLabel={fixedProfileLabel}
+      assistantComposer={assistantComposer}
+      assistantMultiline={assistantMultiline}
       primaryAction={{ ...controls.primary, onClick: handlePrimaryAction }}
       voiceMute={controls.mute && { ...controls.mute, onToggle: voice.toggleMute }}
       floatingChatMode={floatingChatMode}
@@ -1044,7 +1063,7 @@ export function WorkspaceInput({
         className={`@container/composer relative mx-auto flex min-w-0 w-full max-w-210 flex-col cursor-pointer transition-all
         ${layout === "floating"
           ? `rounded-[28px] text-primary-950 dark:text-primary-50 ${compactFloating ? "" : "pb-2"}`
-          : "rounded-[28px] glass-surface pb-2"}
+          : assistantComposer ? "rounded-[28px] glass-surface" : "rounded-[28px] glass-surface pb-2"}
         ${layout === "default" ? "mb-4" : ""}
         ${isFileDragOver ? "ring dark:ring-primary/50 ring-primary-950/50 ring-offset-2 " : ""}`}
         onFocusCapture={(event) => {
@@ -1107,10 +1126,12 @@ export function WorkspaceInput({
           className={compactFloating ? "pl-8 pr-3" : undefined}
         />
         {/* The compact row reserves each control's actual width, including speed labels. */}
-        <div className={compactFloating
+        <div className={assistantComposer ? "relative grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-end gap-x-2 px-2 py-2" : compactFloating
           ? "relative grid grid-cols-[2rem_minmax(0,1fr)_auto] items-end gap-x-1 px-3 py-2"
           : "relative"}>
-          <div className={compactFloating ? "relative col-start-2 row-start-1 min-w-0" : "contents"}>
+          <div ref={assistantEditorRef} className={assistantComposer
+            ? assistantMultiline ? "relative col-span-3 col-start-1 row-start-1 min-w-0 ml-2 mr-18" : "relative col-start-2 row-start-1 min-w-0"
+            : compactFloating ? "relative col-start-2 row-start-1 min-w-0" : "contents"}>
             <RichInputForm
               ref={inputRef}
               query={goal}
@@ -1136,8 +1157,8 @@ export function WorkspaceInput({
                     kind={activeRun?.status === "queued" ? "circle" : "square"}
                   />
                 : undefined}
-              focusShortcutLabel={layout === "floating" ? undefined : focusComposerShortcut}
-              compact={compactFloating}
+              focusShortcutLabel={assistantComposer || layout === "floating" ? undefined : focusComposerShortcut}
+              compact={compactFloating || assistantComposer}
               dense={denseFloating}
             />
             <UnifiedContextDropdown
@@ -1163,9 +1184,9 @@ export function WorkspaceInput({
               triggerRef={pluginsButtonRef}
             />
           </div>
-          {compactFloating && toolbar}
+          {(compactFloating || assistantComposer) && toolbar}
         </div>
-        {!compactFloating && toolbar}
+        {!compactFloating && !assistantComposer && toolbar}
       </div>
     </>
   );

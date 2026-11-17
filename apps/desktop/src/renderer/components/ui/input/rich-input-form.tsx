@@ -21,6 +21,9 @@ const sparklesIconMarkup = renderToStaticMarkup(<Sparkles className="size-3.5 sh
 const pluginIconMarkup = renderToStaticMarkup(<Box className="size-3.5 shrink-0" />);
 
 export interface RichSkillChipData {
+  /** Caller-owned artwork; the editor stays independent of feature components. */
+  icon?: ReactNode;
+  iconSize?: "sm" | "md";
   name: string;
   /** Whether this mention has a destination supplied by the caller. */
   clickable?: boolean;
@@ -270,10 +273,10 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   chip.setAttribute(CHIP_NAME_ATTR, skill.name);
   chip.setAttribute(CHIP_TOKEN_ATTR, skill.token ?? `$${skill.name}`);
   chip.contentEditable = "false";
-  // Fixed height + leading-none + align-middle so the line box height stays constant
-  // regardless of whether the chip carries an icon — keeps the caret height consistent.
+  // Match the editor’s 20px text line without adding vertical or horizontal margins.
+  // A taller inline box shifts the attachment/send controls in compact composers.
   chip.className =
-    "group/chip inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none " +
+    "group/chip inline-flex align-bottom items-center gap-1 h-5 rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline " +
     " cursor-default";
   if (skill.brandColor) {
@@ -285,7 +288,10 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   const { iconSlot, glyph } = createChipIconSlot(labelText);
   const iconPath = skill.iconLarge || skill.iconSmall;
   const fallbackIconMarkup = ["plugin", "mac", "mac_app", "computer"].includes((skill.scope || "").toLowerCase()) ? pluginIconMarkup : sparklesIconMarkup;
-  if (iconPath) {
+  if (skill.icon) {
+    if (skill.iconSize === "md") iconSlot.classList.replace("size-3.5", "size-5");
+    glyph.innerHTML = renderToStaticMarkup(<>{skill.icon}</>);
+  } else if (iconPath) {
     const img = document.createElement("img");
     img.alt = "";
     img.className = "size-full object-contain";
@@ -347,7 +353,7 @@ function buildFileChip(file: RichFileChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = file.path;
   chip.className =
-    "group/chip inline-flex align-middle items-center gap-1 h-6 mx-0.5 text-accent hover:decoration-dotted hover:underline rounded-lg text-s font-medium leading-none select-none " +
+    "group/chip inline-flex align-bottom items-center gap-1 h-5 text-accent hover:decoration-dotted hover:underline rounded-lg text-s font-medium leading-none select-none " +
     "  cursor-default";
 
   const { iconSlot, glyph } = createChipIconSlot(file.basename);
@@ -368,7 +374,7 @@ function buildCodeChip(code: RichCodeChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = code.key;
   chip.className =
-    "group/chip inline-flex align-middle items-center gap-1  mb-0.5 h-6 mx-0.5 text-accent hover:underline rounded-lg text-s font-medium leading-none select-none " +
+    "group/chip inline-flex align-bottom items-center gap-1 h-5 text-accent hover:underline rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline cursor-default";
 
   const { iconSlot, glyph } = createChipIconSlot(code.label);

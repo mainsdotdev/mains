@@ -1,13 +1,13 @@
-import type { AssistantMessageContext, AssistantWelcomeQuestion } from "@mains/contracts/assistants";
+import type { AssistantExecution, AssistantMessageContext, AssistantWelcomeQuestion } from "@mains/contracts/assistants";
 import { CHANNELS } from "@mains/contracts/channels";
 import { emit } from "../../ipc-kit/event-bus";
 import { createWorkAdapter, providersService } from "../providers";
 import { assistantsRepo } from "./assistants.repo";
 import { assistantsService } from "./assistants.service";
-import { object, text } from "./assistants.validation";
+import { execution, object, text } from "./assistants.validation";
 
 const jobs = new Map<string, Promise<void>>();
-const responses = new Map<string, Promise<{ runId: string }>>();
+const responses = new Map<string, { message: string; execution: AssistantExecution; promise: Promise<{ runId: string }> }>();
 let controller: AbortController | undefined;
 let assertCurrent: (() => void) | undefined;
 const changed = () => emit(CHANNELS.assistants.changed, {});
@@ -53,7 +53,7 @@ export const assistantWelcome = {
     async stop() {
         assertCurrent = undefined;
         controller?.abort();
-        await Promise.allSettled([...jobs.values(), ...responses.values()]);
+        await Promise.allSettled([...jobs.values(), ...[...responses.values()].map(response => response.promise)]);
         controller = undefined;
     },
     prepare(id: string, retry = false) {
@@ -114,26 +114,29 @@ export const assistantWelcome = {
         assertCurrent();
         this.prepare(id, true);
     },
-    async respond(accountId: string, id: string, answer: string | null, context: AssistantMessageContext = {}) {
+    async respond(accountId: string, id: string, answer: string | null, context: AssistantMessageContext = {}, requestedExecution?: unknown) {
         const guard = assertCurrent;
         if (!guard) throw new Error("Assistant work is shutting down. Try again after reconnecting");
         guard();
         const assistant = assistantsService.require(id, accountId), row = assistantsRepo.welcome(id);
         if (!row?.question) throw new Error("The welcome is not ready");
         if (answer === null) {
-            if (row.state !== "ready" && row.state !== "skipped") throw new Error("This welcome was already answered");
+            if (responses.has(id) || row.state !== "ready" && row.state !== "skipped") throw new Error("This welcome was already answered");
             assistantsRepo.patchWelcome(id, { state: "skipped", wasSkipped: true, error: null });
             changed();
             return { runId: row.runId };
         }
         const message = text(answer, "Answer", 24000);
-        if (responses.has(id)) {
-            if (row.answer !== message) throw new Error("This welcome was already answered");
-            return responses.get(id)!;
+        const pending = responses.get(id);
+        const target = execution(requestedExecution ?? pending?.execution ?? (row.answer !== null ? JSON.parse(row.execution) : undefined));
+        if (pending) {
+            if (pending.message !== message) throw new Error("This welcome was already answered");
+            if (JSON.stringify(pending.execution) !== JSON.stringify(target)) throw new Error("This welcome keeps its original workspace. Start a new task for a different workspace");
+            return pending.promise;
         }
         if (!["ready", "skipped", "starting", "started"].includes(row.state)) throw new Error("The welcome is not ready");
         if (row.answer !== null && row.answer !== message) throw new Error("This welcome was already answered");
-        assistantsRepo.patchWelcome(id, { state: "starting", answer: message, error: null });
+        if (row.answer !== null && JSON.stringify(execution(JSON.parse(row.execution))) !== JSON.stringify(target)) throw new Error("This welcome keeps its original workspace. Start a new task for a different workspace");
         const job = (async () => {
             const { runsService } = await import("../runs");
             guard();
@@ -141,8 +144,16 @@ export const assistantWelcome = {
                 const existing = await runsService.getRunById(row.runId);
                 guard();
                 if (existing && (existing.accountId !== accountId || existing.assistantId !== id)) throw new Error("Conversation is unavailable");
-                if (!existing) await runsService.executeRun({ accountId, assistantId: id, reservedRunId: row.runId, providerId: assistant.providerId, ...context, goal: message,
-                    initialContext: [{ kind: "note", content: `Application-origin welcome shown before the user's first message:\n${row.question}\nThe user has now answered. Carry out their chosen or written request.`, metadata: { origin: "assistant_setup" } }, ...(context.initialContext ?? [])] });
+                if (!existing) {
+                    const resolved = await assistantsService.execution(accountId, target);
+                    guard();
+                    assistantsService.require(id, accountId);
+                    // Persist the accepted location before native effects; retries reuse it after restart.
+                    assistantsRepo.patchWelcome(id, { state: "starting", answer: message, execution: JSON.stringify(resolved), error: null });
+                    changed();
+                    await runsService.executeRun({ accountId, assistantId: id, reservedRunId: row.runId, providerId: assistant.providerId, ...context, ...resolved, goal: message,
+                        initialContext: [{ kind: "note", content: `Application-origin welcome shown before the user's first message:\n${row.question}\nThe user has now answered. Carry out their chosen or written request.`, metadata: { origin: "assistant_setup" } }, ...(context.initialContext ?? [])] });
+                }
                 guard();
                 assistantsRepo.patchWelcome(id, { state: "started", error: null });
                 changed();
@@ -156,7 +167,8 @@ export const assistantWelcome = {
                 throw error;
             }
         })();
-        responses.set(id, job);
-        try { return await job; } finally { if (responses.get(id) === job) responses.delete(id); }
+        const response = { message, execution: target, promise: job };
+        responses.set(id, response);
+        try { return await job; } finally { if (responses.get(id) === response) responses.delete(id); }
     },
 };

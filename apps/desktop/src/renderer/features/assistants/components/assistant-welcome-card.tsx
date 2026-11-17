@@ -17,7 +17,8 @@ export function AssistantWelcomeCard({ welcome, busy, onAnswer, onRetry }: {
       onRespond={(_id, approved, value) => onAnswer(approved && value?.trim() ? value.trim() : null)} />
   </div>;
   if (welcome.state === "skipped" && welcome.question) return <div className="mt-5 space-y-5 text-sm leading-relaxed text-primary-900 dark:text-primary-100">
-    <p>{welcome.question.question}</p><p>{welcome.question.idleMessage}</p>
+    <p className="w-fit max-w-full rounded-2xl bg-primary-100/80 px-4 py-3 dark:bg-primary/8">{welcome.question.question}</p>
+    <p className="w-fit max-w-full rounded-2xl bg-primary-100/80 px-4 py-3 dark:bg-primary/8">{welcome.question.idleMessage}</p>
   </div>;
   if (welcome.state === "starting") return <div className="mt-5 space-y-3 text-sm text-primary-600 dark:text-primary-400">
     <p>{welcome.error || "Starting your conversation…"}</p>

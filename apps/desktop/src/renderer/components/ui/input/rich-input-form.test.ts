@@ -469,7 +469,8 @@ describe("RichInputForm assistant mentions", () => {
   it("restores a selected assistant, keeps its name readable and serializes its stable token", () => {
     const onQueryChange = vi.fn();
     const token = "@assistant-123";
-    const assistant = { name: token, displayName: "TestFlight", token };
+    const assistant = { name: token, displayName: "TestFlight", token,
+      icon: createElement("svg", { "data-testid": "assistant-avatar", "aria-hidden": "true" }), iconSize: "md" as const };
     const props = { query: `${token} check build 42`, onQueryChange, onSubmit: vi.fn() };
     const view = render(createElement(RichInputForm, { ...props, skillChipMap: new Map() }));
 
@@ -477,6 +478,7 @@ describe("RichInputForm assistant mentions", () => {
     const editor = screen.getByRole("textbox");
     const chip = editor.querySelector('[data-skill-chip="true"]');
     expect(chip?.textContent).toBe("TestFlight");
+    expect(screen.getByTestId("assistant-avatar")).toBeTruthy();
     expect(chip?.getAttribute("data-skill-token")).toBe(token);
     pastePlainText(editor, " please");
     expect(onQueryChange).toHaveBeenLastCalledWith(`${token} check build 42 please`);

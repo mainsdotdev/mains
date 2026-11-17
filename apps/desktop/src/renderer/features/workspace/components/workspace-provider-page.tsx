@@ -3,7 +3,8 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { createPortal } from "react-dom";
 import { toast } from "@/components/ui";
 import { Document, Picture } from "@/components/ui/icons";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
+import { assistantHref } from "@/features/assistants/lib/assistant-navigation";
 import { getProviderVariant } from "@/lib/provider-variants";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import type { RefObject } from "react";
@@ -95,6 +96,7 @@ export function WorkspaceProviderPage(props: WorkspaceProviderPageProps) {
   const requested = runId ?? (!showTabs && typeof activeTab === "string" && isRunTab(activeTab) ? activeTab : undefined);
   const { currentData: run, error } = useGetRunByIdQuery(requested ?? "", { skip: !requested });
   const { currentData: ownerWorkspace } = useGetWorkspaceQuery(run?.workspaceId ?? "", { skip: !run?.isReplica || !run.workspaceId });
+  if (run?.assistantId && !run.isReplica) return <Navigate to={assistantHref(run.assistantId, run.id)} replace />;
   if (run?.isReplica || (!requested && currentWorkspace?.isReplica)) {
     const workspace = run?.workspaceId ? ownerWorkspace ?? (currentWorkspace?.id === run.workspaceId ? currentWorkspace : null) : currentWorkspace?.isReplica ? currentWorkspace : null;
     return <Suspense fallback={<div className="p-6 text-xs text-primary-500">Loading synced conversation…</div>}><ReplicaWorkspaceView key={`${selectedBackend}/${workspace?.id ?? run?.id}`} initialRun={run} workspace={workspace}

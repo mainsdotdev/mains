@@ -22,7 +22,7 @@ import type { ModeId } from "../../../../shared/modes";
 import { toast } from "@/components/ui";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { runsApi, useArchiveRunMutation } from "@/lib/redux/api";
-import { clearPendingRunId, setActiveTab } from "@/lib/redux/slices/workspaceSlice";
+import { clearPendingRunId, detachAssistantRun, setActiveTab } from "@/lib/redux/slices/workspaceSlice";
 import { createRunCache } from "../lib/run-cache";
 import { mergeTranscriptStreams } from "../lib/merge-transcript-streams";
 import { omitCompletedCodexPreviews } from "../lib/run-event-mappers";
@@ -55,6 +55,7 @@ export function useWorkspaceRuns(
   ), [activeRunId, runEvents]);
   const { streamingEvents, clearTurnStreams } = useStreamingEvents(activeRunId, persistedStreamIds);
   const dispatch = useAppDispatch();
+  const backendId = useAppSelector((s) => s.backends.activeBackendId ?? "local");
   const [archiveRun] = useArchiveRunMutation();
 
   const eventsEndRef = useRef<HTMLDivElement>(null);
@@ -111,6 +112,7 @@ export function useWorkspaceRuns(
         const restored = results.flatMap((result) => {
           if (result.status !== "fulfilled" || !result.value.success || !result.value.data) return [];
           const run = result.value.data;
+          if (run.assistantId) { dispatch(detachAssistantRun({ backendId, runId: run.id })); return []; }
           return !run.isArchived && run.workspaceId === workspaceId &&
             (!providerId || run.providerId === providerId) && (!mode || run.mode === mode) ? [run] : [];
         });
@@ -118,14 +120,14 @@ export function useWorkspaceRuns(
       }
     })();
     return () => { current = false; };
-  }, [missingRetainedIds, workspaceId, providerId, mode]);
+  }, [missingRetainedIds, workspaceId, providerId, mode, backendId, dispatch]);
 
   // A run selected through the floating window may need to join this list.
   // Its asynchronous fetch must not insert into a view navigated to later.
   const selectionRevisionRef = useRef(0);
   useLayoutEffect(() => () => {
     selectionRevisionRef.current += 1;
-  }, [viewKey, providerId, mode]);
+  }, [viewKey, providerId, mode, backendId]);
 
   // --- Internal helpers ---
 
@@ -151,7 +153,7 @@ export function useWorkspaceRuns(
     if (operationIsCurrent && !operationIsCurrent()) return null;
     const runResult = await appApi.runs.getById(runId);
     if (operationIsCurrent && !operationIsCurrent(runResult.success ? runResult.data?.accountId : undefined)) return null;
-    if (runResult.success && runResult.data) {
+    if (runResult.success && runResult.data && !runResult.data.assistantId) {
       const newId = runResult.data.id;
       setRuns((prev) => [runResult.data, ...prev.filter((run) => run.id !== newId)]);
       setActiveRunId(newId);
@@ -178,7 +180,7 @@ export function useWorkspaceRuns(
           providerId,
           mode,
         });
-        if (result.success && result.data) filteredRuns = result.data;
+        if (result.success && result.data) filteredRuns = result.data.filter((run: Run) => !run.assistantId);
       } catch (err) {
         console.error("Failed to load workspace runs:", err);
       }
@@ -236,6 +238,7 @@ export function useWorkspaceRuns(
           !run ||
           !accountId ||
           run.accountId !== accountId ||
+          run.assistantId ||
           run.isArchived ||
           (providerId && run.providerId !== providerId) ||
           (mode && run.mode !== mode)
@@ -289,7 +292,7 @@ export function useWorkspaceRuns(
         const result = await appApi.runs.getById(runId);
         if (!current || revisions.get(runId) !== revision || !result.success || !result.data) return;
         const run = result.data;
-        if (run.isArchived || (routeRunId ? run.accountId !== routedAccountId : run.workspaceId !== workspaceId) ||
+        if (run.assistantId || run.isArchived || (routeRunId ? run.accountId !== routedAccountId : run.workspaceId !== workspaceId) ||
             (providerId && run.providerId !== providerId) || (mode && run.mode !== mode)) return;
         setRuns((previous) => previous.some((item) => item.id === run.id)
           ? previous.map((item) => item.id === run.id ? run : item)
@@ -318,7 +321,7 @@ export function useWorkspaceRuns(
         .getByWorkspace(id, { limit: 50, providerId, mode })
         .then((result) => {
           if (result.success && result.data && !runLists.has(id)) {
-            runLists.set(id, result.data);
+            runLists.set(id, result.data.filter((run: Run) => !run.assistantId));
           }
         })
         .catch(() => {});
@@ -417,17 +420,16 @@ export function useWorkspaceRuns(
   const selectTab = useCallback(
     (runId: string) => {
       const revision = selectionRevisionRef.current;
+      const known = runs.find(run => run.id === runId);
+      if (known?.assistantId) return;
       const wasPending = runs.some(
         (run) =>
           run.id === runId &&
           (run.status === "running" || run.status === "queued"),
       );
 
-      setActiveRunId(runId);
-
-      // Always reconcile on tab focus. Besides refreshing the transcript,
-      // this is the immediate fallback for a dropped/backgrounded status push.
-      void loadRunDetails(runId);
+      // Unknown IDs need ownership metadata before their transcript can enter the workspace surface.
+      if (known) { setActiveRunId(runId); void loadRunDetails(runId); }
       const request = beginRunRead(runId);
       if (!request) return;
       void (async () => {
@@ -435,10 +437,12 @@ export function useWorkspaceRuns(
           const result = await appApi.runs.getById(runId);
           if (!request.current() || revision !== selectionRevisionRef.current || !result.success || !result.data) return;
           const run = result.data;
+          if (run.assistantId) { dispatch(detachAssistantRun({ backendId, runId: run.id })); return; }
           if (run.isArchived ||
             (providerId && run.providerId !== providerId) ||
             (mode && run.mode !== mode) ||
             (workspaceId && run.workspaceId !== workspaceId)) return;
+          if (!known) { setActiveRunId(run.id); void loadRunDetails(run.id); }
 
           // The other renderer can create a run after this window loaded its
           // workspace. Selecting it must also make its tab available locally.
@@ -450,7 +454,7 @@ export function useWorkspaceRuns(
         finally { request.release(); }
       })();
     },
-    [runs, loadRunDetails, finalizeRun, workspaceId, providerId, mode, beginRunRead],
+    [runs, loadRunDetails, finalizeRun, workspaceId, providerId, mode, beginRunRead, backendId, dispatch],
   );
 
   const activeRun = runs.find((r) => r.id === activeRunId);

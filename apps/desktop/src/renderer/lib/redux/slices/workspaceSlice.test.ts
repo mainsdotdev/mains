@@ -4,6 +4,7 @@ import reducer, {
   openReviewTab,
   closeReviewTab,
   closeRunTab,
+  detachAssistantRun,
   setReviewRunId,
   setReviewFileReviewed,
   setReviewFileCollapsed,
@@ -18,6 +19,7 @@ import reducer, {
   openProviderAuthTerminal,
   removeContextItem,
   setActiveTab,
+  setPendingRunId,
   setComposerContextKey,
   setDraftText,
   setSelectedFile,
@@ -269,6 +271,32 @@ describe("workspaceSlice — deleted UI owners", () => {
   const draftA = JSON.stringify(["local", "draft", "space", "codex", "developer", "ws-a", null]);
   const runA = runOwnerKey("local", "run-a");
   const runB = runOwnerKey("local", "run-b");
+
+  it("detaches assistant chats from workspace selections and saved tabs while preserving their drafts and other backends", () => {
+    const remoteView = JSON.stringify(["remote", "space", "codex", "developer", "ws-a"]);
+    let state = reducer(undefined, activateWorkspaceView({ key: remoteView, workspaceId: "ws-a", providerId: "codex" }));
+    state = reducer(state, setActiveTab("run-a"));
+    state = reducer(state, activateWorkspaceView({ key: viewA, workspaceId: "ws-a", providerId: "codex" }));
+    state = reducer(state, setActiveTab("run-a"));
+    state = reducer(state, setDraftText({ key: runA, text: "keep assistant draft" }));
+    state = reducer(state, activateWorkspaceView({ key: viewB, workspaceId: "ws-b", providerId: "codex" }));
+    state = reducer(state, setActiveTab("run-a"));
+    state = reducer(state, setPendingRunId("run-a"));
+
+    state = reducer(state, detachAssistantRun({ backendId: "local", runId: "run-a" }));
+
+    expect(state.activeTab).toBe("editor");
+    expect(state.openRunIds).toEqual([]);
+    expect(state.pendingRunId).toBeNull();
+    expect(state.workspaceViews[viewA].activeTab).toBe("editor");
+    expect(state.workspaceViews[viewA].openRunIds).toEqual([]);
+    expect(state.workspaceViews[remoteView].activeTab).toBe("run-a");
+    expect(state.draftTextByKey[runA]).toBe("keep assistant draft");
+
+    state = reducer(state, setActiveTab("run-b"));
+    state = reducer(state, detachAssistantRun({ backendId: "local", runId: "run-a" }));
+    expect(state.activeTab).toBe("run-b");
+  });
 
   it("clears a deleted run from drafts and saved tabs without touching another run", () => {
     let state = reducer(undefined, activateWorkspaceView({ key: viewA, workspaceId: "ws-a", providerId: "codex" }));

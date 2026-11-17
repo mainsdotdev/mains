@@ -1,7 +1,8 @@
 import { useEffect, useRef, type CSSProperties, type PointerEvent } from "react";
 import { normalizeAssistantAvatar, type AssistantAvatar as Avatar } from "@mains/contracts/assistants";
 import { cn } from "@/lib/cn";
-import { AVATAR_PARTICLES, avatarPhase, type AvatarDetail } from "../lib/assistant-particles";
+import { SquareCell, squareCellStyle, SQUARE_PULSE_DURATION_MS } from "@/components/ui";
+import { AVATAR_PARTICLES, AVATAR_GRID_SIDES, AVATAR_FLOWER_CLIP, avatarPhase, type AvatarDetail } from "../lib/assistant-particles";
 import "./assistant-avatar.css";
 
 export const AVATAR_COLORS = {
@@ -21,6 +22,7 @@ export function AssistantAvatar({ avatar, working = false, seed = "assistant", d
   const color = AVATAR_COLORS[selected.color];
   const root = useRef<HTMLSpanElement>(null);
   const phase = avatarPhase(seed);
+  const side = AVATAR_GRID_SIDES[detail];
   useEffect(() => {
     const element = root.current;
     if (!element) return;
@@ -37,26 +39,22 @@ export function AssistantAvatar({ avatar, working = false, seed = "assistant", d
     if (!animated || event.pointerType === "touch") return;
     const bounds = event.currentTarget.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return;
-    const clamp = (n: number) => Math.max(-1, Math.min(1, n));
-    event.currentTarget.style.setProperty("--avatar-look-x", `${clamp((event.clientX - bounds.left) / bounds.width * 2 - 1) * 2}px`);
-    event.currentTarget.style.setProperty("--avatar-look-y", `${clamp((event.clientY - bounds.top) / bounds.height * 2 - 1) * 1.5}px`);
+    const x = (event.clientX - bounds.left) / bounds.width * 2 - 1;
+    const y = (event.clientY - bounds.top) / bounds.height * 2 - 1;
+    event.currentTarget.dataset.gaze = Math.max(Math.abs(x), Math.abs(y)) < 0.3 ? "center"
+      : Math.abs(x) > Math.abs(y) ? x < 0 ? "left" : "right" : y < 0 ? "up" : "down";
   };
   return <span ref={root} aria-hidden="true" data-avatar-shape={selected.shape} data-working={working} data-animated={animated} data-paused={!animated}
     className={cn("particle-avatar inline-flex shrink-0 items-center justify-center", className)}
-    onPointerMove={look} onPointerLeave={event => { event.currentTarget.style.removeProperty("--avatar-look-x"); event.currentTarget.style.removeProperty("--avatar-look-y"); }}
-    style={{ "--avatar-fill": color.fill, "--avatar-light": color.light, "--avatar-ink": color.ink, "--avatar-delay": `${-phase * 8}s`, "--avatar-eye-delay": `${-phase * 7.6}s` } as CSSProperties}>
-    <svg viewBox="0 0 64 64" className="h-full w-full overflow-visible" fill="currentColor" focusable="false">
-      <g className="particle-avatar__body">
-        {AVATAR_PARTICLES[selected.shape][detail].map(particle => <g key={particle.id} data-particle-id={particle.id} transform={`translate(${particle.x} ${particle.y})`}
-          style={{ "--particle-opacity": particle.opacity, "--particle-wave-forward": particle.waveForward - phase, "--particle-wave-return": particle.waveReturn - phase } as CSSProperties}>
-          {particle.eye ? <g className="particle-avatar__look"><rect data-eye={particle.eye} className="particle-avatar__eye" x={-particle.halfSize} y={-particle.halfSize} width={particle.halfSize * 2} height={particle.halfSize * 2} rx={0.8} /></g>
-            : <>
-              <rect className="particle-avatar__particle" x={-particle.halfSize} y={-particle.halfSize} width={particle.halfSize * 2} height={particle.halfSize * 2} rx={0.35} />
-              <rect className="particle-avatar__wave particle-avatar__wave--forward" x={-particle.halfSize} y={-particle.halfSize} width={particle.halfSize * 2} height={particle.halfSize * 2} rx={0.35} />
-              <rect className="particle-avatar__wave particle-avatar__wave--return" x={-particle.halfSize} y={-particle.halfSize} width={particle.halfSize * 2} height={particle.halfSize * 2} rx={0.35} />
-            </>}
-        </g>)}
-      </g>
-    </svg>
+    onPointerMove={look} onPointerLeave={event => { delete event.currentTarget.dataset.gaze; }}
+    style={{ "--avatar-fill": color.fill, "--avatar-light": color.light, "--avatar-ink": color.ink, "--tsq-duration": `${working ? SQUARE_PULSE_DURATION_MS : 3600}ms`, "--tsq-phase": phase, "--avatar-eye-delay": `${-phase * 10.4}s` } as CSSProperties}>
+    <span className="particle-avatar__grid" style={{ gridTemplateColumns: `repeat(${side}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${side}, minmax(0, 1fr))`, clipPath: selected.shape === "flower" ? AVATAR_FLOWER_CLIP : undefined }}>
+      {AVATAR_PARTICLES[selected.shape][detail].map(particle => <SquareCell key={particle.id} data-cell-id={particle.id} data-eye={particle.eye}
+        className="particle-avatar__cell"
+        style={{ ...squareCellStyle(particle.row, particle.col, side), gridRow: particle.row + 1, gridColumn: particle.col + 1, "--tsq-radius": particle.radius,
+          ...Object.fromEntries(Object.entries(particle.gaze).map(([gaze, value]) => [`--eye-${gaze}`, value])) } as CSSProperties}>
+        {Object.values(particle.gaze).some(Boolean) && <span className="particle-avatar__eye" />}
+      </SquareCell>)}
+    </span>
   </span>;
 }

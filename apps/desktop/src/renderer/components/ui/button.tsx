@@ -17,7 +17,7 @@ export type ButtonVariant =
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   /** Compact actions share one surface; only dense rows use a smaller hit area. */
-  iconSize?: "xs" | "sm" | "md";
+  iconSize?: "xs" | "sm" | "md" | "lg";
   isLoading?: boolean;
   fullWidth?: boolean;
   leftIcon?: React.ReactNode;
@@ -57,6 +57,7 @@ const iconSizeStyles = {
   xs: "size-5 p-1 [&>svg]:size-3",
   sm: "size-6 p-1 [&>svg]:size-3.5",
   md: "size-7 p-1.5 [&>svg]:size-4",
+  lg: "size-8 p-2 [&>svg]:size-4",
 };
 
 // Interaction semantics belong to the primitive, not to a visual variant.

@@ -45,6 +45,7 @@ export interface CodexRunSession {
 
 export type CodexActiveRunState = CodexEventRunState & {
   mode: ModeId;
+  assistantId: string | null;
   subscribedThreadIds: Set<string>;
   aborted: boolean;
   timeoutError?: string;
@@ -65,6 +66,7 @@ interface CodexRunCoordinatorOptions {
 interface RegisterRunParams {
   runId: string;
   mode?: ModeId;
+  assistantId?: string | null;
   threadId: string | null;
   mainsCtx: MainsToolContext;
   subAgents?: CodexSubAgentRunMeta[];
@@ -236,6 +238,7 @@ export function createCodexRunCoordinator(
     activeRuns.set(runId, {
       ...state,
       mode: params.mode ?? DEFAULT_MODE_ID,
+      assistantId: params.assistantId ?? null,
       subscribedThreadIds: new Set(
         threadId ? [threadId] : [],
       ),

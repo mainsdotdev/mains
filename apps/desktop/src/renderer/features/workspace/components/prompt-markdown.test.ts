@@ -26,9 +26,10 @@ function Location() {
 describe("PromptMarkdown", () => {
   it("renders a saved assistant's exact token as its human name without a skill destination", () => {
     render(createElement(MemoryRouter, null, createElement(PromptMarkdown, {
-      skills: [{ name: "123", token: "@assistant-123", displayName: "TestFlight", scope: "assistant" }],
+      skills: [{ name: "123", token: "@assistant-123", displayName: "TestFlight", scope: "assistant", assistantAvatar: { shape: "cube", color: "mint" } }],
     }, "@assistant-123 check build 42")));
     expect(screen.getByText("TestFlight")).toBeTruthy();
+    expect(document.querySelector('[data-avatar-shape="cube"]')).toBeTruthy();
     expect(screen.queryByText(/@assistant-123/)).toBeNull();
     fireEvent.click(screen.getByText("TestFlight"));
     expect(openDocument).not.toHaveBeenCalled();

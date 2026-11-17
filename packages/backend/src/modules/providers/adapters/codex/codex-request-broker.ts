@@ -69,6 +69,7 @@ export interface CodexServerResponder {
 export interface CodexRequestRunState {
   threadId?: string | null;
   mode?: ModeId;
+  assistantId?: string | null;
   fileChangeItems: Map<
     string,
     Array<{ path: string; kind: string; diff?: string }>
@@ -134,7 +135,10 @@ export function createCodexRequestBroker(
   const mainsToolNames = new Map(
     MODE_IDS.map((mode) => [
       mode,
-      new Set(toCodexDynamicTools(mode).map((tool) => tool.name)),
+      {
+        conversation: new Set(toCodexDynamicTools(mode).map((tool) => tool.name)),
+        assistant: new Set(toCodexDynamicTools(mode, true).map((tool) => tool.name)),
+      },
     ]),
   );
 
@@ -508,8 +512,10 @@ export function createCodexRequestBroker(
       const toolArgs = parseToolArguments(
         toolParams?.arguments,
       );
-      const mode = getRunState(runId)?.mode ?? DEFAULT_MODE_ID;
-      if (toolName && mainsToolNames.get(mode)?.has(toolName)) {
+      const state = getRunState(runId);
+      const mode = state?.mode ?? DEFAULT_MODE_ID;
+      const toolNames = mainsToolNames.get(mode)?.[state?.assistantId ? "assistant" : "conversation"];
+      if (toolName && toolNames?.has(toolName)) {
         const ctx =
           getMainsToolContext(runId) ?? {
             workspaceId: null,

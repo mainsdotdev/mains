@@ -308,6 +308,9 @@ const workspaceSlice = createSlice({
     detachArchivedRun: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
       detachRunFromViews(state, action.payload.backendId, action.payload.runId);
     },
+    detachAssistantRun: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
+      detachRunFromViews(state, action.payload.backendId, action.payload.runId);
+    },
     forgetRunUiState: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
       const { backendId, runId } = action.payload;
       const ownerKey = runOwnerKey(backendId, runId);
@@ -700,6 +703,7 @@ export const {
   collapseAllExplorerPaths,
   setActiveTab,
   closeRunTab,
+  detachAssistantRun,
   openReviewTab,
   closeReviewTab,
   setReviewRunId,

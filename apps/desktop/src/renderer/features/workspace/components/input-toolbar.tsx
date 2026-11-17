@@ -28,7 +28,8 @@ import type { ModelServiceTier } from "@mains/contracts/run-settings";
 import type { ProviderVariant } from "@/lib/provider-variants";
 
 interface InputToolbarProps {
-  fixedProfileLabel?: string;
+  assistantComposer?: boolean;
+  assistantMultiline?: boolean;
   primaryAction: ComposerPrimaryAction & { onClick: () => void };
   voiceMute?: { muted: boolean; disabled: boolean; onToggle: () => void };
   variant: ProviderVariant;
@@ -84,7 +85,8 @@ interface InputToolbarProps {
 }
 
 export function InputToolbar({
-  fixedProfileLabel,
+  assistantComposer = false,
+  assistantMultiline = false,
   primaryAction,
   voiceMute,
   variant,
@@ -203,7 +205,8 @@ export function InputToolbar({
   ) : (
     <FileUploadDropdown isOpen={showFileDropdown} onToggle={() => setShowFileDropdown(!showFileDropdown)}
       onImageUpload={handleImageUpload} onDocumentUpload={handleDocumentUpload} dropdownRef={fileDropdownRef}
-      openUpward compact={layout === "floating"} />
+      openUpward compact={layout === "floating" || assistantComposer}
+      triggerIcon={assistantComposer ? <Plus className="size-5" /> : undefined} />
   );
   const uploadInput = <Input variant="bare" ref={fileInputRef} type="file" className="hidden"
     aria-label={attachmentMode === "images" ? "Upload images" : "Upload files"}
@@ -223,26 +226,24 @@ export function InputToolbar({
         stopDisabled={primaryAction.disabled}
         icon={<Microphone aria-hidden="true" />}
         showCustomIcon={primaryAction.kind === "voice"}
-        compact={layout === "floating"}
+        compact={layout === "floating" || assistantComposer}
       />
     </>
   );
 
   const speedControl = serviceTiers && serviceTiers.length > 1 && onServiceTierChange
-    ? <ServiceTierSelect value={serviceTier ?? "default"} options={serviceTiers} onChange={onServiceTierChange} compact={layout === "floating"} />
-    : supportsFastMode ? <FastModeButton fastMode={fastMode} onToggle={onFastModeToggle} compact={layout === "floating"} /> : null;
+    ? <ServiceTierSelect value={serviceTier ?? "default"} options={serviceTiers} onChange={onServiceTierChange} compact={layout === "floating" || assistantComposer} />
+    : supportsFastMode ? <FastModeButton fastMode={fastMode} onToggle={onFastModeToggle} compact={layout === "floating" || assistantComposer} /> : null;
 
-  if (fixedProfileLabel) {
-    return (
-      <div className="flex min-w-0 items-center justify-between gap-3 px-3 pt-6">
-        <div className="flex min-w-0 items-center gap-2">
-          {uploadButton}
-          {uploadInput}
-          <span className="truncate text-xs text-primary-500" title={fixedProfileLabel}>{fixedProfileLabel}</span>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">{actionButtons}</div>
+  if (assistantComposer) {
+    return <div className="contents">
+      <div className={`col-start-1 flex h-8 items-center ${assistantMultiline ? "row-start-2 mt-2" : "row-start-1"}`}>
+        {uploadButton}{uploadInput}
       </div>
-    );
+      <div className={`col-start-3 flex h-8 items-center justify-end ${assistantMultiline ? "row-start-2 mt-2" : "row-start-1"}`}>
+        {actionButtons}
+      </div>
+    </div>;
   }
 
   if (layout === "floating") {

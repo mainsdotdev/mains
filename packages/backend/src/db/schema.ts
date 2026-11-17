@@ -1664,6 +1664,10 @@ export const pulses = sqliteTable(
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
 
+    // Assistant identities and assignments stay local to the owning backend.
+    assistantId: text("assistant_id"),
+    lastAssignmentId: text("last_assignment_id"),
+
     // Developer pulses run in a workspace; work/chat pulses run workspace-less
     // (managed execution dir) and may target a collection instead.
     workspaceId: text("workspace_id").references(() => workspaces.id, {
@@ -1720,6 +1724,7 @@ export const pulses = sqliteTable(
   },
   (t) => [
     index("idx_pulses_account").on(t.accountId),
+    index("idx_pulses_assistant").on(t.assistantId),
     index("idx_pulses_workspace").on(t.workspaceId),
     index("idx_pulses_active_next_run").on(t.isActive, t.nextRunAt),
     check(
@@ -1867,6 +1872,7 @@ export const assistantWelcomes = sqliteTable("assistant_welcomes", {
   state: text("state", { enum: ["pending", "generating", "ready", "skipped", "starting", "started", "failed"] }).notNull().default("pending"),
   wasSkipped: integer("was_skipped", { mode: "boolean" }).notNull().default(false),
   question: text("question"), setupPrompt: text("setup_prompt"), answer: text("answer"), error: text("error"),
+  execution: text("execution").notNull().default('{"mode":"work"}'),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 }, (t) => [uniqueIndex("uniq_assistant_welcomes_run").on(t.runId), check("check_assistant_welcome_question_json", sql`json_valid(${t.question}) OR ${t.question} IS NULL`)]);

@@ -700,7 +700,8 @@ body[data-resizing] iframe {
 }
 
 /*
- * Tool status loader — a 4×4 grid of squares. Each square carries two
+ * Shared square cell — used by the 3×3 tool loader and assistant silhouettes.
+ * Each square carries two
  * overlapping pulses (::before / ::after) that peak once per cycle. Their
  * per-cell delays are set inline so the lit squares sweep diagonally: the
  * ::before layer rides the top-left → bottom-right anti-diagonal during the
@@ -716,6 +717,10 @@ body[data-resizing] iframe {
 
 .tool-square {
   position: relative;
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--tsq-radius, 1px);
+  background: var(--tsq-base, transparent);
 }
 
 .tool-square::before,
@@ -723,16 +728,16 @@ body[data-resizing] iframe {
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: 1px;
-  background: currentColor;
+  border-radius: inherit;
+  background: var(--tsq-color, currentColor);
   opacity: 0;
   /* ease-in-out-sine: zero velocity at the peak and at the dim landings, so the
      brighten/dim fades stay silky with no hard corners. */
-  animation: toolSquarePulse 2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation: toolSquarePulse var(--tsq-duration, 2000ms) cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
-.tool-square::before { animation-delay: var(--tsq-d1, 0ms); }
-.tool-square::after  { animation-delay: var(--tsq-d2, 0ms); }
+.tool-square::before { animation-delay: calc(var(--tsq-duration, 2000ms) * (var(--tsq-d1, 0) - var(--tsq-phase, 0))); }
+.tool-square::after  { animation-delay: calc(var(--tsq-duration, 2000ms) * (var(--tsq-d2, 0) - var(--tsq-phase, 0))); }
 
 /*
  * Generate spinner: each tiny square twinkles independently at a random phase

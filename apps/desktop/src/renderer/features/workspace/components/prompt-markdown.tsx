@@ -14,7 +14,12 @@ import { useOpenComposerMention } from "../hooks/use-open-composer-mention";
 import { useOpenFileInEditor } from "../hooks/use-open-file-in-editor";
 import { composerSkillDestination } from "../lib/composer-mention";
 
+import { AssistantAvatar } from "@/features/assistants/components/assistant-avatar";
+import type { AssistantAvatar as Avatar } from "@mains/contracts/assistants";
+
 export interface PromptMarkdownSkill {
+  assistantAvatar?: Avatar;
+  assistantId?: string;
   token?: string;
   name: string;
   path?: string;
@@ -184,8 +189,10 @@ function PromptSkillChip({ skill, onOpen }: {
       title={tooltip}
       onClick={clickable ? () => onOpen(skill.name) : undefined}
     >
-      <span className="inline-flex items-center justify-center size-3.5 shrink-0 rounded-sm overflow-hidden">
-        {iconPath && resolved && !failed ? (
+      <span className={`inline-flex items-center justify-center ${skill.scope === "assistant" ? "size-5" : "size-3.5"} shrink-0 rounded-sm overflow-hidden`}>
+        {skill.scope === "assistant" ? (
+          <AssistantAvatar avatar={skill.assistantAvatar} seed={skill.assistantId ?? skill.name} className="size-5" />
+        ) : iconPath && resolved && !failed ? (
           <img
             src={resolved}
             alt=""

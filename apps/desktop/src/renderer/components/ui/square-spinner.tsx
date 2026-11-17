@@ -1,13 +1,7 @@
-import { type CSSProperties } from "react";
+import { SquareCell, squareCellStyle } from "./square-cell";
 
 /** Side of the loader grid. Drives `grid-template` below. */
 const GRID = 3;
-/** Cycle length — must match the `toolSquarePulse` animation in `index.css`. */
-const DUR_MS = 2000;
-/** Keyframe peak position (fraction of cycle) — must match `toolSquarePulse`. */
-const PEAK = 0.28;
-/** Fraction of a half-cycle that each diagonal sweep spans. */
-const SWEEP = 0.25;
 
 /**
  * Per-cell pulse delays for the two diagonal sweeps. `--tsq-d1` drives the
@@ -20,11 +14,7 @@ const SWEEP = 0.25;
 const CELLS = Array.from({ length: GRID * GRID }, (_, i) => {
   const row = Math.floor(i / GRID);
   const col = i % GRID;
-  const max = (GRID - 1) * 2; // largest diagonal index
-  const phase = (target: number) => Math.round((target - PEAK) * DUR_MS);
-  const d1 = phase(((row + col) / max) * SWEEP);
-  const d2 = phase(0.5 + ((GRID - 1 - row + col) / max) * SWEEP);
-  return { d1, d2 } as const;
+  return squareCellStyle(row, col, GRID);
 });
 
 const TEMPLATE = `repeat(${GRID}, minmax(0, 1fr))`;
@@ -43,13 +33,7 @@ export function SquareSpinner({ className = "size-2.75" }: { className?: string 
       className={`grid shrink-0 gap-px ${className}`}
       style={{ gridTemplateColumns: TEMPLATE, gridTemplateRows: TEMPLATE }}
     >
-      {CELLS.map(({ d1, d2 }, i) => (
-        <span
-          key={i}
-          className="tool-square"
-          style={{ "--tsq-d1": `${d1}ms`, "--tsq-d2": `${d2}ms` } as CSSProperties}
-        />
-      ))}
+      {CELLS.map((style, i) => <SquareCell key={i} style={style} />)}
     </span>
   );
 }

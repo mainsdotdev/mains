@@ -328,9 +328,9 @@ describe("single primary composer button", () => {
 
 describe("frozen assistant composer", () => {
   it("keeps uploads and Send while removing profile-changing controls", () => {
-    const props = { ...nativeToolbarProps(), fixedProfileLabel: "Release model · high effort" };
+    const props = { ...nativeToolbarProps(), assistantComposer: true };
     render(createElement(InputToolbar, props));
-    expect(screen.getByText("Release model · high effort")).toBeTruthy();
+    expect(screen.queryByText("Release model · high effort")).toBeNull();
     expect(screen.queryByRole("button", { name: "Permission mode" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Select model/ })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Send prompt" }));

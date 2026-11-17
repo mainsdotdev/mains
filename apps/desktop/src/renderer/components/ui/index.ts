@@ -131,6 +131,7 @@ export { AnimatedTitle } from "./animated-title";
 export { AsciiSpinner } from "./ascii-spinner";
 export type { AsciiSpinnerVariant, AsciiSpinnerKind } from "./ascii-spinner";
 export { SquareSpinner } from "./square-spinner";
+export { SquareCell, squareCellStyle, SQUARE_PULSE_DURATION_MS } from "./square-cell";
 export { DownloadSpinner } from "./download-spinner";
 export { CircleSpinner } from "./circle-spinner";
 

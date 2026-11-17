@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { Assistant, AssistantWelcome, AssistantMessageContext, SendAssistantMessage } from "@mains/contracts/assistants";
+import type { Assistant, AssistantWelcome, AssistantMessageContext, AssistantExecution, SendAssistantMessage } from "@mains/contracts/assistants";
 import { CHANNELS } from "@mains/contracts/channels";
 import { useSendAssistantMessageMutation, useRespondAssistantWelcomeMutation, usePrepareAssistantWelcomeMutation } from "@/lib/redux/api/assistantsApi";
 import { useGetRunByIdQuery, useAbortRunMutation, useGetWorkspaceQuery } from "@/lib/redux/api";
@@ -72,12 +72,14 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
   const [abort] = useAbortRunMutation();
   const [respondWelcome, welcomeResponse] = useRespondAssistantWelcomeMutation();
   const [prepareWelcome, welcomePreparation] = usePrepareAssistantWelcomeMutation();
+  // New standalone work always starts in Work. Already accepted welcomes keep their delivery target.
+  const execution: AssistantExecution = waitingWelcome?.answer != null ? waitingWelcome.execution ?? { mode: "work" } : { mode: "work" };
   const answerWelcome = async (answer: string | null) => {
     if (sendingRef.current) return;
     sendingRef.current = true;
     setFailure("");
     try {
-      const result = await respondWelcome({ accountId: assistant.accountId, id: assistant.id, answer }).unwrap();
+      const result = await respondWelcome({ accountId: assistant.accountId, id: assistant.id, answer, execution }).unwrap();
       if (bound.current && getTransport() === transport && answer !== null) onSelectRun(result.runId);
     } catch (error) { if (bound.current) setFailure(errorText(error)); }
     finally { sendingRef.current = false; }
@@ -120,7 +122,7 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
     setFailure("");
     const submitted = [...context.items];
     try {
-      const request = pending ?? { accountId: assistant.accountId, assistantId: assistant.id, message: message.trim() || "Use the attached context.", requestId: waitingWelcome ? `welcome-${assistant.id}` : crypto.randomUUID(), ...(selectedRunId ? { runId: selectedRunId } : {}), context: buildRunContextPayload(submitted, files.length ? await serializeAttachments(files) : undefined) as AssistantMessageContext };
+      const request = pending ?? { accountId: assistant.accountId, assistantId: assistant.id, message: message.trim() || "Use the attached context.", requestId: waitingWelcome ? `welcome-${assistant.id}` : crypto.randomUUID(), ...(selectedRunId ? { runId: selectedRunId } : {}), ...(!chatRunId ? { execution } : {}), context: buildRunContextPayload(submitted, files.length ? await serializeAttachments(files) : undefined) as AssistantMessageContext };
       if (!bound.current || getTransport() !== transport) return;
       setPending(request);
       const result = await send(request).unwrap();
@@ -136,14 +138,20 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
   }
   const stop = useCallback(() => { if (chatRunId) void abort(chatRunId).unwrap().catch(error => { if (bound.current) setFailure(errorText(error)); }); }, [chatRunId, abort]);
   const variant = assistant.providerId === "codex" ? "codex" : "claude";
-  const composer = <WorkspaceInput goal={pending?.message ?? message} onGoalChange={setMessage} onSubmit={() => void submit()} onStop={stop}
+  const composer = <>
+    {chatRunId && run && belongs && <div className="mx-auto mb-2 flex w-full max-w-210 items-center justify-between gap-3">
+        <span className="min-w-0 truncate text-xs text-primary-600 dark:text-primary-300" title={workspace?.rootPath}>{run.mode === "developer" ? workspace?.name ?? "Workspace unavailable" : "Work"}</span>
+        <Button variant="ghost" onClick={() => onSelectRun(null)}>New task</Button>
+    </div>}
+    <WorkspaceInput assistantComposer goal={pending?.message ?? message} onGoalChange={setMessage} onSubmit={() => void submit()} onStop={stop}
     isLoading={preparing || sending.isLoading} disabled={!!pending || !belongs} sendDisabled={!!pending} activeRun={visibleRun}
     canResume={!!chatRunId} providerId={assistant.providerId} mode={run?.mode ?? "work"} selectedModel={assistant.model}
     onModelChange={keepProfile} settingsConfig={assistant.conversationSettings.config} onSettingsConfigChange={keepProfile}
-    fixedProfileLabel={`${assistant.model} · ${assistant.effort || "Default"} effort`} allowVoice={false} showGoalButton={false}
-    workspacePath={workspace?.rootPath} uploadedFiles={files} onUploadedFilesChange={setFiles}
+    allowVoice={false} showGoalButton={false}
+    workspacePath={chatRunId ? workspace?.rootPath : undefined} uploadedFiles={files} onUploadedFilesChange={setFiles}
     placeholder={`Message ${assistant.name}…`} inputLabel={`Message ${assistant.name}`} isNewRunTabActive={!chatRunId}
-    layout={chatRunId || waitingWelcome ? "default" : "centered"} />;
+    layout={chatRunId || waitingWelcome ? "default" : "centered"} />
+  </>;
   return <PluginLogoProvider providerId={assistant.providerId}>
     <AsyncQuestionDialogProvider ownerKey={ownerKey} runId={chatRunId} runStatus={run?.status} turns={turns} events={events} historical={history.historical}>
       <div className="relative flex min-h-0 flex-1 flex-col">
@@ -159,7 +167,7 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
           <div className="w-full">{composer}</div>
         </div> : <>
           <div className="min-h-0 flex-1 overflow-hidden">
-            {belongs ? <WorkspaceEvents mode={run?.mode ?? "work"} runs={visibleRun ? [visibleRun] : []} activeTab={chatRunId} currentEvents={events} currentWorkspace={workspace ?? null} eventsEndRef={eventsEndRef} history={history} issueTabs={[]} turns={turns} variant={variant} onSuggestionSelect={setMessage} /> : <p role={runError ? "alert" : "status"} className="p-6 text-sm text-primary-500">{runError ? errorText(runError) : run ? "This conversation belongs to another assistant." : "Loading conversation…"}</p>}
+            {belongs ? <WorkspaceEvents appearance="assistant" hideTurnChanges mode={run?.mode ?? "work"} runs={visibleRun ? [visibleRun] : []} activeTab={chatRunId} currentEvents={events} currentWorkspace={workspace ?? null} eventsEndRef={eventsEndRef} history={history} issueTabs={[]} turns={turns} variant={variant} onSuggestionSelect={setMessage} /> : <p role={runError ? "alert" : "status"} className="p-6 text-sm text-primary-500">{runError ? errorText(runError) : run ? "This conversation belongs to another assistant." : "Loading conversation…"}</p>}
           </div>
           <div className={CONTENT_COLUMN_GUTTER}>
             <ComposerSlot request={approval} onRespond={respond} variant={variant}>{composer}</ComposerSlot>

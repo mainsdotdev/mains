@@ -12,9 +12,10 @@ export function registerAssistantsIpc() {
     ipcMain.handle(CHANNELS.assistants.assignment, handle((accountId: string, id: string) => assistantsService.assignment(accountId, id)));
     ipcMain.handle(CHANNELS.assistants.overview, handle((accountId: string) => assistantsService.overview(accountId)));
     ipcMain.handle(CHANNELS.assistants.createTeam, handle((payload: unknown) => changed(() => assistantsService.createTeam(payload))));
+    ipcMain.handle(CHANNELS.assistants.changeTeam, handle((payload: unknown) => changed(() => assistantsService.changeTeam(payload))));
     ipcMain.handle(CHANNELS.assistants.create, handle((payload: unknown) => changed(async () => { const assistant = await assistantsService.create(payload, assistantWork.guard()); assistantWelcome.prepare(assistant.id); return assistant; })));
     ipcMain.handle(CHANNELS.assistants.prepareWelcome, handle((accountId: string, id: string) => assistantWelcome.retry(accountId, id)));
-    ipcMain.handle(CHANNELS.assistants.respondWelcome, handle((accountId: string, id: string, answer: string | null) => assistantWelcome.respond(accountId, id, answer)));
+    ipcMain.handle(CHANNELS.assistants.respondWelcome, handle((accountId: string, id: string, answer: string | null, execution?: unknown) => assistantWelcome.respond(accountId, id, answer, {}, execution)));
     ipcMain.handle(CHANNELS.assistants.archive, handle((accountId: string, id: string, archived: boolean) => changed(() => { assistantsService.archive(id, accountId, archived); if (!archived) assistantWelcome.prepare(id); })));
     ipcMain.handle(CHANNELS.assistants.saveMemory, handle((payload: unknown) => changed(() => assistantsService.saveMemory(payload))));
     ipcMain.handle(CHANNELS.assistants.removeMemory, handle((accountId: string, id: string, revision: number) => changed(() => assistantsService.removeMemory(accountId, id, revision))));

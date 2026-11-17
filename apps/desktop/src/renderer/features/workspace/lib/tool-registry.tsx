@@ -1,6 +1,8 @@
+import { ASSISTANT_TOOL_LABELS } from "./assistant-tool-content";
 import { Globe } from "@/components/ui/icons/space";
 import {
   Bash,
+  Bot,
   Box,
   BrowserCursor,
   Check,
@@ -174,6 +176,11 @@ export const VENDORS: VendorInfo[] = [
     },
   },
 ];
+
+export const ASSISTANT_TOOLS: BuiltinTool[] = Object.keys(ASSISTANT_TOOL_LABELS).map(name => ({
+  displayName: name, groupKey: name.toLowerCase(), category: "Assistants",
+  icon: <Bot className="size-4" />, aliases: [name.toLowerCase()],
+}));
 
 /**
  * Built-in (non-MCP) tools. Order is significant for the contains-fallback

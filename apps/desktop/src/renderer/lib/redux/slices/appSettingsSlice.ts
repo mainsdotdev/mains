@@ -2,6 +2,7 @@ import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import {
   SIDEBAR_WIDTH_DEFAULT,
   PANEL_WIDTH_DEFAULT,
+  ASSISTANT_INFO_PANEL_WIDTH_DEFAULT,
   BROWSER_PANEL_WIDTH_DEFAULT,
   DOC_VIEWER_PANEL_WIDTH_DEFAULT,
   TASKS_DETAIL_WIDTH_DEFAULT,
@@ -100,6 +101,8 @@ export interface AppSettingsState {
   sidebarWidth: number;
   /** Right panel width in pixels. Mirrored onto `--panel-width`. */
   rightPanelWidth: number;
+  /** Independent width of the assistant information panel. */
+  assistantInfoPanelWidth: number;
   /** Embedded browser panel width in pixels. Mirrored onto `--browser-panel-width`. */
   browserPanelWidth: number;
   /** Whether the in-app document viewer panel is open. */
@@ -155,6 +158,7 @@ const initialState: AppSettingsState = {
   onboardingCompleted: false,
   sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
   rightPanelWidth: PANEL_WIDTH_DEFAULT,
+  assistantInfoPanelWidth: ASSISTANT_INFO_PANEL_WIDTH_DEFAULT,
   browserPanelWidth: BROWSER_PANEL_WIDTH_DEFAULT,
   documentViewerOpen: false,
   documentViewerWidth: DOC_VIEWER_PANEL_WIDTH_DEFAULT,
@@ -312,6 +316,9 @@ const appSettingsSlice = createSlice({
     setRightPanelWidth: (state, action: PayloadAction<number>) => {
       state.rightPanelWidth = action.payload;
     },
+    setAssistantInfoPanelWidth: (state, action: PayloadAction<number>) => {
+      state.assistantInfoPanelWidth = action.payload;
+    },
     setBrowserPanelWidth: (state, action: PayloadAction<number>) => {
       state.browserPanelWidth = action.payload;
     },
@@ -457,6 +464,7 @@ export const {
   setOnboardingCompleted,
   setSidebarWidth,
   setRightPanelWidth,
+  setAssistantInfoPanelWidth,
   setBrowserPanelWidth,
   setDocumentViewerOpen,
   setDocumentViewerPanelWidth,

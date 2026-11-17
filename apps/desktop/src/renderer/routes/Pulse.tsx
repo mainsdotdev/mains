@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { assistantHref } from "@/features/assistants/lib/assistant-navigation";
 import { Close, Plus, Search } from "@/components/ui/icons";
 import { useGetPulsesQuery, type Pulse } from "@/lib/redux/api/pulseApi";
 import { useModeConfig } from "@/hooks/use-mode-config";
@@ -16,7 +17,8 @@ import { PageShell } from "@/components/layout/page-shell";
 
 export default function PulsePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: pulses = [], isLoading } = useGetPulsesQuery();
+  const navigate = useNavigate();
+  const { data: pulses = [], isLoading } = useGetPulsesQuery(undefined, { pollingInterval: 15_000, skipPollingIfUnfocused: true });
   const { mode } = useModeConfig();
   const [query, setQuery] = useState("");
   const [editingPulse, setEditingPulse] = useState<Pulse | null>(null);
@@ -55,6 +57,7 @@ export default function PulsePage() {
   };
 
   const openEdit = (pulse: Pulse) => {
+    if (pulse.assistantId) { navigate(`${assistantHref(pulse.assistantId)}&tab=routines`); return; }
     setEditingPulse(pulse);
     setActiveTemplate(null);
     setModalOpen(true);

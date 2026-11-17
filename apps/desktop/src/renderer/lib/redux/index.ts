@@ -64,6 +64,7 @@ const appSettingsPersistConfig = {
     "showSuggestions",
     "sidebarWidth",
     "rightPanelWidth",
+    "assistantInfoPanelWidth",
     "browserPanelWidth",
     // Persist the panel width but NOT `documentViewerOpen`/`documentViewerDoc`:
     // the loaded document isn't persisted, so reopening to an empty panel on
@@ -120,7 +121,7 @@ const persistedAtlasReducer = persistReducer({
   whitelist: ["coverPositions"],
 }, atlasReducer);
 
-// Assistant tabs are scoped to backend/account/assistant and contain IDs only.
+// Assistant views and unsent execution choices are scoped to backend/account/assistant.
 const persistedAssistantsReducer = persistReducer({
   key: "assistants",
   storage,

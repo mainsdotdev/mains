@@ -1,13 +1,14 @@
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
 import type { Assistant, AssistantMemory } from "@mains/contracts/assistants";
 import { useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation } from "@/lib/redux/api/assistantsApi";
-import { Button, Checkbox, Input, NativeSelect, Textarea } from "@/components/ui";
+import { Button, Checkbox, Input, Label, Select, Textarea } from "@/components/ui";
 import { AgentMarkdown } from "@/components/agent-markdown";
-import { control, errorText } from "../lib/assistant-ui";
+import { errorText } from "../lib/assistant-ui";
 export function AssistantMemoryPanel({ assistant, memories }: {
     assistant: Assistant;
     memories: AssistantMemory[];
 }) {
+    const visibilityLabelId = useId();
     const [editing, setEditing] = useState<AssistantMemory | null>(null);
     const [creating, setCreating] = useState(false);
     const [id, setId] = useState("");
@@ -53,12 +54,30 @@ export function AssistantMemoryPanel({ assistant, memories }: {
         }
     }
     return <section className="space-y-5" aria-label="Assistant memory">
-    <div className="flex items-center justify-between"><div><h2 className="text-lg font-medium">What the team knows</h2><p className="mt-1 text-sm text-primary-500">Shared decisions and this assistant’s private notes, with their sources.</p></div><Button variant="ghost" onClick={() => open(null)}>Add memory</Button></div>
-    {(creating || editing) && <form onSubmit={submit} className="glass-card space-y-3 rounded-2xl p-5">
-      <label className="block text-sm">Title<Input className={`${control} mt-1`} required maxLength={200} value={title} onChange={e => setTitle(e.target.value)}/></label>
-      <label className="block text-sm">Memory<Textarea className={`${control} mt-1 min-h-28`} required maxLength={6000} value={content} onChange={e => setContent(e.target.value)}/></label>
-      <div className="flex flex-wrap items-center gap-4"><label className="text-sm">Visible to<NativeSelect className={`${control} mt-1`} value={scope} disabled={!!editing} onChange={e => setScope(e.target.value)}><option value="team">Whole team</option><option value="assistant">Only {assistant.name}</option></NativeSelect></label><label className="flex items-center gap-2 text-sm"><Checkbox checked={pinned} onChange={setPinned}/>Keep in context</label></div>
-      <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => { setCreating(false); setEditing(null); }}>Cancel</Button><Button type="submit" variant="submit" disabled={saving.isLoading}>Save memory</Button></div>
+    <div>
+      <h2 className="text-lg font-medium">What the team knows</h2>
+      <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-300">Shared decisions and this assistant’s private notes, with their sources.</p>
+      <Button variant="primary" className="mt-4 inline-flex whitespace-nowrap" onClick={() => open(null)}>Add memory</Button>
+    </div>
+    {(creating || editing) && <form onSubmit={submit} className="glass-card space-y-5 rounded-2xl p-5">
+      <label className="flex flex-col gap-2.5">
+        <Label as="span">Title</Label>
+        <Input required maxLength={200} value={title} onChange={e => setTitle(e.target.value)} />
+      </label>
+      <label className="flex flex-col gap-2.5">
+        <Label as="span">Memory</Label>
+        <Textarea className="min-h-28 rounded-2xl" required maxLength={6000} value={content} onChange={e => setContent(e.target.value)} />
+      </label>
+      <div className="flex flex-col gap-2.5">
+        <Label as="span" id={visibilityLabelId}>Visible to</Label>
+        <Select aria-labelledby={visibilityLabelId} size="sm" value={scope} disabled={!!editing} onChange={setScope}
+          options={[{ value: "team", label: "Whole team" }, { value: "assistant", label: `Only ${assistant.name}` }]} />
+      </div>
+      <label className="flex items-center gap-2.5">
+        <Checkbox checked={pinned} onChange={setPinned} />
+        <Label as="span">Keep in context</Label>
+      </label>
+      <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => { setCreating(false); setEditing(null); }}>Cancel</Button><Button type="submit" variant="submit" isLoading={saving.isLoading}>Save memory</Button></div>
     </form>}
     {failure && <p role="alert" className="text-sm text-danger">{failure}</p>}
     {!visible.length && !creating && <div className="rounded-2xl border border-dashed border-primary-300 px-6 py-12 text-center text-sm text-primary-500 dark:border-primary-700">Save the first decision you want this team to remember.</div>}

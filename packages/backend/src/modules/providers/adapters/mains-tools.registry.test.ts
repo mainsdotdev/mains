@@ -266,6 +266,18 @@ describe("mains tool registry — mode dimension", () => {
 
 
 describe("assistant tool scope", () => {
+  it("exposes routine management to Work/Developer assistants on both supported providers", () => {
+    const names = ["ListAssistantRoutines", "ReadAssistantRoutine", "CreateAssistantRoutine", "UpdateAssistantRoutine", "DeleteAssistantRoutine"];
+    for (const mode of ["developer", "work"] as const) {
+      expect(toCodexDynamicTools(mode, true).map(tool => tool.name)).toEqual(expect.arrayContaining(names));
+      expect(toClaudeTools(CTX, mode, true).map(tool => tool.name)).toEqual(expect.arrayContaining(names));
+      for (const name of names) {
+        expect(toCodexDynamicTools(mode).map(tool => tool.name)).not.toContain(name);
+        expect(toClaudeTools(CTX, mode).map(tool => tool.name)).not.toContain(name);
+      }
+    }
+    for (const name of names) expect(toCodexDynamicTools("chat", true).map(tool => tool.name)).not.toContain(name);
+  });
   it("exposes task tools in ordinary Code and keeps private tools in assistant conversations", () => {
     for (const mode of ["developer", "work"] as const) {
       expect(toCodexDynamicTools(mode, true).some(t => "name" in t && t.name === "AssignAssistantTask")).toBe(true);

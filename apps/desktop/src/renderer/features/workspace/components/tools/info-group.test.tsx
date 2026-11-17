@@ -32,8 +32,9 @@ vi.mock("../image-preview-modal", () => ({
   ImagePreviewModal: ({ name, src }: { name: string; src: string }) => <div role="dialog" aria-label={name}>{src}</div>,
 }));
 vi.mock("@/hooks/use-document-viewer", () => ({ useDocumentViewer: () => documentViewer }));
-vi.mock("@/lib/redux/api", () => ({ useLazyGetAppsForFileQuery: () => [vi.fn(), {}] }));
+vi.mock("@/lib/redux/api", () => ({ useLazyGetAppsForFileQuery: () => [vi.fn(), {}], useGetAccountQuery: () => ({ data: undefined }) }));
 vi.mock("@/hooks/use-suppress-browser-view", () => ({ useSuppressBrowserView: vi.fn() }));
+vi.mock("@/features/assistants/components/assistant-task-card", () => ({ AssistantTaskCard: ({ assignmentId }: { assignmentId: string }) => <article aria-label="Assistant task">Task {assignmentId}</article> }));
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import { InfoGroup } from "./info-group";
 
@@ -54,6 +55,29 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
   }] };
 }
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+describe("application-owned assistant task inputs", () => {
+  it("renders the worker's initial task as a card without exposing its routing prompt", () => {
+    const group = prompt({ assistantTaskInput: { assignmentId: "task-1", messageId: "request-task-1", kind: "request" } });
+    group.events[0].content = "Your assignment ID is task-1. Use ReportAssistantTask";
+    render(<InfoGroup group={group} runId="worker" />);
+    expect(screen.getByRole("article", { name: "Assistant task" }).textContent).toBe("Task task-1");
+    expect(screen.queryByText(/Use ReportAssistantTask/)).toBeNull();
+  });
+  it.each(["followup", "status", "result"])("leaves %s activity inside the canonical task card", kind => {
+    const group = prompt({ assistantTaskInput: { assignmentId: "task-1", messageId: "delivery-1", kind } });
+    group.events[0].content = "Teammate assignment status (reference data): internal payload";
+    const { container } = render(<InfoGroup group={group} runId="source" />);
+    expect(container.textContent).toBe("");
+    expect(screen.queryByText(/internal payload/)).toBeNull();
+  });
+  it("keeps ordinary user text visible even if it resembles an internal message", () => {
+    const group = prompt({ browserAnnotations: [], attachments: [] });
+    group.events[0].content = "Teammate assignment status is confusing";
+    render(<InfoGroup group={group} runId="source" />);
+    expect(screen.getByText("Teammate assignment status is confusing")).toBeTruthy();
+  });
+});
 
 describe("prompt context files", () => {
   it("opens a file shown below a sent prompt in the editor", () => {
@@ -295,3 +319,5 @@ describe("prompt browser annotations", () => {
     expect(screen.getByText("deneme")).toBeTruthy();
   });
 });
+
+vi.mock("@/lib/redux/api/assistantsApi", () => ({ useAssistantOverviewQuery: () => ({ currentData: undefined }) }));

@@ -4,7 +4,9 @@ import { emit, registerEventSink } from "../../ipc-kit/event-bus";
 import { assistantsRepo } from "./assistants.repo";
 import { readTaskContext } from "./assistant-mentions";
 import { assistantWelcome } from "./assistant-welcome";
+import { assistantTaskRequestPrompt } from "./assistant-task-messages";
 import { assistantsService } from "./assistants.service";
+import { ASSISTANT_ROUTINE_TOOLS, assistantRoutineTool } from "./assistant-routines";
 import { object, onlyKeys, text, execution } from "./assistants.validation";
 import type { AssistantAssignment, AssistantMessageContext } from "@mains/contracts/assistants";
 let open = false;
@@ -115,8 +117,17 @@ export const assistantWork = {
                 assistantsRepo.patchAssignment(message.assignmentId, { status: "queued", error: null });
             }
             else {
-                assistantsRepo.patchMessage(message.id, { status: "uncertain", error: "Delivery could not be confirmed. Inspect the conversation before sending again." });
-                assistantsRepo.patchAssignment(message.assignmentId, { status: "uncertain", error: "A message delivery needs review" });
+                const fallback = "Delivery could not be confirmed. Inspect the conversation before sending again.";
+                // Preserve the dispatch failure across repeated checks. Older generic rows can
+                // still expose the destination's last error as context, without claiming receipt.
+                const error = message.error && message.error !== fallback ? message.error
+                    : run?.lastError ? `${fallback} Last conversation error: ${run.lastError}` : fallback;
+                assistantsRepo.patchMessage(message.id, { status: "uncertain", error });
+                const task = assistantsRepo.assignment(message.assignmentId);
+                if (task) assistantsRepo.patchAssignment(task.id, {
+                    ...(terminal(task.status) ? {} : { status: "uncertain" as const }),
+                    error: `A message delivery needs review: ${error}`,
+                });
             }
         }
         changed();
@@ -141,7 +152,9 @@ export const assistantWork = {
         }
         const taskExecution = await assistantsService.execution(accountId, value.execution ?? (caller?.run.workspaceId ? { mode: "developer", workspaceId: caller.run.workspaceId } : undefined));
         assertCurrent();
-        assistantsService.require(target.id, accountId);
+        if (assistantsService.require(target.id, accountId).teamId !== target.teamId ||
+            caller?.assistant && assistantsService.require(caller.assistant.id, accountId).teamId !== caller.assistant.teamId)
+            throw new Error("Assistant team changed. Retry this assignment");
         const parent = requestingRunId ? assistantsRepo.byWorker(requestingRunId) : null;
         let ancestor = parent;
         let depth = 0;
@@ -242,7 +255,7 @@ export const assistantWork = {
         assertCurrent();
         const welcome = assistantsRepo.welcome(assistantId);
         if (welcome && welcome.runId === runId && key === `welcome-${assistantId}`)
-            return assistantWelcome.respond(accountId, assistantId, message, context);
+            return assistantWelcome.respond(accountId, assistantId, message, context, requestedExecution);
         if (runId) {
             const run = await runsService.getRunById(runId);
             if (!run || run.accountId !== accountId || run.assistantId !== assistantId || run.isArchived)
@@ -269,6 +282,11 @@ export const assistantWork = {
         if (existing) {
             if (existing.accountId !== accountId || existing.assistantId !== assistant.id || existing.goal !== message)
                 throw new Error("Message key already used");
+            if (requestedExecution !== undefined) {
+                const requested = execution(requestedExecution);
+                if (requested.mode !== existing.mode || (requested.mode === "developer" ? requested.workspaceId : null) !== existing.workspaceId)
+                    throw new Error("Message key already used for a different workspace");
+            }
             return { runId: existing.id };
         }
         return runsService.executeRun({ accountId, assistantId, reservedRunId, providerId: assistant.providerId, spaceId: assistant.spaceId, ...execution(requestedExecution), goal: message, ...promptContext, initialContext });
@@ -358,7 +376,7 @@ export const assistantWork = {
                     try {
                         if (message.kind === "request") {
                             const result = await runsService.executeRun({ accountId: task.accountId, assistantId: target!.id, reservedRunId: task.workerRunId!, providerId: target!.providerId, spaceId: target!.spaceId, ...task.execution, ...assistantsRepo.assignmentContext(task.id)?.context,
-                                goal: `${message.content}\n\nYour assignment ID is ${task.id}. Use ReportAssistantTask to report completed, blocked or failed, with result and evidence.`,
+                                goal: assistantTaskRequestPrompt(task.id, message.content),
                             });
                             if (assistantsRepo.assignment(task.id)?.status === "canceled")
                                 await runsService.abortRun(result.runId);
@@ -416,6 +434,11 @@ export const assistantWork = {
         }
         const { assistant, run } = await actor(runId), args = object(input);
         assertCurrent();
+        if (ASSISTANT_ROUTINE_TOOLS.includes(name)) {
+            const result = assistantRoutineTool(run, assistant.id, name, args);
+            if (!["ListAssistantRoutines", "ReadAssistantRoutine"].includes(name)) changed();
+            return result;
+        }
         if (name === "RecallAssistantMemory")
             return assistantsService.memories(assistant.id, run.accountId, text(args.query, "Query", 1000, true));
         if (name === "SaveAssistantMemory") {

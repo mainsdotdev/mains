@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Run, RunEvent } from "../types";
 import { WorkspaceEvents } from "./workspace-events";
 
-const settings = vi.hoisted(() => ({ showToolCalls: true }));
+const settings = vi.hoisted(() => ({ showToolCalls: true, showTurnChanges: false }));
 vi.mock("./tools/info-group", () => ({ InfoGroup: ({ group }: { group: { events: RunEvent[] } }) => group.events.map((event) => <p key={event.id}>{event.content}</p>) }));
 vi.mock("./editor-content", () => ({ EditorContent: () => null }));
 vi.mock("./issue-tab-content", () => ({ IssueTabContent: () => null }));
@@ -14,17 +14,17 @@ vi.mock("./note-tab-content", () => ({ NoteTabContent: () => null }));
 vi.mock("./turn-rail", () => ({ TurnRail: () => null }));
 vi.mock("./realtime-voice-bar", () => ({ RealtimeVoiceBar: () => null }));
 vi.mock("./provider-auth-notice", () => ({ ProviderAuthNotice: () => null }));
-vi.mock("./turn-changes-card", () => ({ TurnChangesCard: () => null }));
+vi.mock("./turn-changes-card", () => ({ TurnChangesCard: () => <div>Workspace edited files</div> }));
 vi.mock("../hooks/use-plugin-logos", () => ({ usePluginLogoMap: () => new Map(), normalizeSlug: (name: string) => name, renderPluginIcon: () => null }));
 vi.mock("../hooks/use-open-file-in-editor", () => ({ useOpenFileInEditor: () => vi.fn() }));
-vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ showTurnChanges: false }) }));
+vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ showTurnChanges: settings.showTurnChanges }) }));
 vi.mock("@/lib/redux/api", () => ({
   useGetAppSettingsQuery: () => ({ data: settings }),
   useGetProviderAccountInfoQuery: () => ({ data: { account: { id: "account" } } }),
   useGetProviderModelsQuery: () => ({ data: [] }),
 }));
 
-beforeEach(() => { settings.showToolCalls = true; });
+beforeEach(() => { settings.showToolCalls = true; settings.showTurnChanges = false; });
 afterEach(cleanup);
 const run: Run = { id: "run", workspaceId: "ws", status: "running", providerId: "codex", mode: "developer", goal: "Refactor" };
 const prompt: RunEvent = { id: "prompt", type: "artifact", content: "Refactor", timestamp: new Date(1000), metadata: { kind: "user-prompt" } };
@@ -69,11 +69,31 @@ it("keeps an in-flight row running when thought and progress snapshots arrive", 
   expect(view.getByText("Running npm test")).toBeTruthy();
 });
 
-it("shows a new thought even while an assistant response is streaming", () => {
+it.each(["artifact", "log"] as const)("retires an earlier %s thought when the reply arrives, while showing newer thoughts", (type) => {
+  const earlier: RunEvent = { id: "earlier", type, content: type === "log" ? "[reasoning] Checking exports" : "Checking exports",
+    timestamp: new Date(3000), metadata: { kind: "thinking", streaming: true } };
   const reply: RunEvent = { id: "reply", type: "artifact", content: "Here is the result", timestamp: new Date(4000), metadata: { kind: "report", streaming: true } };
   const thought: RunEvent = { ...reply, id: "thought", content: "Checking the final result", metadata: { kind: "thinking", streaming: true } };
-  const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, reply, thought]} />);
+  const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, earlier]} />);
+  expect(view.getByText("Checking exports")).toBeTruthy();
+  view.rerender(<WorkspaceEvents {...props} currentEvents={[prompt, earlier, reply]} />);
+  expect(view.getByText("Here is the result")).toBeTruthy();
+  expect(view.queryByText("Checking exports")).toBeNull();
+  expect(view.queryByText("Thinking")).toBeNull();
+  view.rerender(<WorkspaceEvents {...props} currentEvents={[prompt, earlier, reply, thought]} />);
   expect(view.getByText("Checking the final result")).toBeTruthy();
+  expect(view.getByText("Here is the result")).toBeTruthy();
+});
+
+it("keeps current activity when a hidden voice-work report arrives", () => {
+  const thought: RunEvent = { id: "thought", type: "artifact", content: "Checking exports",
+    timestamp: new Date(2000), metadata: { kind: "thinking", streaming: true } };
+  const hidden: RunEvent = { id: "hidden", type: "artifact", content: "Written voice duplicate",
+    timestamp: new Date(3000), metadata: { kind: "report", streaming: true, inputSource: "voice",
+      realtimeSessionId: "call", providerTurnId: "native" } };
+  const view = render(<WorkspaceEvents {...props} currentEvents={[prompt, thought, hidden]} />);
+  expect(view.queryByText("Written voice duplicate")).toBeNull();
+  expect(view.getByText("Checking exports")).toBeTruthy();
 });
 
 it("shows thinking summaries without rendering command progress as thought text", () => {
@@ -92,4 +112,21 @@ it.each(["[thinking] ", "[reasoning] "])("supports legacy %s logs without reusin
   view.rerender(<WorkspaceEvents {...props} currentEvents={[thought, prompt]} />);
   expect(view.queryByText("Checking exports")).toBeNull();
   expect(view.getByText("Thinking")).toBeTruthy();
+});
+
+
+it("omits workspace edit controls on assistant surfaces even for developer turns", () => {
+  settings.showTurnChanges = true;
+  const finished = { ...run, status: "succeeded" as const };
+  const turn = { id: 1, runId: run.id, turnIndex: 0, promptContent: "Refactor", responseContent: "Done",
+    startedAt: 1000, endedAt: 4000, elapsedMs: 3000, status: "completed" as const,
+    model: null, createdAt: 1000, inputTokens: null, outputTokens: null, cacheReadTokens: null,
+    cacheWriteTokens: null, costMicros: null, modelUsage: null, metadata: null,
+    changes: { id: "change", files: [], additions: 22, deletions: 20, truncated: false, undoneAt: null } };
+  const reply: RunEvent = { id: "reply", type: "artifact", content: "Done", timestamp: new Date(4000), metadata: { kind: "report", turnId: 1 } };
+  const view = render(<WorkspaceEvents {...props} runs={[finished]} currentEvents={[prompt, reply]} turns={[turn]} />);
+  expect(view.getByText("Workspace edited files")).toBeTruthy();
+  view.rerender(<WorkspaceEvents {...props} runs={[finished]} currentEvents={[prompt, reply]} turns={[turn]} hideTurnChanges />);
+  expect(view.queryByText("Workspace edited files")).toBeNull();
+  expect(view.getByText("Done")).toBeTruthy();
 });

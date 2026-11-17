@@ -15,6 +15,7 @@ export interface Run {
   isReplica?: boolean;
   id: string;
   workspaceId?: string | null;
+  assistantId?: string | null;
   collectionId?: string | null;
   spaceId?: string | null;
   mode?: "developer" | "work" | "chat";

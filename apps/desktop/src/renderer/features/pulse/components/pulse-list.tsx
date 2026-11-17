@@ -70,6 +70,7 @@ export function PulseList({
   };
 
   const targetName = (pulse: Pulse): string | null => {
+    if (pulse.assistantId) return "Assistant routine";
     if (pulse.workspaceId) {
       return workspaces.find((w) => w.id === pulse.workspaceId)?.name ?? null;
     }
@@ -177,7 +178,7 @@ function PulseRow({
   const handleRunNow = async () => {
     try {
       await runPulseNow(pulse.id).unwrap();
-      toast.success(`Started “${pulse.title}”`);
+      toast.success(pulse.assistantId ? `Task queued for “${pulse.title}”` : `Started “${pulse.title}”`);
     } catch (err) {
       toast.error(extractErrorMessage(err, "Failed to start pulse"));
     }

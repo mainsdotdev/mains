@@ -10,6 +10,7 @@ import type { RunEvent } from "../../types";
 import { parseToolContent, previewParams } from "../../lib/parse-tool-content";
 import { resolveTool } from "../../lib/resolve-tool";
 import { usePluginLogoMap, renderPluginIcon, normalizeSlug } from "../../hooks";
+import { AssistantToolDisplay } from "./assistant-tool-display";
 import { TaskDisplay, type TaskParams } from "./task-display";
 import { PlanDisplay } from "./plan-display";
 import { WriteDisplay, type WriteParams } from "./write-display";
@@ -134,6 +135,8 @@ const summaryAs = (key: string) => (ctx: Ctx) => ({ [key]: ctx.summary }) as nev
 const ATLAS_DISPLAYS = { atlasreadpage: AtlasReadPageDisplay, atlascreatepage: AtlasCreatePageDisplay, atlasupdatepage: AtlasUpdatePageDisplay };
 
 const DISPATCH: Renderer[] = [
+  (ctx) => ctx.resolved.category === "Assistants" ? <AssistantToolDisplay toolName={ctx.resolved.displayName}
+    params={ctx.metadataInput ?? ctx.params} output={ctx.event.metadata?.output} isCompact={ctx.isCompact} /> : null,
   (ctx) => {
     if (ctx.resolved.category !== "Atlas") return null;
     const Display = ATLAS_DISPLAYS[ctx.resolved.groupKey as keyof typeof ATLAS_DISPLAYS];
@@ -410,9 +413,9 @@ function ToolCallBody({ event, isCompact = true }: ToolCallItemProps) {
     </ToolStatusProvider></TranscriptItemScope>
   );
 
-  if (replica) return wrap(<GenericToolDisplay icon={toolIcon} displayName={resolved.displayName} params={metadataInput ?? params}
+  if (replica && resolved.category !== "Assistants") return wrap(<GenericToolDisplay icon={toolIcon} displayName={resolved.displayName} params={metadataInput ?? params}
     output={event.metadata?.output} isCompact={isCompact} />);
-  if (isEmptyTool) {
+  if (isEmptyTool && resolved.category !== "Assistants") {
     if (isCompact) {
       return wrap(
         <Text as="div" size="s" tone="inherit" className="flex items-center gap-1 px-1 font-sans">

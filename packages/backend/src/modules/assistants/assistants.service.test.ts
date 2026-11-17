@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "../../../test/setup-db";
-import { createAccount, createProvider, createSpace, createRun, createWorkspace } from "../../../test/factories";
+import { createAccount, createProject, createProvider, createSpace, createRun, createWorkspace } from "../../../test/factories";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import type { DatabaseInstance } from "../../db/types";
-import { spaces, providers, appSettings, assistants as assistantProfiles, runs } from "../../db/schema";
+import { spaces, providers, appSettings, assistants as assistantProfiles, runs, pulses } from "../../db/schema";
 let db: DatabaseInstance;
 vi.mock("../../db/client", () => ({ getDb: () => db }));
 vi.mock("../providers/adapters", async () => ({
@@ -25,7 +25,10 @@ import { createWorkAdapter } from "../providers/adapters";
 import { createFakeDriver } from "../providers/adapters/fake.driver";
 import { createWorkRunAdapter } from "../providers/adapters/work-run-core";
 import { auditBridgeSchema } from "../bridge/bridge.records";
-import type { Assistant } from "@mains/contracts/assistants";
+import type { Assistant, AssistantAssignment } from "@mains/contracts/assistants";
+import { createCodexRequestBroker } from "../providers/adapters/codex/codex-request-broker";
+import { pulseService } from "../pulse";
+import { dispatchMainsTool } from "../providers/adapters/mains-tools.registry";
 let cleanup: () => void, restore: () => void, root: string;
 let driver: ReturnType<typeof createFakeDriver>;
 let teamId: string;
@@ -34,6 +37,10 @@ async function makeAssistant(name: string, providerId: "codex" | "claude_code" =
 }
 async function settled(runId: string) {
     await vi.waitFor(async () => expect((await runsService.getRunById(runId))?.status).toBe("succeeded"));
+}
+function workspace(id: string, accountId = "default") {
+    const rootPath = join(root, id); mkdirSync(rootPath, { recursive: true });
+    return createWorkspace(db, { id, accountId, rootPath });
 }
 beforeEach(() => {
     ({ db, cleanup } = createTestDb());
@@ -64,13 +71,237 @@ beforeEach(() => {
     teamId = assistantsService.createTeam({ accountId: "default", name: "Release team" }).id;
 });
 afterEach(async () => {
+    await pulseService.stop();
     await assistantWork.stop();
     restore();
     cleanup();
     rmSync(root, { recursive: true, force: true });
     vi.restoreAllMocks();
 });
+
+describe("scheduled assistant routines", () => {
+    beforeEach(() => pulseService.start());
+    const routine = (assistant: Assistant, input: Record<string, unknown> = {}) => pulseService.createRoutine("default", assistant.id, {
+        title: "Morning release check", prompt: "Check the release and report findings with evidence.",
+        frequency: "daily", hour: 9, minute: 0, timezone: "Europe/Istanbul", ...input,
+    });
+
+    it("creates a scheduled assignment through the assistant's frozen profile and exposes its chat and report", async () => {
+        const assistant = await makeAssistant("Release");
+        const pulse = routine(assistant, { providerId: "claude_code", model: "ignored-model" });
+        expect(pulse).toMatchObject({ assistantId: assistant.id, mode: "work", workspaceId: null, providerId: "codex", model: "test-model", effortLevel: "high" });
+        const due = new Date(Date.now() - 60_000);
+        db.update(pulses).set({ nextRunAt: due }).where(eq(pulses.id, pulse.id)).run();
+        assistantWork.start();
+        await Promise.all([pulseService.tick(), pulseService.tick()]);
+        const fired = pulseService.getById(pulse.id)!;
+        expect(fired.lastAssignmentId).toBeTruthy();
+        const task = assistantsRepo.assignment(fired.lastAssignmentId!)!;
+        await settled(task.workerRunId!);
+        expect(driver.calls.createSession.filter(call => call.runId === task.workerRunId)).toHaveLength(1);
+        expect(driver.calls.createSession.find(call => call.runId === task.workerRunId)).toMatchObject({ mode: "work", model: "test-model", configSnapshot: { modelReasoningEffort: "high", assistantId: assistant.id } });
+        await assistantWork.tool(task.workerRunId!, "ReportAssistantTask", { assignmentId: task.id, status: "completed", result: "Release checked", evidence: ["release-check.log"] });
+        expect(pulseService.getById(pulse.id)).toMatchObject({ lastRunId: task.workerRunId, lastAssignmentStatus: "completed" });
+        expect(assistantsService.conversations(assistant.id, "default").some(chat => chat.id === task.workerRunId)).toBe(true);
+        await pulseService.stop(); pulseService.start(); await pulseService.tick();
+        expect(assistantsRepo.assignments("default").filter(item => item.toAssistantId === assistant.id)).toHaveLength(1);
+    });
+
+    it("keeps Run now distinct from the next scheduled occurrence and prevents accumulating open tasks", async () => {
+        const assistant = await makeAssistant("Release"), pulse = routine(assistant);
+        const first = await pulseService.runNow(pulse.id);
+        const task = assistantsRepo.assignment(first!.lastAssignmentId!)!;
+        await expect(pulseService.runNow(pulse.id)).rejects.toThrow("previous routine task is still open");
+        expect(assistantsRepo.assignments("default")).toHaveLength(1);
+        assistantWork.start();
+        await settled(task.workerRunId!);
+        await assistantWork.tool(task.workerRunId!, "ReportAssistantTask", { assignmentId: task.id, status: "completed", result: "Done", evidence: ["routine-check.log"] });
+        // Simulate firing the original schedule slot after an earlier manual run.
+        db.update(pulses).set({ nextRunAt: pulse.nextRunAt }).where(eq(pulses.id, pulse.id)).run();
+        const second = await pulseService.executePulse(pulse.id);
+        expect(second?.lastAssignmentId).not.toBe(task.id);
+        expect(assistantsRepo.assignments("default")).toHaveLength(2);
+        await settled(assistantsRepo.assignment(second!.lastAssignmentId!)!.workerRunId!);
+    });
+
+    it("runs a repository routine as Developer while keeping its conversation under the assistant", async () => {
+        const assistant = await makeAssistant("Release"), repo = workspace("routine-code");
+        const pulse = routine(assistant, { mode: "developer", workspaceId: repo.id });
+        assistantWork.start();
+        const fired = await pulseService.runNow(pulse.id);
+        const task = assistantsRepo.assignment(fired!.lastAssignmentId!)!;
+        await settled(task.workerRunId!);
+        expect(driver.calls.createSession.find(call => call.runId === task.workerRunId)).toMatchObject({ mode: "developer", execution: { workspaceId: repo.id, cwd: repo.rootPath } });
+        expect(await runsService.getRunsByWorkspace(repo.id)).toEqual([]);
+        expect(assistantsService.conversations(assistant.id, "default").some(chat => chat.id === task.workerRunId)).toBe(true);
+    });
+
+    it("validates ownership, profile edits, schedule settings and immutable assistant identity", async () => {
+        const assistant = await makeAssistant("Release"), pulse = routine(assistant);
+        const foreign = workspace("foreign-routine", "other-account");
+        expect(() => routine(assistant, { mode: "developer", workspaceId: foreign.id })).toThrow("Workspace is unavailable");
+        expect(() => routine(assistant, { timezone: "Mars/Olympus" })).toThrow("valid routine timezone");
+        expect(() => routine(assistant, { hour: 9.5 })).toThrow("valid routine time");
+        expect(() => pulseService.create("other-account", { ...pulse, assistantId: assistant.id })).toThrow("unavailable");
+        expect(() => pulseService.update(pulse.id, { model: "another-model" })).toThrow("fixed profile");
+        expect(() => pulseService.update(pulse.id, { assistantId: "other" } as never)).toThrow("original assistant");
+        expect(() => pulseService.update(pulse.id, { lastAssignmentId: "forged" } as never)).toThrow("Unknown pulse setting");
+        expect(() => pulseService.update(pulse.id, { frequency: "weekly", dayOfWeek: null })).toThrow("dayOfWeek");
+        const changed = pulseService.update(pulse.id, { title: "Evening check", hour: 18, minute: 30, timezone: "UTC" });
+        expect(changed).toMatchObject({ title: "Evening check", hour: 18, minute: 30, assistantId: assistant.id });
+        const later = changed!.nextRunAt!.getTime();
+        pulseService.toggle(pulse.id, false);
+        expect(pulseService.toggle(pulse.id, true)?.nextRunAt!.getTime()).toBeGreaterThanOrEqual(later);
+    });
+
+    it("pauses routines when the assistant is archived and preserves accepted tasks when a routine is deleted", async () => {
+        const assistant = await makeAssistant("Release"), pulse = routine(assistant);
+        assistantsService.archive(assistant.id, "default", true);
+        expect(pulseService.getById(pulse.id)?.isActive).toBe(false);
+        await expect(pulseService.runNow(pulse.id)).rejects.toThrow("unavailable");
+        assistantsService.archive(assistant.id, "default", false);
+        const fired = await pulseService.runNow(pulse.id);
+        const taskId = fired!.lastAssignmentId!;
+        pulseService.delete(pulse.id);
+        expect(pulseService.getById(pulse.id)).toBeNull();
+        expect(assistantsRepo.assignment(taskId)).toBeTruthy();
+    });
+
+    it("retires a paused repository routine before its asynchronous task admission commits", async () => {
+        const assistant = await makeAssistant("Release"), repo = workspace("routine-repo");
+        const pulse = routine(assistant, { mode: "developer", workspaceId: repo.id });
+        const { workspaceService } = await import("../workspace");
+        let release!: () => void;
+        const original = workspaceService.get.bind(workspaceService);
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const lookup = vi.spyOn(workspaceService, "get").mockImplementation(async id => { await gate; return original(id); });
+        const pending = pulseService.runNow(pulse.id);
+        await vi.waitFor(() => expect(lookup).toHaveBeenCalled());
+        pulseService.toggle(pulse.id, false);
+        release();
+        expect(await pending).toBeNull();
+        expect(assistantsRepo.assignments("default")).toHaveLength(0);
+    });
+});
+describe("conversational assistant routines", () => {
+    const input = { requestId: "morning-check", title: "Morning check", prompt: "Review the release checklist and report findings with evidence.", frequency: "daily", hour: 9, minute: 0, timezone: "Europe/Istanbul" };
+    const conversation = (assistant: Assistant, overrides: Record<string, unknown> = {}) => createRun(db, { assistantId: assistant.id, providerId: assistant.providerId, mode: "work", status: "succeeded", ...overrides });
+    beforeEach(() => { pulseService.start(); assistantWork.start(); });
+
+    it("creates a routine through the real Codex tool broker, deduplicates retries after restart, and runs it through Pulse", async () => {
+        const assistant = await makeAssistant("Release"), source = conversation(assistant);
+        const call = async () => {
+            const broker = createCodexRequestBroker({ getRunState: () => ({ mode: "work", assistantId: assistant.id, fileChangeItems: new Map() }),
+                getMainsToolContext: () => ({ runId: source.id, workspaceId: null, rootPath: null }) });
+            const respondToRequest = vi.fn(), respondToRequestError = vi.fn();
+            await broker.handleRequest({ runId: source.id, runIsDead: false, id: 42, method: "item/tool/call", params: { tool: "CreateAssistantRoutine", arguments: JSON.stringify(input) }, server: { respondToRequest, respondToRequestError } });
+            expect(respondToRequestError).not.toHaveBeenCalled();
+            const reply = respondToRequest.mock.calls[0][1];
+            expect(reply.success).toBe(true);
+            return JSON.parse(reply.contentItems[0].text);
+        };
+        const saved = await call();
+        expect(saved).toMatchObject({ title: "Morning check", hour: 9, timezone: "Europe/Istanbul", mode: "work", workspaceId: null, isActive: true });
+        await pulseService.stop(); await assistantWork.stop(); assistantWork.start(); pulseService.start();
+        expect((await call()).id).toBe(saved.id);
+        expect(pulseService.getAll()).toHaveLength(1);
+        const fired = await pulseService.runNow(saved.id);
+        const task = assistantsRepo.assignment(fired!.lastAssignmentId!)!;
+        await settled(task.workerRunId!);
+        await assistantWork.tool(task.workerRunId!, "ReportAssistantTask", { assignmentId: task.id, status: "completed", result: "Checklist reviewed", evidence: ["checklist.log"] });
+        expect(await assistantWork.tool(source.id, "ReadAssistantRoutine", { routineId: saved.id })).toMatchObject({ lastAssignmentStatus: "completed", lastRunId: task.workerRunId });
+        expect(driver.calls.createSession.find(call => call.runId === task.workerRunId)).toMatchObject({ mode: "work", model: "test-model", configSnapshot: { assistantId: assistant.id, modelReasoningEffort: "high" } });
+    });
+
+    it("reads, reschedules, pauses, resumes and deletes the same panel-visible record without changing its execution", async () => {
+        const assistant = await makeAssistant("Release"), repo = workspace("scheduled-repo"), source = conversation(assistant, { mode: "developer", workspaceId: repo.id });
+        const saved = await assistantWork.tool(source.id, "CreateAssistantRoutine", { ...input, frequency: "weekly", dayOfWeek: 1 }) as { id: string };
+        expect(pulseService.getAll()[0]).toMatchObject({ id: saved.id, assistantId: assistant.id, mode: "developer", workspaceId: repo.id });
+        const changed = await assistantWork.tool(source.id, "UpdateAssistantRoutine", { routineId: saved.id, frequency: "daily", hour: 10, minute: 30 }) as { nextRunAt: Date };
+        expect(changed).toMatchObject({ frequency: "daily", dayOfWeek: null, hour: 10, minute: 30, timezone: input.timezone, prompt: input.prompt, mode: "developer", workspaceId: repo.id });
+        expect(await assistantWork.tool(source.id, "UpdateAssistantRoutine", { routineId: saved.id, isActive: false })).toMatchObject({ isActive: false });
+        expect(await assistantWork.tool(source.id, "UpdateAssistantRoutine", { routineId: saved.id, isActive: true })).toMatchObject({ isActive: true });
+        expect(await assistantWork.tool(source.id, "DeleteAssistantRoutine", { routineId: saved.id })).toMatchObject({ deleted: true, id: saved.id });
+        expect(pulseService.getById(saved.id)).toBeNull();
+    });
+
+    it("keeps other assistants, accounts, generic pulses and replicas outside this assistant's management scope", async () => {
+        const assistant = await makeAssistant("Release"), colleague = await makeAssistant("Other"), source = conversation(assistant);
+        const saved = await assistantWork.tool(source.id, "CreateAssistantRoutine", input) as { id: string };
+        const base = pulseService.getById(saved.id)!;
+        createAccount(db, { id: "foreign" });
+        db.insert(pulses).values([
+            { ...base, id: "colleague-routine", assistantId: colleague.id },
+            { ...base, id: "foreign-routine", accountId: "foreign" },
+            { ...base, id: "generic-pulse", assistantId: null },
+            { ...base, id: "replica-routine", ownerBackendId: "another-backend" },
+        ]).run();
+        const listed = await assistantWork.tool(source.id, "ListAssistantRoutines", {}) as { routines: Array<{ id: string }> };
+        expect(listed.routines.map(r => r.id)).toEqual([saved.id]);
+        for (const routineId of ["colleague-routine", "foreign-routine", "generic-pulse", "replica-routine"]) {
+            await expect(assistantWork.tool(source.id, "ReadAssistantRoutine", { routineId })).rejects.toThrow();
+            await expect(assistantWork.tool(source.id, "UpdateAssistantRoutine", { routineId, isActive: false })).rejects.toThrow();
+            await expect(assistantWork.tool(source.id, "DeleteAssistantRoutine", { routineId })).rejects.toThrow();
+        }
+        const ordinary = createRun(db, { mode: "developer", workspaceId: workspace("ordinary-code").id });
+        await expect(assistantWork.tool(ordinary.id, "CreateAssistantRoutine", input)).rejects.toThrow("assistant conversation");
+        db.update(assistantProfiles).set({ isArchived: true }).where(eq(assistantProfiles.id, assistant.id)).run();
+        await expect(assistantWork.tool(source.id, "ListAssistantRoutines", {})).rejects.toThrow("unavailable");
+    });
+
+    it("keeps retry keys scoped to the conversation and rejects conflicting or forged settings", async () => {
+        const assistant = await makeAssistant("Release"), first = conversation(assistant), second = conversation(assistant);
+        const created = await assistantWork.tool(first.id, "CreateAssistantRoutine", input) as { id: string };
+        await expect(assistantWork.tool(first.id, "CreateAssistantRoutine", { ...input, hour: 12 })).rejects.toThrow("different settings");
+        expect((await assistantWork.tool(second.id, "CreateAssistantRoutine", input) as { id: string }).id).not.toBe(created.id);
+        await expect(assistantWork.tool(first.id, "CreateAssistantRoutine", { ...input, assistantId: "forged" })).rejects.toThrow("Unknown assistant field");
+        await expect(assistantWork.tool(first.id, "UpdateAssistantRoutine", { routineId: created.id, workspaceId: "forged" })).rejects.toThrow("Unknown assistant field");
+        await expect(assistantWork.tool(first.id, "UpdateAssistantRoutine", { routineId: created.id })).rejects.toThrow("setting to update");
+        for (const extra of [{ timezone: "Mars/Olympus" }, { hour: 9.5 }, { isActive: "yes" }, { frequency: "weekly" }]) {
+            await expect(assistantWork.tool(first.id, "CreateAssistantRoutine", { ...input, ...extra, requestId: "invalid" })).rejects.toThrow();
+        }
+        const ctx = { workspaceId: null, rootPath: null, runId: first.id };
+        await expect(dispatchMainsTool("CreateAssistantRoutine", { ...input, accountId: "forged" }, ctx)).rejects.toThrow("Invalid arguments");
+        await expect(dispatchMainsTool("CreateAssistantRoutine", { ...input, minute: 80 }, ctx)).rejects.toThrow("Invalid arguments");
+    });
+
+    it("returns bounded paged summaries and an explicit timezone while preserving full prompts for reads", async () => {
+        const assistant = await makeAssistant("Release"), source = conversation(assistant);
+        const created = await assistantWork.tool(source.id, "CreateAssistantRoutine", { ...input, prompt: "a".repeat(1000), timezone: undefined }) as { id: string; timezone: string };
+        expect(created.timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+        const base = pulseService.getById(created.id)!;
+        db.insert(pulses).values(Array.from({ length: 101 }, (_, index) => ({ ...base, id: `extra-${String(index).padStart(3, "0")}` }))).run();
+        const first = await assistantWork.tool(source.id, "ListAssistantRoutines", {}) as { nextOffset: number; routines: Array<{ id: string; prompt: string }> };
+        expect(first.routines).toHaveLength(100);
+        expect(first.routines.every(r => r.prompt.length === 600)).toBe(true);
+        expect(first.nextOffset).toBe(100);
+        expect(await assistantWork.tool(source.id, "ListAssistantRoutines", { offset: first.nextOffset })).toMatchObject({ nextOffset: null, routines: expect.any(Array) });
+        expect(await assistantWork.tool(source.id, "ReadAssistantRoutine", { routineId: created.id })).toMatchObject({ prompt: "a".repeat(1000) });
+        await assistantWork.stop();
+        await expect(assistantWork.tool(source.id, "DeleteAssistantRoutine", { routineId: created.id })).rejects.toThrow("shutting down");
+        expect(pulseService.getById(created.id)).not.toBeNull();
+    });
+});
+
 describe("assistant profiles and shared knowledge", () => {
+    it("lists an assistant’s latest activity first across repositories and Work without exposing archived or foreign chats", async () => {
+        const assistant = await makeAssistant("History"), other = await makeAssistant("Other");
+        assistantsRepo.patchWelcome(assistant.id, { state: "started" });
+        const project = createProject(db, { id: "history-project", name: "mains" });
+        const repo = createWorkspace(db, { id: "history-workspace", projectId: project.id, name: "feat/ios" });
+        const createdAt = new Date("2026-11-01T00:00:00Z"), updatedAt = new Date("2026-11-14T12:00:00Z");
+        createRun(db, { id: "older-code-chat", assistantId: assistant.id, workspaceId: repo.id, mode: "developer", title: "TestFlight check", createdAt, updatedAt });
+        createRun(db, { id: "newer-work-chat", assistantId: assistant.id, mode: "work", createdAt: new Date("2026-11-12T00:00:00Z"), updatedAt: new Date("2026-11-13T00:00:00Z") });
+        createRun(db, { id: "archived-chat", assistantId: assistant.id, isArchived: true });
+        createRun(db, { id: "other-assistant-chat", assistantId: other.id });
+        createRun(db, { id: "foreign-chat", assistantId: assistant.id, accountId: "foreign-account" });
+
+        const chats = assistantsService.conversations(assistant.id, "default");
+        expect(chats.map(chat => chat.id)).toEqual(["older-code-chat", "newer-work-chat"]);
+        expect(chats[0]).toMatchObject({ workspaceId: repo.id, workspaceName: "feat/ios", projectName: "mains", mode: "developer", title: "TestFlight check", createdAt, updatedAt });
+        expect(chats[1]).toMatchObject({ workspaceId: null, workspaceName: null, projectName: null, mode: "work" });
+        expect(() => assistantsService.conversations(assistant.id, "foreign-account")).toThrow("unavailable");
+    });
     it("persists new particle colors and reads legacy avatar shapes without rewriting stored settings", async () => {
         const assistant = await assistantsService.create({ accountId: "default", name: "Particle assistant", instructions: "Help with releases", spaceId: "codex", model: "test-model", effort: "high", avatar: { shape: "cube", color: "rose" } });
         expect(assistant.avatar).toEqual({ shape: "cube", color: "rose" });
@@ -159,6 +390,81 @@ describe("assistant profiles and shared knowledge", () => {
         expect(assistantsService.get(a.id, "other")).toBeNull();
         expect(() => assistantsService.removeMemory("other", row.id, next.revision)).toThrow("not found");
     });
+    it("changes team with private notes while retaining shared knowledge, history and profile settings", async () => {
+        const assistant = await makeAssistant("Build"), teammate = await makeAssistant("Website");
+        const destination = assistantsService.createTeam({ accountId: "default", name: "New team" });
+        const shared = assistantsService.saveMemory({ accountId: "default", teamId, title: "Old policy", content: "Old team knowledge", pinned: true });
+        const privateNote = assistantsService.saveMemory({ accountId: "default", teamId, assistantId: assistant.id, title: "Preference", content: "Private build preference", pinned: true });
+        assistantsService.saveMemory({ accountId: "default", teamId: destination.id, title: "New policy", content: "New team knowledge", pinned: true });
+        const task = await assistantWork.assign({ accountId: "default", toAssistantId: assistant.id, taskKey: "old-task", title: "Build", prompt: "Build" });
+        assistantsRepo.patchAssignment(task.id, { status: "completed", result: "Built" });
+        assistantsRepo.cancelMessages(task.id);
+        createRun(db, { id: "old-chat", assistantId: assistant.id, status: "succeeded" });
+
+        const updated = assistantsService.changeTeam({ accountId: "default", id: assistant.id, teamId: destination.id });
+
+        expect(updated).toEqual({ ...assistant, teamId: destination.id, updatedAt: expect.any(Date) });
+        expect(assistantsRepo.memory(privateNote.id)).toMatchObject({ teamId: destination.id, assistantId: assistant.id, revision: privateNote.revision + 1, pinned: true });
+        expect(assistantsRepo.memory(shared.id)?.teamId).toBe(teamId);
+        expect(assistantsRepo.assignment(task.id)).toMatchObject({ teamId, status: "completed", result: "Built" });
+        expect(assistantsService.conversations(assistant.id, "default").some(chat => chat.id === "old-chat")).toBe(true);
+        expect(assistantsService.context(assistant.id, "default", "knowledge")).toContain("New team knowledge");
+        expect(assistantsService.context(assistant.id, "default", "knowledge")).not.toContain("Old team knowledge");
+        expect(assistantsService.context(teammate.id, "default", "knowledge")).not.toContain("Private build preference");
+        expect(() => assistantsService.saveMemory({ accountId: "default", teamId: destination.id, assistantId: assistant.id, id: privateNote.id, title: "Preference", content: "Stale", expectedRevision: privateNote.revision })).toThrow("changed");
+    });
+    it("validates both team and assistant account before changing membership", async () => {
+        const assistant = await makeAssistant("Build");
+        createAccount(db, { id: "other" });
+        const foreign = assistantsService.createTeam({ accountId: "other", name: "Other" });
+        expect(() => assistantsService.changeTeam({ accountId: "default", id: assistant.id, teamId: foreign.id })).toThrow("Team not found");
+        expect(() => assistantsService.changeTeam({ accountId: "other", id: assistant.id, teamId: foreign.id })).toThrow("unavailable");
+        expect(() => assistantsService.changeTeam({ accountId: "default", id: assistant.id, teamId: "missing" })).toThrow("Team not found");
+        assistantsService.archive(assistant.id, "default", true);
+        expect(() => assistantsService.changeTeam({ accountId: "default", id: assistant.id, teamId })).toThrow("unavailable");
+        expect(assistantsService.get(assistant.id, "default")?.teamId).toBe(teamId);
+    });
+    it("keeps membership stable while conversations, assignments or deliveries are pending", async () => {
+        const assistant = await makeAssistant("Build"), requester = await makeAssistant("Coordinator");
+        const destination = assistantsService.createTeam({ accountId: "default", name: "New team" });
+        const move = (id = assistant.id) => assistantsService.changeTeam({ accountId: "default", id, teamId: destination.id });
+        createRun(db, { id: "active-chat", assistantId: assistant.id, status: "queued" });
+        for (const status of ["queued", "running"] as const) {
+            db.update(runs).set({ status }).where(eq(runs.id, "active-chat")).run();
+            expect(() => move()).toThrow("running conversations");
+        }
+        db.update(runs).set({ status: "succeeded" }).where(eq(runs.id, "active-chat")).run();
+        assistantsRepo.enqueue({ id: "task", accountId: "default", teamId, fromAssistantId: requester.id, toAssistantId: assistant.id, taskKey: "test", dedupeKey: "test", title: "Build", prompt: "Build" },
+            { id: "delivery", assignmentId: "task", kind: "result", targetRunId: "active-chat", content: "Result" });
+        for (const status of ["queued", "running", "blocked", "uncertain"] satisfies AssistantAssignment["status"][]) {
+            assistantsRepo.patchAssignment("task", { status });
+            expect(() => move()).toThrow("assignments");
+            expect(() => move(requester.id)).toThrow("assignments");
+        }
+        assistantsRepo.patchAssignment("task", { status: "completed" });
+        for (const status of ["queued", "dispatching", "uncertain"] as const) {
+            assistantsRepo.patchMessage("delivery", { status });
+            expect(() => move()).toThrow("deliveries");
+            expect(() => move(requester.id)).toThrow("deliveries");
+        }
+        expect(assistantsService.get(assistant.id, "default")?.teamId).toBe(teamId);
+        assistantsRepo.patchMessage("delivery", { status: "delivered" });
+        expect(move().teamId).toBe(destination.id);
+    });
+    it.each(["generating", "starting"] as const)("waits for a %s welcome before changing teams", async state => {
+        const assistant = await makeAssistant("Build"), destination = assistantsService.createTeam({ accountId: "default", name: "New team" });
+        assistantsRepo.patchWelcome(assistant.id, { state });
+        expect(() => assistantsService.changeTeam({ accountId: "default", id: assistant.id, teamId: destination.id })).toThrow("welcome");
+    });
+    it("rejects an assignment if its target moves teams while resolving execution", async () => {
+        const assistant = await makeAssistant("Build"), destination = assistantsService.createTeam({ accountId: "default", name: "New team" });
+        vi.spyOn(assistantsService, "execution").mockImplementation(async () => {
+            assistantsService.changeTeam({ accountId: "default", id: assistant.id, teamId: destination.id });
+            return { mode: "work" };
+        });
+        await expect(assistantWork.assign({ accountId: "default", toAssistantId: assistant.id, taskKey: "race", title: "Build", prompt: "Build" })).rejects.toThrow("team changed");
+        expect(assistantsRepo.assignments("default")).toHaveLength(0);
+    });
     it("classifies assistant tables and identity as local in Bridge", () => { expect(() => auditBridgeSchema()).not.toThrow(); });
 });
 describe("durable assistant delegation", () => {
@@ -233,6 +539,36 @@ describe("durable assistant delegation", () => {
         await assistantWork.recover();
         expect(assistantsRepo.message("uncertain-message")?.status).toBe("uncertain");
         expect(assistantsRepo.assignment(task.id)?.status).toBe("uncertain");
+        expect(driver.calls.resumeSession).toHaveLength(0);
+    });
+    it.each(["blocked", "completed"] as const)("retains the delivery failure and an explicit %s task report during reconciliation", async status => {
+        const { worker, runId } = await parentAndWorker();
+        const task = await assistantWork.assign({ accountId: "default", toAssistantId: worker.id, taskKey: "writer-lock", title: "Check", prompt: "Check the release" }, runId);
+        createRun(db, { id: task.workerRunId!, assistantId: worker.id, providerId: worker.providerId, mode: "work", status: "failed" });
+        assistantsRepo.patchAssignment(task.id, { status, result: status === "completed" ? "Readiness check complete" : null });
+        const error = "This conversation is open in another Codex application. Release that session before continuing.";
+        assistantsRepo.addMessage({ id: "locked-delivery", assignmentId: task.id, targetRunId: task.workerRunId, kind: "followup", content: "Continue", status: "uncertain", error });
+        vi.spyOn(runsService, "getInputStatus").mockResolvedValue({ accepted: false });
+
+        await assistantWork.recover(task.id);
+        await assistantWork.recover(task.id);
+
+        expect(assistantsRepo.message("locked-delivery")).toMatchObject({ status: "uncertain", error });
+        expect(assistantsRepo.assignment(task.id)).toMatchObject({ status: status === "completed" ? "completed" : "uncertain", result: status === "completed" ? "Readiness check complete" : null, error: expect.stringContaining(error) });
+        expect(driver.calls.resumeSession).toHaveLength(0);
+    });
+    it("exposes the last conversation error for older generic uncertain deliveries without replaying them", async () => {
+        const { worker, runId } = await parentAndWorker();
+        const task = await assistantWork.assign({ accountId: "default", toAssistantId: worker.id, taskKey: "legacy-writer-lock", title: "Check", prompt: "Check the release" }, runId);
+        const lastError = "thread existing-thread already has an active writer (code: -32600)";
+        createRun(db, { id: task.workerRunId!, assistantId: worker.id, providerId: worker.providerId, mode: "work", status: "failed", lastError });
+        assistantsRepo.addMessage({ id: "legacy-locked-delivery", assignmentId: task.id, targetRunId: task.workerRunId, kind: "followup", content: "Continue", status: "uncertain", error: "Delivery could not be confirmed. Inspect the conversation before sending again." });
+        vi.spyOn(runsService, "getInputStatus").mockResolvedValue({ accepted: false });
+        await assistantWork.recover(task.id);
+        const error = assistantsRepo.message("legacy-locked-delivery")?.error;
+        expect(error).toContain(`Last conversation error: ${lastError}`);
+        await assistantWork.recover(task.id);
+        expect(assistantsRepo.message("legacy-locked-delivery")?.error).toBe(error);
         expect(driver.calls.resumeSession).toHaveLength(0);
     });
     it("cancels queued work before it reaches a provider", async () => {
@@ -380,6 +716,7 @@ describe("one-time assistant welcome", () => {
         await settled(first.runId);
         expect(driver.calls.createSession).toHaveLength(1);
         expect(driver.calls.createSession[0].goal).toBe("Check TestFlight");
+        expect(driver.calls.createSession[0]).toMatchObject({ mode: "work", execution: { workspaceId: null } });
         const history = await runsService.getHistoryPage({ runId: first.runId, direction: "latest" });
         const reports = history.artifacts.filter(a => a.kind === "report");
         expect(reports[0]?.content).toBe(question.question);
@@ -389,6 +726,57 @@ describe("one-time assistant welcome", () => {
         await expect(assistantWelcome.respond("default", assistant.id, "Different task")).rejects.toThrow("already answered");
         expect(driver.calls.createSession).toHaveLength(1);
         expect(assistantsService.conversations(assistant.id, "default").map(chat => chat.id)).toEqual([first.runId]);
+    });
+    it("starts a welcome in the selected repo without changing the assistant profile", async () => {
+        const { assistant, welcome } = await ready(), repo = workspace("welcome-repo");
+        const target = { mode: "developer" as const, workspaceId: repo.id };
+        const [first, duplicate] = await Promise.all([
+            assistantWelcome.respond("default", assistant.id, "Check TestFlight", {}, target),
+            assistantWelcome.respond("default", assistant.id, "Check TestFlight", {}, target),
+        ]);
+        expect(first).toEqual(duplicate);
+        await settled(welcome.runId);
+        expect(driver.calls.createSession).toHaveLength(1);
+        expect(driver.calls.createSession[0]).toMatchObject({ mode: "developer", model: assistant.model, execution: { workspaceId: repo.id, cwd: repo.rootPath } });
+        expect(assistantsService.welcome(assistant.id, "default")?.execution).toEqual(target);
+        expect(assistantsService.overview("default").welcomes?.find(row => row.assistantId === assistant.id)?.execution).toEqual(target);
+        expect(assistantsService.get(assistant.id, "default")).toEqual(assistant);
+        await expect(assistantWelcome.respond("default", assistant.id, "Check TestFlight", {}, { mode: "work" })).rejects.toThrow("original workspace");
+    });
+    it("rejects unavailable welcome repos before accepting an answer, and permits an unbound retry", async () => {
+        const { assistant, welcome } = await ready();
+        createAccount(db, { id: "other" });
+        const foreign = workspace("foreign-welcome", "other"), archived = workspace("archived-welcome");
+        db.update((await import("../../db/schema")).workspaces).set({ isArchived: true }).where(eq((await import("../../db/schema")).workspaces.id, archived.id)).run();
+        for (const workspaceId of [foreign.id, archived.id, "missing"]) {
+            await expect(assistantWelcome.respond("default", assistant.id, "Check TestFlight", {}, { mode: "developer", workspaceId })).rejects.toThrow("Workspace is unavailable");
+            expect(assistantsService.welcome(assistant.id, "default")).toMatchObject({ state: "ready", answer: null });
+            expect(await runsService.getRunById(welcome.runId)).toBeNull();
+        }
+        await assistantWelcome.respond("default", assistant.id, "Check TestFlight");
+        await settled(welcome.runId);
+        expect(driver.calls.createSession[0].mode).toBe("work");
+    });
+    it("keeps the accepted repo across a failed start and restart without replaying a different task", async () => {
+        const { assistant, welcome } = await ready(), repo = workspace("retry-welcome");
+        const execute = vi.spyOn(runsService, "executeRun").mockRejectedValueOnce(new Error("Connection lost before run creation"));
+        await expect(assistantWelcome.respond("default", assistant.id, "Check TestFlight", {}, { mode: "developer", workspaceId: repo.id })).rejects.toThrow("Connection lost");
+        expect(assistantsService.welcome(assistant.id, "default")).toMatchObject({ state: "starting", answer: "Check TestFlight", execution: { mode: "developer", workspaceId: repo.id } });
+        await assistantWork.stop(); assistantWork.start();
+        expect(driver.calls.createSession).toHaveLength(0);
+        await expect(assistantWelcome.respond("default", assistant.id, "Check TestFlight", {}, { mode: "work" })).rejects.toThrow("original workspace");
+        await assistantWelcome.respond("default", assistant.id, "Check TestFlight");
+        await settled(welcome.runId);
+        expect(execute).toHaveBeenCalledTimes(2);
+        expect(driver.calls.createSession).toHaveLength(1);
+        expect(driver.calls.createSession[0].execution).toMatchObject({ workspaceId: repo.id, cwd: repo.rootPath });
+    });
+    it("uses a selected repo when the first real message follows a skipped welcome", async () => {
+        const { assistant, welcome } = await ready(), repo = workspace("skip-welcome-repo");
+        await assistantWelcome.respond("default", assistant.id, null);
+        await assistantWork.sendChat("default", assistant.id, "Review this repo", `welcome-${assistant.id}`, welcome.runId, undefined, {}, { mode: "developer", workspaceId: repo.id });
+        await settled(welcome.runId);
+        expect(driver.calls.createSession[0]).toMatchObject({ mode: "developer", execution: { workspaceId: repo.id, cwd: repo.rootPath } });
     });
     it("allows ordinary free text and attachments after skip, with idempotent delivery", async () => {
         const { assistant, welcome } = await ready();
@@ -453,10 +841,42 @@ describe("one-time assistant welcome", () => {
 });
 
 describe("task-local execution and Code assistant calls", () => {
-    function workspace(id: string, accountId = "default") {
-        const rootPath = join(root, id); mkdirSync(rootPath, { recursive: true });
-        return createWorkspace(db, { id, accountId, rootPath });
-    }
+    it("accepts a scoped Code task report through the dynamic tool broker and delivers it to its requester", async () => {
+        const w = workspace("code-report"), assistant = await makeAssistant("TestFlight");
+        const source = createRun(db, { id: "report-source", workspaceId: w.id, providerId: "codex", sessionId: "source-session", title: "TestFlight readiness", mode: "developer", status: "succeeded" });
+        const task = await assistantWork.assign({ accountId: "default", toAssistantId: assistant.id, taskKey: "code-report", title: "Check", prompt: "Check TestFlight" }, source.id);
+        // Native task reports arrive during the worker turn, before its terminal status.
+        let finishWorker!: () => void;
+        const workerTurn = new Promise<void>(resolve => { finishWorker = resolve; });
+        const executePrompt = driver.driver.executePrompt;
+        driver.driver.executePrompt = async (...args) => {
+            if ((args[0] as { id: string }).id === task.workerRunId) await workerTurn;
+            return executePrompt(...args);
+        };
+        assistantWork.start();
+        await vi.waitFor(() => expect(driver.calls.createSession.some(call => call.runId === task.workerRunId)).toBe(true));
+        const request = driver.calls.createSession.find(call => call.runId === task.workerRunId)!;
+        const broker = createCodexRequestBroker({
+            getRunState: () => ({ mode: request.mode, assistantId: request.configSnapshot?.assistantId as string, fileChangeItems: new Map() }),
+            getMainsToolContext: () => ({ workspaceId: w.id, rootPath: w.rootPath, runId: task.workerRunId! }),
+        });
+        const respondToRequest = vi.fn(), respondToRequestError = vi.fn();
+        try {
+            await broker.handleRequest({ runId: task.workerRunId!, runIsDead: false, id: 42, method: "item/tool/call", params: {
+                tool: "ReportAssistantTask", arguments: { assignmentId: task.id, status: "completed", result: "Readiness check complete: NOT READY", evidence: ["swift-test.log"] },
+            }, server: { respondToRequest, respondToRequestError } });
+        } finally { finishWorker(); }
+        expect(respondToRequestError).not.toHaveBeenCalled();
+        expect(respondToRequest).toHaveBeenCalledWith(42, expect.objectContaining({ success: true }));
+        expect(assistantsRepo.assignment(task.id)).toMatchObject({ status: "completed", result: "Readiness check complete: NOT READY", error: null });
+        await vi.waitFor(() => expect(assistantsRepo.assignmentMessages(task.id).find(message => message.id.startsWith("report-"))).toMatchObject({ status: "delivered", error: null }));
+        await vi.waitFor(async () => {
+            const sourceHistory = await runsService.getHistoryPage({ runId: source.id });
+            expect(sourceHistory.artifacts).toContainEqual(expect.objectContaining({ kind: "user-prompt", metadata: expect.objectContaining({ assistantTaskInput: expect.objectContaining({ kind: "result" }) }) }));
+        });
+        expect(assistantsService.assignment("default", task.id)?.activity?.find(item => item.kind === "result")?.content).toBe("Readiness check complete: NOT READY");
+        await settled(source.id);
+    });
     it("creates a Work assistant from a Code Space without a team or workspace choice and saves its avatar", async () => {
         db.update(spaces).set({ mode: "developer" }).where(eq(spaces.id, "codex")).run();
         const assistant = await assistantsService.create({ accountId: "default", name: "Trip planner", description: "Plan trips", instructions: "Plan practical trips.", spaceId: "codex", model: "test-model", effort: "high", avatar: { shape: "cube", color: "mint" } });
@@ -477,10 +897,14 @@ describe("task-local execution and Code assistant calls", () => {
         await settled(second.runId);
         expect((await runsService.getRunById(first.runId))?.workspaceId).toBe(a.id);
         expect((await runsService.getRunById(second.runId))?.workspaceId).toBe(b.id);
+        expect(await runsService.getRunsByWorkspace(a.id)).toEqual([]);
+        expect(await runsService.getRunsByWorkspace(b.id)).toEqual([]);
+        expect(assistantsService.conversations(assistant.id, "default").map(chat => chat.id)).toEqual(expect.arrayContaining([first.runId, second.runId]));
         db.update(spaces).set({ mode: "chat" }).where(eq(spaces.id, "codex")).run();
         await assistantWork.sendChat("default", assistant.id, "Check again", "task-local-followup", first.runId);
         await settled(first.runId);
         expect(driver.calls.resumeSession.at(-1)).toMatchObject({ mode: "developer", model: "test-model", execution: { workspaceId: a.id, cwd: a.rootPath } });
+        await expect(assistantWork.sendChat("default", assistant.id, "Check the app", "task-local-code-app", undefined, undefined, {}, { mode: "developer", workspaceId: b.id })).rejects.toThrow("different workspace");
     });
     it("lets ordinary Code chats delegate, keeping private memory and unrelated tasks isolated", async () => {
         const w = workspace("normal-code"), assistant = await makeAssistant("TestFlight");

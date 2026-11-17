@@ -77,6 +77,10 @@ export const PANEL_WIDTH_DEFAULT = 352; // 22rem
 export const PANEL_WIDTH_MIN = 300;
 export const PANEL_WIDTH_MAX = 500;
 
+export const ASSISTANT_INFO_PANEL_WIDTH_DEFAULT = 416; // 26rem
+export const ASSISTANT_INFO_PANEL_WIDTH_MIN = 320;
+export const ASSISTANT_INFO_PANEL_WIDTH_MAX = 640;
+
 export const BROWSER_PANEL_WIDTH_VAR = "--browser-panel-width";
 export const BROWSER_PANEL_WIDTH_DEFAULT = 608; // 38rem
 export const BROWSER_PANEL_WIDTH_MIN = 420;

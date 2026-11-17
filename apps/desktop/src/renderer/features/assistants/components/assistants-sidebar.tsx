@@ -18,7 +18,6 @@ import { errorText, isAssistantWorking } from "../lib/assistant-ui";
 export function AssistantsSidebar() {
   const { data: account } = useGetAccountQuery();
   const { currentData: overview, error, refetch } = useAssistantOverviewQuery(account?.id ?? "", { skip: !account });
-  const [archived, setArchived] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [params] = useSearchParams();
@@ -30,28 +29,25 @@ export function AssistantsSidebar() {
     if (mobile) dispatch(setSidebarCollapsed(true));
   };
   const query = searchQuery.trim().toLocaleLowerCase();
-  const assistants = overview?.assistants.filter(a => a.isArchived === archived && (!query || `${a.name} ${a.description}`.toLocaleLowerCase().includes(query))) ?? [];
+  const assistants = overview?.assistants.filter(a => !a.isArchived && (!query || `${a.name} ${a.description}`.toLocaleLowerCase().includes(query))) ?? [];
   return (
     <div className="flex h-full flex-col text-primary-900 dark:text-primary-100">
-      <div className="relative mx-3 mb-2 mt-12 h-9 shrink-0 md:mt-2">
-        <div inert={searchExpanded} className={`pr-10 transition-opacity duration-150 motion-reduce:transition-none ${searchExpanded ? "opacity-0" : "opacity-100"}`}>
+      <div className="relative mx-3 mb-2 mt-12 h-8 shrink-0 md:mt-2">
+        <div inert={searchExpanded} className={`pr-9 transition-opacity duration-150 motion-reduce:transition-none ${searchExpanded ? "opacity-0" : "opacity-100"}`}>
           <NewButton title="assistant" icon={<New className="size-3.5" />} onClick={() => { const next = new URLSearchParams(params); next.delete("tab"); next.set("new", "1"); open(`/assistants?${next}`); }} />
         </div>
-        <div className={`absolute inset-y-0 right-0 flex items-center justify-end transition-[width] duration-200 ease-out motion-reduce:transition-none ${searchExpanded ? "w-full" : "w-9"}`}>
+        <div className={`absolute inset-y-0 right-0 flex items-center justify-end transition-[width] duration-200 ease-out motion-reduce:transition-none ${searchExpanded ? "w-full" : "w-8"}`}>
           <SearchBar isExpanded={searchExpanded} searchQuery={searchQuery} searchLabel="Search assistants" onToggle={() => setSearchExpanded(true)} onSearchChange={setSearchQuery} onClear={() => { setSearchQuery(""); setSearchExpanded(false); }} />
         </div>
       </div>
       <nav aria-label="Assistants" className="scroll-bounce min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4 noscrollbar">
         {!!error && <div className="px-2 py-3 text-xs text-danger">{errorText(error)}<Button variant="ghost" onClick={() => void refetch()}>Retry</Button></div>}
         {!overview && !error && <p className="px-2 py-3 text-xs text-primary-500">Loading assistants…</p>}
-        {overview && !assistants.length && <p className="px-2 py-3 text-xs text-primary-500">{query ? "No matching assistants" : archived ? "No archived assistants" : "Your assistants will appear here."}</p>}
+        {overview && !assistants.length && <p className="px-2 py-3 text-xs text-primary-500">{query ? "No matching assistants" : "Your assistants will appear here."}</p>}
         {assistants.map(assistant => <AssistantItem key={assistant.id} assistant={assistant}
           working={isAssistantWorking(overview, assistant.id)} active={params.get("new") !== "1" && params.get("assistant") === assistant.id}
           open={open} onOpenDetails={() => open(`${assistantHref(assistant.id, params.get("assistant") === assistant.id ? params.get("run") : null)}&tab=profile`)} />)}
       </nav>
-      <div className="border-t border-primary-200/60 px-3 py-2 dark:border-primary-800/60">
-        <Button variant="subtle" fullWidth className="justify-start text-xs text-primary-500" aria-pressed={archived} onClick={() => setArchived(!archived)}>{archived ? "Show active assistants" : "Archived assistants"}</Button>
-      </div>
     </div>
   );
 }

@@ -238,9 +238,11 @@ function ModelChangeNotice({
 function SessionTimeBar({
   info,
   onFork,
+  revealOnHover = false,
 }: {
   info: SessionInfo;
   onFork?: (responseContent: string) => void;
+  revealOnHover?: boolean;
 }) {
   const handleFork = useCallback(() => {
     if (onFork) {
@@ -254,7 +256,7 @@ function SessionTimeBar({
   const hasUsage = turn && (turn.inputTokens || turn.outputTokens || turn.cacheReadTokens || turn.cacheWriteTokens || turn.costMicros);
 
   return (
-    <Text as="div" size="s" tone="muted" className="flex items-center gap-2 -mt-1">
+    <Text as="div" size="s" tone="muted" className={`flex items-center gap-2 -mt-1 ${revealOnHover ? "opacity-0 pointer-events-none transition-opacity duration-150 group-hover/agent-turn:opacity-100 group-hover/agent-turn:pointer-events-auto group-focus-within/agent-turn:opacity-100 group-focus-within/agent-turn:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto motion-reduce:transition-none" : ""}`}>
       {hasUsage ? (
         <Tooltip
           content={<UsageTooltipContent turn={turn} />}
@@ -289,7 +291,7 @@ function SessionTimeBar({
         </>
       )}
       {info.receivedAt && Number.isFinite(info.receivedAt.getTime()) && (
-        <Text as="span" size="xs" tone="faint" className="ml-1 shrink-0 select-none whitespace-nowrap tabular-nums opacity-0 transition-opacity group-hover/agent-turn:opacity-100 group-focus-within/agent-turn:opacity-100 motion-reduce:transition-none">
+        <Text as="span" size="xs" tone="faint" className={`ml-1 shrink-0 select-none whitespace-nowrap tabular-nums ${revealOnHover ? "" : "opacity-0 transition-opacity group-hover/agent-turn:opacity-100 group-focus-within/agent-turn:opacity-100 motion-reduce:transition-none"}`}>
           <time dateTime={info.receivedAt.toISOString()} title={formatAbsoluteDate(info.receivedAt)}>
             {messageTimeFormatter.format(info.receivedAt)}
           </time>
@@ -427,6 +429,9 @@ function AgentTurnMessagesAccordion({
 }
 
 interface WorkspaceEventsProps {
+  /** Assistant conversations omit workspace edit/review controls. */
+  hideTurnChanges?: boolean;
+  appearance?: "default" | "assistant";
   mode?: Run["mode"];
   runs: Run[];
   activeTab: "editor" | string;
@@ -448,6 +453,8 @@ interface WorkspaceEventsProps {
 }
 
 export function WorkspaceEvents({
+  hideTurnChanges = false,
+  appearance = "default",
   mode,
   runs,
   activeTab,
@@ -603,7 +610,8 @@ export function WorkspaceEvents({
     [activeRun, onForkRun],
   );
 
-  const { showTurnChanges } = useModeConfig(mode);
+  const modeConfig = useModeConfig(mode);
+  const showTurnChanges = modeConfig.showTurnChanges && !hideTurnChanges;
   const turnRenderRows = useMemo(
     () => buildTurnRenderRows(eventGroups),
     [eventGroups],
@@ -688,6 +696,7 @@ export function WorkspaceEvents({
               {sessionBarForThis && (
                 <SessionTimeBar
                   info={sessionBarForThis}
+                  revealOnHover={appearance === "assistant"}
                   onFork={index === lastSessionIndex && isRunCompleted && onForkRun ? handleFork : undefined}
                 />
               )}
@@ -739,6 +748,7 @@ export function WorkspaceEvents({
           ) : (
             <InfoGroup
               group={group}
+              bubble={appearance === "assistant"}
               runId={activeRun?.id}
               providerId={activeRun?.providerId ?? getProviderVariant(variant).providerId}
               floatingChat={floatingChat}
@@ -748,6 +758,7 @@ export function WorkspaceEvents({
           {group.type !== "prompt_suggestion" && sessionBarForThis && (
             <SessionTimeBar
               info={sessionBarForThis}
+              revealOnHover={appearance === "assistant"}
               onFork={index === lastSessionIndex && isRunCompleted && onForkRun ? handleFork : undefined}
             />
           )}
@@ -755,6 +766,7 @@ export function WorkspaceEvents({
       );
     },
     [
+      appearance,
       showTurnChanges,
       activeRun,
       eventGroups,
@@ -794,11 +806,13 @@ export function WorkspaceEvents({
     event.content.trim().length > 0,
   ), [displayEvents]);
 
-  // Foreground thoughts are scoped to the current prompt, including legacy logs.
+  // A visible foreground reply retires older thoughts; newer thoughts still show.
+  // Use the visible transcript so hidden voice-work reports cannot clear activity.
   const latestThinking = useMemo(() => {
-    for (let index = currentEvents.length - 1; index >= 0; index--) {
-      const event = currentEvents[index];
+    for (let index = displayEvents.length - 1; index >= 0; index--) {
+      const event = displayEvents[index];
       if (event.metadata?.isFromSubagent || event.metadata?.parentToolCallId) continue;
+      if (event.type === "artifact" && event.metadata?.kind === "report" && event.content.trim()) break;
       if (event.type === "artifact" && event.metadata?.kind === "user-prompt" && event.metadata.streaming !== true) break;
       if (event.type === "artifact" && event.metadata?.kind === "thinking" && event.content.trim()) return event.content;
       if (event.type === "log") {
@@ -807,7 +821,7 @@ export function WorkspaceEvents({
       }
     }
     return undefined;
-  }, [currentEvents]);
+  }, [displayEvents]);
 
   const hasActiveImageGeneration = useMemo(
     () =>
