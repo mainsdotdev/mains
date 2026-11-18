@@ -196,3 +196,35 @@
   .mosaic-avatar *, .mosaic-avatar *::before, .mosaic-avatar *::after { animation: none !important; }
   .mosaic-avatar .mosaic-avatar__face { translate: none !important; }
 }
+
+.assistant-robot-avatar__activity {
+  position: absolute;
+  inset-inline-end: 5%;
+  inset-block-end: 10%;
+  width: 19%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.assistant-robot-preview__canvas {
+  visibility: hidden;
+}
+
+.assistant-robot-preview[data-robot-rendered] {
+  cursor: grab;
+  touch-action: none;
+}
+
+.assistant-robot-preview[data-robot-rendered][data-dragging] {
+  cursor: grabbing;
+}
+
+.assistant-robot-preview[data-robot-rendered] .assistant-robot-preview__canvas {
+  visibility: visible;
+}
+
+.assistant-robot-preview[data-robot-rendered] .assistant-robot-preview__fallback {
+  visibility: hidden;
+}

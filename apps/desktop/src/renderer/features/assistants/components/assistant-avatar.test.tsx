@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
+import { ASSISTANT_AVATAR_SHAPES_BY_FAMILY, ASSISTANT_ROBOT_AVATARS, type AssistantAvatar as Avatar } from "@mains/contracts/assistants";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantMonogram } from "./assistant-monogram";
+import { AssistantAvatarPicker } from "./assistant-avatar-picker";
 
 let observe: ReturnType<typeof vi.fn>, disconnect: ReturnType<typeof vi.fn>;
 let intersection: IntersectionObserverCallback;
@@ -15,6 +18,44 @@ beforeEach(() => {
     constructor(callback: IntersectionObserverCallback) { intersection = callback; }
     observe = observe;
     disconnect = disconnect;
+  });
+  vi.stubGlobal("matchMedia", vi.fn(() => ({
+    matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+  })));
+});
+
+describe("robot assistant avatars", () => {
+  it.each(ASSISTANT_AVATAR_SHAPES_BY_FAMILY.robot)("renders a bundled thumbnail for %s in compact surfaces", shape => {
+    const { container } = render(<AssistantAvatar avatar={{ shape, color: ASSISTANT_ROBOT_AVATARS[shape] }} working className="size-5" />);
+    expect(container.querySelector("img")?.getAttribute("src")).toContain(`${shape}.webp`);
+    expect(container.querySelector('[data-avatar-family="robot"][data-working="true"]')).toBeTruthy();
+    expect(container.querySelector("canvas")).toBeNull();
+  });
+
+  it("offers only robot choices and remembers a selected variant when switching styles", () => {
+    function Picker() {
+      const [avatar, setAvatar] = useState<Avatar>({ shape: "sphere", color: "rose" });
+      return <>
+        <AssistantAvatarPicker avatar={avatar} onChange={setAvatar} seed="picker" compact />
+        <output>{avatar.shape} {avatar.color}</output>
+      </>;
+    }
+    render(<Picker />);
+    const styles = within(screen.getByRole("radiogroup", { name: "Robot style" }));
+    expect(styles.getAllByRole("radio").map(option => option.textContent)).toEqual(["Retro Terminal", "Clear Shell", "One-Eye Metal"]);
+    expect(screen.queryByRole("radiogroup", { name: "Avatar color" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("sphere rose");
+    for (const name of ["Retro Terminal", "Clear Shell", "One-Eye Metal"]) {
+      fireEvent.click(styles.getByRole("radio", { name }));
+      const variants = within(screen.getByRole("radiogroup", { name: "Robot variant" }));
+      expect(variants.getAllByRole("radio")).toHaveLength(7);
+    }
+    fireEvent.click(screen.getByRole("radio", { name: "Bronze" }));
+    expect(screen.getByRole("status", { hidden: true }).textContent).toBe("metal-bronze amber");
+    fireEvent.click(screen.getByRole("radio", { name: "Clear Shell" }));
+    fireEvent.click(screen.getByRole("radio", { name: "One-Eye Metal" }));
+    expect(screen.getByRole("radio", { name: "Bronze", checked: true })).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: "Mosaic" })).toBeNull();
   });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });

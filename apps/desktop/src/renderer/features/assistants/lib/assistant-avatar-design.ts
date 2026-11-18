@@ -1,5 +1,6 @@
-import type { AssistantAvatar, ASSISTANT_AVATAR_SHAPES_BY_FAMILY } from "@mains/contracts/assistants";
+import { isAssistantRobotShape, type AssistantAvatar, type ASSISTANT_AVATAR_SHAPES_BY_FAMILY } from "@mains/contracts/assistants";
 import { avatarOutline, MOSAIC_SHAPES } from "./assistant-mosaic";
+import { ROBOT_PRESETS } from "./assistant-robot-presets";
 
 type ShapesByFamily = typeof ASSISTANT_AVATAR_SHAPES_BY_FAMILY;
 type MaterialShape<Family extends "badge" | "felt"> = {
@@ -8,8 +9,6 @@ type MaterialShape<Family extends "badge" | "felt"> = {
   eyes: readonly [left: number, right: number, y: number];
   outline: string;
 };
-
-export const AVATAR_FAMILIES = ["mosaic", "badge", "felt"] as const;
 
 const BADGE_SHAPES: Record<ShapesByFamily["badge"][number], MaterialShape<"badge">> = {
   "badge-card": {
@@ -89,5 +88,6 @@ function isMosaicShape(shape: AssistantAvatar["shape"]): shape is keyof typeof M
 }
 
 export function assistantAvatarDesign(shape: AssistantAvatar["shape"]) {
+  if (isAssistantRobotShape(shape)) return { family: "robot" as const, shape, ...ROBOT_PRESETS[shape] };
   return isMosaicShape(shape) ? { family: "mosaic" as const, ...MOSAIC_SHAPES[shape] } : MATERIAL_SHAPES[shape];
 }

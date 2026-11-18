@@ -16,6 +16,10 @@ vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantOverviewQuery: () => ({ currentData: { teams: mocks.teams }, isFetching: false, refetch: vi.fn() }),
 }));
 beforeEach(() => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({
+    matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+  })));
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   mocks.create.mockReset().mockImplementation(({ teamId }: { teamId: string | null }) =>
     ({ unwrap: () => Promise.resolve({ id: "created-assistant", teamId }) }));
   mocks.createTeam.mockReset().mockImplementation((input: { accountId: string; name: string }) => ({ unwrap: () => Promise.resolve({ ...input, id: "new-team", createdAt: new Date(0) }) }));
@@ -24,33 +28,33 @@ beforeEach(() => {
     { id: "website", accountId: "account", name: "Website", createdAt: new Date(0) },
   ];
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 async function fillProfile(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText("Name"), "Trip planner");
 }
 
 describe("assistant creation", () => {
-  it("offers the mosaic shapes and saves the Mains shape independently of color and model settings", async () => {
+  it("offers robot variants and saves the selected preset independently of model settings", async () => {
     const user = userEvent.setup(), created = vi.fn();
     render(<AssistantProfileForm accountId="account" onCreated={created} onClose={vi.fn()} />);
-    const shapes = within(screen.getByRole("radiogroup", { name: "Avatar shape" }));
+    const shapes = within(screen.getByRole("radiogroup", { name: "Robot variant" }));
     expect(shapes.getAllByRole("radio").map(option => option.getAttribute("aria-label"))).toEqual([
-      "Steps", "Sphere", "Block", "Flower", "Weave", "Lantern", "Arch", "Kite", "Swallow", "Mains",
+      "Amber", "Teal", "Cherry", "Indigo", "Plum", "Olive", "Frost",
     ]);
-    expect(within(screen.getByRole("radiogroup", { name: "Avatar color" })).getAllByRole("radio")).toHaveLength(8);
+    expect(shapes.getByRole("radio", { name: "Amber", checked: true })).toBeTruthy();
     expect(screen.queryByLabelText("Workspace")).toBeNull();
     expect(screen.queryByLabelText("Instructions")).toBeNull();
     expect(screen.getByRole("button", { name: "Team" }).textContent).toContain("No team");
-    await user.click(shapes.getByRole("radio", { name: "Mains" }));
-    await user.click(screen.getByRole("radio", { name: "Rose" }));
+    await user.click(screen.getByRole("radio", { name: "Clear Shell" }));
+    await user.click(shapes.getByRole("radio", { name: "Coral Kite" }));
     await fillProfile(user);
     await user.click(screen.getByRole("button", { name: /Test model.*Medium/i }));
     await user.click(screen.getByRole("menuitemradio", { name: "Test model" }));
     await user.click(screen.getByRole("menuitemradio", { name: /^high$/i }));
     await user.click(screen.getByRole("button", { name: "Create mate" }));
     await waitFor(() => expect(created).toHaveBeenCalledWith("created-assistant", null));
-    expect(mocks.create).toHaveBeenCalledWith({ accountId: "account", teamId: null, spaceId: "codex", name: "Trip planner", profileSetup: true, model: "model", effort: "high", avatar: { shape: "mains", color: "rose" } });
+    expect(mocks.create).toHaveBeenCalledWith({ accountId: "account", teamId: null, spaceId: "codex", name: "Trip planner", profileSetup: true, model: "model", effort: "high", avatar: { shape: "clear-coral", color: "coral" } });
   });
 
   it("creates the assistant in an existing selected team", async () => {
@@ -63,27 +67,26 @@ describe("assistant creation", () => {
     await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ teamId: "website" })));
   });
 
-  it("switches avatar styles by keyboard and remembers the shape and color across families", async () => {
+  it("switches robot styles by keyboard and remembers the chosen variant in each style", async () => {
     const user = userEvent.setup();
     render(<AssistantProfileForm accountId="account" onCreated={vi.fn()} onClose={vi.fn()} />);
-    const styles = within(screen.getByRole("radiogroup", { name: "Avatar style" }));
-    const shapes = within(screen.getByRole("radiogroup", { name: "Avatar shape" }));
-    styles.getByRole("radio", { name: "Mosaic" }).focus();
+    const styles = within(screen.getByRole("radiogroup", { name: "Robot style" }));
+    const shapes = within(screen.getByRole("radiogroup", { name: "Robot variant" }));
+    await user.click(shapes.getByRole("radio", { name: "Frost" }));
+    styles.getByRole("radio", { name: "Retro Terminal" }).focus();
     await user.keyboard("{ArrowRight}");
-    expect(styles.getByRole("radio", { name: "Badge" })).toBe(document.activeElement);
-    expect(shapes.getAllByRole("radio").map(option => option.getAttribute("aria-label"))).toEqual(["Card", "Pin", "Shield", "Ticket"]);
-    await user.click(shapes.getByRole("radio", { name: "Ticket" }));
-    await user.click(screen.getByRole("radio", { name: "Mint" }));
-    await user.click(styles.getByRole("radio", { name: "Felt" }));
-    expect(shapes.getAllByRole("radio").map(option => option.getAttribute("aria-label"))).toEqual(["Sprout", "Pebble", "Cloud", "Bloom"]);
-    await user.click(shapes.getByRole("radio", { name: "Cloud" }));
-    await user.click(styles.getByRole("radio", { name: "Badge" }));
-    expect(shapes.getByRole("radio", { name: "Ticket", checked: true })).toBeTruthy();
-    await user.click(styles.getByRole("radio", { name: "Felt" }));
-    expect(shapes.getByRole("radio", { name: "Cloud", checked: true })).toBeTruthy();
+    expect(styles.getByRole("radio", { name: "Clear Shell" })).toBe(document.activeElement);
+    expect(shapes.getAllByRole("radio").map(option => option.getAttribute("aria-label"))).toEqual([
+      "Violet Drop", "Glacier Dome", "Jade Tile", "Rose Prism", "Honey Lantern", "Lime Capsule", "Coral Kite",
+    ]);
+    await user.click(shapes.getByRole("radio", { name: "Lime Capsule" }));
+    await user.click(styles.getByRole("radio", { name: "Retro Terminal" }));
+    expect(shapes.getByRole("radio", { name: "Frost", checked: true })).toBeTruthy();
+    await user.click(styles.getByRole("radio", { name: "Clear Shell" }));
+    expect(shapes.getByRole("radio", { name: "Lime Capsule", checked: true })).toBeTruthy();
     await fillProfile(user);
     await user.click(screen.getByRole("button", { name: "Create mate" }));
-    await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ avatar: { shape: "felt-cloud", color: "mint" } })));
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ avatar: { shape: "clear-lime", color: "lime" } })));
   });
 
   it("creates and selects a team inline before the overview refresh arrives", async () => {
@@ -123,7 +126,7 @@ describe("assistant creation", () => {
     expect(screen.getByRole("button", { name: "Mate provider" }).textContent).toContain("Codex");
     await fillProfile(user);
     await user.click(screen.getByRole("button", { name: "Create mate" }));
-    await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ teamId: null, profileSetup: true })));
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ teamId: null, profileSetup: true, avatar: { shape: "terminal-amber", color: "amber" } })));
     expect(mocks.createTeam).not.toHaveBeenCalled();
   });
 });

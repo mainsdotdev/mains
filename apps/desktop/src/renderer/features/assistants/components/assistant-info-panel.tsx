@@ -1,5 +1,5 @@
 import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent } from "react";
-import { canAccessAssistantAssignment, type Assistant, type AssistantConversation, type AssistantOverview, type AssistantProfile, type AssistantTeam } from "@mains/contracts/assistants";
+import { canAccessAssistantAssignment, isAssistantRobotShape, type Assistant, type AssistantConversation, type AssistantOverview, type AssistantProfile, type AssistantTeam } from "@mains/contracts/assistants";
 import { Button, Input, Label, Select, SegmentedTabs, Textarea } from "@/components/ui";
 import { Close } from "@/components/ui/icons";
 import { AgentMarkdown } from "@/components/agent-markdown";
@@ -14,6 +14,7 @@ import { formatModelDisplayName } from "@/lib/model-display";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantAvatarPicker } from "./assistant-avatar-picker";
+import { AssistantRobotPreview } from "./assistant-robot-avatar";
 import { AssistantMemoryPanel } from "./assistant-memory";
 import { AssistantAssignments } from "./assistant-assignments";
 import { AssistantChatsPanel } from "./assistant-chats-panel";
@@ -96,6 +97,9 @@ function AssistantProfileDetails({ assistant, overview, archiving, error, onTogg
   }
 
   return <form aria-label={draft ? "Edit mate profile" : undefined} onSubmit={save} className="space-y-4 pt-2">
+    {!draft && isAssistantRobotShape(assistant.avatar.shape) && <div className="flex justify-center">
+      <AssistantRobotPreview shape={assistant.avatar.shape} working={isAssistantWorking(overview, assistant.id)} className="size-24" />
+    </div>}
     {draft && <fieldset disabled={isLoading} className="glass-card min-w-0 space-y-3.5 rounded-2xl p-3.5">
       <AssistantAvatarPicker avatar={draft.avatar} seed={assistant.id} compact onChange={avatar => changeDraft({ avatar })} />
       <label className="flex flex-col gap-1.5 text-sm">

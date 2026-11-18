@@ -1,29 +1,49 @@
 import type { ModeId } from "./modes";
 import type { PrRefInput, PrRevision } from "./pull-requests";
 import type { ConversationSettings } from "./run-settings";
+
+export const ASSISTANT_AVATAR_COLORS = ["coral", "amber", "lime", "mint", "cyan", "blue", "violet", "rose"] as const;
+export const ASSISTANT_ROBOT_AVATARS = {
+    "terminal-amber": "amber", "terminal-teal": "mint", "terminal-cherry": "coral", "terminal-indigo": "blue",
+    "terminal-plum": "violet", "terminal-olive": "lime", "terminal-frost": "cyan",
+    "clear-violet": "violet", "clear-glacier": "cyan", "clear-jade": "mint", "clear-rose": "rose",
+    "clear-honey": "amber", "clear-lime": "lime", "clear-coral": "coral",
+    "metal-silver": "mint", "metal-bronze": "amber", "metal-graphite": "blue", "metal-titanium": "violet",
+    "metal-copper": "coral", "metal-ice": "cyan", "metal-moss": "lime",
+} as const satisfies Record<string, typeof ASSISTANT_AVATAR_COLORS[number]>;
+export type AssistantRobotShape = keyof typeof ASSISTANT_ROBOT_AVATARS;
+
 export const ASSISTANT_AVATAR_SHAPES_BY_FAMILY = {
     mosaic: ["steps", "sphere", "cube", "flower", "weave", "lantern", "arch", "kite", "swallow", "mains"],
     badge: ["badge-card", "badge-pin", "badge-shield", "badge-ticket"],
     felt: ["felt-sprout", "felt-pebble", "felt-cloud", "felt-bloom"],
+    robot: Object.keys(ASSISTANT_ROBOT_AVATARS) as readonly AssistantRobotShape[],
 } as const;
 export const ASSISTANT_AVATAR_SHAPES = [
     ...ASSISTANT_AVATAR_SHAPES_BY_FAMILY.mosaic,
     ...ASSISTANT_AVATAR_SHAPES_BY_FAMILY.badge,
     ...ASSISTANT_AVATAR_SHAPES_BY_FAMILY.felt,
+    ...ASSISTANT_AVATAR_SHAPES_BY_FAMILY.robot,
 ] as const;
-export const ASSISTANT_AVATAR_COLORS = ["coral", "amber", "lime", "mint", "cyan", "blue", "violet", "rose"] as const;
 export interface AssistantAvatar { shape: typeof ASSISTANT_AVATAR_SHAPES[number]; color: typeof ASSISTANT_AVATAR_COLORS[number] }
 export const DEFAULT_ASSISTANT_AVATAR: AssistantAvatar = { shape: "sphere", color: "blue" };
 const LEGACY_AVATAR_SHAPES = new Map<string, AssistantAvatar["shape"]>([
     ["circle", "sphere"], ["square", "cube"], ["cross", "arch"],
 ]);
+
+export function isAssistantRobotShape(shape: AssistantAvatar["shape"] | undefined): shape is AssistantRobotShape {
+    return shape !== undefined && Object.prototype.hasOwnProperty.call(ASSISTANT_ROBOT_AVATARS, shape);
+}
+
 /** Normalize retired presets from saved profiles and older clients. */
 export function normalizeAssistantAvatar(value: unknown): AssistantAvatar {
     const stored = value && typeof value === "object" ? value as Record<string, unknown> : {};
     const shape = typeof stored.shape === "string" ? LEGACY_AVATAR_SHAPES.get(stored.shape) ?? stored.shape : undefined;
+    const normalizedShape = ASSISTANT_AVATAR_SHAPES.includes(shape as AssistantAvatar["shape"]) ? shape as AssistantAvatar["shape"] : DEFAULT_ASSISTANT_AVATAR.shape;
     return {
-        shape: ASSISTANT_AVATAR_SHAPES.includes(shape as AssistantAvatar["shape"]) ? shape as AssistantAvatar["shape"] : DEFAULT_ASSISTANT_AVATAR.shape,
-        color: ASSISTANT_AVATAR_COLORS.includes(stored.color as AssistantAvatar["color"]) ? stored.color as AssistantAvatar["color"] : DEFAULT_ASSISTANT_AVATAR.color,
+        shape: normalizedShape,
+        color: isAssistantRobotShape(normalizedShape) ? ASSISTANT_ROBOT_AVATARS[normalizedShape]
+            : ASSISTANT_AVATAR_COLORS.includes(stored.color as AssistantAvatar["color"]) ? stored.color as AssistantAvatar["color"] : DEFAULT_ASSISTANT_AVATAR.color,
     };
 }
 export type AssistantExecution = { mode: "work"; workspaceId?: never } | { mode: "developer"; workspaceId: string };

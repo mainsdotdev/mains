@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { DEFAULT_ASSISTANT_AVATAR, type AssistantAvatar as Avatar, type AssistantTeam } from "@mains/contracts/assistants";
+import type { AssistantAvatar as Avatar, AssistantTeam } from "@mains/contracts/assistants";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import { useGetSpacesQuery, useGetProviderModelsQuery, useGetProvidersQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery, useCreateAssistantMutation } from "@/lib/redux/api/assistantsApi";
@@ -7,6 +7,7 @@ import { Button, Input, Label, Select, ModelSelectDropdown } from "@/components/
 import { AssistantAvatarPicker } from "./assistant-avatar-picker";
 import { AssistantCreationHeader } from "./assistant-profile-header";
 import { AssistantTeamEditor } from "./assistant-team-editor";
+import { DEFAULT_ROBOT_AVATAR } from "../lib/assistant-robot-presets";
 import { errorText } from "../lib/assistant-ui";
 
 export function AssistantProfileForm({ accountId, onCreated, onClose }: {
@@ -29,7 +30,7 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
   const [effortChoice, setEffortChoice] = useState("medium");
   const [thinking, setThinking] = useState(true);
   const effort = thinking ? efforts.includes(effortChoice) ? effortChoice : efforts[0] ?? "" : "";
-  const [avatar, setAvatar] = useState<Avatar>(DEFAULT_ASSISTANT_AVATAR);
+  const [avatar, setAvatar] = useState<Avatar>(DEFAULT_ROBOT_AVATAR);
   const [name, setName] = useState("");
   const [failure, setFailure] = useState("");
   const [create, creation] = useCreateAssistantMutation();

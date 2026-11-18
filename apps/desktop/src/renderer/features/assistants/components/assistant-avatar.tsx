@@ -4,6 +4,7 @@ import { cn } from "@/lib/cn";
 import { SquareCell, squareCellStyle, SQUARE_PULSE_DURATION_MS } from "@/components/ui";
 import { assistantAvatarDesign } from "../lib/assistant-avatar-design";
 import { avatarPhase, type MosaicTile } from "../lib/assistant-mosaic";
+import { AssistantRobotAvatar } from "./assistant-robot-avatar";
 import "./assistant-avatar.css";
 
 export const AVATAR_COLORS = {
@@ -35,11 +36,23 @@ function tileStyle([x, y, width, height, tone, corners = 3]: MosaicTile): CSSPro
   } as CSSProperties;
 }
 
-export function AssistantAvatar({ avatar, working = false, seed = "assistant", animated = true, className }: {
+type AvatarProps = {
   avatar?: Avatar; working?: boolean; seed?: string; animated?: boolean; className?: string;
-}) {
+};
+
+export function AssistantAvatar({ avatar, ...props }: AvatarProps) {
   const selected = normalizeAssistantAvatar(avatar);
   const shape = assistantAvatarDesign(selected.shape);
+  if (shape.family === "robot") {
+    return <AssistantRobotAvatar shape={shape.shape} working={props.working} className={props.className} />;
+  }
+  return <ClassicAssistantAvatar {...props} selected={selected} shape={shape} />;
+}
+
+function ClassicAssistantAvatar({ selected, shape, working = false, seed = "assistant", animated = true, className }: Omit<AvatarProps, "avatar"> & {
+  selected: Avatar;
+  shape: Exclude<ReturnType<typeof assistantAvatarDesign>, { family: "robot" }>;
+}) {
   const color = AVATAR_COLORS[selected.color];
   const root = useRef<HTMLSpanElement>(null);
   const phase = avatarPhase(seed);

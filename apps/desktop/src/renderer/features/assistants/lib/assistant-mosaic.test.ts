@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ASSISTANT_AVATAR_COLORS, ASSISTANT_AVATAR_SHAPES, ASSISTANT_AVATAR_SHAPES_BY_FAMILY, normalizeAssistantAvatar } from "@mains/contracts/assistants";
+import { ASSISTANT_AVATAR_COLORS, ASSISTANT_AVATAR_SHAPES, ASSISTANT_AVATAR_SHAPES_BY_FAMILY, ASSISTANT_ROBOT_AVATARS, isAssistantRobotShape, normalizeAssistantAvatar } from "@mains/contracts/assistants";
 import { MOSAIC_SHAPES, avatarPhase } from "./assistant-mosaic";
 
 describe("assistant mosaic geometry", () => {
@@ -23,9 +23,17 @@ describe("assistant mosaic geometry", () => {
     expect(normalizeAssistantAvatar({ shape: "cross", color: "coral" })).toEqual({ shape: "arch", color: "coral" });
     for (const color of ASSISTANT_AVATAR_COLORS) expect(normalizeAssistantAvatar({ shape: "cube", color }).color).toBe(color);
     expect(ASSISTANT_AVATAR_COLORS).toHaveLength(8);
-    for (const shape of ASSISTANT_AVATAR_SHAPES) expect(normalizeAssistantAvatar({ shape, color: "mint" })).toEqual({ shape, color: "mint" });
+    for (const shape of ASSISTANT_AVATAR_SHAPES.filter(shape => !isAssistantRobotShape(shape))) {
+      expect(normalizeAssistantAvatar({ shape, color: "mint" })).toEqual({ shape, color: "mint" });
+    }
     expect(normalizeAssistantAvatar(null)).toEqual({ shape: "sphere", color: "blue" });
     expect(avatarPhase("release")).toBe(avatarPhase("release"));
     expect(avatarPhase("release")).not.toBe(avatarPhase("website"));
+  });
+
+  it.each(ASSISTANT_AVATAR_SHAPES_BY_FAMILY.robot)("restores the %s robot preset and its curated color", shape => {
+    const avatar = normalizeAssistantAvatar({ shape, color: "lime" });
+    expect(avatar).toEqual({ shape, color: ASSISTANT_ROBOT_AVATARS[shape] });
+    expect(normalizeAssistantAvatar(avatar)).toEqual(avatar);
   });
 });
