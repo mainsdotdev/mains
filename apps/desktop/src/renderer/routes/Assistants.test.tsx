@@ -460,11 +460,11 @@ describe("assistant profile and conversation", () => {
     expect(within(header).getByRole("heading", { name: "New assistant" })).toBeTruthy();
 
     const sphere = within(form).getByRole("radio", { name: "Sphere" });
-    const swallow = within(form).getByRole("radio", { name: "Swallow" });
+    const mains = within(form).getByRole("radio", { name: "Mains" });
     fireEvent.keyDown(sphere, { key: "End" });
-    expect(document.activeElement).toBe(swallow);
-    expect(swallow.getAttribute("aria-checked")).toBe("true");
-    const avatar = header.querySelector<HTMLElement>("[data-avatar-shape='swallow']")!;
+    expect(document.activeElement).toBe(mains);
+    expect(mains.getAttribute("aria-checked")).toBe("true");
+    const avatar = header.querySelector<HTMLElement>("[data-avatar-shape='mains']")!;
     const previousColor = avatar.style.getPropertyValue("--avatar-base");
     fireEvent.click(within(form).getByRole("radio", { name: "Rose" }));
     expect(avatar.style.getPropertyValue("--avatar-base")).not.toBe(previousColor);

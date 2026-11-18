@@ -196,7 +196,8 @@ export function AssistantInfoPanel({ assistant, overview, chats, selectedRunId, 
       <div className="flex shrink-0 items-start gap-3 px-5 pb-4 pt-5">
         <AssistantAvatar avatar={assistant.avatar} working={isAssistantWorking(overview, assistant.id)} seed={assistant.id} className="size-10" />
         <div className="min-w-0 flex-1"><h2 className="truncate text-base font-medium text-primary-950 dark:text-primary-50">{assistant.name}</h2>{assistant.description && <p className="mt-1.5 text-sm leading-relaxed text-primary-700 dark:text-primary-300">{assistant.description}</p>}</div>
-        <Button ref={closeRef} variant="icon" aria-label="Close assistant panel" tooltip="Close assistant panel" onClick={onClose}><Close className="size-4" /></Button>
+        <Button ref={closeRef} variant="icon" aria-label="Close assistant panel" tooltip="Close assistant panel"
+          tooltipPosition="bottom-left" onClick={onClose}><Close className="size-4" /></Button>
       </div>
       <div className="shrink-0 overflow-x-auto px-4 pb-4 noscrollbar">
         <SegmentedTabs aria-label="Assistant information" variant="plain" panelId="assistant-info-content" value={tab} onChange={onTabChange}

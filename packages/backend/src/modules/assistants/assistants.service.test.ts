@@ -412,8 +412,8 @@ describe("assistant profiles and shared knowledge", () => {
     });
     it("saves mosaic avatars and reads legacy shapes without rewriting stored settings", async () => {
         const input = { accountId: "default", teamId, name: "Release assistant", instructions: "Help with releases", spaceId: "codex", model: "test-model", effort: "high" };
-        const assistant = await assistantsService.create({ ...input, avatar: { shape: "kite", color: "rose" } });
-        expect(assistant.avatar).toEqual({ shape: "kite", color: "rose" });
+        const assistant = await assistantsService.create({ ...input, avatar: { shape: "mains", color: "rose" } });
+        expect(assistant.avatar).toEqual({ shape: "mains", color: "rose" });
         expect(assistantsService.get(assistant.id, "default")?.avatar).toEqual(assistant.avatar);
         const legacyClient = await assistantsService.create({ ...input, name: "Legacy client", avatar: { shape: "cross", color: "amber" } });
         expect(legacyClient.avatar).toEqual({ shape: "arch", color: "amber" });

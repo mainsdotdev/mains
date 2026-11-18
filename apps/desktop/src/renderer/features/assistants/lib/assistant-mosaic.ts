@@ -164,6 +164,28 @@ export const MOSAIC_SHAPES: Record<AssistantAvatar["shape"], MosaicShape> = {
     ],
     accents: [0, 3],
   },
+  mains: {
+    label: "Mains",
+    eyes: [34, 66, 50],
+    // The logo's curves sampled into the mosaic's percentage coordinate space.
+    outline: outline([
+      [50, 37], [58, 36], [65, 32], [72, 25], [79, 16], [80, 14], [83, 14], [84, 16],
+      [88, 23], [91, 31], [93, 40], [94, 50], [93, 60], [91, 69], [88, 77], [84, 84],
+      [83, 86], [80, 86], [79, 84], [72, 75], [65, 68], [58, 64], [50, 63],
+      [42, 64], [35, 68], [28, 75], [21, 84], [20, 86], [17, 86], [16, 84],
+      [12, 77], [9, 69], [7, 60], [6, 50], [7, 40], [9, 31], [12, 23], [16, 16],
+      [17, 14], [20, 14], [21, 16], [28, 25], [35, 32], [42, 36],
+    ]),
+    tiles: [
+      [5, 13, 44, 23, "light"],
+      [51, 13, 44, 23, "base"],
+      [5, 38, 44, 24, "base"],
+      [51, 38, 44, 24, "light"],
+      [5, 64, 44, 23, "shade"],
+      [51, 64, 44, 23, "shade"],
+    ],
+    accents: [0, 1],
+  },
 };
 
 export function avatarPhase(seed: string): number {

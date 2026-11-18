@@ -1,6 +1,6 @@
 import type { ModeId } from "./modes";
 import type { ConversationSettings } from "./run-settings";
-export const ASSISTANT_AVATAR_SHAPES = ["steps", "sphere", "cube", "flower", "weave", "lantern", "arch", "kite", "swallow"] as const;
+export const ASSISTANT_AVATAR_SHAPES = ["steps", "sphere", "cube", "flower", "weave", "lantern", "arch", "kite", "swallow", "mains"] as const;
 export const ASSISTANT_AVATAR_COLORS = ["coral", "amber", "lime", "mint", "cyan", "blue", "violet", "rose"] as const;
 export interface AssistantAvatar { shape: typeof ASSISTANT_AVATAR_SHAPES[number]; color: typeof ASSISTANT_AVATAR_COLORS[number] }
 export const DEFAULT_ASSISTANT_AVATAR: AssistantAvatar = { shape: "sphere", color: "blue" };

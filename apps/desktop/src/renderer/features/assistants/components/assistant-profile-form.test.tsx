@@ -30,18 +30,18 @@ async function fillProfile(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("assistant creation", () => {
-  it("offers the nine mosaic shapes and saves shape, color and model settings independently", async () => {
+  it("offers the mosaic shapes and saves the Mains shape independently of color and model settings", async () => {
     const user = userEvent.setup(), created = vi.fn();
     render(<AssistantProfileForm accountId="account" onCreated={created} onClose={vi.fn()} />);
     const shapes = within(screen.getByRole("radiogroup", { name: "Avatar shape" }));
     expect(shapes.getAllByRole("radio").map(option => option.getAttribute("aria-label"))).toEqual([
-      "Steps", "Sphere", "Block", "Flower", "Weave", "Lantern", "Arch", "Kite", "Swallow",
+      "Steps", "Sphere", "Block", "Flower", "Weave", "Lantern", "Arch", "Kite", "Swallow", "Mains",
     ]);
     expect(within(screen.getByRole("radiogroup", { name: "Avatar color" })).getAllByRole("radio")).toHaveLength(8);
     expect(screen.queryByLabelText("Workspace")).toBeNull();
     expect(screen.queryByLabelText("Instructions")).toBeNull();
     expect(screen.getByRole("button", { name: "Team" }).textContent).toContain("No team");
-    await user.click(shapes.getByRole("radio", { name: "Kite" }));
+    await user.click(shapes.getByRole("radio", { name: "Mains" }));
     await user.click(screen.getByRole("radio", { name: "Rose" }));
     await fillProfile(user);
     await user.click(screen.getByRole("button", { name: /Test model.*Medium/i }));
@@ -49,7 +49,7 @@ describe("assistant creation", () => {
     await user.click(screen.getByRole("menuitemradio", { name: /^high$/i }));
     await user.click(screen.getByRole("button", { name: "Create assistant" }));
     await waitFor(() => expect(created).toHaveBeenCalledWith("created-assistant"));
-    expect(mocks.create).toHaveBeenCalledWith({ accountId: "account", teamId: null, spaceId: "codex", name: "Trip planner", profileSetup: true, model: "model", effort: "high", avatar: { shape: "kite", color: "rose" } });
+    expect(mocks.create).toHaveBeenCalledWith({ accountId: "account", teamId: null, spaceId: "codex", name: "Trip planner", profileSetup: true, model: "model", effort: "high", avatar: { shape: "mains", color: "rose" } });
   });
 
   it("creates the assistant in an existing selected team", async () => {
