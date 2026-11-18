@@ -1,0 +1,168 @@
+import { useId, useState, type FormEvent } from "react";
+import type { Assistant, AssistantAssignment, AssignmentStatus } from "@mains/contracts/assistants";
+import { AgentMarkdown } from "@/components/agent-markdown";
+import { Button, Input } from "@/components/ui";
+import { ArrowUp } from "@/components/ui/icons";
+import { plainActivityText } from "@/features/workspace/lib/run-activity";
+import { cn } from "@/lib/cn";
+import { useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation, useReconcileAssistantTaskMutation } from "@/lib/redux/api/assistantsApi";
+import { errorText } from "../lib/assistant-ui";
+import { AssistantAvatar } from "./assistant-avatar";
+
+const warningStatus = "bg-warning/15 text-[color:color-mix(in_srgb,var(--color-warning)_50%,var(--color-primary-950))] dark:text-warning";
+const statusStyle = {
+  queued: { label: "Queued", tone: "bg-primary-200/65 text-primary-700 dark:bg-primary/10 dark:text-primary-300" },
+  running: { label: "Running", tone: "bg-accent/12 text-[color:color-mix(in_srgb,var(--color-accent)_50%,var(--color-primary-950))] dark:text-accent" },
+  blocked: { label: "Blocked", tone: warningStatus },
+  completed: { label: "Completed", tone: "bg-success/15 text-[color:color-mix(in_srgb,var(--color-success)_50%,var(--color-primary-950))] dark:text-success" },
+  failed: { label: "Failed", tone: "bg-danger/15 text-[color:color-mix(in_srgb,var(--color-danger)_50%,var(--color-primary-950))] dark:text-danger" },
+  canceled: { label: "Canceled", tone: "bg-primary-200/50 text-primary-600 dark:bg-primary/5 dark:text-primary-400" },
+  uncertain: { label: "Delivery uncertain", tone: warningStatus },
+} satisfies Record<AssignmentStatus, { label: string; tone: string }>;
+
+const disclosureClassName = "grid grid-cols-[minmax(0,1fr)] transition-[grid-template-rows,opacity] duration-250 ease-in-out motion-reduce:transition-none";
+const sectionClassName = "min-w-0 space-y-1 rounded-xl bg-primary-200/55 px-2.5 py-2 dark:bg-primary-950/45";
+const sectionTitleClassName = "text-xs font-medium text-primary-600 dark:text-primary-400";
+
+export function AssistantAssignmentCard({ task, assignee, openAssistant }: {
+  task: AssistantAssignment;
+  assignee?: Assistant;
+  openAssistant(id: string, runId: string): void;
+}) {
+  const titleId = useId();
+  const detailsId = useId();
+  const previewId = useId();
+  const [disclosure, setDisclosure] = useState<"unopened" | "open" | "closed">("unopened");
+  const expanded = disclosure === "open";
+  const status = statusStyle[task.status];
+  const assigneeName = assignee?.name ?? "Assistant";
+  const preview = plainActivityText(task.result || task.prompt).replace(/\s+/g, " ");
+  const canCancel = !["completed", "failed", "canceled"].includes(task.status);
+  const canCheckDelivery = task.status === "uncertain" || (task.status === "completed" && !!task.error);
+
+  return (
+    <article aria-labelledby={titleId} className="glass-card min-w-0 rounded-2xl">
+      <div className="p-1">
+        <Button variant="bare" fullWidth aria-expanded={expanded} aria-controls={detailsId} aria-describedby={preview && !expanded ? previewId : undefined}
+          onClick={() => setDisclosure(expanded ? "closed" : "open")}
+          className="block min-w-0 rounded-xl px-2 py-1.5 text-left hover:bg-primary-300/20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent dark:hover:bg-primary/5">
+          <span className="flex min-w-0 items-center gap-2">
+            <AssistantAvatar avatar={assignee?.avatar} seed={task.toAssistantId} animated={false} className="size-5" />
+            <span className="min-w-0 flex-1 truncate text-sm font-medium" id={titleId} title={task.title}>{task.title}</span>
+            <span className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium", status.tone)}>
+              <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-current" />
+              {status.label}
+            </span>
+            <ArrowUp aria-hidden="true" className={cn("size-3.5 shrink-0 text-primary-500 transition-transform duration-250 ease-in-out motion-reduce:transition-none", expanded ? "rotate-180" : "rotate-90")} />
+          </span>
+          <span className="mt-1.5 flex min-w-0 items-baseline gap-1.5 pl-7 text-xs text-primary-600 dark:text-primary-400">
+            <span className="max-w-[45%] shrink-0 truncate">{assigneeName}</span>
+            {preview && <span aria-hidden="true" className={cn(disclosureClassName, "min-w-0", expanded ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100")}>
+              <span className="min-h-0 overflow-hidden">
+                <span className="block truncate"><span aria-hidden="true">· </span><span id={previewId}>{preview}</span></span>
+              </span>
+            </span>}
+          </span>
+        </Button>
+      </div>
+      <div id={detailsId} role="group" aria-label="Assignment details" inert={!expanded} aria-hidden={!expanded || undefined}
+        className={cn(disclosureClassName, expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
+        <div className="min-h-0 overflow-hidden">
+          {disclosure !== "unopened" && (
+            <div className="space-y-2 px-2.5 pb-2.5 pt-0.5">
+              <section aria-label="Task brief" className={sectionClassName}>
+                <h3 className={sectionTitleClassName}>Task brief</h3>
+                <p className="whitespace-pre-wrap break-words text-sm leading-5">{task.prompt}</p>
+              </section>
+              {(task.result || task.evidence.length > 0) && (
+                <section aria-label="Report" className={sectionClassName}>
+                  <h3 className={sectionTitleClassName}>Report</h3>
+                  {task.result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{task.result}</AgentMarkdown>}
+                  {!!task.evidence.length && <ul aria-label="Task evidence" className="space-y-0.5 text-xs text-primary-600 dark:text-primary-400">
+                    {task.evidence.map((entry, index) => <li key={index} className="break-words">{entry}</li>)}
+                  </ul>}
+                </section>
+              )}
+              {(task.error || task.status === "blocked") && (
+                <section aria-label="Status details" className={sectionClassName}>
+                  <h3 className={sectionTitleClassName}>Status details</h3>
+                  {task.error && <p className="break-words text-sm leading-5">{task.error}</p>}
+                  {task.status === "blocked" && <AssignmentFollowup task={task} />}
+                </section>
+              )}
+              {(task.workerRunId || canCheckDelivery || canCancel) && (
+                <AssignmentActions task={task} openAssistant={openAssistant} canCheckDelivery={canCheckDelivery} canCancel={canCancel} />
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function AssignmentActions({ task, openAssistant, canCheckDelivery, canCancel }: {
+  task: AssistantAssignment;
+  openAssistant(id: string, runId: string): void;
+  canCheckDelivery: boolean;
+  canCancel: boolean;
+}) {
+  const [cancel, canceling] = useCancelAssistantTaskMutation();
+  const [reconcile, reconciling] = useReconcileAssistantTaskMutation();
+  const [failure, setFailure] = useState("");
+  const busy = canceling.isLoading || reconciling.isLoading;
+  const workerRunId = task.workerRunId;
+
+  function run(operation: Promise<unknown>) {
+    setFailure("");
+    void operation.catch(error => setFailure(errorText(error)));
+  }
+
+  return (
+    <div className="space-y-2">
+      {failure && <p role="alert" className="px-1 text-sm text-danger">{failure}</p>}
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
+        {canCancel && <Button variant="ghost" disabled={busy}
+          onClick={() => run(cancel({ accountId: task.accountId, id: task.id }).unwrap())}>Cancel task</Button>}
+        {canCheckDelivery && <Button variant="primary" disabled={busy}
+          onClick={() => run(reconcile({ accountId: task.accountId, id: task.id }).unwrap())}>Check delivery</Button>}
+        {workerRunId && <Button variant="secondary" onClick={() => openAssistant(task.toAssistantId, workerRunId)}>Open chat</Button>}
+      </div>
+    </div>
+  );
+}
+
+function AssignmentFollowup({ task }: { task: AssistantAssignment }) {
+  const [followup, following] = useFollowupAssistantTaskMutation();
+  const [message, setMessage] = useState("");
+  const [request, setRequest] = useState<{ message: string; messageId: string } | null>(null);
+  const [failure, setFailure] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (following.isLoading) return;
+    setFailure("");
+    const input = request ?? { message, messageId: crypto.randomUUID() };
+    setRequest(input);
+    try {
+      await followup({ accountId: task.accountId, id: task.id, ...input }).unwrap();
+      setRequest(null);
+      setMessage("");
+    } catch (error) {
+      setFailure(errorText(error));
+    }
+  }
+
+  return (
+    <form className="space-y-2 pt-1" onSubmit={submit}>
+      <div className="flex items-stretch gap-2">
+        <Input required maxLength={24000} aria-label="Task follow-up" placeholder="Add the missing information…" className="w-auto flex-1"
+          value={request?.message ?? message} disabled={!!request || following.isLoading} onChange={event => setMessage(event.target.value)} />
+        <Button type="submit" variant="primary" className="shrink-0 whitespace-nowrap" disabled={following.isLoading}>
+          {request ? "Check delivery" : "Continue"}
+        </Button>
+      </div>
+      {failure && <p role="alert" className="text-sm text-danger">{failure}</p>}
+    </form>
+  );
+}

@@ -49,9 +49,10 @@ export function AssistantProfileHeader({ assistant, chatColumnRef, isPanelOpen, 
 }) {
   const header = useMemo(() => assistant ? (
     <AssistantHeaderTab chatColumnRef={chatColumnRef}>
+      {/* Balance the avatar's transparent left edge while keeping the tab width fixed. */}
       <Button id="assistant-profile-trigger" variant="bare" aria-label={`${assistant.name} profile`} aria-expanded={isPanelOpen} aria-controls="assistant-info-panel" onClick={onOpenDetails}
         onKeyDown={event => { if (event.key === "Escape" && isPanelOpen) { event.preventDefault(); onOpenDetails(); } }}
-        className="group/profile pointer-events-auto relative flex h-full min-w-0 items-center rounded-t-2xl px-6 py-2 text-primary-900 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent dark:text-primary-100"
+        className="group/profile pointer-events-auto relative flex h-full min-w-0 items-center rounded-t-2xl py-2 pl-5.5 pr-6.5 text-primary-900 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent dark:text-primary-100"
         style={noDrag}>
         <span className="flex min-w-0 items-center gap-2 transition-transform duration-200 ease-out motion-safe:group-hover/profile:-translate-x-1.5 motion-safe:group-focus-visible/profile:-translate-x-1.5 motion-safe:group-aria-expanded/profile:-translate-x-1.5 motion-reduce:transition-none">
           <AssistantAvatar avatar={assistant.avatar} working={working} seed={assistant.id} className="size-6" />

@@ -46,6 +46,8 @@ html:not(.app-ready) *::after {
 }
 
 @theme inline {
+  --container-transcript-bubble: min(85%, var(--container-xl));
+  --radius-transcript-bubble: 20px;
   --text-xt: 0.5625rem;
   --text-xt--line-height: calc(1.25 / 0.5625);
   --text-t: 0.625rem;

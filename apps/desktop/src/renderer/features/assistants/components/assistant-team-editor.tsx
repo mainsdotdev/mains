@@ -4,8 +4,9 @@ import { Button, Input, Label } from "@/components/ui";
 import { useCreateAssistantTeamMutation } from "@/lib/redux/api/assistantsApi";
 import { errorText } from "../lib/assistant-ui";
 
-export function AssistantTeamEditor({ accountId, onCreated, onCancel }: {
+export function AssistantTeamEditor({ accountId, inline = false, onCreated, onCancel }: {
   accountId: string;
+  inline?: boolean;
   onCreated(team: AssistantTeam): void;
   onCancel(): void;
 }) {
@@ -34,8 +35,10 @@ export function AssistantTeamEditor({ accountId, onCreated, onCancel }: {
     }
   }
 
-  return <section aria-label="Create team" className="glass-card space-y-4 rounded-2xl p-4">
-    <label className="flex flex-col gap-2.5">
+  return <section aria-label="Create team" className={inline
+    ? "mt-3 space-y-3.5 border-t border-primary-200/70 pt-3 dark:border-primary-800/60"
+    : "glass-card space-y-4 rounded-2xl p-4"}>
+    <label className={`flex flex-col ${inline ? "gap-1.5" : "gap-2.5"}`}>
       <Label as="span">Team name</Label>
       <Input value={name} maxLength={100} autoFocus autoComplete="off" placeholder="e.g. Release team" disabled={isLoading}
         onChange={event => setName(event.target.value)} onKeyDown={event => {

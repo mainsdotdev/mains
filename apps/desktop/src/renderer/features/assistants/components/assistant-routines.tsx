@@ -64,15 +64,15 @@ function RoutineForm({ assistant, pulse, onClose }: { assistant: Assistant; puls
       onClose();
     } catch (e) { setFailure(errorText(e)); }
   }
-  return <form aria-label={pulse ? "Edit routine" : "New routine"} onSubmit={event => void submit(event)} className="space-y-5 rounded-2xl glass-card p-4">
-    <label className="flex flex-col gap-2.5"><Label as="span">Routine name</Label><Input required autoFocus maxLength={200} value={title} disabled={busy} onChange={event => setTitle(event.target.value)} placeholder="Morning release check" /></label>
-    <label className="flex flex-col gap-2.5"><Label as="span">Task and completion criteria</Label><Textarea required maxLength={24000} value={prompt} disabled={busy} onChange={event => setPrompt(event.target.value)} className="min-h-28 rounded-2xl" placeholder="What should happen, and what should the assistant report?" /></label>
-    <div role="group" aria-label="Routine schedule" className="space-y-2.5">
+  return <form aria-label={pulse ? "Edit routine" : "New routine"} onSubmit={event => void submit(event)} className="glass-card space-y-3.5 rounded-2xl p-3.5">
+    <label className="flex flex-col gap-1.5"><Label as="span">Routine name</Label><Input required autoFocus maxLength={200} value={title} disabled={busy} onChange={event => setTitle(event.target.value)} placeholder="Morning release check" /></label>
+    <label className="flex flex-col gap-1.5"><Label as="span">Task and completion criteria</Label><Textarea required maxLength={24000} value={prompt} disabled={busy} onChange={event => setPrompt(event.target.value)} className="min-h-28 rounded-2xl" placeholder="What should happen, and what should the assistant report?" /></label>
+    <div role="group" aria-label="Routine schedule" className="space-y-1.5">
       <Label as="span">Schedule</Label>
       <fieldset disabled={busy} className="min-w-0"><SchedulePicker {...schedule} onChange={setSchedule} /></fieldset>
       <p className="text-xs text-primary-500">{timezone}</p>
     </div>
-    <div className="space-y-2.5">
+    <div className="space-y-1.5">
       <Label id="routine-location-label" as="span">Run in</Label>
       {pulse ? <p className="text-sm text-primary-600 dark:text-primary-300">{pulse.mode === "developer" ? options.find(option => option.value === workspaceId)?.label ?? "Workspace unavailable" : "Work"}</p>
         : <Select aria-labelledby="routine-location-label" value={workspaceId} disabled={busy} options={[{ value: "", label: "Work · No repository" }, ...options]} onChange={setWorkspaceId} />}

@@ -1,18 +1,19 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
-import { canAccessAssistantAssignment, type Assistant, type AssistantConversation, type AssistantOverview } from "@mains/contracts/assistants";
-import { Button, Label, Select, SegmentedTabs } from "@/components/ui";
+import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent } from "react";
+import { canAccessAssistantAssignment, type Assistant, type AssistantConversation, type AssistantOverview, type AssistantProfile, type AssistantTeam } from "@mains/contracts/assistants";
+import { Button, Input, Label, Select, SegmentedTabs, Textarea } from "@/components/ui";
 import { Close } from "@/components/ui/icons";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { ResizeHandle } from "@/components/layout/resize-handle";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setAssistantInfoPanelWidth } from "@/lib/redux/slices/appSettingsSlice";
-import { useChangeAssistantTeamMutation } from "@/lib/redux/api/assistantsApi";
+import { useUpdateAssistantProfileMutation } from "@/lib/redux/api/assistantsApi";
 import { ASSISTANT_INFO_PANEL_WIDTH_DEFAULT, ASSISTANT_INFO_PANEL_WIDTH_MIN, ASSISTANT_INFO_PANEL_WIDTH_MAX, clamp } from "@/lib/layout";
 import { formatEffortLevel } from "@/lib/format";
 import { formatModelDisplayName } from "@/lib/model-display";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { AssistantAvatar } from "./assistant-avatar";
+import { AssistantAvatarPicker } from "./assistant-avatar-picker";
 import { AssistantMemoryPanel } from "./assistant-memory";
 import { AssistantAssignments } from "./assistant-assignments";
 import { AssistantChatsPanel } from "./assistant-chats-panel";
@@ -20,32 +21,136 @@ import { AssistantRoutines } from "./assistant-routines";
 import { AssistantTeamEditor } from "./assistant-team-editor";
 import { errorText, isAssistantWorking } from "../lib/assistant-ui";
 
-function AssistantTeamSelect({ assistant, teams, disabled }: { assistant: Assistant; teams: AssistantOverview["teams"]; disabled: boolean }) {
-  const [changeTeam, { isLoading, error }] = useChangeAssistantTeamMutation();
-  const [creating, setCreating] = useState(false);
-  const id = `assistant-${assistant.id}-team`;
-  const options = [{ value: "", label: "No team" }, ...teams.filter(team => team.accountId === assistant.accountId).map(team => ({ value: team.id, label: team.name }))];
-  const unavailable = disabled || isLoading || assistant.isArchived;
-  function selectTeam(teamId: string | null) {
-    if (teamId !== assistant.teamId) void changeTeam({ accountId: assistant.accountId, id: assistant.id, teamId });
+type EditableProfile = AssistantProfile & Pick<Assistant, "teamId">;
+
+function AssistantProfileDetails({ assistant, overview, archiving, error, onToggleArchive }: {
+  assistant: Assistant;
+  overview: AssistantOverview;
+  archiving: boolean;
+  error: string;
+  onToggleArchive(): void;
+}) {
+  const [updateProfile, { isLoading }] = useUpdateAssistantProfileMutation();
+  const [edit, setEdit] = useState<{ draft: EditableProfile; original: EditableProfile } | null>(null);
+  const [creatingTeam, setCreatingTeam] = useState(false);
+  const [createdTeams, setCreatedTeams] = useState<AssistantTeam[]>([]);
+  const [failure, setFailure] = useState("");
+  const saving = useRef(false);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
+  const canEdit = !assistant.isArchived && !overview.welcomes?.some(welcome =>
+    welcome.assistantId === assistant.id && welcome.question?.profileSetup && !welcome.question.profileSetup.saved);
+  const draft = edit?.draft;
+  const teamLabelId = `assistant-${assistant.id}-team-label`;
+  const teams = new Map([...createdTeams, ...overview.teams]
+    .filter(team => team.accountId === assistant.accountId).map(team => [team.id, team.name]));
+  const teamName = assistant.teamId === null ? "No team" : teams.get(assistant.teamId) ?? "Unavailable team";
+
+  useLayoutEffect(() => {
+    if (!edit && restoreFocus.current) {
+      restoreFocus.current = false;
+      editButton.current?.focus({ preventScroll: true });
+    }
+  }, [edit]);
+
+  function beginEdit(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    const { name, description, instructions, avatar, teamId } = assistant;
+    const original = { name, description, instructions, avatar, teamId };
+    setFailure("");
+    setEdit({ original, draft: original });
   }
-  return <div className="rounded-2xl glass-card px-4 py-3.5">
-    <div className="flex items-center justify-between gap-3">
-      <Label id={`${id}-label`} as="span" className="shrink-0" size="xs" tone="secondary">Team</Label>
-      <div className="flex min-w-0 items-stretch gap-2">
-        <div className="min-w-0">
-          <Select id={id} aria-labelledby={`${id}-label`} size="sm" value={assistant.teamId ?? ""} disabled={unavailable || creating}
-            options={options} onChange={teamId => selectTeam(teamId || null)} />
+  function changeDraft(changes: Partial<EditableProfile>) {
+    setEdit(current => current && { ...current, draft: { ...current.draft, ...changes } });
+  }
+  function onTeamCreated(team: AssistantTeam) {
+    setCreatedTeams(current => [...current.filter(value => value.id !== team.id), team]);
+    changeDraft({ teamId: team.id });
+    setCreatingTeam(false);
+  }
+  function closeEditor() {
+    restoreFocus.current = true;
+    setEdit(null);
+    setCreatingTeam(false);
+    setFailure("");
+  }
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!edit || !canEdit || archiving || creatingTeam || saving.current) return;
+    const { name, description, instructions, avatar, teamId } = edit.draft;
+    if (!name.trim() || !instructions.trim()) return;
+    const { teamId: expectedTeamId, ...expectedProfile } = edit.original;
+    saving.current = true;
+    setFailure("");
+    try {
+      await updateProfile({ accountId: assistant.accountId, id: assistant.id, expectedProfile,
+        profile: { name: name.trim(), description: description.trim(), instructions: instructions.trim(), avatar },
+        ...(teamId !== expectedTeamId && { teamChange: { teamId, expectedTeamId } }),
+      }).unwrap();
+      closeEditor();
+    } catch (requestError) {
+      setFailure(errorText(requestError));
+    } finally {
+      saving.current = false;
+    }
+  }
+
+  return <form aria-label={draft ? "Edit assistant profile" : undefined} onSubmit={save} className="space-y-4 pt-2">
+    {draft && <fieldset disabled={isLoading} className="glass-card min-w-0 space-y-3.5 rounded-2xl p-3.5">
+      <AssistantAvatarPicker avatar={draft.avatar} seed={assistant.id} compact onChange={avatar => changeDraft({ avatar })} />
+      <label className="flex flex-col gap-1.5 text-sm">
+        <span>Name</span>
+        <Input value={draft.name} onChange={event => changeDraft({ name: event.target.value })} autoComplete="off" autoFocus required maxLength={100} />
+      </label>
+      <label className="flex flex-col gap-1.5 text-sm">
+        <span>Description</span>
+        <Textarea value={draft.description} onChange={event => changeDraft({ description: event.target.value })} rows={2} maxLength={1000} />
+      </label>
+    </fieldset>}
+    {draft ? <div className="rounded-2xl glass-card p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <Label id={teamLabelId} as="span" className="shrink-0" size="xs" tone="secondary">Team</Label>
+        <div className="ml-auto flex min-w-0 flex-wrap items-stretch justify-end gap-2">
+          <Button className="inline-flex shrink-0 whitespace-nowrap" type="button" variant="primary"
+            disabled={isLoading || creatingTeam} aria-expanded={creatingTeam} onClick={() => setCreatingTeam(true)}>New team</Button>
+          <div className="min-w-0">
+            <Select aria-labelledby={teamLabelId} value={draft.teamId ?? ""} disabled={isLoading || creatingTeam}
+              options={[{ value: "", label: "No team" }, ...Array.from(teams, ([value, label]) => ({ value, label }))]}
+              placeholder="Unavailable team" onChange={teamId => changeDraft({ teamId: teamId || null })} />
+          </div>
         </div>
-        <Button className="inline-flex shrink-0 whitespace-nowrap" type="button" variant="primary" disabled={unavailable || creating}
-          aria-expanded={creating} onClick={() => setCreating(true)}>New team</Button>
       </div>
+      {creatingTeam && <AssistantTeamEditor inline accountId={assistant.accountId}
+        onCancel={() => setCreatingTeam(false)} onCreated={onTeamCreated} />}
+    </div> : <dl className="flex items-baseline justify-between gap-4 rounded-2xl glass-card p-3.5">
+      <dt className="shrink-0 text-xs font-medium text-primary-600 dark:text-primary-300">Team</dt>
+      <dd className="min-w-0 break-words text-right text-sm font-medium leading-6 text-primary-950 dark:text-primary-50">{teamName}</dd>
+    </dl>}
+    <dl className="rounded-2xl glass-card px-3.5 text-sm">
+      {[["Space", assistant.spaceSnapshot.name], ["Model", formatModelDisplayName(assistant.model, getProviderVariantById(assistant.providerId)?.variant)], ["Effort", formatEffortLevel(assistant.effort || "Default")]].map(([label, value]) => <div key={label} className="flex items-baseline justify-between gap-4 border-b border-primary-200/70 py-3.5 last:border-b-0 dark:border-primary-800/60"><dt className="shrink-0 text-xs font-medium text-primary-600 dark:text-primary-300">{label}</dt><dd className={`min-w-0 max-w-[70%] break-words text-right font-medium leading-6 text-primary-950 dark:text-primary-50 ${label === "Effort" ? "capitalize" : ""}`}>{value}</dd></div>)}
+    </dl>
+    <div className="rounded-2xl glass-card p-3.5">
+      {draft ? <label className="flex flex-col gap-1.5 text-sm">
+        <span className="font-semibold text-primary-950 dark:text-primary-50">Instructions</span>
+        <Textarea value={draft.instructions} onChange={event => changeDraft({ instructions: event.target.value })}
+          rows={6} maxLength={16000} required disabled={isLoading} />
+      </label> : <>
+        <h3 className="mb-3 text-sm font-semibold text-primary-950 dark:text-primary-50">Instructions</h3>
+        <AgentMarkdown className="leading-6 [&_p]:my-2 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">{assistant.instructions}</AgentMarkdown>
+      </>}
     </div>
-    {creating && <div className="mt-3"><AssistantTeamEditor accountId={assistant.accountId} onCancel={() => setCreating(false)}
-      onCreated={team => { setCreating(false); selectTeam(team.id); }} /></div>}
-    {isLoading && <p role="status" className="mt-3 text-xs text-primary-600 dark:text-primary-300">Changing team…</p>}
-    {!!error && <p role="alert" className="mt-3 text-sm text-danger">{errorText(error)}</p>}
-  </div>;
+    {!!(failure || error) && <p role="alert" className="text-sm text-danger">{failure || error}</p>}
+    <div className="flex justify-end gap-2">
+      {draft ? <Fragment key="editing">
+        <Button variant="ghost" className="inline-flex min-h-9" disabled={isLoading} onClick={closeEditor}>Cancel</Button>
+        <Button type="submit" variant="submit" className="inline-flex min-h-9" isLoading={isLoading}
+          disabled={!canEdit || archiving || creatingTeam || !draft.name.trim() || !draft.instructions.trim()}>Save</Button>
+      </Fragment> : <Fragment key="viewing">
+        <Button variant={assistant.isArchived ? "primary" : "danger"} className="inline-flex min-h-9" disabled={archiving} isLoading={archiving} onClick={onToggleArchive}>{assistant.isArchived ? "Restore assistant" : "Archive assistant"}</Button>
+        {canEdit && <Button ref={editButton} variant="primary" className="inline-flex min-h-9" disabled={archiving} onClick={beginEdit}>Edit</Button>}
+      </Fragment>}
+    </div>
+  </form>;
 }
 
 export function AssistantInfoPanel({ assistant, overview, chats, selectedRunId, chatsError, onSelectChat, onRetryChats, isOpen, tab, onTabChange, onClose, onToggleArchive, archiving, error, openAssistant }: {
@@ -101,21 +206,8 @@ export function AssistantInfoPanel({ assistant, overview, chats, selectedRunId, 
         {tab === "routines" ? <AssistantRoutines assistant={assistant} onOpenChat={onSelectChat} />
           : tab === "chats" ? <AssistantChatsPanel chats={chats} selectedRunId={selectedRunId} error={chatsError} disabled={assistant.isArchived} onSelect={onSelectChat} onRetry={onRetryChats} />
           : tab === "memory" ? <AssistantMemoryPanel key={assistant.id} assistant={assistant} memories={overview.memories} />
-          : tab === "tasks" ? <AssistantAssignments assistant={assistant} assignments={tasks} assistants={overview.assistants} openAssistant={openAssistant} />
-          : <div className="space-y-5 pt-2">
-            <AssistantTeamSelect key={assistant.id} assistant={assistant} teams={overview.teams} disabled={archiving} />
-            <dl className="rounded-2xl glass-card px-4 text-sm">
-              {[["Space", assistant.spaceSnapshot.name], ["Model", formatModelDisplayName(assistant.model, getProviderVariantById(assistant.providerId)?.variant)], ["Effort", formatEffortLevel(assistant.effort || "Default")]].map(([label, value]) => <div key={label} className="flex items-baseline justify-between gap-4 border-b border-primary-200/70 py-3.5 last:border-b-0 dark:border-primary-800/60"><dt className="shrink-0 text-xs font-medium text-primary-600 dark:text-primary-300">{label}</dt><dd className={`min-w-0 max-w-[70%] break-words text-right font-medium leading-6 text-primary-950 dark:text-primary-50 ${label === "Effort" ? "capitalize" : ""}`}>{value}</dd></div>)}
-            </dl>
-            <div className="rounded-2xl glass-card p-4">
-              <h3 className="mb-3 text-sm font-semibold text-primary-950 dark:text-primary-50">Instructions</h3>
-              <AgentMarkdown className="leading-6 [&_p]:my-2 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">{assistant.instructions}</AgentMarkdown>
-            </div>
-            {error && <p role="alert" className="text-sm text-danger">{error}</p>}
-            <div className="flex justify-end">
-              <Button variant={assistant.isArchived ? "primary" : "danger"} className="inline-flex min-h-9" disabled={archiving} isLoading={archiving} onClick={onToggleArchive}>{assistant.isArchived ? "Restore assistant" : "Archive assistant"}</Button>
-            </div>
-          </div>}
+          : tab === "tasks" ? <AssistantAssignments key={assistant.id} assistant={assistant} assignments={tasks} assistants={overview.assistants} openAssistant={openAssistant} />
+          : <AssistantProfileDetails key={assistant.id} assistant={assistant} overview={overview} archiving={archiving} error={error} onToggleArchive={onToggleArchive} />}
       </div>
       </div>
     </aside>

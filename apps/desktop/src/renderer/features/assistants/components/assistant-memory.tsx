@@ -60,18 +60,18 @@ export function AssistantMemoryPanel({ assistant, memories }: {
       {assistant.teamId && <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-300">Shared decisions and this assistant’s private notes, with their sources.</p>}
       <Button variant="primary" className="mt-4 inline-flex whitespace-nowrap" onClick={() => open(null)}>Add memory</Button>
     </div>
-    {(creating || editing) && <form onSubmit={submit} className="glass-card space-y-5 rounded-2xl p-5">
-      <label className="flex flex-col gap-2.5">
+    {(creating || editing) && <form onSubmit={submit} className="glass-card space-y-3.5 rounded-2xl p-3.5">
+      <label className="flex flex-col gap-1.5">
         <Label as="span">Title</Label>
         <Input required maxLength={200} value={title} onChange={e => setTitle(e.target.value)} />
       </label>
-      <label className="flex flex-col gap-2.5">
+      <label className="flex flex-col gap-1.5">
         <Label as="span">Memory</Label>
         <Textarea className="min-h-28 rounded-2xl" required maxLength={6000} value={content} onChange={e => setContent(e.target.value)} />
       </label>
-      {assistant.teamId && <div className="flex flex-col gap-2.5">
+      {assistant.teamId && <div className="flex flex-col gap-1.5">
         <Label as="span" id={visibilityLabelId}>Visible to</Label>
-        <Select aria-labelledby={visibilityLabelId} size="sm" value={scope} disabled={!!editing} onChange={setScope}
+        <Select aria-labelledby={visibilityLabelId} value={scope} disabled={!!editing} onChange={setScope}
           options={[{ value: "team", label: "Whole team" }, { value: "assistant", label: `Only ${assistant.name}` }]} />
       </div>}
       <label className="flex items-center gap-2.5">

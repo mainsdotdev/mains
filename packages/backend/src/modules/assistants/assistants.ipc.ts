@@ -13,6 +13,7 @@ export function registerAssistantsIpc() {
     ipcMain.handle(CHANNELS.assistants.overview, handle((accountId: string) => assistantsService.overview(accountId)));
     ipcMain.handle(CHANNELS.assistants.createTeam, handle((payload: unknown) => changed(() => assistantsService.createTeam(payload))));
     ipcMain.handle(CHANNELS.assistants.changeTeam, handle((payload: unknown) => changed(() => assistantsService.changeTeam(payload))));
+    ipcMain.handle(CHANNELS.assistants.updateProfile, handle((payload: unknown) => changed(() => assistantsService.updateProfile(payload))));
     ipcMain.handle(CHANNELS.assistants.create, handle((payload: unknown) => changed(async () => { const assistant = await assistantsService.create(payload, assistantWork.guard()); assistantWelcome.prepare(assistant.id); return assistant; })));
     ipcMain.handle(CHANNELS.assistants.prepareWelcome, handle((accountId: string, id: string) => assistantWelcome.retry(accountId, id)));
     ipcMain.handle(CHANNELS.assistants.setupProfile, handle((accountId: string, id: string, input: unknown) => assistantWelcome.setupProfile(accountId, id, input)));

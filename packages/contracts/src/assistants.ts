@@ -65,6 +65,14 @@ export interface ChangeAssistantTeam {
     id: string;
     teamId: string | null;
 }
+export type AssistantProfile = Pick<Assistant, "name" | "description" | "instructions" | "avatar">;
+export interface UpdateAssistantProfile {
+    accountId: string;
+    id: string;
+    profile: AssistantProfile;
+    expectedProfile: AssistantProfile;
+    teamChange?: { teamId: string | null; expectedTeamId: string | null };
+}
 export interface AssistantMemory {
     id: string;
     accountId: string;

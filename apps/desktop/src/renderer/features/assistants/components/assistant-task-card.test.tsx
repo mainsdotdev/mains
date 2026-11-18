@@ -32,14 +32,21 @@ describe("assistant task activity card", () => {
     expect(within(card).queryByRole("list", { name: "Task activity" })).toBeNull();
     fireEvent.click(summary);
     expect(summary.getAttribute("aria-expanded")).toBe("true");
-    expect(within(card).getAllByText("Check complete: NOT READY")).toHaveLength(1);
-    expect(within(card).getAllByText("Review TestFlight")).toHaveLength(1);
-    expect(within(card).getByText("Report missing")).toBeTruthy();
-    expect(within(card).getByText("Continue the existing check")).toBeTruthy();
-    expect(within(card).getByText("Final task report")).toBeTruthy();
-    expect(within(card).getByText("Connection lost")).toBeTruthy();
-    expect(within(card).getByText("Needs attention")).toBeTruthy();
-    expect(within(card).queryByRole("button", { name: "Open chat" }) !== null).toBe(runId === "source");
+    const details = within(card).getByRole("group", { name: "Task details" });
+    const report = within(details).getByRole("region", { name: "Task report" });
+    expect(within(report).getByText("Report")).toBeTruthy();
+    expect(within(report).getByText("Check complete: NOT READY")).toBeTruthy();
+    expect(within(report).getByText("Delivered")).toBeTruthy();
+    expect(within(report).getByRole("list", { name: "Task evidence" })).toBeTruthy();
+    const activity = within(details).getByRole("list", { name: "Task activity" });
+    expect(within(activity).getAllByText("Review TestFlight")).toHaveLength(1);
+    expect(within(activity).getByText("Report missing")).toBeTruthy();
+    expect(within(activity).getByText("Continue the existing check")).toBeTruthy();
+    expect(within(activity).getByText("Final task report")).toBeTruthy();
+    expect(within(activity).getByText("Connection lost")).toBeTruthy();
+    expect(within(activity).getByText("Needs attention")).toBeTruthy();
+    const openChat = within(card).queryByRole("button", { name: "Open chat" });
+    expect(openChat?.textContent ?? null).toBe(runId === "source" ? "Open chat" : null);
   });
 
   it("collapses a canceled task and retains its request when the activity list is missing", () => {
@@ -56,9 +63,14 @@ describe("assistant task activity card", () => {
     expect(within(card).queryByText("Review TestFlight")).toBeNull();
     expect(within(card).queryByRole("button", { name: "Open chat" })).toBeNull();
     fireEvent.click(summary);
-    expect(within(card).getByText("Review TestFlight")).toBeTruthy();
+    const details = within(card).getByRole("group", { name: "Task details" });
+    expect(within(details).getByText("Review TestFlight")).toBeTruthy();
     fireEvent.click(summary);
-    expect(within(card).queryByText("Review TestFlight")).toBeNull();
+    expect(within(card).queryByRole("group", { name: "Task details" })).toBeNull();
+    expect(details.hasAttribute("inert")).toBe(true);
+    fireEvent.click(summary);
+    expect(within(card).getByRole("group", { name: "Task details" })).toBe(details);
+    expect(details.hasAttribute("inert")).toBe(false);
   });
 
   it("does not expose task content in an unrelated chat", () => {

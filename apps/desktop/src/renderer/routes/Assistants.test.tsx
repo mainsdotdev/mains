@@ -5,7 +5,7 @@ import { Provider } from "react-redux";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Assistant, AssistantConversation, AssistantTeam } from "@mains/contracts/assistants";
+import type { Assistant, AssistantConversation, AssistantTeam, UpdateAssistantProfile } from "@mains/contracts/assistants";
 import type { Pulse } from "@/lib/redux/api/pulseApi";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
 import { useAppDispatch } from "@/lib/redux/hooks";
@@ -18,9 +18,10 @@ import { runOwnerKey } from "../../shared/ui-state-keys";
 import { AssistantsSidebar } from "@/features/assistants/components/assistants-sidebar";
 import AssistantsPage from "./Assistants";
 
-const mocks = vi.hoisted(() => ({ routines: [] as Pulse[], chats: [] as AssistantConversation[], assistants: [] as Assistant[], teams: [] as AssistantTeam[], changeTeam: vi.fn(), changingTeam: false, teamError: undefined as unknown, loadingChats: false, chatsError: undefined as unknown, refetchChats: vi.fn(), websiteChats: [{ id: "website-first", title: "Website announcement", goal: "Page", status: "succeeded", mode: "work", workspaceId: null, workspaceName: null, projectName: null, createdAt: new Date(0), updatedAt: new Date(0) }] }));
+const mocks = vi.hoisted(() => ({ routines: [] as Pulse[], chats: [] as AssistantConversation[], assistants: [] as Assistant[], teams: [] as AssistantTeam[], savingProfile: false, loadingChats: false, chatsError: undefined as unknown, refetchChats: vi.fn(), websiteChats: [{ id: "website-first", title: "Website announcement", goal: "Page", status: "succeeded", mode: "work", workspaceId: null, workspaceName: null, projectName: null, createdAt: new Date(0), updatedAt: new Date(0) }] }));
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 const createTeam = vi.hoisted(() => vi.fn());
+const updateProfile = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/redux/api", () => ({
   useGetAccountQuery: () => ({ data: { id: "account" } }),
   useGetProvidersQuery: () => ({ data: [{ id: "codex", isEnabled: true }] }),
@@ -31,7 +32,7 @@ vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments: [], memories: [] }, refetch: vi.fn() }),
   useAssistantConversationsQuery: ({ id }: { id: string }) => ({ currentData: mocks.loadingChats ? undefined : id === "website" ? mocks.websiteChats : mocks.chats, error: mocks.chatsError, refetch: mocks.refetchChats }),
   useArchiveAssistantMutation: () => [vi.fn(), {}],
-  useChangeAssistantTeamMutation: () => [mocks.changeTeam, { isLoading: mocks.changingTeam, error: mocks.teamError }],
+  useUpdateAssistantProfileMutation: () => [updateProfile, { isLoading: mocks.savingProfile }],
   useCreateAssistantMutation: () => [vi.fn(), {}],
   useCreateAssistantTeamMutation: () => [createTeam, {}],
 }));
@@ -79,11 +80,17 @@ function setup(initial = "/assistants?assistant=release&run=first", openPreview?
 }
 beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
-  mocks.changeTeam.mockReset().mockResolvedValue({ data: {} });
   createTeam.mockReset().mockImplementation((input: Pick<AssistantTeam, "accountId" | "name">) =>
     ({ unwrap: () => Promise.resolve({ ...input, id: "new-team", createdAt: new Date(0) }) }));
-  mocks.changingTeam = false;
-  mocks.teamError = undefined;
+  updateProfile.mockReset().mockImplementation(({ id, profile, teamChange }: UpdateAssistantProfile) => ({
+    unwrap: async () => {
+      const assistant = mocks.assistants.find(assistant => assistant.id === id)!;
+      Object.assign(assistant, profile);
+      if (teamChange) assistant.teamId = teamChange.teamId;
+      return assistant;
+    },
+  }));
+  mocks.savingProfile = false;
   mocks.routines = [];
   mocks.loadingChats = false;
   mocks.chatsError = undefined;
@@ -108,7 +115,10 @@ describe("assistant profile and conversation", () => {
     expect(screen.getByRole("tabpanel", { name: "Routines" })).toBe(panel);
     expect(new URLSearchParams(screen.getByTestId("location").textContent ?? "").get("tab")).toBe("routines");
   });
-  it("opens previous chats with location and activity while keeping the Chats panel open", async () => {
+  it("opens compact chat rows with titles and relative activity while keeping Chats open", async () => {
+    const now = Date.now();
+    mocks.chats[0].updatedAt = new Date(now - 8 * 60 * 60 * 1000);
+    mocks.chats[1].updatedAt = new Date(now - 24 * 60 * 60 * 1000);
     const { store } = setup();
     fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
     fireEvent.click(await screen.findByRole("tab", { name: "Chats" }));
@@ -116,9 +126,12 @@ describe("assistant profile and conversation", () => {
     const first = within(panel).getByRole("button", { name: /First release/ });
     const second = within(panel).getByRole("button", { name: /Second release/ });
     expect(first.getAttribute("aria-current")).toBe("page");
-    expect(first.textContent).toContain("mains / feat/ios");
+    expect(within(panel).queryByRole("heading", { name: "Chats" })).toBeNull();
+    expect(within(first).getByText("8h ago")).toBe(first.querySelector("time"));
+    expect(within(second).getByText("1d ago")).toBe(second.querySelector("time"));
+    expect(within(first).queryByText("mains / feat/ios")).toBeNull();
+    expect(within(second).queryByText("Work")).toBeNull();
     expect(first.querySelector("time")?.getAttribute("datetime")).toBe(mocks.chats[0].updatedAt.toISOString());
-    expect(second.textContent).toContain("Work");
 
     fireEvent.click(second);
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("second"));
@@ -167,53 +180,125 @@ describe("assistant profile and conversation", () => {
     expect(screen.getByRole("button", { name: /Website announcement/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /First release/ })).toBeNull();
   });
-  it("changes an existing assistant’s team with the library Select in Details", async () => {
+  it("shows the saved team as text and applies a different team only on Save", async () => {
     setup();
     fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
     const panel = await screen.findByRole("complementary", { name: "About Release" });
+    expect(within(panel).getByText("Mains", { exact: true })).toBeTruthy();
+    expect(within(panel).queryByRole("button", { name: "Team" })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "New team" })).toBeNull();
+    fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
     const select = within(panel).getByRole("button", { name: "Team" });
     expect(select.textContent).toContain("Mains");
     fireEvent.click(select);
     expect(screen.queryByRole("option", { name: "Foreign team" })).toBeNull();
     fireEvent.click(await screen.findByRole("option", { name: "Website team" }));
-    expect(mocks.changeTeam).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "release", teamId: "website-team" });
+    expect(select.textContent).toContain("Website team");
+    expect(updateProfile).not.toHaveBeenCalled();
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    expect(updateProfile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      accountId: "account", id: "release", teamChange: { teamId: "website-team", expectedTeamId: "team" },
+    }));
+    await waitFor(() => expect(within(panel).queryByRole("button", { name: "Team" })).toBeNull());
+    expect(within(panel).getByText("Website team", { exact: true })).toBeTruthy();
     expect(screen.getByTestId("conversation").textContent).toBe("first");
   });
 
-  it("disables the team picker during a save and displays membership errors", async () => {
-    mocks.changingTeam = true;
-    mocks.teamError = { error: "Stop this assistant’s running conversations before changing teams" };
-    setup();
-    fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
+  it("edits the name, avatar, description and instructions from the Details action row", async () => {
+    setup("/assistants?assistant=release&run=first&tab=profile");
     const panel = await screen.findByRole("complementary", { name: "About Release" });
-    expect((within(panel).getByRole("button", { name: "Team" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(within(panel).getByRole("status").textContent).toContain("Changing team");
-    expect(within(panel).getByRole("alert").textContent).toContain("running conversations");
-    expect(mocks.changeTeam).not.toHaveBeenCalled();
+    const edit = within(panel).getByRole("button", { name: "Edit" });
+    const archive = within(panel).getByRole("button", { name: "Archive assistant" });
+    expect(archive.nextElementSibling).toBe(edit);
+    const openEditor = new MouseEvent("click", { bubbles: true, cancelable: true });
+    fireEvent(edit, openEditor);
+    expect(openEditor.defaultPrevented).toBe(true);
+    const form = within(panel).getByRole("form", { name: "Edit assistant profile" });
+    const save = within(form).getByRole("button", { name: "Save" });
+    expect(save).not.toBe(edit);
+    expect(updateProfile).not.toHaveBeenCalled();
+    expect(within(form).queryByRole("textbox", { name: "Model" })).toBeNull();
+    fireEvent.change(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "Release bot" } });
+    fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), { target: { value: "Checks beta releases" } });
+    fireEvent.change(within(form).getByRole("textbox", { name: "Instructions" }), { target: { value: "Verify signing first." } });
+    fireEvent.click(within(form).getByRole("radio", { name: "Kite" }));
+    fireEvent.click(within(form).getByRole("radio", { name: "Lime" }));
+    fireEvent.click(save);
+    await waitFor(() => expect(within(panel).queryByRole("form", { name: "Edit assistant profile" })).toBeNull());
+    expect(updateProfile).toHaveBeenCalledExactlyOnceWith({
+      accountId: "account", id: "release",
+      expectedProfile: { name: "Release", description: "Own releases", instructions: "Verify the release before distribution.", avatar: { shape: "sphere", color: "blue" } },
+      profile: { name: "Release bot", description: "Checks beta releases", instructions: "Verify signing first.", avatar: { shape: "kite", color: "lime" } },
+    });
+    expect(within(panel).getByText("Verify signing first.")).toBeTruthy();
+    expect(within(panel).getByText("model", { exact: true })).toBeTruthy();
+    expect(screen.getByTestId("conversation").textContent).toBe("first");
   });
 
-  it("lets an assistant leave a team from Details without leaving its conversation", async () => {
+  it("keeps the draft on save failure and lets the user cancel it", async () => {
+    updateProfile.mockReturnValueOnce({ unwrap: async () => { throw new Error("Stop this assistant’s running conversations before changing teams"); } });
+    setup("/assistants?assistant=release&run=first&tab=profile");
+    const panel = await screen.findByRole("complementary", { name: "About Release" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
+    const instructions = within(panel).getByRole<HTMLTextAreaElement>("textbox", { name: "Instructions" });
+    fireEvent.change(instructions, { target: { value: "Check signing." } });
+    const select = within(panel).getByRole("button", { name: "Team" });
+    fireEvent.click(select);
+    fireEvent.click(await screen.findByRole("option", { name: "No team" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    expect((await within(panel).findByRole("alert")).textContent).toContain("running conversations");
+    expect(instructions.value).toBe("Check signing.");
+    expect(select.textContent).toContain("No team");
+    fireEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+    expect(within(panel).queryByRole("textbox", { name: "Instructions" })).toBeNull();
+    expect(within(panel).getByText("Mains", { exact: true })).toBeTruthy();
+    expect(within(panel).getByText("Verify the release before distribution.")).toBeTruthy();
+  });
+
+  it("disables the team picker and team creation while saving the profile", async () => {
+    mocks.savingProfile = true;
     setup();
     fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
     const panel = await screen.findByRole("complementary", { name: "About Release" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
+    expect(within(panel).getByRole<HTMLButtonElement>("button", { name: "Team" }).disabled).toBe(true);
+    expect(within(panel).getByRole<HTMLButtonElement>("button", { name: "New team" }).disabled).toBe(true);
+  });
+
+  it("can save No team without leaving the conversation", async () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
+    const panel = await screen.findByRole("complementary", { name: "About Release" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
     fireEvent.click(within(panel).getByRole("button", { name: "Team" }));
     fireEvent.click(await screen.findByRole("option", { name: "No team" }));
-    expect(mocks.changeTeam).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "release", teamId: null });
+    expect(updateProfile).not.toHaveBeenCalled();
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    expect(updateProfile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ teamChange: { teamId: null, expectedTeamId: "team" } }));
+    await waitFor(() => expect(within(panel).queryByRole("button", { name: "Team" })).toBeNull());
+    expect(within(panel).getByText("No team", { exact: true })).toBeTruthy();
     expect(screen.getByTestId("conversation").textContent).toBe("first");
   });
 
-  it("joins the first team when it is created from a teamless assistant’s Details", async () => {
+  it("stages a team created in Edit before the team list refreshes", async () => {
     mocks.teams = [];
     mocks.assistants[0].teamId = null;
     setup();
     fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
     const panel = await screen.findByRole("complementary", { name: "About Release" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Edit" }));
     expect(within(panel).getByRole("button", { name: "Team" }).textContent).toContain("No team");
     fireEvent.click(within(panel).getByRole("button", { name: "New team" }));
+    expect(within(panel).getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled).toBe(true);
     fireEvent.change(within(panel).getByLabelText("Team name"), { target: { value: "Releases" } });
     fireEvent.click(within(panel).getByRole("button", { name: "Create team" }));
-    await waitFor(() => expect(mocks.changeTeam).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "release", teamId: "new-team" }));
+    await waitFor(() => expect(within(panel).getByRole("button", { name: "Team" }).textContent).toContain("Releases"));
     expect(createTeam).toHaveBeenCalledExactlyOnceWith({ accountId: "account", name: "Releases" });
+    expect(updateProfile).not.toHaveBeenCalled();
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    expect(updateProfile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ teamChange: { teamId: "new-team", expectedTeamId: null } }));
+    await waitFor(() => expect(within(panel).queryByRole("button", { name: "Team" })).toBeNull());
+    expect(within(panel).getByText("Releases", { exact: true })).toBeTruthy();
   });
 
   it("resizes the information panel live and saves its width on release", async () => {

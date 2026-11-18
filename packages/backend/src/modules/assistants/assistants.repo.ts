@@ -1,7 +1,7 @@
 import { and, desc, eq, isNull, isNotNull, or, sql } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { assistantTeams, assistants, assistantWelcomes, assistantMemories, assistantAssignments, assistantMessages, runs, runContext, workspaces, projects } from "../../db/schema";
-import type { Assistant, AssistantAssignment } from "@mains/contracts/assistants";
+import type { Assistant, AssistantAssignment, AssistantProfile } from "@mains/contracts/assistants";
 import { normalizeAssistantAvatar } from "@mains/contracts/assistants";
 function assistant(row: typeof assistants.$inferSelect): Assistant {
     const { settings, spaceSnapshot, mode: _mode, workspaceId: _workspace, avatar, ...rest } = row;
@@ -23,8 +23,9 @@ export const assistantsRepo = {
         getDb().insert(assistantWelcomes).values({ assistantId: id, runId: `assistant-welcome-${id}`,
             ...(question ? { state: "ready", question } : {}) }).run();
     },
-    saveProfile(id: string, accountId: string, description: string, instructions: string) {
-        getDb().update(assistants).set({ description, instructions, updatedAt: new Date() })
+    saveProfile(id: string, accountId: string, profile: Pick<AssistantProfile, "description" | "instructions"> & Partial<Pick<AssistantProfile, "name" | "avatar">>) {
+        const { avatar, ...fields } = profile;
+        getDb().update(assistants).set({ ...fields, ...(avatar && { avatar: JSON.stringify(avatar) }), updatedAt: new Date() })
             .where(and(eq(assistants.id, id), eq(assistants.accountId, accountId))).run();
     },
     welcomeOwner(id: string) { return getDb().select({ accountId: assistants.accountId, isArchived: assistants.isArchived }).from(assistants).where(eq(assistants.id, id)).get() ?? null; },

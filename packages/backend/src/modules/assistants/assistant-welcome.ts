@@ -177,7 +177,7 @@ export const assistantWelcome = {
         setup.draft = { description, instructions };
         setup.saved = true;
         assistantsRepo.transaction(() => {
-            assistantsRepo.saveProfile(id, accountId, description, instructions);
+            assistantsRepo.saveProfile(id, accountId, { description, instructions });
             assistantsRepo.patchWelcome(id, { state: "skipped", question: JSON.stringify(question), error: null });
         });
         changed();

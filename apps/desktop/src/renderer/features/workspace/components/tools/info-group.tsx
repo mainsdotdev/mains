@@ -190,8 +190,7 @@ interface InfoGroupProps {
   bubble?: boolean;
 }
 
-const MESSAGE_WIDTH = "max-w-[min(85%,var(--container-xl))]";
-const MESSAGE_BUBBLE = `w-fit min-w-0 ${MESSAGE_WIDTH} rounded-[20px] bg-primary-100/80 px-4 py-3 dark:bg-primary/8`;
+const MESSAGE_BUBBLE = "w-fit min-w-0 max-w-transcript-bubble rounded-transcript-bubble bg-primary-100/80 px-4 py-3 dark:bg-primary/8";
 
 function PromptFileAttachment({ file }: { file: PromptMarkdownFile & { displayName: string } }) {
   const openFile = useOpenFileInEditor();
@@ -345,7 +344,7 @@ function InfoGroupImpl({
     return (
       <div className="w-full overflow-hidden">
         <div className="w-full py-2 flex justify-end">
-          <div className={`flex min-w-0 flex-col items-end gap-2 ${bubble ? `w-fit ${MESSAGE_WIDTH}` : "max-w-[80%]"}`}>
+          <div className={`flex min-w-0 flex-col items-end gap-2 ${bubble ? "w-fit max-w-transcript-bubble" : "max-w-[80%]"}`}>
             {!!event.metadata?.voiceDelegation && (
               <Text
                 as="span"

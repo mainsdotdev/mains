@@ -8,7 +8,46 @@ import { spaceService } from "../space";
 import { providersService } from "../providers";
 import { ASSISTANT_AVATAR_COLORS, ASSISTANT_AVATAR_SHAPES, DEFAULT_ASSISTANT_AVATAR, normalizeAssistantAvatar } from "@mains/contracts/assistants";
 import { snapshotRunSettingConfig } from "@mains/contracts/run-settings";
-import type { Assistant, AssistantConversation, AssistantOverview, AssistantWelcome } from "@mains/contracts/assistants";
+import type { Assistant, AssistantConversation, AssistantOverview, AssistantProfile, AssistantWelcome } from "@mains/contracts/assistants";
+
+function readAvatar(input: unknown) {
+    const value = object(input);
+    onlyKeys(value, ["shape", "color"]);
+    const validShape = value.shape === "cross" || (ASSISTANT_AVATAR_SHAPES as readonly unknown[]).includes(value.shape);
+    if (!validShape || !(ASSISTANT_AVATAR_COLORS as readonly unknown[]).includes(value.color))
+        throw new Error("Choose an available avatar shape and color");
+    return normalizeAssistantAvatar(value);
+}
+
+function matchesProfile(assistant: Assistant, profile: Record<string, unknown>) {
+    const avatar = object(profile.avatar);
+    return assistant.name === profile.name && assistant.description === profile.description && assistant.instructions === profile.instructions &&
+        assistant.avatar.shape === avatar.shape && assistant.avatar.color === avatar.color;
+}
+
+function readTeamId(value: unknown) {
+    return value === null ? null : text(value, "Team");
+}
+
+function readTeamChange(input: unknown) {
+    if (input === undefined) return undefined;
+    const value = object(input);
+    onlyKeys(value, ["teamId", "expectedTeamId"]);
+    return { teamId: readTeamId(value.teamId), expectedTeamId: readTeamId(value.expectedTeamId) };
+}
+
+function changeMembership(assistant: Assistant, teamId: string | null) {
+    const { id, accountId } = assistant;
+    if (teamId && !assistantsRepo.team(teamId, accountId)) throw new Error("Team not found");
+    if (assistant.teamId === teamId) return;
+    if (assistantsRepo.hasPendingRun(id)) throw new Error("Stop this assistant’s running conversations before changing teams");
+    if (assistantsRepo.hasPendingTeamWork(id)) throw new Error("Finish or cancel this assistant’s assignments and pending deliveries before changing teams");
+    const welcome = assistantsRepo.welcome(id);
+    if (welcome && ["generating", "starting"].includes(welcome.state)) throw new Error("Wait for this assistant’s welcome to finish before changing teams");
+    // Private notes follow their owner; shared memories and task history keep their original team.
+    assistantsRepo.changeTeam(id, accountId, teamId);
+}
+
 export const assistantsService = {
     overview(accountId: string): AssistantOverview {
         text(accountId, "Account");
@@ -63,12 +102,7 @@ export const assistantsService = {
             throw new Error("Choose an available model");
         if (effort && !selected.supportedEffortLevels?.includes(effort))
             throw new Error("This model does not support the selected effort");
-        const avatarInput = value.avatar === undefined ? { ...DEFAULT_ASSISTANT_AVATAR } : object(value.avatar);
-        onlyKeys(avatarInput, ["shape", "color"]);
-        const validShape = avatarInput.shape === "cross" || (ASSISTANT_AVATAR_SHAPES as readonly unknown[]).includes(avatarInput.shape);
-        if (!validShape || !(ASSISTANT_AVATAR_COLORS as readonly unknown[]).includes(avatarInput.color))
-            throw new Error("Choose an available avatar shape and color");
-        const avatar = normalizeAssistantAvatar(avatarInput);
+        const avatar = value.avatar === undefined ? DEFAULT_ASSISTANT_AVATAR : readAvatar(value.avatar);
         const config = snapshotRunSettingConfig(space.providerId, provider.config ?? {});
         config.planMode = false;
         config.goalMode = false;
@@ -95,6 +129,33 @@ export const assistantsService = {
         });
         return this.require(id, accountId);
     },
+    updateProfile(input: unknown): Assistant {
+        const value = object(input);
+        onlyKeys(value, ["accountId", "id", "profile", "expectedProfile", "teamChange"]);
+        const accountId = text(value.accountId, "Account"), id = text(value.id, "Assistant");
+        const profile = object(value.profile), expected = object(value.expectedProfile);
+        const teamChange = readTeamChange(value.teamChange);
+        onlyKeys(profile, ["name", "description", "instructions", "avatar"]);
+        const updated: AssistantProfile = {
+            name: text(profile.name, "Name", 100),
+            description: text(profile.description, "Description", 1000, true),
+            instructions: text(profile.instructions, "Instructions", 16000),
+            avatar: readAvatar(profile.avatar),
+        };
+        return assistantsRepo.transaction(() => {
+            const assistant = this.requireForWork(id, accountId);
+            const profileChanged = !matchesProfile(assistant, updated);
+            if (profileChanged && !matchesProfile(assistant, expected)) throw new Error("This profile changed. Reopen the editor to review the latest version.");
+            const membershipChanged = teamChange && assistant.teamId !== teamChange.teamId;
+            if (!profileChanged && !membershipChanged) return assistant;
+            if (membershipChanged) {
+                if (assistant.teamId !== teamChange.expectedTeamId) throw new Error("This assistant’s team changed. Reopen the editor to review the latest version.");
+                changeMembership(assistant, teamChange.teamId);
+            }
+            if (profileChanged) assistantsRepo.saveProfile(id, accountId, updated);
+            return this.require(id, accountId);
+        });
+    },
     archive(id: string, accountId: string, archived: boolean): void {
         if (typeof archived !== "boolean")
             throw new Error("Choose an archive state");
@@ -111,18 +172,11 @@ export const assistantsService = {
         const value = object(input);
         onlyKeys(value, ["accountId", "id", "teamId"]);
         const accountId = text(value.accountId, "Account"), id = text(value.id, "Assistant");
-        const teamId = value.teamId === null ? null : text(value.teamId, "Team");
+        const teamId = readTeamId(value.teamId);
         return assistantsRepo.transaction(() => {
             const assistant = this.require(id, accountId);
-            if (teamId && !assistantsRepo.team(teamId, accountId)) throw new Error("Team not found");
-            if (assistant.teamId === teamId) return assistant;
-            if (assistantsRepo.hasPendingRun(id)) throw new Error("Stop this assistant’s running conversations before changing teams");
-            if (assistantsRepo.hasPendingTeamWork(id)) throw new Error("Finish or cancel this assistant’s assignments and pending deliveries before changing teams");
-            const welcome = assistantsRepo.welcome(id);
-            if (welcome && ["generating", "starting"].includes(welcome.state)) throw new Error("Wait for this assistant’s welcome to finish before changing teams");
-            // Private notes follow their owner; shared memories and task history keep their original team.
-            assistantsRepo.changeTeam(id, accountId, teamId);
-            return this.require(id, accountId);
+            changeMembership(assistant, teamId);
+            return assistant.teamId === teamId ? assistant : this.require(id, accountId);
         });
     },
     saveMemory(input: unknown, sourceRunId: string | null = null) {
@@ -205,7 +259,7 @@ export const assistantsService = {
         const assistant = this.require(id, accountId);
         const row = assistantsRepo.welcome(id);
         const setup = row?.question ? (JSON.parse(row.question) as AssistantWelcome["question"])?.profileSetup : undefined;
-        if (setup && !setup.saved) throw new Error("Finish setting up this assistant’s profile before assigning work");
+        if (setup && !setup.saved) throw new Error("Finish setting up this assistant’s profile first");
         return assistant;
     },
     usesSpace(spaceId: string): boolean { return assistantsRepo.usesSpace(spaceId); },

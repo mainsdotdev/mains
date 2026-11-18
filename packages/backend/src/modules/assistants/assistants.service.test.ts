@@ -424,6 +424,51 @@ describe("assistant profiles and shared knowledge", () => {
         }
         await expect(assistantsService.create({ ...input, name: "Invalid", avatar: { shape: "cube", color: "unknown" } })).rejects.toThrow("available avatar");
     });
+    it("updates the profile for the next turn of an existing chat without changing the frozen execution profile", async () => {
+        const assistant = await makeAssistant("Coordinator");
+        const { name, description, instructions, avatar } = assistant;
+        const expectedProfile = { name, description, instructions, avatar };
+        const profile = { name: "Release bot", description: "Checks beta releases", instructions: "Verify signing before every release.", avatar: { shape: "kite", color: "lime" } } as const;
+        const input = { id: assistant.id, accountId: "default", expectedProfile, profile };
+        const { runId } = await assistantWork.sendChat("default", assistant.id, "Prepare release", "profile-first-turn");
+        await settled(runId);
+
+        expect(() => assistantsService.updateProfile({ ...input, accountId: "another-account" })).toThrow("unavailable");
+        expect(() => assistantsService.updateProfile({ ...input, profile: { ...profile, model: "different" } })).toThrow("Unknown assistant field: model");
+        const updated = assistantsService.updateProfile(input);
+        expect(updated).toEqual({ ...assistant, ...profile, updatedAt: expect.any(Date) });
+        expect(assistantsService.updateProfile(input)).toEqual(updated);
+        expect(() => assistantsService.updateProfile({ ...input, profile: { ...profile, instructions: "Stale instructions." } })).toThrow("profile changed");
+
+        await assistantWork.sendChat("default", assistant.id, "Check the release again", "profile-next-turn", runId);
+        await settled(runId);
+        expect(driver.calls.resumeSession[0]).toMatchObject({ model: assistant.model, configSnapshot: { modelReasoningEffort: assistant.effort } });
+        expect(driver.calls.resumeSession[0].extraInstructions).toContain(profile.instructions);
+        expect(driver.calls.resumeSession[0].extraInstructions).not.toContain(assistant.instructions);
+        expect(assistantsService.conversations(assistant.id, "default").map(chat => chat.id)).toContain(runId);
+    });
+    it("saves the profile and membership together after validating the team change", async () => {
+        const assistant = await makeAssistant("Build");
+        const { id, accountId, name, description, instructions, avatar } = assistant;
+        const destination = assistantsService.createTeam({ accountId, name: "Releases" });
+        const note = assistantsService.saveMemory({ accountId, teamId, assistantId: id, title: "Preference", content: "Private preference" });
+        const expectedProfile = { name, description, instructions, avatar };
+        const profile = { ...expectedProfile, instructions: "Verify signing first." };
+        const input = { id, accountId, expectedProfile, profile, teamChange: { teamId: destination.id, expectedTeamId: teamId } };
+
+        expect(() => assistantsService.updateProfile({ ...input, teamChange: { ...input.teamChange, teamId: "missing" } })).toThrow("Team not found");
+        expect(() => assistantsService.updateProfile({ ...input, teamChange: { ...input.teamChange, expectedTeamId: null } })).toThrow("team changed");
+        createRun(db, { id: "active-edit-chat", assistantId: id, status: "running" });
+        expect(() => assistantsService.updateProfile(input)).toThrow("running conversations");
+        expect(assistantsService.get(id, accountId)).toEqual(assistant);
+        expect(assistantsRepo.memory(note.id)).toMatchObject({ teamId, revision: note.revision });
+
+        db.update(runs).set({ status: "succeeded" }).where(eq(runs.id, "active-edit-chat")).run();
+        const saved = assistantsService.updateProfile(input);
+        expect(saved).toEqual({ ...assistant, ...profile, teamId: destination.id, updatedAt: expect.any(Date) });
+        expect(assistantsService.updateProfile(input)).toEqual(saved);
+        expect(assistantsRepo.memory(note.id)).toMatchObject({ teamId: destination.id, revision: note.revision + 1 });
+    });
     it("projects direct and delegated running conversations into account-scoped avatar activity", async () => {
         const assistant = await makeAssistant("Coordinator"), idle = await makeAssistant("Idle");
         createAccount(db, { id: "another-account" });

@@ -1,5 +1,5 @@
 import { CHANNELS } from "@mains/contracts/channels";
-import type { Assistant, AssistantTeam, AssistantOverview, CreateAssistant, ChangeAssistantTeam, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution, AssistantProfileSetupAction } from "@mains/contracts/assistants";
+import type { Assistant, AssistantTeam, AssistantOverview, CreateAssistant, ChangeAssistantTeam, UpdateAssistantProfile, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution, AssistantProfileSetupAction } from "@mains/contracts/assistants";
 import { baseApi } from "./baseApi";
 export const assistantsApi = baseApi.injectEndpoints({
     endpoints: (b) => ({
@@ -17,6 +17,10 @@ export const assistantsApi = baseApi.injectEndpoints({
         }>({ query: input => ({ handler: CHANNELS.assistants.createTeam, args: [input] }), invalidatesTags: ["Assistants"] }),
         createAssistant: b.mutation<Assistant, CreateAssistant>({ query: input => ({ handler: CHANNELS.assistants.create, args: [input] }), invalidatesTags: ["Assistants"] }),
         changeAssistantTeam: b.mutation<Assistant, ChangeAssistantTeam>({ query: input => ({ handler: CHANNELS.assistants.changeTeam, args: [input] }), invalidatesTags: ["Assistants", "AssistantChats"] }),
+        updateAssistantProfile: b.mutation<Assistant, UpdateAssistantProfile>({
+            query: input => ({ handler: CHANNELS.assistants.updateProfile, args: [input] }),
+            invalidatesTags: (_result, _error, { teamChange }) => teamChange ? ["Assistants", "AssistantChats"] : ["Assistants"],
+        }),
         archiveAssistant: b.mutation<void, {
             accountId: string;
             id: string;
@@ -52,4 +56,4 @@ export const assistantsApi = baseApi.injectEndpoints({
         }>({ query: ({ accountId, id, messageId, message }) => ({ handler: CHANNELS.assistants.followup, args: [accountId, id, messageId, message] }), invalidatesTags: ["Assistants"] }),
     }),
 });
-export const { useSetupAssistantProfileMutation, useAssistantAssignmentQuery, usePrepareAssistantWelcomeMutation, useRespondAssistantWelcomeMutation, useAssistantOverviewQuery, useCreateAssistantTeamMutation, useCreateAssistantMutation, useChangeAssistantTeamMutation, useArchiveAssistantMutation, useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation, useAssistantConversationsQuery, useSendAssistantMessageMutation, useAssignAssistantTaskMutation, useReconcileAssistantTaskMutation, useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation } = assistantsApi;
+export const { useSetupAssistantProfileMutation, useAssistantAssignmentQuery, usePrepareAssistantWelcomeMutation, useRespondAssistantWelcomeMutation, useAssistantOverviewQuery, useCreateAssistantTeamMutation, useCreateAssistantMutation, useChangeAssistantTeamMutation, useUpdateAssistantProfileMutation, useArchiveAssistantMutation, useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation, useAssistantConversationsQuery, useSendAssistantMessageMutation, useAssignAssistantTaskMutation, useReconcileAssistantTaskMutation, useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation } = assistantsApi;
