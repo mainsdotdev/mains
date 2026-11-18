@@ -4,12 +4,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AssistantWelcome, AssistantWelcomeQuestion } from "@mains/contracts/assistants";
 import { AssistantProfileSetupCard } from "./assistant-profile-setup";
 
-const mocks = vi.hoisted(() => ({ send: vi.fn(), reducedMotion: false }));
+const mocks = vi.hoisted(() => ({ send: vi.fn(), reducedMotion: false, platform: "darwin" }));
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useSetupAssistantProfileMutation: () => [mocks.send, { isLoading: false }],
 }));
 vi.mock("@/hooks/use-prefers-reduced-motion", () => ({ usePrefersReducedMotion: () => mocks.reducedMotion }));
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); mocks.reducedMotion = false; });
+vi.mock("../../../../shared/runtime-platform", () => ({ getRuntimeOS: () => mocks.platform }));
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); mocks.reducedMotion = false; mocks.platform = "darwin"; });
 
 const question: AssistantWelcomeQuestion = {
   header: "Set up", question: "Hi, I’m Release. What would you like me to help with?", options: [], idleMessage: "Profile saved.",
@@ -67,6 +68,28 @@ it("shows a new welcome and its answer form immediately with reduced motion", ()
   render(<AssistantProfileSetupCard {...props} welcome={welcome} animateIntro />);
   expect(screen.getByText(question.question)).toBeTruthy();
   expect(screen.getByRole("textbox", { name: "Setup answer" })).toBeTruthy();
+});
+
+it.each([
+  { platform: "darwin", modifier: { metaKey: true }, label: "⌘↵", keyshortcuts: "Meta+Enter" },
+  { platform: "win32", modifier: { ctrlKey: true }, label: "Ctrl+Enter", keyshortcuts: "Control+Enter" },
+])("sends the focused answer with the displayed shortcut on $platform", async ({ platform, modifier, label, keyshortcuts }) => {
+  mocks.platform = platform;
+  mocks.send.mockClear().mockReturnValue({ unwrap: async () => undefined });
+  render(<AssistantProfileSetupCard {...props} welcome={welcome} />);
+  const input = screen.getByRole("textbox", { name: "Setup answer" });
+  const button = screen.getByRole("button", { name: "Send" });
+  expect(button.textContent).toContain(label);
+  expect(button.getAttribute("aria-keyshortcuts")).toBe(keyshortcuts);
+  input.focus();
+  fireEvent.keyDown(input, { key: "Enter", ...modifier });
+  fireEvent.change(input, { target: { value: "Check signing" } });
+  expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(true);
+  fireEvent.keyDown(input, { key: "Enter", isComposing: true, ...modifier });
+  fireEvent.keyDown(input, { key: "Enter", repeat: true, ...modifier });
+  expect(mocks.send).not.toHaveBeenCalled();
+  await act(async () => { fireEvent.keyDown(input, { key: "Enter", ...modifier }); });
+  expect(mocks.send).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "release", input: { action: "answer", step: 0, answer: "Check signing" } });
 });
 
 it.each([false, true])("animates the sent answer only when motion is enabled (reduced motion: %s)", async (reducedMotion) => {

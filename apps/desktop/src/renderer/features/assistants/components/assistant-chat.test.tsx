@@ -13,13 +13,16 @@ import workspaceReducer from "@/lib/redux/slices/workspaceSlice";
 import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
 import { AssistantChat } from "./assistant-chat";
 import { AVATAR_COLORS } from "./assistant-avatar";
+import type { AssistantAvatarState } from "../lib/assistant-avatar-activity";
+import type { StreamingEvent } from "@/features/workspace/hooks/use-streaming-events";
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(), respond: vi.fn(), refetch: vi.fn(), load: vi.fn(),
   registerAppConversation: vi.fn(), attachAppRun: vi.fn(), appContext: vi.fn(),
   run: undefined as Record<string, unknown> | undefined,
   workspace: undefined as Workspace | undefined,
-  context: { items: [] }, history: { historical: false }, events: [],
+  context: { items: [] }, history: { historical: false }, events: [] as StreamingEvent[],
+  approval: false, question: false,
   transport: { subscribe: () => () => {}, onStatusChange: () => () => {} },
 }));
 vi.mock("@/lib/redux/api", () => ({
@@ -38,11 +41,17 @@ vi.mock("@/hooks/use-mcp-app-panel", () => ({ useMcpAppPanel: () => ({
 }) }));
 vi.mock("@/features/workspace/hooks/use-run-history", () => ({ useRunHistory: () => ({ runEvents: {}, runTurns: {}, load: mocks.load, history: mocks.history }) }));
 vi.mock("@/features/workspace/hooks/use-streaming-events", () => ({ useStreamingEvents: () => ({ streamingEvents: mocks.events, clearTurnStreams: vi.fn() }) }));
-vi.mock("@/features/workspace/hooks/use-tool-approval", () => ({ useToolApproval: () => ({ pendingApprovals: [], respond: vi.fn() }) }));
+vi.mock("@/features/workspace/hooks/use-tool-approval", () => ({ useToolApproval: () => ({
+  pendingApprovals: mocks.approval ? [{ runId: "existing" }] : [], respond: vi.fn(),
+}) }));
 vi.mock("@/features/workspace/hooks/use-composer-context", () => ({ useComposerContext: () => mocks.context }));
 vi.mock("@/features/workspace/hooks/use-transient-uploads", () => ({ useTransientUploads: () => [[], vi.fn()] }));
 vi.mock("@/features/workspace/hooks/use-plugin-logos", () => ({ PluginLogoProvider: ({ children }: { children: ReactNode }) => children }));
-vi.mock("@/features/workspace/components/tools/async-question-dialog", () => ({ AsyncQuestionDialogProvider: ({ children }: { children: ReactNode }) => children, ComposerSlot: ({ children }: { children: ReactNode }) => children }));
+vi.mock("@/features/workspace/components/tools/async-question-dialog", () => ({
+  AsyncQuestionDialogProvider: ({ children }: { children: ReactNode }) => children,
+  ComposerSlot: ({ children }: { children: ReactNode }) => children,
+  useAsyncQuestionDialog: () => mocks.question ? { dialog: {} } : null,
+}));
 vi.mock("@/features/workspace/components/workspace-events", () => ({ WorkspaceEvents: () => <div>Existing transcript</div> }));
 vi.mock("@/features/workspace/components/workspace-input", () => ({ WorkspaceInput: ({ goal, onGoalChange, onSubmit, disabled, sendDisabled, workspacePath, mode }: {
   goal: string; onGoalChange(text: string): void; onSubmit(): void; disabled: boolean; sendDisabled: boolean; workspacePath?: string; mode: string;
@@ -58,17 +67,59 @@ beforeEach(() => {
   mocks.registerAppConversation.mockReset().mockReturnValue(() => {});
   mocks.attachAppRun.mockReset(); mocks.appContext.mockReset().mockReturnValue([]);
   mocks.run = undefined; mocks.workspace = undefined;
+  mocks.events = []; mocks.approval = false; mocks.question = false;
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 afterEach(() => { cleanup(); if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView; else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
 
-function setup(options: { selectedRunId?: string; welcome?: AssistantWelcome; seedWorkspaceId?: string } = {}) {
+function setup(options: { selectedRunId?: string; welcome?: AssistantWelcome; seedWorkspaceId?: string; onAvatarState?: (state: AssistantAvatarState | undefined) => void } = {}) {
   const legacyState = { ...assistantsReducer(undefined, { type: "init" }), draftExecutionByOwner: options.seedWorkspaceId ? { [ownerKey]: { mode: "developer", workspaceId: options.seedWorkspaceId } } : {} };
   const store = configureStore({ reducer: { assistants: assistantsReducer, workspace: workspaceReducer, appSettings: appSettingsReducer, backends: () => ({ activeBackendId: "local" }) }, preloadedState: { assistants: legacyState } });
   const selected = vi.fn();
-  const view = render(<Provider store={store}><AssistantChat assistant={assistant} selectedRunId={options.selectedRunId ?? null} welcome={options.welcome} onSelectRun={selected} onOpenDetails={vi.fn()} /></Provider>);
-  return { store, selected, ...view };
+  const tree = () => <Provider store={store}><AssistantChat assistant={assistant} selectedRunId={options.selectedRunId ?? null} welcome={options.welcome} onSelectRun={selected} onOpenDetails={vi.fn()} onAvatarState={options.onAvatarState} /></Provider>;
+  const view = render(tree());
+  return { store, selected, ...view, update: () => view.rerender(tree()) };
 }
+
+describe("assistant avatar activity", () => {
+  const run = { id: "existing", assistantId: assistant.id, mode: "work", createdAt: new Date() };
+
+  it("distinguishes thinking, streaming, approvals and questions before a live completion", () => {
+    const onAvatarState = vi.fn();
+    mocks.run = { ...run, status: "queued" };
+    const view = setup({ selectedRunId: "existing", onAvatarState });
+    expect(onAvatarState).toHaveBeenLastCalledWith("queued");
+    mocks.run = { ...run, status: "running" };
+    view.update();
+    expect(onAvatarState).toHaveBeenLastCalledWith("thinking");
+    mocks.events = [{ id: "stream-reply", type: "artifact", kind: "report", streamId: "reply", content: "I found the result.", timestamp: Date.now() }];
+    view.update();
+    expect(onAvatarState).toHaveBeenLastCalledWith("replying");
+    mocks.approval = true;
+    view.update();
+    expect(onAvatarState).toHaveBeenLastCalledWith("waiting");
+    mocks.approval = false;
+    mocks.question = true;
+    view.update();
+    expect(onAvatarState).toHaveBeenLastCalledWith("waiting");
+    mocks.question = false;
+    mocks.run = { ...run, status: "succeeded" };
+    view.update();
+    expect(onAvatarState).toHaveBeenLastCalledWith("done");
+  });
+
+  it("shows older completions as idle and treats cancellation as idle", () => {
+    const onAvatarState = vi.fn();
+    mocks.run = { ...run, status: "succeeded" };
+    const view = setup({ selectedRunId: "existing", onAvatarState });
+    expect(onAvatarState).toHaveBeenLastCalledWith("idle");
+    mocks.run = { ...run, status: "running" };
+    view.update();
+    mocks.run = { ...run, status: "canceled" };
+    view.update();
+    expect(onAvatarState).toHaveBeenLastCalledWith("idle");
+  });
+});
 describe("assistant task location", () => {
   it("binds an app to the assistant's conversation and sends its messages through the assistant API", async () => {
     mocks.run = { id: "existing", assistantId: assistant.id, spaceId: "frozen-space", providerId: "codex", mode: "work",

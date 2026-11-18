@@ -5,6 +5,8 @@ import { useSmoothText } from "@/features/workspace/hooks/use-smooth-text";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 import { cn } from "@/lib/cn";
 import { useSetupAssistantProfileMutation } from "@/lib/redux/api/assistantsApi";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
+import { getRuntimeOS } from "../../../../shared/runtime-platform";
 import { errorText } from "../lib/assistant-ui";
 
 const bubbleLayout = "w-fit max-w-full whitespace-pre-wrap break-words rounded-2xl px-4 py-3";
@@ -68,6 +70,8 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
   const answerText = answer.step === step ? answer.text : "";
   const pendingAnswer = submittedAnswer?.step === step ? submittedAnswer : null;
   const disabled = busy || request.isLoading || !!pendingAnswer;
+  const platform = getRuntimeOS();
+  const usesCommand = platform === "darwin";
   async function submit(input: AssistantProfileSetupAction) {
     setFailure("");
     try {
@@ -144,8 +148,21 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
               sendAnswer();
             }}>
               <Textarea ref={inputRef} aria-label="Setup answer" placeholder="Describe what you’d like help with…" maxLength={24000} value={answerText}
+                onKeyDown={event => {
+                  const { isComposing, keyCode } = event.nativeEvent;
+                  const hasModifier = usesCommand ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+                  if (event.key !== "Enter" || !hasModifier || event.altKey || event.shiftKey || isComposing || keyCode === 229 || event.defaultPrevented) return;
+                  event.preventDefault();
+                  if (!event.repeat) event.currentTarget.form?.requestSubmit();
+                }}
                 onChange={event => setAnswer({ step, text: event.target.value })} className="w-full" />
-              <Button variant="submit" type="submit" disabled={disabled || !answerText.trim()}>Send</Button>
+              <Button variant="submit" type="submit" disabled={disabled || !answerText.trim()}
+                aria-keyshortcuts={usesCommand ? "Meta+Enter" : "Control+Enter"} className="inline-flex gap-2">
+                Send
+                <kbd aria-hidden="true" className="rounded-md border border-current/25 px-1.5 py-0.5 font-sans text-xxs leading-none opacity-80">
+                  {keyboardShortcutLabel(usesCommand ? "Command+Enter" : "Control+Enter", platform)}
+                </kbd>
+              </Button>
             </form>
           </>
         )}

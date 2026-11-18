@@ -212,7 +212,7 @@
   visibility: hidden;
 }
 
-.assistant-robot-preview[data-robot-rendered] {
+.assistant-robot-preview[data-robot-rendered][data-avatar-interactive] {
   cursor: grab;
   touch-action: none;
 }
@@ -227,4 +227,57 @@
 
 .assistant-robot-preview[data-robot-rendered] .assistant-robot-preview__fallback {
   visibility: hidden;
+}
+
+.assistant-robot-avatar[data-avatar-state="waiting"] .assistant-robot-avatar__activity {
+  background: var(--color-warning);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .assistant-robot-avatar[data-avatar-motion][data-avatar-state="idle"] .assistant-robot-avatar__image {
+    animation: assistantRobotIdleSway 41s linear infinite;
+  }
+
+  .assistant-robot-avatar[data-avatar-motion][data-avatar-state="thinking"] .assistant-robot-avatar__image {
+    animation: assistantRobotThink 1.05s ease-in-out;
+  }
+
+  .assistant-robot-avatar[data-avatar-motion][data-avatar-state="waiting"] .assistant-robot-avatar__image {
+    animation: assistantRobotAttention 480ms ease-in-out;
+  }
+
+  .assistant-robot-avatar[data-avatar-motion][data-avatar-state="done"] .assistant-robot-avatar__image {
+    animation: assistantRobotNod 580ms ease-in-out, assistantRobotIdleSway 41s linear 580ms infinite;
+  }
+
+  .assistant-robot-avatar[data-avatar-motion][data-avatar-state="failed"] .assistant-robot-avatar__image {
+    animation: assistantRobotDip 680ms ease-in-out, assistantRobotIdleSway 41s linear 680ms infinite;
+  }
+}
+
+@keyframes assistantRobotIdleSway {
+  0%, 95%, 99%, 100% { rotate: 0deg; }
+  96% { rotate: -5deg; }
+  98% { rotate: 4deg; }
+}
+
+@keyframes assistantRobotThink {
+  0%, 100% { rotate: 0deg; }
+  52% { rotate: -4deg; }
+}
+
+@keyframes assistantRobotAttention {
+  0%, 100% { rotate: 0deg; }
+  20%, 60% { rotate: -7deg; }
+  40%, 80% { rotate: 7deg; }
+}
+
+@keyframes assistantRobotNod {
+  0%, 100% { transform: none; }
+  55% { transform: translateY(1px) scaleY(.91); }
+}
+
+@keyframes assistantRobotDip {
+  0%, 100% { rotate: 0deg; }
+  50% { rotate: -6deg; }
 }

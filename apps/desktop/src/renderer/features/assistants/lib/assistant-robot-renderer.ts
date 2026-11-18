@@ -7,7 +7,7 @@ attribute vec3 aPosition;
 attribute vec3 aNormal;
 
 uniform vec3 uPosition;
-uniform vec2 uOrbit;
+uniform vec3 uOrbit;
 uniform vec2 uTurn;
 uniform vec2 uLook;
 uniform vec2 uScale;
@@ -24,12 +24,19 @@ vec3 rotate(vec3 point, vec2 angles) {
   return vec3(yaw.x, c * yaw.y - s * yaw.z, s * yaw.y + c * yaw.z);
 }
 
+vec3 orient(vec3 point) {
+  point = rotate(point, uOrbit.xy);
+  float s = sin(uOrbit.z);
+  float c = cos(uOrbit.z);
+  return vec3(c * point.x - s * point.y, s * point.x + c * point.y, point.z);
+}
+
 void main() {
   vec3 point = aPosition;
   point.xy *= uScale;
   point = rotate(point, uTurn) + uPosition + vec3(uLook, 0.0);
-  vec3 view = rotate(point, uOrbit);
-  vNormal = rotate(rotate(aNormal, uTurn), uOrbit);
+  vec3 view = orient(point);
+  vNormal = orient(rotate(aNormal, uTurn));
   vSurface = point;
   gl_Position = vec4(view.xy * 0.99, -view.z * 0.30, 1.0 - view.z * 0.09);
 }
@@ -78,11 +85,11 @@ const finishes: Record<RobotFinish, number> = { matte: 0, metal: 1, glass: 2, li
 type RobotPose = {
   yaw: number;
   pitch: number;
+  roll?: number;
   lookX?: number;
   lookY?: number;
   blink?: number;
-  working?: boolean;
-  time?: number;
+  focus?: number;
 };
 
 function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader {
@@ -153,7 +160,7 @@ export function createRobotRenderer(canvas: HTMLCanvasElement, shape: AssistantR
 
   return {
     dispose,
-    draw({ yaw, pitch, lookX = 0, lookY = 0, blink = 0, working = false, time = 0 }: RobotPose) {
+    draw({ yaw, pitch, roll = 0, lookX = 0, lookY = 0, blink = 0, focus = 0 }: RobotPose) {
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(0, 0, 0, 0);
       gl.depthMask(true);
@@ -166,8 +173,7 @@ export function createRobotRenderer(canvas: HTMLCanvasElement, shape: AssistantR
       gl.enableVertexAttribArray(positionAttr);
       gl.enableVertexAttribArray(normalAttr);
 
-      const focus = working ? 0.5 + 0.5 * Math.sin(time / 360) : 0;
-      gl.uniform2f(orbit, yaw, pitch + focus * 0.036);
+      gl.uniform3f(orbit, yaw, pitch + focus * 0.036, roll);
 
       function drawPart(part: typeof parts[number]) {
         const [x, y, z] = part.position;

@@ -1,6 +1,8 @@
 import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from "react";
 import type { AssistantRobotShape } from "@mains/contracts/assistants";
 import { cn } from "@/lib/cn";
+import { isAvatarWorking, type AssistantAvatarState } from "../lib/assistant-avatar-activity";
+import { nextRobotAmbientGesture, robotEntryGesture, robotRestingPose, sampleRobotGesture, type RobotGesture } from "../lib/assistant-robot-motion";
 import { ROBOT_PRESETS } from "../lib/assistant-robot-presets";
 
 // These front views are baked from the preview meshes at yaw .12 and pitch .09.
@@ -8,13 +10,14 @@ const thumbnails = import.meta.glob<string>("../assets/robots/*.webp", {
   eager: true, import: "default", query: "?no-inline",
 });
 
-export function AssistantRobotAvatar({ shape, working, className }: {
-  shape: AssistantRobotShape; working?: boolean; className?: string;
+export function AssistantRobotAvatar({ shape, working, state = working ? "thinking" : "idle", animateState = false, className }: {
+  shape: AssistantRobotShape; working?: boolean; state?: AssistantAvatarState; animateState?: boolean; className?: string;
 }) {
-  return <span aria-hidden="true" data-avatar-shape={shape} data-avatar-family="robot" data-working={!!working}
+  return <span aria-hidden="true" data-avatar-shape={shape} data-avatar-family="robot" data-working={isAvatarWorking(state)}
+    data-avatar-state={state} data-avatar-motion={animateState || undefined}
     className={cn("assistant-robot-avatar relative inline-flex shrink-0", className)}>
-    <img src={thumbnails[`../assets/robots/${shape}.webp`]} alt="" draggable={false} className="size-full object-contain" />
-    {working && <span className="assistant-robot-avatar__activity" />}
+    <img src={thumbnails[`../assets/robots/${shape}.webp`]} alt="" draggable={false} className="assistant-robot-avatar__image size-full object-contain" />
+    {(isAvatarWorking(state) || state === "waiting") && <span className="assistant-robot-avatar__activity" />}
   </span>;
 }
 
@@ -22,19 +25,21 @@ const HOME = { yaw: .28, pitch: .14, lookX: 0, lookY: 0 };
 const clampPitch = (pitch: number) => Math.max(-.57, Math.min(.72, pitch));
 const motionQuery = "(prefers-reduced-motion: reduce)";
 
-export function AssistantRobotPreview({ shape, working = false, className }: {
-  shape: AssistantRobotShape; working?: boolean; className?: string;
+export function AssistantRobotPreview({ shape, state = "idle", presentation = "interactive", className }: {
+  shape: AssistantRobotShape; state?: AssistantAvatarState; presentation?: "interactive" | "welcome" | "status"; className?: string;
 }) {
+  const interactive = presentation === "interactive";
   const root = useRef<HTMLSpanElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const target = useRef({ ...HOME });
-  const activity = useRef(working);
+  const activity = useRef(state);
   const wake = useRef<() => void>(() => undefined);
   const drag = useRef<{ id: number; x: number; y: number } | null>(null);
+  const pointerActive = useRef(false);
   useEffect(() => {
-    activity.current = working;
+    activity.current = state;
     wake.current();
-  }, [working]);
+  }, [state]);
 
   useEffect(() => {
     const element = root.current;
@@ -46,20 +51,35 @@ export function AssistantRobotPreview({ shape, working = false, className }: {
     let visible = typeof IntersectionObserver === "undefined";
     let ready = false;
     let frame: number | undefined;
-    let blinkTimer: number | undefined;
-    let blinkStart = -Infinity;
+    let ambientTimer: number | undefined;
+    let ambientTick = 0;
+    let shownState = activity.current;
+    let introduced = false;
+    let gesture: { kind: RobotGesture; start: number; direction: number } | undefined;
     const pose = { ...target.current };
+
+    function clearAmbientTimer() {
+      window.clearTimeout(ambientTimer);
+      ambientTimer = undefined;
+    }
 
     function stop() {
       if (frame !== undefined) cancelAnimationFrame(frame);
-      window.clearTimeout(blinkTimer);
-      frame = blinkTimer = undefined;
-      blinkStart = -Infinity;
+      clearAmbientTimer();
+      frame = undefined;
+      gesture = undefined;
+      ambientTick = 0;
+      shownState = activity.current;
     }
 
     const canDraw = () => !!scene && visible && !document.hidden;
     function request() {
-      if (canDraw() && frame === undefined) frame = requestAnimationFrame(draw);
+      if (!canDraw()) return stop();
+      if (frame === undefined) frame = requestAnimationFrame(draw);
+    }
+
+    function startGesture(kind: RobotGesture, now: number) {
+      gesture = { kind, start: now, direction: Math.random() < .5 ? -1 : 1 };
     }
 
     function draw(now: number) {
@@ -70,6 +90,26 @@ export function AssistantRobotPreview({ shape, working = false, className }: {
       if (surface.width !== size) surface.width = surface.height = size;
 
       const reduce = motion.matches;
+      const nextState = activity.current;
+      const interacting = pointerActive.current || !!drag.current;
+      const autonomousGaze = reduce || !interacting;
+      if (nextState !== shownState) {
+        const ended = nextState === "done" || nextState === "failed";
+        const entry = ended && !isAvatarWorking(shownState) && shownState !== "waiting" ? undefined : robotEntryGesture(nextState);
+        shownState = nextState;
+        clearAmbientTimer();
+        ambientTick = 0;
+        gesture = undefined;
+        if (entry && !reduce && !drag.current) startGesture(entry, now);
+      }
+      if (!introduced) {
+        introduced = true;
+        const intro = presentation === "welcome" ? "greet" : presentation === "status" ? robotEntryGesture(nextState) : undefined;
+        if (intro && !reduce) startGesture(intro, now);
+      }
+      if (reduce || drag.current) gesture = undefined;
+      if (reduce || interacting) clearAmbientTimer();
+
       let moving = false;
       for (const key of ["yaw", "pitch", "lookX", "lookY"] as const) {
         const end = reduce && (key === "lookX" || key === "lookY") ? 0 : target.current[key];
@@ -78,21 +118,32 @@ export function AssistantRobotPreview({ shape, working = false, className }: {
         pose[key] = interpolate ? pose[key] + difference * .22 : end;
         moving ||= interpolate;
       }
-      const blinking = !reduce && now - blinkStart < 180;
-      const blink = blinking ? Math.sin((now - blinkStart) / 180 * Math.PI) : 0;
-      scene.draw({ ...pose, blink, working: activity.current, time: reduce ? 0 : now });
+      const sample = gesture && sampleRobotGesture(gesture.kind, now - gesture.start, gesture.direction);
+      if (!sample) gesture = undefined;
+      const rest = robotRestingPose(shownState);
+      scene.draw({
+        yaw: pose.yaw + (sample?.yaw ?? 0),
+        pitch: pose.pitch + (sample?.pitch ?? 0),
+        roll: sample?.roll,
+        lookX: pose.lookX + (autonomousGaze ? sample?.lookX ?? 0 : 0),
+        lookY: pose.lookY + (autonomousGaze ? rest.lookY + (sample?.lookY ?? 0) : 0),
+        blink: sample?.blink,
+        focus: rest.focus,
+      });
       if (!ready && element) {
         ready = true;
         element.dataset.robotRendered = "true";
-        element.tabIndex = 0;
+        if (interactive) element.tabIndex = 0;
       }
-      if (moving || blinking || (!reduce && activity.current)) request();
-      if (!reduce && blinkTimer === undefined) {
-        blinkTimer = window.setTimeout(() => {
-          blinkTimer = undefined;
-          blinkStart = performance.now();
+      if (moving || gesture) request();
+      if (!reduce && !interacting && !gesture && ambientTimer === undefined) {
+        const next = nextRobotAmbientGesture(shownState, ambientTick, presentation === "welcome");
+        ambientTimer = window.setTimeout(() => {
+          ambientTimer = undefined;
+          ambientTick++;
+          startGesture(next.gesture, performance.now());
           request();
-        }, 5800);
+        }, next.delay);
       }
     }
 
@@ -152,13 +203,14 @@ export function AssistantRobotPreview({ shape, working = false, className }: {
       scene?.dispose();
       wake.current = () => undefined;
     };
-  }, [shape]);
+  }, [shape, interactive, presentation]);
 
   function press(event: PointerEvent<HTMLSpanElement>) {
     if (event.button !== 0 || drag.current || !event.currentTarget.dataset.robotRendered) return;
     drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
     event.currentTarget.dataset.dragging = "true";
+    wake.current();
   }
 
   function move(event: PointerEvent<HTMLSpanElement>) {
@@ -172,6 +224,7 @@ export function AssistantRobotPreview({ shape, working = false, className }: {
     } else {
       const bounds = event.currentTarget.getBoundingClientRect();
       if (!bounds.width || !bounds.height || event.pointerType === "touch") return;
+      pointerActive.current = true;
       target.current.lookX = (event.clientX - bounds.left) / bounds.width * 2 - 1;
       target.current.lookY = 1 - (event.clientY - bounds.top) / bounds.height * 2;
     }
@@ -179,6 +232,7 @@ export function AssistantRobotPreview({ shape, working = false, className }: {
   }
 
   function centerGaze() {
+    pointerActive.current = false;
     target.current.lookX = target.current.lookY = 0;
     wake.current();
   }
@@ -203,12 +257,15 @@ export function AssistantRobotPreview({ shape, working = false, className }: {
     wake.current();
   }
 
-  return <span ref={root} role="group" aria-label={`${ROBOT_PRESETS[shape].label} robot preview`}
-    aria-description="Drag or use the arrow keys to rotate. Press Home to reset the view."
+  return <span ref={root} role={interactive ? "group" : undefined} aria-hidden={!interactive || undefined}
+    aria-label={interactive ? `${ROBOT_PRESETS[shape].label} robot preview` : undefined}
+    data-avatar-state={state} data-avatar-interactive={interactive || undefined}
+    aria-description={interactive ? "Drag or use the arrow keys to rotate. Press Home to reset the view." : undefined}
     className={cn("assistant-robot-preview relative inline-flex shrink-0 rounded-2xl outline-accent focus-visible:outline-2", className)}
-    onPointerDown={press} onPointerMove={move} onPointerLeave={centerGaze} onPointerUp={release}
-    onPointerCancel={release} onLostPointerCapture={release} onKeyDown={key}>
-    <AssistantRobotAvatar shape={shape} working={working} className="assistant-robot-preview__fallback size-full" />
+    onPointerDown={interactive ? press : undefined} onPointerMove={move} onPointerLeave={centerGaze}
+    onPointerUp={interactive ? release : undefined} onPointerCancel={release} onLostPointerCapture={release}
+    onKeyDown={interactive ? key : undefined}>
+    <AssistantRobotAvatar shape={shape} state={state} className="assistant-robot-preview__fallback size-full" />
     <canvas ref={canvas} aria-hidden="true" className="assistant-robot-preview__canvas absolute inset-0 size-full" />
   </span>;
 }

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantMonogram } from "./assistant-monogram";
 import { AssistantAvatarPicker } from "./assistant-avatar-picker";
+import { nextRobotAmbientGesture, robotEntryGesture, sampleRobotGesture } from "../lib/assistant-robot-motion";
 
 let observe: ReturnType<typeof vi.fn>, disconnect: ReturnType<typeof vi.fn>;
 let intersection: IntersectionObserverCallback;
@@ -25,6 +26,16 @@ beforeEach(() => {
 });
 
 describe("robot assistant avatars", () => {
+  it("uses a single quick shake for input and spaces out autonomous idle sways", () => {
+    expect(robotEntryGesture("waiting")).toBe("shake");
+    expect(sampleRobotGesture("shake", 60, 1)?.yaw).toBeGreaterThan(0);
+    expect(sampleRobotGesture("shake", 180, 1)?.yaw).toBeLessThan(0);
+    expect(sampleRobotGesture("shake", 480, 1)).toBeUndefined();
+    expect([0, 1, 2].map(tick => nextRobotAmbientGesture("idle", tick).gesture)).toEqual(["blink", "blink", "glance"]);
+    expect(nextRobotAmbientGesture("idle", 2).delay).toBeGreaterThan(9000);
+    expect(nextRobotAmbientGesture("waiting", 2).gesture).toBe("blink");
+  });
+
   it.each(ASSISTANT_AVATAR_SHAPES_BY_FAMILY.robot)("renders a bundled thumbnail for %s in compact surfaces", shape => {
     const { container } = render(<AssistantAvatar avatar={{ shape, color: ASSISTANT_ROBOT_AVATARS[shape] }} working className="size-5" />);
     expect(container.querySelector("img")?.getAttribute("src")).toContain(`${shape}.webp`);

@@ -16,6 +16,7 @@ import { useAssistantUpdates } from "@/features/assistants/hooks/use-assistant-u
 import { usePreviewPanel } from "@/hooks/use-preview-panel";
 import { assistantHref, assistantTeamGroupKey } from "@/features/assistants/lib/assistant-navigation";
 import { errorText, isAssistantWorking } from "@/features/assistants/lib/assistant-ui";
+import type { AssistantAvatarState } from "@/features/assistants/lib/assistant-avatar-activity";
 import { composerOwnerKey } from "@/features/workspace/lib/ui-context";
 
 export default function AssistantsPage() {
@@ -105,6 +106,16 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
     document.getElementById("assistant-profile-trigger")?.focus({ preventScroll: true });
   }, [changeTab]);
   const working = selected ? isAssistantWorking(overview, selected.id) : false;
+  const avatarScope = `${selected?.id ?? ""}:${runId ?? "new"}`;
+  const [reportedAvatarState, setReportedAvatarState] = useState<{ scope: string; state: AssistantAvatarState }>();
+  const reportAvatarState = useCallback((state: AssistantAvatarState | undefined) => {
+    setReportedAvatarState(current => {
+      if (!state) return current?.scope === avatarScope ? undefined : current;
+      return current?.scope === avatarScope && current.state === state ? current : { scope: avatarScope, state };
+    });
+  }, [avatarScope]);
+  const liveAvatarState = reportedAvatarState?.scope === avatarScope ? reportedAvatarState.state : undefined;
+  const avatarState = liveAvatarState && liveAvatarState !== "idle" ? liveAvatarState : working ? "thinking" : "idle";
   const toggleInfoPanel = useCallback(() => changeTab(panelOpen ? undefined : "profile"), [changeTab, panelOpen]);
   const closeCreation = useCallback(() => setParams(previous => {
     const next = new URLSearchParams(previous);
@@ -122,12 +133,12 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
     catch (e) { setFailure(errorText(e)); }
   };
   return <div className="@container/assistant-layout relative flex h-full min-h-0 overflow-hidden text-primary-900 dark:text-primary-100">
-    {!creating && <AssistantProfileHeader assistant={selected} chatColumnRef={chatColumnRef} working={working} isPanelOpen={panelOpen} onOpenDetails={toggleInfoPanel} pending={isLoading} />}
+    {!creating && <AssistantProfileHeader assistant={selected} chatColumnRef={chatColumnRef} working={working} avatarState={avatarState} isPanelOpen={panelOpen} onOpenDetails={toggleInfoPanel} pending={isLoading} />}
     <div ref={chatColumnRef} data-assistant-chat-column="" className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
     {creating ? <div className="scroll-bounce min-h-0 flex-1 overflow-y-auto noscrollbar">
       <AssistantProfileForm accountId={accountId} onClose={closeCreation} onCreated={openCreatedMate} />
     </div> : selected ? <>
-      {selected.isArchived ? <div className="flex flex-1 flex-col items-center justify-center gap-4 text-sm text-primary-500"><p>{selected.name} is archived.</p><Button variant="subtle" disabled={archiving.isLoading} onClick={() => void toggleArchive()}>Restore mate</Button>{failure && <p role="alert" className="text-danger">{failure}</p>}</div> : runParam ? <AssistantChat key={`${selected.id}:${runId ?? "new"}`} assistant={selected} welcome={overview?.welcomes?.find(w => w.assistantId === selected.id && w.runId === runId)} animateWelcome={animateWelcome} selectedRunId={runId} onOpenDetails={() => changeTab("profile")} onSelectRun={id => {
+      {selected.isArchived ? <div className="flex flex-1 flex-col items-center justify-center gap-4 text-sm text-primary-500"><p>{selected.name} is archived.</p><Button variant="subtle" disabled={archiving.isLoading} onClick={() => void toggleArchive()}>Restore mate</Button>{failure && <p role="alert" className="text-danger">{failure}</p>}</div> : runParam ? <AssistantChat key={avatarScope} assistant={selected} welcome={overview?.welcomes?.find(w => w.assistantId === selected.id && w.runId === runId)} animateWelcome={animateWelcome} selectedRunId={runId} onAvatarState={reportAvatarState} onOpenDetails={() => changeTab("profile")} onSelectRun={id => {
         if (!id) { openChat("new"); return; }
         if (!runId) dispatch(replaceAssistantConversationDraft({ ownerKey, runId: id }));
         else dispatch(visitAssistantConversation({ ownerKey, runId: id, initialIds: chats?.map(chat => chat.id) ?? [] }));
@@ -151,7 +162,7 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
       </>}
     </div>}
     </div>
-    {selected && overview && !previewOpen && <AssistantInfoPanel key={selected.id} assistant={selected} overview={overview} isOpen={panelOpen}
+    {selected && overview && !previewOpen && <AssistantInfoPanel key={selected.id} assistant={selected} overview={overview} avatarState={avatarState} isOpen={panelOpen}
       chats={chats} selectedRunId={runId} chatsError={chatsError} onSelectChat={openChat} onRetryChats={() => void refetchChats()}
       tab={tab === "routines" || tab === "chats" || tab === "memory" || tab === "tasks" ? tab : "profile"} onTabChange={changeTab} onClose={closeInfoPanel}
       onToggleArchive={() => void toggleArchive()} archiving={archiving.isLoading} error={failure}

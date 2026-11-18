@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { normalizeAssistantAvatar, type Assistant, type AssistantWelcome, type AssistantMessageContext, type AssistantExecution, type SendAssistantMessage } from "@mains/contracts/assistants";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { RunStatus } from "@mains/contracts/runs";
 import { useSendAssistantMessageMutation, useRespondAssistantWelcomeMutation, usePrepareAssistantWelcomeMutation } from "@/lib/redux/api/assistantsApi";
 import { useGetRunByIdQuery, useAbortRunMutation, useGetWorkspaceQuery } from "@/lib/redux/api";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
@@ -14,7 +15,8 @@ import { WorkspaceEvents } from "@/features/workspace/components/workspace-event
 import { AssistantProfileSetupCard } from "./assistant-profile-setup";
 import { AssistantWelcomeCard } from "./assistant-welcome-card";
 import { WorkspaceInput } from "@/features/workspace/components/workspace-input";
-import { AsyncQuestionDialogProvider, ComposerSlot } from "@/features/workspace/components/tools/async-question-dialog";
+import { AsyncQuestionDialogProvider, ComposerSlot, useAsyncQuestionDialog } from "@/features/workspace/components/tools/async-question-dialog";
+import { isAssistantReplyStreaming } from "@/features/workspace/lib/assistant-transcript-view";
 import { buildRunContextPayload } from "@/features/workspace/lib/run-context-payload";
 import { withoutSubmittedContext } from "@/features/workspace/lib/composer-context";
 import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
@@ -31,6 +33,7 @@ import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import { AssistantMonogram } from "./assistant-monogram";
 import { AVATAR_COLORS } from "./assistant-avatar";
 import { errorText } from "../lib/assistant-ui";
+import { conversationAvatarState, type AssistantAvatarState } from "../lib/assistant-avatar-activity";
 import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
 import type { McpAppScope } from "@/features/workspace/lib/mcp-app-panel";
 import type { McpAppMessageOptions } from "@/features/workspace/lib/mcp-app-context";
@@ -38,13 +41,14 @@ import type { McpAppMessageOptions } from "@/features/workspace/lib/mcp-app-cont
 const keepProfile = () => {};
 const EMPTY_EVENTS: RunEvent[] = [];
 
-export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunId, onSelectRun, onOpenDetails }: {
+export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunId, onSelectRun, onOpenDetails, onAvatarState }: {
   assistant: Assistant;
   welcome?: AssistantWelcome;
   animateWelcome?: boolean;
   selectedRunId: string | null;
   onSelectRun(id: string | null): void;
   onOpenDetails(): void;
+  onAvatarState?(state: AssistantAvatarState | undefined): void;
 }) {
   // The route adds the welcome run ID after this chat mounts.
   const [animateIntro] = useState(animateWelcome);
@@ -125,6 +129,7 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
     startedAt: run.startedAt == null ? undefined : new Date(run.startedAt), endedAt: run.endedAt == null ? undefined : new Date(run.endedAt), createdAt: new Date(run.createdAt),
   } : undefined, [run, belongs]);
   const working = run?.status === "running" || run?.status === "queued";
+  const streamingReply = useMemo(() => working && !history.historical && isAssistantReplyStreaming(events), [events, history.historical, working]);
   const appPanel = useMcpAppPanel();
   const registerAppConversation = appPanel?.registerConversation;
   const attachAppRun = appPanel?.attachRun;
@@ -180,10 +185,13 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
     layout={chatRunId || waitingWelcome ? "default" : "centered"} />;
   return <PluginLogoProvider providerId={assistant.providerId}>
     <AsyncQuestionDialogProvider ownerKey={ownerKey} runId={chatRunId} runStatus={run?.status} turns={turns} events={events} historical={history.historical}>
+      {onAvatarState && <ReportAvatarState onChange={onAvatarState} status={belongs ? run?.status : undefined}
+        hasApproval={!!approval} historical={history.historical} streamingReply={streamingReply}
+        fallback={waitingWelcome ? welcomeAvatarState(waitingWelcome) : chatRunId ? undefined : "idle"} />}
       <div className="relative flex min-h-0 flex-1 flex-col" style={{ "--mate-color": mateColor } as CSSProperties}>
         {waitingWelcome ? <div className={`flex min-h-0 flex-1 flex-col justify-end gap-6 overflow-y-auto py-8 ${CONTENT_COLUMN_GUTTER}`}>
           <div ref={welcomeColumnRef} className="mx-auto w-full max-w-210">
-            <AssistantMonogram name={assistant.name} providerId={assistant.providerId} avatar={assistant.avatar} working={working} onClick={onOpenDetails} />
+            <AssistantMonogram name={assistant.name} providerId={assistant.providerId} avatar={assistant.avatar} working={working} size="xl" welcome onClick={onOpenDetails} />
             {waitingWelcome.question?.profileSetup && waitingWelcome.state !== "starting"
               ? <AssistantProfileSetupCard accountId={assistant.accountId} welcome={waitingWelcome}
                   animateIntro={animateIntro} columnRef={welcomeColumnRef} busy={welcomePreparation.isLoading} onRetry={retryWelcome} />
@@ -206,4 +214,33 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
       </div>
     </AsyncQuestionDialogProvider>
   </PluginLogoProvider>;
+}
+
+function welcomeAvatarState(welcome: AssistantWelcome): AssistantAvatarState {
+  if (welcome.state === "starting") return "queued";
+  if (welcome.state === "generating") return "thinking";
+  if (welcome.state === "ready" && welcome.question && !welcome.question.profileSetup?.saved) return "waiting";
+  return "idle";
+}
+
+function ReportAvatarState({ status, fallback, hasApproval, historical, streamingReply, onChange }: {
+  status?: RunStatus;
+  fallback?: AssistantAvatarState;
+  hasApproval: boolean;
+  historical: boolean;
+  streamingReply: boolean;
+  onChange(state: AssistantAvatarState | undefined): void;
+}) {
+  const questions = useAsyncQuestionDialog();
+  const active = status === "queued" || status === "running";
+  const needsAnswer = !historical && (!!questions?.dialog || (!active && !!questions?.pending && !questions.pending.checking));
+  const observedRun = useRef(false);
+  useEffect(() => () => onChange(undefined), [onChange]);
+  useEffect(() => {
+    if (active) observedRun.current = true;
+    onChange(status ? conversationAvatarState({
+      status, awaitingInput: hasApproval || needsAnswer, streamingReply, observedRun: observedRun.current,
+    }) : fallback);
+  }, [status, fallback, active, hasApproval, needsAnswer, streamingReply, onChange]);
+  return null;
 }

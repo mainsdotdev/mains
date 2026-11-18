@@ -21,12 +21,14 @@ import { AssistantChatsPanel } from "./assistant-chats-panel";
 import { AssistantRoutines } from "./assistant-routines";
 import { AssistantTeamEditor } from "./assistant-team-editor";
 import { errorText, isAssistantWorking } from "../lib/assistant-ui";
+import type { AssistantAvatarState } from "../lib/assistant-avatar-activity";
 
 type EditableProfile = AssistantProfile & Pick<Assistant, "teamId">;
 
-function AssistantProfileDetails({ assistant, overview, archiving, error, onToggleArchive }: {
+function AssistantProfileDetails({ assistant, overview, avatarState, archiving, error, onToggleArchive }: {
   assistant: Assistant;
   overview: AssistantOverview;
+  avatarState: AssistantAvatarState;
   archiving: boolean;
   error: string;
   onToggleArchive(): void;
@@ -98,7 +100,7 @@ function AssistantProfileDetails({ assistant, overview, archiving, error, onTogg
 
   return <form aria-label={draft ? "Edit mate profile" : undefined} onSubmit={save} className="space-y-4 pt-2">
     {!draft && isAssistantRobotShape(assistant.avatar.shape) && <div className="flex justify-center">
-      <AssistantRobotPreview shape={assistant.avatar.shape} working={isAssistantWorking(overview, assistant.id)} className="size-24" />
+      <AssistantRobotPreview shape={assistant.avatar.shape} state={avatarState} className="size-24" />
     </div>}
     {draft && <fieldset disabled={isLoading} className="glass-card min-w-0 space-y-3.5 rounded-2xl p-3.5">
       <AssistantAvatarPicker avatar={draft.avatar} seed={assistant.id} compact onChange={avatar => changeDraft({ avatar })} />
@@ -157,9 +159,10 @@ function AssistantProfileDetails({ assistant, overview, archiving, error, onTogg
   </form>;
 }
 
-export function AssistantInfoPanel({ assistant, overview, chats, selectedRunId, chatsError, onSelectChat, onRetryChats, isOpen, tab, onTabChange, onClose, onToggleArchive, archiving, error, openAssistant }: {
+export function AssistantInfoPanel({ assistant, overview, avatarState, chats, selectedRunId, chatsError, onSelectChat, onRetryChats, isOpen, tab, onTabChange, onClose, onToggleArchive, archiving, error, openAssistant }: {
   assistant: Assistant;
   overview: AssistantOverview;
+  avatarState: AssistantAvatarState;
   chats?: AssistantConversation[];
   selectedRunId: string | null;
   chatsError?: unknown;
@@ -199,7 +202,7 @@ export function AssistantInfoPanel({ assistant, overview, chats, selectedRunId, 
       <div className={`flex h-full min-h-0 flex-col transition-[translate,opacity] ease-out motion-reduce:translate-y-0 motion-reduce:transition-none ${isAnimatedIn ? "translate-y-0 opacity-100 duration-200 delay-75" : "translate-y-3 opacity-0 duration-100 delay-0"}`}>
       {/* Match the title bar action's right inset after the content gutter. */}
       <div className="flex shrink-0 items-start gap-3 pt-5 pr-2.25 pb-4 pl-5">
-        <AssistantAvatar avatar={assistant.avatar} working={isAssistantWorking(overview, assistant.id)} seed={assistant.id} className="size-10" />
+        <AssistantAvatar avatar={assistant.avatar} working={isAssistantWorking(overview, assistant.id)} robotState={avatarState} seed={assistant.id} className="size-10" />
         <div className="min-w-0 flex-1"><h2 className="truncate text-base font-medium text-primary-950 dark:text-primary-50">{assistant.name}</h2>{assistant.description && <p className="mt-1.5 text-sm leading-relaxed text-primary-700 dark:text-primary-300">{assistant.description}</p>}</div>
         <Button ref={closeRef} variant="icon" aria-label="Close mate panel" tooltip="Close mate panel"
           tooltipPosition="bottom-left" onClick={onClose}><Close className="size-4" /></Button>
@@ -213,7 +216,7 @@ export function AssistantInfoPanel({ assistant, overview, chats, selectedRunId, 
           : tab === "chats" ? <AssistantChatsPanel chats={chats} selectedRunId={selectedRunId} error={chatsError} disabled={assistant.isArchived} onSelect={onSelectChat} onRetry={onRetryChats} />
           : tab === "memory" ? <AssistantMemoryPanel key={assistant.id} assistant={assistant} memories={overview.memories} />
           : tab === "tasks" ? <AssistantAssignments key={assistant.id} assistant={assistant} assignments={tasks} assistants={overview.assistants} openAssistant={openAssistant} />
-          : <AssistantProfileDetails key={assistant.id} assistant={assistant} overview={overview} archiving={archiving} error={error} onToggleArchive={onToggleArchive} />}
+          : <AssistantProfileDetails key={assistant.id} assistant={assistant} overview={overview} avatarState={avatarState} archiving={archiving} error={error} onToggleArchive={onToggleArchive} />}
       </div>
       </div>
     </aside>

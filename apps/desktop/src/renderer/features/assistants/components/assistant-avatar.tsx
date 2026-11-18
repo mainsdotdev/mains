@@ -4,6 +4,7 @@ import { cn } from "@/lib/cn";
 import { SquareCell, squareCellStyle, SQUARE_PULSE_DURATION_MS } from "@/components/ui";
 import { assistantAvatarDesign } from "../lib/assistant-avatar-design";
 import { avatarPhase, type MosaicTile } from "../lib/assistant-mosaic";
+import type { AssistantAvatarState } from "../lib/assistant-avatar-activity";
 import { AssistantRobotAvatar } from "./assistant-robot-avatar";
 import "./assistant-avatar.css";
 
@@ -40,11 +41,14 @@ type AvatarProps = {
   avatar?: Avatar; working?: boolean; seed?: string; animated?: boolean; className?: string;
 };
 
-export function AssistantAvatar({ avatar, ...props }: AvatarProps) {
+export function AssistantAvatar({ avatar, robotState, animateRobotState, ...props }: AvatarProps & {
+  robotState?: AssistantAvatarState; animateRobotState?: boolean;
+}) {
   const selected = normalizeAssistantAvatar(avatar);
   const shape = assistantAvatarDesign(selected.shape);
   if (shape.family === "robot") {
-    return <AssistantRobotAvatar shape={shape.shape} working={props.working} className={props.className} />;
+    return <AssistantRobotAvatar shape={shape.shape} working={props.working} state={robotState}
+      animateState={animateRobotState} className={props.className} />;
   }
   return <ClassicAssistantAvatar {...props} selected={selected} shape={shape} />;
 }

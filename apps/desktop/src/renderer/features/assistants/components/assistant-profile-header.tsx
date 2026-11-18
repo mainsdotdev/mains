@@ -6,6 +6,7 @@ import { InvertedCorner } from "@/features/workspace/components/base-tab";
 import { useSetMainHeader } from "@/hooks/use-main-header";
 import { cn } from "@/lib/cn";
 import { AssistantAvatar } from "./assistant-avatar";
+import type { AssistantAvatarState } from "../lib/assistant-avatar-activity";
 
 const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
@@ -43,25 +44,26 @@ function AssistantHeaderTab({ children, chatColumnRef, className = "max-w-[50%]"
   </div>;
 }
 
-export function AssistantProfileHeader({ assistant, chatColumnRef, isPanelOpen, working = false, pending = false, onOpenDetails }: {
-  assistant?: Assistant; isPanelOpen: boolean; working?: boolean; pending?: boolean; onOpenDetails(): void;
+export function AssistantProfileHeader({ assistant, chatColumnRef, isPanelOpen, working = false, avatarState, pending = false, onOpenDetails }: {
+  assistant?: Assistant; isPanelOpen: boolean; working?: boolean; avatarState?: AssistantAvatarState; pending?: boolean; onOpenDetails(): void;
   chatColumnRef: RefObject<HTMLDivElement | null>;
 }) {
   const header = useMemo(() => assistant ? (
     <AssistantHeaderTab chatColumnRef={chatColumnRef}>
       {/* Balance the avatar's transparent left edge while keeping the tab width fixed. */}
       <Button id="assistant-profile-trigger" variant="bare" aria-label={`${assistant.name} profile`} aria-expanded={isPanelOpen} aria-controls="assistant-info-panel" onClick={onOpenDetails}
+        aria-description={avatarState === "waiting" ? "Waiting for your input" : undefined}
         onKeyDown={event => { if (event.key === "Escape" && isPanelOpen) { event.preventDefault(); onOpenDetails(); } }}
         className="group/profile pointer-events-auto relative flex h-full min-w-0 items-center rounded-t-2xl py-2 pl-5.5 pr-6.5 text-primary-900 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent dark:text-primary-100"
         style={noDrag}>
         <span className="flex min-w-0 items-center gap-2 transition-transform duration-200 ease-out motion-safe:group-hover/profile:-translate-x-1.5 motion-safe:group-focus-visible/profile:-translate-x-1.5 motion-safe:group-aria-expanded/profile:-translate-x-1.5 motion-reduce:transition-none">
-          <AssistantAvatar avatar={assistant.avatar} working={working} seed={assistant.id} className="size-6" />
+          <AssistantAvatar avatar={assistant.avatar} working={working} robotState={avatarState} animateRobotState seed={assistant.id} className="size-6" />
           <span className="truncate text-sm font-medium">{assistant.name}</span>
         </span>
         <span aria-hidden="true" className="pointer-events-none absolute right-3 flex motion-safe:-translate-x-1 items-center opacity-0 transition-[translate,opacity] duration-200 ease-out motion-safe:group-hover/profile:translate-x-1 group-hover/profile:opacity-100 motion-safe:group-focus-visible/profile:translate-x-1 group-focus-visible/profile:opacity-100 motion-safe:group-aria-expanded/profile:translate-x-1 group-aria-expanded/profile:opacity-100 motion-reduce:transition-none"><ChevronLeft className="size-4 rotate-180 text-primary-500" /></span>
       </Button>
     </AssistantHeaderTab>
-  ) : null, [assistant, chatColumnRef, isPanelOpen, working, onOpenDetails]);
+  ) : null, [assistant, chatColumnRef, isPanelOpen, working, avatarState, onOpenDetails]);
   useSetMainHeader(header, false, pending);
   return null;
 }
