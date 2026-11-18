@@ -10,7 +10,7 @@ import { AssistantTeamEditor } from "./assistant-team-editor";
 import { errorText } from "../lib/assistant-ui";
 
 export function AssistantProfileForm({ accountId, onCreated, onClose }: {
-  accountId: string; onCreated(id: string): void; onClose(): void;
+  accountId: string; onCreated(id: string, teamId: string | null): void; onClose(): void;
 }) {
   const { data: spaces = [] } = useGetSpacesQuery();
   const { data: providers, isLoading: loadingProviders } = useGetProvidersQuery();
@@ -63,7 +63,7 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
     setFailure("");
     try {
       const result = await create({ accountId, teamId: teamChoice || null, spaceId: space.id, name: name.trim(), profileSetup: true, model: model.id, effort, avatar }).unwrap();
-      if (mounted.current) onCreated(result.id);
+      if (mounted.current) onCreated(result.id, result.teamId);
     } catch (error) { if (mounted.current) setFailure(errorText(error)); }
     finally { sending.current = false; }
   }

@@ -33,6 +33,15 @@ describe("mosaic assistant avatars", () => {
     expect([...view.container.querySelectorAll("[data-eye]")]).toEqual(eyes);
     expect(view.container.querySelector('[data-working="true"]')).toBeTruthy();
   });
+  it.each([["badge-card", "badge"], ["felt-sprout", "felt"]] as const)("renders the %s finish and animates its own eyes", (shape, family) => {
+    const { container } = render(<AssistantAvatar avatar={{ shape, color: "mint" }} working className="size-6" />);
+    const avatar = container.firstElementChild!;
+    expect(avatar.getAttribute("data-avatar-family")).toBe(family);
+    expect(avatar.getAttribute("data-animated")).toBe("true");
+    expect(avatar.querySelectorAll("[data-eye]")).toHaveLength(2);
+    expect(avatar.querySelector(".material-avatar__finish")).toBeTruthy();
+    expect(avatar.querySelector(".tool-square")).toBeNull();
+  });
   it("pauses outside the viewport or in a hidden window and releases observation on unmount", () => {
     const view = render(<AssistantAvatar className="size-8" />);
     const avatar = view.container.firstElementChild!;

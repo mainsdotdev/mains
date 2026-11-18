@@ -1,9 +1,12 @@
-import type { KeyboardEvent } from "react";
-import { ASSISTANT_AVATAR_COLORS, ASSISTANT_AVATAR_SHAPES, type AssistantAvatar as Avatar } from "@mains/contracts/assistants";
+import { useRef, type KeyboardEvent } from "react";
+import { ASSISTANT_AVATAR_COLORS, ASSISTANT_AVATAR_SHAPES_BY_FAMILY, type AssistantAvatar as Avatar } from "@mains/contracts/assistants";
 import { Button } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { MOSAIC_SHAPES } from "../lib/assistant-mosaic";
+import { assistantAvatarDesign, AVATAR_FAMILIES } from "../lib/assistant-avatar-design";
 import { AssistantAvatar, AVATAR_COLORS } from "./assistant-avatar";
+
+type AvatarFamily = typeof AVATAR_FAMILIES[number];
+const FAMILY_LABELS: Record<AvatarFamily, string> = { mosaic: "Mosaic", badge: "Badge", felt: "Felt" };
 
 export function AssistantAvatarPicker({ avatar, seed, onChange, compact = false }: {
   avatar: Avatar;
@@ -11,13 +14,36 @@ export function AssistantAvatarPicker({ avatar, seed, onChange, compact = false 
   onChange(avatar: Avatar): void;
   compact?: boolean;
 }) {
+  const { family } = assistantAvatarDesign(avatar.shape);
+  const shapes = ASSISTANT_AVATAR_SHAPES_BY_FAMILY[family];
+  const previousShapes = useRef<Partial<Record<AvatarFamily, Avatar["shape"]>>>({});
+  function selectFamily(nextFamily: AvatarFamily) {
+    if (family === nextFamily) return;
+    previousShapes.current[family] = avatar.shape;
+    onChange({ ...avatar, shape: previousShapes.current[nextFamily] ?? ASSISTANT_AVATAR_SHAPES_BY_FAMILY[nextFamily][0] });
+  }
+
   return <div className={cn("flex flex-col items-center", compact ? "gap-3" : "gap-5 pb-4 pt-2 sm:gap-6")}>
     <AssistantAvatar avatar={avatar} seed={seed} className={compact ? "size-14" : "size-28"} />
+    <div role="radiogroup" aria-label="Avatar style" onKeyDown={event => cycleAvatar(event, AVATAR_FAMILIES, family, selectFamily)}
+      className="flex max-w-full flex-wrap justify-center gap-1 rounded-2xl bg-primary-200/30 p-1 dark:bg-primary/5">
+      {AVATAR_FAMILIES.map(option => {
+        const selected = family === option;
+        return <Button key={option} variant="bare" role="radio" aria-checked={selected} tabIndex={selected ? 0 : -1}
+          onClick={() => selectFamily(option)}
+          className={cn("flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-medium focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+            selected ? "bg-primary ring-1 ring-inset ring-primary-400/30 dark:bg-primary/10 dark:ring-primary/15"
+              : "text-primary-600 hover:bg-primary-300/20 dark:text-primary-400 dark:hover:bg-primary/5")}>
+          <AssistantAvatar avatar={{ ...avatar, shape: ASSISTANT_AVATAR_SHAPES_BY_FAMILY[option][0] }} animated={false} className="size-5" />
+          {FAMILY_LABELS[option]}
+        </Button>;
+      })}
+    </div>
     <div className="max-w-full overflow-x-auto overscroll-x-contain">
-      <div role="radiogroup" aria-label="Avatar shape" onKeyDown={event => cycleAvatar(event, ASSISTANT_AVATAR_SHAPES, avatar.shape, shape => onChange({ ...avatar, shape }))} className="flex w-max items-center gap-1.5 px-1 py-1">
-        {ASSISTANT_AVATAR_SHAPES.map(shape => {
+      <div role="radiogroup" aria-label="Avatar shape" onKeyDown={event => cycleAvatar(event, shapes, avatar.shape, shape => onChange({ ...avatar, shape }))} className="flex w-max items-center gap-1.5 px-1 py-1">
+        {shapes.map(shape => {
           const selected = avatar.shape === shape;
-          const label = MOSAIC_SHAPES[shape].label;
+          const { label } = assistantAvatarDesign(shape);
           return <Button key={shape} variant="bare" role="radio" aria-label={label} tooltip={label} tabIndex={selected ? 0 : -1} aria-checked={selected}
             onClick={() => onChange({ ...avatar, shape })}
             className={cn("flex shrink-0 items-center justify-center rounded-xl focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",

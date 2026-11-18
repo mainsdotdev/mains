@@ -5,6 +5,7 @@ import {
   SIDEBAR_ACTION_ICON,
   SidebarGroupSection,
 } from "@/components/layout/sidebar/sidebar-group-section";
+import { SidebarTopRows } from "@/components/layout/sidebar/sidebar-top-rows";
 import { ConnectionModalHost } from "@/features/settings/components/connections/connection-modals";
 import { ProviderIcon } from "@/features/workspace/components/provider-icon";
 import {
@@ -107,37 +108,36 @@ export function TasksSidebar() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-2 pt-12 px-5 md:pt-2">
-        <Text size="base" weight="medium" align="left">
-          Tasks
-        </Text>
-        {connected.length > 0 && (
-          <Button
-            variant="icon"
-            onClick={sync}
-            disabled={syncing}
-            aria-label="Sync issues"
-            tooltip="Sync issues"
-            tooltipPosition="bottom"
-            // Pulls the button out by its own padding (p-1.5) so the glyph,
-            // not the hover box, lines up with the counts below.
-            className="-mr-1.5"
-          >
-            <Refresh className={`size-3.5 ${syncing ? "animate-spin" : ""}`} />
-          </Button>
-        )}
-      </div>
-
-      <nav className="shrink-0 space-y-0.5 px-3 py-3" aria-label="Task scope">
-        <ScopeRow
-          icon={<Inbox className="size-3.5 shrink-0" />}
-          label={tab === "issues" ? "All issues" : "All pull requests"}
-          count={tab === "issues" ? counts.total : null}
-          capped={countsCapped}
-          active={!scope.provider}
-          onClick={() => setScope(ALL_SCOPE)}
-        />
-      </nav>
+      <SidebarTopRows header={
+        <div className="flex w-full items-center justify-between gap-2 px-2">
+          <Text as="h2" size="base" weight="medium">Tasks</Text>
+          {connected.length > 0 && (
+            <Button
+              variant="icon"
+              onClick={sync}
+              disabled={syncing}
+              aria-label="Sync issues"
+              tooltip="Sync issues"
+              tooltipPosition="bottom"
+              // Align the glyph with the counts below by offsetting the button padding.
+              className="-mr-1.5"
+            >
+              <Refresh className={`size-3.5 ${syncing ? "animate-spin" : ""}`} />
+            </Button>
+          )}
+        </div>
+      }>
+        <nav aria-label="Task scope">
+          <ScopeRow
+            icon={<Inbox className="size-3.5 shrink-0" />}
+            label={tab === "issues" ? "All issues" : "All pull requests"}
+            count={tab === "issues" ? counts.total : null}
+            capped={countsCapped}
+            active={!scope.provider}
+            onClick={() => setScope(ALL_SCOPE)}
+          />
+        </nav>
+      </SidebarTopRows>
 
       <div className="scroll-bounce min-h-0 flex-1 overflow-y-auto noscrollbar px-3">
         {connected.map((connection) => (

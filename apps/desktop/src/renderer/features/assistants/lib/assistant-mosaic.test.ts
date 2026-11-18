@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ASSISTANT_AVATAR_COLORS, ASSISTANT_AVATAR_SHAPES, normalizeAssistantAvatar } from "@mains/contracts/assistants";
+import { ASSISTANT_AVATAR_COLORS, ASSISTANT_AVATAR_SHAPES, ASSISTANT_AVATAR_SHAPES_BY_FAMILY, normalizeAssistantAvatar } from "@mains/contracts/assistants";
 import { MOSAIC_SHAPES, avatarPhase } from "./assistant-mosaic";
 
 describe("assistant mosaic geometry", () => {
-  it.each(ASSISTANT_AVATAR_SHAPES)("keeps the eyes and activity accents within the %s tiles", shape => {
+  it.each(ASSISTANT_AVATAR_SHAPES_BY_FAMILY.mosaic)("keeps the eyes and activity accents within the %s tiles", shape => {
     const { tiles, eyes: [left, right, y], accents } = MOSAIC_SHAPES[shape];
     expect(tiles.length).toBeLessThanOrEqual(8);
     expect(left).toBeLessThan(right);

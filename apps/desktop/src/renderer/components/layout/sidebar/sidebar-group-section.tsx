@@ -1,4 +1,4 @@
-import type { MouseEvent, ReactNode } from "react";
+import { useId, useState, type MouseEvent, type ReactNode } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceGroupExpanded } from "@/lib/redux/slices/appSettingsSlice";
 import { Button, Text, type SortableHandle } from "@/components/ui";
@@ -12,7 +12,7 @@ export const SIDEBAR_ACTION_ICON =
  * A collapsible sidebar section: header row (label, count, hover "+" action)
  * over an animated children well. Extracted from the workspace list so the
  * chat list's "Projects" tree can share it — it is agnostic about what the
- * children are. Expand state persists per `groupKey` in appSettings.
+ * children are. A `groupKey` persists expansion in appSettings.
  */
 export function SidebarGroupSection({
   groupKey,
@@ -26,7 +26,7 @@ export function SidebarGroupSection({
   sortHandle,
   children,
 }: {
-  groupKey: string;
+  groupKey?: string;
   label: string;
   /**
    * Optional text colour class for a quieter section heading.
@@ -67,12 +67,16 @@ export function SidebarGroupSection({
   children: ReactNode;
 }) {
   const dispatch = useAppDispatch();
+  const contentId = useId();
+  const [localExpanded, setLocalExpanded] = useState(true);
   // Absent means expanded — a group the user has never touched starts open.
-  const expanded = useAppSelector(
-    (state) => state.appSettings.workspaceGroupExpanded[groupKey] ?? true,
+  const savedExpanded = useAppSelector(
+    (state) => groupKey === undefined ? undefined : state.appSettings.workspaceGroupExpanded[groupKey],
   );
+  const expanded = groupKey === undefined ? localExpanded : savedExpanded ?? true;
   const toggleExpanded = () => {
-    dispatch(setWorkspaceGroupExpanded({ groupKey, expanded: !expanded }));
+    if (groupKey === undefined) setLocalExpanded(current => !current);
+    else dispatch(setWorkspaceGroupExpanded({ groupKey, expanded: !expanded }));
   };
   const isSortable = !!sortHandle?.listeners;
 
@@ -83,6 +87,7 @@ export function SidebarGroupSection({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
+        aria-controls={contentId}
         onPointerDown={(event) => {
           // A press on one of the header's own buttons is a click on that
           // button, never the start of a drag.
@@ -161,14 +166,18 @@ export function SidebarGroupSection({
             </Button>
           )}
           <ArrowUp
-            className={`w-3 h-3 -mr-1 text-primary-800 dark:text-primary-200 transition-transform duration-200 hidden group-hover/section:block ${
+            aria-hidden="true"
+            className={`-mr-1 size-3 text-primary-800 opacity-0 transition-[opacity,rotate] duration-200 group-hover/section:opacity-100 group-focus-visible/section:opacity-100 dark:text-primary-200 motion-reduce:transition-none [@media(hover:none)]:opacity-100 ${
               expanded ? "rotate-180" : "rotate-90"
             }`}
           />
         </div>
       </div>
       <div
-        className={`grid transition-[grid-template-rows] duration-300 ease-out ${
+        id={contentId}
+        inert={!expanded}
+        aria-hidden={!expanded}
+        className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${
           expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
         }`}
       >

@@ -168,14 +168,21 @@ describe("assistant profile and conversation", () => {
       return mate;
     } });
     setup();
+    const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
+    const team = sidebar.getByRole("button", { name: "Mains" });
+    fireEvent.click(team);
+    expect(team.getAttribute("aria-expanded")).toBe("false");
+
     fireEvent.click(screen.getByRole("button", { name: "New mate" }));
     const form = within(screen.getByRole("form", { name: "Create mate" }));
     fireEvent.change(form.getByLabelText("Name"), { target: { value: mate.name } });
+    fireEvent.click(form.getByRole("button", { name: "Team" }));
+    fireEvent.click(screen.getByRole("option", { name: "Mains" }));
     fireEvent.click(form.getByRole("button", { name: "Create mate" }));
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe(runId));
     expect(screen.getByTestId("conversation").getAttribute("data-animate-welcome")).toBe("true");
 
-    const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
+    expect(team.getAttribute("aria-expanded")).toBe("true");
     expect(sidebar.getAllByRole("button", { name: /^About / }).map(button => button.getAttribute("aria-label")))
       .toEqual(["About Travel planner", "About Website", "About Release"]);
     fireEvent.click(sidebar.getByRole("button", { name: /^Website/ }));
@@ -505,10 +512,47 @@ describe("assistant profile and conversation", () => {
     expect(store.getState().preview.byOwner[releaseChatOwner].open).toBe(false);
   });
 
+  it("groups active mates by team and keeps the newest mate first", () => {
+    const [release, website] = mocks.assistants;
+    website.teamId = "website-team";
+    mocks.assistants.push(
+      { ...release, id: "travel", name: "Travel planner", teamId: null },
+      { ...release, id: "review", name: "PR reviewer" },
+      { ...release, id: "archived", name: "Archived mate", isArchived: true },
+    );
+    setup();
+
+    const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
+    expect(sidebar.getAllByRole("button", { expanded: true }).map(button => button.textContent)).toEqual(["Mains", "No team", "Website team"]);
+    const mains = within(sidebar.getByRole("region", { name: "Mains" }));
+    expect(mains.getAllByRole("button", { name: /^About / }).map(button => button.getAttribute("aria-label")))
+      .toEqual(["About PR reviewer", "About Release"]);
+    expect(within(sidebar.getByRole("region", { name: "No team" })).getByRole("button", { name: "About Travel planner" })).toBeTruthy();
+    const websiteTeam = within(sidebar.getByRole("region", { name: "Website team" }));
+    expect(websiteTeam.getByRole("button", { name: "About Website" })).toBeTruthy();
+    expect(sidebar.queryByRole("button", { name: "About Archived mate" })).toBeNull();
+
+    fireEvent.click(websiteTeam.getByRole("button", { name: "Website team", expanded: true }));
+    expect(websiteTeam.getByRole("button", { name: "Website team", expanded: false })).toBeTruthy();
+    expect(websiteTeam.queryByRole("button", { name: "About Website" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Search mates" }));
+    const search = screen.getByRole("textbox", { name: "Search mates" });
+    fireEvent.change(search, { target: { value: "website" } });
+    expect(sidebar.queryByRole("region", { name: "Mains" })).toBeNull();
+    expect(websiteTeam.getByRole("button", { name: "About Website" })).toBeTruthy();
+
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(websiteTeam.queryByRole("button", { name: "About Website" })).toBeNull();
+    fireEvent.keyDown(websiteTeam.getByRole("button", { name: "Website team", expanded: false }), { key: "Enter" });
+    expect(websiteTeam.getByRole("button", { name: "About Website" })).toBeTruthy();
+  });
+
   it("filters only the assistant list without switching the current chat", async () => {
     setup();
     const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
-    expect(screen.queryByText("Mates", { exact: true })).toBeNull();
+    const heading = screen.getByRole("heading", { name: "Mates" });
+    expect(heading.compareDocumentPosition(screen.getByRole("button", { name: "New mate" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(sidebar.queryByRole("button", { name: "First release" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Search mates" }));
     const search = screen.getByRole("textbox", { name: "Search mates" });

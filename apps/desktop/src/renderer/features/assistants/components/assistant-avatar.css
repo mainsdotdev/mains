@@ -29,6 +29,101 @@
   box-shadow: 0 1.4cqi 0 var(--avatar-ink);
 }
 
+.material-avatar__surface,
+.material-avatar__finish,
+.material-avatar__glint {
+  position: absolute;
+  inset: 0;
+}
+
+[data-avatar-family="badge"] .material-avatar__surface {
+  --badge-print: color-mix(in srgb, var(--avatar-light) 55%, white);
+  background: linear-gradient(170deg, var(--avatar-light) 33%, var(--avatar-base) 34% 65%,
+    var(--avatar-shade) 66% 86%, var(--avatar-ink) 94%);
+}
+
+[data-avatar-family="badge"] .material-avatar__finish {
+  background:
+    linear-gradient(var(--badge-print), var(--badge-print)) 28% 30% / 15% 2.5% no-repeat,
+    linear-gradient(var(--badge-print), var(--badge-print)) 46% 28% / 6% 2% no-repeat,
+    radial-gradient(ellipse, var(--avatar-ink) 59%, transparent 74%) 28% 75% / 6% 4% no-repeat,
+    radial-gradient(ellipse, var(--avatar-ink) 59%, transparent 74%) 37% 74% / 6% 4% no-repeat,
+    radial-gradient(ellipse, var(--avatar-ink) 59%, transparent 74%) 46% 73% / 6% 4% no-repeat;
+}
+
+[data-avatar-shape="badge-card"] .material-avatar__finish::after {
+  content: "";
+  position: absolute;
+  right: 21%;
+  bottom: 20%;
+  width: 13%;
+  height: 15%;
+  background: var(--badge-print);
+  clip-path: polygon(43% 5%, 57% 5%, 98% 45%, 84% 60%, 60% 37%, 60% 94%, 40% 94%, 40% 37%, 16% 60%, 2% 45%);
+}
+
+[data-avatar-shape="badge-pin"] .material-avatar__finish::after {
+  content: "";
+  position: absolute;
+  inset: 12%;
+  border: 2cqi solid color-mix(in srgb, var(--badge-print) 58%, transparent);
+  border-radius: 50%;
+}
+
+[data-avatar-shape="badge-shield"] .material-avatar__finish::after {
+  content: "";
+  position: absolute;
+  bottom: 20%;
+  left: 41%;
+  width: 18%;
+  height: 12%;
+  background: var(--badge-print);
+  clip-path: polygon(0 19%, 50% 62%, 100% 19%, 100% 47%, 50% 92%, 0 47%);
+}
+
+[data-avatar-shape="badge-ticket"] .material-avatar__finish::after {
+  content: "";
+  position: absolute;
+  top: 22%;
+  right: 24%;
+  bottom: 21%;
+  width: 2.5%;
+  background: repeating-linear-gradient(to bottom, var(--badge-print) 0% 8%, transparent 8% 18%);
+}
+
+[data-avatar-family="felt"] .material-avatar__surface {
+  background:
+    radial-gradient(ellipse at 30% 18%, var(--avatar-light), transparent 65%),
+    linear-gradient(150deg, var(--avatar-light), var(--avatar-base) 49%, var(--avatar-shade) 85%);
+}
+
+[data-avatar-family="felt"] .material-avatar__finish {
+  background-image:
+    radial-gradient(ellipse at 21% 43%, #fff9 0 13%, transparent 24%),
+    radial-gradient(ellipse at 64% 27%, #16111a5c 0 13%, transparent 28%),
+    radial-gradient(ellipse at 43% 79%, #fff6 0 10%, transparent 23%);
+  background-size: 7% 9%, 9% 7%, 11% 13%;
+  opacity: 0.57;
+}
+
+@container (max-width: 30px) {
+  [data-avatar-family="felt"] .material-avatar__finish { opacity: 0.24; }
+}
+
+.material-avatar__glint {
+  background: radial-gradient(ellipse at 35% 23%, #fff5, transparent 66%);
+  opacity: 0;
+}
+
+[data-working="true"][data-animated="true"] .material-avatar__glint {
+  animation: materialAvatarPulse 2.6s ease-in-out var(--avatar-eye-delay) infinite;
+}
+
+@keyframes materialAvatarPulse {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 0.8; }
+}
+
 .mosaic-avatar__face {
   pointer-events: none;
   animation: mosaicAvatarGaze 10.4s steps(1, end) var(--avatar-eye-delay) infinite;
@@ -45,6 +140,12 @@
 }
 
 .mosaic-avatar[data-working="true"] .mosaic-avatar__eye { scale: 1 0.76; }
+
+:is([data-avatar-family="badge"], [data-avatar-family="felt"]) .mosaic-avatar__eye {
+  width: 10%;
+  height: 15%;
+  border-radius: 45%;
+}
 
 @keyframes mosaicAvatarGaze {
   0%, 17%, 35%, 59%, 74%, 92%, 100% { translate: 0 0; }

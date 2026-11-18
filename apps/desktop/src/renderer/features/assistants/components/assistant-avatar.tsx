@@ -2,7 +2,8 @@ import { useEffect, useRef, type CSSProperties, type PointerEvent } from "react"
 import { normalizeAssistantAvatar, type AssistantAvatar as Avatar } from "@mains/contracts/assistants";
 import { cn } from "@/lib/cn";
 import { SquareCell, squareCellStyle, SQUARE_PULSE_DURATION_MS } from "@/components/ui";
-import { MOSAIC_SHAPES, avatarPhase, type MosaicTile } from "../lib/assistant-mosaic";
+import { assistantAvatarDesign } from "../lib/assistant-avatar-design";
+import { avatarPhase, type MosaicTile } from "../lib/assistant-mosaic";
 import "./assistant-avatar.css";
 
 export const AVATAR_COLORS = {
@@ -38,7 +39,7 @@ export function AssistantAvatar({ avatar, working = false, seed = "assistant", a
   avatar?: Avatar; working?: boolean; seed?: string; animated?: boolean; className?: string;
 }) {
   const selected = normalizeAssistantAvatar(avatar);
-  const shape = MOSAIC_SHAPES[selected.shape];
+  const shape = assistantAvatarDesign(selected.shape);
   const color = AVATAR_COLORS[selected.color];
   const root = useRef<HTMLSpanElement>(null);
   const phase = avatarPhase(seed);
@@ -68,7 +69,8 @@ export function AssistantAvatar({ avatar, working = false, seed = "assistant", a
       : Math.abs(x) > Math.abs(y) ? x < 0 ? "left" : "right" : y < 0 ? "up" : "down";
   };
   const [leftEye, rightEye, eyeY] = shape.eyes;
-  return <span ref={root} aria-hidden="true" data-avatar-shape={selected.shape} data-working={working} data-animated={animated} data-paused={!animated}
+  return <span ref={root} aria-hidden="true" data-avatar-shape={selected.shape} data-avatar-family={shape.family}
+    data-working={working} data-animated={animated} data-paused={!animated}
     className={cn("mosaic-avatar inline-flex shrink-0", className)}
     onPointerMove={look} onPointerLeave={event => { delete event.currentTarget.dataset.gaze; }}
     style={{
@@ -76,9 +78,14 @@ export function AssistantAvatar({ avatar, working = false, seed = "assistant", a
       "--tsq-duration": `${SQUARE_PULSE_DURATION_MS}ms`, "--tsq-phase": phase, "--avatar-eye-delay": `${-phase * 10.4}s`,
     } as CSSProperties}>
     <span className="mosaic-avatar__body" style={{ clipPath: shape.outline }}>
-      {shape.tiles.map((tile, index) => <SquareCell key={index} data-cell-id={String(index)}
+      {shape.family === "mosaic" ? shape.tiles.map((tile, index) => <SquareCell key={index} data-cell-id={String(index)}
         className={cn("mosaic-avatar__tile", shape.accents.includes(index) && "mosaic-avatar__tile--accent")}
-        style={tileStyle(tile)} />)}
+        style={tileStyle(tile)} />) : (
+        <span className="material-avatar__surface">
+          <span className="material-avatar__finish" />
+          <span className="material-avatar__glint" />
+        </span>
+      )}
       <span className="mosaic-avatar__face">
         <span className="mosaic-avatar__eye" data-eye="left" style={{ left: `${leftEye}%`, top: `${eyeY}%` }} />
         <span className="mosaic-avatar__eye" data-eye="right" style={{ left: `${rightEye}%`, top: `${eyeY}%` }} />

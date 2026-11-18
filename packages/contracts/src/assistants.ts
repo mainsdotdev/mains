@@ -1,7 +1,16 @@
 import type { ModeId } from "./modes";
 import type { PrRefInput, PrRevision } from "./pull-requests";
 import type { ConversationSettings } from "./run-settings";
-export const ASSISTANT_AVATAR_SHAPES = ["steps", "sphere", "cube", "flower", "weave", "lantern", "arch", "kite", "swallow", "mains"] as const;
+export const ASSISTANT_AVATAR_SHAPES_BY_FAMILY = {
+    mosaic: ["steps", "sphere", "cube", "flower", "weave", "lantern", "arch", "kite", "swallow", "mains"],
+    badge: ["badge-card", "badge-pin", "badge-shield", "badge-ticket"],
+    felt: ["felt-sprout", "felt-pebble", "felt-cloud", "felt-bloom"],
+} as const;
+export const ASSISTANT_AVATAR_SHAPES = [
+    ...ASSISTANT_AVATAR_SHAPES_BY_FAMILY.mosaic,
+    ...ASSISTANT_AVATAR_SHAPES_BY_FAMILY.badge,
+    ...ASSISTANT_AVATAR_SHAPES_BY_FAMILY.felt,
+] as const;
 export const ASSISTANT_AVATAR_COLORS = ["coral", "amber", "lime", "mint", "cyan", "blue", "violet", "rose"] as const;
 export interface AssistantAvatar { shape: typeof ASSISTANT_AVATAR_SHAPES[number]; color: typeof ASSISTANT_AVATAR_COLORS[number] }
 export const DEFAULT_ASSISTANT_AVATAR: AssistantAvatar = { shape: "sphere", color: "blue" };

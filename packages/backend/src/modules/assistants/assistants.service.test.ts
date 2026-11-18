@@ -548,11 +548,15 @@ describe("assistant profiles and shared knowledge", () => {
         expect(chats[1]).toMatchObject({ workspaceId: null, workspaceName: null, projectName: null, mode: "work" });
         expect(() => assistantsService.conversations(assistant.id, "foreign-account")).toThrow("unavailable");
     });
-    it("saves mosaic avatars and reads legacy shapes without rewriting stored settings", async () => {
+    it("saves each avatar family and reads legacy shapes without rewriting stored settings", async () => {
         const input = { accountId: "default", teamId, name: "Release assistant", instructions: "Help with releases", spaceId: "codex", model: "test-model", effort: "high" };
         const assistant = await assistantsService.create({ ...input, avatar: { shape: "mains", color: "rose" } });
         expect(assistant.avatar).toEqual({ shape: "mains", color: "rose" });
         expect(assistantsService.get(assistant.id, "default")?.avatar).toEqual(assistant.avatar);
+        for (const avatar of [{ shape: "badge-ticket", color: "violet" }, { shape: "felt-sprout", color: "mint" }]) {
+            const material = await assistantsService.create({ ...input, name: avatar.shape, avatar });
+            expect(assistantsService.get(material.id, "default")?.avatar).toEqual(avatar);
+        }
         const legacyClient = await assistantsService.create({ ...input, name: "Legacy client", avatar: { shape: "cross", color: "amber" } });
         expect(legacyClient.avatar).toEqual({ shape: "arch", color: "amber" });
         for (const [legacy, current] of [["circle", "sphere"], ["square", "cube"], ["cross", "arch"]]) {
@@ -566,7 +570,7 @@ describe("assistant profiles and shared knowledge", () => {
         const assistant = await makeAssistant("Coordinator");
         const { name, description, instructions, avatar } = assistant;
         const expectedProfile = { name, description, instructions, avatar };
-        const profile = { name: "Release bot", description: "Checks beta releases", instructions: "Verify signing before every release.", avatar: { shape: "kite", color: "lime" } } as const;
+        const profile = { name: "Release bot", description: "Checks beta releases", instructions: "Verify signing before every release.", avatar: { shape: "felt-cloud", color: "lime" } } as const;
         const input = { id: assistant.id, accountId: "default", expectedProfile, profile };
         const { runId } = await assistantWork.sendChat("default", assistant.id, "Prepare release", "profile-first-turn");
         await settled(runId);

@@ -16,7 +16,8 @@ vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantOverviewQuery: () => ({ currentData: { teams: mocks.teams }, isFetching: false, refetch: vi.fn() }),
 }));
 beforeEach(() => {
-  mocks.create.mockReset().mockReturnValue({ unwrap: () => Promise.resolve({ id: "created-assistant" }) });
+  mocks.create.mockReset().mockImplementation(({ teamId }: { teamId: string | null }) =>
+    ({ unwrap: () => Promise.resolve({ id: "created-assistant", teamId }) }));
   mocks.createTeam.mockReset().mockImplementation((input: { accountId: string; name: string }) => ({ unwrap: () => Promise.resolve({ ...input, id: "new-team", createdAt: new Date(0) }) }));
   mocks.teams = [
     { id: "mains", accountId: "account", name: "Mains", createdAt: new Date(0) },
@@ -48,7 +49,7 @@ describe("assistant creation", () => {
     await user.click(screen.getByRole("menuitemradio", { name: "Test model" }));
     await user.click(screen.getByRole("menuitemradio", { name: /^high$/i }));
     await user.click(screen.getByRole("button", { name: "Create mate" }));
-    await waitFor(() => expect(created).toHaveBeenCalledWith("created-assistant"));
+    await waitFor(() => expect(created).toHaveBeenCalledWith("created-assistant", null));
     expect(mocks.create).toHaveBeenCalledWith({ accountId: "account", teamId: null, spaceId: "codex", name: "Trip planner", profileSetup: true, model: "model", effort: "high", avatar: { shape: "mains", color: "rose" } });
   });
 
@@ -60,6 +61,29 @@ describe("assistant creation", () => {
     await fillProfile(user);
     await user.click(screen.getByRole("button", { name: "Create mate" }));
     await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ teamId: "website" })));
+  });
+
+  it("switches avatar styles by keyboard and remembers the shape and color across families", async () => {
+    const user = userEvent.setup();
+    render(<AssistantProfileForm accountId="account" onCreated={vi.fn()} onClose={vi.fn()} />);
+    const styles = within(screen.getByRole("radiogroup", { name: "Avatar style" }));
+    const shapes = within(screen.getByRole("radiogroup", { name: "Avatar shape" }));
+    styles.getByRole("radio", { name: "Mosaic" }).focus();
+    await user.keyboard("{ArrowRight}");
+    expect(styles.getByRole("radio", { name: "Badge" })).toBe(document.activeElement);
+    expect(shapes.getAllByRole("radio").map(option => option.getAttribute("aria-label"))).toEqual(["Card", "Pin", "Shield", "Ticket"]);
+    await user.click(shapes.getByRole("radio", { name: "Ticket" }));
+    await user.click(screen.getByRole("radio", { name: "Mint" }));
+    await user.click(styles.getByRole("radio", { name: "Felt" }));
+    expect(shapes.getAllByRole("radio").map(option => option.getAttribute("aria-label"))).toEqual(["Sprout", "Pebble", "Cloud", "Bloom"]);
+    await user.click(shapes.getByRole("radio", { name: "Cloud" }));
+    await user.click(styles.getByRole("radio", { name: "Badge" }));
+    expect(shapes.getByRole("radio", { name: "Ticket", checked: true })).toBeTruthy();
+    await user.click(styles.getByRole("radio", { name: "Felt" }));
+    expect(shapes.getByRole("radio", { name: "Cloud", checked: true })).toBeTruthy();
+    await fillProfile(user);
+    await user.click(screen.getByRole("button", { name: "Create mate" }));
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ avatar: { shape: "felt-cloud", color: "mint" } })));
   });
 
   it("creates and selects a team inline before the overview refresh arrives", async () => {

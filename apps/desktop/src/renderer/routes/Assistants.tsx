@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
+import { setWorkspaceGroupExpanded } from "@/lib/redux/slices/appSettingsSlice";
 import { useAssistantOverviewQuery, useAssistantConversationsQuery, useArchiveAssistantMutation } from "@/lib/redux/api/assistantsApi";
 import { Button } from "@/components/ui";
 import { Bot, Plus } from "@/components/ui/icons";
@@ -13,7 +14,7 @@ import { AssistantChat } from "@/features/assistants/components/assistant-chat";
 import { AssistantAvatar } from "@/features/assistants/components/assistant-avatar";
 import { useAssistantUpdates } from "@/features/assistants/hooks/use-assistant-updates";
 import { usePreviewPanel } from "@/hooks/use-preview-panel";
-import { assistantHref } from "@/features/assistants/lib/assistant-navigation";
+import { assistantHref, assistantTeamGroupKey } from "@/features/assistants/lib/assistant-navigation";
 import { errorText, isAssistantWorking } from "@/features/assistants/lib/assistant-ui";
 import { composerOwnerKey } from "@/features/workspace/lib/ui-context";
 
@@ -110,7 +111,10 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
     next.delete("new");
     return next;
   }), [setParams]);
-  const openCreatedMate = (id: string) => navigate(assistantHref(id), { state: { createdMateId: id } });
+  const openCreatedMate = (id: string, teamId: string | null) => {
+    dispatch(setWorkspaceGroupExpanded({ groupKey: assistantTeamGroupKey(backendId, accountId, teamId), expanded: true }));
+    navigate(assistantHref(id), { state: { createdMateId: id } });
+  };
   const toggleArchive = async () => {
     if (!selected) return;
     setFailure("");

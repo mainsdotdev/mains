@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { SidebarHeader } from "./sidebar-header";
+import { SidebarTopRows } from "./sidebar-top-rows";
 import { SidebarFooter } from "./sidebar-footer";
 import { SidebarContent } from "./sidebar-content";
 import { NavigationRail } from "./navigation-rail";
@@ -342,12 +343,13 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           <TasksSidebar />
         ) : (
           <div className="h-full overflow-hidden flex flex-col">
-            <SidebarHeader
-              mode={activeSpace?.mode}
-              providerId={activeSpace?.providerId}
-              onModeChange={handleModeChange}
-            />
-            <div className="px-3 py-1">
+            <SidebarTopRows header={
+              <SidebarHeader
+                mode={activeSpace?.mode}
+                providerId={activeSpace?.providerId}
+                onModeChange={handleModeChange}
+              />
+            }>
               <NewButton
                 onClick={isChatShell ? () => handleNewChat() : handleOpenAddProjectModal}
                 shortcutLabel={newItemShortcut}
@@ -362,7 +364,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                 title={sidebarConfig.title}
                 actionPrefix={sidebarConfig.actionPrefix}
               />
-            </div>
+            </SidebarTopRows>
             {isMobile && modeConfig.showTasksNav && (
               <div className="px-3 mb-px">
                 <Button

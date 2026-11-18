@@ -1,4 +1,4 @@
-import type { AssistantAvatar } from "@mains/contracts/assistants";
+import type { ASSISTANT_AVATAR_SHAPES_BY_FAMILY } from "@mains/contracts/assistants";
 
 type TileTone = "base" | "light" | "shade";
 type Corners = number | readonly [number, number, number, number];
@@ -16,11 +16,11 @@ interface MosaicShape {
   outline?: string;
 }
 
-function outline(points: readonly (readonly [x: number, y: number])[]): string {
+export function avatarOutline(points: readonly (readonly [x: number, y: number])[]): string {
   return `polygon(evenodd, ${points.map(([x, y]) => `${x}% ${y}%`).join(", ")})`;
 }
 
-export const MOSAIC_SHAPES: Record<AssistantAvatar["shape"], MosaicShape> = {
+export const MOSAIC_SHAPES: Record<typeof ASSISTANT_AVATAR_SHAPES_BY_FAMILY.mosaic[number], MosaicShape> = {
   steps: {
     label: "Steps",
     eyes: [32, 61, 61],
@@ -92,7 +92,7 @@ export const MOSAIC_SHAPES: Record<AssistantAvatar["shape"], MosaicShape> = {
   lantern: {
     label: "Lantern",
     eyes: [36, 64, 50],
-    outline: outline([
+    outline: avatarOutline([
       [34, 28], [34, 17], [35, 12], [39, 8], [44, 7], [56, 7], [61, 8], [65, 12], [66, 17],
       [66, 28], [72, 28], [78, 30], [81, 34], [83, 38], [88, 70], [91, 70], [94, 71],
       [95, 74], [95, 86], [93, 88], [7, 88], [5, 86], [5, 74], [6, 71], [9, 70], [12, 70],
@@ -113,7 +113,7 @@ export const MOSAIC_SHAPES: Record<AssistantAvatar["shape"], MosaicShape> = {
   arch: {
     label: "Arch",
     eyes: [35, 65, 51],
-    outline: outline([
+    outline: avatarOutline([
       [13, 85], [13, 48], [14, 39], [17, 30], [22, 22], [30, 16], [39, 12], [50, 10],
       [61, 12], [70, 16], [78, 22], [83, 30], [86, 39], [87, 48], [87, 85], [85, 88],
       [83, 89], [68, 89], [65, 88], [64, 85], [64, 72], [63, 69], [60, 68], [40, 68],
@@ -132,7 +132,7 @@ export const MOSAIC_SHAPES: Record<AssistantAvatar["shape"], MosaicShape> = {
   kite: {
     label: "Kite",
     eyes: [36, 65, 49],
-    outline: outline([
+    outline: avatarOutline([
       [56, 7], [58, 6], [60, 7], [62, 10], [91, 43], [92, 46], [90, 51],
       [47, 93], [44, 95], [42, 95], [39, 92], [9, 54], [7, 51], [9, 47],
     ]),
@@ -148,7 +148,7 @@ export const MOSAIC_SHAPES: Record<AssistantAvatar["shape"], MosaicShape> = {
   swallow: {
     label: "Swallow",
     eyes: [37, 63, 50],
-    outline: outline([
+    outline: avatarOutline([
       [7, 19], [5, 18], [4, 19], [5, 23], [16, 60], [19, 64], [24, 67], [36, 66],
       [36, 86], [37, 88], [39, 87], [50, 76], [61, 87], [63, 88], [64, 86], [64, 66],
       [76, 67], [81, 64], [84, 60], [95, 23], [96, 19], [95, 18], [93, 19], [70, 32],
@@ -168,7 +168,7 @@ export const MOSAIC_SHAPES: Record<AssistantAvatar["shape"], MosaicShape> = {
     label: "Mains",
     eyes: [34, 66, 50],
     // The logo's curves sampled into the mosaic's percentage coordinate space.
-    outline: outline([
+    outline: avatarOutline([
       [50, 37], [58, 36], [65, 32], [72, 25], [79, 16], [80, 14], [83, 14], [84, 16],
       [88, 23], [91, 31], [93, 40], [94, 50], [93, 60], [91, 69], [88, 77], [84, 84],
       [83, 86], [80, 86], [79, 84], [72, 75], [65, 68], [58, 64], [50, 63],

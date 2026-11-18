@@ -30,7 +30,7 @@ export function SidebarHeader({
     getCommandMenuOpen,
   );
   return (
-    <div className="flex shrink-0 items-center gap-1 px-3 pb-3 pt-11 md:pt-1">
+    <div className="flex w-full items-center gap-1">
       <div className="flex min-w-0 flex-1 items-center">
         {mode ? (
           <SpaceModePicker
