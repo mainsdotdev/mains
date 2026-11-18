@@ -5,7 +5,7 @@ import { Button, Label, Modal, ModalHeader, Select, Text, Textarea } from "@/com
 import { AssistantAssignmentCard } from "@/features/assistants/components/assistant-assignment-card";
 import { useAssistantUpdates } from "@/features/assistants/hooks/use-assistant-updates";
 import { assistantHref } from "@/features/assistants/lib/assistant-navigation";
-import { errorText } from "@/features/assistants/lib/assistant-ui";
+import { assistantsReadyForWork, errorText } from "@/features/assistants/lib/assistant-ui";
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery, useAssistantPullRequestReviewsQuery, useReviewPullRequestWithAssistantMutation } from "@/lib/redux/api/assistantsApi";
 import { getTransport } from "@/lib/transport";
@@ -47,8 +47,7 @@ function ReviewForm({ pr, revision, disabled, onReviewed }: {
   const submitting = useRef(false);
   useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
-  const mates = overview?.assistants.filter(mate => !mate.isArchived &&
-    !overview.welcomes?.some(welcome => welcome.assistantId === mate.id && welcome.question?.profileSetup && !welcome.question.profileSetup.saved)) ?? [];
+  const mates = assistantsReadyForWork(overview);
   const assistantId = chosenMate || (mates.length === 1 ? mates[0].id : "");
   const eligible = mates.some(mate => mate.id === assistantId);
   const existing = reviews?.find(review => review.assignment.toAssistantId === assistantId && samePrRevision(review.revision, revision));

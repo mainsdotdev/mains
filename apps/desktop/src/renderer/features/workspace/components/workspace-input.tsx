@@ -1178,7 +1178,7 @@ export function WorkspaceInput({
               workspacePath={workspacePath}
               projectId={projectId}
               commands={providerCommands}
-              assistants={canMentionMates ? assistantOverview?.assistants : undefined}
+              assistantOverview={canMentionMates ? assistantOverview : undefined}
               onSelectAssistant={canMentionMates ? selectAssistant : undefined}
               skills={providerSkills}
               isLoadingSkills={isLoadingSkills}

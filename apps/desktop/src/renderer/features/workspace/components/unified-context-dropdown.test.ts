@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UnifiedContextDropdown } from "./unified-context-dropdown";
 import type { SkillInfo } from "@/lib/redux/api/providersApi";
-import type { Assistant } from "@mains/contracts/assistants";
+import type { Assistant, AssistantOverview, AssistantWelcome } from "@mains/contracts/assistants";
 
 const getMentionableApps = vi.hoisted(() => vi.fn());
 
@@ -26,7 +26,7 @@ const directory = {
   hasChildren: true,
 };
 
-function renderDropdown(overrides: { filterText?: string; providerId?: string; workspacePath?: string; skills?: SkillInfo[]; isLoadingSkills?: boolean; assistants?: Assistant[] } = {}) {
+function renderDropdown(overrides: { filterText?: string; providerId?: string; workspacePath?: string; skills?: SkillInfo[]; isLoadingSkills?: boolean; assistantOverview?: Pick<AssistantOverview, "assistants" | "welcomes"> } = {}) {
   const onSelectFile = vi.fn();
   const onSelectSkill = vi.fn();
   const onSelectAssistant = vi.fn();
@@ -42,7 +42,7 @@ function renderDropdown(overrides: { filterText?: string; providerId?: string; w
       workspacePath: overrides.workspacePath ?? "/repo",
       commands: [],
       skills: overrides.skills ?? [],
-      assistants: overrides.assistants,
+      assistantOverview: overrides.assistantOverview,
       onSelectAssistant,
       isLoadingSkills: overrides.isLoadingSkills,
       onSelectCommand: vi.fn(),
@@ -109,7 +109,7 @@ describe("UnifiedContextDropdown Mac app mentions", () => {
 });
 
 describe("UnifiedContextDropdown assistant calls", () => {
-  it("finds assistants by responsibility, excludes archived profiles and selects their exact identity by keyboard", async () => {
+  it("offers ready and legacy mates by responsibility and selects their exact identity by keyboard", async () => {
     Object.defineProperty(window, "api", {
       configurable: true,
       value: { fileExplorer: { listDir: vi.fn(), searchFiles: vi.fn().mockResolvedValue({ success: true, data: [] }) } },
@@ -120,9 +120,26 @@ describe("UnifiedContextDropdown assistant calls", () => {
       conversationSettings: { model: "model", config: {} }, spaceSnapshot: { id: "codex", accountId: "default", name: "Codex", providerId: "codex", mode: "developer", systemPrompt: null },
       createdAt: new Date(), updatedAt: new Date(),
     };
-    const { onSelectAssistant, onSelectSkill, onClose } = renderDropdown({ filterText: "testflight", assistants: [assistant, { ...assistant, id: "archived", name: "Archived checker", isArchived: true }] });
+    const configured = { ...assistant, id: "configured", name: "Configured checker" };
+    const unfinished = { ...assistant, id: "unfinished", name: "Unfinished checker" };
+    const welcome: AssistantWelcome = {
+      assistantId: unfinished.id, runId: "setup", state: "ready", wasSkipped: false, answer: null, error: null, createdAt: new Date(),
+      question: { header: "Setup", question: "How can I help?", options: [], idleMessage: "Ready", profileSetup: { turns: [] } },
+    };
+    const { onSelectAssistant, onSelectSkill, onClose } = renderDropdown({
+      filterText: "testflight",
+      assistantOverview: {
+        assistants: [assistant, configured, unfinished, { ...assistant, id: "archived", name: "Archived checker", isArchived: true }],
+        welcomes: [welcome, {
+          ...welcome, assistantId: configured.id, runId: "configured-setup", state: "skipped", wasSkipped: true,
+          question: { ...welcome.question!, profileSetup: { turns: [], saved: true } },
+        }],
+      },
+    });
     expect(screen.getByText("Mates", { exact: true })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "Call Beta checker" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Call Configured checker" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Call Unfinished checker" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Call Archived checker" })).toBeNull();
     await userEvent.setup().keyboard("{Enter}");
     expect(onSelectAssistant).toHaveBeenCalledExactlyOnceWith(assistant);

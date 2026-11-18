@@ -72,7 +72,7 @@ export function AssistantsSidebar() {
             <section key={groupKey} aria-label={label}>
               <SidebarGroupSection key={query ? "search" : "browse"} groupKey={query ? undefined : groupKey}
                 label={label} labelWeight="medium" count={members.length}>
-                <div className="space-y-1.5 pt-1 pl-2">{rows}</div>
+                <div className="space-y-1.5 pt-1">{rows}</div>
               </SidebarGroupSection>
             </section>
           );

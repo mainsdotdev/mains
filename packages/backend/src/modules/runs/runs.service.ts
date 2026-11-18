@@ -2253,14 +2253,14 @@ export const runsService = {
         payload.providerId,
       );
       const toolPolicy = composeToolPolicy(mode, payload.toolPolicySnapshot);
+      const mentions = prepareAssistantMentions({ accountId: payload.accountId, mode, prompt: payload.goal, promptId: payload.clientPromptId,
+        context: { initialContext: payload.initialContext, contextFiles: payload.contextFiles, contextIssues: payload.contextIssues, contextSignals: payload.contextSignals, contextSkills: payload.contextSkills } });
+      payload = { ...payload, clientPromptId: mentions.promptId, initialContext: mentions.items };
       const execution = resolveRunExecution({ runId, mode, workspace });
       if (workspace) {
         await workspaceService.update(workspace.id, { status: "in_progress" });
       }
 
-      const mentions = prepareAssistantMentions({ accountId: payload.accountId, mode, prompt: payload.goal, promptId: payload.clientPromptId,
-        context: { initialContext: payload.initialContext, contextFiles: payload.contextFiles, contextIssues: payload.contextIssues, contextSignals: payload.contextSignals, contextSkills: payload.contextSkills } });
-      payload = { ...payload, clientPromptId: mentions.promptId, initialContext: mentions.items };
       await runsRepo.insertRun({
         id: runId,
         assistantId: assistant?.id,

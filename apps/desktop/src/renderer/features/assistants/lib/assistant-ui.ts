@@ -1,5 +1,12 @@
 import type { AssistantAssignment, AssistantOverview } from "@mains/contracts/assistants";
 
+export function assistantsReadyForWork(overview?: Pick<AssistantOverview, "assistants" | "welcomes">) {
+    const pendingSetup = new Set(overview?.welcomes?.filter(
+        ({ question }) => question?.profileSetup && !question.profileSetup.saved,
+    ).map(({ assistantId }) => assistantId));
+    return overview?.assistants.filter(assistant => !assistant.isArchived && !pendingSetup.has(assistant.id)) ?? [];
+}
+
 export function isAssistantWorking(overview: AssistantOverview | undefined, id: string): boolean {
     return !!overview?.activeAssistantIds?.includes(id)
         || !!overview?.assignments.some(task => task.toAssistantId === id && (task.status === "running" || task.status === "queued"))

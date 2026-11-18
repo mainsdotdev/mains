@@ -8,7 +8,7 @@ import { createTestDb } from "../../../test/setup-db";
 import { createAccount, createProject, createProvider, createSpace, createRun, createWorkspace } from "../../../test/factories";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import type { DatabaseInstance } from "../../db/types";
-import { spaces, providers, appSettings, assistants as assistantProfiles, runs, pulses } from "../../db/schema";
+import { spaces, providers, appSettings, assistants as assistantProfiles, runs, pulses, workspaces } from "../../db/schema";
 let db: DatabaseInstance;
 vi.mock("../../db/client", () => ({ getDb: () => db }));
 vi.mock("../providers/adapters", async () => ({
@@ -1294,6 +1294,44 @@ describe("task-local execution and Code assistant calls", () => {
         await assistantWork.report(task.workerRunId!, { assignmentId: task.id, status: "completed", result: "Signing verified", evidence: ["Build 42 passed"] });
         const history = await runsService.getHistoryPage({ runId: source.id });
         expect(history.artifacts.some(a => a.metadata?.source === "assistant_assignment" && a.metadata.assignmentId === task.id)).toBe(true);
+    });
+    it("rejects an unfinished Mate mention before accepting a new or continued Code message and allows retry after setup", async () => {
+        const accountId = "default";
+        const w = workspace("mention-setup");
+        const mate = await assistantsService.create({ accountId, name: "TestFlight", spaceId: "codex", model: "test-model", profileSetup: true });
+        const source = createRun(db, { id: "mention-setup-source", workspaceId: w.id, accountId, providerId: "codex", mode: "developer", status: "succeeded" });
+        const token = `@assistant-${mate.id}`;
+        const message = `${token} Check the current build`;
+        const context = [{ kind: "note" as const, metadata: { source: "assistant_mention", assistantId: mate.id, token, requestId: "selected-mate" } }];
+        const continuedMessage = { accountId, runId: source.id, message, clientUserMessageId: "mention-message", additionalContext: context };
+
+        await expect(runsService.executeRun({
+            accountId, providerId: "codex", spaceId: "codex", mode: "developer", workspaceId: w.id,
+            goal: message, reservedRunId: "rejected-mention", clientPromptId: "new-mention", initialContext: context,
+        })).rejects.toThrow("Finish setting up this assistant’s profile first");
+        await expect(runsService.continueRun(continuedMessage)).rejects.toThrow("Finish setting up this assistant’s profile first");
+        expect(await runsService.getRunById("rejected-mention")).toBeNull();
+        expect(await runsService.getRunById(source.id)).toMatchObject({ status: "succeeded" });
+        expect(await runsService.getContextByRun(source.id)).toEqual([]);
+        expect((await runsService.getHistoryPage({ runId: source.id })).artifacts).toEqual([]);
+        expect(db.select({ status: workspaces.status }).from(workspaces).where(eq(workspaces.id, w.id)).get()).toEqual({ status: "todo" });
+        expect(assistantsRepo.assignments(accountId)).toEqual([]);
+        expect(driver.calls.createSession).toEqual([]);
+        expect(driver.calls.resumeSession).toEqual([]);
+
+        const profile = { description: "Check releases", instructions: "Check builds and signing." };
+        driver.driver.generateText = vi.fn().mockResolvedValue(JSON.stringify(profile));
+        vi.mocked(createWorkAdapter).mockReturnValue(createWorkRunAdapter(driver.driver));
+        assistantWork.start();
+        assistantWelcome.setupProfile(accountId, mate.id, { action: "answer", step: 0, answer: "Help with releases" });
+        await vi.waitFor(() => expect(assistantsService.welcome(mate.id, accountId)?.question?.profileSetup?.draft).toEqual(profile));
+        assistantWelcome.setupProfile(accountId, mate.id, { action: "save", profile });
+        expect(assistantsRepo.assignments(accountId)).toEqual([]);
+
+        await expect(runsService.continueRun(continuedMessage)).resolves.toMatchObject({ runId: source.id, resumed: true });
+        await vi.waitFor(() => expect(assistantsRepo.assignments(accountId)).toEqual([
+            expect.objectContaining({ fromRunId: source.id, toAssistantId: mate.id, prompt: "@TestFlight Check the current build" }),
+        ]));
     });
     it("dispatches a structured @ selection only after its exact prompt is accepted and deduplicates replayed context", async () => {
         const w = workspace("mention-code"), assistant = await makeAssistant("TestFlight");

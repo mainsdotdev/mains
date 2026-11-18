@@ -1,5 +1,6 @@
-import type { Assistant } from "@mains/contracts/assistants";
+import type { Assistant, AssistantOverview } from "@mains/contracts/assistants";
 import { AssistantAvatar } from "@/features/assistants/components/assistant-avatar";
+import { assistantsReadyForWork } from "@/features/assistants/lib/assistant-ui";
 import { ReactNode, RefObject, useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { Button, DropdownWrapper, Text } from "@/components/ui";
 import { useClickOutside } from "@/hooks/use-click-outside";
@@ -210,7 +211,7 @@ interface UnifiedContextDropdownProps {
   workspacePath?: string;
   projectId?: string;
   commands: CommandInfo[];
-  assistants?: Assistant[];
+  assistantOverview?: Pick<AssistantOverview, "assistants" | "welcomes">;
   onSelectAssistant?: (assistant: Assistant) => void;
   skills: SkillInfo[];
   isLoadingSkills?: boolean;
@@ -306,7 +307,7 @@ export function UnifiedContextDropdown({
   projectId,
   commands,
   skills,
-  assistants = [],
+  assistantOverview,
   onSelectAssistant,
   isLoadingSkills = false,
   onSelectCommand,
@@ -508,7 +509,11 @@ export function UnifiedContextDropdown({
   }, [filteredFileEntries, isWorkspaceFileSearch, workspacePath]);
 
   const sections = useMemo(() => {
-    const assistantRows: FlatRow[] = trigger === "@" && !pluginsOnly ? assistants.filter(a => !a.isArchived && `${a.name} ${a.description}`.toLocaleLowerCase().includes(filterText.toLocaleLowerCase())).map(assistant => ({ kind: "assistant", assistant })) : [];
+    const assistantRows: FlatRow[] = trigger === "@" && !pluginsOnly
+      ? assistantsReadyForWork(assistantOverview)
+        .filter(assistant => `${assistant.name} ${assistant.description}`.toLocaleLowerCase().includes(filterText.toLocaleLowerCase()))
+        .map(assistant => ({ kind: "assistant", assistant }))
+      : [];
     return [...(assistantRows.length ? [{ title: "Mates", rows: assistantRows }] : []), ...buildSections(
       wantsSkills ? pluginSkills : [],
       wantsSkills && !pluginsOnly ? [...matchingMacApps, ...macSkills] : [],
@@ -520,7 +525,7 @@ export function UnifiedContextDropdown({
       wantsCommands ? filteredCommands : [],
     )];
   }, [
-    assistants, trigger, filterText,
+    assistantOverview, trigger, filterText,
     wantsSkills,
     pluginsOnly,
     pluginSkills,

@@ -11,7 +11,7 @@ export function prepareAssistantMentions(args: { accountId: string; mode: string
     if (args.mode !== "developer") throw new Error("Call assistants from a Code conversation");
     if (selected.length > 4) throw new Error("Call up to four assistants in one message");
     const mentions = selected.map(item => {
-        const assistant = assistantsService.require(text(item.metadata?.assistantId, "Assistant"), args.accountId);
+        const assistant = assistantsService.requireForWork(text(item.metadata?.assistantId, "Assistant"), args.accountId);
         const token = `@assistant-${assistant.id}`;
         if (item.metadata?.token !== token) throw new Error("Invalid assistant mention");
         return { item, assistant, token, requestId: text(item.metadata?.requestId, "Mention key", 80) };
