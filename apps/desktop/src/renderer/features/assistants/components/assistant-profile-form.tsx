@@ -67,7 +67,7 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
     } catch (error) { if (mounted.current) setFailure(errorText(error)); }
     finally { sending.current = false; }
   }
-  return <form onSubmit={submit} aria-label="Create assistant" className="mx-auto flex w-full max-w-xl flex-col gap-6 px-6 py-8 text-primary-900 sm:py-12 dark:text-primary-100">
+  return <form onSubmit={submit} aria-label="Create mate" className="mx-auto flex w-full max-w-xl flex-col gap-6 px-6 py-8 text-primary-900 sm:py-12 dark:text-primary-100">
     <AssistantCreationHeader name={name} avatar={avatar} onClose={onClose} />
     <div className="space-y-5">
       <AssistantAvatarPicker avatar={avatar} seed="creation-preview" onChange={setAvatar} />
@@ -83,12 +83,12 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
         {teamEditorOpen && <AssistantTeamEditor accountId={accountId} onCreated={onTeamCreated} onCancel={() => setTeamEditorOpen(false)} />}
       </div>
       <div className="glass-outline space-y-3 rounded-2xl p-4">
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2"><span className="text-sm">Provider</span><Select aria-label="Assistant provider" value={providerId} onChange={value => { setProviderId(value); setModelId(""); setModelMenu(false); }} options={[{ value: "codex", label: "Codex" }, { value: "claude_code", label: "Claude" }]} /></div>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2"><span className="text-sm">Provider</span><Select aria-label="Mate provider" value={providerId} onChange={value => { setProviderId(value); setModelId(""); setModelMenu(false); }} options={[{ value: "codex", label: "Codex" }, { value: "claude_code", label: "Claude" }]} /></div>
         <div className="flex items-center justify-between gap-3"><span className="shrink-0 text-sm">Model & effort</span><ModelSelectDropdown model={modelName} models={names} modelEffortLevelsByModel={levels} onModelChange={value => setModelId(models.find(m => (m.displayName || m.id) === value)?.id ?? "")}
           thinkingMode={!!effort} effortLevel={effort} onEffortLevelChange={value => { setEffortChoice(value); setThinking(true); }} onThinkingModeToggle={() => setThinking(!thinking)} allowUltracode={false} openUpward maxMenuHeight={224} isOpen={modelMenu} onToggle={() => setModelMenu(!modelMenu)} onClose={() => setModelMenu(false)} dropdownRef={modelRef} isLoading={isFetching} variant={providerId === "codex" ? "codex" : "claude"} /></div>
       </div>
-      {!!(failure || catalogError || !loadingProviders && !availableProvider) && <p role="alert" className="text-sm text-danger">{failure || (catalogError ? errorText(catalogError) : "Enable a provider to create an assistant.")}</p>}
+      {!!(failure || catalogError || !loadingProviders && !availableProvider) && <p role="alert" className="text-sm text-danger">{failure || (catalogError ? errorText(catalogError) : "Enable a provider to create a mate.")}</p>}
     </div>
-    <div className="pt-1"><Button variant="submit" fullWidth type="submit" disabled={creation.isLoading || isFetching || loadingProviders || !availableProvider || !space || !model || missingTeam || teamEditorOpen}>{creation.isLoading ? "Creating…" : "Create assistant"}</Button></div>
+    <div className="pt-1"><Button variant="submit" fullWidth type="submit" disabled={creation.isLoading || isFetching || loadingProviders || !availableProvider || !space || !model || missingTeam || teamEditorOpen}>{creation.isLoading ? "Creating…" : "Create mate"}</Button></div>
   </form>;
 }

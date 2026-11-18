@@ -40,13 +40,13 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy }:
       {setup.saved ? <p className={bubble}>{question.idleMessage}</p>
         : welcome.state === "failed" ? (
           <div className="space-y-2">
-            <p role="alert" className="text-danger">{welcome.error || "Could not draft the profile."}</p>
+            <p role="alert" className="text-danger">{welcome.error ? errorText(welcome.error) : "Could not draft the profile."}</p>
             <Button variant="subtle" disabled={disabled} onClick={() => { setFailure(""); void onRetry(); }}>Retry profile draft</Button>
           </div>
         ) : welcome.state !== "ready" || request.isLoading && !draft ? (
           <p role="status" className="text-primary-600 dark:text-primary-400">Preparing the profile…</p>
         ) : draft ? (
-          <form aria-label="Assistant profile draft" className="glass-card w-full max-w-lg space-y-4 rounded-2xl p-4"
+          <form aria-label="Mate profile draft" className="glass-card w-full max-w-lg space-y-4 rounded-2xl p-4"
             onSubmit={event => { event.preventDefault(); if (!disabled) void submit({ action: "save", profile: draft }); }}>
             <h2 className="font-medium">Profile draft</h2>
             {edit ? <>

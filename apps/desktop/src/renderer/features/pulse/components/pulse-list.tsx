@@ -70,7 +70,7 @@ export function PulseList({
   };
 
   const targetName = (pulse: Pulse): string | null => {
-    if (pulse.assistantId) return "Assistant routine";
+    if (pulse.assistantId) return "Mate routine";
     if (pulse.workspaceId) {
       return workspaces.find((w) => w.id === pulse.workspaceId)?.name ?? null;
     }

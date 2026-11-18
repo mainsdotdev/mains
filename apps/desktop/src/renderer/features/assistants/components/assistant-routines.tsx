@@ -16,18 +16,18 @@ export function AssistantRoutines({ assistant, onOpenChat }: { assistant: Assist
   const [deleting, setDeleting] = useState<Pulse | null>(null);
   const [failure, setFailure] = useState("");
   const [remove, removing] = useDeletePulseMutation();
-  return <section aria-label="Assistant routines" className="space-y-5 pt-2">
+  return <section aria-label="Mate routines" className="space-y-5 pt-2">
     <div>
       <h3 className="text-lg font-medium">Routines</h3>
-      <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-400">Give this assistant work on a schedule. Each run creates a task with its own chat.</p>
-      <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-400">You can also create or change routines by asking this assistant in chat.</p>
+      <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-400">Give this mate work on a schedule. Each run creates a task with its own chat.</p>
+      <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-400">You can also create or change routines by asking this mate in chat.</p>
       {editing === undefined && <Button variant="primary" className="mt-4 inline-flex gap-2" disabled={assistant.isArchived} onClick={() => setEditing(null)}><Plus className="size-4" />New routine</Button>}
     </div>
     {editing !== undefined && <RoutineForm key={editing?.id ?? "new"} assistant={assistant} pulse={editing} onClose={() => setEditing(undefined)} />}
     {!!error && <div role="alert" className="text-sm text-danger">{errorText(error)}<Button variant="ghost" onClick={() => void refetch()}>Retry</Button></div>}
     {failure && <p role="alert" className="text-sm text-danger">{failure}</p>}
     {!currentData && !error && <div role="status" className="flex items-center gap-2 text-sm text-primary-500"><AsciiSpinner variant="inherit" />Loading routines…</div>}
-    {routines?.length === 0 && !error && <p className="rounded-2xl glass-card px-4 py-8 text-center text-sm leading-relaxed text-primary-600 dark:text-primary-400">No routines yet. Schedule the first task for this assistant.</p>}
+    {routines?.length === 0 && !error && <p className="rounded-2xl glass-card px-4 py-8 text-center text-sm leading-relaxed text-primary-600 dark:text-primary-400">No routines yet. Schedule the first task for this mate.</p>}
     {routines?.map(pulse => <RoutineRow key={pulse.id} pulse={pulse} disabled={assistant.isArchived} onEdit={() => setEditing(pulse)} onDelete={() => { setFailure(""); setDeleting(pulse); }} onOpenChat={onOpenChat} />)}
     <p className="text-xs leading-relaxed text-primary-500">Keep Mains or its connected server running. Missed schedules catch up once on startup.</p>
     <Alert isOpen={!!deleting} title="Delete routine?" description="Future scheduled runs stop. Tasks already queued or running continue; their chats stay in history."
@@ -66,7 +66,7 @@ function RoutineForm({ assistant, pulse, onClose }: { assistant: Assistant; puls
   }
   return <form aria-label={pulse ? "Edit routine" : "New routine"} onSubmit={event => void submit(event)} className="glass-card space-y-3.5 rounded-2xl p-3.5">
     <label className="flex flex-col gap-1.5"><Label as="span">Routine name</Label><Input required autoFocus maxLength={200} value={title} disabled={busy} onChange={event => setTitle(event.target.value)} placeholder="Morning release check" /></label>
-    <label className="flex flex-col gap-1.5"><Label as="span">Task and completion criteria</Label><Textarea required maxLength={24000} value={prompt} disabled={busy} onChange={event => setPrompt(event.target.value)} className="min-h-28 rounded-2xl" placeholder="What should happen, and what should the assistant report?" /></label>
+    <label className="flex flex-col gap-1.5"><Label as="span">Task and completion criteria</Label><Textarea required maxLength={24000} value={prompt} disabled={busy} onChange={event => setPrompt(event.target.value)} className="min-h-28 rounded-2xl" placeholder="What should happen, and what should the mate report?" /></label>
     <div role="group" aria-label="Routine schedule" className="space-y-1.5">
       <Label as="span">Schedule</Label>
       <fieldset disabled={busy} className="min-w-0"><SchedulePicker {...schedule} onChange={setSchedule} /></fieldset>
@@ -77,7 +77,7 @@ function RoutineForm({ assistant, pulse, onClose }: { assistant: Assistant; puls
       {pulse ? <p className="text-sm text-primary-600 dark:text-primary-300">{pulse.mode === "developer" ? options.find(option => option.value === workspaceId)?.label ?? "Workspace unavailable" : "Work"}</p>
         : <Select aria-labelledby="routine-location-label" value={workspaceId} disabled={busy} options={[{ value: "", label: "Work · No repository" }, ...options]} onChange={setWorkspaceId} />}
     </div>
-    <p className="text-xs leading-relaxed text-primary-500">Uses this assistant’s model and memory.</p>
+    <p className="text-xs leading-relaxed text-primary-500">Uses this mate’s model and memory.</p>
     {failure && <p role="alert" className="text-sm text-danger">{failure}</p>}
     <div className="flex justify-end gap-2"><Button variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" disabled={busy || !valid} isLoading={busy}>{pulse ? "Save routine" : "Create routine"}</Button></div>
   </form>;

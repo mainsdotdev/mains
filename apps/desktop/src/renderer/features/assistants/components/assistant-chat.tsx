@@ -190,7 +190,7 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
           <div className="w-full">{composer}</div>
         </div> : <>
           <div className="min-h-0 flex-1 overflow-hidden">
-            {belongs ? <WorkspaceEvents appearance="assistant" assistant={assistant} hideTurnChanges hasPendingUserInput={!!approval} mode={run?.mode ?? "work"} runs={visibleRun ? [visibleRun] : []} activeTab={chatRunId} currentEvents={events} currentWorkspace={workspace ?? null} eventsEndRef={eventsEndRef} history={history} issueTabs={[]} turns={turns} variant={variant} onSuggestionSelect={setMessage} /> : <p role={runError ? "alert" : "status"} className="p-6 text-sm text-primary-500">{runError ? errorText(runError) : run ? "This conversation belongs to another assistant." : "Loading conversation…"}</p>}
+            {belongs ? <WorkspaceEvents appearance="assistant" assistant={assistant} hideTurnChanges hasPendingUserInput={!!approval} mode={run?.mode ?? "work"} runs={visibleRun ? [visibleRun] : []} activeTab={chatRunId} currentEvents={events} currentWorkspace={workspace ?? null} eventsEndRef={eventsEndRef} history={history} issueTabs={[]} turns={turns} variant={variant} onSuggestionSelect={setMessage} /> : <p role={runError ? "alert" : "status"} className="p-6 text-sm text-primary-500">{runError ? errorText(runError) : run ? "This conversation belongs to another mate." : "Loading conversation…"}</p>}
           </div>
           <div className={CONTENT_COLUMN_GUTTER}>
             <ComposerSlot request={approval} onRespond={respond} variant={variant}>{composer}</ComposerSlot>

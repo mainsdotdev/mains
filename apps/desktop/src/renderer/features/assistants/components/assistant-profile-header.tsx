@@ -67,7 +67,7 @@ export function AssistantProfileHeader({ assistant, chatColumnRef, isPanelOpen, 
 }
 
 export function AssistantCreationHeader({ name, avatar, onClose }: { name: string; avatar: Avatar; onClose(): void }) {
-  const title = name.trim() || "New assistant";
+  const title = name.trim() || "New mate";
   const header = useMemo(() => (
     <AssistantHeaderTab className="max-w-[65%] sm:max-w-[50%]">
       <div className="group/creation pointer-events-auto relative flex h-full min-w-0 items-center rounded-t-2xl py-2 pr-9 pl-7 text-primary-900 dark:text-primary-100" style={noDrag}>
@@ -75,7 +75,7 @@ export function AssistantCreationHeader({ name, avatar, onClose }: { name: strin
           <AssistantAvatar avatar={avatar} seed="creation-preview" className="size-6" />
           <h1 className="truncate text-sm font-medium">{title}</h1>
         </div>
-        <Button variant="bare" aria-label="Close new assistant" onClick={onClose}
+        <Button variant="bare" aria-label="Close new mate" onClick={onClose}
           className={cn(
             "pointer-events-none absolute right-2 flex size-6 items-center justify-center rounded-lg text-primary-500 opacity-0",
             "hover:bg-primary-300/20 hover:text-primary-900 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent dark:hover:bg-primary/10 dark:hover:text-primary-100",

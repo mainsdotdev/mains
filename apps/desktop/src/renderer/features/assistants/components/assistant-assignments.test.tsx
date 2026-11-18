@@ -68,6 +68,16 @@ describe("standalone assignments", () => {
     expect(card.queryByRole("group", { name: "Assignment details" })).toBeNull();
   });
 
+  it("shows the Mate name on generated mention requests and preserves typed titles", () => {
+    const assignments = [
+      assignment({ id: "mention", taskKey: "mention:prompt:request", title: "Assistant request" }),
+      assignment({ id: "manual", taskKey: "manual", title: "Assistant request" }),
+    ];
+    render(<AssistantAssignments assistant={assistant} assignments={assignments} assistants={[assistant]} openAssistant={vi.fn()} />);
+    expect(screen.getByRole("article", { name: "Mate request" })).toBeTruthy();
+    expect(screen.getByRole("article", { name: "Assistant request" })).toBeTruthy();
+  });
+
   it("retains a blocked follow-up while collapsed and retries it with the same message id", async () => {
     const user = userEvent.setup();
     const task = assignment({ status: "blocked", error: "Signing team is missing." });

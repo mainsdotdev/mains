@@ -327,7 +327,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         }}
         role="complementary"
         aria-label={
-          assistantsRoute ? "Assistants sidebar" : atlasRoute ? "Atlas sidebar" : showTasksSidebar ? "Tasks sidebar" : "Workspace sidebar"
+          assistantsRoute ? "Mates sidebar" : atlasRoute ? "Atlas sidebar" : showTasksSidebar ? "Tasks sidebar" : "Workspace sidebar"
         }
         aria-hidden={panelHidden}
         inert={panelHidden}

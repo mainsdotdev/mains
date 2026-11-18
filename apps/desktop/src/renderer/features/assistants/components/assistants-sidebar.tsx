@@ -34,16 +34,16 @@ export function AssistantsSidebar() {
     <div className="flex h-full flex-col text-primary-900 dark:text-primary-100">
       <div className="relative mx-3 mb-2.5 mt-12 h-8 shrink-0 md:mt-2">
         <div inert={searchExpanded} className={`pr-9 transition-opacity duration-150 motion-reduce:transition-none ${searchExpanded ? "opacity-0" : "opacity-100"}`}>
-          <NewButton title="assistant" icon={<Plus className="size-3.5" />} onClick={() => { const next = new URLSearchParams(params); next.delete("tab"); next.set("new", "1"); open(`/assistants?${next}`); }} />
+          <NewButton title="mate" icon={<Plus className="size-3.5" />} onClick={() => { const next = new URLSearchParams(params); next.delete("tab"); next.set("new", "1"); open(`/assistants?${next}`); }} />
         </div>
         <div className={`absolute inset-y-0 right-0 flex items-center justify-end transition-[width] duration-200 ease-out motion-reduce:transition-none ${searchExpanded ? "w-full" : "w-8"}`}>
-          <SearchBar isExpanded={searchExpanded} searchQuery={searchQuery} searchLabel="Search assistants" onToggle={() => setSearchExpanded(true)} onSearchChange={setSearchQuery} onClear={() => { setSearchQuery(""); setSearchExpanded(false); }} />
+          <SearchBar isExpanded={searchExpanded} searchQuery={searchQuery} searchLabel="Search mates" onToggle={() => setSearchExpanded(true)} onSearchChange={setSearchQuery} onClear={() => { setSearchQuery(""); setSearchExpanded(false); }} />
         </div>
       </div>
-      <nav aria-label="Assistants" className="scroll-bounce min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 pb-4 noscrollbar">
+      <nav aria-label="Mates" className="scroll-bounce min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 pb-4 noscrollbar">
         {!!error && <div className="px-2 py-3 text-xs text-danger">{errorText(error)}<Button variant="ghost" onClick={() => void refetch()}>Retry</Button></div>}
-        {!overview && !error && <p className="px-2 py-3 text-xs text-primary-500">Loading assistants…</p>}
-        {overview && !assistants.length && <p className="px-2 py-3 text-xs text-primary-500">{query ? "No matching assistants" : "Your assistants will appear here."}</p>}
+        {!overview && !error && <p className="px-2 py-3 text-xs text-primary-500">Loading mates…</p>}
+        {overview && !assistants.length && <p className="px-2 py-3 text-xs text-primary-500">{query ? "No matching mates" : "Your mates will appear here."}</p>}
         {assistants.map(assistant => <AssistantItem key={assistant.id} assistant={assistant}
           working={isAssistantWorking(overview, assistant.id)} active={params.get("new") !== "1" && params.get("assistant") === assistant.id}
           open={open} onOpenDetails={() => open(`${assistantHref(assistant.id, params.get("assistant") === assistant.id ? params.get("run") : null)}&tab=profile`)} />)}

@@ -37,7 +37,7 @@ it.each(["inputText", "text"])("shows assignment result and evidence from %s env
   const event = mapToolCallToEvent({ id: 1, runId: "r", toolName: "ReadAssistantTask", status: "done",
     input: JSON.stringify({ assignmentId: "task-1" }), output: JSON.stringify([{ type, text: JSON.stringify(data) }]) })!;
   const { container } = render(<ToolCallItem event={event} isCompact={false} />);
-  fireEvent.click(screen.getByText("Read assistant assignment"));
+  fireEvent.click(screen.getByText("Read mate assignment"));
   expect(screen.getAllByText("TestFlight check")[0]).toBeTruthy();
   expect(screen.getByText("Ruby is missing")).toBeTruthy();
   expect(screen.getByText("beta:check exited 1")).toBeTruthy();
@@ -50,7 +50,7 @@ it("renders assistant roster roles", () => {
   const event = mapToolCallToEvent({ id: 2, runId: "r", toolName: "ListAssistants", status: "done",
     input: "{}", output: JSON.stringify({ content: [{ type: "text", text: JSON.stringify([{ name: "Testflight", role: "Check builds", providerId: "codex" }]) }] }) })!;
   render(<ToolCallItem event={event} isCompact={false} />);
-  fireEvent.click(screen.getByText("Listed assistants"));
+  fireEvent.click(screen.getByText("Listed mates"));
   expect(screen.getByText("Testflight")).toBeTruthy();
   expect(screen.getByText("Check builds")).toBeTruthy();
   expect(screen.getByText("codex")).toBeTruthy();
@@ -59,13 +59,13 @@ it("renders assistant roster roles", () => {
 it("keeps pending assistant tools visible without arguments or output", () => {
   render(<ToolCallItem event={{ id: "pending", type: "tool_call", content: "ListAssistantTasks", timestamp: new Date(),
     metadata: { toolName: "ListAssistantTasks", status: "running" } }} />);
-  expect(screen.getByText(/assistant assignments/)).toBeTruthy();
+  expect(screen.getByText(/mate assignments/)).toBeTruthy();
 });
 
 it("shows an empty list without raw JSON", () => {
   const event = mapToolCallToEvent({ id: 3, runId: "r", toolName: "ListAssistantTasks", status: "done", input: "{}", output: "[]" })!;
   render(<ToolCallItem event={event} isCompact={false} />);
-  fireEvent.click(screen.getByText("Listed assistant assignments"));
+  fireEvent.click(screen.getByText("Listed mate assignments"));
   expect(screen.getByText("None")).toBeTruthy();
 });
 
@@ -76,7 +76,7 @@ it("shows a routine's schedule, timezone and state through the existing tool dis
   const event = mapToolCallToEvent({ id: 4, runId: "r", toolName: "ListAssistantRoutines", status: "done",
     input: "{}", output: JSON.stringify([{ type: "inputText", text: JSON.stringify(result) }]) })!;
   const { container } = render(<ToolCallItem event={event} isCompact={false} />);
-  fireEvent.click(screen.getByText("Listed assistant routines"));
+  fireEvent.click(screen.getByText("Listed mate routines"));
   expect(screen.getByText("Check TestFlight")).toBeTruthy();
   expect(screen.getByText("Daily at 9:30 AM")).toBeTruthy();
   expect(screen.getAllByText("Europe/Istanbul")).toHaveLength(2);

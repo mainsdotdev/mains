@@ -9,6 +9,7 @@ import { useGetAccountQuery, useGetWorkspaceQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery, useAssistantAssignmentQuery } from "@/lib/redux/api/assistantsApi";
 import { useAssistantUpdates } from "../hooks/use-assistant-updates";
 import { assistantHref } from "../lib/assistant-navigation";
+import { errorText } from "../lib/assistant-ui";
 import { AssistantAvatar } from "./assistant-avatar";
 
 const activityLabels = { request: "Task request", followup: "Follow-up", status: "Status", result: "Report" };
@@ -37,21 +38,22 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
   const workspaceId = task?.execution.mode === "developer" ? task.execution.workspaceId : "";
   const { currentData: workspace } = useGetWorkspaceQuery(workspaceId, { skip: !workspaceId });
   const assistant = overview?.assistants.find(a => a.id === task?.toAssistantId);
-  if (error) return <Button variant="ghost" onClick={() => void refetch()}>Retry assistant request</Button>;
-  if (found === null) return <p className="py-3 text-xs text-primary-500">This assistant request is unavailable.</p>;
+  if (error) return <Button variant="ghost" onClick={() => void refetch()}>Retry mate request</Button>;
+  if (found === null) return <p className="py-3 text-xs text-primary-500">This mate request is unavailable.</p>;
   if (found && !task) return <p className="py-3 text-xs text-primary-500">This task belongs to another conversation.</p>;
-  if (!task) return <p className="py-3 text-xs text-primary-500">Loading assistant request…</p>;
+  if (!task) return <p className="py-3 text-xs text-primary-500">Loading mate request…</p>;
 
   const taskKey = `${runId}:${task.id}`;
   const hasOpened = disclosure?.taskKey === taskKey;
   const expanded = hasOpened && disclosure.expanded;
-  const name = assistant?.name ?? "Assistant";
+  const name = assistant?.name ?? "Mate";
   const scope = workspace?.name ?? (task.execution.mode === "work" ? "Work" : "");
   const running = task.status === "running" || task.status === "queued";
   const workerRunId = task.workerRunId;
   const canOpenChat = workerRunId && workerRunId !== runId && ["running", "blocked", "completed", "failed"].includes(task.status);
   const reportPreview = task.result ? plainActivityText(task.result).replace(/\s+/g, " ") : "";
   const activity = task.activity ?? [];
+  const taskError = task.error ? errorText(task.error) : "";
   const requestInActivity = activity.some(item => item.kind === "request" && item.content === task.prompt);
   const errorInActivity = activity.some(item => item.kind === "status" && item.content === task.error);
   const reportActivity = task.result ? activity.filter(item => item.kind === "result" && item.content === task.result).at(-1) : undefined;
@@ -84,21 +86,21 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
       <div aria-hidden={expanded || undefined} className={cn(disclosureClassName, expanded ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100")}>
         <div className="min-h-0 overflow-hidden">
           {reportPreview && <p className="truncate px-3.5 pb-2.5 text-xs text-primary-600 dark:text-primary-400">{reportPreview}</p>}
-          {task.error && <div className="px-3.5 pb-2.5"><p role="alert" className="line-clamp-2 break-words text-xs text-danger">{task.error}</p></div>}
+          {taskError && <div className="px-3.5 pb-2.5"><p role="alert" className="line-clamp-2 break-words text-xs text-danger">{taskError}</p></div>}
         </div>
       </div>
       <div id={detailsId} role="group" aria-label="Task details" aria-hidden={!expanded || undefined} inert={!expanded}
         className={cn(disclosureClassName, expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
         <div className="min-h-0 overflow-hidden">
           {hasOpened && <div className="space-y-2 px-2.5 pb-2.5 pt-0.5">
-            {task.error && !errorInActivity && <p role="alert" className={cn(sectionClassName, "break-words text-xs text-danger")}>{task.error}</p>}
+            {taskError && !errorInActivity && <p role="alert" className={cn(sectionClassName, "break-words text-xs text-danger")}>{taskError}</p>}
             {(task.result || task.evidence.length > 0) && <section aria-label="Task report" className={sectionClassName}>
               <TaskSectionHeading label="Report" deliveryStatus={reportActivity?.deliveryStatus} />
               {task.result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{task.result}</AgentMarkdown>}
               {!!task.evidence.length && <ul aria-label="Task evidence" className="space-y-0.5 text-xs text-primary-600 dark:text-primary-400">
                 {task.evidence.map((item, index) => <li key={index} className="break-words">{item}</li>)}
               </ul>}
-              {reportActivity?.error && <p className="break-words text-xs text-danger">{reportActivity.error}</p>}
+              {reportActivity?.error && <p className="break-words text-xs text-danger">{errorText(reportActivity.error)}</p>}
             </section>}
             {task.prompt && !requestInActivity && <div className={sectionClassName}>
               <TaskSectionHeading label="Task request" />
@@ -109,8 +111,8 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
                 <li key={item.id} className={sectionClassName}>
                   <TaskSectionHeading label={activityLabels[item.kind]} deliveryStatus={item.deliveryStatus} />
                   {!(item.kind === "result" && item.content === task.result) &&
-                    <AgentMarkdown className="[&>.document-paragraph]:leading-5">{item.content}</AgentMarkdown>}
-                  {item.error && <p className="break-words text-xs text-danger">{item.error}</p>}
+                    <AgentMarkdown className="[&>.document-paragraph]:leading-5">{item.kind === "status" ? errorText(item.content) : item.content}</AgentMarkdown>}
+                  {item.error && <p className="break-words text-xs text-danger">{errorText(item.error)}</p>}
                 </li>
               ))}
             </ol>}

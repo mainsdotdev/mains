@@ -12,7 +12,7 @@ export function AssistantMonogram({ name, avatar, working = false, size = "sm", 
   onClick(): void;
 }) {
   return (
-    <Button variant="bare" aria-label={`About ${name}`} tooltip="Assistant information" onClick={onClick}
+    <Button variant="bare" aria-label={`About ${name}`} tooltip="Mate information" onClick={onClick}
       className={cn(
         "flex shrink-0 items-center justify-center font-medium text-primary-900 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent dark:text-primary-100",
         size === "lg" ? "mx-auto mb-4 size-12 rounded-2xl text-xl" : "size-8 rounded-xl text-sm",

@@ -1,4 +1,5 @@
 import { formatSchedule } from "@/features/pulse/lib/format-schedule";
+import { assignmentDisplayTitle, errorText } from "@/features/assistants/lib/assistant-ui";
 import type { PulseFrequency } from "@/lib/redux/api/pulseApi";
 import { formatAbsoluteDate } from "@/lib/format-date";
 import { Text } from "@/components/ui";
@@ -8,7 +9,7 @@ import { ASSISTANT_TOOL_LABELS, assistantToolResult } from "../../lib/assistant-
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody, useToolStatus } from "./_shared";
 
 const LABELS: Record<string, string> = {
-  name: "Assistant", role: "Role", providerId: "Provider", title: "Title", description: "Description",
+  name: "Mate", role: "Role", providerId: "Provider", title: "Title", description: "Description",
   prompt: "Request", status: "Status", result: "Result", evidence: "Evidence", error: "Error",
   execution: "Execution", mode: "Mode", workspaceId: "Workspace", content: "Content",
   message: "Message", query: "Search", scope: "Scope", revision: "Revision", pinned: "Pinned",
@@ -39,6 +40,8 @@ function Details({ value, depth = 0 }: { value: unknown; depth?: number }) {
   const fields = Object.entries(presented).filter(([key, val]) => Object.prototype.hasOwnProperty.call(LABELS, key) &&
     val != null && val !== "" && !(hasSchedule && ["frequency", "hour", "minute", "dayOfWeek"].includes(key)))
     .map(([key, val]) => {
+      if (key === "title" && typeof val === "string") return [key, assignmentDisplayTitle(val, record.taskKey)] as const;
+      if ((key === "error" || key === "lastError") && typeof val === "string") return [key, errorText(val)] as const;
       if (["createdAt", "updatedAt", "nextRunAt", "lastRunAt"].includes(key) &&
         (typeof val === "string" || typeof val === "number") && Number.isFinite(new Date(val).getTime())) {
         return [key, formatAbsoluteDate(val)] as const;
@@ -66,10 +69,10 @@ export function AssistantToolDisplay({ toolName, params, output, isCompact = fal
   const result = assistantToolResult(output);
   const label = ASSISTANT_TOOL_LABELS[toolName] ?? toolName;
   const record = result && typeof result === "object" && !Array.isArray(result) ? result as Record<string, unknown> : null;
-  const summary = typeof params?.title === "string" ? params.title : typeof params?.query === "string" ? params.query
+  const summary = typeof params?.title === "string" ? assignmentDisplayTitle(params.title, params.taskKey) : typeof params?.query === "string" ? params.query
     : typeof params?.question === "string" ? params.question
     : Array.isArray(result) ? `${result.length} ${result.length === 1 ? "item" : "items"}`
-    : typeof record?.title === "string" ? record.title : "";
+    : typeof record?.title === "string" ? assignmentDisplayTitle(record.title, record.taskKey) : "";
   const hasDetails = !!params && Object.keys(params).length > 0 || result != null;
   return <div>
     <ToolHeader icon={<Bot className="size-4" />} verb={label} hasDetails={hasDetails} isExpanded={expanded}

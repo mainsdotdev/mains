@@ -235,13 +235,13 @@ function InfoGroupImpl({
     return <Text as="div" size="xs" tone="muted" className="my-3">File available on {replica.label}</Text>;
   }
   if (event.type === "artifact" && event.metadata?.source === "assistant_assignment" && typeof event.metadata.assignmentId === "string") {
-    return replica ? <Text size="xs" tone="subtle">Assistant task available on {replica.label}</Text> : <AssistantTaskCard assignmentId={event.metadata.assignmentId} runId={runId} />;
+    return replica ? <Text size="xs" tone="subtle">Mate task available on {replica.label}</Text> : <AssistantTaskCard assignmentId={event.metadata.assignmentId} runId={runId} />;
   }
   const taskInput = event.type === "artifact" ? readAssistantTaskInput(event.metadata?.assistantTaskInput) : null;
   if (taskInput) {
     // The canonical task card owns delivery/status activity; keep these native prompt boundaries out of user bubbles.
     if (taskInput.kind !== "request") return null;
-    return replica ? <Text size="xs" tone="subtle">Assistant task available on {replica.label}</Text> : <AssistantTaskCard assignmentId={taskInput.assignmentId} runId={runId} />;
+    return replica ? <Text size="xs" tone="subtle">Mate task available on {replica.label}</Text> : <AssistantTaskCard assignmentId={taskInput.assignmentId} runId={runId} />;
   }
   if (event.type === "artifact" && event.metadata?.kind === "voice-task") {
     const task = event.metadata.voiceTask as VoiceTaskLink | undefined;

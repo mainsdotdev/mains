@@ -208,12 +208,12 @@ describe("assistant profile and conversation", () => {
     setup("/assistants?assistant=release&run=first&tab=profile");
     const panel = await screen.findByRole("complementary", { name: "About Release" });
     const edit = within(panel).getByRole("button", { name: "Edit" });
-    const archive = within(panel).getByRole("button", { name: "Archive assistant" });
+    const archive = within(panel).getByRole("button", { name: "Archive mate" });
     expect(archive.nextElementSibling).toBe(edit);
     const openEditor = new MouseEvent("click", { bubbles: true, cancelable: true });
     fireEvent(edit, openEditor);
     expect(openEditor.defaultPrevented).toBe(true);
-    const form = within(panel).getByRole("form", { name: "Edit assistant profile" });
+    const form = within(panel).getByRole("form", { name: "Edit mate profile" });
     const save = within(form).getByRole("button", { name: "Save" });
     expect(save).not.toBe(edit);
     expect(updateProfile).not.toHaveBeenCalled();
@@ -224,7 +224,7 @@ describe("assistant profile and conversation", () => {
     fireEvent.click(within(form).getByRole("radio", { name: "Kite" }));
     fireEvent.click(within(form).getByRole("radio", { name: "Lime" }));
     fireEvent.click(save);
-    await waitFor(() => expect(within(panel).queryByRole("form", { name: "Edit assistant profile" })).toBeNull());
+    await waitFor(() => expect(within(panel).queryByRole("form", { name: "Edit mate profile" })).toBeNull());
     expect(updateProfile).toHaveBeenCalledExactlyOnceWith({
       accountId: "account", id: "release",
       expectedProfile: { name: "Release", description: "Own releases", instructions: "Verify the release before distribution.", avatar: { shape: "sphere", color: "blue" } },
@@ -246,7 +246,7 @@ describe("assistant profile and conversation", () => {
     fireEvent.click(select);
     fireEvent.click(await screen.findByRole("option", { name: "No team" }));
     fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
-    expect((await within(panel).findByRole("alert")).textContent).toContain("running conversations");
+    expect((await within(panel).findByRole("alert")).textContent).toBe("Stop this mate’s running conversations before changing teams");
     expect(instructions.value).toBe("Check signing.");
     expect(select.textContent).toContain("No team");
     fireEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
@@ -305,7 +305,7 @@ describe("assistant profile and conversation", () => {
     const { store } = setup();
     fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
     const panel = await screen.findByRole("complementary", { name: "About Release" });
-    const handle = within(panel).getByRole("separator", { name: "Resize assistant panel" });
+    const handle = within(panel).getByRole("separator", { name: "Resize mate panel" });
     const frame = panel.closest<HTMLElement>("[data-assistant-info-panel]")!;
     expect(handle.getAttribute("aria-valuenow")).toBe("416");
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
@@ -322,10 +322,10 @@ describe("assistant profile and conversation", () => {
     expect(store.getState().appSettings.assistantInfoPanelWidth).toBe(550);
     expect(document.body.hasAttribute("data-resizing")).toBe(false);
 
-    fireEvent.click(within(panel).getByRole("button", { name: "Close assistant panel" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Close mate panel" }));
     fireEvent.click(screen.getByRole("button", { name: "Release profile" }));
     const reopened = await screen.findByRole("complementary", { name: "About Release" });
-    const restoredHandle = within(reopened).getByRole("separator", { name: "Resize assistant panel" });
+    const restoredHandle = within(reopened).getByRole("separator", { name: "Resize mate panel" });
     expect(restoredHandle.getAttribute("aria-valuenow")).toBe("550");
     fireEvent.doubleClick(restoredHandle);
     expect(store.getState().appSettings.assistantInfoPanelWidth).toBe(416);
@@ -357,10 +357,10 @@ describe("assistant profile and conversation", () => {
     const panel = await screen.findByRole("complementary", { name: "About Release" });
     resizeChat(579);
     resizeChat(445);
-    fireEvent.click(within(panel).getByRole("button", { name: "Close assistant panel" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Close mate panel" }));
     resizeChat(1000);
-    fireEvent.click(screen.getByRole("button", { name: "New assistant" }));
-    const creationTrack = screen.getByRole("heading", { name: "New assistant" }).closest<HTMLElement>("[data-assistant-header-track]");
+    fireEvent.click(screen.getByRole("button", { name: "New mate" }));
+    const creationTrack = screen.getByRole("heading", { name: "New mate" }).closest<HTMLElement>("[data-assistant-header-track]");
     expect(creationTrack?.style.width).toBe("");
   });
 
@@ -370,7 +370,7 @@ describe("assistant profile and conversation", () => {
     expect(header.getByRole("button", { name: "Release profile" })).toBeTruthy();
     expect(header.getByText("Release")).toBeTruthy();
     expect(screen.queryByRole("tablist", { name: "Assistant conversations" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "New assistant chat tab" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New mate chat tab" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Closed chats" })).toBeNull();
     fireEvent.click(header.getByRole("button", { name: "Release profile" }));
     const panel = await screen.findByRole("complementary", { name: "About Release" });
@@ -381,7 +381,7 @@ describe("assistant profile and conversation", () => {
     expect(within(panel).getByText("Verify the release before distribution.")).toBeTruthy();
     expect(within(panel).getByText("model", { exact: true })).toBeTruthy();
     expect(screen.getByTestId("conversation").closest("[inert]")).toBeNull();
-    expect(document.activeElement).toBe(within(panel).getByRole("button", { name: "Close assistant panel" }));
+    expect(document.activeElement).toBe(within(panel).getByRole("button", { name: "Close mate panel" }));
     fireEvent.click(within(panel).getByRole("tab", { name: "Memory" }));
     expect(screen.getByRole("tabpanel", { name: "Memory" })).toBeTruthy();
     expect(screen.getByTestId("conversation").textContent).toBe("first");
@@ -426,38 +426,38 @@ describe("assistant profile and conversation", () => {
 
   it("filters only the assistant list without switching the current chat", async () => {
     setup();
-    const sidebar = within(screen.getByRole("navigation", { name: "Assistants" }));
-    expect(screen.queryByText("Assistants", { exact: true })).toBeNull();
+    const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
+    expect(screen.queryByText("Mates", { exact: true })).toBeNull();
     expect(sidebar.queryByRole("button", { name: "First release" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Search assistants" }));
-    const search = screen.getByRole("textbox", { name: "Search assistants" });
+    fireEvent.click(screen.getByRole("button", { name: "Search mates" }));
+    const search = screen.getByRole("textbox", { name: "Search mates" });
     expect(document.activeElement).toBe(search);
     fireEvent.change(search, { target: { value: "own the website" } });
     expect(sidebar.queryByRole("button", { name: /^Release/ })).toBeNull();
     expect(sidebar.getByRole("button", { name: /^Website/ })).toBeTruthy();
     expect(screen.getByTestId("conversation").textContent).toBe("first");
     fireEvent.keyDown(search, { key: "Escape" });
-    expect(screen.queryByRole("textbox", { name: "Search assistants" })).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Search assistants" }));
+    expect(screen.queryByRole("textbox", { name: "Search mates" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Search mates" }));
     expect(sidebar.getByRole("button", { name: /^Release/ })).toBeTruthy();
   });
 
   it("preserves each assistant's selected conversation through creation and sidebar switches", async () => {
     setup("/assistants?assistant=release&run=second");
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("second"));
-    fireEvent.click(screen.getByRole("button", { name: "New assistant" }));
-    const form = screen.getByRole("form", { name: "Create assistant" });
+    fireEvent.click(screen.getByRole("button", { name: "New mate" }));
+    const form = screen.getByRole("form", { name: "Create mate" });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByTestId("conversation")).toBeNull();
     const header = screen.getByRole("banner", { name: "Assistant header" });
-    expect(within(header).getByRole("heading", { name: "New assistant" })).toBeTruthy();
+    expect(within(header).getByRole("heading", { name: "New mate" })).toBeTruthy();
     expect(header.querySelector("[data-avatar-shape='sphere']")).toBeTruthy();
 
     const name = within(form).getByLabelText("Name");
     fireEvent.change(name, { target: { value: "Travel planner" } });
     expect(within(header).getByRole("heading", { name: "Travel planner" })).toBeTruthy();
     fireEvent.change(name, { target: { value: "" } });
-    expect(within(header).getByRole("heading", { name: "New assistant" })).toBeTruthy();
+    expect(within(header).getByRole("heading", { name: "New mate" })).toBeTruthy();
 
     const sphere = within(form).getByRole("radio", { name: "Sphere" });
     const mains = within(form).getByRole("radio", { name: "Mains" });
@@ -469,9 +469,9 @@ describe("assistant profile and conversation", () => {
     fireEvent.click(within(form).getByRole("radio", { name: "Rose" }));
     expect(avatar.style.getPropertyValue("--avatar-base")).not.toBe(previousColor);
 
-    fireEvent.click(within(header).getByRole("button", { name: "Close new assistant" }));
+    fireEvent.click(within(header).getByRole("button", { name: "Close new mate" }));
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("second"));
-    expect(within(header).queryByRole("button", { name: "Close new assistant" })).toBeNull();
+    expect(within(header).queryByRole("button", { name: "Close new mate" })).toBeNull();
     expect(within(header).getByRole("button", { name: "Release profile" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /^Website/ }));
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("website-first"));

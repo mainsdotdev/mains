@@ -6,7 +6,7 @@ import { ArrowUp } from "@/components/ui/icons";
 import { plainActivityText } from "@/features/workspace/lib/run-activity";
 import { cn } from "@/lib/cn";
 import { useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation, useReconcileAssistantTaskMutation } from "@/lib/redux/api/assistantsApi";
-import { errorText } from "../lib/assistant-ui";
+import { assignmentDisplayTitle, errorText } from "../lib/assistant-ui";
 import { AssistantAvatar } from "./assistant-avatar";
 
 const warningStatus = "bg-warning/15 text-[color:color-mix(in_srgb,var(--color-warning)_50%,var(--color-primary-950))] dark:text-warning";
@@ -35,7 +35,8 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant }: {
   const [disclosure, setDisclosure] = useState<"unopened" | "open" | "closed">("unopened");
   const expanded = disclosure === "open";
   const status = statusStyle[task.status];
-  const assigneeName = assignee?.name ?? "Assistant";
+  const title = assignmentDisplayTitle(task.title, task.taskKey);
+  const assigneeName = assignee?.name ?? "Mate";
   const preview = plainActivityText(task.result || task.prompt).replace(/\s+/g, " ");
   const canCancel = !["completed", "failed", "canceled"].includes(task.status);
   const canCheckDelivery = task.status === "uncertain" || (task.status === "completed" && !!task.error);
@@ -48,7 +49,7 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant }: {
           className="block min-w-0 rounded-xl px-2 py-1.5 text-left hover:bg-primary-300/20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent dark:hover:bg-primary/5">
           <span className="flex min-w-0 items-center gap-2">
             <AssistantAvatar avatar={assignee?.avatar} seed={task.toAssistantId} animated={false} className="size-5" />
-            <span className="min-w-0 flex-1 truncate text-sm font-medium" id={titleId} title={task.title}>{task.title}</span>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium" id={titleId} title={title}>{title}</span>
             <span className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium", status.tone)}>
               <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-current" />
               {status.label}
@@ -86,7 +87,7 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant }: {
               {(task.error || task.status === "blocked") && (
                 <section aria-label="Status details" className={sectionClassName}>
                   <h3 className={sectionTitleClassName}>Status details</h3>
-                  {task.error && <p className="break-words text-sm leading-5">{task.error}</p>}
+                  {task.error && <p className="break-words text-sm leading-5">{errorText(task.error)}</p>}
                   {task.status === "blocked" && <AssignmentFollowup task={task} />}
                 </section>
               )}

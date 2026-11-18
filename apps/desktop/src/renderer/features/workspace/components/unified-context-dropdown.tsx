@@ -509,7 +509,7 @@ export function UnifiedContextDropdown({
 
   const sections = useMemo(() => {
     const assistantRows: FlatRow[] = trigger === "@" && !pluginsOnly ? assistants.filter(a => !a.isArchived && `${a.name} ${a.description}`.toLocaleLowerCase().includes(filterText.toLocaleLowerCase())).map(assistant => ({ kind: "assistant", assistant })) : [];
-    return [...(assistantRows.length ? [{ title: "Assistants", rows: assistantRows }] : []), ...buildSections(
+    return [...(assistantRows.length ? [{ title: "Mates", rows: assistantRows }] : []), ...buildSections(
       wantsSkills ? pluginSkills : [],
       wantsSkills && !pluginsOnly ? [...matchingMacApps, ...macSkills] : [],
       wantsSkills && !pluginsOnly ? regularSkills : [],

@@ -13,6 +13,12 @@ function call(id: string, content: string): RunEvent {
 }
 
 describe("summarizeToolCalls", () => {
+  it("uses Mate labels for assistant tools across providers", () => {
+    for (const prefix of ["", "mcp__mains__"]) {
+      expect(summarizeToolCalls([call("list", `${prefix}ListAssistants: {}`)])).toBe("Listed mates");
+    }
+  });
+
   it("names Atlas page actions consistently across providers", () => {
     for (const prefix of ["", "mcp__mains__"]) {
       expect(summarizeToolCalls([

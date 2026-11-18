@@ -121,6 +121,7 @@ describe("UnifiedContextDropdown assistant calls", () => {
       createdAt: new Date(), updatedAt: new Date(),
     };
     const { onSelectAssistant, onSelectSkill, onClose } = renderDropdown({ filterText: "testflight", assistants: [assistant, { ...assistant, id: "archived", name: "Archived checker", isArchived: true }] });
+    expect(screen.getByText("Mates", { exact: true })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "Call Beta checker" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Call Archived checker" })).toBeNull();
     await userEvent.setup().keyboard("{Enter}");

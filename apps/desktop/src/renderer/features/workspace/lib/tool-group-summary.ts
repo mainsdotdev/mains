@@ -15,6 +15,7 @@
 import type { RunEvent } from "../types";
 import { resolveTool } from "./resolve-tool";
 import { atlasToolHasError } from "./atlas-tool-content";
+import { ASSISTANT_TOOL_LABELS } from "./assistant-tool-content";
 import { PHRASES_BY_GROUP_KEY, VENDOR_PHRASE_RANK } from "./tool-registry";
 
 const MAX_SUMMARY_CLAUSES = 3;
@@ -81,9 +82,11 @@ export function summarizeToolCalls(events: RunEvent[]): string {
 
     // No registered phrase: name the tool rather than dropping it from the
     // sentence. Reads as "… and used Glob" — duller, never wrong.
+    const action = resolved.category === "Assistants" ? ASSISTANT_TOOL_LABELS[resolved.displayName]?.toLowerCase() : undefined;
+    const fallback = action ?? `used ${resolved.groupLabel}`;
     const phrase = PHRASES_BY_GROUP_KEY[groupKey] ?? {
-      one: `used ${resolved.groupLabel}`,
-      many: `used ${resolved.groupLabel}`,
+      one: fallback,
+      many: fallback,
       rank: 70,
     };
     clauses.set(groupKey, {

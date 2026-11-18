@@ -22,7 +22,7 @@ export function AssistantChatsPanel({ chats, selectedRunId, error, disabled, onS
     </div>}
     {!chats && !error && <div role="status" className="flex items-center gap-2 py-6 text-sm text-primary-600 dark:text-primary-400"><AsciiSpinner variant="inherit" />Loading chats…</div>}
     {chats?.length === 0 && !error && <p className="rounded-2xl glass-card px-4 py-8 text-center text-sm leading-relaxed text-primary-600 dark:text-primary-400">No conversations yet. Start a new task to begin.</p>}
-    {!!chats?.length && <ul aria-label="Assistant chats" className="space-y-0.5">
+    {!!chats?.length && <ul aria-label="Mate chats" className="space-y-0.5">
       {chats.map(chat => {
         const active = chat.id === selectedRunId;
         const title = chat.title?.trim() || chat.goal?.split("\n")[0].trim() || "New conversation";

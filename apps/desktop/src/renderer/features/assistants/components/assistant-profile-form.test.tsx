@@ -47,7 +47,7 @@ describe("assistant creation", () => {
     await user.click(screen.getByRole("button", { name: /Test model.*Medium/i }));
     await user.click(screen.getByRole("menuitemradio", { name: "Test model" }));
     await user.click(screen.getByRole("menuitemradio", { name: /^high$/i }));
-    await user.click(screen.getByRole("button", { name: "Create assistant" }));
+    await user.click(screen.getByRole("button", { name: "Create mate" }));
     await waitFor(() => expect(created).toHaveBeenCalledWith("created-assistant"));
     expect(mocks.create).toHaveBeenCalledWith({ accountId: "account", teamId: null, spaceId: "codex", name: "Trip planner", profileSetup: true, model: "model", effort: "high", avatar: { shape: "mains", color: "rose" } });
   });
@@ -58,7 +58,7 @@ describe("assistant creation", () => {
     await user.click(screen.getByRole("button", { name: "Team" }));
     await user.click(await screen.findByRole("option", { name: "Website" }));
     await fillProfile(user);
-    await user.click(screen.getByRole("button", { name: "Create assistant" }));
+    await user.click(screen.getByRole("button", { name: "Create mate" }));
     await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ teamId: "website" })));
   });
 
@@ -66,13 +66,13 @@ describe("assistant creation", () => {
     const user = userEvent.setup();
     render(<AssistantProfileForm accountId="account" onCreated={vi.fn()} onClose={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "New team" }));
-    expect((screen.getByRole("button", { name: "Create assistant" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Create mate" }) as HTMLButtonElement).disabled).toBe(true);
     await user.type(screen.getByLabelText("Team name"), "Launch team{Enter}");
     await waitFor(() => expect(mocks.createTeam).toHaveBeenCalledWith({ accountId: "account", name: "Launch team" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Team" }).textContent).toContain("Launch team"));
     expect(mocks.create).not.toHaveBeenCalled();
     await fillProfile(user);
-    await user.click(screen.getByRole("button", { name: "Create assistant" }));
+    await user.click(screen.getByRole("button", { name: "Create mate" }));
     await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ teamId: "new-team" })));
   });
 
@@ -96,9 +96,9 @@ describe("assistant creation", () => {
     render(<AssistantProfileForm accountId="account" onCreated={vi.fn()} onClose={vi.fn()} />);
     expect(screen.queryByText("Advanced")).toBeNull();
     expect(screen.getByRole("button", { name: "Team" }).textContent).toContain("No team");
-    expect(screen.getByRole("button", { name: "Assistant provider" }).textContent).toContain("Codex");
+    expect(screen.getByRole("button", { name: "Mate provider" }).textContent).toContain("Codex");
     await fillProfile(user);
-    await user.click(screen.getByRole("button", { name: "Create assistant" }));
+    await user.click(screen.getByRole("button", { name: "Create mate" }));
     await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ teamId: null, profileSetup: true })));
     expect(mocks.createTeam).not.toHaveBeenCalled();
   });

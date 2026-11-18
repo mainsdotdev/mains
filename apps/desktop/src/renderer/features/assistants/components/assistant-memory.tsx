@@ -54,10 +54,10 @@ export function AssistantMemoryPanel({ assistant, memories }: {
             setFailure(errorText(error));
         }
     }
-    return <section className="space-y-5" aria-label="Assistant memory">
+    return <section className="space-y-5" aria-label="Mate memory">
     <div>
       <h2 className="text-lg font-medium">{assistant.teamId ? "What the team knows" : `What ${assistant.name} remembers`}</h2>
-      {assistant.teamId && <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-300">Shared decisions and this assistant’s private notes, with their sources.</p>}
+      {assistant.teamId && <p className="mt-1 text-sm leading-relaxed text-primary-600 dark:text-primary-300">Shared decisions and this mate’s private notes, with their sources.</p>}
       <Button variant="primary" className="mt-4 inline-flex whitespace-nowrap" onClick={() => open(null)}>Add memory</Button>
     </div>
     {(creating || editing) && <form onSubmit={submit} className="glass-card space-y-3.5 rounded-2xl p-3.5">

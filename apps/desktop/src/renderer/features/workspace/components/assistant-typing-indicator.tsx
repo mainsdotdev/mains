@@ -12,7 +12,7 @@ export function AssistantTypingIndicator({ assistant, thinkingText, awaitingInpu
   const questions = useAsyncQuestionDialog();
   if (awaitingInput || questions?.dialog) return null;
   const activity = thinkingText && plainActivityText(thinkingText);
-  return <div role="status" aria-label={`${assistant?.name ?? "Assistant"} is responding`} className="flex min-w-0 items-center gap-2.5">
+  return <div role="status" aria-label={`${assistant?.name ?? "Mate"} is responding`} className="flex min-w-0 items-center gap-2.5">
     {assistant && <AssistantAvatar avatar={assistant.avatar} seed={assistant.id} className="size-6" />}
     {activity ? (
       <Text as="span" size="sm" tone="inherit" className="shine-text min-w-0 max-w-120 truncate">{activity}</Text>

@@ -65,7 +65,7 @@ export function NavigationRail({
   const destinations: Array<{
     label: string; path: string; Icon: typeof Plugin; disabled?: boolean;
   }> = [
-    { label: "Assistants", path: "/assistants", Icon: AssistantSteps },
+    { label: "Mates", path: "/assistants", Icon: AssistantSteps },
     { label: "Atlas", path: "/atlas", Icon: Globe },
     {
       label: "Plugins",
