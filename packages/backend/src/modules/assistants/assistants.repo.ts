@@ -16,7 +16,8 @@ export const assistantsRepo = {
     teams(accountId: string) { return getDb().select().from(assistantTeams).where(eq(assistantTeams.accountId, accountId)).orderBy(assistantTeams.createdAt).limit(100).all(); },
     team(id: string, accountId: string) { return getDb().select().from(assistantTeams).where(and(eq(assistantTeams.id, id), eq(assistantTeams.accountId, accountId))).get() ?? null; },
     createTeam(row: typeof assistantTeams.$inferInsert) { getDb().insert(assistantTeams).values(row).run(); },
-    list(accountId: string) { return getDb().select().from(assistants).where(eq(assistants.accountId, accountId)).orderBy(assistants.createdAt).limit(200).all().map(assistant); },
+    // Creation timestamps have second precision, so break ties by insertion order.
+    list(accountId: string) { return getDb().select().from(assistants).where(eq(assistants.accountId, accountId)).orderBy(assistants.createdAt, sql`rowid ASC`).limit(200).all().map(assistant); },
     get(id: string, accountId: string) { const row = getDb().select().from(assistants).where(and(eq(assistants.id, id), eq(assistants.accountId, accountId))).get(); return row ? assistant(row) : null; },
     create(row: typeof assistants.$inferInsert) { getDb().insert(assistants).values(row).run(); },
     createWelcome(id: string, question?: string) {

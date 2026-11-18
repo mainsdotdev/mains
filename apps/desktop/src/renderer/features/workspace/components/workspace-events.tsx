@@ -1,6 +1,6 @@
-import type { Assistant } from "@mains/contracts/assistants";
+import { normalizeAssistantAvatar, type Assistant } from "@mains/contracts/assistants";
 import type { PlanDecisionResult } from "@mains/contracts/plan-decision";
-import { Fragment, type ReactNode, RefObject, useMemo, useRef, useState, useCallback, useEffect } from "react";
+import { Fragment, type CSSProperties, type ReactNode, RefObject, useMemo, useRef, useState, useCallback, useEffect } from "react";
 import {
   ToolCallGroup,
   InfoGroup,
@@ -25,6 +25,7 @@ import { useTranscriptScroll } from "../hooks/use-transcript-scroll";
 import { RealtimeVoiceBar } from "./realtime-voice-bar";
 import { projectVoiceTranscriptEvents } from "../lib/voice-transcript-view";
 import { assistantTranscriptGroups, isAssistantReplyStreaming } from "../lib/assistant-transcript-view";
+import { AVATAR_COLORS } from "@/features/assistants/components/assistant-avatar";
 import { AssistantTypingIndicator } from "./assistant-typing-indicator";
 import { CONTENT_COLUMN_GUTTER } from "../lib/content-column";
 import { buildTurnMarkers, type TurnMarker } from "../lib/turn-markers";
@@ -840,6 +841,7 @@ export function WorkspaceEvents({
       ),
     [currentEvents],
   );
+  const mateQuestionColor = appearance === "assistant" ? AVATAR_COLORS[normalizeAssistantAvatar(assistant?.avatar).color].fill : undefined;
 
   // The view cache restores scroll position and accordion state across tabs.
 
@@ -858,7 +860,7 @@ export function WorkspaceEvents({
           <div
             ref={transcriptRef}
             onScroll={onTranscriptScroll}
-            style={{ overflowAnchor: "none" }}
+            style={{ overflowAnchor: "none", "--mate-question-color": mateQuestionColor } as CSSProperties}
             className={`h-full overflow-y-auto noscrollbar ${floatingChat ? "overscroll-contain" : ""} ${isRunTabActive ? "" : "hidden"}`}
           >
             {/* The main transcript shares its gutter with the composer. Floating

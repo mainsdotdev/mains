@@ -99,6 +99,33 @@ async function handle(
 }
 
 describe("Codex request broker", () => {
+  it("records ordinary Mate questions and their exact answers without recording secret prompts", async () => {
+    const { broker } = createHarness(async (request) => ({
+      requestId: request.requestId, approved: true, answer: request.isSecret ? "private answer" : "Tokyo, or Osaka",
+    }));
+    const { server, responses } = createResponder();
+    const onUserInputEvent = vi.fn();
+    await broker.handleRequest({
+      server, id: 42, method: "item/tool/requestUserInput", runId: "run-1", runIsDead: false, onUserInputEvent,
+      params: { itemId: "item-1", questions: [
+        { id: "city", question: "Where to?", options: [{ label: "Tokyo" }, { label: "Kyoto" }] },
+        { id: "secret", question: "Secret?", isSecret: true },
+      ] },
+    });
+    expect(onUserInputEvent).toHaveBeenCalledTimes(2);
+    expect(onUserInputEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      toolName: "UserInput", input: expect.objectContaining({ question: "Where to?" }),
+      metadata: { phase: "start", toolCallId: "codex-user-input-item-1-0" },
+    }));
+    expect(onUserInputEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      output: { status: "answered", answer: "Tokyo, or Osaka" },
+      metadata: { phase: "complete", toolCallId: "codex-user-input-item-1-0" },
+    }));
+    expect(responses).toEqual([{ id: 42, result: { answers: {
+      city: { answers: ["Tokyo", "or Osaka"] }, secret: { answers: ["private answer"] },
+    } } }]);
+  });
+
   it("refreshes only the matching pending file approval and releases it after the decision", async () => {
     let respond!: (response: ToolApprovalResponse) => void;
     const h = createHarness(() => new Promise((resolve) => { respond = resolve; }));

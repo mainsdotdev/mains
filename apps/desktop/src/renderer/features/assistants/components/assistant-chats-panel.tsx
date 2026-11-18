@@ -30,7 +30,7 @@ export function AssistantChatsPanel({ chats, selectedRunId, error, disabled, onS
         const elapsed = formatCompactRelativeDate(updatedAt);
         return <li key={chat.id}>
           <Button variant="bare" fullWidth aria-current={active ? "page" : undefined} onClick={() => onSelect(chat.id)}
-            className={`flex min-w-0 items-center justify-between gap-3 rounded-lg px-3 py-2 text-left focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50 ${active ? "glass-outline-soft glass-outline bg-primary/50 dark:bg-primary/5" : "hover:bg-primary/50 dark:hover:bg-primary/5"}`}>
+            className={`flex min-w-0 items-center justify-between gap-3 rounded-xl px-3 py-2 text-left focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50 ${active ? "glass-outline-soft glass-outline bg-primary/50 dark:bg-primary/5" : "hover:bg-primary/50 dark:hover:bg-primary/5"}`}>
             <Text as="span" size="s" weight="medium" className="min-w-0 truncate" title={title}>{title}</Text>
             {elapsed && <time className="shrink-0 text-xs font-normal whitespace-nowrap text-primary-500 tabular-nums"
               dateTime={new Date(updatedAt).toISOString()} title={`Last activity: ${formatAbsoluteDate(updatedAt)}`}>

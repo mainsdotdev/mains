@@ -566,7 +566,7 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
 /** Async questions, compaction boundaries, speech and native voice tools stay in chronological chat flow. Typed turns
  * keep the existing layout; voice work never adds a separate work disclosure. */
 export function buildTurnRenderRows(groups: EventGroup[], layout: TranscriptLayout = "turns"): TurnRenderRow[] {
-  if (layout === "conversation") return groups.map((_, index) => ({ kind: "flat", indices: [index] }));
+  if (layout === "conversation") return groups.flatMap((group, index) => group.representedByQuestion ? [] : [{ kind: "flat", indices: [index] }]);
   const rows: TurnRenderRow[] = [];
   const flushRegular = (from: number, to: number) => {
     if (from >= to) return;

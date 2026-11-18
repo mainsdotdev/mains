@@ -15,6 +15,13 @@ export const AVATAR_COLORS = {
   violet: { label: "Violet", fill: "#9274D3", light: "#B7A0E7", ink: "#7753AD" },
   rose: { label: "Rose", fill: "#D96CA4", light: "#ECA4C9", ink: "#AD417B" },
 } as const;
+
+export function assistantMentionTextColor(avatar?: Avatar): string {
+  const { ink, light } = AVATAR_COLORS[normalizeAssistantAvatar(avatar).color];
+  const tone = `color-mix(in srgb, ${ink} var(--assistant-mention-ink), ${light})`;
+  return `color-mix(in srgb, ${tone} var(--assistant-mention-tint), var(--assistant-mention-foreground))`;
+}
+
 function tileStyle([x, y, width, height, tone, corners = 3]: MosaicTile): CSSProperties {
   const radii = typeof corners === "number" ? [corners] : corners;
   const horizontal = radii.map(radius => `${radius / width * 100}%`).join(" ");

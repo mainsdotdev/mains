@@ -2,46 +2,9 @@ import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Text } from "@/components/ui";
 import { Question, Check } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
-import { coerceToolOutput } from "../../lib/parse-tool-content";
+import { pickedQuestionOptions, readUserQuestionEntries, type AskUserQuestionParams } from "../../lib/user-question-content";
 
-interface QuestionOption {
-  label: string;
-  description?: string;
-}
-
-interface QuestionItem {
-  question: string;
-  header?: string;
-  options?: QuestionOption[];
-  multiSelect?: boolean;
-}
-
-export interface AskUserQuestionParams {
-  questions?: QuestionItem[];
-  question?: string;
-}
-
-interface AskUserQuestionOutput {
-  questions?: QuestionItem[];
-  /** Keyed by question text (Claude) or by question index (the others). */
-  answers?: Record<string, string | string[]>;
-  /** Claude: per-question notes, keyed by question text. */
-  annotations?: Record<string, { unanswered?: unknown } | undefined>;
-}
-
-/** How Claude reports a question that ended without an answer. */
-const UNANSWERED_LABELS: Record<string, string> = {
-  dismissed: "Dismissed",
-  skipped: "Skipped",
-  replied_in_chat: "Answered in chat",
-};
-
-/** Claude joins a multi-select answer's labels with ", ". */
-function pickedLabels(answer: string | string[] | undefined, multiSelect?: boolean): string[] {
-  if (answer == null) return [];
-  if (Array.isArray(answer)) return answer;
-  return multiSelect ? answer.split(", ") : [answer];
-}
+export type { AskUserQuestionParams } from "../../lib/user-question-content";
 
 export function AskUserQuestionDisplay({
   params,
@@ -54,24 +17,15 @@ export function AskUserQuestionDisplay({
 }) {
   const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
-  const parsed = parseOutput(output);
-  const fromParams = params.questions?.length
-    ? params.questions
-    : typeof params.question === "string" && params.question.trim()
-      ? [{ question: params.question.trim() }]
-      : [];
-  const questions = parsed?.questions?.length
-    ? parsed.questions
-    : fromParams;
-  const answers = parsed?.answers;
-  const annotations = parsed?.annotations;
+  const entries = readUserQuestionEntries(params, output);
+  const first = entries[0]?.question;
   const header =
-    questions[0]?.header ??
-    questions[0]?.question ??
+    first?.header ??
+    first?.question ??
     params.question ??
     "Question";
 
-  const hasContent = questions.length > 0;
+  const hasContent = entries.length > 0;
 
   return (
     <div>
@@ -91,12 +45,9 @@ export function AskUserQuestionDisplay({
       {hasContent && (
         <ToolCollapse isExpanded={isExpanded}>
           <ToolOutputBody as="div" className="text-xs font-sans space-y-3">
-            {questions.map((q, qi) => {
-              const unansweredKind = annotations?.[q.question]?.unanswered;
-              const unanswered = typeof unansweredKind === "string" ? UNANSWERED_LABELS[unansweredKind] : undefined;
-              // An unanswered question's answer is only the text the model read.
-              const selectedAnswer = unanswered ? undefined : answers?.[q.question] ?? answers?.[String(qi)];
-              const picked = pickedLabels(selectedAnswer, q.multiSelect);
+            {entries.map((entry, qi) => {
+              const { question: q, answer: selectedAnswer, unanswered } = entry;
+              const picked = pickedQuestionOptions(entry);
 
               return (
                 <div key={qi} className="space-y-2">
@@ -107,7 +58,7 @@ export function AskUserQuestionDisplay({
                   {q.options && q.options.length > 0 && (
                     <div className="space-y-1.5">
                       {q.options.map((opt) => {
-                        const isSelected = picked.includes(opt.label);
+                        const isSelected = picked.includes(opt);
 
                         return (
                           <div
@@ -146,7 +97,7 @@ export function AskUserQuestionDisplay({
                       {unanswered}
                     </Text>
                   )}
-                  {!q.options?.some((option) => picked.includes(option.label)) &&
+                  {!picked.length &&
                     selectedAnswer != null &&
                     String(selectedAnswer).trim() !== "" && (
                     <div className="flex items-start gap-2 rounded px-2 py-1.5 bg-primary/80 dark:bg-success/10">
@@ -166,48 +117,4 @@ export function AskUserQuestionDisplay({
       )}
     </div>
   );
-}
-
-function parseOutput(output: unknown): AskUserQuestionOutput | null {
-  const parsed = coerceToolOutput(output);
-
-  if (typeof parsed === "object" && parsed !== null) {
-    const obj = parsed as Record<string, unknown>;
-    let answers = obj.answers as
-      | Record<string, string | string[]>
-      | undefined;
-    if (!answers) {
-      const fromUserResponse = extractUserResponseAnswer(
-        obj.content,
-        obj.detailedContent,
-      );
-      if (fromUserResponse) {
-        answers = { "0": fromUserResponse };
-      }
-    }
-    return {
-      questions: Array.isArray(obj.questions)
-        ? (obj.questions as QuestionItem[])
-        : undefined,
-      answers,
-      annotations: typeof obj.annotations === "object" && obj.annotations !== null
-        ? (obj.annotations as AskUserQuestionOutput["annotations"])
-        : undefined,
-    };
-  }
-
-  return null;
-}
-
-/** Copilot / broker style: { content: "User responded: …" } */
-function extractUserResponseAnswer(
-  content: unknown,
-  detailedContent: unknown,
-): string | undefined {
-  for (const field of [content, detailedContent]) {
-    if (typeof field !== "string" || !field.trim()) continue;
-    const m = field.match(/^User responded:\s*(.*)$/i);
-    if (m) return m[1].trim();
-  }
-  return undefined;
 }

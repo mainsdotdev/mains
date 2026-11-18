@@ -29,7 +29,9 @@ export function AssistantsSidebar() {
     if (mobile) dispatch(setSidebarCollapsed(true));
   };
   const query = searchQuery.trim().toLocaleLowerCase();
-  const assistants = overview?.assistants.filter(a => !a.isArchived && (!query || `${a.name} ${a.description}`.toLocaleLowerCase().includes(query))) ?? [];
+  const assistants = overview?.assistants
+    .filter(a => !a.isArchived && (!query || `${a.name} ${a.description}`.toLocaleLowerCase().includes(query)))
+    .reverse() ?? [];
   return (
     <div className="flex h-full flex-col text-primary-900 dark:text-primary-100">
       <div className="relative mx-3 mb-2.5 mt-12 h-8 shrink-0 md:mt-2">

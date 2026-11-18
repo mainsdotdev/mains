@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, AsciiSpinner } from "@/components/ui";
+import type { AssistantTaskActivity } from "@mains/contracts/assistants";
+import { Button } from "@/components/ui";
 import { ArrowUp } from "@/components/ui/icons";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import { plainActivityText } from "@/features/workspace/lib/run-activity";
@@ -11,17 +12,19 @@ import { useAssistantUpdates } from "../hooks/use-assistant-updates";
 import { assistantHref } from "../lib/assistant-navigation";
 import { errorText } from "../lib/assistant-ui";
 import { AssistantAvatar } from "./assistant-avatar";
+import { AssignmentStatusBadge } from "./assignment-status-badge";
 
 const activityLabels = { request: "Task request", followup: "Follow-up", status: "Status", result: "Report" };
-const deliveryLabels = { queued: "Waiting to send", dispatching: "Sending", delivered: "Delivered", uncertain: "Needs attention", canceled: "Canceled" };
+const deliveryLabels = { queued: "Waiting to send", dispatching: "Sending", uncertain: "Needs attention", canceled: "Canceled" };
 const sectionClassName = "min-w-0 space-y-1 rounded-xl bg-primary-200/55 px-3 py-2.5 dark:bg-primary-950/45";
 const disclosureClassName = "grid grid-cols-[minmax(0,1fr)] transition-[grid-template-rows,opacity] duration-250 ease-in-out motion-reduce:transition-none";
 
-function TaskSectionHeading({ label, deliveryStatus }: { label: string; deliveryStatus?: keyof typeof deliveryLabels }) {
+function TaskSectionHeading({ label, deliveryStatus }: { label: string; deliveryStatus?: AssistantTaskActivity["deliveryStatus"] }) {
+  const deliveryLabel = deliveryStatus && deliveryStatus !== "delivered" ? deliveryLabels[deliveryStatus] : undefined;
   return (
     <div className="flex flex-wrap items-baseline gap-x-1.5 text-xs text-primary-600 dark:text-primary-400">
-      <span className="font-medium text-primary-800 dark:text-primary-200">{label}</span>
-      {deliveryStatus && <><span aria-hidden="true">·</span><span>{deliveryLabels[deliveryStatus]}</span></>}
+      <h3 className="font-medium">{label}</h3>
+      {deliveryLabel && <><span aria-hidden="true">·</span><span>{deliveryLabel}</span></>}
     </div>
   );
 }
@@ -60,65 +63,64 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
   const activityRows = activity.filter(item => item.id !== reportActivity?.id);
 
   return (
-    <article aria-label={`${name} task`} className="glass-card my-2 w-full min-w-0 max-w-transcript-bubble rounded-transcript-bubble text-primary-900 dark:text-primary-100">
-      <div className="flex items-center gap-1.5 p-1.5">
-        <Button variant="bare" aria-expanded={expanded} aria-controls={detailsId}
-          onClick={() => setDisclosure({ taskKey, expanded: !expanded })}
-          className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-1.5 text-left hover:bg-primary-300/20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent dark:hover:bg-primary/5">
-          <AssistantAvatar avatar={assistant?.avatar} working={running} seed={task.toAssistantId} className="size-6" />
-          <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-            <span className="truncate text-sm font-medium">{name}</span>
-            {scope && <span className="truncate text-xs text-primary-600 dark:text-primary-400"><span aria-hidden="true">· </span>{scope}</span>}
-          </span>
-          <span className="flex shrink-0 items-center gap-1.5 text-xs capitalize text-primary-600 dark:text-primary-400">
-            {running && <AsciiSpinner variant={assistant?.providerId === "codex" ? "codex" : "claude"} kind="circle" />}
-            {task.status}
-          </span>
-          <ArrowUp aria-hidden="true" className={cn("size-3.5 shrink-0 text-primary-500 transition-transform duration-250 ease-in-out motion-reduce:transition-none", expanded ? "rotate-180" : "rotate-90")} />
-        </Button>
-        {canOpenChat && (
-          <Button variant="secondary" className="mr-1 shrink-0 whitespace-nowrap px-2.5 text-xs focus-visible:ring-2 focus-visible:ring-accent"
-            onClick={() => navigate(assistantHref(task.toAssistantId, workerRunId))}>
-            Open chat
+    <article aria-label={`${name} task`} className="my-2 flex w-full min-w-0 max-w-transcript-bubble flex-col gap-2 text-primary-900 dark:text-primary-100">
+      <div className="glass-card rounded-transcript-bubble">
+        <div className="p-1.5">
+          <Button variant="bare" aria-expanded={expanded} aria-controls={detailsId}
+            onClick={() => setDisclosure({ taskKey, expanded: !expanded })}
+            className="flex min-h-9 w-full min-w-0 items-center gap-2 rounded-xl px-2 py-1.5 text-left hover:bg-primary-300/20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent dark:hover:bg-primary/5">
+            <AssistantAvatar avatar={assistant?.avatar} working={running} seed={task.toAssistantId} className="size-6" />
+            <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+              <span className="truncate text-sm font-medium">{name}</span>
+              {scope && <span className="truncate text-xs text-primary-600 dark:text-primary-400"><span aria-hidden="true">· </span>{scope}</span>}
+            </span>
+            <AssignmentStatusBadge status={task.status} />
+            <ArrowUp aria-hidden="true" className={cn("size-3.5 shrink-0 text-primary-500 transition-transform duration-250 ease-in-out motion-reduce:transition-none", expanded ? "rotate-180" : "rotate-90")} />
           </Button>
-        )}
-      </div>
-      <div aria-hidden={expanded || undefined} className={cn(disclosureClassName, expanded ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100")}>
-        <div className="min-h-0 overflow-hidden">
-          {reportPreview && <p className="truncate px-3.5 pb-2.5 text-xs text-primary-600 dark:text-primary-400">{reportPreview}</p>}
-          {taskError && <div className="px-3.5 pb-2.5"><p role="alert" className="line-clamp-2 break-words text-xs text-danger">{taskError}</p></div>}
         </div>
-      </div>
-      <div id={detailsId} role="group" aria-label="Task details" aria-hidden={!expanded || undefined} inert={!expanded}
-        className={cn(disclosureClassName, expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
-        <div className="min-h-0 overflow-hidden">
-          {hasOpened && <div className="space-y-2 px-2.5 pb-2.5 pt-0.5">
-            {taskError && !errorInActivity && <p role="alert" className={cn(sectionClassName, "break-words text-xs text-danger")}>{taskError}</p>}
-            {(task.result || task.evidence.length > 0) && <section aria-label="Task report" className={sectionClassName}>
-              <TaskSectionHeading label="Report" deliveryStatus={reportActivity?.deliveryStatus} />
-              {task.result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{task.result}</AgentMarkdown>}
-              {!!task.evidence.length && <ul aria-label="Task evidence" className="space-y-0.5 text-xs text-primary-600 dark:text-primary-400">
-                {task.evidence.map((item, index) => <li key={index} className="break-words">{item}</li>)}
-              </ul>}
-              {reportActivity?.error && <p className="break-words text-xs text-danger">{errorText(reportActivity.error)}</p>}
-            </section>}
-            {task.prompt && !requestInActivity && <div className={sectionClassName}>
-              <TaskSectionHeading label="Task request" />
-              <p className="whitespace-pre-wrap break-words text-sm leading-5">{task.prompt}</p>
+        <div aria-hidden={expanded || undefined} className={cn(disclosureClassName, expanded ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100")}>
+          <div className="min-h-0 overflow-hidden">
+            {reportPreview && <p className="truncate px-3.5 pb-2.5 text-xs text-primary-600 dark:text-primary-400">{reportPreview}</p>}
+            {taskError && <div className="px-3.5 pb-2.5"><p role="alert" className="line-clamp-2 break-words text-xs text-danger">{taskError}</p></div>}
+          </div>
+        </div>
+        <div id={detailsId} role="group" aria-label="Task details" aria-hidden={!expanded || undefined} inert={!expanded}
+          className={cn(disclosureClassName, expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
+          <div className="min-h-0 overflow-hidden">
+            {hasOpened && <div className="space-y-2 px-2.5 pb-2.5 pt-0.5">
+              {taskError && !errorInActivity && <p role="alert" className={cn(sectionClassName, "break-words text-xs text-danger")}>{taskError}</p>}
+              {(task.result || task.evidence.length > 0) && <section aria-label="Task report" className={sectionClassName}>
+                <TaskSectionHeading label="Report" deliveryStatus={reportActivity?.deliveryStatus} />
+                {task.result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{task.result}</AgentMarkdown>}
+                {!!task.evidence.length && <ul aria-label="Task evidence" className="space-y-0.5 text-xs text-primary-600 dark:text-primary-400">
+                  {task.evidence.map((item, index) => <li key={index} className="break-words">{item}</li>)}
+                </ul>}
+                {reportActivity?.error && <p className="break-words text-xs text-danger">{errorText(reportActivity.error)}</p>}
+              </section>}
+              {task.prompt && !requestInActivity && <div className={sectionClassName}>
+                <TaskSectionHeading label="Task request" />
+                <p className="whitespace-pre-wrap break-words text-sm leading-5">{task.prompt}</p>
+              </div>}
+              {!!activityRows.length && <ol aria-label="Task activity" className="space-y-2">
+                {activityRows.map(item => (
+                  <li key={item.id} className={sectionClassName}>
+                    <TaskSectionHeading label={activityLabels[item.kind]} deliveryStatus={item.deliveryStatus} />
+                    {!(item.kind === "result" && item.content === task.result) &&
+                      <AgentMarkdown className="[&>.document-paragraph]:leading-5">{item.kind === "status" ? errorText(item.content) : item.content}</AgentMarkdown>}
+                    {item.error && <p className="break-words text-xs text-danger">{errorText(item.error)}</p>}
+                  </li>
+                ))}
+              </ol>}
             </div>}
-            {!!activityRows.length && <ol aria-label="Task activity" className="space-y-2">
-              {activityRows.map(item => (
-                <li key={item.id} className={sectionClassName}>
-                  <TaskSectionHeading label={activityLabels[item.kind]} deliveryStatus={item.deliveryStatus} />
-                  {!(item.kind === "result" && item.content === task.result) &&
-                    <AgentMarkdown className="[&>.document-paragraph]:leading-5">{item.kind === "status" ? errorText(item.content) : item.content}</AgentMarkdown>}
-                  {item.error && <p className="break-words text-xs text-danger">{errorText(item.error)}</p>}
-                </li>
-              ))}
-            </ol>}
-          </div>}
+          </div>
         </div>
       </div>
+      {canOpenChat && (
+        <Button variant="secondary" className="self-end whitespace-nowrap px-2.5 text-xs focus-visible:ring-2 focus-visible:ring-accent"
+          onClick={() => navigate(assistantHref(task.toAssistantId, workerRunId))}>
+          Open chat
+        </Button>
+      )}
     </article>
   );
 }

@@ -346,10 +346,13 @@ function DeferredOutputRow({ event, deferred, isCompact = true, presentation = "
     {error ? <button onClick={() => { setError(null); setAttempt(value => value + 1); }}>Retry opening app: {error}</button> : "Loading app…"}
   </Text>;
   const resolved = resolveTool(event.content);
+  const params = event.metadata?.input as Record<string, unknown> | null;
   return <ToolStatusProvider value={eventToolStatus(event)}>
-    <GenericToolDisplay icon={resolved.icon} displayName={resolved.displayName}
-      params={event.metadata?.input as Record<string, unknown> | null}
-      output={`${deferred.preview}\n… (${deferred.chars.toLocaleString()} characters)`} isCompact={isCompact} />
+    {resolved.category === "Assistants"
+      ? <AssistantToolDisplay toolName={resolved.displayName} params={params ?? parseToolContent(event.content).params}
+        outputDeferred isCompact={isCompact} />
+      : <GenericToolDisplay icon={resolved.icon} displayName={resolved.displayName} params={params}
+        output={`${deferred.preview}\n… (${deferred.chars.toLocaleString()} characters)`} isCompact={isCompact} />}
     {expanded && <Text as="div" size="xs" tone="subtle">
       {error ? <button onClick={() => { setError(null); setAttempt((value) => value + 1); }}>Retry loading output: {error}</button> : "Loading full output…"}
     </Text>}

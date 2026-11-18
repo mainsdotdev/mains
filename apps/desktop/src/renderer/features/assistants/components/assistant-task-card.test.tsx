@@ -25,8 +25,13 @@ describe("assistant task activity card", () => {
       ] } as AssistantAssignment;
     render(<MemoryRouter><AssistantTaskCard assignmentId="task" runId={runId} /></MemoryRouter>);
     const card = screen.getByRole("article", { name: "Testflight Ready task" });
-    expect(card.className).toContain("glass-card");
-    const summary = within(card).getByRole("button", { name: /Testflight Ready.*completed/i });
+    const summary = within(card).getByRole("button", { name: /Testflight Ready.*Completed/ });
+    const surface = summary.closest(".glass-card");
+    expect(surface).toBe(card.firstElementChild);
+    const openChat = within(card).queryByRole("button", { name: "Open chat" });
+    expect(openChat?.textContent ?? null).toBe(runId === "source" ? "Open chat" : null);
+    if (openChat) expect(surface?.nextElementSibling).toBe(openChat);
+    expect(within(summary).getByText("Completed").className).toContain("dark:text-success");
     expect(summary.getAttribute("aria-expanded")).toBe("false");
     expect(within(card).getByText("Check complete: NOT READY")).toBeTruthy();
     expect(within(card).queryByRole("list", { name: "Task activity" })).toBeNull();
@@ -34,9 +39,9 @@ describe("assistant task activity card", () => {
     expect(summary.getAttribute("aria-expanded")).toBe("true");
     const details = within(card).getByRole("group", { name: "Task details" });
     const report = within(details).getByRole("region", { name: "Task report" });
-    expect(within(report).getByText("Report")).toBeTruthy();
+    expect(within(report).getByRole("heading", { name: "Report" })).toBeTruthy();
     expect(within(report).getByText("Check complete: NOT READY")).toBeTruthy();
-    expect(within(report).getByText("Delivered")).toBeTruthy();
+    expect(within(details).queryByText("Delivered")).toBeNull();
     expect(within(report).getByRole("list", { name: "Task evidence" })).toBeTruthy();
     const activity = within(details).getByRole("list", { name: "Task activity" });
     expect(within(activity).getAllByText("Review TestFlight")).toHaveLength(1);
@@ -45,8 +50,7 @@ describe("assistant task activity card", () => {
     expect(within(activity).getByText("Final task report")).toBeTruthy();
     expect(within(activity).getByText("Connection lost")).toBeTruthy();
     expect(within(activity).getByText("Needs attention")).toBeTruthy();
-    const openChat = within(card).queryByRole("button", { name: "Open chat" });
-    expect(openChat?.textContent ?? null).toBe(runId === "source" ? "Open chat" : null);
+    expect(within(card).queryByRole("button", { name: "Open chat" })).toBe(openChat);
   });
 
   it("collapses a canceled task and retains its request when the activity list is missing", () => {

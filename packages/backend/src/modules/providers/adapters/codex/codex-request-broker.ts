@@ -3,6 +3,7 @@ import type {
   ToolApprovalRequest,
   ToolApprovalResponse,
 } from "../../../runs/runs.dto";
+import type { WorkRunEventHandler } from "../../../../../shared/adapter.types";
 import { requestToolApproval, updatePendingRequest } from "../../../runs/user-input-broker";
 import type { ApprovalPresentationPatch } from "../../../runs/user-input-lifecycle";
 import { guardsService } from "../../../guards/guards.service";
@@ -85,6 +86,7 @@ export interface CodexServerRequest {
   params: unknown;
   runId: string;
   runIsDead: boolean;
+  onUserInputEvent?: WorkRunEventHandler;
 }
 
 interface CodexRequestBrokerOptions {
@@ -427,6 +429,13 @@ export function createCodexRequestBroker(
         typeof p?.autoResolutionMs === "number"
           ? p.autoResolutionMs
           : undefined;
+      const recordInput = async (event: Parameters<WorkRunEventHandler>[0]) => {
+        try {
+          await request.onUserInputEvent?.(event);
+        } catch {
+          logger.warn("Could not record a Codex user input event.");
+        }
+      };
 
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
@@ -444,22 +453,30 @@ export function createCodexRequestBroker(
           (q.description as string) ??
           "";
         const opts = normalizeOptions(q);
+        const requestId = questions.length === 1 ? String(id) : `${id}-q${i}`;
+        const input = { question: text, header: (q.header as string) || undefined, options: opts };
+        const startedAt = now();
+        const toolCallId = `codex-user-input-${p?.itemId ?? id}-${i}`;
+        const recordQuestion = request.onUserInputEvent && q.isSecret !== true && typeof text === "string" && text.trim();
+        if (recordQuestion) await recordInput({
+          type: "tool_call", toolName: "UserInput", input, startedAt,
+          metadata: { phase: "start", toolCallId },
+        });
+        let recordedAnswer: string | undefined;
         try {
           const result = await requestApproval({
             // Synthetic per-question requestId so each dialog has a
             // unique broker key while still sharing the codex JSON-RPC id.
-            requestId: questions.length === 1 ? String(id) : `${id}-q${i}`,
+            requestId,
             runId,
             toolName: "UserInput",
             kind: "ask_user",
-            header: (q.header as string) || undefined,
-            question: text,
-            options: opts,
+            ...input,
             multiSelect: false,
             isOther: q.isOther === true,
             isSecret: q.isSecret === true,
             autoResolutionMs,
-            timestamp: now(),
+            timestamp: startedAt,
           });
           if (!result.approved) {
             answers[qId] = { answers: [] };
@@ -471,9 +488,16 @@ export function createCodexRequestBroker(
             : [];
           const fallback = opts?.[0]?.label ?? "yes";
           answers[qId] = { answers: parts.length > 0 ? parts : [fallback] };
+          recordedAnswer = result.answer?.trim() ? result.answer : fallback;
         } catch {
           answers[qId] = { answers: [] };
           aborted = true;
+        } finally {
+          if (recordQuestion) await recordInput({
+            type: "tool_call", toolName: "UserInput", input, endedAt: now(),
+            output: recordedAnswer === undefined ? { status: "canceled" } : { status: "answered", answer: recordedAnswer },
+            metadata: { phase: "complete", toolCallId },
+          });
         }
       }
 

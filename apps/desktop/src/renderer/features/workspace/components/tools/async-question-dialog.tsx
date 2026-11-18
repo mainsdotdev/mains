@@ -36,6 +36,7 @@ const initialDraft = (source: QuestionSource): QuestionDraft => ({ answers: sour
 type DialogProps = ComponentProps<typeof ToolApprovalDialog>;
 interface AsyncQuestionDialogState {
   dialog: DialogProps | null;
+  activeArtifactId?: number;
   pending: { count: number; checking: boolean; error?: string; onOpen: () => void } | null;
   open: (artifactId: number) => void;
   canOpen: (artifactId: number) => boolean;
@@ -186,7 +187,7 @@ export function AsyncQuestionDialogProvider({ ownerKey, runId, runStatus, turns,
     };
   }
   const next = pending.find((source) => drafts.get(source.key)?.status === "unknown") ?? pending[0];
-  return <Context.Provider value={{ dialog, open,
+  return <Context.Provider value={{ dialog, open, activeArtifactId: current?.artifactId,
     pending: !historical && next ? {
       count: pending.reduce((count, source) => count + source.questions.length, 0),
       checking: drafts.get(next.key)?.status === "unknown",

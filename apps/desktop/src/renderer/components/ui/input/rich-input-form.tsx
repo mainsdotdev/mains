@@ -24,6 +24,8 @@ export interface RichSkillChipData {
   /** Caller-owned artwork; the editor stays independent of feature components. */
   icon?: ReactNode;
   iconSize?: "sm" | "md";
+  /** Caller-owned text color, including any theme-dependent CSS. */
+  textColor?: string;
   name: string;
   /** Whether this mention has a destination supplied by the caller. */
   clickable?: boolean;
@@ -119,6 +121,7 @@ const CODE_CHIP_ATTR = "data-code-chip";
 const CODE_KEY_ATTR = "data-code-key";
 const CHIP_KEY_SEP = "";
 const CHIP_LABEL_ATTR = "data-chip-label";
+const CHIP_ICON_ATTR = "data-chip-icon";
 const CHIP_CLICKABLE_ATTR = "data-chip-clickable";
 const CHIP_REMOVE_ATTR = "data-chip-remove";
 const MENTION_CHIP_SELECTOR = `[${CHIP_ATTR}], [${FILE_CHIP_ATTR}], [${CODE_CHIP_ATTR}]`;
@@ -240,6 +243,7 @@ function createChipIconSlot(label: string): { iconSlot: HTMLSpanElement; glyph: 
   iconSlot.className = "relative inline-flex size-3.5 shrink-0 items-center justify-center";
 
   const glyph = document.createElement("span");
+  glyph.setAttribute(CHIP_ICON_ATTR, "true");
   glyph.setAttribute("aria-hidden", "true");
   glyph.className =
     "inline-flex size-full items-center justify-center overflow-hidden rounded-sm transition-opacity group-hover/chip:opacity-0 [@media(hover:none)]:opacity-0";
@@ -279,7 +283,10 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
     "group/chip inline-flex align-bottom items-center gap-1 h-5 rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline " +
     " cursor-default";
-  if (skill.brandColor) {
+  if (skill.textColor) {
+    chip.style.setProperty("--chip-text-color", skill.textColor);
+    chip.style.color = "var(--chip-text-color)";
+  } else if (skill.brandColor) {
     chip.style.color = `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))`;
   }
 
@@ -1014,7 +1021,21 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       if (
         query === lastSerializedRef.current &&
         !((fileMapChanged || skillMapChanged) && hasUnrenderedContextToken(root, fileChipMap, skillChipMap))
-      ) return;
+      ) {
+        if (skillMapChanged) {
+          // Avatar data can arrive after a saved draft has already restored its chips.
+          // Keep their nodes and the editor selection in place when the tint changes.
+          for (const chip of root.querySelectorAll<HTMLElement>(`[${CHIP_ATTR}]`)) {
+            const data = skillChipMap?.get(chip.getAttribute(CHIP_TOKEN_ATTR) ?? "");
+            if (!data?.textColor || chip.style.getPropertyValue("--chip-text-color") === data.textColor) continue;
+            chip.style.setProperty("--chip-text-color", data.textColor);
+            chip.style.color = "var(--chip-text-color)";
+            const glyph = chip.querySelector(`[${CHIP_ICON_ATTR}]`);
+            if (data.icon && glyph) glyph.innerHTML = renderToStaticMarkup(<>{data.icon}</>);
+          }
+        }
+        return;
+      }
       rebuildContent(root, query, skillChipMap, fileChipMap, codeChipMap);
       lastSerializedRef.current = query;
       setIsEmpty(query.length === 0);

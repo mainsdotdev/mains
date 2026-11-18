@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent } from "react";
-import type { Assistant, AssistantAssignment, AssignmentStatus } from "@mains/contracts/assistants";
+import type { Assistant, AssistantAssignment } from "@mains/contracts/assistants";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import { Button, Input } from "@/components/ui";
 import { ArrowUp } from "@/components/ui/icons";
@@ -8,17 +8,7 @@ import { cn } from "@/lib/cn";
 import { useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation, useReconcileAssistantTaskMutation } from "@/lib/redux/api/assistantsApi";
 import { assignmentDisplayTitle, errorText } from "../lib/assistant-ui";
 import { AssistantAvatar } from "./assistant-avatar";
-
-const warningStatus = "bg-warning/15 text-[color:color-mix(in_srgb,var(--color-warning)_50%,var(--color-primary-950))] dark:text-warning";
-const statusStyle = {
-  queued: { label: "Queued", tone: "bg-primary-200/65 text-primary-700 dark:bg-primary/10 dark:text-primary-300" },
-  running: { label: "Running", tone: "bg-accent/12 text-[color:color-mix(in_srgb,var(--color-accent)_50%,var(--color-primary-950))] dark:text-accent" },
-  blocked: { label: "Blocked", tone: warningStatus },
-  completed: { label: "Completed", tone: "bg-success/15 text-[color:color-mix(in_srgb,var(--color-success)_50%,var(--color-primary-950))] dark:text-success" },
-  failed: { label: "Failed", tone: "bg-danger/15 text-[color:color-mix(in_srgb,var(--color-danger)_50%,var(--color-primary-950))] dark:text-danger" },
-  canceled: { label: "Canceled", tone: "bg-primary-200/50 text-primary-600 dark:bg-primary/5 dark:text-primary-400" },
-  uncertain: { label: "Delivery uncertain", tone: warningStatus },
-} satisfies Record<AssignmentStatus, { label: string; tone: string }>;
+import { AssignmentStatusBadge } from "./assignment-status-badge";
 
 const disclosureClassName = "grid grid-cols-[minmax(0,1fr)] transition-[grid-template-rows,opacity] duration-250 ease-in-out motion-reduce:transition-none";
 const sectionClassName = "min-w-0 space-y-1 rounded-xl bg-primary-200/55 px-2.5 py-2 dark:bg-primary-950/45";
@@ -34,7 +24,6 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant }: {
   const previewId = useId();
   const [disclosure, setDisclosure] = useState<"unopened" | "open" | "closed">("unopened");
   const expanded = disclosure === "open";
-  const status = statusStyle[task.status];
   const title = assignmentDisplayTitle(task.title, task.taskKey);
   const assigneeName = assignee?.name ?? "Mate";
   const preview = plainActivityText(task.result || task.prompt).replace(/\s+/g, " ");
@@ -50,10 +39,7 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant }: {
           <span className="flex min-w-0 items-center gap-2">
             <AssistantAvatar avatar={assignee?.avatar} seed={task.toAssistantId} animated={false} className="size-5" />
             <span className="min-w-0 flex-1 truncate text-sm font-medium" id={titleId} title={title}>{title}</span>
-            <span className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium", status.tone)}>
-              <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-current" />
-              {status.label}
-            </span>
+            <AssignmentStatusBadge status={task.status} />
             <ArrowUp aria-hidden="true" className={cn("size-3.5 shrink-0 text-primary-500 transition-transform duration-250 ease-in-out motion-reduce:transition-none", expanded ? "rotate-180" : "rotate-90")} />
           </span>
           <span className="mt-1.5 flex min-w-0 items-baseline gap-1.5 pl-7 text-xs text-primary-600 dark:text-primary-400">

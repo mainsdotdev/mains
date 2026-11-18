@@ -14,7 +14,7 @@ import { useOpenComposerMention } from "../hooks/use-open-composer-mention";
 import { useOpenFileInEditor } from "../hooks/use-open-file-in-editor";
 import { composerSkillDestination } from "../lib/composer-mention";
 
-import { AssistantAvatar } from "@/features/assistants/components/assistant-avatar";
+import { AssistantAvatar, assistantMentionTextColor } from "@/features/assistants/components/assistant-avatar";
 import type { AssistantAvatar as Avatar } from "@mains/contracts/assistants";
 
 export interface PromptMarkdownSkill {
@@ -174,6 +174,8 @@ function PromptSkillChip({ skill, onOpen }: {
   const label = skill.displayName || skill.name;
   const tooltip = skill.shortDescription || skill.description || label;
   const clickable = composerSkillDestination(skill) !== null;
+  const color = skill.scope === "assistant" ? assistantMentionTextColor(skill.assistantAvatar)
+    : skill.brandColor ? `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))` : undefined;
   const FallbackIcon = ["plugin", "mac", "mac_app", "computer"].includes((skill.scope || "").toLowerCase()) ? Apps : Sparkles;
   const Chip = clickable ? Button : "span";
 
@@ -181,11 +183,7 @@ function PromptSkillChip({ skill, onOpen }: {
     <Chip
       type={clickable ? "button" : undefined}
       className={`inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none text-accent hover:decoration-dotted hover:underline ${clickable ? "cursor-pointer focus-visible:ring-2 focus-visible:ring-accent/40" : "cursor-default"}`}
-      style={
-        skill.brandColor
-          ? { color: `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))` }
-          : undefined
-      }
+      style={color ? { color } : undefined}
       title={tooltip}
       onClick={clickable ? () => onOpen(skill.name) : undefined}
     >

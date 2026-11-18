@@ -37,13 +37,17 @@ import type { McpAppMessageOptions } from "@/features/workspace/lib/mcp-app-cont
 const keepProfile = () => {};
 const EMPTY_EVENTS: RunEvent[] = [];
 
-export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, onOpenDetails }: {
+export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunId, onSelectRun, onOpenDetails }: {
   assistant: Assistant;
   welcome?: AssistantWelcome;
+  animateWelcome?: boolean;
   selectedRunId: string | null;
   onSelectRun(id: string | null): void;
   onOpenDetails(): void;
 }) {
+  // The route adds the welcome run ID after this chat mounts.
+  const [animateIntro] = useState(animateWelcome);
+  const welcomeColumnRef = useRef<HTMLDivElement>(null);
   const waitingWelcome = welcome && welcome.state !== "started" ? welcome : undefined;
   const chatRunId = waitingWelcome ? null : selectedRunId;
   const backendId = useAppSelector(state => state.backends.activeBackendId);
@@ -176,11 +180,11 @@ export function AssistantChat({ assistant, welcome, selectedRunId, onSelectRun, 
     <AsyncQuestionDialogProvider ownerKey={ownerKey} runId={chatRunId} runStatus={run?.status} turns={turns} events={events} historical={history.historical}>
       <div className="relative flex min-h-0 flex-1 flex-col">
         {waitingWelcome ? <div className={`flex min-h-0 flex-1 flex-col justify-end gap-6 overflow-y-auto py-8 ${CONTENT_COLUMN_GUTTER}`}>
-          <div className="mx-auto w-full max-w-210">
+          <div ref={welcomeColumnRef} className="mx-auto w-full max-w-210">
             <AssistantMonogram name={assistant.name} providerId={assistant.providerId} avatar={assistant.avatar} working={working} onClick={onOpenDetails} />
             {waitingWelcome.question?.profileSetup && waitingWelcome.state !== "starting"
               ? <AssistantProfileSetupCard accountId={assistant.accountId} welcome={waitingWelcome}
-                  busy={welcomePreparation.isLoading} onRetry={retryWelcome} />
+                  animateIntro={animateIntro} columnRef={welcomeColumnRef} busy={welcomePreparation.isLoading} onRetry={retryWelcome} />
               : <AssistantWelcomeCard welcome={waitingWelcome} busy={welcomeResponse.isLoading || welcomePreparation.isLoading}
                   onAnswer={answerWelcome} onRetry={retryWelcome} />}
           </div>

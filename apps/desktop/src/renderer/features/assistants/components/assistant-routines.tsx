@@ -29,7 +29,6 @@ export function AssistantRoutines({ assistant, onOpenChat }: { assistant: Assist
     {!currentData && !error && <div role="status" className="flex items-center gap-2 text-sm text-primary-500"><AsciiSpinner variant="inherit" />Loading routines…</div>}
     {routines?.length === 0 && !error && <p className="rounded-2xl glass-card px-4 py-8 text-center text-sm leading-relaxed text-primary-600 dark:text-primary-400">No routines yet. Schedule the first task for this mate.</p>}
     {routines?.map(pulse => <RoutineRow key={pulse.id} pulse={pulse} disabled={assistant.isArchived} onEdit={() => setEditing(pulse)} onDelete={() => { setFailure(""); setDeleting(pulse); }} onOpenChat={onOpenChat} />)}
-    <p className="text-xs leading-relaxed text-primary-500">Keep Mains or its connected server running. Missed schedules catch up once on startup.</p>
     <Alert isOpen={!!deleting} title="Delete routine?" description="Future scheduled runs stop. Tasks already queued or running continue; their chats stay in history."
       primaryButtonText="Delete" secondaryButtonText="Cancel" primaryButtonVariant="danger" isPrimaryLoading={removing.isLoading}
       onPrimary={() => { if (deleting) void remove(deleting.id).unwrap().then(() => setDeleting(null)).catch(e => { setFailure(errorText(e)); setDeleting(null); }); }} onSecondary={() => setDeleting(null)} />

@@ -71,7 +71,7 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
     <AssistantCreationHeader name={name} avatar={avatar} onClose={onClose} />
     <div className="space-y-5">
       <AssistantAvatarPicker avatar={avatar} seed="creation-preview" onChange={setAvatar} />
-      <label className="flex flex-col gap-2.5 text-sm"><span>Name</span><Input required maxLength={100} value={name} onChange={e => setName(e.target.value)} placeholder="TestFlight" autoComplete="off" /></label>
+      <label className="flex flex-col gap-2.5 text-sm"><span>Name</span><Input required maxLength={100} value={name} onChange={e => setName(e.target.value)} placeholder="Name your mate" autoComplete="off" /></label>
       <div className="space-y-2.5">
         <div className="flex items-center justify-between gap-3">
           <Label as="span" id={teamLabelId}>Team</Label>

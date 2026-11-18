@@ -1,3 +1,15 @@
+:root {
+  --assistant-mention-ink: 100%;
+  --assistant-mention-tint: 60%;
+  --assistant-mention-foreground: var(--color-primary-950);
+}
+
+:root.dark {
+  --assistant-mention-ink: 0%;
+  --assistant-mention-tint: 85%;
+  --assistant-mention-foreground: var(--color-primary);
+}
+
 .mosaic-avatar {
   position: relative;
   container-type: inline-size;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { asyncQuestionMessageId } from "@mains/contracts/async-questions";
 import type { RunEvent } from "../types";
 import { groupEvents } from "./group-events";
 import { buildTurnRenderRows } from "./transcript-rows";
@@ -8,23 +9,38 @@ const event = (id: string, kind: string, extra: Record<string, unknown> = {}): R
   id, type: "artifact", content: id, timestamp: new Date(Number(id.replace(/\D/g, "")) * 1000 || 1000), metadata: { kind, ...extra },
 });
 const tool: RunEvent = { ...event("tool1", ""), type: "tool_call", content: "Bash: npm test", metadata: { toolName: "Bash", status: "done" } };
-const question: RunEvent = { ...tool, id: "question", content: "AskAssistantQuestion", metadata: { toolName: "AskAssistantQuestion", status: "done", output: { status: "answered", answer: "Tokyo" } } };
+const question: RunEvent = { ...tool, id: "question", content: "AskAssistantQuestion", metadata: {
+  toolName: "AskAssistantQuestion", status: "done", input: { question: "Where to?" }, output: { status: "answered", answer: "Tokyo" },
+} };
+const questionAnswer = { artifactId: 12, answers: ["Tokyo"] };
+const clientUserMessageId = asyncQuestionMessageId(questionAnswer.artifactId);
+const promptReply = event("answer3", "user-prompt", { asyncQuestionReply: questionAnswer, clientUserMessageId });
 
 describe("assistant conversation projection", () => {
-  it("keeps every conversation message in order while hiding tools, receipts and provider activity", () => {
+  it("shows both kinds of question in order and coalesces the async answer with its card", () => {
     const prompt = event("prompt1", "user-prompt"), first = event("reply2", "report"), last = event("reply4", "report");
-    const asyncQuestion = event("artifact-12", "report", { source: "codex_async_questions", asyncQuestionAnswer: { answers: ["Tokyo"] } });
-    const reply = event("answer3", "user-prompt", { asyncQuestionReply: { artifactId: 12 } });
+    const asyncQuestion = event("artifact-12", "report", {
+      source: "codex_async_questions", questions: [{ title: "Which city?", options: ["Kyoto", "Tokyo"] }],
+    });
     const log: RunEvent = { ...tool, id: "log", type: "log", content: "Session initialized", metadata: { level: "info" } };
     const compaction = { ...log, id: "compaction", content: "Context compacted", metadata: { source: "context_compaction", phase: "end" } };
-    const events = [prompt, first, tool, question, asyncQuestion, reply, log, compaction, last];
+    const events = [prompt, first, tool, question, asyncQuestion, promptReply, log, compaction, last];
     const original = groupEvents(events);
     const groups = assistantTranscriptGroups(original);
-    expect(groups.flatMap(group => group.events)).toEqual([prompt, first, reply, last]);
-    expect(buildTurnRenderRows(groups, "conversation").every(row => row.kind === "flat")).toBe(true);
+    const recoveredQuestion = { ...asyncQuestion, metadata: { ...asyncQuestion.metadata,
+      asyncQuestionAnswer: { ...questionAnswer, clientUserMessageId } } };
+    expect(groups.flatMap(group => group.events)).toEqual([prompt, first, question, recoveredQuestion, promptReply, last]);
+    expect(buildTurnRenderRows(groups, "conversation").flatMap(row => row.kind === "flat" ? row.indices : [])
+      .flatMap(index => groups[index].events)).toEqual([prompt, first, question, recoveredQuestion, last]);
     expect(original.some(group => group.type === "tool_calls")).toBe(true);
     expect(original.some(group => group.type === "context_compaction")).toBe(true);
-    expect(events).toContain(question);
+    expect(asyncQuestion.metadata?.asyncQuestionAnswer).toBeUndefined();
+  });
+
+  it("keeps a confirmed reply visible when its question is on an earlier history page", () => {
+    const groups = assistantTranscriptGroups(groupEvents([promptReply]));
+    expect(groups[0].representedByQuestion).toBeUndefined();
+    expect(buildTurnRenderRows(groups, "conversation")).toEqual([{ kind: "flat", indices: [0] }]);
   });
 
   it("keeps deliverables, selected images and interactive apps without showing scratch previews", () => {

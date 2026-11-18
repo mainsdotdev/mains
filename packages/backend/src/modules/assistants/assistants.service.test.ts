@@ -392,6 +392,13 @@ describe("conversational assistant routines", () => {
 });
 
 describe("assistant profiles and shared knowledge", () => {
+    it("keeps insertion order for assistants created in the same second across teams", async () => {
+        const first = await makeAssistant("Release manager");
+        const second = await makeIndependentAssistant("Trip planner");
+        db.update(assistantProfiles).set({ createdAt: new Date(0) }).run();
+
+        expect(assistantsService.overview("default").assistants.map(assistant => assistant.id)).toEqual([first.id, second.id]);
+    });
     it("lists an assistant’s latest activity first across repositories and Work without exposing archived or foreign chats", async () => {
         const assistant = await makeAssistant("History"), other = await makeAssistant("Other");
         assistantsRepo.patchWelcome(assistant.id, { state: "started" });

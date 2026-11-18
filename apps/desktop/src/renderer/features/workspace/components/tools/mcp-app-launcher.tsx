@@ -8,7 +8,7 @@ import { useMcpAppToolOpener } from "@/hooks/use-mcp-app-tool-opener";
 export function McpAppLauncher({ icon, appearance = "link", ...props }: McpAppToolOpen & { icon?: ReactNode; appearance?: "link" | "card" }) {
   const openTool = useMcpAppToolOpener();
   return <Button variant="bare" className={appearance === "card"
-    ? "my-2 flex w-full items-center gap-3 rounded-2xl glass-card px-4 py-4 text-left text-sm text-primary-700 dark:text-primary-300 hover:bg-primary-100/50 dark:hover:bg-primary/5"
+    ? "glass-card my-2 flex w-full min-w-0 max-w-transcript-bubble items-center gap-3 rounded-transcript-bubble px-4 py-3 text-left text-sm leading-relaxed text-primary-700 hover:bg-primary-100/50 dark:text-primary-300 dark:hover:bg-primary/5"
     : "my-2 gap-2 text-xs flex text-primary-700 dark:text-primary-300 decoration-dotted underline"} onClick={() => openTool?.(props)}
     disabled={!openTool} tooltip={!openTool ? "App panel is unavailable in this window" : undefined}
     aria-label={`Open ${props.app.appName ?? props.title} in app panel`}>

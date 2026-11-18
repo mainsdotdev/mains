@@ -28,7 +28,7 @@ describe("PromptMarkdown", () => {
     render(createElement(MemoryRouter, null, createElement(PromptMarkdown, {
       skills: [{ name: "123", token: "@assistant-123", displayName: "TestFlight", scope: "assistant", assistantAvatar: { shape: "cube", color: "mint" } }],
     }, "@assistant-123 check build 42")));
-    expect(screen.getByText("TestFlight")).toBeTruthy();
+    expect(screen.getByText("TestFlight").parentElement?.style.color).toMatch(/#237d66 var\(--assistant-mention-ink\), #81cfb4/i);
     expect(document.querySelector('[data-avatar-shape="cube"]')).toBeTruthy();
     expect(screen.queryByText(/@assistant-123/)).toBeNull();
     fireEvent.click(screen.getByText("TestFlight"));

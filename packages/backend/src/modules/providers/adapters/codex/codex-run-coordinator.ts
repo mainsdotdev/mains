@@ -797,17 +797,26 @@ export function createCodexRunCoordinator(
         id: number | string,
         method: string,
         params: unknown,
-      ) =>
-        requestBroker.handleRequest({
+      ) => {
+        const state = activeRuns.get(runId);
+        const threadId = requestThreadId(params);
+        const turnId = requestTurnId(params);
+        const recordUserInput = method === "item/tool/requestUserInput" && state?.assistantId &&
+          (!threadId || threadId === state.threadId) && (!turnId || !state.turnId || turnId === state.turnId);
+        return requestBroker.handleRequest({
           server,
           id,
           method,
           params,
           runId,
-          runIsDead:
-            resolved ||
-            activeRuns.get(runId)?.aborted === true,
+          runIsDead: resolved || state?.aborted === true,
+          onUserInputEvent: recordUserInput ? (event) => {
+            const liveState = activeRuns.get(runId);
+            if (resolved || liveState !== state || liveState?.aborted || (turnId && liveState?.turnId && liveState.turnId !== turnId)) return;
+            return onEvent(event);
+          } : undefined,
         });
+      };
 
       const sink: CodexRunSink = {
         onEvent,

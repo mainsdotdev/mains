@@ -926,6 +926,7 @@ function InteractiveWorkspaceProviderPage({
                 onStop={handleStop}
                 isNewRunTabActive={ws.showNewRunTab}
                 layout="centered"
+                providerNoticeClassName="mb-0"
               />
             </div>
           </div>

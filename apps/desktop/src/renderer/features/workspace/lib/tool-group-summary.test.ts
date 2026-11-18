@@ -16,6 +16,10 @@ describe("summarizeToolCalls", () => {
   it("uses Mate labels for assistant tools across providers", () => {
     for (const prefix of ["", "mcp__mains__"]) {
       expect(summarizeToolCalls([call("list", `${prefix}ListAssistants: {}`)])).toBe("Listed mates");
+      expect(summarizeToolCalls([
+        call("list", `${prefix}ListAssistantTasks: {}`),
+        call("read", `${prefix}ReadAssistantTask: {}`),
+      ])).toBe("Listed mate assignments, read mate assignment");
     }
   });
 

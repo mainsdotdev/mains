@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { useAssistantOverviewQuery, useAssistantConversationsQuery, useArchiveAssistantMutation } from "@/lib/redux/api/assistantsApi";
@@ -26,9 +26,10 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
   const dispatch = useAppDispatch();
   const chatColumnRef = useRef<HTMLDivElement>(null);
   useAssistantUpdates();
-  const { currentData: overview, error, isLoading, refetch } = useAssistantOverviewQuery(accountId);
+  const { currentData: overview, error, isLoading, isFetching, refetch } = useAssistantOverviewQuery(accountId);
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { isOpen: previewOpen, ownerKey: previewOwner, hide: hidePreview } = usePreviewPanel();
   const selectedId = params.get("assistant");
   const selected = overview?.assistants.find(a => a.id === selectedId);
@@ -39,6 +40,8 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
   const runId = runParam && runParam !== "new" ? runParam : null;
   const tab = params.get("tab");
   const creating = params.get("new") === "1";
+  const createdMateId = (location.state as { createdMateId?: string } | null)?.createdMateId;
+  const animateWelcome = selectedId === createdMateId;
   const { currentData: chats, error: chatsError, refetch: refetchChats } = useAssistantConversationsQuery({ accountId, id: selectedId ?? "" }, { skip: !selected });
   const ownerKey = assistantConversationOwner(backendId, accountId, selectedId ?? "");
   const savedView = useAppSelector(state => state.assistants.views[ownerKey]);
@@ -106,6 +109,7 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
     next.delete("new");
     return next;
   }), [setParams]);
+  const openCreatedMate = (id: string) => navigate(assistantHref(id), { state: { createdMateId: id } });
   const toggleArchive = async () => {
     if (!selected) return;
     setFailure("");
@@ -116,16 +120,16 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
     {!creating && <AssistantProfileHeader assistant={selected} chatColumnRef={chatColumnRef} working={working} isPanelOpen={panelOpen} onOpenDetails={toggleInfoPanel} pending={isLoading} />}
     <div ref={chatColumnRef} data-assistant-chat-column="" className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
     {creating ? <div className="scroll-bounce min-h-0 flex-1 overflow-y-auto noscrollbar">
-      <AssistantProfileForm accountId={accountId} onClose={closeCreation} onCreated={id => navigate(assistantHref(id))} />
+      <AssistantProfileForm accountId={accountId} onClose={closeCreation} onCreated={openCreatedMate} />
     </div> : selected ? <>
-      {selected.isArchived ? <div className="flex flex-1 flex-col items-center justify-center gap-4 text-sm text-primary-500"><p>{selected.name} is archived.</p><Button variant="subtle" disabled={archiving.isLoading} onClick={() => void toggleArchive()}>Restore mate</Button>{failure && <p role="alert" className="text-danger">{failure}</p>}</div> : runParam ? <AssistantChat key={`${selected.id}:${runId ?? "new"}`} assistant={selected} welcome={overview?.welcomes?.find(w => w.assistantId === selected.id && w.runId === runId)} selectedRunId={runId} onOpenDetails={() => changeTab("profile")} onSelectRun={id => {
+      {selected.isArchived ? <div className="flex flex-1 flex-col items-center justify-center gap-4 text-sm text-primary-500"><p>{selected.name} is archived.</p><Button variant="subtle" disabled={archiving.isLoading} onClick={() => void toggleArchive()}>Restore mate</Button>{failure && <p role="alert" className="text-danger">{failure}</p>}</div> : runParam ? <AssistantChat key={`${selected.id}:${runId ?? "new"}`} assistant={selected} welcome={overview?.welcomes?.find(w => w.assistantId === selected.id && w.runId === runId)} animateWelcome={animateWelcome} selectedRunId={runId} onOpenDetails={() => changeTab("profile")} onSelectRun={id => {
         if (!id) { openChat("new"); return; }
         if (!runId) dispatch(replaceAssistantConversationDraft({ ownerKey, runId: id }));
         else dispatch(visitAssistantConversation({ ownerKey, runId: id, initialIds: chats?.map(chat => chat.id) ?? [] }));
         navigateChat(id, !runId);
       }} /> : <div className="flex flex-1 items-center justify-center text-sm text-primary-500">Loading conversation…</div>}
     </> : <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-      {error ? <><p role="alert" className="text-sm text-danger">{errorText(error)}</p><Button variant="ghost" onClick={() => void refetch()}>Retry</Button></> : isLoading ? <p className="text-sm text-primary-500">Loading mates…</p> : <><Bot className="size-8 text-primary-400" /><h1 className="text-xl font-medium">{selectedId ? "Mate unavailable" : "Your mates"}</h1><p className="max-w-sm text-sm text-primary-500">{selectedId ? "Choose a mate from the sidebar." : "Create a mate, then start a conversation. Your team can share memory and work together."}</p><Button variant="subtle" onClick={() => setParams({ new: "1" })}><Plus className="size-4" />New mate</Button></>}
+      {error ? <><p role="alert" className="text-sm text-danger">{errorText(error)}</p><Button variant="ghost" onClick={() => void refetch()}>Retry</Button></> : isLoading || (isFetching && animateWelcome) ? <p className="text-sm text-primary-500">Loading mates…</p> : <><Bot className="size-8 text-primary-400" /><h1 className="text-xl font-medium">{selectedId ? "Mate unavailable" : "Your mates"}</h1><p className="max-w-sm text-sm text-primary-500">{selectedId ? "Choose a mate from the sidebar." : "Create a mate, then start a conversation. Your team can share memory and work together."}</p><Button variant="subtle" onClick={() => setParams({ new: "1" })}><Plus className="size-4" />New mate</Button></>}
     </div>}
     </div>
     {selected && overview && !previewOpen && <AssistantInfoPanel key={selected.id} assistant={selected} overview={overview} isOpen={panelOpen}

@@ -12,6 +12,8 @@ export interface EventGroup {
   startTime: Date;
   endTime: Date;
   isRunning?: boolean;
+  /** The Mate question already displays this reply. Retain its input boundary for turn matching. */
+  representedByQuestion?: boolean;
 }
 
 /** Tool events rendered as PlanDisplay — same name rules as `groupEvents` standalone plan groups. */

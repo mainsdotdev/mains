@@ -2,8 +2,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
+import { asyncQuestionMessageId } from "@mains/contracts/async-questions";
 import { groupEvents, type EventGroup } from "../../lib/group-events";
 import { mapArtifactToEvent } from "../../lib/run-event-mappers";
+import { assistantTranscriptGroups } from "../../lib/assistant-transcript-view";
 import { appApi } from "@/lib/transport";
 
 const documentViewer = vi.hoisted(() => ({ open: vi.fn() }));
@@ -173,6 +175,60 @@ describe("Codex async questions", () => {
     render(<InfoGroup group={group} />);
     expect(screen.getByText("Review finished.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Question/ })).toBeNull();
+  });
+});
+
+describe("Mate question bubbles", () => {
+  const question = {
+    id: 12, runId: "run", kind: "report" as const, content: "Which city?",
+    metadata: { source: "codex_async_questions", questions: [{ title: "Which city?", options: ["Kyoto", "Tokyo"] }] },
+  };
+  const answered = (answer: string) => groupEvents([mapArtifactToEvent({
+    ...question, metadata: { ...question.metadata,
+      asyncQuestionAnswer: { artifactId: 12, answers: [answer], clientUserMessageId: asyncQuestionMessageId(12) },
+    },
+  })])[0];
+
+  it("shows all choices before answering, then only the selected choice", () => {
+    const pending = groupEvents([mapArtifactToEvent(question)])[0];
+    const view = render(<InfoGroup runId="run" group={pending} bubble />);
+    expect(screen.getByRole("list", { name: "Options" }).textContent).toBe("AKyotoBTokyo");
+
+    view.rerender(<InfoGroup runId="run" group={answered("Tokyo")} bubble />);
+    expect(screen.getByRole("list", { name: "Selected options" }).textContent).toBe("BTokyo");
+    expect(screen.queryByText("Kyoto")).toBeNull();
+  });
+
+  it("keeps a custom reply in its own user bubble", () => {
+    const answer = "Tokyo, if possible\nOsaka also works.";
+    const { container } = render(<InfoGroup runId="run" group={answered(answer)} bubble />);
+    expect(screen.getByRole("region", { name: "Mate question" }).textContent).toBe("Which city?");
+    expect(container.querySelector(".ms-auto")?.textContent).toBe(answer);
+    expect(screen.queryByRole("list")).toBeNull();
+  });
+
+  it("renders only the confirmed answer when older history has the question", () => {
+    const group = prompt({ asyncQuestionReply: { artifactId: 12, answers: ["Tokyo"] },
+      clientUserMessageId: asyncQuestionMessageId(12) });
+    group.events[0].content = "Which city?\n\nTokyo";
+    render(<InfoGroup group={group} bubble />);
+    expect(screen.getByText("Tokyo")).toBeTruthy();
+    expect(screen.queryByText(/Which city/)).toBeNull();
+  });
+
+  it.each([
+    ["AskUserQuestion", { answers: { "Which city?": "Kyoto" } }],
+    ["UserInput", { status: "answered", answer: "Kyoto" }],
+    ["mcp__mains__AskAssistantQuestion", { content: [{ type: "text", text: '{"status":"answered","answer":"Kyoto"}' }] }],
+  ])("renders the result of %s as conversation content", (toolName, output) => {
+    const groups = assistantTranscriptGroups(groupEvents([{
+      type: "tool_call", id: "tool-1", content: toolName, timestamp: new Date(),
+      metadata: { toolName, status: "done", input: { question: "Which city?", options: [{ label: "Kyoto" }, { label: "Tokyo" }] }, output },
+    }]));
+    render(<InfoGroup group={groups[0]} bubble />);
+    expect(screen.getByText("Which city?")).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Selected options" }).textContent).toBe("AKyoto");
+    expect(screen.queryByText("Tokyo")).toBeNull();
   });
 });
 

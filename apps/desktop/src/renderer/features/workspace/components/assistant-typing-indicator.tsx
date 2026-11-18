@@ -1,8 +1,11 @@
 import type { Assistant } from "@mains/contracts/assistants";
-import { Text } from "@/components/ui";
+import { SquareCell, squareCellStyle, Text } from "@/components/ui";
 import { AssistantAvatar } from "@/features/assistants/components/assistant-avatar";
 import { plainActivityText } from "../lib/run-activity";
 import { useAsyncQuestionDialog } from "./tools/async-question-dialog";
+
+// The center row of the square spinner yields two evenly spaced horizontal passes.
+const WAITING_CELL_STYLES = [0, 1, 2].map(column => squareCellStyle(1, column, 3));
 
 export function AssistantTypingIndicator({ assistant, thinkingText, awaitingInput = false }: {
   assistant?: Pick<Assistant, "id" | "name" | "avatar">;
@@ -17,9 +20,9 @@ export function AssistantTypingIndicator({ assistant, thinkingText, awaitingInpu
     {activity ? (
       <Text as="span" size="sm" tone="inherit" className="shine-text min-w-0 max-w-120 truncate">{activity}</Text>
     ) : (
-      <span aria-hidden="true" className="flex h-6 items-center gap-1">
-        {[0, 1, 2].map(index => <span key={index} className="size-1.5 rounded-full bg-primary-500 motion-safe:animate-pulse"
-          style={{ animationDelay: `${index * 180}ms` }} />)}
+      <span aria-hidden="true" className="flex h-6 items-center gap-1 text-primary-600 [--tsq-base:color-mix(in_srgb,currentColor_30%,transparent)] motion-reduce:[--tsq-base:currentColor] dark:text-primary-300">
+        {WAITING_CELL_STYLES.map((style, index) => <SquareCell key={index} style={style}
+          className="size-1.5 motion-reduce:before:animate-none! motion-reduce:after:animate-none!" />)}
       </span>
     )}
   </div>;

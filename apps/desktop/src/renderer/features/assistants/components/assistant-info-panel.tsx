@@ -193,7 +193,8 @@ export function AssistantInfoPanel({ assistant, overview, chats, selectedRunId, 
         onReset={() => dispatch(setAssistantInfoPanelWidth(ASSISTANT_INFO_PANEL_WIDTH_DEFAULT))}
         ariaLabel="Resize mate panel" />
       <div className={`flex h-full min-h-0 flex-col transition-[translate,opacity] ease-out motion-reduce:translate-y-0 motion-reduce:transition-none ${isAnimatedIn ? "translate-y-0 opacity-100 duration-200 delay-75" : "translate-y-3 opacity-0 duration-100 delay-0"}`}>
-      <div className="flex shrink-0 items-start gap-3 px-5 pb-4 pt-5">
+      {/* Match the title bar action's right inset after the content gutter. */}
+      <div className="flex shrink-0 items-start gap-3 pt-5 pr-2.25 pb-4 pl-5">
         <AssistantAvatar avatar={assistant.avatar} working={isAssistantWorking(overview, assistant.id)} seed={assistant.id} className="size-10" />
         <div className="min-w-0 flex-1"><h2 className="truncate text-base font-medium text-primary-950 dark:text-primary-50">{assistant.name}</h2>{assistant.description && <p className="mt-1.5 text-sm leading-relaxed text-primary-700 dark:text-primary-300">{assistant.description}</p>}</div>
         <Button ref={closeRef} variant="icon" aria-label="Close mate panel" tooltip="Close mate panel"

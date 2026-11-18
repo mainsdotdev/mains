@@ -62,6 +62,8 @@ import { VoiceTaskCard } from "../voice-task-card";
 import type { VoiceTaskLink } from "@mains/contracts/realtime";
 import { AskUserQuestionDisplay } from "./ask-user-question-display";
 import { CodexAsyncQuestionCard } from "./codex-async-question-card";
+import { MateQuestionAnswer, MateQuestionBubble } from "./mate-question-bubble";
+import { isUserQuestionTool, readQuestionReplyEvent, readQuestionToolEntries } from "../../lib/user-question-content";
 import {
   readAsyncQuestionAnswer,
   readAsyncQuestionReply,
@@ -221,6 +223,10 @@ function InfoGroupImpl({
   const event = group.events[0];
   const [previewAtt, setPreviewAtt] = useState<PromptPreview | null>(null);
   if (!event) return null;
+  if (bubble && isUserQuestionTool(event)) {
+    const entries = readQuestionToolEntries(event);
+    return entries.length ? <MateQuestionBubble entries={entries} /> : null;
+  }
   if (replica && runId && event.type === "artifact" && event.metadata?.kind === "image") {
     return <>{group.events.map((row) => {
       const id = /^artifact-(-?\d+)$/.exec(row.id)?.[1];
@@ -251,6 +257,10 @@ function InfoGroupImpl({
   }
 
   if (event.type === "artifact" && event.metadata?.kind === "user-prompt") {
+    const questionReply = bubble ? readQuestionReplyEvent(event) : null;
+    if (questionReply) return group.representedByQuestion ? null : <div className="flex min-w-0 flex-col gap-2">
+      {questionReply.answers.map((answer, index) => <MateQuestionAnswer key={index}>{answer}</MateQuestionAnswer>)}
+    </div>;
     const message = (event.content ?? "").trim();
     const isAsyncQuestionReply =
       readAsyncQuestionReply(event.metadata.asyncQuestionReply) !== null;
@@ -573,16 +583,22 @@ function InfoGroupImpl({
     const questions = readAsyncQuestions(event.metadata.questions);
     const artifactId = /^artifact-(\d+)$/.exec(event.id)?.[1];
     if (questions.length > 0) {
-      if (!replica && runId && artifactId)
+      const answer = readAsyncQuestionAnswer(event.metadata.asyncQuestionAnswer);
+      if ((!replica || bubble) && runId && artifactId)
         return (
           <CodexAsyncQuestionCard
             runId={runId}
             artifactId={Number(artifactId)}
             questions={questions}
-            answer={readAsyncQuestionAnswer(event.metadata.asyncQuestionAnswer)}
+            answer={answer?.artifactId === Number(artifactId) ? answer : null}
             state={readAsyncQuestionState(event.metadata.asyncQuestionState)}
+            bubble={bubble}
           />
         );
+      if (bubble) return <MateQuestionBubble entries={questions.map(({ title, options }, index) => ({
+        question: { question: title, options: options?.map(label => ({ label })) },
+        answer: answer?.answers[index],
+      }))} />;
       return (
         <AskUserQuestionDisplay
           params={{

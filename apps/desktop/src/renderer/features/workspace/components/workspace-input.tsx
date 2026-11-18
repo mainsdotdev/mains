@@ -1,7 +1,8 @@
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery } from "@/lib/redux/api/assistantsApi";
 import type { Assistant } from "@mains/contracts/assistants";
-import { AssistantAvatar } from "@/features/assistants/components/assistant-avatar";
+import { AssistantAvatar, assistantMentionTextColor } from "@/features/assistants/components/assistant-avatar";
+import { cn } from "@/lib/cn";
 import { isAbsoluteFilePath } from "@/lib/file-path";
 
 import {
@@ -82,6 +83,7 @@ const EMPTY_DIRECTORIES: string[] = [];
 
 function assistantChip(token: string, name: string, id: string, avatar?: Assistant["avatar"]): RichSkillChipData {
   return { name: token, displayName: name, token, clickable: false, scope: "assistant", iconSize: "md",
+    textColor: assistantMentionTextColor(avatar),
     icon: <AssistantAvatar avatar={avatar} seed={id} animated={false} className="size-5" /> };
 }
 
@@ -184,6 +186,7 @@ interface WorkspaceInputProps {
   isNewRunTabActive?: boolean;
   /** Empty-state stack: tighter outer margins so the bar sits vertically centered with the headline. */
   layout?: "default" | "centered" | "floating";
+  providerNoticeClassName?: string;
   floatingChatMode?: FloatingChatMode;
   /** Use the full Work/Chat toolbar when this floating panel is expanded. */
   expandFloatingToolbar?: boolean;
@@ -232,6 +235,7 @@ export function WorkspaceInput({
   onStop,
   isNewRunTabActive = false,
   layout = "default",
+  providerNoticeClassName,
   floatingChatMode,
   expandFloatingToolbar = false,
   onFloatingFocus,
@@ -279,8 +283,11 @@ export function WorkspaceInput({
   const openSkillMention = useOpenComposerMention(contextSkills, activeProviderId);
   // Empty-state backlight: the centered composer glows in the accent.
   const { composerPlaceholder, mode: effectiveMode } = useModeConfig(mode);
+  const canMentionMates = effectiveMode === "developer" && !assistantComposer;
   const { data: account } = useGetAccountQuery();
-  const { currentData: assistantOverview } = useAssistantOverviewQuery(account?.id ?? "", { skip: !account || effectiveMode !== "developer" || suspended });
+  const { currentData: assistantOverview } = useAssistantOverviewQuery(account?.id ?? "", {
+    skip: !account || suspended || effectiveMode !== "developer" || (!canMentionMates && !contextAssistants.length),
+  });
 
   // Built outside the JSX on purpose: calling the helper inline in `style`
   // makes the React Compiler bail on this component's manual memoization.
@@ -1026,6 +1033,7 @@ export function WorkspaceInput({
       dense={denseFloating}
     />
   );
+  const noticeClassName = cn("w-full max-w-210 mx-auto", providerNoticeClassName);
 
   return (
     <>
@@ -1037,7 +1045,7 @@ export function WorkspaceInput({
             void refetchModels();
             void refetchAccountInfo();
           }}
-          className="w-full max-w-210 mx-auto"
+          className={noticeClassName}
         />
       ) : (
         (authErrorMessage || providerSignedOut) && (
@@ -1053,7 +1061,7 @@ export function WorkspaceInput({
               void refetchAccountInfo();
             }}
             isRechecking={isFetchingModels || isFetchingAccountInfo}
-            className="w-full max-w-210 mx-auto"
+            className={noticeClassName}
           />
         )
       )}
@@ -1170,8 +1178,8 @@ export function WorkspaceInput({
               workspacePath={workspacePath}
               projectId={projectId}
               commands={providerCommands}
-              assistants={effectiveMode === "developer" ? assistantOverview?.assistants : undefined}
-              onSelectAssistant={selectAssistant}
+              assistants={canMentionMates ? assistantOverview?.assistants : undefined}
+              onSelectAssistant={canMentionMates ? selectAssistant : undefined}
               skills={providerSkills}
               isLoadingSkills={isLoadingSkills}
               onSelectCommand={handleSlashCommandSelect}

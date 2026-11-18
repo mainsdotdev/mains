@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { useLayoutEffect, type ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Assistant, AssistantConversation, AssistantTeam, UpdateAssistantProfile } from "@mains/contracts/assistants";
+import type { Assistant, AssistantConversation, AssistantTeam, AssistantWelcome, UpdateAssistantProfile } from "@mains/contracts/assistants";
 import type { Pulse } from "@/lib/redux/api/pulseApi";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
 import { useAppDispatch } from "@/lib/redux/hooks";
@@ -21,7 +21,9 @@ import AssistantsPage from "./Assistants";
 const mocks = vi.hoisted(() => ({ routines: [] as Pulse[], chats: [] as AssistantConversation[], assistants: [] as Assistant[], teams: [] as AssistantTeam[], savingProfile: false, loadingChats: false, chatsError: undefined as unknown, refetchChats: vi.fn(), websiteChats: [{ id: "website-first", title: "Website announcement", goal: "Page", status: "succeeded", mode: "work", workspaceId: null, workspaceName: null, projectName: null, createdAt: new Date(0), updatedAt: new Date(0) }] }));
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 const createTeam = vi.hoisted(() => vi.fn());
+const createMate = vi.hoisted(() => vi.fn());
 const updateProfile = vi.hoisted(() => vi.fn());
+const welcomes = vi.hoisted(() => [] as AssistantWelcome[]);
 vi.mock("@/lib/redux/api", () => ({
   useGetAccountQuery: () => ({ data: { id: "account" } }),
   useGetProvidersQuery: () => ({ data: [{ id: "codex", isEnabled: true }] }),
@@ -29,11 +31,11 @@ vi.mock("@/lib/redux/api", () => ({
   useGetProviderModelsQuery: () => ({ currentData: [{ id: "model", displayName: "Test model" }], isFetching: false }),
 }));
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
-  useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments: [], memories: [] }, refetch: vi.fn() }),
+  useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments: [], memories: [], welcomes }, refetch: vi.fn() }),
   useAssistantConversationsQuery: ({ id }: { id: string }) => ({ currentData: mocks.loadingChats ? undefined : id === "website" ? mocks.websiteChats : mocks.chats, error: mocks.chatsError, refetch: mocks.refetchChats }),
   useArchiveAssistantMutation: () => [vi.fn(), {}],
   useUpdateAssistantProfileMutation: () => [updateProfile, { isLoading: mocks.savingProfile }],
-  useCreateAssistantMutation: () => [vi.fn(), {}],
+  useCreateAssistantMutation: () => [createMate, {}],
   useCreateAssistantTeamMutation: () => [createTeam, {}],
 }));
 vi.mock("@/lib/redux/api/pulseApi", () => ({
@@ -43,15 +45,16 @@ vi.mock("@/lib/redux/api/pulseApi", () => ({
 vi.mock("@/features/assistants/hooks/use-assistant-updates", () => ({ useAssistantUpdates() {} }));
 vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ mode: "developer" }) }));
 vi.mock("@/features/assistants/components/assistant-chat", () => ({
-  AssistantChat: ({ assistant, selectedRunId, onSelectRun, onOpenDetails }: {
-    assistant: Assistant; selectedRunId: string | null; onSelectRun(id: string): void; onOpenDetails(): void;
+  AssistantChat: ({ assistant, selectedRunId, animateWelcome, onSelectRun, onOpenDetails }: {
+    assistant: Assistant; selectedRunId: string | null; animateWelcome?: boolean; onSelectRun(id: string): void; onOpenDetails(): void;
   }) => {
+    const [animateIntro] = useState(animateWelcome);
     const dispatch = useAppDispatch();
     const owner = composerOwnerKey({ backendId: "local", assistantId: assistant.id, spaceId: assistant.spaceId,
       providerId: assistant.providerId, mode: assistant.spaceSnapshot.mode }, selectedRunId);
     useLayoutEffect(() => { dispatch(setComposerContextKey(owner)); }, [dispatch, owner]);
     return <div>{!selectedRunId && <button aria-label="Center assistant monogram" onClick={onOpenDetails}>R</button>}
-      <output data-testid="conversation">{selectedRunId ?? "draft"}</output>
+      <output data-testid="conversation" data-animate-welcome={animateIntro}>{selectedRunId ?? "draft"}</output>
       <button onClick={() => {
         mocks.chats = [{ id: "third", title: "Third release", goal: "Third", status: "succeeded", mode: "work", workspaceId: null,
           workspaceName: null, projectName: null, createdAt: new Date(), updatedAt: new Date() }, ...mocks.chats];
@@ -80,6 +83,8 @@ function setup(initial = "/assistants?assistant=release&run=first", openPreview?
 }
 beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
+  createMate.mockReset();
+  welcomes.length = 0;
   createTeam.mockReset().mockImplementation((input: Pick<AssistantTeam, "accountId" | "name">) =>
     ({ unwrap: () => Promise.resolve({ ...input, id: "new-team", createdAt: new Date(0) }) }));
   updateProfile.mockReset().mockImplementation(({ id, profile, teamChange }: UpdateAssistantProfile) => ({
@@ -104,6 +109,33 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView; else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
 
 describe("assistant profile and conversation", () => {
+  it("lists the new mate first, plays its welcome, and opens a revisited setup without replaying it", async () => {
+    const mate = { ...mocks.assistants[0], id: "new-mate", name: "Travel planner" };
+    const runId = "assistant-welcome-new-mate";
+    createMate.mockReturnValue({ unwrap: async () => {
+      mocks.assistants.push(mate);
+      welcomes.push({ assistantId: mate.id, runId, state: "ready", answer: null, wasSkipped: false, error: null, createdAt: new Date(),
+        question: { header: "Set up", question: "How can I help?", options: [], idleMessage: "Ready", profileSetup: { turns: [] } } });
+      return mate;
+    } });
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "New mate" }));
+    const form = within(screen.getByRole("form", { name: "Create mate" }));
+    fireEvent.change(form.getByLabelText("Name"), { target: { value: mate.name } });
+    fireEvent.click(form.getByRole("button", { name: "Create mate" }));
+    await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe(runId));
+    expect(screen.getByTestId("conversation").getAttribute("data-animate-welcome")).toBe("true");
+
+    const sidebar = within(screen.getByRole("navigation", { name: "Mates" }));
+    expect(sidebar.getAllByRole("button", { name: /^About / }).map(button => button.getAttribute("aria-label")))
+      .toEqual(["About Travel planner", "About Website", "About Release"]);
+    fireEvent.click(sidebar.getByRole("button", { name: /^Website/ }));
+    await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("website-first"));
+    fireEvent.click(sidebar.getByRole("button", { name: /^Travel planner/ }));
+    await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe(runId));
+    expect(screen.getByTestId("conversation").getAttribute("data-animate-welcome")).toBe("false");
+  });
+
   it("opens Routines and its last task without closing the panel or losing chat selection", async () => {
     mocks.routines = [{ id: "routine", accountId: "account", assistantId: "release", title: "Daily release check", prompt: "Check the release", frequency: "daily", hour: 9, minute: 0, timezone: "Europe/Istanbul", isActive: true, mode: "work", lastRunId: "second" } as Pulse];
     setup("/assistants?assistant=release&run=first&tab=routines");
