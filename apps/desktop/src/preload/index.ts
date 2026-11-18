@@ -117,6 +117,7 @@ const api = {
     changeTeam: (payload: import("@mains/contracts/assistants").ChangeAssistantTeam) => ipcRenderer.invoke(CHANNELS.assistants.changeTeam, payload),
     updateProfile: (payload: import("@mains/contracts/assistants").UpdateAssistantProfile) => ipcRenderer.invoke(CHANNELS.assistants.updateProfile, payload),
     archive: (accountId: string, id: string, archived: boolean) => ipcRenderer.invoke(CHANNELS.assistants.archive, accountId, id, archived),
+    remove: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.remove, accountId, id),
     conversations: (accountId: string, id: string) => ipcRenderer.invoke(CHANNELS.assistants.conversations, accountId, id),
     send: (payload: import("@mains/contracts/assistants").SendAssistantMessage) => ipcRenderer.invoke(CHANNELS.assistants.send, payload),
     saveMemory: (payload: import("@mains/contracts/assistants").SaveAssistantMemory) => ipcRenderer.invoke(CHANNELS.assistants.saveMemory, payload),

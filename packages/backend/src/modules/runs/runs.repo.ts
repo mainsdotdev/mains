@@ -308,6 +308,12 @@ export const runsRepo = {
     return rows.map((row) => row.id);
   },
 
+  async findRunIdsByAssistant(accountId: string, assistantId: string): Promise<string[]> {
+    const rows = await getDb().select({ id: runs.id }).from(runs)
+      .where(and(eq(runs.accountId, accountId), eq(runs.assistantId, assistantId), ownedHere(runs.ownerBackendId)));
+    return rows.map(row => row.id);
+  },
+
   async findRunsByStatus(
     accountId: string,
     status: "queued" | "running" | "succeeded" | "failed" | "canceled"

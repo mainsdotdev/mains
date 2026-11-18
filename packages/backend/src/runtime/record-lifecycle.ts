@@ -1,7 +1,7 @@
 import { ResourceCleanupError } from "./resource-lifecycle";
 import { AsyncLocalStorage } from "node:async_hooks";
 
-type RecordKind = "run" | "workspace" | "collection" | "collection-source" | "project";
+type RecordKind = "run" | "workspace" | "collection" | "collection-source" | "project" | "assistant";
 export type RecordAction = "archive" | "restore" | "delete" | "delete-worktree" | `source-delete:${string}` | symbol;
 interface Owner { action: RecordAction; result: Promise<unknown>; finished: Promise<void>; failed?: boolean; active: boolean }
 const owners = new Map<string, Owner>();

@@ -8,7 +8,7 @@ export const CHANNELS = {
     assignment: "assistants:assignment", prepareWelcome: "assistants:prepareWelcome", respondWelcome: "assistants:respondWelcome", setupProfile: "assistants:setupProfile",
     overview: "assistants:overview", create: "assistants:create", createTeam: "assistants:createTeam",
     changeTeam: "assistants:changeTeam", updateProfile: "assistants:updateProfile",
-    archive: "assistants:archive", saveMemory: "assistants:saveMemory", removeMemory: "assistants:removeMemory",
+    archive: "assistants:archive", remove: "assistants:remove", saveMemory: "assistants:saveMemory", removeMemory: "assistants:removeMemory",
     conversations: "assistants:conversations", send: "assistants:send", assign: "assistants:assign",
     reviewPullRequest: "assistants:reviewPullRequest", pullRequestReviews: "assistants:pullRequestReviews",
     reconcile: "assistants:reconcile", followup: "assistants:followup", cancel: "assistants:cancel", changed: "assistants:changed",

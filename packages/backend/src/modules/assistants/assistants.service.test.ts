@@ -450,6 +450,78 @@ describe("conversational assistant routines", () => {
     });
 });
 
+describe("archived Mate deletion", () => {
+    it("removes owned data and leaves shared memories and a teammate's delegated work in place", async () => {
+        const mate = await makeAssistant("Release");
+        const colleague = await makeAssistant("Build");
+        const accountId = "default";
+        const privateNote = assistantsService.saveMemory({ accountId, teamId, assistantId: mate.id, title: "Preference", content: "Private note" });
+        const sharedNote = assistantsService.saveMemory({ accountId, teamId, title: "Team notes", content: "Shared note" });
+        const routine = pulseService.createRoutine(accountId, mate.id, {
+            title: "Daily check", prompt: "Check builds", frequency: "daily", hour: 9, minute: 0, timezone: "UTC",
+        });
+        createRun(db, { id: "mate-run", assistantId: mate.id, mode: "work", status: "succeeded" });
+        createRun(db, { id: "archived-mate-run", assistantId: mate.id, isArchived: true, status: "succeeded" });
+        createRun(db, { id: "colleague-run", assistantId: colleague.id, status: "succeeded" });
+        assistantsRepo.enqueue({
+            id: "received", accountId, teamId, fromAssistantId: colleague.id, fromRunId: "colleague-run", toAssistantId: mate.id,
+            taskKey: "received", dedupeKey: "received", title: "Release check", prompt: "Check release", status: "completed", workerRunId: "mate-run",
+        }, { id: "received-message", assignmentId: "received", kind: "request", content: "Check release", status: "delivered" });
+        assistantsRepo.enqueue({
+            id: "sent", accountId, teamId, fromAssistantId: mate.id, fromRunId: "mate-run", toAssistantId: colleague.id,
+            taskKey: "sent", dedupeKey: "sent", title: "Build check", prompt: "Check build", status: "completed", parentId: "received",
+        }, { id: "sent-message", assignmentId: "sent", kind: "request", content: "Check build", status: "delivered" });
+
+        assistantsService.archive(mate.id, accountId, true);
+        await assistantsService.remove(mate.id, accountId);
+
+        expect(assistantsService.get(mate.id, accountId)).toBeNull();
+        expect(assistantsRepo.welcome(mate.id)).toBeNull();
+        expect(assistantsRepo.memory(privateNote.id)).toBeNull();
+        expect(assistantsRepo.memory(sharedNote.id)?.content).toBe("Shared note");
+        expect(pulseService.getById(routine.id)).toBeNull();
+        expect(await runsService.getRunById("mate-run")).toBeNull();
+        expect(await runsService.getRunById("archived-mate-run")).toBeNull();
+        expect(await runsService.getRunById("colleague-run")).toBeTruthy();
+        expect(assistantsRepo.assignment("received")).toBeNull();
+        expect(assistantsRepo.message("received-message")).toBeNull();
+        expect(assistantsRepo.assignment("sent")).toMatchObject({ toAssistantId: colleague.id, fromAssistantId: null, fromRunId: null, parentId: null });
+        expect(assistantsRepo.message("sent-message")).toBeTruthy();
+    });
+
+    it("checks ownership, archive state, and pending work before deleting any conversations", async () => {
+        const mate = await makeAssistant("Release");
+        createAccount(db, { id: "other" });
+        await expect(assistantsService.remove(mate.id, "other")).rejects.toThrow("not found");
+        await expect(assistantsService.remove(mate.id, "default")).rejects.toThrow("Archive this Mate");
+        assistantsService.archive(mate.id, "default", true);
+        createRun(db, { id: "old-mate-run", assistantId: mate.id, status: "succeeded" });
+        createRun(db, { id: "pending-mate-run", assistantId: mate.id, status: "running" });
+
+        await expect(assistantsService.remove(mate.id, "default")).rejects.toThrow("running conversations");
+        expect(await runsService.getRunById("old-mate-run")).toBeTruthy();
+        expect(assistantsService.get(mate.id, "default")?.isArchived).toBe(true);
+    });
+
+    it("keeps an interrupted deletion archived and retries the remaining conversations", async () => {
+        const mate = await makeAssistant("Release");
+        createRun(db, { id: "mate-run-1", assistantId: mate.id, status: "succeeded" });
+        createRun(db, { id: "mate-run-2", assistantId: mate.id, status: "succeeded" });
+        assistantsService.archive(mate.id, "default", true);
+        const deleteRun = runsService.deleteRun.bind(runsService);
+        vi.spyOn(runsService, "deleteRun").mockImplementationOnce(deleteRun).mockRejectedValueOnce(new Error("Storage unavailable"));
+
+        const removing = assistantsService.remove(mate.id, "default");
+        expect(() => assistantsService.archive(mate.id, "default", false)).toThrow("being archived, restored or deleted");
+        await expect(removing).rejects.toThrow("Storage unavailable");
+        expect(assistantsService.get(mate.id, "default")?.isArchived).toBe(true);
+        await assistantsService.remove(mate.id, "default");
+        expect(assistantsService.get(mate.id, "default")).toBeNull();
+        expect(await runsService.getRunById("mate-run-1")).toBeNull();
+        expect(await runsService.getRunById("mate-run-2")).toBeNull();
+    });
+});
+
 describe("assistant profiles and shared knowledge", () => {
     it("keeps insertion order for assistants created in the same second across teams", async () => {
         const first = await makeAssistant("Release manager");

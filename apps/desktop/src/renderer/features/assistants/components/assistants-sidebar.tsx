@@ -8,19 +8,21 @@ import SearchBar from "@/components/layout/sidebar/search-bar";
 import { SidebarItemHoverCard } from "@/components/layout/sidebar/sidebar-item-hover-card";
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery } from "@/lib/redux/api/assistantsApi";
-import { useAppDispatch } from "@/lib/redux/hooks";
+import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { useIsMobile } from "@/lib/platform";
 import { assistantHref } from "../lib/assistant-navigation";
 import { AssistantMonogram } from "./assistant-monogram";
+import { AssistantArchiveMenu } from "./assistant-archive-menu";
 import { errorText, isAssistantWorking } from "../lib/assistant-ui";
 
 export function AssistantsSidebar() {
+  const backendId = useAppSelector(state => state.backends.activeBackendId);
   const { data: account } = useGetAccountQuery();
   const { currentData: overview, error, refetch } = useAssistantOverviewQuery(account?.id ?? "", { skip: !account });
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const mobile = useIsMobile();
@@ -50,6 +52,13 @@ export function AssistantsSidebar() {
           working={isAssistantWorking(overview, assistant.id)} active={params.get("new") !== "1" && params.get("assistant") === assistant.id}
           open={open} onOpenDetails={() => open(`${assistantHref(assistant.id, params.get("assistant") === assistant.id ? params.get("run") : null)}&tab=profile`)} />)}
       </nav>
+      {account && <div className="shrink-0 px-3 pt-4 pb-3">
+        <AssistantArchiveMenu key={`${backendId}:${account.id}`} accountId={account.id} assistants={overview?.assistants} error={error}
+          onOpen={id => open(assistantHref(id))}
+          onRemoved={id => {
+            if (params.get("assistant") === id) setParams(params.get("new") === "1" ? { new: "1" } : {}, { replace: true });
+          }} />
+      </div>}
     </div>
   );
 }

@@ -303,6 +303,11 @@ export const pulseService = {
     scheduleNext();
   },
 
+  deleteAssistantRoutines(accountId: string, assistantId: string): void {
+    for (const id of pulseRepo.deleteAssistantRoutines(accountId, assistantId)) lifecycle.invalidate(id);
+    scheduleNext();
+  },
+
   // ── Execution ──
 
   async executePulse(id: string, manualTaskKey?: string): Promise<Pulse | null> {

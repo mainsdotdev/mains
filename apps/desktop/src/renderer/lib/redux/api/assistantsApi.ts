@@ -27,6 +27,10 @@ export const assistantsApi = baseApi.injectEndpoints({
             id: string;
             archived: boolean;
         }>({ query: ({ accountId, id, archived }) => ({ handler: CHANNELS.assistants.archive, args: [accountId, id, archived] }), invalidatesTags: ["Assistants"] }),
+        removeAssistant: b.mutation<void, { accountId: string; id: string }>({
+            query: ({ accountId, id }) => ({ handler: CHANNELS.assistants.remove, args: [accountId, id] }),
+            invalidatesTags: ["Assistants", "AssistantChats", "Pulse"],
+        }),
         saveAssistantMemory: b.mutation<AssistantMemory, SaveAssistantMemory>({ query: input => ({ handler: CHANNELS.assistants.saveMemory, args: [input] }), invalidatesTags: ["Assistants"] }),
         removeAssistantMemory: b.mutation<void, {
             accountId: string;
@@ -66,4 +70,4 @@ export const assistantsApi = baseApi.injectEndpoints({
     }),
 });
 export const { useSetupAssistantProfileMutation, useAssistantAssignmentQuery, usePrepareAssistantWelcomeMutation, useRespondAssistantWelcomeMutation, useAssistantOverviewQuery, useCreateAssistantTeamMutation, useCreateAssistantMutation, useChangeAssistantTeamMutation, useUpdateAssistantProfileMutation, useArchiveAssistantMutation, useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation, useAssistantConversationsQuery, useSendAssistantMessageMutation, useAssignAssistantTaskMutation, useReconcileAssistantTaskMutation, useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation } = assistantsApi;
-export const { useReviewPullRequestWithAssistantMutation, useAssistantPullRequestReviewsQuery } = assistantsApi;
+export const { useReviewPullRequestWithAssistantMutation, useAssistantPullRequestReviewsQuery, useRemoveAssistantMutation } = assistantsApi;

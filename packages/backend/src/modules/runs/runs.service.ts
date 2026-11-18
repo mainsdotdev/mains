@@ -1756,6 +1756,15 @@ export const runsService = {
     for (const runId of runIds) await this.deleteRun(runId);
   },
 
+  async deleteRunsByAssistant(accountId: string, assistantId: string): Promise<void> {
+    const runIds = await runsRepo.findRunIdsByAssistant(accountId, assistantId);
+    for (const runId of runIds) {
+      assertRunCanRetire(runId);
+      if (isRecordTransitioning(recordKey("run", runId))) throw new Error("Wait for this Mate’s conversation changes to finish.");
+    }
+    for (const runId of runIds) await this.deleteRun(runId);
+  },
+
   async assertWorkspaceCanRetire(workspaceId: string): Promise<void> {
     const runIds = await runsRepo.findRunIdsByWorkspaceId(workspaceId);
     for (const runId of runIds) {

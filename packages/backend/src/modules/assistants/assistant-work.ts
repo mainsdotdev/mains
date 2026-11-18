@@ -375,7 +375,8 @@ export const assistantWork = {
                 const run = task.workerRunId ? await runsService.getRunById(task.workerRunId) : null;
                 if (!open || owner !== generation)
                     return;
-                if (run && !live(run.status) && !terminal(assistantsRepo.assignment(task.id)!.status)) {
+                const current = assistantsRepo.assignment(task.id);
+                if (run && !live(run.status) && current && !terminal(current.status)) {
                     const waitingForChildren = assistantsRepo.assignments(task.accountId).some(child => child.parentId === task.id && !terminal(child.status));
                     if (run.status === "succeeded" && waitingForChildren)
                         continue;
@@ -383,8 +384,8 @@ export const assistantWork = {
                     const error = run.lastError || (run.status === "succeeded" ? "The turn ended without a task report. Continue the conversation to finish or report a blocker." : null);
                     assistantsRepo.transaction(() => {
                         assistantsRepo.patchAssignment(task.id, { status, error });
-                        if (task.fromRunId)
-                            assistantsRepo.addMessage({ id: `outcome-${task.id}-${run.endedAt?.getTime() ?? run.status}`, assignmentId: task.id, kind: "result", targetRunId: task.fromRunId,
+                        if (current.fromRunId)
+                            assistantsRepo.addMessage({ id: `outcome-${task.id}-${run.endedAt?.getTime() ?? run.status}`, assignmentId: task.id, kind: "result", targetRunId: current.fromRunId,
                                 content: `Teammate assignment status (reference data): ${JSON.stringify({ assignmentId: task.id, status, error })}. A provider turn is not evidence of task completion. Continue only the user's existing request.` });
                     });
                     changed();
@@ -459,7 +460,8 @@ export const assistantWork = {
                 catch (error) {
                     assistantsRepo.patchMessage(message.id, { status: "canceled", error: String(error) });
                     dispatchingRuns.delete(message.targetRunId!);
-                    if (!terminal(assistantsRepo.assignment(task.id)!.status))
+                    const current = assistantsRepo.assignment(task.id);
+                    if (current && !terminal(current.status))
                         assistantsRepo.patchAssignment(task.id, { status: "blocked", error: String(error) });
                     changed();
                 }

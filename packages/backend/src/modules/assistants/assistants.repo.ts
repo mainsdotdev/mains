@@ -1,4 +1,4 @@
-import { and, desc, eq, getTableColumns, isNull, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, isNull, isNotNull, or, sql } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { assistantTeams, assistants, assistantWelcomes, assistantMemories, assistantAssignments, assistantMessages, runs, runContext, workspaces, projects } from "../../db/schema";
 import type { Assistant, AssistantAssignment, AssistantMessageContext, AssistantProfile, AssistantPullRequestContext, AssistantPullRequestReview } from "@mains/contracts/assistants";
@@ -55,6 +55,22 @@ export const assistantsRepo = {
             .where(and(eq(assistantMemories.assistantId, id), eq(assistantMemories.accountId, accountId))).run();
     },
     archive(id: string, archived: boolean) { getDb().update(assistants).set({ isArchived: archived, updatedAt: new Date() }).where(eq(assistants.id, id)).run(); },
+    deleteArchived(id: string, accountId: string): void {
+        const db = getDb();
+        db.transaction(() => {
+            const received = and(eq(assistantAssignments.accountId, accountId), eq(assistantAssignments.toAssistantId, id));
+            const receivedIds = db.select({ id: assistantAssignments.id }).from(assistantAssignments).where(received);
+            db.update(assistantAssignments).set({ parentId: null }).where(and(
+                eq(assistantAssignments.accountId, accountId), inArray(assistantAssignments.parentId, receivedIds),
+            )).run();
+            // The receiving Mate still owns the work assigned to it by this sender.
+            db.update(assistantAssignments).set({ fromAssistantId: null, fromRunId: null, sourceContextId: null })
+                .where(and(eq(assistantAssignments.accountId, accountId), eq(assistantAssignments.fromAssistantId, id))).run();
+            db.delete(assistantAssignments).where(received).run();
+            const removed = db.delete(assistants).where(and(eq(assistants.id, id), eq(assistants.accountId, accountId), eq(assistants.isArchived, true))).run();
+            if (!removed.changes) throw new Error("Mate is no longer archived.");
+        });
+    },
     memories(accountId: string, assistant?: Pick<Assistant, "id" | "teamId">) {
         const scope = assistant && or(
             eq(assistantMemories.assistantId, assistant.id),
@@ -73,6 +89,7 @@ export const assistantsRepo = {
         return getDb().select({ contextId: runContext.id, runId: runs.id, accountId: runs.accountId, metadata: runContext.metadata }).from(runContext)
             .innerJoin(runs, eq(runs.id, runContext.runId)).leftJoin(assistantAssignments, or(eq(assistantAssignments.sourceContextId, runContext.id), and(eq(assistantAssignments.fromRunId, runs.id), sql`${assistantAssignments.taskKey} = 'mention:' || json_extract(${runContext.metadata}, '$.sourcePromptId') || ':' || json_extract(${runContext.metadata}, '$.requestId')`, sql`${assistantAssignments.toAssistantId} = json_extract(${runContext.metadata}, '$.assistantId')`)))
             .where(and(isNull(assistantAssignments.id), eq(runs.isArchived, false), eq(runs.mode, "developer"), sql`json_extract(${runContext.metadata}, '$.source') = 'assistant_mention'`,
+                sql`EXISTS (SELECT 1 FROM assistants a WHERE a.id = json_extract(${runContext.metadata}, '$.assistantId') AND a.account_id = ${runs.accountId})`,
                 sql`EXISTS (SELECT 1 FROM run_artifacts a WHERE a.run_id = ${runs.id} AND a.kind = 'user-prompt' AND a.content = json_extract(${runContext.metadata}, '$.sourcePrompt') AND (json_extract(a.metadata, '$.clientPromptId') = json_extract(${runContext.metadata}, '$.sourcePromptId') OR json_extract(a.metadata, '$.clientUserMessageId') = json_extract(${runContext.metadata}, '$.sourcePromptId')))`))
             .orderBy(runContext.id).limit(50).all();
     },

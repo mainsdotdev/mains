@@ -19,6 +19,7 @@ export function registerAssistantsIpc() {
     ipcMain.handle(CHANNELS.assistants.setupProfile, handle((accountId: string, id: string, input: unknown) => assistantWelcome.setupProfile(accountId, id, input)));
     ipcMain.handle(CHANNELS.assistants.respondWelcome, handle((accountId: string, id: string, answer: string | null, execution?: unknown) => assistantWelcome.respond(accountId, id, answer, {}, execution)));
     ipcMain.handle(CHANNELS.assistants.archive, handle((accountId: string, id: string, archived: boolean) => changed(() => { assistantsService.archive(id, accountId, archived); if (!archived) assistantWelcome.prepare(id); })));
+    ipcMain.handle(CHANNELS.assistants.remove, handle((accountId: string, id: string) => changed(() => assistantsService.remove(id, accountId))));
     ipcMain.handle(CHANNELS.assistants.saveMemory, handle((payload: unknown) => changed(() => assistantsService.saveMemory(payload))));
     ipcMain.handle(CHANNELS.assistants.removeMemory, handle((accountId: string, id: string, revision: number) => changed(() => assistantsService.removeMemory(accountId, id, revision))));
     ipcMain.handle(CHANNELS.assistants.conversations, handle((accountId: string, id: string) => assistantsService.conversations(id, accountId)));

@@ -10,6 +10,7 @@ import { providersService } from "../providers";
 import { ASSISTANT_AVATAR_COLORS, ASSISTANT_AVATAR_SHAPES, DEFAULT_ASSISTANT_AVATAR, normalizeAssistantAvatar } from "@mains/contracts/assistants";
 import { snapshotRunSettingConfig } from "@mains/contracts/run-settings";
 import type { Assistant, AssistantConversation, AssistantOverview, AssistantProfile, AssistantWelcome } from "@mains/contracts/assistants";
+import { assertRecordAvailable, recordKey, transitionRecord } from "../../runtime/record-lifecycle";
 
 function readAvatar(input: unknown) {
     const value = object(input);
@@ -160,14 +161,36 @@ export const assistantsService = {
     archive(id: string, accountId: string, archived: boolean): void {
         if (typeof archived !== "boolean")
             throw new Error("Choose an archive state");
-        if (!this.get(id, accountId))
+        const assistant = this.get(id, accountId);
+        if (!assistant)
             throw new Error("Assistant not found");
+        id = assistant.id;
+        accountId = assistant.accountId;
+        assertRecordAvailable(recordKey("assistant", id, accountId));
         if (archived && assistantsRepo.assignments(accountId).some(t => t.toAssistantId === id && ["queued", "running", "blocked", "uncertain"].includes(t.status)))
             throw new Error("Finish or cancel this assistant's assignments before archiving");
         if (archived && assistantsRepo.hasPendingRun(id))
             throw new Error("Stop this assistant’s running conversations before archiving");
         assistantsRepo.archive(id, archived);
         if (archived) pulseService.pauseAssistantRoutines(id);
+    },
+    remove(id: string, accountId: string): Promise<void> {
+        id = text(id, "Assistant");
+        accountId = text(accountId, "Account");
+        return transitionRecord(recordKey("assistant", id, accountId), "delete", async () => {
+            const assistant = this.get(id, accountId);
+            if (!assistant) throw new Error("Mate not found.");
+            if (!assistant.isArchived) throw new Error("Archive this Mate before deleting it.");
+            if (assistantsRepo.hasPendingRun(id)) throw new Error("Stop this Mate’s running conversations before deleting it.");
+            if (assistantsRepo.hasPendingTeamWork(id)) throw new Error("Finish or cancel this Mate’s assignments and pending deliveries before deleting it.");
+            const welcome = assistantsRepo.welcome(id);
+            if (welcome && ["generating", "starting"].includes(welcome.state)) throw new Error("Wait for this Mate’s setup to finish before deleting it.");
+
+            const { runsService } = await import("../runs");
+            await runsService.deleteRunsByAssistant(accountId, id);
+            pulseService.deleteAssistantRoutines(accountId, id);
+            assistantsRepo.deleteArchived(id, accountId);
+        });
     },
     changeTeam(input: unknown): Assistant {
         const value = object(input);

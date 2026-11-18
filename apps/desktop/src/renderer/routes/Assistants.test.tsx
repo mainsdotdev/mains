@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({ routines: [] as Pulse[], chats: [] as Assistan
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 const createTeam = vi.hoisted(() => vi.fn());
 const createMate = vi.hoisted(() => vi.fn());
+const archiveMate = vi.hoisted(() => vi.fn());
+const removeMate = vi.hoisted(() => vi.fn());
 const updateProfile = vi.hoisted(() => vi.fn());
 const welcomes = vi.hoisted(() => [] as AssistantWelcome[]);
 vi.mock("@/lib/redux/api", () => ({
@@ -33,7 +35,8 @@ vi.mock("@/lib/redux/api", () => ({
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
   useAssistantOverviewQuery: () => ({ currentData: { assistants: mocks.assistants, teams: mocks.teams, assignments: [], memories: [], welcomes }, refetch: vi.fn() }),
   useAssistantConversationsQuery: ({ id }: { id: string }) => ({ currentData: mocks.loadingChats ? undefined : id === "website" ? mocks.websiteChats : mocks.chats, error: mocks.chatsError, refetch: mocks.refetchChats }),
-  useArchiveAssistantMutation: () => [vi.fn(), {}],
+  useArchiveAssistantMutation: () => [archiveMate, {}],
+  useRemoveAssistantMutation: () => [removeMate, {}],
   useUpdateAssistantProfileMutation: () => [updateProfile, { isLoading: mocks.savingProfile }],
   useCreateAssistantMutation: () => [createMate, {}],
   useCreateAssistantTeamMutation: () => [createTeam, {}],
@@ -84,6 +87,8 @@ function setup(initial = "/assistants?assistant=release&run=first", openPreview?
 beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
   createMate.mockReset();
+  archiveMate.mockReset().mockReturnValue({ unwrap: async () => undefined });
+  removeMate.mockReset().mockReturnValue({ unwrap: async () => undefined });
   welcomes.length = 0;
   createTeam.mockReset().mockImplementation((input: Pick<AssistantTeam, "accountId" | "name">) =>
     ({ unwrap: () => Promise.resolve({ ...input, id: "new-team", createdAt: new Date(0) }) }));
@@ -109,6 +114,50 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView; else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
 
 describe("assistant profile and conversation", () => {
+  it("opens a searchable archive from the sidebar and restores a mate from its row", async () => {
+    mocks.assistants[1].isArchived = true;
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    const archive = within(screen.getByRole("menu", { name: "Archived" }));
+    const search = archive.getByRole("textbox", { name: "Search archived mates" });
+    expect(document.activeElement).toBe(search);
+    expect(archive.queryByRole("menuitem", { name: "Open Release" })).toBeNull();
+    fireEvent.change(search, { target: { value: "nonmatching" } });
+    expect(archive.getByText("No matching mates")).toBeTruthy();
+    fireEvent.change(search, { target: { value: "website" } });
+    fireEvent.click(archive.getByRole("menuitem", { name: "Restore Website" }));
+    await waitFor(() => expect(archiveMate).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "website", archived: false }));
+  });
+
+  it("asks before permanent deletion and clears the deleted mate's selection", async () => {
+    mocks.assistants[1].isArchived = true;
+    removeMate.mockReturnValue({ unwrap: async () => {
+      mocks.assistants = mocks.assistants.filter(mate => mate.id !== "website");
+    } });
+    setup("/assistants?assistant=website");
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete Website permanently" }));
+    const confirmation = within(screen.getByRole("alertdialog", { name: "Delete Website permanently?" }));
+    expect(confirmation.getByText(/conversations, private memory, routines/)).toBeTruthy();
+    expect(removeMate).not.toHaveBeenCalled();
+    fireEvent.click(confirmation.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(removeMate).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "website" }));
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toContain("assistant=release"));
+  });
+
+  it("shows animated avatar previews on the empty screen and opens the first mate form", () => {
+    mocks.assistants = [];
+    const { container } = setup("/assistants");
+    const heading = screen.getByRole("heading", { name: "Your mates" });
+    const emptyState = heading.parentElement!;
+    const avatars = [...emptyState.querySelectorAll('[data-avatar-shape][data-animated="true"]')];
+    expect(avatars.map(avatar => avatar.getAttribute("data-avatar-shape"))).toEqual(["sphere", "mains", "flower"]);
+    expect(avatars.every(avatar => avatar.getAttribute("aria-hidden") === "true")).toBe(true);
+    fireEvent.click(within(emptyState).getByRole("button", { name: "New mate" }));
+    expect(screen.getByRole("form", { name: "Create mate" })).toBeTruthy();
+    expect(container.querySelector(".mosaic-avatar--floating")).toBeNull();
+  });
+
   it("lists the new mate first, plays its welcome, and opens a revisited setup without replaying it", async () => {
     const mate = { ...mocks.assistants[0], id: "new-mate", name: "Travel planner" };
     const runId = "assistant-welcome-new-mate";

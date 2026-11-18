@@ -117,6 +117,12 @@ export const pulseRepo = {
       .returning({ id: pulses.id }).all().map(row => row.id);
   },
 
+  deleteAssistantRoutines(accountId: string, assistantId: string): string[] {
+    return getDb().delete(pulses)
+      .where(and(eq(pulses.accountId, accountId), eq(pulses.assistantId, assistantId), ownedHere(pulses.ownerBackendId)))
+      .returning({ id: pulses.id }).all().map(row => row.id);
+  },
+
   /**
    * Atomically bump nextRunAt without touching anything else.
    * Used to "claim" a pulse before kicking off its run so concurrent scheduling
