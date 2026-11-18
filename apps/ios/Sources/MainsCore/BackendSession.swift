@@ -84,6 +84,7 @@ public struct PendingMessage: Sendable {
         guard let runID else { return false }
         guard artifact.runId == runID, artifact.kind == "user-prompt" else { return false }
         if isSteering { return artifact.metadata?["clientUserMessageId"].string == payload["clientUserMessageId"].string }
+        if let promptID = payload["clientPromptId"].string { return artifact.metadata?["clientPromptId"].string == promptID }
         return artifact.id > previousArtifactID && artifact.content == text
     }
 }
@@ -137,6 +138,14 @@ public final class BackendSession {
     public private(set) var viewingRunID: String?
     public private(set) var pendingMessage: PendingMessage?
     public private(set) var pendingFork: PendingFork?
+    public private(set) var matesRevision = 0
+    private var pendingMateCommand: PendingMateCommand?
+    public var mateCommandPending: Bool { pendingMateCommand != nil }
+    public var mateCommandUncertain: Bool { pendingMateCommand?.uncertain == true }
+    public var supportsMates: Bool { connectedDescriptor?.capabilities.contains("assistants") == true && !isDemo }
+    public var mateSpaces: [Space] {
+        spaces.filter { ($0.providerId == "codex" || $0.providerId == "claude_code") && providerConfigs[$0.providerId] != nil }
+    }
     public private(set) var remoteQueues: [RemoteRunQueue] = []
     public private(set) var historyLoading = false
     public private(set) var historyError: String?
@@ -792,6 +801,104 @@ public final class BackendSession {
 
     public var canSaveToAtlas: Bool { active && isConnected && pendingAtlasSave == nil }
 
+    private func mateRead(_ channel: String, args: [JSONValue] = []) async throws -> JSONValue {
+        guard isConnected, let transport, let accountID else { throw MainsError.disconnected }
+        guard supportsMates else { throw MainsError.server("Update Mains on your computer to use Mates on iPhone.") }
+        let owner = pairingOwner, current = generation
+        let value = try await transport.invoke(channel, args: [.string(accountID)] + args)
+        try Task.checkCancellation()
+        guard owner == pairingOwner, current == generation, self.transport === transport, isConnected else { throw MainsError.changedBackend }
+        return value
+    }
+
+    public func loadMates(mateID: String? = nil) async throws -> MateDirectory {
+        let directory = try await mateRead("assistants:mobileDirectory", args: mateID.map { [.string($0)] } ?? []).decode(MateDirectory.self)
+        guard directory.mates.count <= 200, directory.teams.count <= 100 else { throw MainsError.invalidReply }
+        return directory
+    }
+
+    public func loadMateChats(_ mateID: String) async throws -> [MateChat] {
+        let chats = try await mateRead("assistants:conversations", args: [.string(mateID)]).decode([MateChat].self)
+        guard chats.count <= 100 else { throw MainsError.invalidReply }
+        return chats
+    }
+
+    public func loadMateAssignment(_ id: String, runID: String) async throws -> MateAssignment {
+        let assignment = try await mateRead("assistants:mobileAssignment", args: [.string(runID), .string(id)]).decode(MateAssignment.self)
+        guard assignment.id == id, viewingRunID == runID else { throw MainsError.changedBackend }
+        return assignment
+    }
+
+    public func createMate(name: String, space: Space, model: String, effort: String, teamID: String?, avatar: MateAvatar) async throws -> String {
+        guard let accountID else { throw MainsError.disconnected }
+        let payload: JSONValue = .object([
+            "accountId": .string(accountID), "name": .string(name), "spaceId": .string(space.id), "model": .string(model),
+            "effort": .string(effort), "teamId": teamID.map(JSONValue.string) ?? .null,
+            "avatar": try .encode(avatar), "profileSetup": .bool(true),
+        ])
+        let result = try await writeMate("assistants:create", args: [payload])
+        guard let id = result["id"].string, !id.isEmpty else { throw MainsError.invalidReply }
+        return id
+    }
+
+    public func answerMateSetup(_ id: String, step: Int, answer: String) async throws {
+        try await mateSetup(id, action: .object(["action": .string("answer"), "step": .number(Double(step)), "answer": .string(answer)]))
+    }
+
+    public func saveMateSetup(_ id: String, profile: MateProfile) async throws {
+        try await mateSetup(id, action: .object(["action": .string("save"), "profile": try .encode(profile)]))
+    }
+
+    private func mateSetup(_ id: String, action: JSONValue) async throws {
+        guard let accountID else { throw MainsError.disconnected }
+        _ = try await writeMate("assistants:setupProfile", args: [.string(accountID), .string(id), action])
+    }
+
+    public func retryMateWelcome(_ id: String) async throws {
+        guard let accountID else { throw MainsError.disconnected }
+        _ = try await writeMate("assistants:prepareWelcome", args: [.string(accountID), .string(id)])
+    }
+
+    public func skipMateWelcome(_ id: String) async throws {
+        guard let accountID else { throw MainsError.disconnected }
+        _ = try await writeMate("assistants:respondWelcome", args: [.string(accountID), .string(id), .null])
+    }
+
+    @discardableResult public func checkMateCommand() async throws -> String? {
+        guard let attempt = pendingMateCommand, attempt.uncertain, isConnected else { throw MainsError.disconnected }
+        return try await deliverMate(attempt)["id"].string
+    }
+
+    private func writeMate(_ channel: String, args: [JSONValue]) async throws -> JSONValue {
+        guard isConnected, supportsMates else { throw MainsError.disconnected }
+        guard pendingMateCommand == nil else { throw MainsError.server("Check the pending Mate change before trying again.") }
+        return try await deliverMate(PendingMateCommand(channel: channel, args: args, owner: pairingOwner))
+    }
+
+    private func deliverMate(_ attempt: PendingMateCommand) async throws -> JSONValue {
+        var pending = attempt
+        pending.uncertain = false
+        pendingMateCommand = pending
+        do {
+            let result = try await command(attempt.channel, args: attempt.args, commandID: attempt.id, owner: attempt.owner)
+            guard attempt.owner == pairingOwner else { throw MainsError.changedBackend }
+            if attempt.channel == "assistants:create", result["id"].string?.isEmpty != false { throw MainsError.invalidReply }
+            pendingMateCommand = nil
+            matesRevision += 1
+            return result
+        } catch {
+            if attempt.owner == pairingOwner {
+                let failure = error as? MainsError
+                let refused: Bool
+                if case .server = failure { refused = failure?.isUnconfirmedCommand == false }
+                else { refused = failure == .unauthorized || failure == .incompatible }
+                pending.uncertain = !refused
+                pendingMateCommand = refused ? nil : pending
+            }
+            throw error
+        }
+    }
+
     private func validAtlasTags(_ tags: [AtlasTag], limit: Int) -> Bool {
         tags.count <= limit && Set(tags.map(\.id)).count == tags.count && tags.allSatisfy {
             !$0.id.isEmpty && $0.id.utf8.count <= 256 && !$0.name.isEmpty && $0.name.utf16.count <= 256
@@ -1162,7 +1269,7 @@ public final class BackendSession {
         activeEndpoint = nil; connectedDescriptor = nil; lastSyncedAt = nil
         consentRevision += 1
         conversations = []; spaces = []; workspaces = []; histories = [:]; historyOrder = []
-        transcript = Transcript(); viewingRunID = nil; pendingMessage = nil; pendingFork = nil; pendingAtlasSave = nil; accountID = nil
+        transcript = Transcript(); viewingRunID = nil; pendingMessage = nil; pendingFork = nil; pendingAtlasSave = nil; pendingMateCommand = nil; matesRevision += 1; accountID = nil
         sending = false; stoppingRunID = nil; drafts = [:]
         homeDrafts = [:]; collections = []; projects = []; gitStates = []
         selectedSpaceID = nil; homeTargets = [:]; composerSettings = [:]; providerConfigs = [:]
@@ -1379,6 +1486,11 @@ public final class BackendSession {
         pendingApprovals = []; approvalExpiryTask?.cancel(); approvalExpiryTask = nil
         if cursor == nil, let page = histories[id] { transcript.replace(page) }
         if cursor != nil { transcript.setFollowing(false) }
+        if isConnected && !conversations.contains(where: { $0.id == id }) {
+            let owner = pairingOwner, current = generation
+            _ = try? await readQueuedRun(id)
+            guard owner == pairingOwner, current == generation, viewingRunID == id, !Task.isCancelled else { return }
+        }
         await loadHistory(direction: cursor == nil ? "latest" : "newer", initialCursor: cursor)
     }
 
@@ -1497,6 +1609,7 @@ public final class BackendSession {
 
     private func event(_ channel: String, _ payload: JSONValue) {
         if channel == "atlas:changed" { atlasRevision += 1; return }
+        if channel == "assistants:changed" { matesRevision += 1; return }
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         if channel == "runs:realtimeEvent" {
             voice.receive(payload)
@@ -1647,7 +1760,8 @@ public final class BackendSession {
 
     public func send(_ text: String, runID: String? = nil, spaceID: String? = nil, workspaceID: String? = nil,
                      collectionID: String? = nil, settings: ComposerSettings? = nil, attachments: [PromptAttachment] = [],
-                     contextSkills: [ContextSkill] = [], contextScope: ContextScope? = nil, steering: Bool = false, queuedInputID: String? = nil) async throws -> String {
+                     contextSkills: [ContextSkill] = [], contextScope: ContextScope? = nil, steering: Bool = false, queuedInputID: String? = nil,
+                     mate: Mate? = nil, useMateWelcome: Bool = false) async throws -> String {
         #if MAINS_GPT_LIVE || SWIFT_PACKAGE
         guard pendingVoiceConversation == nil else { throw MainsError.server("Check the unconfirmed voice conversation before sending.") }
         guard voice.runID != runID || !voice.ownsCall || voice.phase == .connected && conversations.first(where: { $0.id == runID })?.isActive == true else {
@@ -1664,13 +1778,29 @@ public final class BackendSession {
         guard isConnected, !sending,
               let pairing, let accountID else { throw MainsError.disconnected }
         let attached = ContextMentions.attached(in: text, skills: contextSkills)
-        let message = ContextMentions.goal(text, skills: attached)
-        guard !message.isEmpty || !attachments.isEmpty else { throw MainsError.server("Write a message or attach a file first.") }
+        let mateMentions = attached.compactMap(\.mateContext)
+        if steering && !mateMentions.isEmpty { throw MainsError.server("Send a Mate request in the next turn.") }
+        let commandID = UUID().uuidString
+        let goal = ContextMentions.goal(text, skills: attached)
+        guard !goal.isEmpty || !attachments.isEmpty else { throw MainsError.server("Write a message or attach a file first.") }
+        let message = goal.isEmpty && mate != nil ? "Use the attached context." : goal
         let providerID: String
         let channel: String
         let actualWorkspaceID: String?
         var payload: [String: JSONValue] = ["accountId": .string(accountID)]
-        if let runID {
+        if let mate {
+            guard supportsMates, mate.ready, runID == nil, !message.isEmpty else {
+                throw MainsError.server("Finish setting up this Mate and enter a message before sending.")
+            }
+            providerID = mate.providerId; channel = "assistants:send"; actualWorkspaceID = nil
+            payload["assistantId"] = .string(mate.id)
+            payload["message"] = .string(message)
+            payload["requestId"] = .string(commandID)
+            if useMateWelcome, let welcome = mate.welcome, ["ready", "skipped", "starting"].contains(welcome.state) {
+                payload["requestId"] = .string("welcome-" + mate.id)
+                payload["runId"] = .string(welcome.runId)
+            }
+        } else if let runID {
             guard settingsChanges[runID] == nil else { throw MainsError.server("Confirm the conversation’s settings before sending.") }
             guard pendingMessage?.runID != runID || pendingMessage?.status != .accepted else {
                 throw MainsError.server("Your previous message is still syncing.")
@@ -1706,18 +1836,33 @@ public final class BackendSession {
                 payload["collectionId"] = .string(collectionID)
             }
         }
+        if !mateMentions.isEmpty {
+            guard mate == nil, let actualWorkspaceID, workspaces.contains(where: { $0.id == actualWorkspaceID && $0.isReplica != true }),
+                  (runID.flatMap { id in conversations.first { $0.id == id }?.mode } ?? spaces.first { $0.id == spaceID }?.mode) == "developer" else {
+                throw MainsError.server("Call Mates from a local Code conversation.")
+            }
+            if let provider = attached.compactMap(\.mateProviderID).first(where: { !hasConsent(providerID: $0) }) {
+                throw MainsError.server("Allow data sharing with \(Provider.recipient(provider)) before calling this Mate.")
+            }
+            payload[runID == nil ? "initialContext" : "additionalContext"] = .array(mateMentions)
+            payload["clientPromptId"] = .string(queuedInputID ?? commandID)
+        }
+        var context: [String: JSONValue] = [:]
         if !attached.isEmpty {
             guard contextScope == self.contextScope(providerID: providerID, workspaceID: actualWorkspaceID) else {
                 throw MainsError.server("The context belongs to another provider or workspace. Choose it again before sending.")
             }
-            payload["contextSkills"] = .array(attached.map(\.wire))
+            let skills = attached.filter { $0.mateID == nil }
+            if !skills.isEmpty { context["contextSkills"] = .array(skills.map(\.wire)) }
         }
-        if !attachments.isEmpty { payload["attachments"] = try .encode(attachments) }
+        if !attachments.isEmpty { context["attachments"] = try .encode(attachments) }
+        if mate != nil { payload["context"] = .object(context) }
+        else { payload.merge(context) { _, value in value } }
         guard hasConsent(providerID: providerID) else {
             throw MainsError.server(isDemo ? "Continue the on-device demo disclosure before sending." : "Allow data sharing with \(Provider.recipient(providerID)) before sending.")
         }
         let attempt = PendingMessage(runID: runID, text: message, date: Date(), status: .sending,
-                                     commandID: UUID().uuidString, channel: channel, payload: .object(payload),
+                                     commandID: commandID, channel: channel, payload: .object(payload),
                                      backendID: pairing.descriptor.backendId, owner: pairingOwner,
                                      previousArtifactID: transcript.page?.artifacts.map(\.id).max() ?? 0, attachments: attachments, contextSkills: attached, queueInputID: queuedInputID)
         pendingMessage = attempt

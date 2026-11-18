@@ -102,7 +102,7 @@ struct ConversationQueueView: View {
                 if let status = status(message) { Text(status).font(.caption).foregroundStyle(.secondary) }
                 if let error = message.error { Text(error).font(.caption).foregroundStyle(.orange).lineLimit(2) }
             }.frame(maxWidth: .infinity, alignment: .leading)
-            if message.status != .editing {
+            if message.status != .editing && !message.input.contextSkills.contains(where: { $0.mateID != nil }) {
                 Button("Steer") { Task { await session.steerQueuedMessage(queue.runID, id: message.id) } }
                     .font(.caption.weight(.semibold)).disabled(!canSteer || queue.busy || queue.hasUnknown || message.status != .queued || !session.isConnected || session.pendingMessage != nil)
             }

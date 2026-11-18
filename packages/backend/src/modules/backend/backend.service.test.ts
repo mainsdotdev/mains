@@ -168,6 +168,11 @@ describe("backendService", () => {
   describe("PAIRED_DEVICE_COMMANDS", () => {
     it("is exactly the control loop's verbs plus the picker writes, disjoint from the read list", () => {
       expect([...PAIRED_DEVICE_COMMANDS].sort()).toEqual([
+        "assistants:create",
+        "assistants:prepareWelcome",
+        "assistants:respondWelcome",
+        "assistants:send",
+        "assistants:setupProfile",
         "atlas:editMobileBookmark",
         "atlas:saveMobileBookmark",
         "atlas:saveMobileFile",
@@ -480,6 +485,7 @@ describe("backendService", () => {
 describe("PAIRED_DEVICE_EVENTS", () => {
   it("is exactly the pushes the phone subscribes to", () => {
     expect([...PAIRED_DEVICE_EVENTS].sort()).toEqual([
+      "assistants:changed",
       "atlas:changed",
       "providers:modelsUpdated",
       "providers:skillsUpdated",

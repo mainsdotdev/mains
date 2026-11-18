@@ -20,7 +20,11 @@ public final class ConversationDraft {
     private func persistVisibleText() {
         guard !persistencePaused else { return }
         let inFlight = submission.map { $0.retainsContent && stillContains($0) } ?? false
-        textChanged?(inFlight ? "" : text)
+        var readable = text
+        for skill in contextSkills where skill.mateID != nil {
+            readable = readable.replacingOccurrences(of: ContextMentions.mention(skill), with: skill.title)
+        }
+        textChanged?(inFlight ? "" : readable)
     }
     public var attachments: [PromptAttachment] = []
     public var contextSkills: [ContextSkill] = []
@@ -40,7 +44,7 @@ public final class ConversationDraft {
         Submission(text: text, attachments: attachments, contextSkills: ContextMentions.attached(in: text, skills: contextSkills), contextScope: contextScope, retainsContent: false)
     }
     public func restore(_ snapshot: Submission) {
-        text = snapshot.text; attachments = snapshot.attachments; contextSkills = snapshot.contextSkills
+        contextSkills = snapshot.contextSkills; attachments = snapshot.attachments; text = snapshot.text
         if let contextScope, contextScope != snapshot.contextScope { clearContext() }
         else { contextScope = snapshot.contextScope }
     }
@@ -73,7 +77,7 @@ public final class ConversationDraft {
         }
         if sent.retainsContent && stillContains(sent) { return }
         if text.isEmpty && attachments.isEmpty {
-            text = sent.text; attachments = sent.attachments; contextSkills = sent.contextSkills
+            contextSkills = sent.contextSkills; attachments = sent.attachments; text = sent.text
             if let scope = contextScope { synchronizeContext(scope) } else { contextScope = sent.contextScope }
             if contextScope != sent.contextScope { clearContext() }
         } else { unsentText = sent.text; unsentAttachments = sent.attachments; unsentSkills = sent.contextSkills; unsentScope = sent.contextScope }
@@ -82,7 +86,7 @@ public final class ConversationDraft {
     public func restoreUnsent() {
         guard let unsentText else { return }
         let currentText = text, currentAttachments = attachments, currentSkills = contextSkills, currentScope = contextScope
-        text = unsentText; attachments = unsentAttachments; contextSkills = unsentSkills
+        contextSkills = unsentSkills; attachments = unsentAttachments; text = unsentText
         if currentScope != unsentScope { clearContext() }
         self.unsentText = currentText.isEmpty && currentAttachments.isEmpty ? nil : currentText; unsentAttachments = currentAttachments; unsentSkills = currentSkills; unsentScope = currentScope
     }
@@ -98,8 +102,9 @@ public final class ConversationDraft {
     public func reconcileContext() { contextSkills = ContextMentions.attached(in: text, skills: contextSkills) }
     public func insert(_ skill: ContextSkill, scope: ContextScope) {
         synchronizeContext(scope)
-        text = ContextMentions.replacingTrigger(in: text, with: ContextMentions.mention(skill))
-        if !contextSkills.contains(where: { $0.name == skill.name }) { contextSkills.append(skill) }
+        let selection = contextSkills.first(where: { $0.name == skill.name })
+        if selection == nil { contextSkills.append(skill) }
+        text = ContextMentions.replacingTrigger(in: text, with: ContextMentions.mention(selection ?? skill))
     }
     public func removeContext(_ skill: ContextSkill) {
         text = ContextMentions.removing(skill, from: text); contextSkills.removeAll { $0.name == skill.name }
@@ -109,7 +114,7 @@ public final class ConversationDraft {
         contextSkills = []
     }
     public func transfer(to other: ConversationDraft) {
-        other.text = text; other.attachments = attachments; other.contextSkills = contextSkills; other.contextScope = contextScope
+        other.contextSkills = contextSkills; other.attachments = attachments; other.contextScope = contextScope; other.text = text
         text = ""; attachments = []; contextSkills = []
     }
     public func dismissFailure() { failure = nil; unsentText = nil; unsentAttachments = []; unsentSkills = []; unsentScope = nil }

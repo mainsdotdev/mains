@@ -13,16 +13,20 @@ public struct ContextSkill: Codable, Hashable, Identifiable, Sendable {
     public var iconLarge: String?
     public var brandColor: String?
     public var scope: String?
+    public private(set) var mateID: String?
+    public private(set) var mateProviderID: String?
     public var id: String { name }
     public var title: String { displayName.flatMap { $0.isEmpty ? nil : $0 } ?? name }
     public var detail: String? {
         [shortDescription, description].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
     }
     public var group: String {
-        switch scope?.lowercased() { case "plugin": "Plugins"; case "mac", "mac_app", "computer": "Mac apps"; default: "Skills" }
+        if mateID != nil { return "Mates" }
+        return switch scope?.lowercased() { case "plugin": "Plugins"; case "mac", "mac_app", "computer": "Mac apps"; default: "Skills" }
     }
     public var badge: String {
-        switch scope?.lowercased() {
+        if mateID != nil { return "Mate" }
+        return switch scope?.lowercased() {
         case "user": "User"
         case "project", "repo": "Project"
         case "system": "System"
@@ -33,6 +37,20 @@ public struct ContextSkill: Codable, Hashable, Identifiable, Sendable {
     }
     public init(name: String, displayName: String? = nil, description: String? = nil, scope: String? = nil, path: String? = nil) {
         self.name = name; self.displayName = displayName; self.description = description; self.scope = scope; self.path = path
+    }
+    public static func mate(id: String, name: String, description: String? = nil, providerID: String? = nil) -> Self {
+        var selection = Self(name: "assistant-" + id, displayName: "@" + name, description: description)
+        selection.mateID = id
+        selection.mateProviderID = providerID
+        return selection
+    }
+    var wireToken: String { (mateID == nil ? "$" : "@") + name }
+    var mateContext: JSONValue? {
+        guard let mateID else { return nil }
+        return .object(["kind": .string("note"), "metadata": .object([
+            "source": .string("assistant_mention"), "assistantId": .string(mateID), "requestId": .string(mateID),
+            "token": .string(wireToken), "name": .string(String(title.dropFirst())),
+        ])])
     }
     public init(from decoder: Decoder) throws {
         let v = try JSONValue(from: decoder)
@@ -137,7 +155,10 @@ public enum ContextMentions {
         if let match = detect(text) { return String(text[..<match.range.lowerBound]) + (replacement.isEmpty ? "" : replacement + " ") }
         return text + (text.isEmpty || text.last?.isWhitespace == true ? "" : " ") + replacement + " "
     }
-    public static func mention(_ skill: ContextSkill) -> String { skill.title + marker }
+    public static func mention(_ skill: ContextSkill) -> String {
+        if let id = skill.mateID { return skill.title + marker + id + marker }
+        return skill.title + marker
+    }
     public static func attached(in text: String, skills: [ContextSkill]) -> [ContextSkill] {
         skills.filter { text.contains(mention($0)) }
     }
@@ -146,13 +167,13 @@ public enum ContextMentions {
     }
     public static func goal(_ text: String, skills: [ContextSkill]) -> String {
         var result = text
-        for skill in skills { result = result.replacingOccurrences(of: mention(skill), with: "$" + skill.name) }
+        for skill in skills { result = result.replacingOccurrences(of: mention(skill), with: skill.wireToken) }
         return result.replacingOccurrences(of: marker, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
     public static func display(_ text: String, skills: [ContextSkill]) -> String {
         var result = text
         for skill in skills.sorted(by: { $0.name.count > $1.name.count }) {
-            let pattern = #"\$"# + NSRegularExpression.escapedPattern(for: skill.name) + #"(?![\w/-])"#
+            let pattern = NSRegularExpression.escapedPattern(for: skill.wireToken) + #"(?![\w/-])"#
             if let expression = try? NSRegularExpression(pattern: pattern) {
                 result = expression.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: NSRegularExpression.escapedTemplate(for: skill.title))
             }

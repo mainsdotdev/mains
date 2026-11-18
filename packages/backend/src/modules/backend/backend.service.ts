@@ -30,6 +30,9 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.backend.describe,
   CHANNELS.account.get,
   CHANNELS.search.conversations,
+  CHANNELS.assistants.mobileDirectory,
+  CHANNELS.assistants.mobileAssignment,
+  CHANNELS.assistants.conversations,
   // Narrow Atlas readers return identities and bounded content, never host paths.
   CHANNELS.atlas.mobileLibrary,
   CHANNELS.atlas.readMobilePage,
@@ -105,6 +108,11 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
  * Arbitrary filesystem paths, git, terminal and general settings stay out.
  */
 export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
+  CHANNELS.assistants.create,
+  CHANNELS.assistants.setupProfile,
+  CHANNELS.assistants.prepareWelcome,
+  CHANNELS.assistants.respondWelcome,
+  CHANNELS.assistants.send,
   CHANNELS.atlas.updateMobileItem,
   CHANNELS.atlas.setMobileTrash,
   CHANNELS.atlas.setMobileTags,
@@ -157,6 +165,7 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
  * connections. Exactly the channels the phone subscribes to.
  */
 export const PAIRED_DEVICE_EVENTS: ReadonlySet<string> = new Set([
+  CHANNELS.assistants.changed,
   CHANNELS.atlas.changed,
   CHANNELS.runs.realtimeEvent,
   CHANNELS.runs.queueChanged,

@@ -16,6 +16,7 @@ public struct TranscriptRow: Identifiable, Equatable, Sendable {
     public var pendingAttachments: [PromptAttachment] = []
     public var subagents: [SessionSubagent] = []
     public var voiceTask: VoiceTaskLink? = nil
+    public var mateTask: MateAssignmentLink? = nil
     public var voice = false
     /// Display-only lifecycle adjustment; the history/cache keeps the wire status.
     public var toolDisplayStatus: String? = nil
@@ -217,11 +218,25 @@ public struct Transcript: Sendable {
             var text = artifact.content ?? ""
             let kind: TranscriptRow.Kind
             var media: [TranscriptMedia] = []
+            var mateTask: MateAssignmentLink?
+            let taskInput = metadata["assistantTaskInput"]
+            let isTaskInput = artifact.kind == "user-prompt" && taskInput["messageId"].string != nil
+                && taskInput["assignmentId"].string != nil
             switch artifact.kind {
             case "user-prompt":
-                kind = .prompt
+                if isTaskInput {
+                    guard taskInput["kind"].string == "request", let id = taskInput["assignmentId"].string else { return nil }
+                    kind = .response
+                    mateTask = MateAssignmentLink(id: id, runID: artifact.runId)
+                    text = "Mate request"
+                } else { kind = .prompt }
                 media = TranscriptMedia.prompt(metadata, runID: artifact.runId)
-            case "report", "result", "command_result": kind = .response
+            case "report", "result", "command_result":
+                kind = .response
+                if metadata["source"].string == "assistant_assignment", let id = metadata["assignmentId"].string {
+                    mateTask = MateAssignmentLink(id: id, runID: artifact.runId)
+                    text = "Mate request"
+                }
             case "log":
                 guard metadata["level"].string == "error" else { return nil }
                 kind = .notice
@@ -235,11 +250,16 @@ public struct Transcript: Sendable {
             let identity = promptIdentities[artifact.id]
             let id = rowID(for: artifact)
             let date = identity?.date ?? streamID.flatMap { streamDates[$0] } ?? metadata["voiceStartedAt"].number.map { Date(timeIntervalSince1970: $0 / 1000) } ?? artifact.createdAt
+            let mates = metadata["assistantMentions"].array.compactMap { mention -> ContextSkill? in
+                guard let id = mention["id"].string, let name = mention["name"].string,
+                      mention["token"].string == "@assistant-" + id else { return nil }
+                return .mate(id: id, name: name)
+            }
             return TranscriptRow(id: id, kind: kind, text: text, date: date, live: false,
-                                 deferredArtifactID: metadata["mobileContentDeferred"].bool || metadata["mobileContentDeferred"]["chars"].number != nil ? artifact.id : nil, media: media,
-                                 turnID: Self.turnID(metadata), contextSkills: (try? metadata["skills"].decode([ContextSkill].self)) ?? [],
+                                 deferredArtifactID: mateTask == nil && (metadata["mobileContentDeferred"].bool || metadata["mobileContentDeferred"]["chars"].number != nil) ? artifact.id : nil, media: media,
+                                 turnID: Self.turnID(metadata), contextSkills: mates + ((try? metadata["skills"].decode([ContextSkill].self)) ?? []),
                                  delivery: identity == nil ? nil : .accepted,
-                                 voiceTask: VoiceTaskLink.read(metadata["voiceTask"]), voice: metadata["voice"].bool, sourceID: artifact.id)
+                                 voiceTask: VoiceTaskLink.read(metadata["voiceTask"]), mateTask: mateTask, voice: metadata["voice"].bool, sourceID: artifact.id)
         }
         let projection = SubagentProjection(calls: page?.toolCalls ?? [])
         rows += (page?.toolCalls ?? []).filter { $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) && !projection.rootCallIDs.contains($0.id) }.map {

@@ -33,7 +33,10 @@ struct ChatMessage: View {
                     }.font(.caption).foregroundStyle(.secondary).frame(height: 18).padding(.trailing, 4)
                 }
             case .response:
-                if let task = row.voiceTask {
+                if let task = row.mateTask {
+                    MateTaskCard(session: session, link: task)
+                    if !row.media.isEmpty { ChatMediaGallery(session: session, media: row.media) }
+                } else if let task = row.voiceTask {
                     Button { openVoiceConversation(task.id) } label: {
                         HStack(spacing: 10) {
                             Image(systemName: "arrow.triangle.branch")
@@ -64,6 +67,45 @@ struct ChatMessage: View {
         .frame(maxWidth: .infinity, alignment: row.kind == .prompt ? .trailing : .leading)
         .contextMenu {
             Button(row.live ? "Copy current text" : row.deferredArtifactID != nil ? "Copy message preview" : "Copy message", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.text }
+        }
+    }
+}
+
+private struct MateTaskCard: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let link: MateAssignmentLink
+    @Environment(\.openMateConversation) private var openChat
+    @State private var assignment: MateAssignment?
+    @State private var error: String?
+    @State private var retry = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(assignment?.title ?? "Mate request", systemImage: "squareshape.split.2x2").font(.headline)
+            if let assignment {
+                Text(assignment.status.capitalized).font(.subheadline).foregroundStyle(.secondary)
+                if let result = assignment.result, !result.isEmpty { ChatMessageBody(text: result) }
+                if let failure = assignment.error { Text(failure).font(.footnote).foregroundStyle(.secondary) }
+                if let runID = assignment.workerRunId, runID != link.runID {
+                    Button("Open Mate chat", systemImage: "arrow.up.right") { openChat(runID) }
+                        .accessibilityIdentifier("openMateTaskChat")
+                }
+            } else if error == nil && session.isConnected && session.supportsMates { ProgressView().controlSize(.small) }
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(.secondary)
+                Button("Retry") { retry += 1 }
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18))
+        .accessibilityIdentifier("mateAssignment-\(link.id)")
+        .task(id: "\(link.runID):\(link.id):\(session.matesRevision):\(session.isConnected):\(retry)") {
+            guard session.isConnected, session.supportsMates else { return }
+            do { assignment = try await session.loadMateAssignment(link.id, runID: link.runID); error = nil }
+            catch { if !Task.isCancelled, session.viewingRunID == link.runID { self.error = error.localizedDescription } }
         }
     }
 }

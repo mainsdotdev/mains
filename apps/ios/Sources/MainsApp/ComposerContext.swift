@@ -8,13 +8,18 @@ struct ComposerContext {
     let spaceID: String?
     let runID: String?
     let workspaceID: String?
+    let lockedProfile: Bool
     init(space: Space, runID: String? = nil) {
         providerId = space.providerId; mode = space.mode; name = space.name
-        spaceID = space.id; self.runID = runID; workspaceID = nil
+        spaceID = space.id; self.runID = runID; workspaceID = nil; lockedProfile = false
     }
     init(run: Conversation) {
         providerId = run.providerId; mode = run.mode; name = Provider.name(run.providerId)
-        spaceID = nil; runID = run.id; workspaceID = run.workspaceId
+        spaceID = nil; runID = run.id; workspaceID = run.workspaceId; lockedProfile = run.assistantId != nil
+    }
+    init(mate: Mate) {
+        providerId = mate.providerId; mode = "work"; name = mate.name
+        spaceID = nil; runID = nil; workspaceID = nil; lockedProfile = true
     }
     @MainActor func settings(_ session: BackendSession) -> ComposerSettings {
         if let runID, let editing = session.existingMessageQueue(for: runID)?.editingSettings { return editing }

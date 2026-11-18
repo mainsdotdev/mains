@@ -29,6 +29,8 @@ struct MessageComposer: View {
     @State private var contextPresentationID = UUID()
     @State private var composerFrame = CGRect.zero
     @State private var panelScope: ContextScope?
+    @State private var mateConsent: ConsentContext?
+    @State private var mateSelectionAfterConsent: (() -> Void)?
     private var contextScope: ContextScope { context.contextScope(session) }
     private var trigger: ContextTriggerMatch? { focused && !attachmentsOpen ? ContextMentions.detect(draft.text) : nil }
     @State private var attachmentsOpen = false
@@ -83,6 +85,13 @@ struct MessageComposer: View {
                 .onChange(of: geometry.frame(in: .global)) { _, frame in composerFrame = frame }
         })
         .contextPicker(pickerRequest)
+        .sheet(item: $mateConsent, onDismiss: { mateSelectionAfterConsent = nil }) { consent in
+            ConsentView(context: consent) {
+                guard consent.backendID == session.pairing?.descriptor.backendId else { return }
+                session.grantConsent(providerID: consent.providerID, backendID: consent.backendID)
+                mateSelectionAfterConsent?()
+            }
+        }
         .onChange(of: draft.text) { _, _ in draft.reconcileContext() }
         .onChange(of: contextScope, initial: true) { _, scope in draft.synchronizeContext(scope); pluginsOpen = false }
         .attachmentOverlay(isPresented: attachmentsOpen, id: attachmentPresentationID, accent: Provider.accent(context.providerId),
@@ -129,7 +138,8 @@ struct MessageComposer: View {
                 }.padding(.horizontal, 8).padding(.top, 6)
             }
             ContextTextEditor(text: $draft.text, skills: $draft.contextSkills, scope: contextScope, focused: $focused,
-                placeholder: context.runID == nil ? "Start a run in \(context.name)" : "Continue this run…",
+                placeholder: context.lockedProfile ? (context.runID == nil ? "Message \(context.name)" : "Message this Mate…")
+                    : (context.runID == nil ? "Start a run in \(context.name)" : "Continue this run…"),
                 identifier: context.runID == nil ? "homeMessageInput" : "messageInput")
                 .padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 3)
             HStack(alignment: .center, spacing: 6) {
@@ -141,7 +151,9 @@ struct MessageComposer: View {
                 })
                 .disabled(draft.isSending).accessibilityLabel("Add attachment").accessibilityIdentifier("addAttachment")
                 Group {
-                    if dynamicTypeSize.isAccessibilitySize {
+                    if context.lockedProfile {
+                        Spacer(minLength: 0)
+                    } else if dynamicTypeSize.isAccessibilitySize {
                         ScrollView(.horizontal) { configurationControls }.scrollIndicators(.hidden)
                     } else {
                         configurationControls
@@ -308,9 +320,17 @@ struct MessageComposer: View {
         let scope = contextScope, owner = session.ownership
         return ContextPickerRequest(id: contextPresentationID, frame: composerFrame, session: session, scope: scope, owner: owner,
             trigger: trigger?.trigger, query: trigger?.filter ?? "", pluginsOnly: trigger == nil && pluginsOpen,
+            offersMates: !context.lockedProfile && context.mode == "developer" && scope.workspaceID != nil,
             pickSkill: { skill in
                 guard owner == session.ownership, scope == contextScope, !draft.isSending else { return }
-                draft.insert(skill, scope: scope); pluginsOpen = false; focused = true
+                let select = {
+                    guard owner == session.ownership, scope == contextScope, !draft.isSending else { return }
+                    draft.insert(skill, scope: scope); pluginsOpen = false; focused = true
+                }
+                if let provider = skill.mateProviderID, !session.hasConsent(providerID: provider), let backend = session.pairing?.descriptor.backendId {
+                    mateSelectionAfterConsent = select
+                    mateConsent = ConsentContext(backendID: backend, providerID: provider)
+                } else { select() }
             }, pickCommand: { command in
                 guard owner == session.ownership, scope == contextScope, !draft.isSending else { return }
                 draft.text = ContextMentions.replacingTrigger(in: draft.text, with: "/" + command.name)

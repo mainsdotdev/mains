@@ -18,7 +18,7 @@ public struct ContextText: Sendable {
         var candidates: [(NSRange, ContextSkill)] = []
         for skill in skills {
             let pattern = canonical
-                ? #"\$"# + NSRegularExpression.escapedPattern(for: skill.name) + #"(?::[\w-]+)?(?![\w/-])"#
+                ? NSRegularExpression.escapedPattern(for: skill.wireToken) + (skill.mateID == nil ? #"(?::[\w-]+)?"# : "") + #"(?![\w/-])"#
                 : NSRegularExpression.escapedPattern(for: ContextMentions.mention(skill))
             guard let expression = try? NSRegularExpression(pattern: pattern) else { continue }
             candidates += expression.matches(in: source, range: NSRange(location: 0, length: string.length)).map { ($0.range, skill) }

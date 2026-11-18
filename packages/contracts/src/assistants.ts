@@ -257,3 +257,14 @@ export interface AssistantWelcome {
     execution?: AssistantExecution;
     createdAt: Date;
 }
+
+export interface MobileMateDirectory {
+    mates: Array<Pick<Assistant, "id" | "name" | "description" | "avatar" | "teamId" | "providerId" | "model"> & {
+        needsSetup: boolean;
+        welcome: Pick<AssistantWelcome, "runId" | "state" | "question" | "error"> | null;
+    }>;
+    teams: Array<Pick<AssistantTeam, "id" | "name">>;
+}
+
+export type MobileMateChat = Pick<AssistantConversation, "id" | "title" | "updatedAt">;
+export type MobileMateAssignment = Pick<AssistantAssignment, "id" | "title" | "status" | "result" | "error" | "workerRunId">;

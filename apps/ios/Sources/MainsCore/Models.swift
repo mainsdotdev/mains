@@ -55,6 +55,7 @@ public struct Conversation: Codable, Equatable, Identifiable, Sendable {
     public let providerId: String
     public let mode: String
     public let spaceId: String?
+    public var assistantId: String? = nil
     public var workspaceId: String? = nil
     public var collectionId: String? = nil
     public let title: String?

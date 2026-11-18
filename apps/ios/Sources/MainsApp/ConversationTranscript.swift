@@ -399,7 +399,7 @@ private struct ChatTurnView: View {
     }
     private func messages(_ rows: [TranscriptRow]) -> some View {
         VStack(alignment: .leading, spacing: 20) {
-            let lastResponse = section.rows.last(where: { $0.kind == .response })
+            let lastResponse = section.rows.last(where: { $0.kind == .response && $0.mateTask == nil })
             let copyRowID = live || lastResponse?.live == true ? nil : lastResponse?.id
             ForEach(TranscriptGroup.build(rows)) { group in
                 if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: live) }

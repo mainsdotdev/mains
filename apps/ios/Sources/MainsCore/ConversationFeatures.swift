@@ -64,7 +64,7 @@ public struct TranscriptSection: Identifiable, Equatable, Sendable {
     public var folded: Bool { !previous.isEmpty }
     /// Copy all visible-window assistant prose in the turn, including folded work.
     /// Tool output, prompts and notices do not belong on the clipboard.
-    public var responseText: String { rows.filter { $0.kind == .response && $0.voiceTask == nil }.map(\.text).joined(separator: "\n\n") }
+    public var responseText: String { rows.filter { $0.kind == .response && $0.voiceTask == nil && $0.mateTask == nil }.map(\.text).joined(separator: "\n\n") }
     public var responseIsPreview: Bool { rows.contains { $0.kind == .response && $0.deferredArtifactID != nil } }
     public func displayedRows(expanded: Bool) -> [TranscriptRow] {
         guard folded && !expanded else { return rows }
@@ -81,11 +81,11 @@ public struct TranscriptSection: Identifiable, Equatable, Sendable {
         var result: [Self] = [], turn: [TranscriptRow] = []
         func flush() {
             guard let first = turn.first else { return }
-            let responses = turn.indices.filter { turn[$0].kind == .response }
+            let responses = turn.indices.filter { turn[$0].kind == .response && turn[$0].mateTask == nil }
             if responses.count > 1, let cut = responses.last {
                 let earlier = Array(turn[..<cut])
-                result.append(Self(id: first.id, rows: turn, previous: earlier.filter { $0.kind != .notice && $0.kind != .media && $0.kind != .subagents && !$0.voice && $0.voiceTask == nil },
-                                   breakout: earlier.filter { $0.kind == .notice || $0.kind == .media || $0.kind == .subagents || $0.voice || $0.voiceTask != nil }, last: Array(turn[cut...])))
+                result.append(Self(id: first.id, rows: turn, previous: earlier.filter { $0.kind != .notice && $0.kind != .media && $0.kind != .subagents && !$0.voice && $0.voiceTask == nil && $0.mateTask == nil },
+                                   breakout: earlier.filter { $0.kind == .notice || $0.kind == .media || $0.kind == .subagents || $0.voice || $0.voiceTask != nil || $0.mateTask != nil }, last: Array(turn[cut...])))
             } else { result.append(Self(id: first.id, rows: turn, previous: [], breakout: [], last: turn)) }
             turn = []
         }

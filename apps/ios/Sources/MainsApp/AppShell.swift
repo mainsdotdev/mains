@@ -7,10 +7,11 @@ struct OpenVoiceConversationAction {
 extension EnvironmentValues {
     // Read-only navigation also works for chats created by desktop voice calls.
     @Entry var openVoiceConversation = OpenVoiceConversationAction()
+    @Entry var openMateConversation = OpenVoiceConversationAction()
 }
 
 
-enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String) }
+enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String), mates, mate(String) }
 
 struct AppShell: View {
     #if DEBUG && targetEnvironment(simulator)
@@ -50,7 +51,7 @@ struct AppShell: View {
                     Color(.systemBackground).ignoresSafeArea()
                     if offset > 0 || searchMounted {
                         SidebarView(session: session, collapsed: $collapsedCollections, openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
-                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) })
+                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
                             .frame(width: width)
                             .offset(x: searchExpanded ? -width : 0)
                             .allowsHitTesting(!searchExpanded)
@@ -84,9 +85,9 @@ struct AppShell: View {
                             }
                             .navigationDestination(for: AppRoute.self) { route in
                                 switch route {
-                                case .conversation(let id): ConversationView(session: session, runID: id, openComputer: showSettings, onNew: goHome, onFork: { path.append(.conversation($0)) })
+                                case .conversation(let id): ConversationView(session: session, runID: id, openComputer: showSettings, onNew: { newConversation(from: id) }, onFork: { path.append(.conversation($0)) })
                                     .id("\(session.ownership):\(id)")
-                                case .searchMessage(let id, let cursor): ConversationView(session: session, runID: id, openComputer: showSettings, onNew: goHome, onFork: { path.append(.conversation($0)) }, initialCursor: cursor)
+                                case .searchMessage(let id, let cursor): ConversationView(session: session, runID: id, openComputer: showSettings, onNew: { newConversation(from: id) }, onFork: { path.append(.conversation($0)) }, initialCursor: cursor)
                                     .id("\(session.ownership):\(id):\(cursor.timestamp):\(cursor.id)")
                                 case .workspace(let id): WorkspaceConversationsView(session: session, workspaceID: id,
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
@@ -96,6 +97,10 @@ struct AppShell: View {
                                     .id(session.ownership)
                                 case .atlasPage(let id): AtlasPageView(session: session, pageID: id, openPage: { path.append(.atlasPage($0)) }, openConversation: { path.append(.conversation($0)) })
                                     .id("\(session.ownership):atlas:\(id)")
+                                case .mates: MatesView(session: session, openMate: { path.append(.mate($0)) })
+                                    .id(session.ownership)
+                                case .mate(let id): MateView(session: session, mateID: id, openChat: { path.append(.conversation($0)) })
+                                    .id("\(session.ownership):mate:\(id)")
                                 }
                             }
                         }
@@ -174,6 +179,10 @@ struct AppShell: View {
             }
         }
         .environment(\.openVoiceConversation, OpenVoiceConversationAction { openVoiceConversation($0) })
+        .environment(\.openMateConversation, OpenVoiceConversationAction { id in
+            guard session.viewingRunID != id else { return }
+            path.append(.conversation(id))
+        })
         #if MAINS_GPT_LIVE
         .onChange(of: session.voice.error) { _, error in if let error { session.actionError = error } }
         #endif
@@ -223,6 +232,12 @@ struct AppShell: View {
         #endif
         if let spaceID { session.selectSpace(spaceID) }
         open(.conversation(id))
+    }
+    private func newConversation(from runID: String) {
+        if let mateID = session.conversations.first(where: { $0.id == runID })?.assistantId {
+            if path.dropLast().last == .mate(mateID) { path.removeLast() }
+            else { open(.mate(mateID)) }
+        } else { goHome() }
     }
     private func showSettings() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)

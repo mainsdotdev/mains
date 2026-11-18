@@ -13,6 +13,7 @@ struct SidebarView: View {
     let settings: () -> Void
     let openWorkInbox: () -> Void
     let openAtlas: () -> Void
+    let openMates: () -> Void
     @State private var pendingMode: String?
     @State private var providersExpanded = false
     @Namespace private var modeSelection
@@ -24,7 +25,7 @@ struct SidebarView: View {
     private var otherSpaces: [Space] { session.spaces.filter { $0.id != space?.id } }
     private var controlAnimation: Animation? { reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 1) }
     private var chats: [Conversation] {
-        session.conversations.filter { $0.providerId == space?.providerId && $0.mode == space?.mode }
+        session.conversations.filter { $0.assistantId == nil && $0.providerId == space?.providerId && $0.mode == space?.mode }
     }
     private var recents: [Conversation] {
         let collections = Set(session.collections.map(\.id))
@@ -63,6 +64,14 @@ struct SidebarView: View {
                                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
                         }.buttonStyle(ChatPressStyle())
                             .accessibilityIdentifier("openAtlas")
+                        if !session.isDemo {
+                            Button(action: openMates) {
+                                Label("Mates", systemImage: "squareshape.split.2x2")
+                                    .font(.body.weight(.medium))
+                                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                    .contentShape(.rect)
+                            }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openMates")
+                        }
                         Divider().padding(.vertical, 16).accessibilityHidden(true)
                     }
                     if space?.mode == "developer" {

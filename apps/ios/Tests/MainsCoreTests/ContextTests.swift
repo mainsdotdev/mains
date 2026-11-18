@@ -10,6 +10,8 @@ import Testing
     var delaySkills = false
     var failSendAfter = false
     var overrideSkills: JSONValue?
+    var supportsMates = false
+    var loseMateCreation = false
     var emit: ((String, JSONValue) -> Void)?
 }
 
@@ -26,6 +28,10 @@ import Testing
     func close() { base.close() }
     func perform(_ channel: String, args: [JSONValue], commandId: String?, timeout: TimeInterval) async throws -> JSONValue {
         faults.calls.append(.init(channel: channel, args: args, id: commandId))
+        if channel == "assistants:create", faults.supportsMates {
+            if faults.loseMateCreation { faults.loseMateCreation = false; throw MainsError.timeout }
+            return .object(["id": .string("release")])
+        }
         if channel == "providers:getSkills" {
             let value = faults.overrideSkills
             if faults.delaySkills { faults.delaySkills = false; try await Task.sleep(for: .milliseconds(100)) }
@@ -34,12 +40,70 @@ import Testing
         }
         if channel == "providers:getCommands" && faults.failCommands { throw MainsError.server("Commands unavailable") }
         let value = try await base.perform(channel, args: args, commandId: commandId, timeout: timeout)
+        if channel == "backend:describe", faults.supportsMates {
+            var descriptor = value.objectValue
+            descriptor["capabilities"] = .array(value["capabilities"].array + [.string("assistants")])
+            return .object(descriptor)
+        }
         if channel == "runs:execute" && faults.failSendAfter { faults.failSendAfter = false; throw MainsError.timeout }
         return value
     }
 }
 
 @Suite(.serialized) struct ContextTests {
+    @Test @MainActor func aPairedSessionRecoversMateCreationAndSendsCodeMentionsAsExplicitContext() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let faults = ContextFaults(), storage = MemoryStorage()
+        faults.supportsMates = true; faults.loseMateCreation = true
+        storage.pairing = backend.pairing
+        let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        try await eventually { session.isConnected && session.supportsMates }
+        let space = try #require(session.mateSpaces.first { $0.providerId == "codex" && $0.mode == "developer" })
+        let workspace = try #require(backend.defaultWorkspaceID)
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+
+        let avatar = MateAvatar(shape: "sphere", color: "mint")
+        await #expect(throws: MainsError.timeout) {
+            _ = try await session.createMate(name: "Release", space: space, model: "test-model", effort: "medium", teamID: nil, avatar: avatar)
+        }
+        #expect(session.mateCommandUncertain)
+        #expect(try await session.checkMateCommand() == "release")
+        let writes = faults.calls.filter { $0.channel == "assistants:create" }
+        #expect(writes.count == 2 && writes[0].id == writes[1].id && writes[0].args == writes[1].args)
+        #expect(writes[0].args.first?["profileSetup"] == .bool(true))
+        #expect(!session.mateCommandPending)
+
+        let mate = ContextSkill.mate(id: "release", name: "Release", providerID: "codex")
+        let scope = session.contextScope(providerID: "codex", workspaceID: workspace)
+        _ = try await session.send(ContextMentions.mention(mate) + " Check the sample", spaceID: space.id,
+                                   workspaceID: workspace, contextSkills: [mate], contextScope: scope)
+        let call = try #require(faults.calls.last { $0.channel == "runs:execute" })
+        let payload = try #require(call.args.first)
+        #expect(payload["goal"].string == "@assistant-release Check the sample")
+        #expect(payload["initialContext"].array == [try #require(mate.mateContext)])
+        #expect(payload["contextSkills"] == .null)
+        #expect(payload["clientPromptId"].string == call.id)
+    }
+
+    @Test @MainActor func mateSelectionsKeepTheirIdentityWithDuplicateNamesAndPlainSavedDrafts() throws {
+        let scope = ContextScope(providerID: "codex", workspaceID: "repo")
+        let first = ContextSkill.mate(id: "release-one", name: "Release", providerID: "codex")
+        let second = ContextSkill.mate(id: "release-two", name: "Release", providerID: "codex")
+        let draft = ConversationDraft()
+        var saved = ""
+        draft.textChanged = { saved = $0 }
+        draft.text = "@"; draft.insert(first, scope: scope)
+        draft.text += "@"; draft.insert(second, scope: scope)
+        #expect(saved == "@Release @Release ")
+        let submission = draft.snapshot()
+        let message = ContextMentions.goal(submission.text, skills: submission.contextSkills)
+        #expect(message == "@assistant-release-one @assistant-release-two")
+        #expect(ContextText(message, skills: submission.contextSkills, canonical: true).readable == "@Release @Release")
+        #expect(submission.contextSkills.compactMap(\.mateContext).map { $0["metadata"]["assistantId"].string } == ["release-one", "release-two"])
+    }
+
     @Test func triggersRespectUnicodeWhitespaceAndTokenBoundaries() throws {
         for (text, trigger, query) in [("@", "@", ""), ("şunu /rev", "/", "rev"), ("👋\n$yazı", "$", "yazı")] {
             let match = try #require(ContextMentions.detect(text))

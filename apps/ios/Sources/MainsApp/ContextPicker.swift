@@ -9,12 +9,13 @@ struct ContextPickerRequest: Equatable, Sendable {
     let trigger: String?
     let query: String
     let pluginsOnly: Bool
+    let offersMates: Bool
     let pickSkill: @MainActor @Sendable (ContextSkill) -> Void
     let pickCommand: @MainActor @Sendable (ContextCommand) -> Void
     let close: @MainActor @Sendable () -> Void
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.frame == rhs.frame && lhs.scope == rhs.scope && lhs.owner == rhs.owner
-            && lhs.trigger == rhs.trigger && lhs.query == rhs.query && lhs.pluginsOnly == rhs.pluginsOnly
+            && lhs.trigger == rhs.trigger && lhs.query == rhs.query && lhs.pluginsOnly == rhs.pluginsOnly && lhs.offersMates == rhs.offersMates
     }
 }
 
@@ -69,6 +70,7 @@ private struct ContextPickerPanel: View {
     let request: ContextPickerRequest
     let maxHeight: CGFloat
     @State private var catalogue = ContextCatalogue()
+    @State private var mates: [Mate] = []
     @State private var loading = true
     @State private var retry = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -84,7 +86,13 @@ private struct ContextPickerPanel: View {
         LoadKey(scope: request.scope, owner: request.owner, revision: request.session.contextRevisions[request.scope.providerID] ?? 0,
                 connected: request.session.isConnected, retry: retry)
     }
-    private var skills: [ContextSkill] { catalogue.matchingSkills(request.query, pluginsOnly: request.pluginsOnly) }
+    private var showMates: Bool { request.offersMates && request.trigger == "@" && !request.pluginsOnly && request.session.supportsMates }
+    private var skills: [ContextSkill] {
+        let choices = showMates ? mates.filter { mate in
+            mate.ready && (request.query.isEmpty || mate.name.localizedCaseInsensitiveContains(request.query) || mate.description.localizedCaseInsensitiveContains(request.query))
+        }.map { ContextSkill.mate(id: $0.id, name: $0.name, description: $0.description, providerID: $0.providerId) } : []
+        return choices + catalogue.matchingSkills(request.query, pluginsOnly: request.pluginsOnly)
+    }
     private var commands: [ContextCommand] { catalogue.matchingCommands(request.query, trigger: request.trigger, pluginsOnly: request.pluginsOnly) }
     private var height: CGFloat {
         let groups = Set(skills.map(\.group)).count + (commands.isEmpty ? 0 : 1)
@@ -110,7 +118,7 @@ private struct ContextPickerPanel: View {
                             Button("Try again") { retry += 1 }.font(.footnote.weight(.semibold))
                         }.padding(14)
                     }
-                    ForEach(["Plugins", "Mac apps", "Skills"], id: \.self) { group in
+                    ForEach(["Mates", "Plugins", "Mac apps", "Skills"], id: \.self) { group in
                         let items = skills.filter { $0.group == group }
                         if !items.isEmpty {
                             section(group)
@@ -178,6 +186,12 @@ private struct ContextPickerPanel: View {
                 guard !Task.isCancelled, key == loadKey, request.owner == request.session.ownership else { return }
                 catalogue.error = error.localizedDescription; loading = false
             }
+        }
+        .task(id: "\(showMates):\(request.owner):\(request.session.matesRevision):\(request.session.isConnected)") {
+            guard showMates, request.session.isConnected else { mates = []; return }
+            let result = try? await request.session.loadMates()
+            guard !Task.isCancelled, request.owner == request.session.ownership else { return }
+            mates = result?.mates ?? []
         }
         .accessibilityElement(children: .contain).accessibilityLabel("Context picker")
     }

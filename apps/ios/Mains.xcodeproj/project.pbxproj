@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		034935A13A4A80F8A9C440359C684A49 /* PairingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80F444082E51526190D341850FB48921 /* PairingClient.swift */; };
 		03F1600E2003F4DD1B7339B5485ECB26 /* WorkInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DB60064282D0A72BE66370EC1BC4B83 /* WorkInbox.swift */; };
+		8019227A1178B2643D8C8CEF880BB8C3 /* MatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE01840870F94F325DB3DB6353DF40C0 /* MatesView.swift */; };
 		05EADEA81FBD73A6EAF9800DA92FE051 /* MessageComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76900D32D0C8904F67F57BE8CEEA2FB7 /* MessageComposer.swift */; };
 		1106C297D984784A1D1AD4ADBC9DAF7E /* DemoContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67FFFB24CD280A0BA60913F1E6A3E9E7 /* DemoContext.swift */; };
 		1600CA57860500D1AB0431FD9AEBE832 /* DemoSubagents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C9DE9F98064E2C9E4381BF6B813D2CE /* DemoSubagents.swift */; };
@@ -16,6 +17,7 @@
 		1A3860AF240C91174A036D3DDE230A91 /* ConversationFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5302803F0227291B9A4C3AC24BFDD54 /* ConversationFeatures.swift */; };
 		1C38C5BA752DFD718B3BE5CAB702481C /* InlineContextText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32FC63CBA8D04EA622A4C9C62F717652 /* InlineContextText.swift */; };
 		212E3F024B9B03D331E9BACF43CEE191 /* AtlasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECD6B0F950EA1814C850944660530B65 /* AtlasView.swift */; };
+		1EC0CC395CC7FF9F8323C116D6993636 /* Mates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3517BDB7415302079847ADB1B5F71998 /* Mates.swift */; };
 		232F5FBAD83FD33835893B83D30F8E08 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072F8A586D018847376BAD4C821FDC95 /* Models.swift */; };
 		2470E2BA81EDE1AA0C528304CD28ADE8 /* ComposerContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13C8BE9B7B9B1FE294E9C2F35CF13A8B /* ComposerContext.swift */; };
 		24BF67F9DEF936E086378DF9F4AD4D7E /* WorkspaceConversationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9030279B1032595CDCFE95FD91CE0DA1 /* WorkspaceConversationsView.swift */; };
@@ -122,6 +124,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		3517BDB7415302079847ADB1B5F71998 /* Mates.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Mates.swift; sourceTree = "<group>"; };
 		072F8A586D018847376BAD4C821FDC95 /* Models.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		08191F3F3FEBB5DA8797A6589F166773 /* ComputerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ComputerView.swift; sourceTree = "<group>"; };
 		09372078680AFA8109162659B0390FAA /* WebRTC-LICENSE.txt */ = {isa = PBXFileReference; includeInIndex = 1; path = "WebRTC-LICENSE.txt"; sourceTree = "<group>"; };
@@ -180,6 +183,7 @@
 		6F840090FC7A648E76FD25F39A650D60 /* AgentActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AgentActivity.swift; sourceTree = "<group>"; };
 		6FC5133675922226D44584457045981D /* ConversationTranscript.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationTranscript.swift; sourceTree = "<group>"; };
 		762D7C4719C6D3A5498269BAE1D1F9FA /* HomeModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HomeModels.swift; sourceTree = "<group>"; };
+		CE01840870F94F325DB3DB6353DF40C0 /* MatesView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MatesView.swift; sourceTree = "<group>"; };
 		76900D32D0C8904F67F57BE8CEEA2FB7 /* MessageComposer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MessageComposer.swift; sourceTree = "<group>"; };
 		7B982681B2FC6083E49B493CAF2088C9 /* VoiceSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VoiceSettingsView.swift; sourceTree = "<group>"; };
 		7CB9C841782473F5C138531296B53C4D /* EffortOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = EffortOverlay.swift; sourceTree = "<group>"; };
@@ -298,6 +302,7 @@
 				762D7C4719C6D3A5498269BAE1D1F9FA /* HomeModels.swift */,
 				2CBCCB8C17ABF2EC44DC6DF5A652D773 /* MessageMarkdown.swift */,
 				B9453C295664C0A1A2E6DC97889B9517 /* MessageMath.swift */,
+				3517BDB7415302079847ADB1B5F71998 /* Mates.swift */,
 				072F8A586D018847376BAD4C821FDC95 /* Models.swift */,
 				80F444082E51526190D341850FB48921 /* PairingClient.swift */,
 				4C9E0D51DFED0AAACDD027A6D5F903BC /* RealtimeVoice.swift */,
@@ -420,6 +425,7 @@
 				32FC63CBA8D04EA622A4C9C62F717652 /* InlineContextText.swift */,
 				27CEE5763E8B936165850E467BB37843 /* MainsApp.swift */,
 				D92F73E9ECE6FC520760B9D7A8982F14 /* MathMarkdownView.swift */,
+				CE01840870F94F325DB3DB6353DF40C0 /* MatesView.swift */,
 				76900D32D0C8904F67F57BE8CEEA2FB7 /* MessageComposer.swift */,
 				D2BBE447DE4A13E0405D2C0B61220F35 /* NativeRealtimeVoiceMedia.swift */,
 				C968DBC7B12CAE8F784E30FD10920212 /* NativeStorage.swift */,
@@ -580,6 +586,7 @@
 				B712648D4326AEAF745D4D6F13F4585E /* HomeModels.swift in Sources */,
 				602051F381F65B66EC5F245DF3F70E9E /* MessageMarkdown.swift in Sources */,
 				3C62848A766553716E03E0BA32CCF130 /* MessageMath.swift in Sources */,
+				1EC0CC395CC7FF9F8323C116D6993636 /* Mates.swift in Sources */,
 				232F5FBAD83FD33835893B83D30F8E08 /* Models.swift in Sources */,
 				034935A13A4A80F8A9C440359C684A49 /* PairingClient.swift in Sources */,
 				B9349C16BA57BB90E3184478AAC1E746 /* RealtimeVoice.swift in Sources */,
@@ -635,6 +642,7 @@
 				1C38C5BA752DFD718B3BE5CAB702481C /* InlineContextText.swift in Sources */,
 				42F4F3FCC2D8EE1E9BD6AE510D266887 /* MainsApp.swift in Sources */,
 				576111A5553BAF6726DB874E87410404 /* MathMarkdownView.swift in Sources */,
+				8019227A1178B2643D8C8CEF880BB8C3 /* MatesView.swift in Sources */,
 				05EADEA81FBD73A6EAF9800DA92FE051 /* MessageComposer.swift in Sources */,
 				91B340A3C4E592AD4ABC6B1CA0B8EA3C /* NativeStorage.swift in Sources */,
 				695F869508AC4098F2AF0205E7DFA9D5 /* OutputsView.swift in Sources */,
