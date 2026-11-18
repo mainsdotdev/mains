@@ -6,7 +6,7 @@ import { ArrowUp } from "@/components/ui/icons";
 import { plainActivityText } from "@/features/workspace/lib/run-activity";
 import { cn } from "@/lib/cn";
 import { useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation, useReconcileAssistantTaskMutation } from "@/lib/redux/api/assistantsApi";
-import { assignmentDisplayTitle, errorText } from "../lib/assistant-ui";
+import { assignmentDisplayTitle, errorText, pullRequestReviewPresentation } from "../lib/assistant-ui";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssignmentStatusBadge } from "./assignment-status-badge";
 
@@ -14,19 +14,25 @@ const disclosureClassName = "grid grid-cols-[minmax(0,1fr)] transition-[grid-tem
 const sectionClassName = "min-w-0 space-y-1 rounded-xl bg-primary-200/55 px-2.5 py-2 dark:bg-primary-950/45";
 const sectionTitleClassName = "text-xs font-medium text-primary-600 dark:text-primary-400";
 
-export function AssistantAssignmentCard({ task, assignee, openAssistant }: {
+export function AssistantAssignmentCard({ task, assignee, openAssistant, initiallyExpanded = false, showBrief = true }: {
   task: AssistantAssignment;
   assignee?: Assistant;
   openAssistant(id: string, runId: string): void;
+  initiallyExpanded?: boolean;
+  showBrief?: boolean;
 }) {
   const titleId = useId();
   const detailsId = useId();
   const previewId = useId();
-  const [disclosure, setDisclosure] = useState<"unopened" | "open" | "closed">("unopened");
+  const [disclosure, setDisclosure] = useState<"unopened" | "open" | "closed">(initiallyExpanded ? "open" : "unopened");
   const expanded = disclosure === "open";
   const title = assignmentDisplayTitle(task.title, task.taskKey);
   const assigneeName = assignee?.name ?? "Mate";
-  const preview = plainActivityText(task.result || task.prompt).replace(/\s+/g, " ");
+  const review = pullRequestReviewPresentation(task);
+  const result = review?.result ?? task.result;
+  const evidence = review?.evidence ?? task.evidence;
+  const brief = review ? review.focus : showBrief ? task.prompt : "";
+  const preview = plainActivityText(result || brief).replace(/\s+/g, " ");
   const canCancel = !["completed", "failed", "canceled"].includes(task.status);
   const canCheckDelivery = task.status === "uncertain" || (task.status === "completed" && !!task.error);
 
@@ -57,19 +63,23 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant }: {
         <div className="min-h-0 overflow-hidden">
           {disclosure !== "unopened" && (
             <div className="space-y-2 px-2.5 pb-2.5 pt-0.5">
-              <section aria-label="Task brief" className={sectionClassName}>
+              {!review && showBrief && <section aria-label="Task brief" className={sectionClassName}>
                 <h3 className={sectionTitleClassName}>Task brief</h3>
                 <p className="whitespace-pre-wrap break-words text-sm leading-5">{task.prompt}</p>
-              </section>
-              {(task.result || task.evidence.length > 0) && (
+              </section>}
+              {(result || evidence.length > 0) && (
                 <section aria-label="Report" className={sectionClassName}>
                   <h3 className={sectionTitleClassName}>Report</h3>
-                  {task.result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{task.result}</AgentMarkdown>}
-                  {!!task.evidence.length && <ul aria-label="Task evidence" className="space-y-0.5 text-xs text-primary-600 dark:text-primary-400">
-                    {task.evidence.map((entry, index) => <li key={index} className="break-words">{entry}</li>)}
+                  {result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{result}</AgentMarkdown>}
+                  {!!evidence.length && <ul aria-label="Task evidence" className={cn("text-xs text-primary-600 dark:text-primary-400", review ? "flex flex-wrap gap-x-3 gap-y-1" : "space-y-0.5")}>
+                    {evidence.map((entry, index) => <li key={index} className="break-words">{entry}</li>)}
                   </ul>}
                 </section>
               )}
+              {review?.focus && <section aria-label="Review focus" className={sectionClassName}>
+                <h3 className={sectionTitleClassName}>Review focus</h3>
+                <p className="whitespace-pre-wrap break-words text-sm leading-5">{review.focus}</p>
+              </section>}
               {(task.error || task.status === "blocked") && (
                 <section aria-label="Status details" className={sectionClassName}>
                   <h3 className={sectionTitleClassName}>Status details</h3>

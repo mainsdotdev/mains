@@ -30,6 +30,8 @@ const ACTIVITY_TYPES = {
     "REVIEW_REQUEST_REMOVED_EVENT", "READY_FOR_REVIEW_EVENT", "CONVERT_TO_DRAFT_EVENT", "HEAD_REF_FORCE_PUSHED_EVENT"],
 };
 
+// Team.name requires an organization or discussion scope even when no team is
+// returned. The timeline also serves connections authorized for repo/read:user.
 const ACTIVITY_QUERY = `
   query PrActivity($owner: String!, $repo: String!, $number: Int!, $last: Int!, $before: String,
     $types: [PullRequestTimelineItemsItemType!]!) {
@@ -47,11 +49,11 @@ const ACTIVITY_QUERY = `
             ... on MergedEvent { id createdAt actor { login avatarUrl(size: 48) } commit { oid url } }
             ... on ReviewRequestedEvent {
               id createdAt actor { login avatarUrl(size: 48) }
-              requestedReviewer { ... on User { login } ... on Team { name } ... on Bot { login } }
+              requestedReviewer { __typename ... on User { login } ... on Bot { login } }
             }
             ... on ReviewRequestRemovedEvent {
               id createdAt actor { login avatarUrl(size: 48) }
-              requestedReviewer { ... on User { login } ... on Team { name } ... on Bot { login } }
+              requestedReviewer { __typename ... on User { login } ... on Bot { login } }
             }
             ... on ReadyForReviewEvent { id createdAt actor { login avatarUrl(size: 48) } }
             ... on ConvertToDraftEvent { id createdAt actor { login avatarUrl(size: 48) } }
@@ -84,7 +86,7 @@ interface GraphQlActivity {
   body?: string;
   url?: string;
   state?: string;
-  requestedReviewer?: { login?: string; name?: string } | null;
+  requestedReviewer?: { __typename: string; login?: string } | null;
   commit?: { oid: string; url: string } | null;
   afterCommit?: { oid: string; url: string } | null;
 }
@@ -102,6 +104,11 @@ function variables(ref: PrRef, page: PrSearchPageInput) {
 function requirePr<T>(pr: T | null | undefined): T {
   if (!pr) throw new Error("Pull request not found");
   return pr;
+}
+
+function reviewerLabel(reviewer: GraphQlActivity["requestedReviewer"]): string | null {
+  if (reviewer?.__typename === "Team" || reviewer?.__typename === "EnterpriseTeam") return "a team";
+  return reviewer?.login ?? null;
 }
 
 export async function readPrCommits(octokit: Octokit, ref: PrRef, page: PrSearchPageInput): Promise<PrCommitPage> {
@@ -131,7 +138,7 @@ export async function readPrActivity(
       id: node.id, kind: KINDS[node.__typename], author: node.author ?? node.actor ?? null,
       createdAt: node.submittedAt ?? node.createdAt, body: node.body ?? null,
       url: node.url ?? node.commit?.url ?? node.afterCommit?.url ?? null,
-      reviewState: node.state ?? null, reviewer: node.requestedReviewer?.login ?? node.requestedReviewer?.name ?? null,
+      reviewState: node.state ?? null, reviewer: reviewerLabel(node.requestedReviewer),
       commitOid: node.commit?.oid ?? node.afterCommit?.oid ?? null,
     }));
   return { items, totalCount: connection.totalCount, ...connection.pageInfo };

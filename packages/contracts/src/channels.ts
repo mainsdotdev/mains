@@ -10,6 +10,7 @@ export const CHANNELS = {
     changeTeam: "assistants:changeTeam", updateProfile: "assistants:updateProfile",
     archive: "assistants:archive", saveMemory: "assistants:saveMemory", removeMemory: "assistants:removeMemory",
     conversations: "assistants:conversations", send: "assistants:send", assign: "assistants:assign",
+    reviewPullRequest: "assistants:reviewPullRequest", pullRequestReviews: "assistants:pullRequestReviews",
     reconcile: "assistants:reconcile", followup: "assistants:followup", cancel: "assistants:cancel", changed: "assistants:changed",
   },
   account: {

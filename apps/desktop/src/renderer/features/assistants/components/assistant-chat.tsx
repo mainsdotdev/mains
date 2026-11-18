@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { Assistant, AssistantWelcome, AssistantMessageContext, AssistantExecution, SendAssistantMessage } from "@mains/contracts/assistants";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { normalizeAssistantAvatar, type Assistant, type AssistantWelcome, type AssistantMessageContext, type AssistantExecution, type SendAssistantMessage } from "@mains/contracts/assistants";
 import { CHANNELS } from "@mains/contracts/channels";
 import { useSendAssistantMessageMutation, useRespondAssistantWelcomeMutation, usePrepareAssistantWelcomeMutation } from "@/lib/redux/api/assistantsApi";
 import { useGetRunByIdQuery, useAbortRunMutation, useGetWorkspaceQuery } from "@/lib/redux/api";
@@ -29,6 +29,7 @@ import { Button } from "@/components/ui";
 import { getTransport, onTransportChange } from "@/lib/transport";
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import { AssistantMonogram } from "./assistant-monogram";
+import { AVATAR_COLORS } from "./assistant-avatar";
 import { errorText } from "../lib/assistant-ui";
 import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
 import type { McpAppScope } from "@/features/workspace/lib/mcp-app-panel";
@@ -168,6 +169,7 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
   }, [registerAppConversation, belongs, waitingWelcome, chatRunId, run, appScope, ownerKey, submit]);
   const stop = useCallback(() => { if (chatRunId) void abort(chatRunId).unwrap().catch(error => { if (bound.current) setFailure(errorText(error)); }); }, [chatRunId, abort]);
   const variant = assistant.providerId === "codex" ? "codex" : "claude";
+  const mateColor = AVATAR_COLORS[normalizeAssistantAvatar(assistant.avatar).color].fill;
   const composer = <WorkspaceInput assistantComposer goal={pending?.message ?? message} onGoalChange={setMessage} onSubmit={() => void submit()} onStop={stop}
     isLoading={preparing || sending.isLoading} disabled={!!pending || !belongs} sendDisabled={!!pending} activeRun={visibleRun}
     canResume={!!chatRunId} providerId={assistant.providerId} mode={run?.mode ?? "work"} selectedModel={assistant.model}
@@ -178,7 +180,7 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
     layout={chatRunId || waitingWelcome ? "default" : "centered"} />;
   return <PluginLogoProvider providerId={assistant.providerId}>
     <AsyncQuestionDialogProvider ownerKey={ownerKey} runId={chatRunId} runStatus={run?.status} turns={turns} events={events} historical={history.historical}>
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col" style={{ "--mate-color": mateColor } as CSSProperties}>
         {waitingWelcome ? <div className={`flex min-h-0 flex-1 flex-col justify-end gap-6 overflow-y-auto py-8 ${CONTENT_COLUMN_GUTTER}`}>
           <div ref={welcomeColumnRef} className="mx-auto w-full max-w-210">
             <AssistantMonogram name={assistant.name} providerId={assistant.providerId} avatar={assistant.avatar} working={working} onClick={onOpenDetails} />

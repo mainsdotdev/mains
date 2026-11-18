@@ -1,4 +1,5 @@
 import type { PrActivityFilter, PrActivityInput, PrActivityPage, PrCommitPage, PrPageInput } from "@mains/contracts/pull-requests";
+import { samePrRevision, type PrRevision } from "@mains/contracts/pull-requests";
 // ─────────────────────────────────────────────────────────────
 // Pull Requests Service
 // Live PR inbox across providers. Throw-style: plain values out,
@@ -210,6 +211,22 @@ export const pullRequestsService = {
   async getDiff(input: PrRefInput): Promise<PrDiff> {
     const source = await requireSource(input.provider);
     return source.getDiff(validateRef(input));
+  },
+
+  async getReviewSnapshot(input: PrRefInput, expected: PrRevision) {
+    const ref = validateRef(input);
+    const source = await requireSource(input.provider);
+    const checkRevision = async () => {
+      const details = await source.getReviewDetails(ref);
+      if (details.state !== "open") throw new Error("This pull request is no longer open");
+      if (!samePrRevision(details.revision, expected)) throw new Error("The pull request changed. Refresh it before starting a review.");
+      return details;
+    };
+    await checkRevision();
+    const diff = await source.getDiff(ref);
+    const details = await checkRevision();
+    if (!diff.diffText.trim()) throw new Error("GitHub did not provide any changes to review");
+    return { ...details, ...diff };
   },
 
   async merge(

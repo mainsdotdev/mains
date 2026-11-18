@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { pulseService } from "../pulse";
 import { assistantTaskActivity } from "./assistant-task-messages";
 import { assistantsRepo } from "./assistants.repo";
-import { object, onlyKeys, text, execution } from "./assistants.validation";
+import { object, onlyKeys, text, execution, readPullRequestReviewRef } from "./assistants.validation";
+import { pullRequestKey } from "@mains/contracts/pull-requests";
 import { workspaceService } from "../workspace";
 import { spaceService } from "../space";
 import { providersService } from "../providers";
@@ -254,6 +255,9 @@ export const assistantsService = {
     assignment(accountId: string, id: string) {
         const task = assistantsRepo.assignment(text(id, "Assignment"));
         return task?.accountId === text(accountId, "Account") ? { ...task, activity: assistantTaskActivity(task.id) } : null;
+    },
+    pullRequestReviews(accountId: string, ref: unknown, selectedId?: string) {
+        return assistantsRepo.pullRequestReviews(text(accountId, "Account"), pullRequestKey(readPullRequestReviewRef(ref)), text(selectedId, "Review", 200, true));
     },
     requireForWork(id: string, accountId: string): Assistant {
         const assistant = this.require(id, accountId);

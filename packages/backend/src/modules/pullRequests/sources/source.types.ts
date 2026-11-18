@@ -1,4 +1,4 @@
-import type { PrActivityFilter, PrActivityPage, PrCommitPage } from "@mains/contracts/pull-requests";
+import type { PrActivityFilter, PrActivityPage, PrCommitPage, PrRevision } from "@mains/contracts/pull-requests";
 // ─────────────────────────────────────────────────────────────
 // PR Source Types
 // Live pull-request data fetched per provider (GitHub today;
@@ -103,6 +103,7 @@ export interface PrCheck {
 }
 
 export interface PullRequestDetail extends PullRequestSummary {
+  revision?: PrRevision;
   commitCount: number;
   /** Full markdown body (bodyText on the summary is a plain-text preview). */
   body: string;
@@ -142,6 +143,8 @@ export interface PrSource {
   search(filters: PrSearchFilters, page: PrSearchPageInput): Promise<PrSearchPage>;
 
   getDetail(ref: PrRef): Promise<PullRequestDetail>;
+
+  getReviewDetails(ref: PrRef): Promise<{ title: string; body: string; state: PrState; revision: PrRevision }>;
 
   getDiff(ref: PrRef): Promise<PrDiff>;
 

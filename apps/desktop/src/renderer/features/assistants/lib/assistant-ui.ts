@@ -1,4 +1,4 @@
-import type { AssistantOverview } from "@mains/contracts/assistants";
+import type { AssistantAssignment, AssistantOverview } from "@mains/contracts/assistants";
 
 export function isAssistantWorking(overview: AssistantOverview | undefined, id: string): boolean {
     return !!overview?.activeAssistantIds?.includes(id)
@@ -8,6 +8,41 @@ export function isAssistantWorking(overview: AssistantOverview | undefined, id: 
 
 export function assignmentDisplayTitle(title: string, taskKey: unknown): string {
     return title === "Assistant request" && typeof taskKey === "string" && taskKey.startsWith("mention:") ? "Mate request" : title;
+}
+
+const managedReviewPath = /(^|[\s(`])(?:file:\/\/)?(?:\/?[a-z]:[\\/]|\/)[^\r\n`<>()[\]]*?[\\/]attachments[\\/][a-f0-9]{64}[\\/](pr-\d+(?:\.diff|-description\.md))\b/gim;
+const reviewIdentityOrUrl = /https?:\/\/[^\s<>()`]+|\b(?:[a-f0-9]{64}|[a-f0-9]{40}|[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12})\b/gi;
+const legacyReviewFocus = "\nUser's review focus: ";
+
+export function pullRequestReviewPresentation(task: AssistantAssignment) {
+    const review = task.pullRequestReview;
+    if (!review) return null;
+
+    const reference = review.key.slice(review.key.indexOf(":") + 1);
+    const number = reference.split("#").at(-1);
+    const sourceNames = new Map([[`pr-${number}.diff`, "PR diff"], [`pr-${number}-description.md`, "PR description"]]);
+    const identities = new Map([
+        [review.revision.baseOid.toLowerCase(), review.revision.baseOid.slice(0, 7)],
+        [review.revision.headOid.toLowerCase(), review.revision.headOid.slice(0, 7)],
+        [task.id.toLowerCase(), "this review"],
+    ]);
+    const formatText = (value: string) => value
+        .replace(managedReviewPath, (path, prefix: string, name: string) => {
+            const label = sourceNames.get(name.toLowerCase());
+            return label ? `${prefix}${label}` : path;
+        })
+        .replace(reviewIdentityOrUrl, token => identities.get(token.toLowerCase()) ?? token);
+
+    const legacyFocusIndex = task.prompt.indexOf(legacyReviewFocus);
+    return {
+        reference,
+        commit: review.revision.headOid.slice(0, 7),
+        truncated: review.truncated,
+        focus: review.focus ?? (legacyFocusIndex === -1 ? "" : task.prompt.slice(legacyFocusIndex + legacyReviewFocus.length)),
+        result: task.result ? formatText(task.result) : null,
+        evidence: [...new Set(task.evidence.map(value => sourceNames.get(value.trim().toLowerCase()) ?? formatText(value)))],
+        formatText,
+    };
 }
 
 const serviceErrorCopy = new Map([

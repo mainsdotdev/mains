@@ -23,6 +23,8 @@ export function registerAssistantsIpc() {
     ipcMain.handle(CHANNELS.assistants.removeMemory, handle((accountId: string, id: string, revision: number) => changed(() => assistantsService.removeMemory(accountId, id, revision))));
     ipcMain.handle(CHANNELS.assistants.conversations, handle((accountId: string, id: string) => assistantsService.conversations(id, accountId)));
     ipcMain.handle(CHANNELS.assistants.assign, handle((payload: unknown) => assistantWork.assign(payload, undefined, assistantWork.guard())));
+    ipcMain.handle(CHANNELS.assistants.reviewPullRequest, handle((payload: unknown) => assistantWork.reviewPullRequest(payload)));
+    ipcMain.handle(CHANNELS.assistants.pullRequestReviews, handle((accountId: string, ref: unknown, selectedId?: string) => assistantsService.pullRequestReviews(accountId, ref, selectedId)));
     ipcMain.handle(CHANNELS.assistants.reconcile, handle((accountId: string, id: string) => assistantWork.reconcile(accountId, id)));
     ipcMain.handle(CHANNELS.assistants.cancel, handle((accountId: string, id: string) => assistantWork.cancel(accountId, id)));
     ipcMain.handle(CHANNELS.assistants.followup, handle((accountId: string, id: string, messageId: string, message: string) => assistantWork.followup(accountId, id, messageId, message)));

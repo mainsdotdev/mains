@@ -3,7 +3,7 @@ import { cn } from "@/lib/cn";
 import { pickedQuestionOptions, type UserQuestionEntry } from "../../lib/user-question-content";
 
 export function MateQuestionAnswer({ children }: { children: ReactNode }) {
-  return <p className="ms-auto w-fit min-w-0 max-w-transcript-bubble whitespace-pre-wrap wrap-anywhere rounded-2xl bg-primary-50 px-3.5 py-2 text-sm leading-relaxed text-primary-900 dark:bg-primary/5 dark:text-primary-100">{children}</p>;
+  return <p className="ms-auto w-fit min-w-0 max-w-transcript-bubble whitespace-pre-wrap wrap-anywhere rounded-2xl bg-mate-user-bubble px-3.5 py-2 text-sm leading-relaxed">{children}</p>;
 }
 
 export function MateQuestionBubble({ entries, action }: { entries: UserQuestionEntry[]; action?: ReactNode }) {
@@ -21,7 +21,7 @@ export function MateQuestionBubble({ entries, action }: { entries: UserQuestionE
               const ordinal = question.options?.indexOf(option) ?? optionIndex;
               return <li key={ordinal} className={cn("flex min-w-0 gap-2.5 py-1", picked.length ? "items-center" : "items-start")}>
                 <span aria-hidden="true" className={cn("inline-flex size-6 shrink-0 items-center justify-center rounded-lg text-xs font-medium",
-                  picked.length ? "bg-[var(--mate-question-color,var(--color-primary-200))] text-black" : "mt-0.5 bg-primary-200/45 text-primary-700 dark:bg-primary/10 dark:text-primary-300")}>
+                  picked.length ? "bg-[var(--mate-color,var(--color-primary-200))] text-black" : "mt-0.5 bg-primary-200/45 text-primary-700 dark:bg-primary/10 dark:text-primary-300")}>
                   {ordinal < 26 ? String.fromCharCode(65 + ordinal) : ordinal + 1}
                 </span>
                 <div className="min-w-0 wrap-anywhere">

@@ -12,6 +12,7 @@ import assistantsReducer, { assistantConversationOwner } from "@/lib/redux/slice
 import workspaceReducer from "@/lib/redux/slices/workspaceSlice";
 import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
 import { AssistantChat } from "./assistant-chat";
+import { AVATAR_COLORS } from "./assistant-avatar";
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(), respond: vi.fn(), refetch: vi.fn(), load: vi.fn(),
@@ -76,6 +77,8 @@ describe("assistant task location", () => {
     mocks.appContext.mockReturnValue([{ kind: "mcp-app", id: "flights:app", sessionId: "flights", appName: "Skyscanner",
       updateId: "app", label: "Skyscanner", hidden: true, block: { type: "text", text: "Active app: Skyscanner" } }]);
     const { selected } = setup({ selectedRunId: "existing" });
+    const chat = screen.getByText("Existing transcript").closest<HTMLElement>('[style*="--mate-color"]');
+    expect(chat?.style.getPropertyValue("--mate-color")).toBe(AVATAR_COLORS[assistant.avatar.color].fill);
     const host = mocks.registerAppConversation.mock.lastCall![0];
     expect(host).toMatchObject({ runId: "existing", scope: { assistantId: assistant.id, spaceId: "frozen-space", mode: "work", workspaceId: undefined } });
     let result;

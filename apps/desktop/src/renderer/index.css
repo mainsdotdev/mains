@@ -1132,6 +1132,19 @@ html.mains-web.dark #root {
   transition: padding-right 150ms ease-out;
 }
 
+@utility bg-mate-user-bubble {
+  background-color: var(--mate-color, var(--color-primary-200));
+  color: var(--color-white);
+
+  & .prose :where(h1, h2, h3, h4, h5, h6, p, ul, ol, li, th, td, blockquote, strong, em, code, a, button) {
+    color: inherit;
+  }
+
+  & .prose a {
+    text-decoration-line: underline;
+  }
+}
+
 @utility glass-outline {
   position: relative;
   background: none;

@@ -47,16 +47,26 @@ describe("GitHub PR commit and activity pages", () => {
     expect(page).toMatchObject(pageInfo);
   });
 
-  it("maps real lifecycle events, teams and removed actors without inventing activity", async () => {
-    graphql.mockResolvedValue(result("timelineItems", [
-      { __typename: "ReviewRequestedEvent", id: "request", actor, createdAt: at, requestedReviewer: { name: "Desktop" } },
-      { __typename: "MergedEvent", id: "merge", actor: null, createdAt: at, commit: { oid: "merged-sha", url: "https://github.com/merged" } },
-      { __typename: "HeadRefForcePushedEvent", id: "push", actor, createdAt: at, afterCommit: { oid: "new-head", url: "https://github.com/head" } },
-      { __typename: "UnknownFutureEvent", id: "unknown", createdAt: at },
-    ]));
+  it("maps lifecycle events and reviewers with the default GitHub scopes", async () => {
+    graphql.mockImplementation(async (query: string) => {
+      // GitHub checks scopes for fields in both review fragments before it returns events.
+      if (/\.\.\. on Team\b/.test(query)) throw new Error("The 'name' field requires read:org or read:discussion");
+      return result("timelineItems", [
+        { __typename: "ReviewRequestedEvent", id: "request", actor, createdAt: at, requestedReviewer: { __typename: "Team" } },
+        { __typename: "ReviewRequestRemovedEvent", id: "remove", actor, createdAt: at, requestedReviewer: { __typename: "EnterpriseTeam" } },
+        { __typename: "ReviewRequestedEvent", id: "user", actor, createdAt: at, requestedReviewer: { __typename: "User", login: "reviewer" } },
+        { __typename: "ReviewRequestedEvent", id: "bot", actor, createdAt: at, requestedReviewer: { __typename: "Bot", login: "review-bot" } },
+        { __typename: "MergedEvent", id: "merge", actor: null, createdAt: at, commit: { oid: "merged-sha", url: "https://github.com/merged" } },
+        { __typename: "HeadRefForcePushedEvent", id: "push", actor, createdAt: at, afterCommit: { oid: "new-head", url: "https://github.com/head" } },
+        { __typename: "UnknownFutureEvent", id: "unknown", createdAt: at },
+      ]);
+    });
     const page = await source().getActivity(ref, {}, "all");
     expect(page.items).toEqual([
-      expect.objectContaining({ kind: "review_requested", reviewer: "Desktop", author: actor }),
+      expect.objectContaining({ kind: "review_requested", reviewer: "a team", author: actor }),
+      expect.objectContaining({ kind: "review_request_removed", reviewer: "a team", author: actor }),
+      expect.objectContaining({ kind: "review_requested", reviewer: "reviewer", author: actor }),
+      expect.objectContaining({ kind: "review_requested", reviewer: "review-bot", author: actor }),
       expect.objectContaining({ kind: "merged", author: null, commitOid: "merged-sha", url: "https://github.com/merged" }),
       expect.objectContaining({ kind: "force_pushed", commitOid: "new-head" }),
     ]);

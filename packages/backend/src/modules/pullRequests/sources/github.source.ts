@@ -135,6 +135,8 @@ const DETAIL_QUERY = `
         deletions
         baseRefName
         headRefName
+        baseRefOid
+        headRefOid
         createdAt
         updatedAt
         mergedAt
@@ -290,6 +292,8 @@ interface GraphQlCheckContext {
 }
 
 interface GraphQlDetailNode extends GraphQlPullRequestNode {
+  baseRefOid: string;
+  headRefOid: string;
   body: string;
   mergedAt: string | null;
   mergeable: string;
@@ -515,6 +519,7 @@ function toDetail(node: GraphQlDetailNode): PullRequestDetail {
 
   return {
     ...toSummary(node),
+    revision: node.baseRefOid && node.headRefOid ? { baseOid: node.baseRefOid, headOid: node.headRefOid } : undefined,
     body: node.body,
     commitCount: node.commits?.totalCount ?? 0,
     mergedAt: node.mergedAt,
@@ -625,6 +630,21 @@ export function createGithubPrSource(options: { token: string }): PrSource {
     getCommits(ref, page) { return readPrCommits(octokit, ref, page); },
 
     getActivity(ref, page, filter) { return readPrActivity(octokit, ref, page, filter); },
+
+    async getReviewDetails(ref) {
+      const response = await octokit.graphql<{
+        repository: { pullRequest: Pick<GraphQlDetailNode, "title" | "body" | "state" | "baseRefOid" | "headRefOid"> | null } | null;
+      }>(`
+        query PrReviewDetails($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) { title body state baseRefOid headRefOid }
+          }
+        }
+      `, { owner: ref.owner, repo: ref.repo, number: ref.number });
+      const pr = response.repository?.pullRequest;
+      if (!pr) throw new Error(`Pull request ${ref.owner}/${ref.repo}#${ref.number} not found`);
+      return { title: pr.title, body: pr.body, state: toPrState(pr.state), revision: { baseOid: pr.baseRefOid, headOid: pr.headRefOid } };
+    },
 
     async getDiff(ref: PrRef): Promise<PrDiff> {
       try {

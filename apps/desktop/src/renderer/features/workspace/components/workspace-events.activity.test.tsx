@@ -77,10 +77,8 @@ it("shows the active assistant's avatar and live activity until a reply streams 
   const assistantProps = { ...props, appearance: "assistant" as const, assistant };
   const view = render(<WorkspaceEvents {...assistantProps} />);
   const status = view.getByRole("status", { name: "Gezici is responding" });
-  const avatar = status.querySelector<HTMLElement>('[data-avatar-shape="kite"][data-animated="true"]');
+  const avatar = status.querySelector('[data-avatar-shape="kite"][data-animated="true"]');
   expect(avatar?.querySelectorAll("[data-eye]")).toHaveLength(2);
-  const transcript = view.getByText(prompt.content).closest<HTMLElement>('[style*="--mate-question-color"]');
-  expect(transcript?.style.getPropertyValue("--mate-question-color")).toBe(avatar?.style.getPropertyValue("--avatar-base"));
   const cells = [...status.querySelectorAll<HTMLElement>(":scope > span > .tool-square")];
   expect(cells).toHaveLength(3);
   const delays = cells.map(cell => Number(cell.style.getPropertyValue("--tsq-d1")));

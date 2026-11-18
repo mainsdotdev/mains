@@ -7,7 +7,8 @@ import { cn } from "@/lib/cn";
 import { useSetupAssistantProfileMutation } from "@/lib/redux/api/assistantsApi";
 import { errorText } from "../lib/assistant-ui";
 
-const bubble = "w-fit max-w-full whitespace-pre-wrap break-words rounded-2xl bg-primary-100/80 px-4 py-3 dark:bg-primary/8";
+const bubbleLayout = "w-fit max-w-full whitespace-pre-wrap break-words rounded-2xl px-4 py-3";
+const bubble = `${bubbleLayout} bg-primary-100/80 dark:bg-primary/8`;
 const sendTransition = { duration: 260, easing: "cubic-bezier(0.22, 1, 0.36, 1)" };
 type SetupTurn = AssistantProfileSetup["turns"][number];
 type SubmittedAnswer = SetupTurn & { step: number };
@@ -19,7 +20,7 @@ export function AssistantProfileSetupHistory({ setup, sending }: {
   return setup.turns.map(({ question, answer }, index) => (
     <div key={index} className="flex flex-col gap-3">
       <p className={bubble}>{question}</p>
-      <p ref={sending?.step === index ? sending.ref : undefined} className={`${bubble} origin-top-right self-end`}>{answer}</p>
+      <p ref={sending?.step === index ? sending.ref : undefined} className={`${bubbleLayout} origin-top-right self-end bg-mate-user-bubble`}>{answer}</p>
     </div>
   ));
 }

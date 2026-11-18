@@ -1,5 +1,6 @@
 import { CHANNELS } from "@mains/contracts/channels";
-import type { Assistant, AssistantTeam, AssistantOverview, CreateAssistant, ChangeAssistantTeam, UpdateAssistantProfile, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution, AssistantProfileSetupAction } from "@mains/contracts/assistants";
+import type { Assistant, AssistantTeam, AssistantOverview, CreateAssistant, ChangeAssistantTeam, UpdateAssistantProfile, SaveAssistantMemory, AssistantMemory, AssistantAssignment, AssignAssistantTask, AssistantConversation, SendAssistantMessage, AssistantExecution, AssistantProfileSetupAction, AssistantPullRequestReview, ReviewPullRequestWithAssistant } from "@mains/contracts/assistants";
+import type { PrRefInput } from "@mains/contracts/pull-requests";
 import { baseApi } from "./baseApi";
 export const assistantsApi = baseApi.injectEndpoints({
     endpoints: (b) => ({
@@ -40,6 +41,14 @@ export const assistantsApi = baseApi.injectEndpoints({
             runId: string;
         }, SendAssistantMessage>({ query: input => ({ handler: CHANNELS.assistants.send, args: [input] }), invalidatesTags: ["AssistantChats", "Assistants"] }),
         assignAssistantTask: b.mutation<AssistantAssignment, AssignAssistantTask>({ query: input => ({ handler: CHANNELS.assistants.assign, args: [input] }), invalidatesTags: ["Assistants", "AssistantChats"] }),
+        reviewPullRequestWithAssistant: b.mutation<AssistantAssignment, ReviewPullRequestWithAssistant>({
+            query: input => ({ handler: CHANNELS.assistants.reviewPullRequest, args: [input] }),
+            invalidatesTags: ["Assistants", "AssistantChats"],
+        }),
+        assistantPullRequestReviews: b.query<AssistantPullRequestReview[], { accountId: string; pr: PrRefInput; selectedId?: string }>({
+            query: ({ accountId, pr, selectedId }) => ({ handler: CHANNELS.assistants.pullRequestReviews, args: [accountId, pr, selectedId ?? null] }),
+            providesTags: ["Assistants"],
+        }),
         reconcileAssistantTask: b.mutation<AssistantAssignment, {
             accountId: string;
             id: string;
@@ -57,3 +66,4 @@ export const assistantsApi = baseApi.injectEndpoints({
     }),
 });
 export const { useSetupAssistantProfileMutation, useAssistantAssignmentQuery, usePrepareAssistantWelcomeMutation, useRespondAssistantWelcomeMutation, useAssistantOverviewQuery, useCreateAssistantTeamMutation, useCreateAssistantMutation, useChangeAssistantTeamMutation, useUpdateAssistantProfileMutation, useArchiveAssistantMutation, useSaveAssistantMemoryMutation, useRemoveAssistantMemoryMutation, useAssistantConversationsQuery, useSendAssistantMessageMutation, useAssignAssistantTaskMutation, useReconcileAssistantTaskMutation, useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation } = assistantsApi;
+export const { useReviewPullRequestWithAssistantMutation, useAssistantPullRequestReviewsQuery } = assistantsApi;

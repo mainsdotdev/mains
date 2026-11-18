@@ -1,6 +1,6 @@
 import type { PrActivityInput, PrActivityPage, PrCommitPage } from "@mains/contracts/pull-requests";
 export type { PrRefInput } from "@mains/contracts/pull-requests";
-import type { PrRefInput } from "@mains/contracts/pull-requests";
+import type { PrRefInput, PrRevision } from "@mains/contracts/pull-requests";
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 
@@ -88,6 +88,7 @@ export interface PrCheck {
 }
 
 export interface PullRequestDetail extends PullRequestSummary {
+  revision?: PrRevision;
   commitCount: number;
   body: string;
   mergedAt: string | null;

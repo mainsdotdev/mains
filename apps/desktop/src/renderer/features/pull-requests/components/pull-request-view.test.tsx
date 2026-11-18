@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { AssistantPullRequestReview } from "@mains/contracts/assistants";
 import { baseApi } from "@/lib/redux/api/baseApi";
 import { useGetPrDiffQuery, type PrRefInput } from "@/lib/redux/api/pullRequestsApi";
 import { getTransport, resetTransport, setTransport, type Transport, type TransportStatus } from "@/lib/transport";
@@ -13,6 +14,7 @@ import { toastStore } from "@/components/ui";
 import { PullRequestView } from "./pull-request-view";
 
 vi.mock("@/components/markdown-components", () => ({ markdownComponents: {} }));
+vi.mock("@/components/agent-markdown", () => ({ AgentMarkdown: ({ children }: { children: string }) => <p>{children}</p> }));
 vi.mock("@/lib/diff-highlighter", () => ({ warmDiffHighlighter: vi.fn() }));
 vi.mock("./pr-diff-view", () => ({ PrDiffView: ({ prRef }: { prRef: PrRefInput }) => {
   const { data } = useGetPrDiffQuery(prRef);
@@ -57,17 +59,61 @@ beforeEach(() => {
   });
   setTransport({ kind: "test", invoke, subscribe: () => () => {}, status: () => status,
     onStatusChange: (listener) => { statusListeners.add(listener); return () => { statusListeners.delete(listener); }; } } as Transport);
+  document.documentElement.style.fontSize = "16px";
   HTMLElement.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   Object.defineProperty(window, "api", { configurable: true, value: { shell: { openExternal } } });
 });
 afterEach(() => {
   cleanup();
+  document.documentElement.style.removeProperty("font-size");
   for (const state of stores.splice(0)) state.dispatch(baseApi.util.resetApiState());
   resetTransport(); toastStore.dismissAll(); vi.unstubAllGlobals(); vi.clearAllMocks();
 });
 
 describe("shared pull request view", () => {
+  it("hides the Mate review action in both tabs and shows previously saved reports", async () => {
+    const revision = { baseOid: "a".repeat(40), headOid: "b".repeat(40) };
+    detail = { ...prFixture, revision };
+    const original = invoke.getMockImplementation()!;
+    const assignment: AssistantPullRequestReview["assignment"] = {
+      id: "review-1", accountId: "default", teamId: null, fromAssistantId: null, fromRunId: null, parentId: null,
+      toAssistantId: "ready-mate", title: "Review acme/widget#176", taskKey: "review", prompt: "Review the PR", execution: { mode: "work" },
+      status: "completed", result: `Check how the release flag is initialized at ${revision.headOid}.`, evidence: ["release.ts:12", "pr-176.diff"], error: null,
+      workerRunId: "review-thread", createdAt: new Date(), updatedAt: new Date(),
+      pullRequestReview: { key: "github:acme/widget#176", revision, truncated: true },
+    };
+    const reviews = JSON.parse(JSON.stringify([{ assignment, revision, truncated: true }]));
+    invoke.mockImplementation((channel, args) => {
+      if (channel === CHANNELS.account.get) return { success: true, data: { id: "default" } };
+      if (channel === CHANNELS.assistants.overview) return { success: true, data: {
+        assistants: [{ id: "ready-mate", name: "Review Mate" }],
+        teams: [], assignments: [], memories: [],
+      } };
+      if (channel === CHANNELS.assistants.pullRequestReviews) return { success: true, data: reviews };
+      return original(channel, args);
+    });
+    harness();
+
+    expect(await screen.findByText("release.ts:12")).toBeTruthy();
+    const report = within(screen.getByRole("region", { name: "Report" }));
+    expect(report.getByText("Check how the release flag is initialized at bbbbbbb.")).toBeTruthy();
+    expect(report.getByText("PR diff")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Summary" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText(/Partial diff/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open chat" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Review with Mate" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Changes/ }));
+    await screen.findByText("Original diff");
+    expect(screen.queryByRole("button", { name: "Review with Mate" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    detail = { ...detail, revision: { ...revision, headOid: "c".repeat(40) } };
+    fireEvent.click(screen.getByRole("button", { name: "Refresh pull request" }));
+    expect(await screen.findByText(/Previous revision/)).toBeTruthy();
+  });
+
   it("loads commits on expansion, follows older pages and deduplicates overlapping records", async () => {
     const original = invoke.getMockImplementation()!;
     const commit = (oid: string, message: string) => ({ oid, message, committedAt: prFixture.createdAt,
@@ -119,10 +165,13 @@ describe("shared pull request view", () => {
     expect(screen.queryByText("okan opened this pull request")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Load older activity" }));
     await screen.findByText("Unable to load activity.");
+    fireEvent.click(screen.getByText("Error details"));
+    expect(screen.getByText("Temporary failure")).toBeTruthy();
     expect(screen.getByText("Approved release")).toBeTruthy();
     failOlder = false;
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await screen.findByText("Earlier comment");
+    expect(screen.queryByText("Error details")).toBeNull();
     expect(screen.getByText("okan opened this pull request")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Filter activity" }));
     fireEvent.click(await screen.findByRole("option", { name: "Comments" }));

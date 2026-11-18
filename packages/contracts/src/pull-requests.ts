@@ -5,6 +5,15 @@ export interface PrRefInput {
   number: number;
 }
 
+export interface PrRevision {
+  baseOid: string;
+  headOid: string;
+}
+
+export function samePrRevision(a: PrRevision, b: PrRevision): boolean {
+  return a.baseOid === b.baseOid && a.headOid === b.headOid;
+}
+
 export interface PrPageInput extends PrRefInput {
   cursor?: string | null;
   pageSize?: number;

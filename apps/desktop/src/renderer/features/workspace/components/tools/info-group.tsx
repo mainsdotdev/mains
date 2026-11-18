@@ -264,6 +264,7 @@ function InfoGroupImpl({
     const message = (event.content ?? "").trim();
     const isAsyncQuestionReply =
       readAsyncQuestionReply(event.metadata.asyncQuestionReply) !== null;
+    const promptBubbleBackground = bubble ? "bg-mate-user-bubble" : `${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`;
     const isReview = event.metadata?.isReview === true;
     const issues = (event.metadata?.issues ?? []) as Array<{
       provider: string;
@@ -397,7 +398,7 @@ function InfoGroupImpl({
             )}
             {message && (
               <div
-                className={`min-w-0 max-w-full ${isAsyncQuestionReply ? "px-3 py-1.5" : "px-3.5 py-2"} rounded-2xl ${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`}
+                className={`min-w-0 max-w-full ${isAsyncQuestionReply ? "px-3 py-1.5" : "px-3.5 py-2"} rounded-2xl ${promptBubbleBackground}`}
               >
                 <div
                   className={`prose prose-sm dark:prose-invert max-w-none text-left ${

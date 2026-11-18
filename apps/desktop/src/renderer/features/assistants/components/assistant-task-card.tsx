@@ -10,7 +10,7 @@ import { useGetAccountQuery, useGetWorkspaceQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery, useAssistantAssignmentQuery } from "@/lib/redux/api/assistantsApi";
 import { useAssistantUpdates } from "../hooks/use-assistant-updates";
 import { assistantHref } from "../lib/assistant-navigation";
-import { errorText } from "../lib/assistant-ui";
+import { errorText, pullRequestReviewPresentation } from "../lib/assistant-ui";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssignmentStatusBadge } from "./assignment-status-badge";
 
@@ -49,18 +49,21 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
   const taskKey = `${runId}:${task.id}`;
   const hasOpened = disclosure?.taskKey === taskKey;
   const expanded = hasOpened && disclosure.expanded;
+  const review = pullRequestReviewPresentation(task);
   const name = assistant?.name ?? "Mate";
-  const scope = workspace?.name ?? (task.execution.mode === "work" ? "Work" : "");
+  const scope = review ? "PR review" : workspace?.name ?? (task.execution.mode === "work" ? "Work" : "");
   const running = task.status === "running" || task.status === "queued";
   const workerRunId = task.workerRunId;
   const canOpenChat = workerRunId && workerRunId !== runId && ["running", "blocked", "completed", "failed"].includes(task.status);
-  const reportPreview = task.result ? plainActivityText(task.result).replace(/\s+/g, " ") : "";
+  const result = review?.result ?? task.result;
+  const evidence = review?.evidence ?? task.evidence;
+  const reportPreview = result ? plainActivityText(result).replace(/\s+/g, " ") : "";
   const activity = task.activity ?? [];
   const taskError = task.error ? errorText(task.error) : "";
   const requestInActivity = activity.some(item => item.kind === "request" && item.content === task.prompt);
   const errorInActivity = activity.some(item => item.kind === "status" && item.content === task.error);
   const reportActivity = task.result ? activity.filter(item => item.kind === "result" && item.content === task.result).at(-1) : undefined;
-  const activityRows = activity.filter(item => item.id !== reportActivity?.id);
+  const activityRows = activity.filter(item => item.id !== reportActivity?.id && (!review || item.kind !== "request"));
 
   return (
     <article aria-label={`${name} task`} className="my-2 flex w-full min-w-0 max-w-transcript-bubble flex-col gap-2 text-primary-900 dark:text-primary-100">
@@ -89,15 +92,26 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
           <div className="min-h-0 overflow-hidden">
             {hasOpened && <div className="space-y-2 px-2.5 pb-2.5 pt-0.5">
               {taskError && !errorInActivity && <p role="alert" className={cn(sectionClassName, "break-words text-xs text-danger")}>{taskError}</p>}
-              {(task.result || task.evidence.length > 0) && <section aria-label="Task report" className={sectionClassName}>
+              {(result || evidence.length > 0) && <section aria-label="Task report" className={sectionClassName}>
                 <TaskSectionHeading label="Report" deliveryStatus={reportActivity?.deliveryStatus} />
-                {task.result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{task.result}</AgentMarkdown>}
-                {!!task.evidence.length && <ul aria-label="Task evidence" className="space-y-0.5 text-xs text-primary-600 dark:text-primary-400">
-                  {task.evidence.map((item, index) => <li key={index} className="break-words">{item}</li>)}
+                {result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{result}</AgentMarkdown>}
+                {!!evidence.length && <ul aria-label="Task evidence" className={cn("text-xs text-primary-600 dark:text-primary-400", review ? "flex flex-wrap gap-x-3 gap-y-1" : "space-y-0.5")}>
+                  {evidence.map((item, index) => <li key={index} className="break-words">{item}</li>)}
                 </ul>}
                 {reportActivity?.error && <p className="break-words text-xs text-danger">{errorText(reportActivity.error)}</p>}
               </section>}
-              {task.prompt && !requestInActivity && <div className={sectionClassName}>
+              {review && <section aria-label="Review scope" className={sectionClassName}>
+                <TaskSectionHeading label="Review scope" />
+                <p className="break-words text-xs">
+                  {review.reference} <span aria-hidden="true">·</span> <code>{review.commit}</code>
+                  {review.truncated && " · Partial diff"}
+                </p>
+                {review.focus && <>
+                  <TaskSectionHeading label="Review focus" />
+                  <p className="whitespace-pre-wrap break-words text-sm leading-5">{review.focus}</p>
+                </>}
+              </section>}
+              {!review && task.prompt && !requestInActivity && <div className={sectionClassName}>
                 <TaskSectionHeading label="Task request" />
                 <p className="whitespace-pre-wrap break-words text-sm leading-5">{task.prompt}</p>
               </div>}
@@ -106,7 +120,7 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
                   <li key={item.id} className={sectionClassName}>
                     <TaskSectionHeading label={activityLabels[item.kind]} deliveryStatus={item.deliveryStatus} />
                     {!(item.kind === "result" && item.content === task.result) &&
-                      <AgentMarkdown className="[&>.document-paragraph]:leading-5">{item.kind === "status" ? errorText(item.content) : item.content}</AgentMarkdown>}
+                      <AgentMarkdown className="[&>.document-paragraph]:leading-5">{item.kind === "status" ? errorText(item.content) : item.kind === "result" && review ? review.formatText(item.content) : item.content}</AgentMarkdown>}
                     {item.error && <p className="break-words text-xs text-danger">{errorText(item.error)}</p>}
                   </li>
                 ))}

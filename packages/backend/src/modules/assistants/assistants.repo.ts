@@ -1,16 +1,22 @@
-import { and, desc, eq, isNull, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, isNull, isNotNull, or, sql } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { assistantTeams, assistants, assistantWelcomes, assistantMemories, assistantAssignments, assistantMessages, runs, runContext, workspaces, projects } from "../../db/schema";
-import type { Assistant, AssistantAssignment, AssistantProfile } from "@mains/contracts/assistants";
+import type { Assistant, AssistantAssignment, AssistantMessageContext, AssistantProfile, AssistantPullRequestContext, AssistantPullRequestReview } from "@mains/contracts/assistants";
 import { normalizeAssistantAvatar } from "@mains/contracts/assistants";
 function assistant(row: typeof assistants.$inferSelect): Assistant {
     const { settings, spaceSnapshot, mode: _mode, workspaceId: _workspace, avatar, ...rest } = row;
     return { ...rest, avatar: normalizeAssistantAvatar(JSON.parse(avatar)), conversationSettings: JSON.parse(settings), spaceSnapshot: JSON.parse(spaceSnapshot) };
 }
-function assignment(row: typeof assistantAssignments.$inferSelect): AssistantAssignment {
-    const { dedupeKey: _dedupeKey, context: _context, sourcePromptId: _sourcePrompt, sourceContextId: _sourceContext, execution, ...rest } = row;
-    return { ...rest, execution: JSON.parse(execution), evidence: JSON.parse(row.evidence) };
+const { context: _assignmentContext, ...assignmentFields } = getTableColumns(assistantAssignments);
+const assignmentProjection = { ...assignmentFields, review: sql<string | null>`json_extract(${assistantAssignments.context}, '$.pullRequestReview')` };
+type AssignmentRow = Omit<typeof assistantAssignments.$inferSelect, "context"> & { review: string | null };
+type AssignmentContext = AssistantMessageContext & { pullRequestReview?: AssistantPullRequestContext };
+
+function assignment(row: AssignmentRow): AssistantAssignment {
+    const { dedupeKey: _dedupeKey, review, sourcePromptId: _sourcePrompt, sourceContextId: _sourceContext, execution, evidence, ...rest } = row;
+    return { ...rest, execution: JSON.parse(execution), evidence: JSON.parse(evidence), ...(review && { pullRequestReview: JSON.parse(review) }) };
 }
+
 export const assistantsRepo = {
     activeAssistantIds(accountId: string) { return getDb().selectDistinct({ id: runs.assistantId }).from(runs).where(and(eq(runs.accountId, accountId), eq(runs.isArchived, false), isNotNull(runs.assistantId), or(eq(runs.status, "running"), eq(runs.status, "queued")))).limit(200).all().map(row => row.id!); },
     teams(accountId: string) { return getDb().select().from(assistantTeams).where(eq(assistantTeams.accountId, accountId)).orderBy(assistantTeams.createdAt).limit(100).all(); },
@@ -70,7 +76,7 @@ export const assistantsRepo = {
                 sql`EXISTS (SELECT 1 FROM run_artifacts a WHERE a.run_id = ${runs.id} AND a.kind = 'user-prompt' AND a.content = json_extract(${runContext.metadata}, '$.sourcePrompt') AND (json_extract(a.metadata, '$.clientPromptId') = json_extract(${runContext.metadata}, '$.sourcePromptId') OR json_extract(a.metadata, '$.clientUserMessageId') = json_extract(${runContext.metadata}, '$.sourcePromptId')))`))
             .orderBy(runContext.id).limit(50).all();
     },
-    assignmentsWithSource() { return getDb().select({ task: assistantAssignments }).from(assistantAssignments).innerJoin(runs, eq(runs.id, assistantAssignments.fromRunId)).where(and(eq(runs.isArchived, false), sql`NOT EXISTS (SELECT 1 FROM run_artifacts a WHERE a.run_id = ${assistantAssignments.fromRunId} AND json_extract(a.metadata, '$.source') = 'assistant_assignment' AND json_extract(a.metadata, '$.assignmentId') = ${assistantAssignments.id})`)).orderBy(assistantAssignments.createdAt, assistantAssignments.id).limit(200).all().map(row => assignment(row.task)); },
+    assignmentsWithSource() { return getDb().select({ task: assignmentProjection }).from(assistantAssignments).innerJoin(runs, eq(runs.id, assistantAssignments.fromRunId)).where(and(eq(runs.isArchived, false), sql`NOT EXISTS (SELECT 1 FROM run_artifacts a WHERE a.run_id = ${assistantAssignments.fromRunId} AND json_extract(a.metadata, '$.source') = 'assistant_assignment' AND json_extract(a.metadata, '$.assignmentId') = ${assistantAssignments.id})`)).orderBy(assistantAssignments.createdAt, assistantAssignments.id).limit(200).all().map(row => assignment(row.task)); },
     pendingRuns() { return getDb().select({ id: runs.id }).from(runs).where(and(sql `${runs.assistantId} IS NOT NULL`, eq(runs.status, "running"))).limit(200).all(); },
     conversations(id: string, accountId: string) {
         return getDb().select({
@@ -83,17 +89,39 @@ export const assistantsRepo = {
             .where(and(eq(runs.assistantId, id), eq(runs.accountId, accountId), eq(runs.isArchived, false)))
             .orderBy(desc(runs.updatedAt), desc(runs.createdAt), desc(runs.id)).limit(100).all();
     },
-    assignments(accountId: string) { return getDb().select().from(assistantAssignments).where(eq(assistantAssignments.accountId, accountId)).orderBy(sql`CASE WHEN status IN ('completed', 'failed', 'canceled') THEN 1 ELSE 0 END`, desc(assistantAssignments.createdAt), assistantAssignments.id).limit(200).all().map(assignment); },
-    assignment(id: string) { const row = getDb().select().from(assistantAssignments).where(eq(assistantAssignments.id, id)).get(); return row ? assignment(row) : null; },
-    byKey(accountId: string, key: string) { const row = getDb().select().from(assistantAssignments).where(and(eq(assistantAssignments.accountId, accountId), eq(assistantAssignments.dedupeKey, key))).get(); return row ? assignment(row) : null; },
-    assignmentContext(id: string) { const row = getDb().select({ context: assistantAssignments.context, sourcePromptId: assistantAssignments.sourcePromptId }).from(assistantAssignments).where(eq(assistantAssignments.id, id)).get(); return row ? { context: JSON.parse(row.context), sourcePromptId: row.sourcePromptId } : null; },
-    byWorker(runId: string) { const row = getDb().select().from(assistantAssignments).where(eq(assistantAssignments.workerRunId, runId)).get(); return row ? assignment(row) : null; },
+    assignments(accountId: string) { return getDb().select(assignmentProjection).from(assistantAssignments).where(eq(assistantAssignments.accountId, accountId)).orderBy(sql`CASE WHEN status IN ('completed', 'failed', 'canceled') THEN 1 ELSE 0 END`, desc(assistantAssignments.createdAt), assistantAssignments.id).limit(200).all().map(assignment); },
+    pullRequestReviews(accountId: string, prKey: string, selectedId: string): AssistantPullRequestReview[] {
+        const rows = getDb().select({ task: assignmentProjection, workerRunId: runs.id })
+            .from(assistantAssignments)
+            .leftJoin(runs, and(eq(runs.id, assistantAssignments.workerRunId), eq(runs.accountId, accountId), eq(runs.assistantId, assistantAssignments.toAssistantId), eq(runs.isArchived, false)))
+            .where(and(eq(assistantAssignments.accountId, accountId), sql`json_extract(${assistantAssignments.context}, '$.pullRequestReview.key') = ${prKey}`))
+            .orderBy(sql`CASE WHEN ${assistantAssignments.id} = ${selectedId} THEN 0 ELSE 1 END`, desc(assistantAssignments.createdAt), sql`${assistantAssignments}.rowid DESC`).limit(50).all();
+        return rows.map(({ task, workerRunId }) => {
+            const item = assignment(task);
+            const { revision, truncated } = item.pullRequestReview!;
+            return { revision, truncated, assignment: { ...item, workerRunId } };
+        });
+    },
+    assignment(id: string) { const row = getDb().select(assignmentProjection).from(assistantAssignments).where(eq(assistantAssignments.id, id)).get(); return row ? assignment(row) : null; },
+    byKey(accountId: string, key: string) { const row = getDb().select(assignmentProjection).from(assistantAssignments).where(and(eq(assistantAssignments.accountId, accountId), eq(assistantAssignments.dedupeKey, key))).get(); return row ? assignment(row) : null; },
+    assignmentContext(id: string): AssistantMessageContext | undefined {
+        const row = getDb().select({ context: assistantAssignments.context }).from(assistantAssignments).where(eq(assistantAssignments.id, id)).get();
+        if (!row) return undefined;
+        const { pullRequestReview: _review, ...context } = JSON.parse(row.context) as AssignmentContext;
+        return context;
+    },
+    releasePullRequestReviewInputs(id: string) {
+        // The worker now retains the originals as ordinary run attachments.
+        getDb().update(assistantAssignments).set({ context: sql`json_remove(${assistantAssignments.context}, '$.attachments')` })
+            .where(and(eq(assistantAssignments.id, id), sql`json_type(${assistantAssignments.context}, '$.pullRequestReview') = 'object'`)).run();
+    },
+    byWorker(runId: string) { const row = getDb().select(assignmentProjection).from(assistantAssignments).where(eq(assistantAssignments.workerRunId, runId)).get(); return row ? assignment(row) : null; },
     enqueue(row: typeof assistantAssignments.$inferInsert, message: typeof assistantMessages.$inferInsert) { getDb().transaction(() => { getDb().insert(assistantAssignments).values(row).run(); getDb().insert(assistantMessages).values(message).run(); }); },
     patchAssignment(id: string, patch: Partial<typeof assistantAssignments.$inferInsert>) { getDb().update(assistantAssignments).set({ ...patch, updatedAt: new Date() }).where(eq(assistantAssignments.id, id)).run(); },
     messages() { return getDb().select().from(assistantMessages).where(eq(assistantMessages.status, "queued")).orderBy(sql`rowid`).limit(100).all(); },
     message(id: string) { return getDb().select().from(assistantMessages).where(eq(assistantMessages.id, id)).get() ?? null; },
     assignmentMessages(id: string) { return getDb().select().from(assistantMessages).where(eq(assistantMessages.assignmentId, id)).orderBy(desc(assistantMessages.createdAt), sql`rowid DESC`).limit(50).all().reverse(); },
-    unfinishedAssignments() { return getDb().select().from(assistantAssignments).where(or(eq(assistantAssignments.status, "running"), eq(assistantAssignments.status, "queued"))).limit(200).all().map(assignment); },
+    unfinishedAssignments() { return getDb().select(assignmentProjection).from(assistantAssignments).where(or(eq(assistantAssignments.status, "running"), eq(assistantAssignments.status, "queued"))).limit(200).all().map(assignment); },
     hasUnconfirmedDelivery(runId: string) { return !!getDb().select({ id: assistantMessages.id }).from(assistantMessages).where(and(eq(assistantMessages.targetRunId, runId), or(eq(assistantMessages.status, "dispatching"), eq(assistantMessages.status, "uncertain")))).limit(1).get(); },
   unsettledMessages() { return getDb().select().from(assistantMessages).where(or(eq(assistantMessages.status, "dispatching"), eq(assistantMessages.status, "uncertain"))).limit(200).all(); },
     addMessage(row: typeof assistantMessages.$inferInsert) { getDb().insert(assistantMessages).values(row).onConflictDoNothing().run(); },

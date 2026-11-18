@@ -5,6 +5,7 @@ import {
 } from "@/lib/redux/api/pullRequestsApi";
 import { Body, Button, Select, Text } from "@/components/ui";
 import { ArrowUp, Commit, External, Filter, PullRequest } from "@/components/ui/icons";
+import { extractErrorMessage } from "@/lib/extract-error-message";
 import { formatDate } from "@/lib/format-date";
 import { Avatar, Markdown } from "./pr-content";
 
@@ -26,10 +27,17 @@ function Time({ value }: { value: string }) {
     className="shrink-0 text-xxs text-primary-500">{formatDate(value)}</time>;
 }
 
-function PageError({ children, retry }: { children: string; retry: () => unknown }) {
-  return <div role="status" className="flex items-center justify-between gap-3 px-4 py-3">
-    <Text size="xs" tone="warning">{children}</Text>
-    <Button variant="subtle" onClick={() => { void retry(); }}>Try again</Button>
+function PageError({ children, error, retry }: { children: string; error: unknown; retry: () => unknown }) {
+  const detail = extractErrorMessage(error, "").trim();
+  return <div className="space-y-1 px-4 py-3">
+    <div className="flex items-center justify-between gap-3">
+      <Text size="xs" tone="warning" role="status">{children}</Text>
+      <Button variant="subtle" onClick={() => { void retry(); }}>Try again</Button>
+    </div>
+    {detail && detail !== children && <details className="text-xs text-primary-600 dark:text-primary-400">
+      <summary className="w-fit cursor-pointer">Error details</summary>
+      <p className="mt-1 whitespace-pre-wrap break-words">{detail}</p>
+    </details>}
   </div>;
 }
 
@@ -52,7 +60,7 @@ function Commits({ prRef, count, active }: { prRef: PrRefInput; count: number; a
     {expanded && <div id={id} className="border-t border-primary-200/60 dark:border-primary-800/60">
       {query.hasNextPage && <Button variant="subtle" disabled={query.isFetching} className="m-2 text-xs"
         onClick={() => { void query.fetchNextPage(); }}>{query.isFetchingNextPage ? "Loading…" : "Load older commits"}</Button>}
-      {query.isError && <PageError retry={() => query.direction === "forward" && query.currentData ? query.fetchNextPage() : query.refetch()}>Unable to load commits.</PageError>}
+      {query.isError && <PageError error={query.error} retry={() => query.direction === "forward" && query.currentData ? query.fetchNextPage() : query.refetch()}>Unable to load commits.</PageError>}
       {query.isLoading && <Text as="p" size="xs" tone="subtle" className="px-4 py-3" role="status">Loading commits…</Text>}
       {commits.map((commit) => <div key={commit.oid} className="flex items-start gap-3 border-b border-primary-200/40 px-4 py-3 last:border-b-0 dark:border-primary-800/40">
         <Avatar author={commit.author} />
@@ -127,7 +135,7 @@ export function PrActivitySection({ prRef, detail, active }: { prRef: PrRefInput
       {query.hasNextPage && <Button variant="subtle" disabled={query.isFetching}
         onClick={() => { void query.fetchNextPage(); }}>{query.isFetchingNextPage ? "Loading…" : "Load older activity"}</Button>}
       {query.isLoading && <Text as="p" size="xs" tone="subtle" role="status">Loading activity…</Text>}
-      {query.isError && <PageError retry={() => query.direction === "forward" && query.currentData ? query.fetchNextPage() : query.refetch()}>Unable to load activity.</PageError>}
+      {query.isError && <PageError error={query.error} retry={() => query.direction === "forward" && query.currentData ? query.fetchNextPage() : query.refetch()}>Unable to load activity.</PageError>}
       {showOpening && <div className="flex items-center gap-3 rounded-2xl border border-primary-200/60 px-4 py-3 dark:border-primary-800/70">
         <PullRequest className="size-4 shrink-0 text-success" />
         <Text as="span" size="s" className="min-w-0 flex-1 wrap-break-word">{detail.author?.login ?? "Someone"} opened this pull request</Text>

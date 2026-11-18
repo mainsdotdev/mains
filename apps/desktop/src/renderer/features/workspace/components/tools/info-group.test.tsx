@@ -104,6 +104,14 @@ describe("prompt context files", () => {
   });
 });
 
+it("uses the Mate tint for the user's bubble in the Mate transcript", () => {
+  const group = prompt({ browserAnnotations: [], attachments: [] });
+  const view = render(<InfoGroup group={group} bubble />);
+  expect(screen.getByText(group.events[0].content).closest(".bg-mate-user-bubble")).toBeTruthy();
+  view.rerender(<InfoGroup group={group} />);
+  expect(screen.getByText(group.events[0].content).closest(".bg-mate-user-bubble")).toBeNull();
+});
+
 describe("prompt document attachments", () => {
   it.each(["txt", "pdf", "docx"] as const)("opens a durable %s attachment from its card in the document preview", async (docType) => {
     const name = `Özgeçmiş.${docType}`.normalize("NFD");

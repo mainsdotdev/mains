@@ -1,4 +1,5 @@
 import type { ModeId } from "./modes";
+import type { PrRefInput, PrRevision } from "./pull-requests";
 import type { ConversationSettings } from "./run-settings";
 export const ASSISTANT_AVATAR_SHAPES = ["steps", "sphere", "cube", "flower", "weave", "lantern", "arch", "kite", "swallow", "mains"] as const;
 export const ASSISTANT_AVATAR_COLORS = ["coral", "amber", "lime", "mint", "cyan", "blue", "violet", "rose"] as const;
@@ -118,6 +119,12 @@ export interface AssistantTaskActivity {
     error: string | null;
     createdAt: Date;
 }
+export interface AssistantPullRequestContext {
+    key: string;
+    revision: PrRevision;
+    truncated: boolean;
+    focus?: string;
+}
 export interface AssistantAssignment {
     id: string;
     accountId: string;
@@ -138,6 +145,7 @@ export interface AssistantAssignment {
     createdAt: Date;
     updatedAt: Date;
     activity?: AssistantTaskActivity[];
+    pullRequestReview?: AssistantPullRequestContext;
 }
 export function canAccessAssistantAssignment(
     assistant: Pick<Assistant, "id" | "accountId" | "teamId">,
@@ -153,6 +161,20 @@ export interface AssignAssistantTask {
     title: string;
     prompt: string;
     execution?: AssistantExecution;
+}
+
+export interface ReviewPullRequestWithAssistant {
+    accountId: string;
+    assistantId: string;
+    pr: PrRefInput;
+    revision: PrRevision;
+    focus?: string;
+}
+
+export interface AssistantPullRequestReview {
+    assignment: AssistantAssignment;
+    revision: PrRevision;
+    truncated: boolean;
 }
 export interface AssistantConversation {
     id: string;

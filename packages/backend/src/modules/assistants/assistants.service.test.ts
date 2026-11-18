@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { eq } from "drizzle-orm";
@@ -30,6 +30,7 @@ import { auditBridgeSchema } from "../bridge/bridge.records";
 import type { Assistant, AssistantAssignment } from "@mains/contracts/assistants";
 import { createCodexRequestBroker } from "../providers/adapters/codex/codex-request-broker";
 import { pulseService } from "../pulse";
+import { pullRequestsService } from "../pullRequests";
 import { dispatchMainsTool, toClaudeTools } from "../providers/adapters/mains-tools.registry";
 let cleanup: () => void, restore: () => void, root: string;
 let driver: ReturnType<typeof createFakeDriver>;
@@ -83,6 +84,64 @@ afterEach(async () => {
     cleanup();
     rmSync(root, { recursive: true, force: true });
     vi.restoreAllMocks();
+});
+
+describe("Mate pull request reviews", () => {
+    const pr = { owner: "Acme", repo: "Widget", number: 12 };
+    const revision = { baseOid: "a".repeat(40), headOid: "b".repeat(40) };
+    const diffText = "diff --git a/index.ts b/index.ts\n+export const answer = 42;\n";
+
+    it("runs one Work assignment per revision and retains the report and exact review files", async () => {
+        const mate = await makeIndependentAssistant("Reviewer");
+        const readSnapshot = vi.spyOn(pullRequestsService, "getReviewSnapshot").mockImplementation(async (_pr, requested) =>
+            ({ title: "Check changes", body: "Context about the change", state: "open", revision: requested, diffText, truncated: true }));
+        assistantWork.start();
+        const input = { accountId: "default", assistantId: mate.id, pr, revision };
+        const [assignment, concurrent] = await Promise.all([
+            assistantWork.reviewPullRequest({ ...input, focus: "Check defaults" }),
+            assistantWork.reviewPullRequest(input),
+        ]);
+        expect(concurrent.id).toBe(assignment.id);
+        expect(assignment.execution).toEqual({ mode: "work" });
+        expect(assignment.prompt).toContain("Only part of the diff");
+        expect(assignment.prompt).toContain("Keep commit IDs, assignment IDs, and local attachment paths out of the report");
+        expect(assignment.prompt).not.toContain("Context about the change");
+        expect(assistantsService.pullRequestReviews("default", pr)).toMatchObject([{ assignment: { id: assignment.id }, revision, truncated: true }]);
+        expect(assistantsService.pullRequestReviews("other-account", pr)).toEqual([]);
+        expect(assistantsService.pullRequestReviews("default", { ...pr, number: 13 })).toEqual([]);
+        await settled(assignment.workerRunId!);
+        const attachments = driver.calls.createSession[0].attachments!;
+        expect(attachments.map(attachment => attachment.name)).toEqual(["pr-12.diff", "pr-12-description.md"]);
+        expect(readFileSync(attachments[0].sourcePath!, "utf8")).toBe(diffText);
+        expect(readFileSync(attachments[1].sourcePath!, "utf8")).toContain("Context about the change");
+        expect(assistantsRepo.assignmentContext(assignment.id)?.attachments).toBeUndefined();
+        await assistantWork.report(assignment.workerRunId!, { assignmentId: assignment.id, status: "completed", result: "Check the default", evidence: ["index.ts:1"] });
+        expect(assistantsService.pullRequestReviews("default", pr)).toMatchObject([{ assignment: { status: "completed", result: "Check the default", workerRunId: assignment.workerRunId } }]);
+        const card = assistantsService.assignment("default", assignment.id);
+        expect(card?.pullRequestReview).toEqual({ key: "github:acme/widget#12", revision, truncated: true, focus: "Check defaults" });
+        expect(card?.activity?.find(event => event.kind === "request")?.content).toBe(assignment.prompt);
+
+        const calls = readSnapshot.mock.calls.length;
+        expect(await assistantWork.reviewPullRequest({ ...input, pr: { ...pr, owner: "acme" }, focus: "Check another area" })).toMatchObject({ id: assignment.id });
+        expect(readSnapshot).toHaveBeenCalledTimes(calls);
+        const nextRevision = { ...revision, headOid: "c".repeat(40) };
+        const next = await assistantWork.reviewPullRequest({ ...input, revision: nextRevision });
+        expect(next.id).not.toBe(assignment.id);
+        await settled(next.workerRunId!);
+        expect(assistantsService.pullRequestReviews("default", pr).map(review => review.revision)).toEqual([nextRevision, revision]);
+        expect(assistantsService.pullRequestReviews("default", pr, assignment.id)[0].assignment.id).toBe(assignment.id);
+    });
+
+    it("leaves the queue unchanged when PR preparation fails or the Mate belongs to another account", async () => {
+        const mate = await makeIndependentAssistant("Reviewer");
+        assistantWork.start();
+        const readSnapshot = vi.spyOn(pullRequestsService, "getReviewSnapshot").mockRejectedValue(new Error("The pull request changed"));
+        const input = { accountId: "default", assistantId: mate.id, pr, revision };
+        await expect(assistantWork.reviewPullRequest({ ...input, accountId: "other-account" })).rejects.toThrow("Assistant is unavailable");
+        expect(readSnapshot).not.toHaveBeenCalled();
+        await expect(assistantWork.reviewPullRequest(input)).rejects.toThrow("pull request changed");
+        expect(assistantsService.pullRequestReviews("default", pr)).toEqual([]);
+    });
 });
 
 describe("blocking assistant questions", () => {

@@ -18,10 +18,13 @@ import { useAppDispatch } from "@/lib/redux/hooks";
 import { onTransportChange } from "@/lib/transport";
 import { canonicalPrRef, githubPullRequestUrl, pullRequestKey } from "../lib/pull-request-link";
 import { PrDiffView } from "./pr-diff-view";
+import { PullRequestMateAction, PullRequestMateReviews } from "./pr-mate-review";
 import { Avatar, Markdown } from "./pr-content";
 import { PrActivitySection } from "./pr-activity";
 import { PrChecksCard } from "./pr-checks-card";
 import { PullRequestActionsContext, usePrDraft, usePullRequestActions } from "../hooks/use-pull-request-actions";
+
+const SHOW_MATE_REVIEW_ACTION = false;
 
 const MERGE_METHODS: { value: PrMergeMethod; label: string }[] = [
   { value: "merge", label: "Merge" },
@@ -74,6 +77,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
   const url = detail?.url ?? suppliedUrl ?? initialPr?.url ?? githubPullRequestUrl(ref);
   const needsConnection = availability?.connected === false;
   const [tab, setTab] = useState<"summary" | "changes">("summary");
+  const [selectedReview, setSelectedReview] = useState<{ id: string; version: number }>();
   const [mergeMethod, setMergeMethod] = useState<PrMergeMethod>("merge");
   const [mergeMenuOpen, setMergeMenuOpen] = useState(false);
   const mergeMenuRef = useRef<HTMLDivElement>(null);
@@ -111,7 +115,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
 
   return (
     <PullRequestActionsContext.Provider value={actions}>
-    <div className="flex h-full min-h-0 flex-col @container">
+    <div className="flex h-full min-h-0 flex-col text-primary-900 dark:text-primary-100 @container">
       <header className="shrink-0 border-b border-primary-200/60 dark:border-primary-800/60 px-5 @min-[560px]:px-8 pt-5 pb-3">
         <div className="flex items-center gap-2 text-xs">
           <Text as="span" size="xs" tone="subtle" className="truncate">{ref.owner}/{ref.repo}</Text>
@@ -156,6 +160,10 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
             <Button variant="icon" onClick={() => { void window.api.shell.openExternal(url); }} tooltip="Open on GitHub" aria-label="Open on GitHub">
               <External className="size-3.5" />
             </Button>
+            {SHOW_MATE_REVIEW_ACTION && active && detail?.state === "open" && detail.revision && (
+              <PullRequestMateAction pr={ref} revision={detail.revision} disabled={isError || isFetching}
+                onReviewed={id => { setSelectedReview(previous => ({ id, version: (previous?.version ?? 0) + 1 })); setTab("summary"); }} />
+            )}
             {current?.state === "open" && (isDraft ? (
               <Button variant="secondary" disabled={!actions.can({ kind: "ready" })}
                 onClick={handleMarkReady} className="ml-2">
@@ -215,6 +223,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
             {tab === "changes" ? (active && <PrDiffView prRef={ref} />) : (
               <div className="space-y-6">
                 <PrChecksCard detail={detail} active={active} />
+                {active && detail.revision && <PullRequestMateReviews pr={ref} revision={detail.revision} selected={selectedReview} />}
                 {hasConflicts && <Text as="p" size="xs" tone="danger">This pull request has merge conflicts.</Text>}
                 <section aria-label="Pull request description" className="pb-2">
                   {detail.body.trim() ? <Markdown>{detail.body}</Markdown>
