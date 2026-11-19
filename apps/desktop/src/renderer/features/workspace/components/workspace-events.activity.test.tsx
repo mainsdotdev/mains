@@ -79,11 +79,15 @@ it("shows the active assistant's avatar and live activity until a reply streams 
   const status = view.getByRole("status", { name: "Gezici is responding" });
   const avatar = status.querySelector('[data-avatar-shape="kite"][data-animated="true"]');
   expect(avatar?.querySelectorAll("[data-eye]")).toHaveLength(2);
-  expect(view.getByText("Thinking").closest('[role="status"]')).toBe(status);
+  const label = view.getByText("Thinking");
+  expect(label.closest('[role="status"]')).toBe(status);
+  expect(label.classList.contains("shine-text")).toBe(true);
   expect(view.queryByText(/npm test/)).toBeNull();
   const thought: RunEvent = { id: "thought", type: "artifact", content: "**Comparing travel options**", timestamp: new Date(3500), metadata: { kind: "thinking", streaming: true } };
   view.rerender(<WorkspaceEvents {...assistantProps} currentEvents={[prompt, command, thought]} />);
-  expect(view.getByText("Comparing travel options").closest('[role="status"]')).toBe(status);
+  const liveLabel = view.getByText("Comparing travel options");
+  expect(liveLabel.closest('[role="status"]')).toBe(status);
+  expect(liveLabel.classList.contains("shine-text")).toBe(true);
   expect(status.querySelector('[data-avatar-shape="kite"]')).toBe(avatar);
   expect(view.queryByText("Thinking")).toBeNull();
   view.rerender(<WorkspaceEvents {...assistantProps} currentEvents={[prompt, command, thought]} hasPendingUserInput />);

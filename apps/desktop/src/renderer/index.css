@@ -872,12 +872,12 @@ body[data-resizing] iframe {
   animation: shine 2s linear infinite;
   background:
     radial-gradient(circle at center, var(--color-primary-900), transparent) -200% 50% / 200% 100% no-repeat,
-    var(--color-primary-400);
+    var(--shine-text-base, var(--color-primary-400));
 
   .dark & {
     background:
       radial-gradient(circle at center, var(--color-primary-100), transparent) -200% 50% / 200% 100% no-repeat,
-      var(--color-primary-700);
+      var(--shine-text-base, var(--color-primary-700));
   }
 }
 

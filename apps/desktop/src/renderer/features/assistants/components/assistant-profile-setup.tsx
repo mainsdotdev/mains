@@ -105,7 +105,12 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
           </div>
         ) : pendingAnswer || welcome.state !== "ready" || request.isLoading && !draft ? (
           <p role="status" className={cn("text-primary-600 dark:text-primary-400",
-            submittedAnswer && "motion-safe:animate-[slide-fade-up_220ms_ease-out_60ms_both]")}>Preparing the profile…</p>
+            submittedAnswer && "motion-safe:animate-[slide-fade-up_220ms_ease-out_60ms_both]")}>
+            <span className={cn("inline-block", !reducedMotion &&
+              "shine-text [--shine-text-base:var(--color-primary-600)] dark:[--shine-text-base:var(--color-primary-400)]")}>
+              Preparing the profile…
+            </span>
+          </p>
         ) : draft ? (
           // Start at the height of the loading line so the bottom-aligned chat moves with the card.
           <div className="grid grid-cols-[minmax(0,1fr)] grid-rows-[minmax(1lh,1fr)] overflow-clip motion-safe:transition-[grid-template-rows] motion-safe:duration-320 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] motion-safe:starting:grid-rows-[minmax(1lh,0fr)]">

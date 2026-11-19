@@ -577,7 +577,7 @@ function ToolApprovalDialogContents({
 
           <div className="shrink-0 px-3.5 py-3 sm:px-4">
             <div
-              className={`flex flex-col gap-3 sm:flex-row sm:items-end ${isCursor ? "sm:justify-end" : ""}`}
+              className={`flex flex-col gap-3 sm:flex-row sm:items-center ${isCursor ? "sm:justify-end" : ""}`}
             >
               {!isCursor && (
                 <label className="min-w-0 flex-1">
@@ -598,11 +598,11 @@ function ToolApprovalDialogContents({
                       if (!request.defaultToNo) handleSubmitAnswer();
                     }}
                     placeholder="Type a custom answer…"
-                    className="w-full rounded-xl glass-input  px-3 py-2 text-xs text-primary-900 transition-colors placeholder:text-primary-500 focus:outline-none dark:bg-primary-800/50 dark:text-primary-100 dark:placeholder:text-primary-500"
+                    className="min-h-11 w-full rounded-xl glass-input px-3 py-2 text-xs text-primary-900 transition-colors placeholder:text-primary-500 focus:outline-none dark:bg-primary-800/50 dark:text-primary-100 dark:placeholder:text-primary-500"
                   />
                 </label>
               )}
-              <div className="flex shrink-0 items-center justify-end gap-2 sm:pb-px">
+              <div className="flex shrink-0 items-center justify-end gap-2">
                 {questionControls?.onPrevious && (
                   <Button variant="ghost" disabled={questionControls.busy || questionControls.readOnly} onClick={questionControls.onPrevious}>Back</Button>
                 )}

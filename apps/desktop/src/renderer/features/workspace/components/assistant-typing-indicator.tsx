@@ -2,7 +2,6 @@ import { isAssistantRobotShape, type Assistant } from "@mains/contracts/assistan
 import { Text } from "@/components/ui";
 import { AssistantAvatar } from "@/features/assistants/components/assistant-avatar";
 import { AssistantRobotPreview } from "@/features/assistants/components/assistant-robot-avatar";
-import { cn } from "@/lib/cn";
 import { plainActivityText } from "../lib/run-activity";
 import { useAsyncQuestionDialog } from "./tools/async-question-dialog";
 
@@ -19,7 +18,8 @@ export function AssistantTypingIndicator({ assistant, thinkingText, awaitingInpu
     {isAssistantRobotShape(shape)
       ? <AssistantRobotPreview shape={shape} state="thinking" presentation="status" className="size-8" />
       : assistant && <AssistantAvatar avatar={assistant.avatar} seed={assistant.id} working className="size-8" />}
-    <Text as="span" size="sm" tone={activity ? "inherit" : "secondary"} className={cn("min-w-0 max-w-120 truncate", activity && "shine-text")}>
+    <Text as="span" size="sm" tone="subtle"
+      className="min-w-0 max-w-120 truncate shine-text [--shine-text-base:var(--color-primary-600)] dark:[--shine-text-base:var(--color-primary-400)]">
       {activity || "Thinking"}
     </Text>
   </div>;
