@@ -43,7 +43,7 @@ export function AssistantAvatarPicker({ avatar, seed, onChange, compact = false 
 
   return <div className={cn("flex flex-col items-center", compact ? "gap-3" : "gap-5 pb-4 pt-2 sm:gap-6")}>
     {selectedShape
-      ? <AssistantRobotPreview shape={selectedShape} className={compact ? "size-20" : "size-28"} />
+      ? <AssistantRobotPreview shape={selectedShape} presentation="picker" className={compact ? "size-20" : "size-28"} />
       : <AssistantAvatar avatar={avatar} seed={seed} className={compact ? "size-20" : "size-28"} />}
     <div role="radiogroup" aria-label="Robot style" onKeyDown={event => cycleAvatar(event, ROBOT_STYLES, style, selectStyle)}
       className="flex max-w-full flex-wrap justify-center gap-1">

@@ -2,7 +2,8 @@ import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from "react"
 import type { AssistantRobotShape } from "@mains/contracts/assistants";
 import { cn } from "@/lib/cn";
 import { isAvatarWorking, type AssistantAvatarState } from "../lib/assistant-avatar-activity";
-import { nextRobotAmbientGesture, robotEntryGesture, robotRestingPose, sampleRobotGesture, type RobotGesture } from "../lib/assistant-robot-motion";
+import { createRobotSelectionReactions, nextRobotAmbientGesture, nextRobotSelectionReaction, robotEntryGesture,
+  robotRestingPose, sampleAvatarReaction, sampleRobotGesture, type RobotGesture, type RobotSelectionReaction } from "../lib/assistant-robot-motion";
 import { ROBOT_PRESETS } from "../lib/assistant-robot-presets";
 
 // These front views are baked from the preview meshes at yaw .12 and pitch .09.
@@ -25,17 +26,22 @@ const HOME = { yaw: .28, pitch: .14, lookX: 0, lookY: 0 };
 const clampPitch = (pitch: number) => Math.max(-.57, Math.min(.72, pitch));
 const motionQuery = "(prefers-reduced-motion: reduce)";
 
+type PreviewMotion = { type: "activity"; kind: RobotGesture } | { type: "reaction"; kind: RobotSelectionReaction };
+
 export function AssistantRobotPreview({ shape, state = "idle", presentation = "interactive", className }: {
-  shape: AssistantRobotShape; state?: AssistantAvatarState; presentation?: "interactive" | "welcome" | "status"; className?: string;
+  shape: AssistantRobotShape; state?: AssistantAvatarState; presentation?: "interactive" | "picker" | "welcome" | "status"; className?: string;
 }) {
-  const interactive = presentation === "interactive";
+  const picker = presentation === "picker";
+  const interactive = presentation === "interactive" || picker;
   const root = useRef<HTMLSpanElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const target = useRef({ ...HOME });
   const activity = useRef(state);
   const wake = useRef<() => void>(() => undefined);
+  const interrupt = useRef<(preserveSpin: boolean) => void>(() => undefined);
   const drag = useRef<{ id: number; x: number; y: number } | null>(null);
   const pointerActive = useRef(false);
+  const lastPickerReaction = useRef<RobotSelectionReaction | undefined>(undefined);
   useEffect(() => {
     activity.current = state;
     wake.current();
@@ -45,6 +51,14 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
     const element = root.current;
     const surface = canvas.current;
     if (!element || !surface) return;
+    if (picker) {
+      const held = drag.current;
+      if (held && element.hasPointerCapture(held.id)) element.releasePointerCapture(held.id);
+      target.current = { ...HOME };
+      drag.current = null;
+      pointerActive.current = false;
+      delete element.dataset.dragging;
+    }
     const motion = window.matchMedia(motionQuery);
     let scene: ReturnType<typeof import("../lib/assistant-robot-renderer").createRobotRenderer> = null;
     let disposed = false;
@@ -55,7 +69,9 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
     let ambientTick = 0;
     let shownState = activity.current;
     let introduced = false;
-    let gesture: { kind: RobotGesture; start: number; direction: number } | undefined;
+    let gesture: (PreviewMotion & { start: number; direction: number }) | undefined;
+    let pickerReactions: ReturnType<typeof createRobotSelectionReactions> | undefined;
+    let spinAngle = 0;
     const pose = { ...target.current };
 
     function clearAmbientTimer() {
@@ -65,9 +81,8 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
 
     function stop() {
       if (frame !== undefined) cancelAnimationFrame(frame);
-      clearAmbientTimer();
+      interruptGesture(false);
       frame = undefined;
-      gesture = undefined;
       ambientTick = 0;
       shownState = activity.current;
     }
@@ -78,8 +93,36 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
       if (frame === undefined) frame = requestAnimationFrame(draw);
     }
 
-    function startGesture(kind: RobotGesture, now: number) {
-      gesture = { kind, start: now, direction: Math.random() < .5 ? -1 : 1 };
+    function interruptGesture(preserveSpin: boolean) {
+      if (preserveSpin) {
+        pose.yaw += spinAngle;
+        target.current.yaw += spinAngle;
+      }
+      spinAngle = 0;
+      gesture = undefined;
+      clearAmbientTimer();
+    }
+
+    function startGesture(next: PreviewMotion, start: number) {
+      gesture = { ...next, start, direction: Math.random() < .5 ? -1 : 1 };
+    }
+
+    function scheduleAmbient() {
+      const reactions = pickerReactions;
+      function play(next: PreviewMotion) {
+        ambientTimer = undefined;
+        startGesture(next, performance.now());
+        request();
+      }
+      if (reactions) {
+        ambientTimer = window.setTimeout(() => play({ type: "reaction", kind: reactions.next() }), reactions.delay());
+      } else {
+        const next = nextRobotAmbientGesture(shownState, ambientTick, presentation === "welcome");
+        ambientTimer = window.setTimeout(() => {
+          ambientTick++;
+          play({ type: "activity", kind: next.gesture });
+        }, next.delay);
+      }
     }
 
     function draw(now: number) {
@@ -97,17 +140,23 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
         const ended = nextState === "done" || nextState === "failed";
         const entry = ended && !isAvatarWorking(shownState) && shownState !== "waiting" ? undefined : robotEntryGesture(nextState);
         shownState = nextState;
-        clearAmbientTimer();
+        interruptGesture(false);
         ambientTick = 0;
-        gesture = undefined;
-        if (entry && !reduce && !drag.current) startGesture(entry, now);
+        if (entry && !reduce && !drag.current) startGesture({ type: "activity", kind: entry }, now);
       }
       if (!introduced) {
         introduced = true;
-        const intro = presentation === "welcome" ? "greet" : presentation === "status" ? robotEntryGesture(nextState) : undefined;
-        if (intro && !reduce) startGesture(intro, now);
+        if (picker) {
+          const entry = nextRobotSelectionReaction(lastPickerReaction.current);
+          lastPickerReaction.current = entry;
+          pickerReactions = createRobotSelectionReactions(entry);
+          if (!reduce) startGesture({ type: "reaction", kind: entry }, now + 125);
+        } else {
+          const intro = presentation === "welcome" ? "greet" : presentation === "status" ? robotEntryGesture(nextState) : undefined;
+          if (intro && !reduce) startGesture({ type: "activity", kind: intro }, now);
+        }
       }
-      if (reduce || drag.current) gesture = undefined;
+      if (reduce || drag.current) interruptGesture(!reduce);
       if (reduce || interacting) clearAmbientTimer();
 
       let moving = false;
@@ -118,7 +167,10 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
         pose[key] = interpolate ? pose[key] + difference * .22 : end;
         moving ||= interpolate;
       }
-      const sample = gesture && sampleRobotGesture(gesture.kind, now - gesture.start, gesture.direction);
+      const sample = gesture && (gesture.type === "reaction"
+        ? sampleAvatarReaction(gesture.kind, now - gesture.start, gesture.direction)
+        : sampleRobotGesture(gesture.kind, now - gesture.start, gesture.direction));
+      spinAngle = gesture?.type === "reaction" && gesture.kind === "spin" ? sample?.yaw ?? 0 : 0;
       if (!sample) gesture = undefined;
       const rest = robotRestingPose(shownState);
       scene.draw({
@@ -137,13 +189,7 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
       }
       if (moving || gesture) request();
       if (!reduce && !interacting && !gesture && ambientTimer === undefined) {
-        const next = nextRobotAmbientGesture(shownState, ambientTick, presentation === "welcome");
-        ambientTimer = window.setTimeout(() => {
-          ambientTimer = undefined;
-          ambientTick++;
-          startGesture(next.gesture, performance.now());
-          request();
-        }, next.delay);
+        scheduleAmbient();
       }
     }
 
@@ -189,6 +235,7 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
     surface.addEventListener("webglcontextlost", lost);
     surface.addEventListener("webglcontextrestored", load);
     wake.current = request;
+    interrupt.current = interruptGesture;
     void load();
     return () => {
       disposed = true;
@@ -202,11 +249,13 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
       surface.removeEventListener("webglcontextrestored", load);
       scene?.dispose();
       wake.current = () => undefined;
+      interrupt.current = () => undefined;
     };
-  }, [shape, interactive, presentation]);
+  }, [shape, interactive, picker, presentation]);
 
   function press(event: PointerEvent<HTMLSpanElement>) {
     if (event.button !== 0 || drag.current || !event.currentTarget.dataset.robotRendered) return;
+    interrupt.current(true);
     drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
     event.currentTarget.dataset.dragging = "true";
@@ -253,6 +302,7 @@ export function AssistantRobotPreview({ shape, state = "idle", presentation = "i
       case "Home": target.current = { ...HOME }; break;
       default: return;
     }
+    if (picker) interrupt.current(event.key !== "Home");
     event.preventDefault();
     wake.current();
   }

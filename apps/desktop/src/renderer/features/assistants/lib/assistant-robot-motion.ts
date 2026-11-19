@@ -41,6 +41,92 @@ export function robotRestingPose(state: AssistantAvatarState) {
 
 type GesturePose = Partial<Record<"yaw" | "pitch" | "roll" | "lookX" | "lookY" | "blink", number>>;
 
+const REACTION_MS = { blink: 320, doubleBlink: 650, spin: 1080, sway: 890, shiver: 560, glance: 1120, nod: 750 } as const;
+export type RobotSelectionReaction = keyof typeof REACTION_MS;
+
+const SELECTION_REACTIONS = Object.keys(REACTION_MS) as RobotSelectionReaction[];
+const IDLE_REACTIONS = ["blink", "doubleBlink", "glance", "sway", "nod"] as const;
+
+function chooseReaction(reactions: readonly RobotSelectionReaction[], previous?: RobotSelectionReaction): RobotSelectionReaction {
+  const choices = reactions.filter(reaction => reaction !== previous);
+  return choices[Math.floor(Math.random() * choices.length)];
+}
+
+export function nextRobotSelectionReaction(previous?: RobotSelectionReaction): RobotSelectionReaction {
+  return chooseReaction(SELECTION_REACTIONS, previous);
+}
+
+export function createRobotSelectionReactions(entry: string) {
+  const selected = SELECTION_REACTIONS.find(reaction => reaction === entry) ?? nextRobotSelectionReaction();
+  const followups = (["blink", "glance"] as const).filter(reaction => reaction !== (selected === "doubleBlink" ? "blink" : selected));
+  if (Math.random() < .5) followups.reverse();
+  let previous = selected;
+  let played = 0;
+  return {
+    entry: selected,
+    delay() {
+      const [minimum, spread] = played === 0 ? [450, 250] : followups.length ? [1450, 500] : [2600, 1800];
+      return minimum + Math.random() * spread;
+    },
+    next() {
+      played++;
+      previous = followups.shift() ?? chooseReaction(IDLE_REACTIONS, previous);
+      return previous;
+    },
+  };
+}
+
+function smooth(progress: number) {
+  const t = Math.max(0, Math.min(1, progress));
+  return t * t * (3 - 2 * t);
+}
+
+function blinkAt(progress: number) {
+  return smooth(progress / .36) * smooth((1 - progress) / .43);
+}
+
+export function sampleWorkingPose(elapsed: number): GesturePose {
+  const time = elapsed / 1000;
+  const easeIn = smooth(time / .35);
+  return {
+    yaw: .32 * Math.sin(2.6 * time) * easeIn,
+    pitch: -.12 * Math.sin(3.4 * time) * easeIn,
+    roll: .11 * Math.sin(2.6 * time + .5) * easeIn,
+    lookX: .67 * Math.sin(1.9 * time) * easeIn,
+    blink: blinkAt(((time + 2.5) % 3.2) / .32),
+  };
+}
+
+export function sampleAvatarReaction(kind: RobotSelectionReaction, elapsed: number, direction: number, subtle = false): GesturePose | undefined {
+  const progress = Math.max(0, elapsed) / REACTION_MS[kind];
+  if (progress >= 1) return undefined;
+  const arc = Math.sin(Math.PI * progress) ** 2;
+  switch (kind) {
+    case "blink":
+      return { blink: blinkAt(progress) };
+    case "doubleBlink":
+      return { blink: blinkAt(progress / .42) + blinkAt((progress - .52) / .48) };
+    case "spin":
+      return { yaw: direction * Math.PI * 2 * smooth(progress), pitch: -.10 * arc };
+    case "sway": {
+      const shake = direction * Math.sin(4 * Math.PI * progress) * arc;
+      return { yaw: .38 * shake, roll: .22 * shake };
+    }
+    case "shiver": {
+      const shake = Math.sin(14 * Math.PI * progress) * arc;
+      return { yaw: direction * .17 * shake, roll: .10 * shake, pitch: .05 * shake };
+    }
+    case "glance": {
+      const look = direction * smooth(progress / .18) * smooth((1 - progress) / .26) * (subtle ? .8 : 1);
+      return { lookX: look, lookY: .05 * Math.abs(look) };
+    }
+    case "nod": {
+      const amount = arc * (subtle ? .44 : 1);
+      return { pitch: .31 * amount, roll: direction * .12 * amount, lookY: .52 * amount };
+    }
+  }
+}
+
 export function sampleRobotGesture(gesture: RobotGesture, elapsed: number, direction: number): GesturePose | undefined {
   const progress = Math.max(0, elapsed) / GESTURE_MS[gesture];
   if (progress >= 1) return undefined;

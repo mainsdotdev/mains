@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { ASSISTANT_AVATAR_SHAPES_BY_FAMILY, ASSISTANT_ROBOT_AVATARS, type AssistantAvatar as Avatar } from "@mains/contracts/assistants";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantMonogram } from "./assistant-monogram";
 import { AssistantAvatarPicker } from "./assistant-avatar-picker";
 import { nextRobotAmbientGesture, robotEntryGesture, sampleRobotGesture } from "../lib/assistant-robot-motion";
+import * as renderer from "../lib/assistant-robot-renderer";
 
 let observe: ReturnType<typeof vi.fn>, disconnect: ReturnType<typeof vi.fn>;
 let intersection: IntersectionObserverCallback;
@@ -67,6 +68,51 @@ describe("robot assistant avatars", () => {
     fireEvent.click(screen.getByRole("radio", { name: "One-Eye Metal" }));
     expect(screen.getByRole("radio", { name: "Bronze", checked: true })).toBeTruthy();
     expect(screen.queryByRole("radio", { name: "Mosaic" })).toBeNull();
+  });
+
+  it("renders different reactions for successive picker selections and starts the new avatar facing forward", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(.65);
+    type Draw = NonNullable<ReturnType<typeof renderer.createRobotRenderer>>["draw"];
+    const draw = vi.fn<Draw>();
+    const create = vi.spyOn(renderer, "createRobotRenderer").mockReturnValue({ draw, dispose: vi.fn() });
+    let frame: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => { frame = fn; return 1; });
+    vi.stubGlobal("cancelAnimationFrame", () => { frame = undefined; });
+
+    function Picker() {
+      const [avatar, setAvatar] = useState<Avatar>({ shape: "terminal-amber", color: "amber" });
+      return <AssistantAvatarPicker avatar={avatar} onChange={setAvatar} seed="picker" />;
+    }
+    const { container } = render(<Picker />);
+    Object.defineProperty(container.querySelector("canvas")!, "clientWidth", { value: 112 });
+
+    async function showPreview(shape: string) {
+      intersection([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+      await waitFor(() => {
+        expect(create.mock.lastCall?.[1]).toBe(shape);
+        expect(frame).toBeDefined();
+      });
+    }
+    function advance(now: number) {
+      const next = frame;
+      frame = undefined;
+      next?.(now);
+      return draw.mock.lastCall?.[0];
+    }
+
+    await showPreview("terminal-amber");
+    advance(0);
+    expect(advance(395)?.roll).toBeGreaterThan(.05);
+    expect(advance(425)?.roll).toBeLessThan(-.08);
+    const preview = screen.getByRole("group", { name: "Amber robot preview" });
+    for (let i = 0; i < 12; i++) fireEvent.keyDown(preview, { key: "ArrowRight" });
+    for (let now = 440; now < 730; now += 16) advance(now);
+    expect(draw.mock.lastCall?.[0].yaw).toBeGreaterThan(3);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Teal" }));
+    await showPreview("terminal-teal");
+    expect(advance(800)?.yaw).toBeCloseTo(.28);
+    expect(Math.abs(advance(1255)?.roll ?? 0)).toBeGreaterThan(.15);
   });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
