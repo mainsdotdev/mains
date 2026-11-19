@@ -20,6 +20,7 @@ import { execFileSync } from "node:child_process";
 import WebSocket from "ws";
 import { buildSubprotocols } from "@mains/contracts/ws-protocol";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { MobileMateDirectory } from "@mains/contracts/assistants";
 import { getDb } from "./db/client";
 import { providers as providerTable } from "./db/schema";
 import { eq } from "drizzle-orm";
@@ -77,7 +78,7 @@ describe("backend host acquisition and shutdown", () => {
     let socket = openDevice();
     let id = 0;
     const invoke = (channel: string, args: unknown[], commandId?: string) => socketInvoke(socket, ++id, channel, args, commandId);
-    const models = vi.spyOn(providers.providersService, "getModels").mockResolvedValue([{ id: "test-model", displayName: "Test model" }]);
+    const models = vi.spyOn(providers.providersService, "getModels").mockResolvedValue([{ id: "test-model", displayName: "Test model", supportedEffortLevels: ["high"] }]);
     const driver = createFakeDriver();
     const workerReleased = deferred();
     const createSession = driver.driver.createSession;
@@ -119,7 +120,7 @@ describe("backend host acquisition and shutdown", () => {
       expect(await invoke(CHANNELS.assistants.overview, [accountId])).toMatchObject({ success: false });
       expect(await invoke(CHANNELS.assistants.mobileDirectory, ["foreign"])).toMatchObject({ success: false });
 
-      const input = { accountId, name: "Release", spaceId: space.id, model: "test-model", profileSetup: true };
+      const input = { accountId, name: "Release", spaceId: space.id, model: "test-model", effort: "high", profileSetup: true };
       expect(await invoke(CHANNELS.assistants.create, [input])).toMatchObject({ success: false, error: expect.stringContaining("commandId") });
       const created = await invoke(CHANNELS.assistants.create, [input], "create-mate") as { success: boolean; data: { id: string } };
       expect(created).toMatchObject({ success: true, data: { id: expect.any(String) } });
@@ -130,19 +131,28 @@ describe("backend host acquisition and shutdown", () => {
       await once(socket, "open");
       expect(await invoke(CHANNELS.assistants.create, [input], "create-mate")).toEqual(created);
       const mateId = created.data.id;
-      expect(await invoke(CHANNELS.assistants.mobileDirectory, [accountId])).toMatchObject({
+      const mateDirectory = await invoke(CHANNELS.assistants.mobileDirectory, [accountId]) as { data: MobileMateDirectory };
+      expect(mateDirectory).toMatchObject({
         success: true, data: { mates: [{ id: mateId, needsSetup: true, welcome: null }] },
       });
+      expect(mateDirectory.data.mates[0]).not.toHaveProperty("details");
       expect(await invoke(CHANNELS.assistants.setupProfile, [accountId, mateId, { action: "answer", step: 0, answer: "Release help" }], "answer-setup"))
         .toMatchObject({ success: true });
       const profile = { description: "Build checks", instructions: "Summarize the sample." };
       await vi.waitFor(async () => expect(await invoke(CHANNELS.assistants.mobileDirectory, [accountId, mateId])).toMatchObject({
-        success: true, data: { mates: [{ welcome: { question: { profileSetup: { draft: profile } } } }] },
+        success: true, data: { mates: [{
+          details: { spaceName: space.name, effort: "high", instructions: "" },
+          welcome: { question: { profileSetup: { draft: profile } } },
+        }] },
       }));
       expect(await invoke(CHANNELS.assistants.setupProfile, [accountId, mateId, { action: "save", profile }], "save-setup")).toMatchObject({ success: true });
 
-      const saved = await invoke(CHANNELS.assistants.mobileDirectory, [accountId, mateId]) as { data: { mates: Array<{ welcome: { runId: string } }> } };
-      const welcomeRunId = saved.data.mates[0].welcome.runId;
+      const saved = await invoke(CHANNELS.assistants.mobileDirectory, [accountId, mateId]) as { data: MobileMateDirectory };
+      expect(saved).toMatchObject({ success: true, data: { mates: [{
+        id: mateId, description: profile.description, needsSetup: false,
+        details: { spaceName: space.name, effort: "high", instructions: profile.instructions },
+      }] } });
+      const welcomeRunId = saved.data.mates[0].welcome!.runId;
       const sent = await invoke(CHANNELS.assistants.send, [{
         accountId, assistantId: mateId, message: "Say hello", requestId: `welcome-${mateId}`, runId: welcomeRunId,
       }], "new-mate-chat") as { data: { runId: string } };

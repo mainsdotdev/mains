@@ -6,6 +6,13 @@ enum AppAppearance: String, CaseIterable {
     var colorScheme: ColorScheme? {
         switch self { case .system: nil; case .light: .light; case .dark: .dark }
     }
+    fileprivate var symbol: String {
+        switch self {
+        case .system: "circle.lefthalf.filled"
+        case .light: "sun.max"
+        case .dark: "moon"
+        }
+    }
 }
 
 struct ComputerView: View {
@@ -27,28 +34,37 @@ struct ComputerView: View {
 
     var body: some View {
         List {
-            SettingsSection(session.isDemo ? "Demo Mode" : "Connected computer", headerLeadingInset: 0) {
+            SettingsSection(session.isDemo ? "Demo Mode" : "Connected computer") {
                 if session.isDemo {
-                    SettingsRow(title: "Demo Mac", subtitle: "Runs on this iPhone. No AI service is contacted. Demo changes reset when the app restarts.", value: "Demo")
-                    Button { pair = true } label: { SettingsRow(title: "Pair a computer", subtitle: "Connect to Mains with a pairing code", symbol: "chevron.right") }
+                    SettingsRow(title: "Demo Mac", leadingSymbol: "desktopcomputer",
+                                subtitle: "Runs on this iPhone. No AI service is contacted. Demo changes reset when the app restarts.", value: "Demo")
+                    Button { pair = true } label: {
+                        SettingsRow(title: "Pair a computer", leadingSymbol: "qrcode.viewfinder",
+                                    subtitle: "Connect to Mains with a pairing code", trailingSymbol: "chevron.right")
+                    }
                 } else if let pairing = session.pairing {
                     computerSummary
-                    SettingsRow(title: "Address", subtitle: fallbackAddresses, value: endpoint.map(Self.host) ?? "—")
-                    SettingsRow(title: "Mains version", value: descriptor?.appVersion ?? "—")
-                    timestampRow("Paired", date: pairing.pairedAt, empty: "—")
-                    timestampRow("Last synced", date: session.lastSyncedAt, empty: "Not yet")
-                    Button(role: .destructive) { forget = true } label: { SettingsRow(title: "Forget this computer", destructive: true) }
-                        .accessibilityIdentifier("forgetComputer")
+                    SettingsRow(title: "Address", leadingSymbol: "network", subtitle: fallbackAddresses, value: endpoint.map(Self.host) ?? "—")
+                    SettingsRow(title: "Mains version", leadingSymbol: "info.circle", value: descriptor?.appVersion ?? "—")
+                    timestampRow("Paired", symbol: "calendar", date: pairing.pairedAt, empty: "—")
+                    timestampRow("Last synced", symbol: "clock", date: session.lastSyncedAt, empty: "Not yet")
+                    Button(role: .destructive) { forget = true } label: {
+                        SettingsRow(title: "Forget this computer", leadingSymbol: "xmark.circle", destructive: true)
+                    }
+                    .accessibilityIdentifier("forgetComputer")
                 } else {
-                    SettingsRow(title: "No computer paired", subtitle: "Start Mains on your computer, then scan its pairing code.")
-                    Button { pair = true } label: { SettingsRow(title: "Scan pairing code", symbol: "chevron.right") }
+                    SettingsRow(title: "No computer paired", leadingSymbol: "desktopcomputer",
+                                subtitle: "Start Mains on your computer, then scan its pairing code.")
+                    Button { pair = true } label: {
+                        SettingsRow(title: "Scan pairing code", leadingSymbol: "qrcode.viewfinder", trailingSymbol: "chevron.right")
+                    }
                 }
             }
             if session.pairing != nil {
                 SettingsSection {
                     Button { Task { await session.refresh() } } label: {
                         HStack {
-                            SettingsRow(title: session.refreshing ? "Syncing…" : "Sync now",
+                            SettingsRow(title: session.refreshing ? "Syncing…" : "Sync now", leadingSymbol: "arrow.clockwise",
                                         subtitle: session.isDemo ? "Refresh the on-device sample conversations" : session.isConnected ? "Pull the latest runs, workspaces and settings" : "Available once Mains is reachable")
                             if session.refreshing { ProgressView().controlSize(.small) }
                         }
@@ -56,12 +72,13 @@ struct ComputerView: View {
                     .disabled(!session.isConnected || session.refreshing).accessibilityIdentifier("syncNow")
                     if canRetry {
                         Button { session.retry() } label: {
-                            SettingsRow(title: "Try again", subtitle: "Reconnect to Mains on your computer now")
+                            SettingsRow(title: "Try again", leadingSymbol: "wifi", subtitle: "Reconnect to Mains on your computer now")
                         }
                     }
                     if needsPairing {
                         Button { pair = true } label: {
-                            SettingsRow(title: "Pair again", subtitle: "Scan a new pairing code from your computer", symbol: "chevron.right")
+                            SettingsRow(title: "Pair again", leadingSymbol: "qrcode.viewfinder",
+                                        subtitle: "Scan a new pairing code from your computer", trailingSymbol: "chevron.right")
                         }
                     }
                     Button {
@@ -69,7 +86,8 @@ struct ComputerView: View {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         copied = true
                     } label: {
-                        SettingsRow(title: "Copy diagnostics", subtitle: "Versions, addresses and the connection’s state, for a bug report",
+                        SettingsRow(title: "Copy diagnostics", leadingSymbol: "doc.on.doc",
+                                    subtitle: "Versions, addresses and the connection’s state, for a bug report",
                                     value: copied ? "Copied" : nil)
                     }
                     .accessibilityIdentifier("copyDiagnostics")
@@ -79,7 +97,7 @@ struct ComputerView: View {
             if AppFeatures.gptLiveEnabled && session.pairing != nil {
                 SettingsSection("GPT Live") {
                     NavigationLink { VoiceSettingsView(session: session) } label: {
-                        SettingsRow(title: "Voice", subtitle: "Choose a voice and listen to samples",
+                        SettingsRow(title: "Voice", leadingSymbol: "waveform", subtitle: "Choose a voice and listen to samples",
                                     value: session.selectedRealtimeVoice?.capitalized)
                     }
                     .accessibilityIdentifier("voiceSettings")
@@ -92,7 +110,7 @@ struct ComputerView: View {
                         appearance = option
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     } label: {
-                        SettingsRow(title: option.title,
+                        SettingsRow(title: option.title, leadingSymbol: option.symbol,
                                     subtitle: option == .system ? "Follow the phone’s Display & Brightness setting" : nil,
                                     selected: appearance == option)
                     }
@@ -101,28 +119,34 @@ struct ComputerView: View {
                 }
             }
             SettingsSection("This phone") {
-                SettingsRow(title: "Name", value: UIDevice.current.name)
+                SettingsRow(title: "Name", leadingSymbol: "iphone", value: UIDevice.current.name)
                 if let pairing = session.pairing, !session.isDemo {
-                    SettingsRow(title: "Device ID", subtitle: "As listed by Mains on your computer", value: String(pairing.deviceId.prefix(8)))
+                    SettingsRow(title: "Device ID", leadingSymbol: "number.square",
+                                subtitle: "As listed by Mains on your computer", value: String(pairing.deviceId.prefix(8)))
                 }
-                SettingsRow(title: "Version", value: Self.appVersion)
-                SettingsRow(title: "Build", value: "\(Self.buildVariant) (\(Self.buildNumber))")
-                SettingsRow(title: "Protocol", value: String(Wire.protocolVersion))
+                SettingsRow(title: "Version", leadingSymbol: "info.circle", value: Self.appVersion)
+                SettingsRow(title: "Build", leadingSymbol: "hammer", value: "\(Self.buildVariant) (\(Self.buildNumber))")
+                SettingsRow(title: "Protocol", leadingSymbol: "arrow.left.arrow.right", value: String(Wire.protocolVersion))
             }
             SettingsSection("Legal & Support") {
                 NavigationLink { AIDataSharingSettingsView(session: session) } label: {
-                    SettingsRow(title: "AI Data Sharing", subtitle: session.isDemo ? "Demo choices are separate from real provider permissions" : "Review or reset provider permissions")
+                    SettingsRow(title: "AI Data Sharing", leadingSymbol: "hand.raised",
+                                subtitle: session.isDemo ? "Demo choices are separate from real provider permissions" : "Review or reset provider permissions")
                 }
                 .accessibilityIdentifier("aiDataSharing")
-                externalRow("Privacy Policy", subtitle: "How Mains handles your data", url: "https://mains.dev/privacy")
-                externalRow("Terms of Use", subtitle: "Terms for using Mains", url: "https://mains.dev/terms")
-                externalRow("Support", subtitle: "Email team@mains.dev", url: "mailto:team@mains.dev?subject=Mains%20Mobile%20Support", symbol: "envelope")
-                externalRow("Open Source Licenses", subtitle: "Open-source software used by the app", url: "https://mains.dev/license")
+                externalRow("Privacy Policy", symbol: "lock.shield", subtitle: "How Mains handles your data", url: "https://mains.dev/privacy")
+                externalRow("Terms of Use", symbol: "doc.text", subtitle: "Terms for using Mains", url: "https://mains.dev/terms")
+                externalRow("Support", symbol: "envelope", subtitle: "Email team@mains.dev",
+                            url: "mailto:team@mains.dev?subject=Mains%20Mobile%20Support", trailingSymbol: nil)
+                externalRow("Open Source Licenses", symbol: "chevron.left.forwardslash.chevron.right",
+                            subtitle: "Open-source software used by the app", url: "https://mains.dev/license")
             }
             if session.isDemo && session.pairing != nil {
                 SettingsSection {
-                    Button(role: .destructive) { session.exitDemo(); dismiss() } label: { SettingsRow(title: "Exit Demo Mode", destructive: true) }
-                        .accessibilityIdentifier("exitDemo")
+                    Button(role: .destructive) { session.exitDemo(); dismiss() } label: {
+                        SettingsRow(title: "Exit Demo Mode", leadingSymbol: "rectangle.portrait.and.arrow.right", destructive: true)
+                    }
+                    .accessibilityIdentifier("exitDemo")
                 }
             }
         }
@@ -146,22 +170,25 @@ struct ComputerView: View {
     }
 
     private var computerSummary: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                Text(session.pairing?.descriptor.name ?? "Computer").font(.headline).lineLimit(1)
-                Spacer(minLength: 4)
-                HStack(spacing: 6) {
-                    if session.connection.isBusy { ProgressView().controlSize(.mini) }
-                    else { Circle().fill(statusColor).frame(width: 7, height: 7).accessibilityHidden(true) }
-                    Text(session.connection.label.replacingOccurrences(of: "…", with: "")).font(.subheadline.weight(.medium))
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            SettingsRowIcon(symbol: "desktopcomputer")
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 12) {
+                    Text(session.pairing?.descriptor.name ?? "Computer").font(.headline).lineLimit(1)
+                    Spacer(minLength: 4)
+                    HStack(spacing: 6) {
+                        if session.connection.isBusy { ProgressView().controlSize(.mini) }
+                        else { Circle().fill(statusColor).frame(width: 7, height: 7).accessibilityHidden(true) }
+                        Text(session.connection.label.replacingOccurrences(of: "…", with: "")).font(.subheadline.weight(.medium))
+                    }
+                    .foregroundStyle(statusColor).accessibilityIdentifier("settingsConnectionStatus")
                 }
-                .foregroundStyle(statusColor).accessibilityIdentifier("settingsConnectionStatus")
+                if let endpoint {
+                    Text(session.isConnected ? "via \(Self.host(endpoint)) · Mains \(descriptor?.appVersion ?? "—")" : Self.host(endpoint))
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if let connectionHint { Text(connectionHint).font(.footnote).foregroundStyle(.secondary).padding(.top, 2) }
             }
-            if let endpoint {
-                Text(session.isConnected ? "via \(Self.host(endpoint)) · Mains \(descriptor?.appVersion ?? "—")" : Self.host(endpoint))
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            if let connectionHint { Text(connectionHint).font(.footnote).foregroundStyle(.secondary).padding(.top, 2) }
         }
         .padding(.vertical, 10)
     }
@@ -183,13 +210,13 @@ struct ComputerView: View {
         let alternatives = (session.pairing?.endpoints ?? []).filter { $0 != endpoint }.map(Self.host)
         return alternatives.isEmpty ? nil : "Also " + alternatives.joined(separator: ", ")
     }
-    private func timestampRow(_ title: String, date: Date?, empty: String) -> some View {
+    private func timestampRow(_ title: String, symbol: String, date: Date?, empty: String) -> some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in
-            SettingsRow(title: title, subtitle: date?.formatted(date: .numeric, time: .standard),
+            SettingsRow(title: title, leadingSymbol: symbol, subtitle: date?.formatted(date: .numeric, time: .standard),
                         value: date.map { compactRelativeAge($0, now: timeline.date) } ?? empty)
         }
     }
-    private func externalRow(_ title: String, subtitle: String, url: String, symbol: String = "arrow.up.right.square") -> some View {
+    private func externalRow(_ title: String, symbol: String, subtitle: String, url: String, trailingSymbol: String? = "arrow.up.right.square") -> some View {
         Button {
             guard let destination = URL(string: url) else { return }
             openURL(destination) { accepted in
@@ -197,7 +224,7 @@ struct ComputerView: View {
                     session.actionError = title == "Support" ? "Could not open Mail. Email team@mains.dev for support." : "Could not open \(title). Visit \(url) in your browser."
                 }
             }
-        } label: { SettingsRow(title: title, subtitle: subtitle, symbol: symbol) }
+        } label: { SettingsRow(title: title, leadingSymbol: symbol, subtitle: subtitle, trailingSymbol: trailingSymbol) }
     }
     private static var appVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—" }
     private static var buildNumber: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—" }
@@ -302,24 +329,46 @@ private struct SettingsRow: View {
     @ObserveHotReload private var hotReload
     #endif
     let title: String
+    var leadingSymbol: String? = nil
     var subtitle: String? = nil
     var value: String? = nil
-    var symbol: String? = nil
+    var trailingSymbol: String? = nil
     var selected = false
     var destructive = false
     var body: some View {
         HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).foregroundStyle(destructive ? .red : .primary)
-                if let subtitle { Text(subtitle).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                if let leadingSymbol {
+                    SettingsRowIcon(symbol: leadingSymbol).foregroundStyle(destructive ? .red : .primary)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).foregroundStyle(destructive ? .red : .primary)
+                    if let subtitle { Text(subtitle).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if let value { Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing) }
             if selected { Image(systemName: "checkmark").foregroundStyle(.blue).font(.body.weight(.medium)).accessibilityHidden(true) }
-            if let symbol { Image(systemName: symbol).font(.subheadline).foregroundStyle(.tertiary).accessibilityHidden(true) }
+            if let trailingSymbol { Image(systemName: trailingSymbol).font(.subheadline).foregroundStyle(.tertiary).accessibilityHidden(true) }
         }
         .font(.body).padding(.vertical, 8).frame(minHeight: 36).contentShape(.rect)
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct SettingsRowIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    @ScaledMetric(relativeTo: .body) private var width: CGFloat = 24
+    let symbol: String
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.body)
+            .symbolRenderingMode(.monochrome)
+            .frame(width: width)
+            .accessibilityHidden(true)
     }
 }
 
@@ -328,16 +377,15 @@ private struct SettingsSection<Content: View>: View {
     @ObserveHotReload private var hotReload
     #endif
     var title: String? = nil
-    var headerLeadingInset: CGFloat? = nil
     @ViewBuilder let content: Content
-    init(_ title: String? = nil, headerLeadingInset: CGFloat? = nil, @ViewBuilder content: () -> Content) {
-        self.title = title; self.headerLeadingInset = headerLeadingInset; self.content = content()
+    init(_ title: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title; self.content = content()
     }
     var body: some View {
         Section { content } header: {
             if let title {
                 Text(title).font(.title3.weight(.semibold)).foregroundStyle(.primary).textCase(nil).padding(.bottom, 4)
-                    .listRowInsets(.leading, headerLeadingInset)
+                    .listRowInsets(.leading, 0)
             }
         }
         .listRowBackground(Color(.secondarySystemBackground))

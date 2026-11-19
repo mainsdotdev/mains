@@ -167,8 +167,16 @@ import ImageIO
     let search = ToolPresentation(try call("Glob", .object(["pattern": .string("*.swift")]), .object(["filenames": .array([.string("a.swift"), .string("b.swift")])])) )
     #expect(search.detail == "*.swift" && search.stat == "2 files")
     let unknown = ToolPresentation(try call("mcp__linear__list_issues", .object(["query": .string("native")]), .string("{\"content\":[{\"text\":\"Issue details\"}]}")))
-    #expect(unknown.name.contains("Linear"))
+    #expect(unknown.verb == "Linear listed issues" && unknown.detail.isEmpty)
     #expect(unknown.body == "Issue details")
+    let read = ToolPresentation(try call("Read", .object(["file_path": .string("Sources/HomeView.swift")]),
+                                         .object(["file": .object(["content": .string("Preview"), "numLines": .number(118)])])))
+    #expect(read.icon == "tool-read" && read.detail == "Sources/HomeView.swift" && read.stat == "(118 lines)")
+    let grep = ToolPresentation(try call("Grep", .object(["pattern": .string("composer")]),
+                                         .object(["filenames": .array([.string("/deep/project/Sources/App.swift")]), "totalMatches": .number(3),
+                                                  "numLines": .number(3), "truncated": .bool(true)])))
+    #expect(grep.icon == "tool-grep" && grep.stat == "(3 matches, 1 files, truncated)")
+    #expect(grep.body == ".../project/Sources/App.swift")
 }
 
 @Test func toolInputDetailsFollowDesktopDisplaysAndSkipEmptyArguments() throws {

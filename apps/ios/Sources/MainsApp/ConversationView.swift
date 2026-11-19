@@ -24,7 +24,7 @@ struct ConversationView: View {
     @Bindable private var draft: ConversationDraft
     @Bindable private var queue: ConversationQueue
     @State private var owner: Int?
-    @State private var viewport = TranscriptViewport()
+    @State private var scroll = TranscriptScrollState()
     @State private var initializedHistoryEntry: HistoryEntry?
     private var historyEntry: HistoryEntry { HistoryEntry(runID: runID, cursor: initialCursor) }
     @State private var consent: ConsentContext?
@@ -157,9 +157,9 @@ struct ConversationView: View {
             if initialCursor != nil, initializedHistoryEntry != historyEntry {
                 // Returning from a file diff must preserve the existing transcript and viewport.
                 initializedHistoryEntry = historyEntry
-                viewport.beginPage()
+                scroll.viewport.beginPage()
                 await session.selectConversation(runID, around: initialCursor)
-                viewport.finishPage(latestConfirmed: false)
+                scroll.viewport.finishPage(latestConfirmed: false)
             } else if session.viewingRunID != runID { await session.selectConversation(runID) }
         }
         .task(id: outputCheck) {
@@ -242,7 +242,7 @@ struct ConversationView: View {
 
     private var conversationContent: some View {
         ZStack {
-            ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", viewport: $viewport, openFile: { turn, file in
+            ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", scroll: scroll, openFile: { turn, file in
                 selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
             }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor, mate: conversationMate) {
                 content = ContentReference(id: $0)
@@ -392,7 +392,7 @@ struct ConversationView: View {
             } else if let context = composerContext {
                 MessageComposer(session: session, context: context, draft: draft,
                     canSend: run != nil && session.pendingConversationAction == nil && session.pendingFork == nil && session.stoppingRunID != runID && (usesQueue ||
-                        session.isConnected && !uncertain && !session.sending && pending?.status != .accepted && !viewport.paging && run?.isActive != true),
+                        session.isConnected && !uncertain && !session.sending && pending?.status != .accepted && !scroll.paging && run?.isActive != true),
                     active: run?.isActive == true, canSendDuringRun: run?.supportsSteering == true, sendLabel: sendLabel,
                     stopping: session.stoppingRunID == runID, stop: { Task { await stop() } },
                     model: { modelSheet = true }, options: { optionsSheet = true }, send: prepareSend)
@@ -446,14 +446,14 @@ struct ConversationView: View {
         guard let submission = draft.begin() else { return }
         do {
             if session.transcript.page?.hasNewer == true {
-                viewport.beginPage()
+                scroll.viewport.beginPage()
                 await session.loadHistory(direction: "latest")
                 guard session.viewingRunID == runID, session.historyError == nil,
                       session.transcript.page?.hasNewer != true else {
                     throw MainsError.server("Couldn't open the latest messages. Your message wasn't sent.")
                 }
-                viewport.finishPage(latestConfirmed: true)
-            } else { viewport.follow() }
+                scroll.viewport.finishPage(latestConfirmed: true)
+            } else { scroll.viewport.follow() }
             session.setHistoryFollowing(true)
             guard owner == session.ownership else { throw MainsError.changedBackend }
             _ = try await session.send(submission.text, runID: runID, attachments: submission.attachments, contextSkills: submission.contextSkills, contextScope: submission.contextScope)
@@ -462,7 +462,7 @@ struct ConversationView: View {
             acceptedCount += 1
         } catch {
             guard owner == session.ownership else { return }
-            if viewport.paging { viewport.finishPage(latestConfirmed: false) }
+            if scroll.paging { scroll.viewport.finishPage(latestConfirmed: false) }
             draft.reject(submission, message: error.localizedDescription, uncertain: uncertain)
         }
     }

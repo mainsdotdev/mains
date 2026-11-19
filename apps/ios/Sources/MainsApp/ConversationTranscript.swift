@@ -1,4 +1,39 @@
 import SwiftUI
+import Observation
+
+@MainActor @Observable
+final class TranscriptScrollState {
+    private(set) var paging = false
+    private(set) var visibleToolIDs: Set<Int> = []
+    private var showsJumpOnLatestPage = false
+
+    // Publish changes that affect the transcript or its controls.
+    @ObservationIgnored var viewport = TranscriptViewport() {
+        didSet {
+            if paging != viewport.paging { paging = viewport.paging }
+            let showsJump = viewport.showsJump(hasNewer: false)
+            if showsJumpOnLatestPage != showsJump { showsJumpOnLatestPage = showsJump }
+            if oldValue.geometry.topInset != viewport.geometry.topInset || oldValue.geometry.bottomInset != viewport.geometry.bottomInset {
+                updateVisibleTools()
+            }
+        }
+    }
+    @ObservationIgnored var toolFrames: [Int: CGRect] = [:] { didSet { updateVisibleTools() } }
+    @ObservationIgnored var transcriptFrame = CGRect.zero { didSet { updateVisibleTools() } }
+
+    func showsJump(hasNewer: Bool) -> Bool { hasNewer ? !paging : showsJumpOnLatestPage }
+
+    private func updateVisibleTools() {
+        let geometry = viewport.geometry
+        let visibleFrame = CGRect(x: transcriptFrame.minX, y: transcriptFrame.minY + geometry.topInset,
+                                  width: transcriptFrame.width,
+                                  height: max(0, transcriptFrame.height - geometry.topInset - geometry.bottomInset))
+        let visible = Set(toolFrames.compactMap { id, frame in
+            !visibleFrame.isEmpty && !frame.isEmpty && frame.intersection(visibleFrame).height >= frame.height * 0.5 ? id : nil
+        })
+        if visibleToolIDs != visible { visibleToolIDs = visible }
+    }
+}
 
 struct ConversationTranscript: View {
     #if DEBUG && targetEnvironment(simulator)
@@ -7,7 +42,7 @@ struct ConversationTranscript: View {
     let session: BackendSession
     let runID: String
     let providerID: String
-    @Binding var viewport: TranscriptViewport
+    let scroll: TranscriptScrollState
     let openFile: (RunTurn, TurnFileChange) -> Void
     let openSubagents: () -> Void
     let fork: () -> Void
@@ -21,8 +56,6 @@ struct ConversationTranscript: View {
     @State private var navigationID: UUID?
     @State private var loadingDirection: String?
     @State private var landing: TranscriptLanding?
-    @State private var toolFrames: [Int: CGRect] = [:]
-    @State private var transcriptFrame = CGRect.zero
     @State private var searchLanded = false
     @State private var activitySelection: ConversationActivitySelection?
     @State private var mentionArtwork: (owner: Int, avatars: [String: MateAvatar])?
@@ -46,12 +79,6 @@ struct ConversationTranscript: View {
         return MentionArtworkRequest(owner: session.ownership, revision: session.matesRevision,
                                      canLoad: paneVisible && hasMentions && session.isConnected && session.supportsMates)
     }
-    private var forkRowID: String? {
-        guard !isMate, run?.isReplica != true else { return nil }
-        return TranscriptForkAnchor.rowID(in: rows, atLatest: page?.hasNewer != true,
-                                         active: run?.isActive == true,
-                                         hasLocalContinuation: pending != nil && pending?.isSteering != true)
-    }
 
     var body: some View {
         GeometryReader { container in
@@ -67,18 +94,29 @@ struct ConversationTranscript: View {
     }
 
     private func transcript(minimumHeight: CGFloat) -> some View {
-        ScrollView {
+        let rows = self.rows
+        let page = self.page
+        let run = self.run
+        let pending = self.pending
+        let searchRowID = self.searchRowID
+        let isMate = run?.assistantId != nil
+        let sections = TranscriptSection.build(rows, foldsResponses: !isMate)
+        let liveSectionID = run?.isActive == true && !session.transcript.isHistorical ? sections.last?.id : nil
+        let forkRowID = isMate || run?.isReplica == true ? nil : TranscriptForkAnchor.rowID(
+            in: rows, atLatest: page?.hasNewer != true, active: run?.isActive == true,
+            hasLocalContinuation: pending != nil && pending?.isSteering != true)
+        let footers = isMate || run?.mode == "chat" ? [:] : TurnChangeFooters.build(sections: sections, turns: page?.turns ?? [], atLatest: page?.hasNewer != true)
+        return ScrollView {
             // The backend already caps this page at 200 rows / 1 MB. Eager
             // measurement avoids lazy height estimates shifting a live tail.
             VStack(alignment: .leading, spacing: 24) {
-                let footers = isMate || run?.mode == "chat" ? [:] : TurnChangeFooters.build(sections: sections, turns: page?.turns ?? [], atLatest: page?.hasNewer != true)
                 if page?.hasOlder == true {
                     Button { navigate("older") } label: {
                         HStack(spacing: 8) {
                             if loadingDirection == "older" { ProgressView().controlSize(.mini) }
                             Text(loadingDirection == "older" ? "Loading earlier messages…" : "Load earlier messages")
                         }.font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 8)
-                    }.buttonStyle(.plain).disabled(session.historyLoading || viewport.paging || !session.isConnected)
+                    }.buttonStyle(.plain).disabled(session.historyLoading || scroll.paging || !session.isConnected)
                         .accessibilityIdentifier("loadEarlierMessages")
                 }
                 Color.clear.frame(height: 1).id("transcript-top")
@@ -100,7 +138,7 @@ struct ConversationTranscript: View {
                 ForEach(sections) { section in
                     VStack(alignment: .leading, spacing: 12) {
                         ChatTurnView(session: session, section: section, providerID: providerID, isMate: isMate,
-                                     live: run?.isActive == true && section.id == sections.last?.id && !session.transcript.isHistorical,
+                                     live: section.id == liveSectionID,
                                      readContent: readContent, openSubagents: openSubagents,
                                      forkRowID: forkRowID, forkRunID: runID, fork: fork, searchRowID: searchRowID)
                         ForEach(footers[section.id] ?? [], id: \.id) { turn in
@@ -123,7 +161,7 @@ struct ConversationTranscript: View {
                 if let error = session.historyError {
                     ChatNotice(title: "Messages couldn't load", message: error, symbol: "wifi.exclamationmark", warning: true) {
                         Button("Retry") { navigate(session.historyRetryDirection) }
-                            .disabled(!session.isConnected || session.historyLoading || viewport.paging)
+                            .disabled(!session.isConnected || session.historyLoading || scroll.paging)
                     }
                 }
                 if loadingDirection == "newer" { ProgressView().controlSize(.small).frame(maxWidth: .infinity).accessibilityLabel("Loading messages") }
@@ -147,6 +185,7 @@ struct ConversationTranscript: View {
         .accessibilityIdentifier("conversationTranscript")
         .onPreferenceChange(TranscriptFramesKey.self) { frames in
             let previous = sectionFrames
+            let viewport = scroll.viewport
             sectionFrames = frames
             if !searchLanded, let searchRowID, let section = sections.first(where: { $0.rows.contains { $0.id == searchRowID } }), frames[section.id] != nil {
                 searchLanded = true
@@ -163,8 +202,8 @@ struct ConversationTranscript: View {
                 if abs(movement) >= 1 { scrollPosition.scrollTo(y: max(-viewport.geometry.topInset, viewport.geometry.offset + movement)) }
             }
         }
-        .onPreferenceChange(ActiveToolFramesKey.self) { toolFrames = $0 }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { transcriptFrame = $0 }
+        .onPreferenceChange(ActiveToolFramesKey.self) { scroll.toolFrames = $0 }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { scroll.transcriptFrame = $0 }
         .scrollDismissesKeyboard(.interactively)
         .defaultScrollAnchor(.top, for: .initialOffset)
         .defaultScrollAnchor(.top, for: .alignment)
@@ -172,11 +211,11 @@ struct ConversationTranscript: View {
         .onScrollPhaseChange { _, phase in
             guard paneVisible else { return }
             if phase == .tracking || phase == .interacting {
-                if !viewport.interacting { viewport.beginInteraction() }
+                if !scroll.viewport.interacting { scroll.viewport.beginInteraction() }
             } else if phase == .idle {
-                let followed = viewport.following
-                let direction = viewport.endInteraction(hasNewer: page?.hasNewer == true, hasOlder: page?.hasOlder == true)
-                if viewport.following != followed { session.setHistoryFollowing(viewport.following) }
+                let followed = scroll.viewport.following
+                let direction = scroll.viewport.endInteraction(hasNewer: self.page?.hasNewer == true, hasOlder: self.page?.hasOlder == true)
+                if scroll.viewport.following != followed { session.setHistoryFollowing(scroll.viewport.following) }
                 if let direction, session.historyError == nil { navigate(direction.rawValue) }
             }
         }
@@ -185,21 +224,22 @@ struct ConversationTranscript: View {
                                visibleFrame: geometry.containerSize.height, topInset: geometry.contentInsets.top,
                                bottomInset: geometry.contentInsets.bottom)
         } action: { old, next in
-            let followed = viewport.following
-            let direction = viewport.update(next, hasNewer: page?.hasNewer == true, hasOlder: page?.hasOlder == true)
-            if viewport.following != followed { session.setHistoryFollowing(viewport.following) }
+            let page = self.page
+            let followed = scroll.viewport.following
+            let direction = scroll.viewport.update(next, hasNewer: page?.hasNewer == true, hasOlder: page?.hasOlder == true)
+            if scroll.viewport.following != followed { session.setHistoryFollowing(scroll.viewport.following) }
             if paneVisible, let direction, session.historyError == nil { navigate(direction.rawValue) }
-            if paneVisible && viewport.chasing && page?.hasNewer != true &&
+            if paneVisible && scroll.viewport.chasing && page?.hasNewer != true &&
                 (old.content != next.content || old.frame != next.frame || old.topInset != next.topInset || old.bottomInset != next.bottomInset) {
                 scrollPosition.scrollTo(edge: .bottom)
             }
         }
         .onChange(of: paneVisible) { _, visible in
-            if !visible { viewport.interruptInteraction() }
-            else if viewport.chasing && page?.hasNewer != true { scrollPosition.scrollTo(edge: .bottom) }
+            if !visible { scroll.viewport.interruptInteraction() }
+            else if scroll.viewport.chasing && self.page?.hasNewer != true { scrollPosition.scrollTo(edge: .bottom) }
         }
         .overlay(alignment: .bottom) {
-            if viewport.showsJump(hasNewer: page?.hasNewer == true) {
+            if scroll.showsJump(hasNewer: page?.hasNewer == true) {
                 Button {
                     navigate("latest")
                 } label: {
@@ -213,7 +253,7 @@ struct ConversationTranscript: View {
         }
         .onDisappear {
             navigationID = nil; loadingDirection = nil; landing = nil
-            viewport.finishPage(latestConfirmed: false)
+            scroll.viewport.finishPage(latestConfirmed: false)
         }
         .sheet(item: $activitySelection) { selection in
             ConversationActivitySheet(session: session, selection: selection, isMate: isMate)
@@ -243,28 +283,23 @@ struct ConversationTranscript: View {
         }
     }
 
-    private func toolIsVisible(_ id: Int?) -> Bool {
-        guard let id, let frame = toolFrames[id], !frame.isEmpty, !transcriptFrame.isEmpty else { return false }
-        let visibleFrame = CGRect(x: transcriptFrame.minX, y: transcriptFrame.minY + viewport.geometry.topInset,
-                                  width: transcriptFrame.width,
-                                  height: max(0, transcriptFrame.height - viewport.geometry.topInset - viewport.geometry.bottomInset))
-        return frame.intersection(visibleFrame).height >= frame.height * 0.5
-    }
+    private func toolIsVisible(_ id: Int?) -> Bool { id.map(scroll.visibleToolIDs.contains) ?? false }
 
     private func readingAnchors(in frames: [String: TranscriptFrame]) -> [TranscriptAnchor] {
-        frames.filter { $0.value.rect.maxY > viewport.geometry.offset + viewport.geometry.topInset &&
-            $0.value.rect.minY < viewport.geometry.offset + viewport.geometry.frame - viewport.geometry.bottomInset }
+        let geometry = scroll.viewport.geometry
+        return frames.filter { $0.value.rect.maxY > geometry.offset + geometry.topInset &&
+            $0.value.rect.minY < geometry.offset + geometry.frame - geometry.bottomInset }
             .sorted { $0.value.rect.minY < $1.value.rect.minY }
-            .map { TranscriptAnchor(id: $0.key, top: $0.value.rect.minY - viewport.geometry.offset) }
+            .map { TranscriptAnchor(id: $0.key, top: $0.value.rect.minY - geometry.offset) }
     }
 
     private func navigate(_ direction: String) {
-        guard !viewport.paging, !session.historyLoading, session.viewingRunID == runID,
+        guard !scroll.paging, !session.historyLoading, session.viewingRunID == runID,
               session.isConnected || direction == "latest" && page?.hasNewer != true else { return }
         let id = UUID(), owner = session.ownership, toLatest = direction == "latest" || page == nil
         let anchors = readingAnchors(in: sectionFrames)
         navigationID = id; loadingDirection = direction
-        viewport.beginPage(); session.setHistoryFollowing(false)
+        scroll.viewport.beginPage(); session.setHistoryFollowing(false)
         Task {
             let loaded = session.isConnected ? await session.loadHistory(direction: direction) : true
             guard navigationID == id, session.ownership == owner, session.viewingRunID == runID else { return }
@@ -274,7 +309,10 @@ struct ConversationTranscript: View {
                 finishNavigation(latest: true)
                 session.setHistoryFollowing(true)
                 withAnimation(reduceMotion ? nil : .snappy(duration: 0.25, extraBounce: 0)) { scrollPosition.scrollTo(edge: .bottom) }
-            } else if let anchor = anchors.first(where: { candidate in sections.contains { $0.id == candidate.id } }) {
+                return
+            }
+            let sections = TranscriptSection.build(rows, foldsResponses: !isMate)
+            if let anchor = anchors.first(where: { candidate in sections.contains { $0.id == candidate.id } }) {
                 landing = TranscriptLanding(id: id, anchor: anchor)
             } else {
                 // Pages are bounded and can be disjoint: continue at their shared boundary.
@@ -286,10 +324,8 @@ struct ConversationTranscript: View {
 
     private func finishNavigation(latest: Bool = false) {
         landing = nil; navigationID = nil; loadingDirection = nil
-        viewport.finishPage(latestConfirmed: latest)
+        scroll.viewport.finishPage(latestConfirmed: latest)
     }
-
-    private var sections: [TranscriptSection] { TranscriptSection.build(rows, foldsResponses: !isMate) }
 }
 
 private struct ConversationActivitySelection: Identifiable {

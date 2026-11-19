@@ -29,6 +29,27 @@ try {
       const { default: MainsFill } = require('./src/renderer/components/ui/icons/mains.tsx');
       const { default: Queue } = require('./src/renderer/components/ui/icons/queue.tsx');
       const { default: AssistantSteps } = require('./src/renderer/components/ui/icons/assistant-steps.tsx');
+      const ui = require('./src/renderer/components/ui/icons');
+      const tools = {
+        'arrow-up': ui.ArrowUp, bash: ui.Bash, read: ui.Read, view: ui.ViewFile,
+        edit: ui.Edit, write: ui.Write, trash: ui.Trash, glob: ui.Glob, grep: ui.Grep,
+        search: ui.Search, web: ui.Web, task: ui.Task, workflow: ui.Workflow,
+        'send-message': ui.SendMessage, monitor: ui.Infinite, sql: ui.Sql,
+        'enter-plan': ui.EnterPlan, 'exit-plan': ui.ExitPlan, check: ui.Check,
+        question: ui.Question, generic: ui.GenericTool, cursor: ui.BrowserCursor,
+        mains: ui.MainsStroke, notes: ui.Notes, layers: ui.Layers, file: ui.FileIcon,
+      };
+      const toolIcons = Object.fromEntries(Object.entries(tools)
+        .map(([name, Icon]) => ['tool-' + name, Icon]));
+      const files = require('./src/renderer/components/ui/icons/file-icons');
+      const toolFileIcons = {
+        'tool-file-swift': files.SwiftFileIcon,
+        'tool-file-typescript': files.TsFileIcon,
+        'tool-file-javascript': files.JsFileIcon,
+        'tool-file-react': files.ReactFileIcon,
+        'tool-file-json': files.JsonFileIcon,
+        'tool-file-python': files.PythonFileIcon,
+      };
       // Atlas navigation uses its own outlined icons outside the space registry.
       const atlasIcons = {
         'atlas-all': require('./src/renderer/components/ui/icons/library.tsx').default,
@@ -53,7 +74,7 @@ try {
         'model-zai': require('./src/renderer/components/ui/icons/zai.tsx').default,
         'model-bot': require('./src/renderer/components/ui/icons/bot.tsx').default,
       };
-      module.exports = Object.fromEntries(Object.entries({ ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill, 'assistant-steps': AssistantSteps, ...atlasIcons, ...documentIcons, ...modelIcons })
+      module.exports = Object.fromEntries(Object.entries({ ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill, 'assistant-steps': AssistantSteps, ...atlasIcons, ...documentIcons, ...modelIcons, ...toolIcons, ...toolFileIcons })
         .map(([name, Icon]) => [name, renderToStaticMarkup(React.createElement(Icon))]));
     `, resolveDir: desktopRoot, loader: 'tsx' },
     bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic',
@@ -106,7 +127,8 @@ for (const [name, markup] of Object.entries(icons)) {
     dom.window.close();
   }
   const folder = new URL(`registry-${name}.imageset/`, root);
-  const contents = JSON.stringify({ images: [{ filename: 'icon.svg', idiom: 'universal' }], info: { author: 'xcode', version: 1 }, properties: { 'preserves-vector-representation': true, 'template-rendering-intent': 'template' } }, null, 2) + '\n';
+  const rendering = name.startsWith('tool-file-') ? 'original' : 'template';
+  const contents = JSON.stringify({ images: [{ filename: 'icon.svg', idiom: 'universal' }], info: { author: 'xcode', version: 1 }, properties: { 'preserves-vector-representation': true, 'template-rendering-intent': rendering } }, null, 2) + '\n';
   if (check) {
     for (const [file, expected] of [['icon.svg', svg], ['Contents.json', contents]]) {
       if (await readFile(new URL(file, folder), 'utf8').catch(() => null) !== expected) {

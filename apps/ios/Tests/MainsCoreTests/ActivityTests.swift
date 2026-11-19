@@ -113,7 +113,7 @@ private func lifecycleTool(_ id: Int, _ name: String, status: String = "running"
     transcript.replace(activityPage(artifacts, tools: calls))
     transcript.receive(thoughtEvent("Inspecting exports"))
     #expect(transcript.rows.filter(\.live).compactMap { $0.tool?.id } == [8, 9])
-    #expect(transcript.rows.compactMap(\.toolPresentation).map(\.verb) == ["Searching…", "Reading…"])
+    #expect(transcript.rows.compactMap(\.toolPresentation).map(\.verb) == ["Searching", "Reading"])
     #expect(transcript.activity?.toolID == 9)
 }
 
@@ -173,10 +173,12 @@ private func lifecycleTool(_ id: Int, _ name: String, status: String = "running"
     #expect(ToolGroupPresentation([command, calls[2], edit]).summary == "Edited a file, read a file, ran a command")
     #expect(ToolGroupPresentation([edit, calls[2], command]).summary == "Edited a file, read a file, ran a command")
     #expect(ToolGroupPresentation([command, command]).summary == "Ran commands")
+    #expect(ToolGroupPresentation(calls + [edit, command]).icons.map(\.asset) == ["tool-glob", "tool-read", "tool-edit"])
     #expect(ToolGroupPresentation([]).summary.isEmpty)
     let vendors = [try lifecycleTool(7, "mcp__linear__list_issues", at: 7),
                    try lifecycleTool(8, "mcp__codex_apps__gmail.search_emails", at: 8)]
     #expect(ToolGroupPresentation(vendors).summary == "Used the Linear and Gmail integrations")
+    #expect(ToolGroupPresentation(vendors).icons.map(\.asset) == ["tool-generic", "tool-generic"])
     let atlas = try lifecycleTool(9, "mcp__mains__AtlasUpdatePage", status: "done", at: 9,
                                   output: .string("{\"isError\":true}"))
     #expect(ToolGroupPresentation([atlas]).summary == "Tried to update an Atlas page")

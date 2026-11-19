@@ -137,9 +137,7 @@ private struct SteppedEffortSlider: View {
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @GestureState private var touching = false
-    @State private var origin: CGFloat?
     @State private var dragPosition: CGFloat?
-    @State private var moved = false
     @State private var pending: String?
     @State private var nearest: Int?
     @State private var interrupted = false
@@ -208,32 +206,34 @@ private struct SteppedEffortSlider: View {
                     Circle().fill(.white).overlay { Circle().strokeBorder(Color(.separator), lineWidth: 0.5) }
                         .shadow(color: .black.opacity(0.16), radius: 3, y: 2)
                         .frame(width: thumb, height: thumb).offset(x: x - thumb / 2)
-                }.frame(width: width, height: hit).contentShape(.rect)
+                }.frame(width: width, height: hit).padding(.horizontal, inset).contentShape(.rect)
                     .animation(rangeMotion, value: stops)
                     .animation(rangeMotion, value: value)
-                    .gesture(DragGesture(minimumDistance: 0)
+                    .simultaneousGesture(DragGesture(minimumDistance: 0)
                         .updating($touching) { _, state, _ in state = true }
                         .onChanged { gesture in
                             guard enabled, interactionEnabled else { return }
                             if !ownsState { reset(); localScope = scope }
                             if !gestureActive { gestureActive = true; interrupted = false }
                             guard !interrupted else { return }
-                            if origin == nil { origin = center(index, width: width) }
-                            if abs(gesture.translation.width) > 8 { moved = true }
-                            if moved {
-                                let position = clamp((origin ?? x) + gesture.translation.width, width: width)
-                                dragPosition = position; nearest = stop(at: position, width: width)
+                            if dragPosition == nil {
+                                // Let the surrounding scroll view handle vertical swipes.
+                                if isVerticalSwipe(gesture) { interrupted = true; return }
+                                guard abs(gesture.translation.width) > 8 else { return }
                             }
+                            let position = clamp(gesture.location.x - inset, width: width)
+                            dragPosition = position
+                            nearest = stop(at: position, width: width)
                         }
                         .onEnded { gesture in
                             defer { gestureActive = false }
                             guard enabled, interactionEnabled, ownsState, !interrupted else { reset(); return }
-                            let position = moved ? (origin ?? x) + gesture.translation.width : gesture.location.x
+                            guard dragPosition != nil || !isVerticalSwipe(gesture) else { return }
+                            let position = gesture.location.x - inset
                             let selected = stop(at: position, width: width)
                             let level = stops[selected]
                             withAnimation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 1)) {
                                 dragPosition = nil; nearest = nil; pending = level == value ? nil : level
-                                origin = nil; moved = false
                             }
                             if level != value { onCommit(level) }
                         })
@@ -241,7 +241,6 @@ private struct SteppedEffortSlider: View {
                         let wasTouching = touching
                         reset(keepingPending: true); interrupted = wasTouching
                     }
-                    .padding(.horizontal, inset)
             }.frame(height: hit)
                 .allowsHitTesting(enabled && interactionEnabled)
                 .accessibilityElement(children: .ignore).accessibilityLabel("Effort").accessibilityValue(label)
@@ -268,8 +267,12 @@ private struct SteppedEffortSlider: View {
         }
         .onChange(of: saving) { _, busy in if !busy { reset() } }
         .onChange(of: touching) { _, active in
-            if !active { if origin != nil { reset() }; gestureActive = false }
+            if !active { if dragPosition != nil { reset() }; gestureActive = false }
         }
+    }
+    private func isVerticalSwipe(_ gesture: DragGesture.Value) -> Bool {
+        let vertical = abs(gesture.translation.height)
+        return vertical > max(8, abs(gesture.translation.width))
     }
     private func center(_ index: Int, width: CGFloat) -> CGFloat {
         endInset + CGFloat(index) / CGFloat(max(1, stops.count - 1)) * max(0, width - endInset * 2)
@@ -279,7 +282,7 @@ private struct SteppedEffortSlider: View {
         Int((min(1, max(0, (x - endInset) / max(1, width - endInset * 2))) * CGFloat(stops.count - 1)).rounded())
     }
     private func reset(keepingPending: Bool = false) {
-        origin = nil; dragPosition = nil; nearest = nil; moved = false
+        dragPosition = nil; nearest = nil
         if !keepingPending { pending = nil }
     }
 }

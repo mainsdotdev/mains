@@ -18,12 +18,14 @@ export const assistantsMobile = {
         const welcomes = new Map(assistantsRepo.welcomes(accountId).filter(row => row.state !== "started").map(row => [row.assistantId, row]));
         return {
             teams: assistantsRepo.teams(accountId).map(({ id, name }) => ({ id, name })),
-            mates: profiles.map(({ id, name, description, avatar, teamId, providerId, model }) => {
+            mates: profiles.map(({ id, name, description, avatar, teamId, providerId, model, spaceSnapshot, effort, instructions }) => {
                 const row = welcomes.get(id);
                 const question = row?.question ? JSON.parse(row.question) as AssistantWelcomeQuestion : null;
                 const needsSetup = !!question?.profileSetup && !question.profileSetup.saved;
                 const welcome = row && selectedId !== undefined ? { runId: row.runId, state: row.state, question, error: row.error } : null;
-                return { id, name, description, avatar, teamId, providerId, model, needsSetup, welcome };
+                const mate = { id, name, description, avatar, teamId, providerId, model, needsSetup, welcome };
+                if (selectedId === undefined) return mate;
+                return { ...mate, details: { spaceName: spaceSnapshot.name, effort, instructions } };
             }),
         };
     },

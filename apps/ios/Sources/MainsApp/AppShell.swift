@@ -127,9 +127,9 @@ struct AppShell: View {
                                     MateView(session: session, mateID: id, openChat: { path.append(.conversation($0)) },
                                              openInfo: { path.append(.mateInfo(id)) })
                                         .id("\(session.ownership):mate:\(id)")
-                                case .mateInfo:
-                                    Color(.systemBackground).ignoresSafeArea()
-                                        .navigationTitle("Mate Info").navigationBarTitleDisplayMode(.inline)
+                                case .mateInfo(let id):
+                                    MateInfoView(session: session, mateID: id)
+                                        .id("\(session.ownership):mate-info:\(id)")
                                 }
                             }
                         }

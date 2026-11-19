@@ -288,6 +288,7 @@ export interface MobileMateDirectory {
     mates: Array<Pick<Assistant, "id" | "name" | "description" | "avatar" | "teamId" | "providerId" | "model"> & {
         needsSetup: boolean;
         welcome: Pick<AssistantWelcome, "runId" | "state" | "question" | "error"> | null;
+        details?: Pick<Assistant, "effort" | "instructions"> & { spaceName: string };
     }>;
     teams: Array<Pick<AssistantTeam, "id" | "name">>;
 }

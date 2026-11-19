@@ -92,13 +92,13 @@ struct GlassSelectionTab<Icon: View>: View {
     var body: some View {
         HStack(spacing: 8) {
             icon().frame(width: 22, height: 22)
-            if selected && showLabel {
+            if showLabel {
                 Text(title).fixedSize().lineLimit(1)
                     .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .leading)))
             }
         }
         .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-        .padding(.horizontal, selected ? 14 : 11)
+        .padding(.horizontal, selected || showLabel ? 14 : 11)
         .frame(minWidth: 44, minHeight: 40).clipped()
         .background(alignment: .center) {
             if selected {

@@ -55,7 +55,14 @@ public struct Mate: Decodable, Identifiable, Sendable {
     public let model: String
     public let needsSetup: Bool
     public let welcome: MateWelcome?
+    public let details: MateDetails?
     public var ready: Bool { !needsSetup }
+}
+
+public struct MateDetails: Decodable, Sendable {
+    public let spaceName: String
+    public let effort: String
+    public let instructions: String
 }
 
 public struct MateWelcome: Decodable, Sendable {

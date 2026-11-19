@@ -21,7 +21,7 @@ struct SidebarView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .subheadline) private var modeLabelWidth: CGFloat = 36
     @ScaledMetric(relativeTo: .body) private var searchLabelWidth: CGFloat = 110
-    private let horizontalInset: CGFloat = 28
+    private let horizontalInset: CGFloat = 16
     private var space: Space? { session.selectedSpace }
     private var modes: [String] { space.map { Experience.modes(for: $0.providerId) } ?? [] }
     private var otherSpaces: [Space] { session.spaces.filter { $0.id != space?.id } }
@@ -225,7 +225,7 @@ struct SidebarView: View {
                 let selected = space?.mode == mode
                 Button { chooseMode(mode) } label: {
                     GlassSelectionTab(title: Experience.label(mode), selected: selected,
-                                      showLabel: showLabel, selection: modeSelection) {
+                                      showLabel: showLabel && selected, selection: modeSelection) {
                         ZStack {
                             RegistryIcon(token: "icon:\(mode == "developer" ? "code" : mode == "work" ? "bag" : "chat")",
                                          size: 22, tint: selected ? .primary : .primary.opacity(0.8))

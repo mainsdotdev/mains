@@ -19,10 +19,10 @@ extension ToolCall {
 
 /// Native counterpart of desktop's tool registry and status-aware ToolHeader.
 public struct ToolPresentation: Sendable {
-    public enum Kind: Sendable { case command, read, edit, write, delete, glob, grep, web, task, plan, todo, generic }
+    public enum Kind: Sendable { case command, read, view, image, edit, write, delete, glob, grep, web, task, plan, todo, generic }
     public let name: String
     public let verb: String
-    public let symbol: String
+    public let icon: String
     public let kind: Kind
     public let detail: String
     public let body: String
@@ -36,40 +36,74 @@ public struct ToolPresentation: Sendable {
     public let running: Bool
     public let failed: Bool
     public var diff: Bool { kind == .edit || kind == .write }
+    public var showsFile: Bool { [.read, .view, .edit, .write].contains(kind) && !detail.isEmpty && !deferredInput }
     public var hasDetails: Bool { !body.isEmpty || deferredOutput || showsInput && (!input.isEmpty || deferredInput) }
 
     private struct Definition {
-        let name: String, verb: String, active: String, symbol: String
+        let name: String, verb: String, active: String, symbol: String, icon: String
         let kind: Kind
         let aliases: [String]
     }
     private static let definitions: [Definition] = [
-        .init(name: "Todos", verb: "Updated todos", active: "Updating todos", symbol: "checklist", kind: .todo, aliases: ["taskcreate", "taskupdate", "taskget", "tasklist", "updatetodos", "todowrite", "update_plan"]),
-        .init(name: "WebFetch", verb: "Fetched", active: "Fetching", symbol: "globe", kind: .web, aliases: ["webfetch", "web_fetch", "fetch"]),
-        .init(name: "WebSearch", verb: "Searched", active: "Searching", symbol: "globe", kind: .web, aliases: ["websearch", "web_search"]),
-        .init(name: "Read", verb: "Read", active: "Reading", symbol: "doc.text", kind: .read, aliases: ["read", "read_file", "view"]),
-        .init(name: "Edit", verb: "Edited", active: "Editing", symbol: "pencil", kind: .edit, aliases: ["edit", "replace", "edit_file", "apply_patch"]),
-        .init(name: "Write", verb: "Wrote", active: "Writing", symbol: "square.and.pencil", kind: .write, aliases: ["write", "writeifempty", "create_file", "write_file", "create"]),
-        .init(name: "Delete", verb: "Deleted", active: "Deleting", symbol: "trash", kind: .delete, aliases: ["delete", "delete_file"]),
-        .init(name: "Bash", verb: "Ran", active: "Running", symbol: "terminal", kind: .command, aliases: ["bash", "terminal", "shell", "exec_command", "command_execution", "monitor"]),
-        .init(name: "Glob", verb: "Searched", active: "Searching", symbol: "folder", kind: .glob, aliases: ["glob", "find"]),
-        .init(name: "Grep", verb: "Grepped", active: "Grepping", symbol: "text.magnifyingglass", kind: .grep, aliases: ["grep", "rg", "search", "toolsearch"]),
-        .init(name: "Skill", verb: "Skill", active: "Using skill", symbol: "sparkles", kind: .task, aliases: ["skill"]),
-        .init(name: "Plan", verb: "Plan", active: "Planning", symbol: "list.bullet.rectangle", kind: .plan, aliases: ["plan", "enterplanmode", "exitplanmode", "create plan"]),
-        .init(name: "Task", verb: "Ran subagent", active: "Running subagent", symbol: "person.crop.square", kind: .task, aliases: ["task", "agent", "workflow", "sendmessage", "send_message"]),
-        .init(name: "SQL", verb: "SQL", active: "Querying", symbol: "tablecells", kind: .generic, aliases: ["sql"]),
+        .init(name: "Todos", verb: "Updated todos", active: "Updating todos", symbol: "checklist", icon: "tool-check", kind: .todo, aliases: ["taskcreate", "taskupdate", "updatetodos", "todowrite", "update_plan"]),
+        .init(name: "TaskGet", verb: "TaskGet", active: "TaskGet", symbol: "eye", icon: "tool-view", kind: .todo, aliases: ["taskget"]),
+        .init(name: "TaskList", verb: "TaskList", active: "TaskList", symbol: "magnifyingglass", icon: "tool-search", kind: .todo, aliases: ["tasklist"]),
+        .init(name: "WebFetch", verb: "Fetched", active: "Fetching", symbol: "globe", icon: "tool-web", kind: .web, aliases: ["webfetch", "web_fetch", "fetch", "[permission:url]"]),
+        .init(name: "WebSearch", verb: "Searched", active: "Searching", symbol: "globe", icon: "tool-web", kind: .web, aliases: ["websearch", "web_search"]),
+        .init(name: "Read", verb: "Read", active: "Reading", symbol: "doc.text", icon: "tool-read", kind: .read, aliases: ["read", "read_file", "[permission:read]"]),
+        .init(name: "View", verb: "Viewed", active: "Viewing", symbol: "doc.text", icon: "tool-view", kind: .view, aliases: ["view"]),
+        .init(name: "ImageView", verb: "Viewed", active: "Viewing", symbol: "photo", icon: "atlas-image", kind: .image, aliases: ["imageview", "image_view"]),
+        .init(name: "Apply Patch", verb: "Edited", active: "Editing", symbol: "pencil", icon: "tool-edit", kind: .edit, aliases: ["apply_patch"]),
+        .init(name: "Edit", verb: "Edited", active: "Editing", symbol: "pencil", icon: "tool-edit", kind: .edit, aliases: ["edit", "replace", "edit_file", "[permission:write]"]),
+        .init(name: "Write", verb: "Wrote", active: "Writing", symbol: "square.and.pencil", icon: "tool-write", kind: .write, aliases: ["write", "writeifempty", "create_file", "write_file"]),
+        .init(name: "Create", verb: "Wrote", active: "Writing", symbol: "square.and.pencil", icon: "tool-write", kind: .write, aliases: ["create"]),
+        .init(name: "Delete", verb: "Deleted", active: "Deleting", symbol: "trash", icon: "tool-trash", kind: .delete, aliases: ["delete", "delete_file"]),
+        .init(name: "Bash", verb: "Ran", active: "Running", symbol: "terminal", icon: "tool-bash", kind: .command, aliases: ["bash", "terminal", "exec_command", "command_execution", "[permission:shell]"]),
+        .init(name: "Shell", verb: "Ran", active: "Running", symbol: "terminal", icon: "tool-bash", kind: .command, aliases: ["shell"]),
+        .init(name: "Monitor", verb: "Monitored", active: "Monitoring", symbol: "infinity", icon: "tool-monitor", kind: .task, aliases: ["monitor"]),
+        .init(name: "Glob", verb: "Searched", active: "Searching", symbol: "folder", icon: "tool-glob", kind: .glob, aliases: ["glob", "find"]),
+        .init(name: "Grep", verb: "Grepped", active: "Grepping", symbol: "text.magnifyingglass", icon: "tool-grep", kind: .grep, aliases: ["grep", "rg"]),
+        .init(name: "Search", verb: "Grepped", active: "Grepping", symbol: "magnifyingglass", icon: "tool-grep", kind: .grep, aliases: ["search"]),
+        .init(name: "ToolSearch", verb: "Searched tools", active: "Searching tools", symbol: "magnifyingglass", icon: "tool-search", kind: .task, aliases: ["toolsearch"]),
+        .init(name: "Skill", verb: "Skill", active: "Skill", symbol: "sparkles", icon: "sparkles", kind: .task, aliases: ["skill"]),
+        .init(name: "Plan", verb: "Plan", active: "Plan", symbol: "list.bullet.rectangle", icon: "tool-enter-plan", kind: .plan, aliases: ["plan", "create plan"]),
+        .init(name: "EnterPlanMode", verb: "Entered plan mode", active: "Entering plan mode", symbol: "list.bullet.rectangle", icon: "tool-enter-plan", kind: .plan, aliases: ["enterplanmode"]),
+        .init(name: "ExitPlanMode", verb: "Plan", active: "Plan", symbol: "list.bullet.rectangle", icon: "tool-exit-plan", kind: .plan, aliases: ["exitplanmode"]),
+        .init(name: "Task", verb: "Task", active: "Task", symbol: "person.crop.square", icon: "tool-task", kind: .task, aliases: ["task"]),
+        .init(name: "Agent", verb: "Agent", active: "Agent", symbol: "person.crop.square", icon: "tool-task", kind: .task, aliases: ["agent"]),
+        .init(name: "Workflow", verb: "Workflow", active: "Workflow", symbol: "person.crop.square", icon: "tool-workflow", kind: .task, aliases: ["workflow"]),
+        .init(name: "SendMessage", verb: "Sent", active: "Sending", symbol: "paperplane", icon: "tool-send-message", kind: .task, aliases: ["sendmessage", "send_message"]),
+        .init(name: "AskUserQuestion", verb: "Asked", active: "Asking", symbol: "questionmark.bubble", icon: "tool-question", kind: .task, aliases: ["askuserquestion", "ask_user", "askuser"]),
+        .init(name: "Intent", verb: "Intent", active: "Intent", symbol: "note.text", icon: "tool-notes", kind: .task, aliases: ["report_intent"]),
+        .init(name: "SQL", verb: "SQL", active: "SQL", symbol: "tablecells", icon: "tool-layers", kind: .generic, aliases: ["sql"]),
     ]
     static func header(for name: String) -> (name: String, symbol: String) {
         let definition = definition(for: name.lowercased())
-        return (definition?.name ?? friendlyName(name), definition?.symbol ?? "puzzlepiece.extension")
+        let fallback = name.replacingOccurrences(of: "mcp__", with: "").replacingOccurrences(of: ".", with: " ")
+        return (definition?.name ?? friendlyName(fallback), definition?.symbol ?? "puzzlepiece.extension")
     }
     private static func definition(for lower: String) -> Definition? {
         lower.hasPrefix("mcp__") ? nil : Self.definitions.first { $0.aliases.contains(lower) }
             ?? Self.definitions.first { $0.aliases.contains { $0.count >= 4 && lower.contains($0) } }
     }
+    fileprivate static func groupIcon(for name: String) -> (key: String, asset: String) {
+        let lower = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let integration = integration(for: lower) { return ("vendor:" + integration.id, integration.icon) }
+        let builtin = definition(for: lower)
+        let key = builtin?.aliases.first ?? lower
+        let asset = switch key {
+        case "skill": "box"
+        case "search": "tool-search"
+        case "sql": "tool-sql"
+        case "report_intent": "sparkles"
+        default: builtin?.icon ?? "tool-generic"
+        }
+        return (key, asset)
+    }
     public init(_ call: ToolCall, status: String? = nil) {
         let lower = call.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let builtin = Self.definition(for: lower)
+        let integration = Self.integration(for: lower)
         let params = Self.unwrap(call.input ?? .null)
         let output = Self.unwrap(call.output ?? .null)
         let status = call.statusForDisplay(overriding: status)
@@ -81,29 +115,53 @@ public struct ToolPresentation: Sendable {
         // Desktop's dedicated and MCP displays render their result, not a raw
         // argument disclosure. Only its unknown-tool fallback shows Input.
         showsInput = builtin == nil && !lower.hasPrefix("mcp__")
-        name = builtin?.name ?? Self.friendlyName(call.toolName)
-        verb = running ? (builtin?.active ?? name) + "…" : builtin?.verb ?? name
-        symbol = builtin?.symbol ?? (lower.hasPrefix("mcp__") ? "puzzlepiece.extension" : "wrench.and.screwdriver")
+        name = builtin?.name ?? integration?.name ?? Self.friendlyName(call.toolName)
+        let queryOnly = kind == .web && params["url"].string?.isEmpty != false && params["query"].string?.isEmpty == false
+        if queryOnly { verb = running ? "Searching" : "Searched" }
+        else if let builtin { verb = running ? builtin.active : builtin.verb }
+        else if let integration { verb = running ? integration.active : integration.name }
+        else { verb = name }
+        icon = builtin?.icon ?? integration?.icon ?? "tool-generic"
         let path = Self.string(params, ["file_path", "filePath", "path", "filename", "file"])
+        let title = params["_title"].string ?? ""
         let raw = params.string ?? Self.string(params, ["_raw", "patch", "input"])
         let summary: String
         switch kind {
-        case .command: summary = Self.string(params, ["description", "command", "cmd"])
-        case .read, .edit, .write, .delete:
-            let patchPath = raw.components(separatedBy: "\n").first { $0.hasPrefix("*** Update File: ") || $0.hasPrefix("*** Add File: ") }?.components(separatedBy: ": ").dropFirst().joined(separator: ": ") ?? ""
+        case .command:
+            let command = Self.string(params, ["description", "command", "cmd"])
+            summary = command.isEmpty ? "command" : command
+        case .read:
+            let value = path.isEmpty && (title.contains("/") || title.contains(".")) ? title : path
+            summary = Self.shortPath(value, count: 1)
+        case .delete:
+            summary = path.isEmpty ? "file" : Self.shortPath(path, count: 1)
+        case .view, .image, .edit, .write:
+            let header = raw.components(separatedBy: "\n").first { $0.hasPrefix("*** Update File: ") || $0.hasPrefix("*** Add File: ") || $0.hasPrefix("*** Delete File: ") }
+            let patchPath = header?.components(separatedBy: ": ").dropFirst().joined(separator: ": ") ?? ""
             let value = path.isEmpty ? patchPath : path
-            summary = value.isEmpty ? "" : TranscriptMedia.fileName(value)
-        case .glob: summary = Self.string(params, ["pattern", "path"])
+            summary = value.isEmpty ? (kind == .image ? "image" : "") : TranscriptMedia.fileName(value)
+        case .glob: summary = params["pattern"].string ?? "?"
         case .grep: summary = Self.string(params, ["pattern", "query", "regex"])
         case .web: summary = Self.string(params, ["url", "query"])
-        default: summary = Self.string(params, ["description", "summary", "skill", "name", "question", "query", "title", "message"])
+        default:
+            if integration?.id == "cua_repl" { summary = Self.string(params, ["title", "code"]) }
+            else if integration != nil { summary = "" }
+            else { summary = Self.string(params, ["description", "summary", "skill", "name", "question", "query", "title", "message"]) }
         }
         detail = String((deferredInput ? params["preview"].string ?? summary : summary).replacingOccurrences(of: "\n", with: " ").prefix(300))
         input = deferredInput ? params["preview"].string ?? "" : Self.hasInputContent(params) ? Self.text(params) : ""
         var outputText = deferredOutput ? output["preview"].string ?? "" : Self.text(output)
-        if kind == .glob, !deferredOutput {
-            let files = output["filenames"].array.isEmpty ? output["files"].array : output["filenames"].array
-            if !files.isEmpty { outputText = files.compactMap(\.string).joined(separator: "\n") }
+        var files = (output["filenames"].array.isEmpty ? output["files"].array : output["filenames"].array).compactMap(\.string)
+        if !deferredOutput {
+            if kind == .glob, let raw = output.string {
+                files = raw.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            }
+            if kind == .glob, !files.isEmpty || output["numFiles"].number != nil || output["filenames"] != .null {
+                outputText = files.map { Self.shortPath($0, count: 3) }.joined(separator: "\n")
+            }
+            if kind == .grep, !files.isEmpty {
+                outputText = output["content"].string ?? files.map { Self.shortPath($0, count: 3) }.joined(separator: "\n")
+            }
         }
         var diffLines: [String] = []
         if kind == .edit || kind == .write, !deferredOutput {
@@ -121,15 +179,46 @@ public struct ToolPresentation: Sendable {
             }
             if !diffLines.isEmpty { outputText = diffLines.joined(separator: "\n") }
         }
-        body = outputText.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[ -/]*[@-~]", with: "", options: .regularExpression)
+        let cleanOutput = outputText.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[ -/]*[@-~]", with: "", options: .regularExpression)
+        body = kind == .command ? cleanOutput.trimmingCharacters(in: .whitespacesAndNewlines) : cleanOutput
         added = diffLines.filter { $0.hasPrefix("+") && !$0.hasPrefix("+++") }.count
         removed = diffLines.filter { $0.hasPrefix("-") && !$0.hasPrefix("---") }.count
-        let files = output["filenames"].array.isEmpty ? output["files"].array : output["filenames"].array
-        let lines = output["numLines"].number ?? output["file"]["numLines"].number
-        if kind == .glob && !files.isEmpty { stat = "\(files.count) files" }
-        else if let lines, lines.isFinite && lines > 0 && lines < 1_000_000 { stat = "\(Int(lines)) lines" }
-        else if kind == .grep || kind == .read, !body.isEmpty && !deferredOutput { stat = "\(body.components(separatedBy: "\n").count) lines" }
-        else { stat = "" }
+        let previewLines = body.isEmpty || deferredOutput ? 0 : body.components(separatedBy: "\n").count
+        let lines = Self.count(output["numLines"]) ?? Self.count(output["file"]["numLines"])
+        let fileCount = Self.count(output["numFiles"]) ?? Self.count(output["totalFiles"]) ?? files.count
+        switch kind {
+        case .glob:
+            stat = fileCount > 0 ? "\(fileCount) files" : ""
+        case .grep:
+            let matches = Self.count(output["totalMatches"]) ?? 0
+            let lineCount = lines ?? (output.string == nil ? 0 : previewLines)
+            let stats = [
+                matches > 0 ? "\(matches) matches" : nil,
+                lineCount > 0 && lineCount != matches ? "\(lineCount) lines" : nil,
+                fileCount > 0 ? "\(fileCount) files" : nil,
+                output["truncated"].bool ? "truncated" : nil,
+            ].compactMap { $0 }
+            stat = stats.isEmpty ? "" : "(\(stats.joined(separator: ", ")))"
+        case .read:
+            let lineCount = lines ?? previewLines
+            stat = lineCount > 0 ? "(\(lineCount) lines)" : ""
+        case .view:
+            let lineCount = lines ?? body.split(separator: "\n").count
+            stat = !deferredOutput && lineCount > 0 ? "\(lineCount) lines" : ""
+        case .web:
+            stat = Self.count(params["max_length"]).map { "(max \($0))" } ?? ""
+        default:
+            stat = ""
+        }
+    }
+    private static func shortPath(_ value: String, count: Int) -> String {
+        let parts = value.components(separatedBy: CharacterSet(charactersIn: "/\\"))
+        guard parts.count > 3 else { return value }
+        return (count == 1 ? "" : ".../") + parts.suffix(count).joined(separator: "/")
+    }
+    private static func count(_ value: JSONValue) -> Int? {
+        guard let number = value.number, number >= 0, number < 1_000_000_000 else { return nil }
+        return Int(number)
     }
     public static func unwrap(_ value: JSONValue) -> JSONValue {
         if value == .object(["$undefined": .bool(true)]) { return .null }
@@ -152,6 +241,53 @@ public struct ToolPresentation: Sendable {
         default: return true
         }
     }
+    fileprivate struct Integration {
+        let id: String
+        let label: String
+        let name: String
+        let active: String
+        let icon: String
+    }
+    private static let integrationVerbs = [
+        "list": ("listed", "listing"), "get": ("got", "getting"), "view": ("viewed", "viewing"),
+        "fetch": ("fetched", "fetching"), "read": ("read", "reading"), "search": ("searched", "searching"),
+        "research": ("researched", "researching"), "save": ("saved", "saving"), "create": ("created", "creating"),
+        "update": ("updated", "updating"), "delete": ("deleted", "deleting"), "archive": ("archived", "archiving"),
+        "extract": ("extracted", "extracting"), "add": ("added", "adding"), "remove": ("removed", "removing"),
+        "send": ("sent", "sending"), "run": ("ran", "running"), "draft": ("drafted", "drafting"),
+        "reply": ("replied", "replying"), "open": ("opened", "opening"), "close": ("closed", "closing"),
+    ]
+    fileprivate static func integration(for lower: String) -> Integration? {
+        guard lower.hasPrefix("mcp__") else { return nil }
+        let parts = String(lower.dropFirst(5)).components(separatedBy: "__")
+        let server = parts[0]
+        var tool = parts.dropFirst().joined(separator: "__")
+        if server == "cua_repl" {
+            return Integration(id: server, label: "Computer use", name: "Computer use", active: "Computer use", icon: "tool-cursor")
+        }
+        var id = server
+        if server != "mains" {
+            let dot = tool.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+            let prefix = tool.split(separator: "_", maxSplits: 1, omittingEmptySubsequences: false)
+            if dot.count == 2 && !dot[0].isEmpty {
+                id = String(dot[0])
+                tool = String(dot[1])
+            } else if prefix.count == 2 && !prefix[0].isEmpty && integrationVerbs[String(prefix[0])] == nil {
+                id = String(prefix[0])
+                tool = String(prefix[1])
+            }
+        }
+        let label = friendlyName(id)
+        let icon = id == "mains" ? "tool-mains" : "tool-generic"
+        let verb = tool.split(separator: "_", maxSplits: 1, omittingEmptySubsequences: false)
+        if let key = verb.first, let (past, present) = integrationVerbs[String(key)] {
+            let entity = verb.dropFirst().first?.replacingOccurrences(of: "_", with: " ") ?? ""
+            return Integration(id: id, label: label, name: [label, past, entity].filter { !$0.isEmpty }.joined(separator: " "),
+                               active: [label, present, entity].filter { !$0.isEmpty }.joined(separator: " "), icon: icon)
+        }
+        let name = [label, tool.replacingOccurrences(of: "_", with: " ")].filter { !$0.isEmpty }.joined(separator: " ")
+        return Integration(id: id, label: label, name: name, active: name, icon: icon)
+    }
     public static func text(_ value: JSONValue) -> String {
         if let text = value.string { return text }
         if value == .null { return "" }
@@ -164,8 +300,8 @@ public struct ToolPresentation: Sendable {
         return (try? encoder.encode(value)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
     private static func friendlyName(_ name: String) -> String {
-        let cleaned = name.replacingOccurrences(of: "mcp__", with: "").replacingOccurrences(of: "__", with: " ")
-            .replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: ".", with: " ")
+        let cleaned = name.replacingOccurrences(of: "[_-]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? "Tool" : cleaned.prefix(1).uppercased() + cleaned.dropFirst()
     }
 }
@@ -174,7 +310,11 @@ public struct ToolPresentation: Sendable {
 /// Keep phrases/ranks aligned with desktop's tool-group-summary/tool-registry.
 public struct ToolGroupPresentation: Sendable {
     public let summary: String
-    public let symbols: [String]
+    public struct Icon: Identifiable, Sendable {
+        public let id: String
+        public let asset: String
+    }
+    public let icons: [Icon]
     private struct Phrase {
         let one: String, many: String
         let rank: Int
@@ -233,15 +373,14 @@ public struct ToolGroupPresentation: Sendable {
         "report_intent": "intent", "create plan": "plan", "send_message": "sendmessage",
         "ask_user": "askuserquestion", "askuser": "askuserquestion",
     ]
-    private static let vendorVerbs: Set<String> = ["list", "get", "view", "fetch", "read", "search", "research", "save", "create", "update", "delete", "archive", "extract", "add", "remove", "send", "run", "draft", "reply", "open", "close"]
-
     public init(_ calls: [ToolCall]) {
-        var icons: [String] = []
-        for call in calls {
-            let icon = ToolPresentation.header(for: call.toolName).symbol
-            if !icons.contains(icon) { icons.append(icon) }
+        var seenIcons: Set<String> = []
+        var groupIcons: [Icon] = []
+        for call in calls where groupIcons.count < 3 {
+            let icon = ToolPresentation.groupIcon(for: call.toolName)
+            if seenIcons.insert(icon.key).inserted { groupIcons.append(Icon(id: icon.key, asset: icon.asset)) }
         }
-        symbols = Array(icons.prefix(3))
+        icons = groupIcons
         if !calls.isEmpty && calls.allSatisfy({ $0.metadata?["codexItemType"].string == "imageView" }) {
             summary = calls.count == 1 ? "Viewed an image" : "Viewed \(calls.count) images"
             return
@@ -251,12 +390,13 @@ public struct ToolGroupPresentation: Sendable {
         var vendorOrder = Int.max
         for (order, call) in calls.enumerated() {
             let lower = call.toolName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            if let vendor = Self.vendor(lower) {
+            let bare = lower.replacingOccurrences(of: "mcp__mains__", with: "")
+            if let vendor = ToolPresentation.integration(for: lower),
+               vendor.id != "mains" || Self.phrases[bare] == nil && !bare.hasPrefix("atlas") {
                 if vendorIDs.insert(vendor.id).inserted { vendors.append(vendor.label) }
                 vendorOrder = min(vendorOrder, order)
                 continue
             }
-            let bare = lower.replacingOccurrences(of: "mcp__mains__", with: "")
             let alias = Self.aliases[bare] ?? bare
             let key = Self.phrases[alias] != nil ? alias : ToolPresentation.header(for: call.toolName).name.lowercased()
             let failedAtlas = key.hasPrefix("atlas") && (["error", "failed", "canceled"].contains(call.status) || ToolPresentation.unwrap(call.output ?? .null)["isError"].bool)
@@ -275,22 +415,6 @@ public struct ToolGroupPresentation: Sendable {
         summary = sentence.prefix(1).uppercased() + sentence.dropFirst()
     }
 
-    private static func vendor(_ lower: String) -> (id: String, label: String)? {
-        guard lower.hasPrefix("mcp__") else { return nil }
-        let components = String(lower.dropFirst(5)).components(separatedBy: "__")
-        let server = components[0], tool = components.dropFirst().joined(separator: "__")
-        if server == "mains", tool.hasPrefix("atlas") || phrases[tool] != nil { return nil }
-        if server == "cua_repl" { return (server, "Computer use") }
-        if server == "mains" { return (server, "Mains") }
-        var slug = server
-        if let dot = tool.firstIndex(of: ".") { slug = String(tool[..<dot]) }
-        else if let separator = tool.firstIndex(of: "_") {
-            let candidate = String(tool[..<separator])
-            if !vendorVerbs.contains(candidate) { slug = candidate }
-        }
-        let words = slug.replacingOccurrences(of: "_", with: " ")
-        return (slug, words.prefix(1).uppercased() + words.dropFirst())
-    }
 }
 
 /// Consecutive calls share one work summary; messages keep their original order.

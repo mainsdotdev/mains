@@ -100,6 +100,116 @@ struct MatesView: View {
     }
 }
 
+struct MateInfoView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let mateID: String
+    @State private var directory: MateDirectory?
+    @State private var error: String?
+    @State private var retry = 0
+    @State private var requestID = UUID()
+
+    var body: some View {
+        Group {
+            if !session.isConnected {
+                ContentUnavailableView("Computer offline", systemImage: "wifi.slash",
+                                       description: Text("Connect to your computer to see this Mate’s profile."))
+            } else if let directory, let mate = directory.mates.first(where: { $0.id == mateID }) {
+                profile(mate, teams: directory.teams)
+            } else if let error {
+                ContentUnavailableView {
+                    Label("Mate info unavailable", systemImage: "person.crop.circle.badge.exclamationmark")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Try Again") { retry += 1 }
+                }
+            } else {
+                ProgressView().accessibilityLabel("Loading Mate info")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Mate Info")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: "\(session.ownership):\(session.isConnected):\(session.matesRevision):\(retry)") { await load() }
+    }
+
+    private func profile(_ mate: Mate, teams: [MateTeam]) -> some View {
+        let team = mate.teamId.map { id in teams.first(where: { $0.id == id })?.name ?? "Unavailable team" } ?? "No team"
+        let model = session.models[mate.providerId]?.first(where: { $0.id == mate.model })?.label(for: mate.providerId) ?? mate.model
+        return List {
+            Section {
+                VStack(spacing: 8) {
+                    let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id)
+                    if let preset {
+                        MateRobotPreview(preset: preset, acceptsDrag: false)
+                            .frame(width: 116, height: 116)
+                    } else {
+                        MateRobotThumbnail(preset: nil)
+                            .frame(width: 116, height: 116)
+                            .accessibilityHidden(true)
+                    }
+                    Text(mate.name)
+                        .font(.title2.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    if !mate.description.isEmpty {
+                        Text(mate.description).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 8)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+            }
+            Section {
+                LabeledContent("Team", value: team)
+                if let details = mate.details { LabeledContent("Space", value: details.spaceName) }
+                LabeledContent("Model", value: model)
+                if let details = mate.details {
+                    LabeledContent("Effort", value: details.effort.isEmpty ? "Default" : ComposerSettings.effortLabel(details.effort))
+                }
+            }
+            if let details = mate.details, !details.instructions.isEmpty {
+                Section("Instructions") {
+                    ChatMessageBody(text: details.instructions).equatable()
+                        .environment(\.openURL, OpenURLAction { url in
+                            ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
+                        })
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .refreshable { await load() }
+    }
+
+    private func load() async {
+        let request = UUID()
+        requestID = request
+        guard session.isConnected else { directory = nil; error = nil; return }
+        let owner = session.ownership
+        error = nil
+        do {
+            let current = try await session.loadMates(mateID: mateID)
+            guard !Task.isCancelled, request == requestID, owner == session.ownership else { return }
+            guard current.mates.contains(where: { $0.id == mateID }) else {
+                directory = nil
+                error = "This Mate is unavailable."
+                return
+            }
+            directory = current
+        } catch {
+            guard !Task.isCancelled, request == requestID, owner == session.ownership else { return }
+            directory = nil
+            self.error = error.localizedDescription
+        }
+    }
+}
+
 struct NewMateDraft {
     var name = ""
     var avatar = MateRobotAssets.catalogue?.defaultPreset?.avatar ?? MateAvatar(shape: "terminal-amber", color: "amber")
@@ -304,7 +414,8 @@ struct NewMateModelView: View {
     }
 
     private var providerTabs: some View {
-        HStack(spacing: 8) {
+        let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+        return layout {
             ForEach(["codex", "claude_code"], id: \.self) { provider in
                 let isClaude = provider == "claude_code"
                 let title = isClaude ? "Claude" : "Codex"
@@ -314,7 +425,7 @@ struct NewMateModelView: View {
                 Button {
                     if let candidate, !selected { selectSpace(candidate) }
                 } label: {
-                    GlassSelectionTab(title: title, selected: selected, showLabel: !dynamicTypeSize.isAccessibilitySize,
+                    GlassSelectionTab(title: title, selected: selected, showLabel: true,
                                       selection: providerSelection) {
                         RegistryIcon(token: isClaude ? "icon:claude" : "icon:codex", size: 22, tint: iconTint, useStoredColor: false)
                     }

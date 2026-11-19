@@ -22,6 +22,7 @@ const fixtureMate = {
   id: 'fixture-mate', name: 'Fixture Mate', description: 'Checks releases',
   avatar: { shape: 'terminal-amber', color: 'amber' }, teamId: 'release-team',
   providerId: 'codex', model: 'fixture-balanced', needsSetup: false, welcome: null,
+  details: { spaceName: 'Release Workspace', effort: 'high', instructions: 'Summarize release risks and link the checks.' },
 };
 const fixtureMateTeams = [
   { id: 'release-team', name: 'Release Team' },
@@ -32,7 +33,7 @@ const fixtureMates = [
   fixtureMate,
   { ...fixtureMate, id: 'fixture-planner', name: 'Fixture Planner', description: 'Plans trips', teamId: 'planning-team' },
   { ...fixtureMate, id: 'fixture-reviewer', name: 'Fixture Reviewer', description: '', needsSetup: true },
-  { ...fixtureMate, id: 'fixture-solo', name: 'Fixture Solo', description: '', teamId: null },
+  { ...fixtureMate, id: 'fixture-solo', name: 'Fixture Solo', description: '', teamId: null, details: undefined },
 ];
 const connections = new Set(), receipts = new Map(), observations = [];
 const timers = new Set(), replies = new Map();
@@ -411,7 +412,11 @@ wss.on('connection', socket => {
         case CHANNELS.backend.describe: result = descriptor; break;
         case CHANNELS.assistants.mobileDirectory: {
           const mates = [...fixtureMates, ...createdMates.values()];
-          result = { mates: args[1] ? mates.filter(mate => mate.id === args[1]) : mates, teams: fixtureMateTeams }; break;
+          result = {
+            mates: args[1] ? mates.filter(mate => mate.id === args[1]).map(({ details, ...mate }) => details ? { ...mate, details } : mate)
+              : mates.map(({ details: _details, ...mate }) => mate),
+            teams: fixtureMateTeams,
+          }; break;
         }
         case CHANNELS.assistants.mobileAssignment: {
           const task = mateAssignments.get(args[2]);
@@ -426,6 +431,7 @@ wss.on('connection', socket => {
             idleMessage: 'Profile saved. What would you like me to do first?', profileSetup: { turns: [] } };
           createdMates.set(mateId, { id: mateId, name: input.name, avatar: input.avatar, teamId: input.teamId, description: '',
             providerId: space.providerId, model: input.model, needsSetup: true,
+            details: { spaceName: space.name, effort: input.effort ?? '', instructions: '' },
             welcome: { runId: `welcome-${mateId}`, question, state: 'ready', error: null } });
           result = { id: mateId };
           const receipt = { success: true, data: result };
@@ -451,6 +457,7 @@ wss.on('connection', socket => {
             setup.draft = input.profile;
             setup.saved = true;
             mate.description = input.profile.description;
+            mate.details.instructions = input.profile.instructions;
             mate.needsSetup = false;
             welcome.state = 'skipped';
           } else { throw new Error('Unexpected Mate setup step'); }

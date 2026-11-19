@@ -423,7 +423,7 @@ struct ComposerSendButton: View {
     @Environment(\.mateChatTint) private var mateTint
 
     var body: some View {
-        let ink = mateTint == nil ? Color.white : .black
+        let ink = Color.white
         Button(action: action) {
             Group {
                 if sending { ProgressView().tint(ink) }

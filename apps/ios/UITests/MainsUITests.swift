@@ -142,9 +142,12 @@ final class MainsUITests: XCTestCase {
         let codex = app.buttons["mate-provider-codex"], claude = app.buttons["mate-provider-claude_code"]
         XCTAssertTrue(codex.isSelected)
         XCTAssertGreaterThanOrEqual(codex.frame.minY, modelBar.frame.maxY)
+        let codexWidth = codex.frame.width, claudeWidth = claude.frame.width
         claude.tap()
         XCTAssertTrue(claude.isSelected)
         XCTAssertTrue(wheel.waitForExistence(timeout: 5))
+        XCTAssertEqual(codex.frame.width, codexWidth, accuracy: 1)
+        XCTAssertEqual(claude.frame.width, claudeWidth, accuracy: 1)
         attachScreenshot(app, name: "New Mate – Claude provider color")
         codex.tap()
         XCTAssertTrue(codex.isSelected)
@@ -156,6 +159,16 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "New Mate – model and effort")
         effort.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
         XCTAssertEqual(effort.value as? String, "Low")
+        let right = effort.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+        let middle = effort.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        right.press(forDuration: 0.1, thenDragTo: middle)
+        XCTAssertEqual(effort.value as? String, "Medium")
+        let verticalStart = effort.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.25))
+        let verticalEnd = effort.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.75))
+        verticalStart.press(forDuration: 0.1, thenDragTo: verticalEnd)
+        XCTAssertEqual(effort.value as? String, "Medium")
+        middle.press(forDuration: 0.1, thenDragTo: right)
+        XCTAssertEqual(effort.value as? String, "High")
         wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.83)).tap()
         XCTAssertTrue(effort.waitForNonExistence(timeout: 5))
         XCTAssertEqual(wheel.value as? String, "Thinking toggle")
@@ -301,7 +314,14 @@ final class MainsUITests: XCTestCase {
         info.tap()
         let infoBar = app.navigationBars["Mate Info"]
         XCTAssertTrue(infoBar.waitForExistence(timeout: 5))
-        XCTAssertFalse(description.exists)
+        XCTAssertTrue(description.waitForExistence(timeout: 5))
+        XCTAssertTrue(mateInfoRow(containing: "Release Team", in: app).exists)
+        XCTAssertTrue(mateInfoRow(containing: "Release Workspace", in: app).exists)
+        XCTAssertTrue(mateInfoRow(containing: "Balanced", in: app).exists)
+        XCTAssertTrue(mateInfoRow(containing: "High", in: app).exists)
+        let instructions = app.staticTexts["Summarize release risks and link the checks."]
+        XCTAssertTrue(instructions.waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "Mate Info – saved profile")
         infoBar.buttons["BackButton"].tap()
 
         let firstChat = app.staticTexts["Release check 1"]
@@ -415,6 +435,34 @@ final class MainsUITests: XCTestCase {
         app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
         app.navigationBars["Mates"].buttons["BackButton"].tap()
         forgetFixture(app)
+    }
+
+    func testMateInfoShowsBasicProfileWhenTheComputerOmitsDetails() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-solo"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        if !mate.isHittable { app.swipeUp() }
+        mate.tap()
+
+        let info = app.buttons["openMateInfo"]
+        XCTAssertTrue(info.waitForExistence(timeout: 5))
+        info.tap()
+        XCTAssertTrue(app.staticTexts["Fixture Solo"].waitForExistence(timeout: 5))
+        XCTAssertTrue(mateInfoRow(containing: "No team", in: app).exists)
+        XCTAssertTrue(mateInfoRow(containing: "Model", in: app).exists)
+        XCTAssertFalse(app.staticTexts["Instructions"].exists)
+        app.navigationBars["Mate Info"].buttons["BackButton"].tap()
+        app.navigationBars["Fixture Solo"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    private func mateInfoRow(containing text: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value == %@", text, text)).firstMatch
     }
 
     func testMateAvatarPreviewRotatesAndCreationCarouselSwitchesStyles() throws {
