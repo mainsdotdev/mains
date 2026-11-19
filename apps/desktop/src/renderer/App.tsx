@@ -3,7 +3,7 @@ import { HashRouter as Router, useLocation } from "react-router-dom";
 import Sidebar from "./components/layout/sidebar";
 import RightPanel from "./components/layout/right-panel";
 import { ToggleButton } from "./components/layout/right-panel/toggle-button";
-import { SessionPanel, SessionPanelTrigger } from "@/features/workspace/components/session-panel";
+import { SessionPanel, SessionPanelTrigger, useRunningServerSessions } from "@/features/workspace/components/session-panel";
 import { TerminalPanelTrigger } from "@/features/workspace/components/terminal-panel-trigger";
 import { SubagentPanel } from "@/features/workspace/components/subagent-panel/subagent-panel";
 import { useHasSessionSubagents } from "./features/workspace/hooks/use-session-subagents";
@@ -174,6 +174,9 @@ function AppContent() {
   const onboardingCompleted = useAppSelector(
     (state) => state.appSettings.onboardingCompleted,
   );
+  const shellVisible = onboardingCompleted || isWeb;
+  const serverSessions = useRunningServerSessions(shellVisible, workspaceRoute ? activeWorkspaceId : null);
+  const hasRunningServers = serverSessions.length > 0;
   // The onboarding screen announces its native mode only once its lazy chunk
   // has mounted, so the first visible window already contains the welcome UI.
   useOnboardingWindow(false, onboardingCompleted);
@@ -193,17 +196,13 @@ function AppContent() {
     ? preview.isExpanded ? EDGE_GUTTER : BROWSER_PANEL_WIDTH
     : rightPanelVisible ? RIGHT_PANEL_WIDTH : EDGE_GUTTER;
 
-  // The box has two independent targets: Code can describe a workspace before
-  // a run exists; Work can describe a workspace-less run. Git remains gated
-  // behind the workspace half so its status query never touches managed run
-  // directories.
-  const hasSessionPanelTarget =
-    operationalAccess && ((modeConfig.showGitActions && !!activeWorkspaceId) ||
-    (modeConfig.showSources && !!sessionRunId));
-  const sessionPanelShown =
-    isSessionPanelOpen &&
-    !hideWorkspacePanels &&
-    hasSessionPanelTarget;
+  // Environment and sources are contextual. Running terminals belong to the
+  // connected backend and are reachable from the entire app shell.
+  const allowSessionDetails = operationalAccess && !hideWorkspacePanels;
+  const diffWorkspaceId = allowSessionDetails && modeConfig.showGitActions ? activeWorkspaceId : null;
+  const hasSessionDetails = !!diffWorkspaceId || (allowSessionDetails && modeConfig.showSources && !!sessionRunId);
+  const showSessionTrigger = hasRunningServers || (hasSessionDetails && (!isMobile || isSessionPanelOpen));
+  const sessionPanelShown = isSessionPanelOpen && (hasSessionDetails || hasRunningServers);
   // The box floats — overlays the content instead of taking a column — when
   // there is no room to share (another panel already holds the right edge), or
   // nothing to share *with*: the empty state and the other non-run tabs centre
@@ -211,7 +210,7 @@ function AppContent() {
   // a panel it has no relationship to. Both are derived, so closing that panel
   // or opening a run drops the box back into the layout on its own.
   const sessionPanelFloating =
-    rightLaneWidth !== EDGE_GUTTER || sessionRunId === null;
+    rightLaneWidth !== EDGE_GUTTER || !hasSessionDetails || sessionRunId === null;
   // The subagent box shares the session box's layout contract: it appears when
   // the open run has agents, hides while the right panel owns the edge, floats
   // over the content when the browser/doc panels do, and — in its normal list
@@ -256,8 +255,6 @@ function AppContent() {
       ? `calc(${NAV_RAIL_WIDTH} + ${SIDEBAR_WIDTH})`
       : `calc(${NAV_RAIL_WIDTH} + 0.5rem)`;
   const contentRight = isMobile ? EDGE_GUTTER : rightLaneWidth;
-  const shellVisible = onboardingCompleted || isWeb;
-
   useKeyboardShortcut("app.toggleSidebar", () => {
     dispatch(setSidebarCollapsed(!sidebarCollapsed));
   }, { enabled: isMobile || workspaceRoute || atlasRoute || assistantsRoute || tasksRoute, allowInEditable: true });
@@ -378,9 +375,15 @@ function AppContent() {
           marginRight={contentRight}
           transparentSurface={workspaceRoute || assistantsRoute}
           contentInsetRight={contentInsetRight}
-          headerActions={operationalAccess && (!isMobile || showTerminalToggle) && !hideWorkspacePanels && !preview.isExpanded && (
+          headerActions={(showSessionTrigger || showTerminalToggle) && !preview.isExpanded && (
             <div className="flex items-center gap-0.5 empty:hidden">
-              {!isMobile && <SessionPanelTrigger showGitActions={modeConfig.showGitActions} showSources={modeConfig.showSources} showTerminal={modeConfig.showTerminal} />}
+              {showSessionTrigger && (
+                <SessionPanelTrigger
+                  showSessionDetails={hasSessionDetails}
+                  hasRunningServers={hasRunningServers}
+                  diffWorkspaceId={diffWorkspaceId}
+                />
+              )}
               {showTerminalToggle && <TerminalPanelTrigger isOpen={bottomTerminal.isOpen} onToggle={bottomTerminal.toggle} />}
             </div>
           )}
@@ -396,10 +399,12 @@ function AppContent() {
         {operationalAccess && !hideWorkspacePanels && modeConfig.showRightPanel && (
           <RightPanel isOpen={rightPanelVisible} width={RIGHT_PANEL_WIDTH} />
         )}
-        {operationalAccess && !hideWorkspacePanels && (
+        {(allowSessionDetails || hasRunningServers) && (
           <SessionPanel
+            allowSessionDetails={allowSessionDetails}
             providerId={activeProviderId}
             runId={sessionRunId}
+            serverSessions={serverSessions}
             laneOffset={rightLaneWidth}
             floating={sessionPanelFloating}
           />
