@@ -1,11 +1,13 @@
 export const DEFAULT_APP_ICON_ID = "mains-default" as const;
 export const ATLAS_APP_ICON_ID = "mains-atlas" as const;
 export const BRIDGE_APP_ICON_ID = "mains-bridge" as const;
+export const MATE_APP_ICON_ID = "mains-mate" as const;
 
 export const APP_ICON_IDS = [
   DEFAULT_APP_ICON_ID,
   ATLAS_APP_ICON_ID,
   BRIDGE_APP_ICON_ID,
+  MATE_APP_ICON_ID,
 ] as const;
 
 export type AppIconId = (typeof APP_ICON_IDS)[number];
@@ -15,6 +17,7 @@ const APP_ICON_ASSET_NAMES: Record<AppIconId, string> = {
   [DEFAULT_APP_ICON_ID]: "mains-default",
   [ATLAS_APP_ICON_ID]: "atlas",
   [BRIDGE_APP_ICON_ID]: "bridge",
+  [MATE_APP_ICON_ID]: "mate",
 };
 
 export function isAppIconId(value: unknown): value is AppIconId {

@@ -178,7 +178,7 @@ function AppContent() {
   // has mounted, so the first visible window already contains the welcome UI.
   useOnboardingWindow(false, onboardingCompleted);
   const [animateWorkspaceEntry] = useState(
-    () => !onboardingCompleted && !isWeb && typeof document.startViewTransition !== "function",
+    () => !onboardingCompleted && !isWeb && !("startViewTransition" in document),
   );
   const isMobile = useIsMobile();
   const browserTabsInHeader = false;

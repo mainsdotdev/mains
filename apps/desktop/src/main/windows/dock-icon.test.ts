@@ -117,7 +117,7 @@ describe("Dock icons", () => {
   });
 
   it("preserves every active choice and includes both appearances plus Icon Composer sources", () => {
-    expect(APP_ICON_IDS).toEqual(["mains-default", "mains-atlas", "mains-bridge"]);
+    expect(APP_ICON_IDS).toEqual(["mains-default", "mains-atlas", "mains-bridge", "mains-mate"]);
     for (const id of APP_ICON_IDS) {
       saveIcon(id);
       expect(getSavedDockIcon()).toBe(id);
@@ -133,6 +133,7 @@ describe("Dock icons", () => {
   it.each([
     ["mains-atlas", "atlas.png"],
     ["mains-bridge", "bridge.png"],
+    ["mains-mate", "mate.png"],
   ] as const)("loads %s with a 96px transparent margin", (id, filename) => {
     setDockIcon(id);
     expect(mocks.nativeImage.createFromPath).toHaveBeenCalledWith(
@@ -194,6 +195,8 @@ describe("Dock icons", () => {
     ["mains-atlas", "Dark", "atlas-dark.png"],
     ["mains-bridge", "", "bridge.png"],
     ["mains-bridge", "Dark", "bridge-dark.png"],
+    ["mains-mate", "", "mate.png"],
+    ["mains-mate", "Dark", "mate-dark.png"],
   ])("restores %s with the Mac's %j appearance at startup", (id, style, filename) => {
     saveIcon(id);
     mocks.systemPreferences.getUserDefault.mockReturnValue(style);
