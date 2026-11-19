@@ -6,9 +6,9 @@ struct MatesView: View {
     #endif
     let session: BackendSession
     let openMate: (String) -> Void
+    let newMate: ([MateTeam]) -> Void
     @State private var directory: MateDirectory?
     @State private var error: String?
-    @State private var creating = false
     @State private var reload = 0
 
     var body: some View {
@@ -36,19 +36,11 @@ struct MatesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("New Mate", systemImage: "plus") { creating = true }
+                Button("New Mate", systemImage: "plus") {
+                    if let directory { newMate(directory.teams) }
+                }
                     .disabled(directory == nil || !session.isConnected || session.mateCommandPending)
                     .accessibilityIdentifier("newMate")
-            }
-        }
-        .sheet(isPresented: $creating) {
-            if let directory {
-                NavigationStack {
-                    NewMateForm(session: session, teams: directory.teams, dismiss: { creating = false }) { id in
-                        creating = false
-                        openMate(id)
-                    }
-                }
             }
         }
         .task(id: "\(session.ownership):\(session.isConnected):\(session.matesRevision):\(reload)") { await load() }
@@ -98,103 +90,266 @@ struct MatesView: View {
     }
 }
 
-private struct NewMateForm: View {
+struct NewMateDraft {
+    var name = ""
+    var avatar = MateRobotAssets.catalogue?.defaultPreset?.avatar ?? MateAvatar(shape: "terminal-amber", color: "amber")
+    var rememberedStyles: [String: String] = [:]
+    var teamID: String?
+    var spaceID: String?
+    var settings: ComposerSettings?
+
+    var hasValidName: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.utf16.count <= 100
+    }
+}
+
+struct NewMateView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let teams: [MateTeam]
+    @Binding var draft: NewMateDraft
+    let next: () -> Void
+    @FocusState private var editingName: Bool
+
+    var body: some View {
+        GeometryReader { geometry in
+            let avatarHeight = min(330, max(220, geometry.size.height * 0.46))
+            ScrollView {
+                VStack(spacing: 0) {
+                    Spacer(minLength: 16)
+                    TextField("Mate name", text: $draft.name)
+                        .font(.largeTitle.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white)
+                        .textFieldStyle(.plain)
+                        .textInputAutocapitalization(.words)
+                        .submitLabel(.done)
+                        .focused($editingName)
+                        .onSubmit { editingName = false }
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: 460, minHeight: 52)
+                        .accessibilityIdentifier("mateName")
+
+                    if let catalogue = MateRobotAssets.catalogue {
+                        MateRobotPicker(catalogue: catalogue, avatar: $draft.avatar,
+                                        remembered: $draft.rememberedStyles, stageHeight: avatarHeight)
+                        Text("Swipe to choose. Hold and drag to rotate.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24).padding(.top, 12)
+                    } else {
+                        MateRobotThumbnail(preset: nil).frame(height: avatarHeight)
+                    }
+
+                    teamMenu.frame(maxWidth: 230).padding(.horizontal, 24).padding(.top, 20)
+                    Spacer(minLength: 24)
+                }
+                .frame(minHeight: geometry.size.height)
+                .frame(maxWidth: .infinity)
+                .background(alignment: .center) { KeyboardDismissBackground(dismissFocus: { editingName = false }) }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .mateCreationChrome("New Mate")
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Next") {
+                    editingName = false
+                    next()
+                }
+                .disabled(!draft.hasValidName)
+                .accessibilityIdentifier("nextMateStep")
+            }
+        }
+    }
+
+    private var teamMenu: some View {
+        let teamName = teams.first { $0.id == draft.teamID }?.name ?? "No team"
+        return Menu {
+            Button { draft.teamID = nil } label: {
+                if draft.teamID == nil { Label("No team", systemImage: "checkmark") }
+                else { Text("No team") }
+            }
+            ForEach(teams) { team in
+                Button { draft.teamID = team.id } label: {
+                    if team.id == draft.teamID { Label(team.name, systemImage: "checkmark") }
+                    else { Text(team.name) }
+                }
+            }
+        } label: {
+            mateCreationChoiceLabel(teamName, icon: "icon:users")
+        }
+        .accessibilityLabel("Team")
+        .accessibilityValue(teamName)
+        .disabled(teams.isEmpty)
+    }
+}
+
+struct NewMateModelView: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let session: BackendSession
-    let teams: [MateTeam]
-    let dismiss: () -> Void
+    @Binding var draft: NewMateDraft
     let created: (String) -> Void
-    @State private var name = ""
-    @State private var spaceID = ""
-    @State private var modelID = ""
-    @State private var effort = ""
-    @State private var teamID = ""
-    @State private var avatar = MateRobotAssets.catalogue?.defaultPreset?.avatar ?? MateAvatar(shape: "terminal-amber", color: "amber")
+    @Environment(\.dismiss) private var dismiss
     @State private var error: String?
+
     private var spaces: [Space] { session.mateSpaces }
-    private var space: Space? { spaces.first { $0.id == spaceID } }
+    private var space: Space? { spaces.first { $0.id == draft.spaceID } ?? spaces.first }
     private var models: [ModelChoice] { space.flatMap { session.models[$0.providerId] } ?? [] }
-    private var levels: [String] { models.first { $0.id == modelID }?.supportedEffortLevels ?? [] }
-    private var valid: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.utf16.count <= 100 && !modelID.isEmpty && space != nil }
+    private var preferredSettings: ComposerSettings { draft.settings ?? space.map { session.settings(for: $0) } ?? .init() }
+    private var model: ModelChoice? {
+        let preferredModel = preferredSettings.model
+        return models.first { $0.id == preferredModel }
+            ?? models.first { $0.id == space?.model }
+            ?? models.first { $0.isDefault == true } ?? models.first
+    }
+    private var settings: ComposerSettings {
+        var result = preferredSettings
+        guard let space, let model else { return result }
+        let provider = space.providerId
+        let levels = EffortControlKind.ordered(model.supportedEffortLevels ?? [])
+        result.select(model, provider: provider)
+        let effort = result.effort(provider: provider)
+        if !levels.contains(effort) {
+            let compatible = if provider == "codex", levels.count > 1 {
+                levels.contains("medium") ? "medium" : levels[0]
+            } else if effort == "ultracode", levels.contains("xhigh") { "xhigh" }
+            else { "" }
+            result.setEffort(compatible, provider: provider)
+        }
+        return result
+    }
+    private var writing: Bool { session.mateCommandPending && !session.mateCommandUncertain }
+    private var canCreate: Bool {
+        draft.hasValidName && model != nil && session.isConnected && !session.mateCommandPending
+    }
 
     var body: some View {
-        Form {
-            Section {
-                if let catalogue = MateRobotAssets.catalogue {
-                    MateRobotPicker(catalogue: catalogue, avatar: $avatar)
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Spacer(minLength: 20)
+                    modelSelection.frame(maxWidth: 520)
+                    Spacer(minLength: 20)
                 }
-                TextField("Name", text: $name).accessibilityIdentifier("mateName")
-                Picker("Team", selection: $teamID) {
-                    Text("No team").tag("")
-                    ForEach(teams) { Text($0.name).tag($0.id) }
-                }
+                .frame(minHeight: geometry.size.height)
+                .frame(maxWidth: .infinity)
             }
-            Section("Model") {
-                if spaces.isEmpty { Text("Enable a Claude or Codex Space on your computer.").foregroundStyle(.secondary) }
-                Picker("Space", selection: $spaceID) {
-                    ForEach(spaces) { Text("\($0.name) · \(Provider.name($0.providerId))").tag($0.id) }
-                }
-                if let space, session.loadingModels.contains(space.providerId) { ProgressView("Loading models") }
-                if let space, let message = session.modelErrors[space.providerId] {
-                    Text(message).foregroundStyle(.secondary)
-                    Button("Retry models") { Task { await session.loadModels(space.providerId, force: true) } }
-                }
-                Picker("Model", selection: $modelID) {
-                    ForEach(models) { Text($0.displayName).tag($0.id) }
-                }
-                if !levels.isEmpty {
-                    Picker("Effort", selection: $effort) {
-                        Text("Default").tag("")
-                        ForEach(levels, id: \.self) { Text($0.capitalized).tag($0) }
-                    }
-                }
-            }
-            if let error { Section { Text(error).foregroundStyle(.secondary) } }
-            if session.mateCommandUncertain {
-                Section { Button("Check creation") { Task { await checkCreation() } }.disabled(!session.isConnected) }
-            }
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .navigationTitle("New Mate").navigationBarTitleDisplayMode(.inline)
+        .mateCreationChrome("Model & Effort")
+        .navigationBarBackButtonHidden(writing)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel", action: dismiss).disabled(session.mateCommandPending && !session.mateCommandUncertain)
-            }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Create") { Task { await create() } }
-                    .disabled(!valid || !session.isConnected || session.mateCommandPending)
+                    .disabled(!canCreate)
                     .accessibilityIdentifier("createMate")
             }
         }
-        .interactiveDismissDisabled(session.mateCommandPending && !session.mateCommandUncertain)
-        .onAppear { if spaceID.isEmpty { spaceID = spaces.first?.id ?? "" } }
-        .task(id: spaceID) {
-            guard let selected = space else { return }
-            modelID = ""; effort = ""
-            await session.loadModels(selected.providerId)
-            guard !Task.isCancelled, spaceID == selected.id else { return }
-            modelID = models.first(where: { $0.id == selected.model })?.id
-                ?? models.first(where: { $0.isDefault == true })?.id ?? models.first?.id ?? ""
+        .task(id: "\(space?.providerId ?? ""):\(session.isConnected)") {
+            if let space, session.isConnected { await session.loadModels(space.providerId) }
         }
-        .onChange(of: modelID) { if !levels.contains(effort) { effort = "" } }
     }
+
+    private var modelSelection: some View {
+        VStack(spacing: 12) {
+            if let space {
+                spaceMenu.frame(maxWidth: 230).padding(.horizontal, 24)
+                ModelEffortPicker(providerID: space.providerId, models: models, model: model, settings: settings,
+                                  loading: ComposerContext(space: space).modelsLoading(session), enabled: session.isConnected && !writing,
+                                  storedEffortOnly: true, error: session.modelErrors[space.providerId],
+                                  canRetry: session.isConnected && !writing,
+                                  retry: { Task { await session.loadModels(space.providerId, force: true) } },
+                                  selectModel: { model in
+                                      var next = settings
+                                      next.select(model, provider: space.providerId)
+                                      draft.settings = next
+                                  }, updateEffort: { draft.settings = $0 })
+                    .id(space.id)
+            } else {
+                Text("Enable a Claude or Codex Space on your computer.")
+                    .foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
+            }
+
+            if writing { ProgressView("Creating Mate…").controlSize(.small) }
+            if let error { Text(error).foregroundStyle(.secondary).padding(.horizontal, 24) }
+            if session.mateCommandUncertain {
+                Button("Check creation") { Task { await checkCreation() } }.disabled(!session.isConnected)
+            }
+        }
+    }
+
+    private var spaceMenu: some View {
+        Menu {
+            ForEach(spaces) { candidate in
+                Button {
+                    if candidate.id != space?.id {
+                        draft.spaceID = candidate.id
+                        draft.settings = nil
+                    }
+                } label: {
+                    let title = "\(candidate.name) · \(Provider.name(candidate.providerId))"
+                    if candidate.id == space?.id { Label(title, systemImage: "checkmark") }
+                    else { Text(title) }
+                }
+            }
+        } label: {
+            mateCreationChoiceLabel(space?.name ?? "Space", icon: space?.icon ?? "icon:box")
+        }
+        .accessibilityLabel("Space")
+        .accessibilityValue(space?.name ?? "")
+        .disabled(spaces.isEmpty || writing)
+    }
+
     private func create() async {
+        guard canCreate, let space, let model else { return }
         let owner = session.ownership
-        guard let space else { return }
+        error = nil
         do {
-            let id = try await session.createMate(name: name, space: space, model: modelID, effort: effort,
-                                                  teamID: teamID.isEmpty ? nil : teamID, avatar: avatar)
+            let id = try await session.createMate(name: draft.name, space: space, model: model.id,
+                                                  effort: settings.effort(provider: space.providerId),
+                                                  teamID: draft.teamID, avatar: draft.avatar)
             if owner == session.ownership { created(id) }
         } catch { if owner == session.ownership { self.error = error.localizedDescription } }
     }
+
     private func checkCreation() async {
+        let owner = session.ownership
         do {
-            if let id = try await session.checkMateCommand() { created(id) }
-            else { dismiss() }
-        }
-        catch { self.error = error.localizedDescription }
+            let id = try await session.checkMateCommand()
+            guard owner == session.ownership else { return }
+            if let id { created(id) } else { dismiss() }
+        } catch { if owner == session.ownership { self.error = error.localizedDescription } }
     }
+}
+
+private extension View {
+    func mateCreationChrome(_ title: String) -> some View {
+        self.background(Color.black.ignoresSafeArea())
+            .environment(\.colorScheme, .dark)
+            .tint(.white)
+            .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color.black, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+    }
+}
+
+@MainActor private func mateCreationChoiceLabel(_ name: String, icon: String) -> some View {
+    HStack(spacing: 7) {
+        RegistryIcon(token: icon, fallback: "person.2", size: 15, tint: .primary, useStoredColor: false)
+        Text(name).lineLimit(1)
+        Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
+    }
+    .font(.subheadline.weight(.medium))
+    .foregroundStyle(.white)
+    .padding(.horizontal, 12)
+    .frame(maxWidth: .infinity, minHeight: 44)
+    .modifier(GlassSurface(radius: 22))
 }
 
 struct MateView: View {

@@ -60,64 +60,296 @@ struct MateRobotPicker: View {
     #endif
     let catalogue: MateRobotCatalogue
     @Binding var avatar: MateAvatar
-    @State private var previous: [String: String] = [:]
-    @Environment(\.dynamicTypeSize) private var typeSize
+    @Binding var remembered: [String: String]
+    let stageHeight: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var style: MateRobotCatalogue.Style? {
         catalogue.styles.first { $0.presets.contains { $0.id == avatar.shape } } ?? catalogue.styles.first
     }
-    private var selection: Binding<String> { Binding(get: { style?.id ?? "" }, set: selectStyle) }
 
     var body: some View {
-        VStack(spacing: 12) {
-            if let preset = style?.presets.first(where: { $0.id == avatar.shape }) ?? catalogue.defaultPreset {
-                MateRobotPreview(preset: preset).frame(width: 136, height: 136)
+        VStack(spacing: 6) {
+            if let style, !style.presets.isEmpty {
+                MateAvatarCarousel(presets: style.presets, avatar: $avatar, stageHeight: stageHeight)
+                    .id(style.id)
             }
-            if typeSize.isAccessibilitySize { stylePicker.pickerStyle(.menu) }
-            else { stylePicker.pickerStyle(.segmented) }
 
-            if let style {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        ForEach(style.presets) { preset in
-                            let selected = avatar.shape == preset.id
-                            Button {
-                                previous[style.id] = preset.id
-                                avatar = preset.avatar
-                            } label: {
-                                MateRobotThumbnail(preset: preset)
-                                    .frame(width: 38, height: 38)
-                                    .frame(width: 48, height: 48)
-                                    .background(selected ? Color.primary.opacity(0.08) : .clear, in: .rect(cornerRadius: 12))
-                                    .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(selected ? Color.primary.opacity(0.24) : .clear) }
-                                    .contentShape(.rect)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(preset.label)
-                            .accessibilityAddTraits(selected ? .isSelected : [])
-                            .accessibilityIdentifier("mate-avatar-\(preset.id)")
-                            .id(preset.id)
+            HStack(spacing: 8) {
+                ForEach(catalogue.styles) { candidate in
+                    let selected = candidate.id == style?.id
+                    Button {
+                        selectStyle(candidate)
+                    } label: {
+                        VStack(spacing: 2) {
+                            MateRobotThumbnail(preset: candidate.presets.first)
+                                .frame(width: 30, height: 24)
+                            Text(candidate.label)
+                                .font(.caption.weight(.semibold))
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(selected ? .white : .secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                    }.scrollTargetLayout()
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, minHeight: 52)
+                        .background(alignment: .center) {
+                            if selected { Color.clear.modifier(GlassSurface(radius: 20)) }
+                            else { RoundedRectangle(cornerRadius: 20).fill(.white.opacity(0.06)) }
+                        }
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(ChatPressStyle())
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("mate-avatar-style-\(candidate.id)")
                 }
-                .scrollIndicators(.hidden)
-                .scrollPosition(id: Binding<String?>(get: { avatar.shape }, set: { _ in }), anchor: .center)
+            }
+            .frame(maxWidth: 432)
+            .padding(.horizontal, 24)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Robot style")
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: style?.id)
+        }
+        .onChange(of: avatar.shape) { _, id in
+            if let style { remembered[style.id] = id }
+        }
+    }
+
+    private func selectStyle(_ next: MateRobotCatalogue.Style) {
+        guard next.id != style?.id,
+              let preset = next.presets.first(where: { $0.id == remembered[next.id] }) ?? next.presets.first else { return }
+        if let style { remembered[style.id] = avatar.shape }
+        avatar = preset.avatar
+    }
+}
+
+private struct MateAvatarCarousel: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let presets: [MateRobotCatalogue.Preset]
+    @Binding var avatar: MateAvatar
+    let stageHeight: CGFloat
+    @State private var index: Int
+    @State private var dragOffset: CGFloat = 0
+    @State private var visible = false
+    @State private var renderedSlots: Set<Int> = []
+    @State private var turn: (slot: Int, step: Int)?
+    @State private var selectionTurn = 1
+    @State private var rotation: (slot: Int, drag: RobotPreviewDrag)?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(presets: [MateRobotCatalogue.Preset], avatar: Binding<MateAvatar>, stageHeight: CGFloat) {
+        self.presets = presets
+        self.stageHeight = stageHeight
+        _avatar = avatar
+        _index = State(initialValue: presets.firstIndex { $0.id == avatar.wrappedValue.shape } ?? 0)
+    }
+
+    private var snap: Animation? {
+        reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.88)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let size = min(320, width * 0.69, stageHeight - 16)
+            let spacing = size * 0.86 + 8
+            let neighbors = max(2, Int(ceil(width / (2 * spacing))) + 1)
+
+            ZStack {
+                // Absolute slots keep their identity across the two ends of the preset list.
+                ForEach((index - neighbors)...(index + neighbors), id: \.self) { slot in
+                    let x = CGFloat(slot - index) * spacing + dragOffset
+                    let nearViewport = abs(x) < (width + size) / 2 + spacing * 0.3
+                    MateRobotPreview(preset: preset(at: slot), acceptsDrag: false,
+                                     renders: visible && nearViewport, animates: slot == index && dragOffset == 0,
+                                     turn: turn?.slot == slot ? turn?.step ?? 0 : 0,
+                                     selectionTurn: slot == index ? selectionTurn : nil,
+                                     externalDrag: rotation?.slot == slot ? rotation?.drag : nil) { rendered in
+                        if rendered { renderedSlots.insert(slot) }
+                        else { renderedSlots.remove(slot) }
+                    }
+                        .frame(width: size, height: size)
+                        .modifier(MateAvatarArc(x: x, radius: max(1, width * 0.58), reduceMotion: reduceMotion))
+                        .transition(.identity)
+                }
+            }
+            .frame(width: width, height: geometry.size.height)
+            .clipped()
+            .overlay {
+                MateAvatarGestures(
+                    rotationSize: renderedSlots.contains(index) ? size : 0,
+                    onDrag: { dragOffset = min(spacing, max(-spacing, $0)) },
+                    onEnd: { distance in
+                        let step = abs(distance) >= spacing / 3 ? (distance < 0 ? 1 : -1) : 0
+                        select(index + step)
+                    },
+                    onTap: { x in
+                        let step = Int((x / spacing).rounded())
+                        if step == 0 { rotateSelection() }
+                        else { select(index + step) }
+                    },
+                    onRotate: { drag in rotation = (index, drag) }
+                )
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
+        .frame(height: stageHeight)
+        .onScrollVisibilityChange(threshold: 0.05) { visible = $0 }
+        .background(alignment: .center) {
+            RadialGradient(colors: [MateRobotAssets.chatTint(for: avatar).opacity(0.15), .clear],
+                           center: .center, startRadius: 12, endRadius: stageHeight * 0.61)
+                .allowsHitTesting(false)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: avatar)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Avatar")
+        .accessibilityValue(preset(at: index).label)
+        .accessibilityHint("Choose an avatar for this Mate. Hold and drag to rotate it.")
+        .accessibilityIdentifier(renderedSlots.contains(index) ? "mate-avatar-carousel-3d" : "mate-avatar-carousel")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: select(index + 1)
+            case .decrement: select(index - 1)
+            @unknown default: break
+            }
+        }
+        .accessibilityAction(named: Text("Rotate avatar"), rotateSelection)
+        .sensoryFeedback(.selection, trigger: avatar)
     }
 
-    private var stylePicker: some View {
-        Picker("Robot style", selection: selection) {
-            ForEach(catalogue.styles) { Text($0.label).tag($0.id) }
-        }.accessibilityIdentifier("mate-avatar-style")
+    private func preset(at slot: Int) -> MateRobotCatalogue.Preset {
+        presets[(slot % presets.count + presets.count) % presets.count]
     }
 
-    private func selectStyle(_ id: String) {
-        guard let next = catalogue.styles.first(where: { $0.id == id }),
-              let preset = next.presets.first(where: { $0.id == previous[id] }) ?? next.presets.first else { return }
-        avatar = preset.avatar
+    private func select(_ slot: Int) {
+        if slot != index {
+            selectionTurn += 1
+            rotation = nil
+        }
+        withAnimation(snap) {
+            index = slot
+            dragOffset = 0
+        }
+        avatar = preset(at: slot).avatar
+    }
+
+    private func rotateSelection() {
+        guard renderedSlots.contains(index) else { return }
+        turn = (index, turn?.slot == index ? (turn?.step ?? 0) + 1 : 1)
+    }
+}
+
+struct RobotPreviewDrag: Equatable {
+    let offset: CGPoint
+    let held: Bool
+}
+
+/// A hold on the center model owns rotation. Quick swipes keep their horizontal and vertical roles.
+private struct MateAvatarGestures: UIViewRepresentable {
+    let rotationSize: CGFloat
+    var onDrag: (CGFloat) -> Void
+    var onEnd: (CGFloat) -> Void
+    var onTap: (CGFloat) -> Void
+    var onRotate: (RobotPreviewDrag) -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        let coordinator = context.coordinator
+        let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.panChanged(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = coordinator
+        let hold = UILongPressGestureRecognizer(target: coordinator, action: #selector(Coordinator.rotated(_:)))
+        hold.minimumPressDuration = 0.25
+        hold.allowableMovement = 12
+        hold.delegate = coordinator
+        pan.require(toFail: hold)
+        let tap = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.tapped(_:)))
+        tap.require(toFail: pan)
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(hold)
+        view.addGestureRecognizer(tap)
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.parent = self
+        view.isUserInteractionEnabled = isEnabled
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: MateAvatarGestures
+        private var rotationStart: CGPoint?
+        init(_ parent: MateAvatarGestures) { self.parent = parent }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+            let speed = pan.velocity(in: pan.view)
+            return abs(speed.x) > abs(speed.y)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard gestureRecognizer is UILongPressGestureRecognizer, let stage = gestureRecognizer.view else { return true }
+            guard parent.rotationSize > 0 else { return false }
+            let point = touch.location(in: stage)
+            let radius = parent.rotationSize / 2
+            return abs(point.x - stage.bounds.midX) <= radius && abs(point.y - stage.bounds.midY) <= radius
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            guard let stage = gestureRecognizer.view, let scroll = other.view as? UIScrollView else { return false }
+            return other === scroll.panGestureRecognizer && stage.isDescendant(of: scroll)
+        }
+
+        @objc func panChanged(_ pan: UIPanGestureRecognizer) {
+            let distance = pan.translation(in: pan.view).x
+            switch pan.state {
+            case .changed: parent.onDrag(distance)
+            case .ended: parent.onEnd(distance + 0.12 * pan.velocity(in: pan.view).x)
+            case .cancelled, .failed: parent.onEnd(0)
+            default: break
+            }
+        }
+
+        @objc func tapped(_ tap: UITapGestureRecognizer) {
+            guard let view = tap.view else { return }
+            parent.onTap(tap.location(in: view).x - view.bounds.midX)
+        }
+
+        @objc func rotated(_ hold: UILongPressGestureRecognizer) {
+            let point = hold.location(in: hold.view)
+            if hold.state == .began { rotationStart = point }
+            guard let origin = rotationStart else { return }
+            let held = hold.state == .began || hold.state == .changed
+            parent.onRotate(RobotPreviewDrag(offset: CGPoint(x: point.x - origin.x, y: point.y - origin.y), held: held))
+            if !held { rotationStart = nil }
+        }
+    }
+}
+
+private struct MateAvatarArc: ViewModifier, Animatable {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    nonisolated var x: CGFloat
+    let radius: CGFloat
+    let reduceMotion: Bool
+    nonisolated var animatableData: CGFloat {
+        get { x }
+        set { x = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let position = min(1, abs(x) / radius)
+        let arc = 1 - sqrt(1 - position * position)
+        return content
+            .scaleEffect(reduceMotion ? 1 : 1 - 0.35 * position)
+            .rotationEffect(.degrees(reduceMotion ? 0 : Double(x.sign == .minus ? -position : position) * 13))
+            .opacity(1 - 0.6 * position)
+            .offset(x: x, y: reduceMotion ? 0 : 30 * arc)
     }
 }
 
@@ -126,6 +358,13 @@ struct MateRobotPreview: View {
     @ObserveHotReload private var hotReload
     #endif
     let preset: MateRobotCatalogue.Preset
+    var acceptsDrag = true
+    var renders = true
+    var animates = true
+    var turn = 0
+    var selectionTurn: Int?
+    var externalDrag: RobotPreviewDrag?
+    var onRendered: (Bool) -> Void = { _ in }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @State private var visible = false
@@ -133,16 +372,24 @@ struct MateRobotPreview: View {
     @State private var rotationStep = 0
 
     var body: some View {
-        let active = visible && scenePhase == .active
-        let showingPreview = active && renderedShape == preset.id
+        let active = renders && visible && scenePhase == .active
+        let showingPreview = renderedShape == preset.id
         ZStack {
             MateRobotThumbnail(preset: preset).opacity(showingPreview ? 0 : 1)
-            RobotWebPreview(shape: preset.id, active: active, reducedMotion: reduceMotion,
-                            showingPreview: showingPreview, rotationStep: rotationStep, onRendered: { renderedShape = $0 })
-                .allowsHitTesting(active)
+            if active || showingPreview {
+                RobotWebPreview(shape: preset.id, active: active, reducedMotion: reduceMotion, ambientMotion: animates,
+                                acceptsDrag: acceptsDrag, showingPreview: showingPreview,
+                                rotationStep: acceptsDrag ? rotationStep : turn, selectionTurn: selectionTurn,
+                                externalDrag: externalDrag, onRendered: { renderedShape = $0 })
+                    .allowsHitTesting(active && acceptsDrag)
+            }
         }
-        .onAppear { visible = true }
-        .onDisappear { visible = false }
+        .onAppear {
+            visible = true
+            if showingPreview { onRendered(true) }
+        }
+        .onDisappear { visible = false; onRendered(false) }
+        .onChange(of: showingPreview) { _, rendered in onRendered(rendered) }
         .accessibilityElement(children: .ignore)
         .accessibilityIdentifier(showingPreview ? "mate-robot-preview" : "mate-robot-thumbnail")
         .accessibilityLabel("\(preset.label) robot")
@@ -154,6 +401,7 @@ struct MateRobotPreview: View {
             @unknown default: break
             }
         }
+        .accessibilityHidden(!acceptsDrag)
     }
 }
 
@@ -161,8 +409,12 @@ private struct RobotWebPreview: UIViewRepresentable {
     let shape: String
     let active: Bool
     let reducedMotion: Bool
+    let ambientMotion: Bool
+    let acceptsDrag: Bool
     let showingPreview: Bool
     let rotationStep: Int
+    let selectionTurn: Int?
+    let externalDrag: RobotPreviewDrag?
     let onRendered: (String?) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -185,7 +437,9 @@ private struct RobotWebPreview: UIViewRepresentable {
             webView.loadFileURL(shell, allowingReadAccessTo: shell.deletingLastPathComponent())
         }
         let surface = RobotPreviewSurface(webView: webView)
-        surface.addGestureRecognizer(RobotTouchGesture(target: context.coordinator, action: #selector(Coordinator.dragChanged(_:))))
+        if acceptsDrag {
+            surface.addGestureRecognizer(RobotTouchGesture(target: context.coordinator, action: #selector(Coordinator.dragChanged(_:))))
+        }
         return surface
     }
 
@@ -193,6 +447,7 @@ private struct RobotWebPreview: UIViewRepresentable {
         context.coordinator.parent = self
         surface.webView.alpha = showingPreview ? 1 : 0
         context.coordinator.render(surface.webView)
+        context.coordinator.updateExternalDrag(in: surface.webView)
     }
 
     static func dismantleUIView(_ surface: RobotPreviewSurface, coordinator: Coordinator) {
@@ -211,6 +466,7 @@ private struct RobotWebPreview: UIViewRepresentable {
                 }
                 if parent.shape != oldValue.shape || !parent.active {
                     pendingDrag = nil
+                    lastExternalDrag = nil
                     dragging = false
                 }
             }
@@ -221,6 +477,7 @@ private struct RobotWebPreview: UIViewRepresentable {
         private var lastRequest: Request?
         private var renderedShape: String?
         private var pendingDrag: CGPoint?
+        private var lastExternalDrag: RobotPreviewDrag?
         private var dragging = false
         private var sendingDrag = false
 
@@ -228,17 +485,36 @@ private struct RobotWebPreview: UIViewRepresentable {
             let shape: String
             let active: Bool
             let reducedMotion: Bool
+            let ambientMotion: Bool
             let step: Int
+            let selectionTurn: Int?
         }
 
         init(parent: RobotWebPreview) { self.parent = parent }
 
         @objc func dragChanged(_ gesture: RobotTouchGesture) {
             guard !retired, parent.active, let surface = gesture.view as? RobotPreviewSurface else { return }
+            enqueueDrag(gesture.delta, held: gesture.state == .began || gesture.state == .changed, in: surface.webView)
+        }
+
+        func updateExternalDrag(in webView: WKWebView) {
+            guard parent.active, parent.externalDrag != lastExternalDrag else { return }
+            let previous = lastExternalDrag
+            lastExternalDrag = parent.externalDrag
+            if let drag = parent.externalDrag {
+                guard drag.held || previous?.held == true else { return }
+                let origin = previous?.held == true ? previous?.offset ?? .zero : .zero
+                enqueueDrag(CGPoint(x: drag.offset.x - origin.x, y: drag.offset.y - origin.y), held: drag.held, in: webView)
+            } else if previous?.held == true {
+                enqueueDrag(.zero, held: false, in: webView)
+            }
+        }
+
+        private func enqueueDrag(_ delta: CGPoint, held: Bool, in webView: WKWebView) {
             let accumulated = pendingDrag ?? .zero
-            pendingDrag = CGPoint(x: accumulated.x + gesture.delta.x, y: accumulated.y + gesture.delta.y)
-            dragging = gesture.state == .began || gesture.state == .changed
-            sendDrag(to: surface.webView)
+            pendingDrag = CGPoint(x: accumulated.x + delta.x, y: accumulated.y + delta.y)
+            dragging = held
+            sendDrag(to: webView)
         }
 
         private func sendDrag(to webView: WKWebView) {
@@ -258,17 +534,23 @@ private struct RobotWebPreview: UIViewRepresentable {
 
         func render(_ webView: WKWebView) {
             guard ready, !retired else { return }
-            let request = Request(shape: parent.shape, active: parent.active, reducedMotion: parent.reducedMotion, step: parent.rotationStep)
+            let request = Request(shape: parent.shape, active: parent.active, reducedMotion: parent.reducedMotion,
+                                  ambientMotion: parent.ambientMotion, step: parent.rotationStep, selectionTurn: parent.selectionTurn)
             guard request != lastRequest else { return }
             let delta = lastRequest.map { request.step - $0.step } ?? 0
             lastRequest = request
             webView.callAsyncJavaScript(
-                "const ready = window.showRobot(shape, active, reduced); if (ready && step) window.rotateRobot(step); return ready;",
-                arguments: ["shape": request.shape, "active": request.active, "reduced": request.reducedMotion, "step": delta],
+                "const status = window.showRobot(shape, active, reduced, ambient, turn); if (status !== 'unavailable' && step) window.rotateRobot(step); return status;",
+                arguments: ["shape": request.shape, "active": request.active, "reduced": request.reducedMotion,
+                            "ambient": request.ambientMotion, "step": delta, "turn": request.selectionTurn ?? 0],
                 in: nil, in: .page
             ) { [weak self, weak webView] result in
                 guard let self, let webView, !self.retired, self.lastRequest == request else { return }
-                self.setRenderedShape((try? result.get()) as? Bool == true ? request.shape : nil, in: webView)
+                switch (try? result.get()) as? String {
+                case "ready": self.setRenderedShape(request.shape, in: webView)
+                case "pending": break
+                default: self.setRenderedShape(nil, in: webView)
+                }
             }
         }
 

@@ -5,7 +5,7 @@ public struct MateDirectory: Decodable, Sendable {
     public let teams: [MateTeam]
 }
 
-public struct MateTeam: Decodable, Identifiable, Sendable {
+public struct MateTeam: Decodable, Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String
 }

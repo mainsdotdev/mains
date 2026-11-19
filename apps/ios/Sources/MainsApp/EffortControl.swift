@@ -4,37 +4,36 @@ struct EffortControlPanel: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    let session: BackendSession
-    let context: ComposerContext
+    let providerID: String
     let model: ModelChoice
+    let settings: ComposerSettings
+    let baseKind: EffortControlKind
+    let canInteract: Bool
+    let saving: Bool
     var expanded = false
     var expandedControlHeight: CGFloat = 76
-    var settingsPreview: ComposerSettings?
-    var interactionBlocked = false
     var onPreview: (String?) -> Void = { _ in }
+    let onChange: (ComposerSettings) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .body) private var minimumStopSpacing: CGFloat = 44
     @State private var controlWidth: CGFloat?
-    private var settings: ComposerSettings { settingsPreview ?? context.settings(session) }
-    private var value: String { settings.effort(provider: context.providerId, model: model) }
-    private var canInteract: Bool { !interactionBlocked && !context.saving(session) && session.isConnected && !session.sending }
+    private var value: String { settings.effort(provider: providerID, model: model) }
     private var rangeMotion: Animation? { reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 1) }
     private var kind: EffortControlKind {
-        let base = EffortControlKind.resolve(provider: context.providerId, levels: model.supportedEffortLevels ?? [])
-        guard case .slider(let stops) = base else { return base }
-        guard let controlWidth else { return dynamicTypeSize.isAccessibilitySize ? .list(stops) : base }
+        guard case .slider(let stops) = baseKind else { return baseKind }
+        guard let controlWidth else { return dynamicTypeSize.isAccessibilitySize ? .list(stops) : baseKind }
         let metrics = EffortSliderMetrics(expanded: expanded, controlHeight: expandedControlHeight)
-        return base.fittingSlider(trackLength: Double(metrics.trackLength(in: controlWidth)),
+        return baseKind.fittingSlider(trackLength: Double(metrics.trackLength(in: controlWidth)),
                                   minimumStopSpacing: Double(minimumStopSpacing), prefersMenu: dynamicTypeSize.isAccessibilitySize)
     }
-    private func label(_ level: String) -> String { ComposerSettings.effortLabel(level, provider: context.providerId) }
+    private func label(_ level: String) -> String { ComposerSettings.effortLabel(level, provider: providerID) }
     var body: some View {
         if expanded || kind != .hidden {
             ZStack {
                 switch kind {
                 case .slider(let stops):
-                    SteppedEffortSlider(stops: stops, value: value, emptyLabel: label(""), saving: context.saving(session),
+                    SteppedEffortSlider(stops: stops, value: value, emptyLabel: label(""), saving: saving,
                                         modelID: model.id, interactionEnabled: canInteract, expanded: expanded,
                                         expandedControlHeight: expandedControlHeight, onPreview: { onPreview($0) }, onCommit: save)
                         .transition(.opacity)
@@ -43,8 +42,8 @@ struct EffortControlPanel: View {
                         guard canInteract else { return }
                         var next = settings
                         if on { next.config["thinkingMode"] = .bool(true) }
-                        else { next.setEffort("", provider: context.providerId) }
-                        context.save(next, session: session)
+                        else { next.setEffort("", provider: providerID) }
+                        onChange(next)
                     })).transition(.opacity)
                 case .toggle(let level):
                     thinkingRow(Binding(get: { value == level || value == "ultracode" }, set: { save($0 ? level : "") }), detail: label(level))
@@ -67,7 +66,7 @@ struct EffortControlPanel: View {
                 }
             }
             .frame(height: expanded ? expandedControlHeight : nil)
-            .font(expanded ? .title3 : .subheadline).tint(Provider.accent(context.providerId))
+            .font(expanded ? .title3 : .subheadline).tint(Provider.accent(providerID))
             .padding(.horizontal, expanded ? 0 : 14).padding(.vertical, expanded ? 0 : 10)
             .frame(maxWidth: .infinity)
             .background(alignment: .center) {
@@ -99,7 +98,7 @@ struct EffortControlPanel: View {
     }
     private func save(_ value: String) {
         guard canInteract, value != self.value else { return }
-        var next = settings; next.setEffort(value, provider: context.providerId); context.save(next, session: session)
+        var next = settings; next.setEffort(value, provider: providerID); onChange(next)
     }
 }
 

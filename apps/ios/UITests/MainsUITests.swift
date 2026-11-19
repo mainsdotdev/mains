@@ -122,8 +122,46 @@ final class MainsUITests: XCTestCase {
         newMate.tap()
         let name = app.textFields["mateName"]
         XCTAssertTrue(name.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["New Mate"].buttons["BackButton"].exists)
+        let next = app.buttons["nextMateStep"]
+        let wheel = app.descendants(matching: .any)["selectModel"]
+        XCTAssertFalse(next.isEnabled)
+        XCTAssertFalse(wheel.exists)
+        XCTAssertFalse(app.buttons["createMate"].exists)
+        attachScreenshot(app, name: "New Mate – name, avatar and team")
+        app.buttons["Team"].tap()
+        app.buttons["Release Team"].tap()
         name.tap()
         name.typeText("Kitchen Mate")
+        next.tap()
+
+        let modelBar = app.navigationBars["Model & Effort"]
+        XCTAssertTrue(modelBar.waitForExistence(timeout: 5))
+        XCTAssertFalse(name.exists)
+        XCTAssertFalse(app.buttons["Team"].exists)
+        XCTAssertTrue(wheel.waitForExistence(timeout: 5))
+        let effort = app.descendants(matching: .any)["effortSlider"]
+        XCTAssertTrue(effort.waitForExistence(timeout: 5))
+        XCTAssertEqual(wheel.value as? String, "Balanced")
+        XCTAssertEqual(effort.value as? String, "Medium")
+        attachScreenshot(app, name: "New Mate – model and effort")
+        effort.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
+        XCTAssertEqual(effort.value as? String, "Low")
+        wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.83)).tap()
+        XCTAssertTrue(effort.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(wheel.value as? String, "Thinking toggle")
+        wheel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.17)).tap()
+        XCTAssertTrue(effort.waitForExistence(timeout: 5))
+        effort.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(effort.value as? String, "High")
+
+        modelBar.buttons["BackButton"].tap()
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        XCTAssertEqual(name.value as? String, "Kitchen Mate")
+        XCTAssertEqual(app.buttons["Team"].value as? String, "Release Team")
+        next.tap()
+        XCTAssertTrue(effort.waitForExistence(timeout: 5))
+        XCTAssertEqual(effort.value as? String, "High")
         app.buttons["createMate"].tap()
 
         let greeting = app.staticTexts["Hi, I’m Kitchen Mate. What would you like me to help with?"]
@@ -316,7 +354,7 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
-    func testMateAvatarDragsKeepTheListAndNavigationInPlace() throws {
+    func testMateAvatarPreviewRotatesAndCreationCarouselSwitchesStyles() throws {
         continueAfterFailure = false
         let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
@@ -354,12 +392,42 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(mate.waitForExistence(timeout: 5))
 
         app.buttons["newMate"].tap()
-        checkPreview(in: "New Mate")
-        let pickerPosition = preview.frame
-        drag(from: CGPoint(x: pickerPosition.midX, y: pickerPosition.midY), dy: 225)
-        XCTAssertTrue(app.navigationBars["New Mate"].exists)
-        XCTAssertEqual(preview.frame.minY, pickerPosition.minY, accuracy: 3)
-        app.buttons["Cancel"].tap()
+        let carousel = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "mate-avatar-carousel")).firstMatch
+        func checkAvatar(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
+            let expected = NSPredicate(format: "value == %@ AND identifier == %@", label, "mate-avatar-carousel-3d")
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: expected, object: carousel)], timeout: 10),
+                           .completed, file: file, line: line)
+        }
+        XCTAssertTrue(carousel.waitForExistence(timeout: 5))
+        checkAvatar("Amber")
+        let midpoint = CGPoint(x: app.frame.midX, y: carousel.frame.midY)
+        let pose = carousel.screenshot().pngRepresentation
+        root.withOffset(CGVector(dx: midpoint.x, dy: midpoint.y)).tap()
+        XCTAssertNotEqual(carousel.screenshot().pngRepresentation, pose)
+        checkAvatar("Amber")
+        drag(from: midpoint, dx: -145)
+        checkAvatar("Teal")
+        let beforeManualRotation = carousel.screenshot().pngRepresentation
+        root.withOffset(CGVector(dx: midpoint.x, dy: midpoint.y)).press(forDuration: 0.4, thenDragTo:
+            root.withOffset(CGVector(dx: midpoint.x + 100, dy: midpoint.y - 30)))
+        checkAvatar("Teal")
+        XCTAssertNotEqual(carousel.screenshot().pngRepresentation, beforeManualRotation)
+        drag(from: midpoint, dx: 145)
+        checkAvatar("Amber")
+        drag(from: midpoint, dx: 145)
+        checkAvatar("Frost")
+
+        app.buttons["mate-avatar-style-clear"].tap()
+        checkAvatar("Violet Drop")
+        attachScreenshot(app, name: "New Mate – Clear Shell")
+        app.buttons["mate-avatar-style-metal"].tap()
+        checkAvatar("Silver")
+        attachScreenshot(app, name: "New Mate – One-Eye Metal")
+        app.buttons["mate-avatar-style-terminal"].tap()
+        checkAvatar("Frost")
+
+        app.navigationBars["New Mate"].buttons["BackButton"].tap()
         XCTAssertTrue(mate.waitForExistence(timeout: 5))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         forgetFixture(app)
@@ -1343,6 +1411,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "effortSlider").firstMatch.exists)
         thinking.tap(); XCTAssertEqual(thinking.value as? String, "1")
         app.buttons["closeEffortOverlay"].tap()
+        XCTAssertTrue(app.buttons["closeEffortOverlay"].waitForNonExistence(timeout: 5))
         app.buttons["chooseModel"].tap()
         XCTAssertTrue(thinking.waitForExistence(timeout: 5))
         XCTAssertEqual(thinking.value as? String, "1")

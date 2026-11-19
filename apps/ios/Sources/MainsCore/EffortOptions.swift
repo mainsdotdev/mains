@@ -13,10 +13,11 @@ public enum EffortControlKind: Equatable, Sendable {
         for level in levels where !level.isEmpty && level != "ultracode" && !result.contains(level) { result.append(level) }
         return result
     }
-    public static func resolve(provider: String, levels: [String]) -> Self {
+    /// Mate creation stores a catalog effort level. Thinking and Ultracode use separate composer settings.
+    public static func resolve(provider: String, levels: [String], storedEffortOnly: Bool = false) -> Self {
         var ordered = ordered(levels)
-        if supportsUltracode(provider: provider, levels: ordered) { ordered.append("ultracode") }
-        if ordered.isEmpty { return provider == "claude_code" ? .thinking : .hidden }
+        if !storedEffortOnly, supportsUltracode(provider: provider, levels: ordered) { ordered.append("ultracode") }
+        if ordered.isEmpty { return provider == "claude_code" && !storedEffortOnly ? .thinking : .hidden }
         if ordered.count == 1 { return provider == "codex" ? .hidden : .toggle(ordered[0]) }
         var stops = ordered
         // OpenCode's empty preference is Default. Keep native None first and

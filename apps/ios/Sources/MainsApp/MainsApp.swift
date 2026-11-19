@@ -13,7 +13,6 @@ enum AppFeatures {
 @main
 struct MainsApp: App {
     @State private var session = BackendSession(storage: NativeStorage())
-    @AppStorage("appearancePreference") private var appearance = AppAppearance.system
     @Environment(\.scenePhase) private var scenePhase
     private let monitor = NWPathMonitor()
 
@@ -30,7 +29,6 @@ struct MainsApp: App {
 
     private var application: some View {
         RootView(session: session)
-            .preferredColorScheme(appearance.colorScheme)
             .tint(.primary)
             .task {
 #if MAINS_GPT_LIVE

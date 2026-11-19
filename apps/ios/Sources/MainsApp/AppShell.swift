@@ -11,7 +11,7 @@ extension EnvironmentValues {
 }
 
 
-enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String), mates, mate(String) }
+enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String), mates, newMate([MateTeam]), newMateModel, mate(String) }
 
 struct AppShell: View {
     #if DEBUG && targetEnvironment(simulator)
@@ -19,7 +19,9 @@ struct AppShell: View {
     #endif
     let session: BackendSession
     let openPairing: () -> Void
+    @AppStorage("appearancePreference") private var appearance = AppAppearance.system
     @State private var path: [AppRoute] = []
+    @State private var newMateDraft = NewMateDraft()
     @State private var homeRunID: String?
     @State private var drawerOpen = false
     @GestureState private var drag: CGFloat = 0
@@ -99,7 +101,20 @@ struct AppShell: View {
                                     .id(session.ownership)
                                 case .atlasPage(let id): AtlasPageView(session: session, pageID: id, openPage: { path.append(.atlasPage($0)) }, openConversation: { path.append(.conversation($0)) })
                                     .id("\(session.ownership):atlas:\(id)")
-                                case .mates: MatesView(session: session, openMate: { path.append(.mate($0)) })
+                                case .mates: MatesView(session: session, openMate: { path.append(.mate($0)) }, newMate: { teams in
+                                    newMateDraft = NewMateDraft()
+                                    path.append(.newMate(teams))
+                                })
+                                    .id(session.ownership)
+                                case .newMate(let teams):
+                                    NewMateView(teams: teams, draft: $newMateDraft) { path.append(.newMateModel) }
+                                        .id(session.ownership)
+                                case .newMateModel:
+                                    NewMateModelView(session: session, draft: $newMateDraft) { id in
+                                        guard path.last == .newMateModel, path.count >= 2,
+                                              case .newMate = path[path.count - 2] else { return }
+                                        path.replaceSubrange((path.count - 2)..., with: [.mate(id)])
+                                    }
                                     .id(session.ownership)
                                 case .mate(let id): MateView(session: session, mateID: id, openChat: { path.append(.conversation($0)) })
                                     .id("\(session.ownership):mate:\(id)")
@@ -186,6 +201,7 @@ struct AppShell: View {
             guard session.viewingRunID != id else { return }
             path.append(.conversation(id))
         })
+        .preferredColorScheme(visibleColorScheme)
         #if MAINS_GPT_LIVE
         .onChange(of: session.voice.error) { _, error in if let error { session.actionError = error } }
         #endif
@@ -212,6 +228,13 @@ struct AppShell: View {
     }
 
     private var mainPaneInteractive: Bool { !searchMounted && (!drawerOpen || inlineSidebarVisible) }
+
+    private var visibleColorScheme: ColorScheme? {
+        switch path.last {
+        case .newMate, .newMateModel: .dark
+        default: appearance.colorScheme
+        }
+    }
 
 #if MAINS_GPT_LIVE
     private var visibleVoiceRunID: String? {
