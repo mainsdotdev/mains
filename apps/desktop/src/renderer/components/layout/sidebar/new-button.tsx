@@ -1,4 +1,5 @@
 import { Button, Caption, Text } from "@/components/ui";
+import { SIDEBAR_PRIMARY_ACTION_CLASS } from "@/lib/sidebar-layout";
 import { useKeyboardShortcut } from "@/providers/keyboard-shortcuts-provider";
 
 interface NewButtonProps {
@@ -30,7 +31,7 @@ export default function NewButton({
       onClick={onClick}
       aria-haspopup={opensDialog ? "dialog" : undefined}
       fullWidth
-      className="justify-start cursor-pointer transition-transform duration-200 px-2 rounded-xl"
+      className={`justify-start cursor-pointer transition-transform duration-200 px-2 ${SIDEBAR_PRIMARY_ACTION_CLASS}`}
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
     >
       {icon}

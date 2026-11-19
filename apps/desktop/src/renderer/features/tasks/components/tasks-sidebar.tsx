@@ -8,6 +8,8 @@ import {
 import { SidebarTopRows } from "@/components/layout/sidebar/sidebar-top-rows";
 import { ConnectionModalHost } from "@/features/settings/components/connections/connection-modals";
 import { ProviderIcon } from "@/features/workspace/components/provider-icon";
+import { cn } from "@/lib/cn";
+import { SIDEBAR_PRIMARY_ACTION_CLASS } from "@/lib/sidebar-layout";
 import {
   useGetConnectionStatesQuery,
   useGetIssuesInboxQuery,
@@ -129,6 +131,7 @@ export function TasksSidebar() {
       }>
         <nav aria-label="Task scope">
           <ScopeRow
+            className={SIDEBAR_PRIMARY_ACTION_CLASS}
             icon={<Inbox className="size-3.5 shrink-0" />}
             label={tab === "issues" ? "All issues" : "All pull requests"}
             count={tab === "issues" ? counts.total : null}
@@ -300,6 +303,7 @@ function ScopeRow({
   capped,
   active,
   icon,
+  className,
   onClick,
 }: {
   label: string;
@@ -307,11 +311,12 @@ function ScopeRow({
   capped: boolean;
   active: boolean;
   icon?: ReactNode;
+  className?: string;
   onClick: () => void;
 }) {
   return (
     <Button
-      className={itemClass(active)}
+      className={cn(itemClass(active), className)}
       aria-current={active ? "page" : undefined}
       onClick={onClick}
     >

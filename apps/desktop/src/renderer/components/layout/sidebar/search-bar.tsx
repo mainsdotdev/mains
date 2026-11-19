@@ -35,13 +35,13 @@ export default function SearchBar({
 
   return (
     <div
-      className={`relative h-8 flex items-center ${
+      className={`relative flex h-full items-center ${
         isExpanded ? "flex-1" : "w-auto"
       }`}
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
     >
       {isExpanded ? (
-        <div className="relative w-full">
+        <div className="relative h-full w-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-primary-900 dark:text-primary-100 " />
           <Input
             variant="bare"
@@ -53,7 +53,7 @@ export default function SearchBar({
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClear(); } }}
-            className="w-full h-8 bg-primary-950/5 dark:bg-primary/5 border-none
+            className="w-full h-full bg-primary-950/5 dark:bg-primary/5 border-none
                         rounded-xl pl-9 pr-10 text-sm text-primary-900 dark:text-primary
                         placeholder:text-primary-500 dark:placeholder:text-primary-500
                         transition-colors duration-200 focus:outline-none focus:bg-primary/20 dark:focus:bg-primary/10 "
