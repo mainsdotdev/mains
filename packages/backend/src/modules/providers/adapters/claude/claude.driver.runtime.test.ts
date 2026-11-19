@@ -10,6 +10,13 @@ import {
   resolveClaudeRuntime,
 } from "../../providers.utils";
 import { createClaudeDriver, mapSDKMessage } from "./claude.driver";
+import {
+  createWorkAdapter,
+  getAccountInfoForProvider,
+  listSkillsForProvider,
+  shutdownWorkAdapter,
+} from "../adapter.factory";
+import type { ProviderResponse } from "../../providers.dto";
 import { runsRepo } from "../../../runs/runs.repo";
 import { bridgeService } from "../../../bridge";
 import { guardsService } from "../../../guards/guards.service";
@@ -530,6 +537,69 @@ console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"avai
     }
   });
 
+  it("finishes commands, models and installed plugins when the first account probe invalidates discovery", async () => {
+    vi.spyOn(os, "homedir").mockReturnValue(fixture);
+    const logError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const provider: ProviderResponse = {
+      id: "claude_code", kind: "agent_runtime", displayName: "Claude", isEnabled: true,
+      config: { settingSources: [] }, capabilities: null, defaultModel: null,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    const adapter = createWorkAdapter(provider);
+    const refreshed = path.join(fixture, "catalog-refreshed");
+    fs.writeFileSync(bundled, `#!${process.execPath}
+const fs = require("node:fs");
+const [command, subcommand] = process.argv.slice(2);
+if (command === "--version") console.log("2.1.283 (Claude Code)");
+if (command === "auth") process.stdout.write(fs.readFileSync(${JSON.stringify(statusFile)}));
+if (command === "plugin") {
+  if (!fs.existsSync(${JSON.stringify(refreshed)})) {
+    fs.appendFileSync(${JSON.stringify(callsFile)}, subcommand + "\\n");
+    setInterval(() => {}, 1000);
+  } else if (subcommand === "marketplace") {
+    console.log(JSON.stringify([{ name: "test", installLocation: ${JSON.stringify(fixture)} }]));
+  } else {
+    console.log(JSON.stringify({ installed: [{ id: "current@test", enabled: true }], available: [] }));
+  }
+}
+`);
+    let finishModels!: (value: unknown) => void;
+    let finishCommands!: (value: unknown) => void;
+    sdk.supportedModels.mockReturnValueOnce(new Promise((resolve) => { finishModels = resolve; }));
+    sdk.initializationResult.mockReturnValueOnce(new Promise((resolve) => { finishCommands = resolve; }));
+    const pending = Promise.allSettled([
+      adapter.listCommands!(fixture), adapter.listCommands!(fixture),
+      adapter.listModels!(), listSkillsForProvider(provider, fixture),
+    ]);
+    try {
+      await vi.waitFor(() => {
+        expect(sdk.initializationResult).toHaveBeenCalledOnce();
+        expect(sdk.supportedModels).toHaveBeenCalledOnce();
+        expect(cliCalls().trim().split("\n")).toHaveLength(2);
+      });
+      const oldQueries = sdk.query.mock.calls.map(([{ options }]) => options.abortController.signal);
+      fs.writeFileSync(refreshed, "");
+      await getAccountInfoForProvider(provider);
+
+      expect(await pending).toEqual([
+        { status: "fulfilled", value: [expect.objectContaining({ name: "help" })] },
+        { status: "fulfilled", value: [expect.objectContaining({ name: "help" })] },
+        { status: "fulfilled", value: [expect.objectContaining({ id: "sonnet" })] },
+        { status: "fulfilled", value: [expect.objectContaining({ name: "current", scope: "plugin" })] },
+      ]);
+      expect(oldQueries.every((signal) => signal.aborted)).toBe(true);
+      expect(sdk.initializationResult).toHaveBeenCalledTimes(2);
+      expect(sdk.supportedModels).toHaveBeenCalledTimes(2);
+      expect(sdk.close).toHaveBeenCalledTimes(4);
+      expect(logError).not.toHaveBeenCalled();
+    } finally {
+      finishCommands({ commands: [{ name: "obsolete" }] });
+      finishModels([{ value: "obsolete", displayName: "Obsolete" }]);
+      await shutdownWorkAdapter(provider.id);
+      await pending;
+    }
+  });
+
   it("reads plan usage through a control query using the selected runtime and releases it", async () => {
     sdk.usage.mockResolvedValueOnce({
       rate_limits_available: true,
@@ -553,14 +623,21 @@ console.log(process.argv.includes("marketplace") ? "[]" : '{"installed":[],"avai
     let finish!: (models: Array<{ value: string; displayName: string }>) => void;
     sdk.supportedModels.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
     const pending = driver.listModels!();
-    await vi.waitFor(() => expect(sdk.supportedModels).toHaveBeenCalledOnce());
-    driver.invalidateCatalogs?.();
-    finish([{ value: "old", displayName: "Old" }]);
-    await pending;
+    try {
+      await vi.waitFor(() => expect(sdk.supportedModels).toHaveBeenCalledOnce());
+      sdk.supportedModels.mockResolvedValue([{ value: "new", displayName: "New" }]);
+      driver.invalidateCatalogs?.();
 
-    sdk.supportedModels.mockResolvedValue([{ value: "new", displayName: "New" }]);
-    expect(await driver.listModels!()).toEqual([expect.objectContaining({ id: "new" })]);
-    expect(sdk.supportedModels).toHaveBeenCalledTimes(2);
+      const current = [expect.objectContaining({ id: "new" })];
+      expect(await pending).toEqual(current);
+      finish([{ value: "old", displayName: "Old" }]);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(await driver.listModels!()).toEqual(current);
+      expect(sdk.supportedModels).toHaveBeenCalledTimes(2);
+    } finally {
+      finish([]);
+      await driver.shutdown?.();
+    }
   });
 
   it("shares concurrent model discovery and closes the single control query", async () => {

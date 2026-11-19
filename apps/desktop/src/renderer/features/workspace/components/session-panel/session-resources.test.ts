@@ -116,6 +116,33 @@ describe("buildSessionResources", () => {
     ]);
   });
 
+  it("excludes persisted Mate mentions and keeps notes with the same name", () => {
+    const result = buildSessionResources({
+      context: [
+        context({ kind: "note", ref: "Pre Testflight" }),
+        context({
+          id: 2,
+          kind: "note",
+          ref: "Pre Testflight",
+          metadata: { source: "assistant_mention", assistantId: "mate-1" },
+          createdAt: 2_000,
+        }),
+        context({
+          id: 3,
+          kind: "note",
+          ref: "Trip Planner",
+          metadata: { source: "assistant_mention", assistantId: "mate-2" },
+        }),
+      ],
+      artifacts: [],
+      toolCalls: [],
+    });
+
+    expect(result.sources.map(({ id, title }) => ({ id, title }))).toEqual([
+      { id: "context-1", title: "Pre Testflight" },
+    ]);
+  });
+
   it("recovers attachments and structured context from persisted prompt artifacts", () => {
     const result = buildSessionResources({
       context: [],

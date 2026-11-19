@@ -2916,6 +2916,29 @@ export function mapSDKMessage(
 
 export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDriver {
   const queryLifecycle = createClaudeQueryLifecycle<typeof import("@anthropic-ai/claude-agent-sdk")>();
+  let catalogRevision = 0;
+  let discoveryScope = new AbortController();
+
+  // Follow catalog refreshes while keeping each caller bound to its runtime generation.
+  async function readCurrentDiscovery<T>(read: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const scope = discoveryScope.signal;
+    for (;;) {
+      scope.throwIfAborted();
+      signal?.throwIfAborted();
+      const revision = catalogRevision;
+      try {
+        const result = await read();
+        scope.throwIfAborted();
+        signal?.throwIfAborted();
+        if (revision === catalogRevision) return result;
+      } catch (error) {
+        scope.throwIfAborted();
+        signal?.throwIfAborted();
+        if (revision === catalogRevision) throw error;
+      }
+    }
+  }
+
   // SDK loader state
   let sdkLoaded = false;
   let queryFn:
@@ -2957,13 +2980,14 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // A plugin change adds/removes commands, skills, and agents — so installing or
   // uninstalling one must invalidate those caches too, not just the plugin list.
   function invalidatePluginCaches(): void {
+    catalogRevision++;
     pluginCatalogRead.invalidate();
     commandsCache.invalidate();
     skillsCache.invalidate();
   }
 
   async function loadModels(context: ResourceReadContext): Promise<ModelInfo[]> {
-    const sdkModels = await withControlQuery((query) => query.supportedModels());
+    const sdkModels = await withControlQuery((query) => query.supportedModels(), undefined, context.signal);
     context.assertCurrent();
     if (!sdkModels || sdkModels.length === 0) throw new Error("SDK returned no models");
 
@@ -3012,6 +3036,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     const initResult = await withControlQuery(
       (query) => query.initializationResult(),
       workspacePath,
+      context.signal,
     );
     context.assertCurrent();
     if (!initResult?.commands || initResult.commands.length === 0) {
@@ -3020,7 +3045,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     // initializationResult().commands mixes built-in /commands with disk-backed skills.
     // Exclude only skills we discover the same way as the $ menu.
-    const diskSkills = await fetchDiskSkills(workspacePath);
+    const diskSkills = await fetchDiskSkills(workspacePath, context.signal);
     context.assertCurrent();
     const diskSkillNames = new Set(diskSkills.map((s) => s.name));
 
@@ -3354,9 +3379,16 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   async function withControlQuery<T>(
     read: (query: SDKQuery) => Promise<T>,
     cwd?: string,
+    signal?: AbortSignal,
   ): Promise<T> {
+    signal?.throwIfAborted();
     const controller = new AbortController();
     const owner = queryLifecycle.open({ cancel: () => controller.abort() });
+    const cancel = () => {
+      // The finally block awaits the same query release.
+      void owner.cancel(signal?.reason).catch(() => {});
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
     try {
       await owner.run(ensureSDK);
       const options = buildProcessOptions();
@@ -3365,6 +3397,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const query = owner.acquire(() => queryFn!({ prompt: "", options }));
       return await owner.run(() => read(query));
     } finally {
+      signal?.removeEventListener("abort", cancel);
       await owner.close();
     }
   }
@@ -3656,9 +3689,14 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // Disk skills discovery (shared between listSkills and listCommands filtering)
   // ─────────────────────────────────────────────────────────────
 
-  async function fetchDiskSkills(workspacePath?: string): Promise<SkillInfo[]> {
-    try { return (await skillsCache.read(workspacePath ?? "")).value; }
-    catch (error) { logError("Failed to discover skills:", error); return []; }
+  async function fetchDiskSkills(workspacePath?: string, signal?: AbortSignal): Promise<SkillInfo[]> {
+    try {
+      return (await readCurrentDiscovery(() => skillsCache.read(workspacePath ?? "", { signal }), signal)).value;
+    } catch (error) {
+      signal?.throwIfAborted();
+      logError("Failed to discover skills:", error);
+      return [];
+    }
   }
 
   async function loadDiskSkills(workspacePath: string | undefined, context: ResourceReadContext): Promise<SkillInfo[]> {
@@ -4732,6 +4770,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     async shutdown(): Promise<void> {
       const closing = queryLifecycle.shutdown();
+      const scope = discoveryScope;
+      scope.abort();
       sessionIdMemo.clear();
       liveSessions.clear();
       runCwdMemo.clear();
@@ -4742,18 +4782,17 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       getSessionMessagesFn = null;
       deleteSdkSessionFn = null;
       modelsCache.invalidate();
-      pluginCatalogRead.invalidate();
-      commandsCache.invalidate();
-      skillsCache.invalidate();
+      invalidatePluginCaches();
       createSdkMcpServerFn = null;
       toolFn = null;
       await closing;
+      if (discoveryScope === scope) discoveryScope = new AbortController();
       logInfo("Shutdown complete");
     },
 
     async listModels(): Promise<ModelInfo[]> {
       try {
-        return (await modelsCache.read()).value;
+        return (await readCurrentDiscovery(() => modelsCache.read())).value;
       } catch (error) {
         logError("Failed to fetch models from SDK:", error);
         return getDefaultModels(config.defaultModel);
@@ -4762,7 +4801,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     async listCommands(workspacePath?: string): Promise<CommandInfo[]> {
       try {
-        return (await commandsCache.read(workspacePath ?? "")).value ?? [];
+        return (await readCurrentDiscovery(() => commandsCache.read(workspacePath ?? ""))).value ?? [];
       } catch (error) {
         logError("Failed to fetch commands from SDK:", error);
         return [];
@@ -4774,8 +4813,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async listPlugins(signal?: AbortSignal): Promise<PluginListResponse> {
-      signal?.throwIfAborted();
-      return (await pluginCatalogRead.read("", { signal })).value.response;
+      return (await readCurrentDiscovery(() => pluginCatalogRead.read("", { signal }), signal)).value.response;
     },
 
     async readPlugin(pluginName: string, marketplacePath: string): Promise<PluginDetail> {
