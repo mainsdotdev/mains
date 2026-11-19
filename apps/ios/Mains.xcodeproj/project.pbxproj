@@ -111,6 +111,9 @@
 		FAE92E2E44A058C7A35EFC99ED39FFD5 /* Transcript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DA193A6ADAE3EB8015268F6B70E305 /* Transcript.swift */; };
 		FCB474BF2DF0974429EAE8261B7C7F49 /* TranscriptViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B606AD3460011CCBFD5AD14ADEB6F25 /* TranscriptViewport.swift */; };
 		FCBEF00E6E980C0930F2DCDA2EDC303C /* AtlasSaveControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FC466905847E89691054712C866CA65 /* AtlasSaveControls.swift */; };
+		34C428D04E7C79234C3BC37D /* RobotAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20F7FE6F06247BA5F630F212 /* RobotAvatarView.swift */; };
+		B0C120B4ACE26726EF795E6B /* RobotAvatars in Resources */ = {isa = PBXBuildFile; fileRef = C85FDA14D6F50A5653B52A25 /* RobotAvatars */; };
+		C7FCFA03FF9D31CE83BDE210 /* robots in Resources */ = {isa = PBXBuildFile; fileRef = 3A9545DDF85B0F8782EBD7D3 /* robots */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -241,6 +244,9 @@
 		F4620BCCA28C093A845E2D03EC5EBA83 /* AtlasTrashView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtlasTrashView.swift; sourceTree = "<group>"; };
 		F4E3177CE122C85706CE789290C119B9 /* Math */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; path = Math; sourceTree = "<group>"; };
 		FA0F6DD3AE77FB56A49B6766CFB55069 /* AttachmentCamera.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AttachmentCamera.swift; sourceTree = "<group>"; };
+		20F7FE6F06247BA5F630F212 /* RobotAvatarView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RobotAvatarView.swift; sourceTree = "<group>"; };
+		3A9545DDF85B0F8782EBD7D3 /* robots */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; name = robots; path = ../../desktop/src/renderer/features/assistants/assets/robots; sourceTree = "<group>"; };
+		C85FDA14D6F50A5653B52A25 /* RobotAvatars */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; path = RobotAvatars; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -361,6 +367,8 @@
 				09372078680AFA8109162659B0390FAA /* WebRTC-LICENSE.txt */,
 				F4E3177CE122C85706CE789290C119B9 /* Math */,
 				B50607620CDD3AB3ACB54301D512352D /* VoicePreviews */,
+				C85FDA14D6F50A5653B52A25 /* RobotAvatars */,
+				3A9545DDF85B0F8782EBD7D3 /* robots */,
 			);
 			name = Resources;
 			path = Resources;
@@ -426,6 +434,7 @@
 				27CEE5763E8B936165850E467BB37843 /* MainsApp.swift */,
 				D92F73E9ECE6FC520760B9D7A8982F14 /* MathMarkdownView.swift */,
 				CE01840870F94F325DB3DB6353DF40C0 /* MatesView.swift */,
+				20F7FE6F06247BA5F630F212 /* RobotAvatarView.swift */,
 				76900D32D0C8904F67F57BE8CEEA2FB7 /* MessageComposer.swift */,
 				D2BBE447DE4A13E0405D2C0B61220F35 /* NativeRealtimeVoiceMedia.swift */,
 				C968DBC7B12CAE8F784E30FD10920212 /* NativeStorage.swift */,
@@ -540,6 +549,8 @@
 				807686D78C9ABAACD0960179C5726CD0 /* Math in Resources */,
 				4215F75AD3581D55851B381B47655DEB /* DemoSnapshot.json in Resources */,
 				6790CF5AF804DED0C1289561 /* DemoMedia in Resources */,
+				B0C120B4ACE26726EF795E6B /* RobotAvatars in Resources */,
+				C7FCFA03FF9D31CE83BDE210 /* robots in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -643,6 +654,7 @@
 				42F4F3FCC2D8EE1E9BD6AE510D266887 /* MainsApp.swift in Sources */,
 				576111A5553BAF6726DB874E87410404 /* MathMarkdownView.swift in Sources */,
 				8019227A1178B2643D8C8CEF880BB8C3 /* MatesView.swift in Sources */,
+				34C428D04E7C79234C3BC37D /* RobotAvatarView.swift in Sources */,
 				05EADEA81FBD73A6EAF9800DA92FE051 /* MessageComposer.swift in Sources */,
 				91B340A3C4E592AD4ABC6B1CA0B8EA3C /* NativeStorage.swift in Sources */,
 				695F869508AC4098F2AF0205E7DFA9D5 /* OutputsView.swift in Sources */,

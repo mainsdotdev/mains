@@ -160,14 +160,14 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .mosaic-avatar--floating {
-    animation: mosaicAvatarFloat 5s ease-in-out var(--avatar-float-delay, 0s) infinite;
+  .assistant-avatar--floating {
+    animation: assistantAvatarFloat 5s ease-in-out var(--avatar-float-delay, 0s) infinite;
   }
 
-  .mosaic-avatar--floating[data-paused="true"] { animation-play-state: paused; }
+  .assistant-avatar--floating[data-paused="true"] { animation-play-state: paused; }
 }
 
-@keyframes mosaicAvatarFloat {
+@keyframes assistantAvatarFloat {
   0%, 100% { translate: 0 0; }
   50% { translate: 0 -5px; }
 }

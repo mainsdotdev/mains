@@ -1,0 +1,128 @@
+{
+  "defaultShape": "terminal-amber",
+  "styles": [
+    {
+      "id": "terminal",
+      "label": "Retro Terminal",
+      "presets": [
+        {
+          "id": "terminal-amber",
+          "label": "Amber",
+          "color": "amber"
+        },
+        {
+          "id": "terminal-teal",
+          "label": "Teal",
+          "color": "mint"
+        },
+        {
+          "id": "terminal-cherry",
+          "label": "Cherry",
+          "color": "coral"
+        },
+        {
+          "id": "terminal-indigo",
+          "label": "Indigo",
+          "color": "blue"
+        },
+        {
+          "id": "terminal-plum",
+          "label": "Plum",
+          "color": "violet"
+        },
+        {
+          "id": "terminal-olive",
+          "label": "Olive",
+          "color": "lime"
+        },
+        {
+          "id": "terminal-frost",
+          "label": "Frost",
+          "color": "cyan"
+        }
+      ]
+    },
+    {
+      "id": "clear",
+      "label": "Clear Shell",
+      "presets": [
+        {
+          "id": "clear-violet",
+          "label": "Violet Drop",
+          "color": "violet"
+        },
+        {
+          "id": "clear-glacier",
+          "label": "Glacier Dome",
+          "color": "cyan"
+        },
+        {
+          "id": "clear-jade",
+          "label": "Jade Tile",
+          "color": "mint"
+        },
+        {
+          "id": "clear-rose",
+          "label": "Rose Prism",
+          "color": "rose"
+        },
+        {
+          "id": "clear-honey",
+          "label": "Honey Lantern",
+          "color": "amber"
+        },
+        {
+          "id": "clear-lime",
+          "label": "Lime Capsule",
+          "color": "lime"
+        },
+        {
+          "id": "clear-coral",
+          "label": "Coral Kite",
+          "color": "coral"
+        }
+      ]
+    },
+    {
+      "id": "metal",
+      "label": "One-Eye Metal",
+      "presets": [
+        {
+          "id": "metal-silver",
+          "label": "Silver",
+          "color": "mint"
+        },
+        {
+          "id": "metal-bronze",
+          "label": "Bronze",
+          "color": "amber"
+        },
+        {
+          "id": "metal-graphite",
+          "label": "Graphite",
+          "color": "blue"
+        },
+        {
+          "id": "metal-titanium",
+          "label": "Titanium",
+          "color": "violet"
+        },
+        {
+          "id": "metal-copper",
+          "label": "Copper",
+          "color": "coral"
+        },
+        {
+          "id": "metal-ice",
+          "label": "Ice Disc",
+          "color": "cyan"
+        },
+        {
+          "id": "metal-moss",
+          "label": "Moss Shield",
+          "color": "lime"
+        }
+      ]
+    }
+  ]
+}

@@ -137,33 +137,49 @@ struct MessageComposer: View {
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { draft.attachments.removeAll { $0.id == id } }
                 }.padding(.horizontal, 8).padding(.top, 6)
             }
-            ContextTextEditor(text: $draft.text, skills: $draft.contextSkills, scope: contextScope, focused: $focused,
-                placeholder: context.lockedProfile ? (context.runID == nil ? "Message \(context.name)" : "Message this Mate…")
-                    : (context.runID == nil ? "Start a run in \(context.name)" : "Continue this run…"),
-                identifier: context.runID == nil ? "homeMessageInput" : "messageInput")
-                .padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 3)
-            HStack(alignment: .center, spacing: 6) {
-                Button(action: openAttachments) {
-                    Image(systemName: "plus").font(.system(size: 22, weight: .light)).frame(width: 44, height: 44)
+            if context.lockedProfile {
+                let expanded = !draft.text.isEmpty
+                MateComposerLayout(expanded: expanded) {
+                    textEditor
+                    attachmentButton
+                    HStack(spacing: 6) { composerActions }
                 }
-                .background(GeometryReader { geometry in
-                    Color.clear.preference(key: AttachmentSourceFrameKey.self, value: geometry.frame(in: .global))
-                })
-                .disabled(draft.isSending).accessibilityLabel("Add attachment").accessibilityIdentifier("addAttachment")
-                Group {
-                    if context.lockedProfile {
-                        Spacer(minLength: 0)
-                    } else if dynamicTypeSize.isAccessibilitySize {
-                        ScrollView(.horizontal) { configurationControls }.scrollIndicators(.hidden)
-                    } else {
-                        configurationControls
-                    }
-                }.fixedSize(horizontal: false, vertical: true)
-                composerActions
+                .buttonStyle(.plain)
+                .animation(reduceMotion ? nil : MateComposerLayout.transition, value: expanded)
+            } else {
+                textEditor.padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 3)
+                HStack(spacing: 6) {
+                    attachmentButton
+                    Group {
+                        if dynamicTypeSize.isAccessibilitySize {
+                            ScrollView(.horizontal) { configurationControls }.scrollIndicators(.hidden)
+                        } else {
+                            configurationControls
+                        }
+                    }.fixedSize(horizontal: false, vertical: true)
+                    composerActions
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(8).modifier(GlassSurface(radius: 34, interactive: false)).padding(.horizontal, 12)
+    }
+
+    private var textEditor: some View {
+        ContextTextEditor(text: $draft.text, skills: $draft.contextSkills, scope: contextScope, focused: $focused,
+            placeholder: context.lockedProfile ? (context.runID == nil ? "Message \(context.name)" : "Message this Mate…")
+                : (context.runID == nil ? "Start a run in \(context.name)" : "Continue this run…"),
+            identifier: context.runID == nil ? "homeMessageInput" : "messageInput")
+    }
+
+    private var attachmentButton: some View {
+        Button(action: openAttachments) {
+            Image(systemName: "plus").font(.system(size: 22, weight: .light)).frame(width: 44, height: 44)
+        }
+        .background(GeometryReader { geometry in
+            Color.clear.preference(key: AttachmentSourceFrameKey.self, value: geometry.frame(in: .global))
+        })
+        .disabled(draft.isSending).accessibilityLabel("Add attachment").accessibilityIdentifier("addAttachment")
     }
 
     private var configurationControls: some View {
@@ -393,5 +409,50 @@ struct MessageComposer: View {
             throw MainsError.server("Attach up to 5 files, totalling 2 MB or less.")
         }
         draft.attachments.append(contentsOf: attachments)
+    }
+}
+
+/// Repositions the same text input and controls so the keyboard and caret stay active throughout the transition.
+struct MateComposerLayout: Layout {
+    static let transition = Animation.easeInOut(duration: 0.24)
+    private let editorInset: CGFloat = 10
+    private var progress: CGFloat
+
+    init(expanded: Bool) { progress = expanded ? 1 : 0 }
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? subviews.reduce(2 * editorInset) { $0 + $1.sizeThatFits(.unspecified).width }
+        return CGSize(width: width, height: metrics(width: width, subviews: subviews).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let layout = metrics(width: bounds.width, subviews: subviews)
+        subviews[0].place(at: CGPoint(x: bounds.minX + layout.editorX, y: bounds.minY + layout.editorY),
+                          anchor: .topLeading, proposal: ProposedViewSize(width: layout.editorWidth, height: nil))
+        let controlsY = bounds.minY + layout.controlsY
+        if subviews.count == 3 {
+            subviews[1].place(at: CGPoint(x: bounds.minX, y: controlsY), anchor: .leading, proposal: .unspecified)
+        }
+        subviews[subviews.count - 1].place(at: CGPoint(x: bounds.maxX, y: controlsY), anchor: .trailing, proposal: .unspecified)
+    }
+
+    private func metrics(width: CGFloat, subviews: Subviews) -> (editorX: CGFloat, editorY: CGFloat, editorWidth: CGFloat, controlsY: CGFloat, height: CGFloat) {
+        let leading = subviews.count == 3 ? subviews[1].sizeThatFits(.unspecified) : .zero
+        let trailing = subviews[subviews.count - 1].sizeThatFits(.unspecified)
+        let editorX = editorInset + leading.width * (1 - progress)
+        let editorWidth = max(0, width - editorX - editorInset - trailing.width * (1 - progress))
+        let editorHeight = subviews[0].sizeThatFits(ProposedViewSize(width: editorWidth, height: nil)).height
+        let controlHeight = max(44, leading.height, trailing.height)
+        let compactHeight = max(controlHeight, editorHeight)
+        let expandedHeight = 14 + editorHeight + controlHeight
+        let height = compactHeight + (expandedHeight - compactHeight) * progress
+        let editorY = (compactHeight - editorHeight) / 2 * (1 - progress) + 7 * progress
+        let controlsY = compactHeight / 2 * (1 - progress) + (expandedHeight - controlHeight / 2) * progress
+        return (editorX, editorY, editorWidth, controlsY, height)
     }
 }

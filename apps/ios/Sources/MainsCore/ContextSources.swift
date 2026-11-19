@@ -15,6 +15,7 @@ public struct ContextSkill: Codable, Hashable, Identifiable, Sendable {
     public var scope: String?
     public private(set) var mateID: String?
     public private(set) var mateProviderID: String?
+    public private(set) var mateAvatar: MateAvatar?
     public var id: String { name }
     public var title: String { displayName.flatMap { $0.isEmpty ? nil : $0 } ?? name }
     public var detail: String? {
@@ -38,10 +39,11 @@ public struct ContextSkill: Codable, Hashable, Identifiable, Sendable {
     public init(name: String, displayName: String? = nil, description: String? = nil, scope: String? = nil, path: String? = nil) {
         self.name = name; self.displayName = displayName; self.description = description; self.scope = scope; self.path = path
     }
-    public static func mate(id: String, name: String, description: String? = nil, providerID: String? = nil) -> Self {
+    public static func mate(id: String, name: String, description: String? = nil, providerID: String? = nil, avatar: MateAvatar? = nil) -> Self {
         var selection = Self(name: "assistant-" + id, displayName: "@" + name, description: description)
         selection.mateID = id
         selection.mateProviderID = providerID
+        selection.mateAvatar = avatar
         return selection
     }
     var wireToken: String { (mateID == nil ? "$" : "@") + name }

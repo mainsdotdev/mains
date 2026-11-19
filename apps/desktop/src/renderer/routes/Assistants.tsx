@@ -11,7 +11,7 @@ import { assistantConversationOwner, visitAssistantConversation, replaceAssistan
 import { AssistantProfileForm } from "@/features/assistants/components/assistant-profile-form";
 import { AssistantInfoPanel } from "@/features/assistants/components/assistant-info-panel";
 import { AssistantChat } from "@/features/assistants/components/assistant-chat";
-import { AssistantAvatar } from "@/features/assistants/components/assistant-avatar";
+import { AssistantRobotAvatar } from "@/features/assistants/components/assistant-robot-avatar";
 import { useAssistantUpdates } from "@/features/assistants/hooks/use-assistant-updates";
 import { usePreviewPanel } from "@/hooks/use-preview-panel";
 import { assistantHref, assistantTeamGroupKey } from "@/features/assistants/lib/assistant-navigation";
@@ -148,12 +148,12 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
       {error ? <><p role="alert" className="text-sm text-danger">{errorText(error)}</p><Button variant="ghost" onClick={() => void refetch()}>Retry</Button></> : isLoading || (isFetching && animateWelcome) ? <p className="text-sm text-primary-500">Loading mates…</p> : <>
         {selectedId ? <Bot className="size-8 text-primary-400" aria-hidden /> : (
           <div aria-hidden="true" className="flex items-end gap-3 px-2 py-2 sm:gap-4">
-            <AssistantAvatar avatar={{ shape: "sphere", color: "blue" }} seed="welcome-sphere"
-              className="mosaic-avatar--floating size-11 -rotate-10 [--avatar-float-delay:-3.2s] sm:size-12" />
-            <AssistantAvatar avatar={{ shape: "mains", color: "violet" }} seed="welcome-mains"
-              className="mosaic-avatar--floating size-14 sm:size-16" />
-            <AssistantAvatar avatar={{ shape: "flower", color: "coral" }} seed="welcome-flower"
-              className="mosaic-avatar--floating size-11 rotate-10 [--avatar-float-delay:-1.6s] sm:size-12" />
+            <AssistantRobotAvatar shape="terminal-amber"
+              className="assistant-avatar--floating size-14 -rotate-10 [--avatar-float-delay:-3.2s] sm:size-16" />
+            <AssistantRobotAvatar shape="clear-violet"
+              className="assistant-avatar--floating size-18 sm:size-20" />
+            <AssistantRobotAvatar shape="metal-silver"
+              className="assistant-avatar--floating size-14 rotate-10 [--avatar-float-delay:-1.6s] sm:size-16" />
           </div>
         )}
         <h1 className="text-xl font-medium">{selectedId ? "Mate unavailable" : "Your mates"}</h1>

@@ -9,6 +9,12 @@ struct ConversationView: View {
         let runID: String
         let cursor: HistoryCursor?
     }
+    private struct MateHeaderRequest: Equatable {
+        let owner: Int
+        let mateID: String?
+        let revision: Int
+        let canLoad: Bool
+    }
     let session: BackendSession
     let runID: String
     let openComputer: () -> Void
@@ -34,6 +40,7 @@ struct ConversationView: View {
     @State private var companion = ConversationCompanionState()
     @State private var outputSelection: ConversationOutputSelection?
     @State private var outputsSheet = false
+    @State private var loadedMate: (owner: Int, mate: Mate)?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.layoutDirection) private var layoutDirection
@@ -49,8 +56,17 @@ struct ConversationView: View {
     #else
     private var focusedVoice: Bool { false }
     #endif
-    private var agents: [SessionSubagent] { session.viewingRunID == runID ? session.transcript.subagents : [] }
+    private var agents: [SessionSubagent] { run?.assistantId == nil && session.viewingRunID == runID ? session.transcript.subagents : [] }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
+    private var mateHeaderRequest: MateHeaderRequest {
+        MateHeaderRequest(owner: session.ownership, mateID: run?.assistantId, revision: session.matesRevision,
+                          canLoad: session.isConnected && session.supportsMates)
+    }
+    private var conversationMate: Mate? {
+        guard let loadedMate, loadedMate.owner == session.ownership, loadedMate.mate.id == run?.assistantId else { return nil }
+        return loadedMate.mate
+    }
+    private var showsMateHeader: Bool { conversationMate != nil && !focusedVoice && !showsConnectionPill }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
     private var composerContext: ComposerContext? {
         if let run { return ComposerContext(run: run) }
@@ -120,7 +136,7 @@ struct ConversationView: View {
             rightToLeft: layoutDirection == .rightToLeft, state: companion, divisions: divisions)
         let action = companion.outputsAction(twoReaders: twoReaders)
         let displayedOutputID = outputSelection?.id
-        return ConversationWorkspace(plan: plan) {
+        return ConversationWorkspace(plan: plan, extendsConversationUnderHeader: showsMateHeader) {
             conversationContent.simultaneousGesture(TapGesture().onEnded {
                 if outputSelection?.id == displayedOutputID { companion.focusConversation() }
             })
@@ -133,8 +149,8 @@ struct ConversationView: View {
         }
         .background(Color(.systemBackground))
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(focusedVoice || showsConnectionPill ? "" : run?.displayTitle ?? "Conversation")
-        .toolbarRole(.editor)
+        .navigationTitle(focusedVoice || showsConnectionPill ? "" : conversationMate?.name ?? run?.displayTitle ?? "Conversation")
+        .toolbarRole(showsMateHeader ? .navigationStack : .editor)
         .toolbar(.visible, for: .navigationBar)
         .task(id: historyEntry) {
             owner = session.ownership
@@ -159,6 +175,7 @@ struct ConversationView: View {
         .task(id: "\(run?.providerId ?? ""):\(session.isConnected)") {
             if let run { await session.loadModels(run.providerId, force: true) }
         }
+        .task(id: mateHeaderRequest) { await loadConversationMate(mateHeaderRequest) }
         .onChange(of: draft.text) { _, _ in companion.focusConversation() }
         .onChange(of: focusedVoice) { _, focused in if focused { companion.close(); outputSelection = nil } }
         .onChange(of: session.ownership) { _, _ in companion.close(); outputSelection = nil; outputsSheet = false }
@@ -205,6 +222,14 @@ struct ConversationView: View {
     }
 
     private func adaptCompanion(twoReaders: Bool) { if !focusedVoice { companion.adapt(expanded: twoReaders, hasOutputs: hasOutputs) } }
+
+    private func loadConversationMate(_ request: MateHeaderRequest) async {
+        guard request.canLoad, let id = request.mateID,
+              let directory = try? await session.loadMates(mateID: id),
+              !Task.isCancelled, request == mateHeaderRequest else { return }
+        loadedMate = directory.mates.first { $0.id == id }.map { (request.owner, $0) }
+    }
+
     private func performOutputsAction(_ action: ConversationCompanionState.OutputsAction) {
         switch action {
         case .browse: outputsSheet = true
@@ -222,6 +247,9 @@ struct ConversationView: View {
             }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor) {
                 content = ContentReference(id: $0)
             }
+            .environment(\.mateChatTint, conversationMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
+            .safeAreaPadding(.top, showsMateHeader ? 32 : 0)
+            .scrollEdgeEffectStyle(showsMateHeader ? .soft : nil, for: .top)
             .opacity(focusedVoice ? 0 : 1)
             .allowsHitTesting(!focusedVoice)
             .accessibilityHidden(focusedVoice)
@@ -239,9 +267,16 @@ struct ConversationView: View {
     }
 
     @ToolbarContentBuilder private func conversationToolbar(outputsAction: ConversationCompanionState.OutputsAction) -> some ToolbarContent {
+            let hasOutputAction = (hasOutputs || companion.isOpen) && !focusedVoice
+            let outputsInMenu = showsMateHeader && horizontalSizeClass != .regular
             if showsConnectionPill {
                 ToolbarItem(placement: .principal) {
                     ConnectionPill(session: session, action: openComputer)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else if let mate = conversationMate, !focusedVoice {
+                ToolbarItem(placement: .principal) {
+                    MateConversationTitle(mate: mate)
                 }
                 .sharedBackgroundVisibility(.hidden)
             } else if session.isDemo && !focusedVoice {
@@ -256,14 +291,15 @@ struct ConversationView: View {
                 #if MAINS_GPT_LIVE
                 if ownsVoice { VoicePresentationMenu() }
                 #endif
-                if (hasOutputs || companion.isOpen) && !focusedVoice {
-                    Button(outputsAction == .showConversation ? "Show conversation" : "Outputs",
-                           systemImage: outputsAction == .showConversation ? "bubble.left" : "doc.on.doc") { performOutputsAction(outputsAction) }
-                        .accessibilityIdentifier("conversationOutputs")
+                if hasOutputAction && !outputsInMenu {
+                    outputsButton(outputsAction)
                 }
                 if !focusedVoice {
                     Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
                     Menu {
+                        if hasOutputAction && outputsInMenu {
+                            outputsButton(outputsAction)
+                        }
                         Button(action: prepareFork) {
                             Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
                         }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
@@ -287,6 +323,12 @@ struct ConversationView: View {
                     .accessibilityLabel("Conversation options").accessibilityIdentifier("conversationOptions")
                 }
             }
+    }
+
+    private func outputsButton(_ action: ConversationCompanionState.OutputsAction) -> some View {
+        Button(action == .showConversation ? "Show conversation" : "Outputs",
+               systemImage: action == .showConversation ? "bubble.left" : "doc.on.doc") { performOutputsAction(action) }
+            .accessibilityIdentifier("conversationOutputs")
     }
 
     private var composerArea: some View {
@@ -447,6 +489,38 @@ struct ConversationView: View {
         guard owner == session.ownership else { return }
         do { try await session.stop(runID) }
         catch { if owner == session.ownership { draft.showFailure(error.localizedDescription, title: "Couldn't stop reply") } }
+    }
+}
+
+struct MateConversationTitle: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let mate: Mate
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    var body: some View {
+        let compact = horizontalSizeClass != .regular
+        // Keep the native bar at its usual height while the avatar and name extend over the chat.
+        Color.clear.frame(width: compact ? 112 : 240, height: 44)
+            .overlay(alignment: .top) {
+                VStack(spacing: -8) {
+                    MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id))
+                        .frame(width: 84, height: 84)
+                    Text(mate.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .modifier(GlassSurface(radius: 18, interactive: false))
+                }
+                .frame(width: compact ? 192 : 240)
+                .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                .fixedSize(horizontal: false, vertical: true)
+                .offset(y: -11)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(mate.name)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("mateConversationHeader")
+            }
+            .allowsHitTesting(false)
     }
 }
 

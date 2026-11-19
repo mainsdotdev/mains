@@ -29,11 +29,12 @@ struct ConversationTranscript: View {
         return session.transcript.rowID(for: artifact)
     }
     private var page: HistoryPage? { session.viewingRunID == runID ? session.transcript.page : nil }
-    private var rows: [TranscriptRow] { session.viewingRunID == runID ? session.transcript.rows(pending: pending, runID: runID) : [] }
+    private var rows: [TranscriptRow] { session.viewingRunID == runID ? session.transcript.rows(pending: pending, runID: runID, forMate: isMate) : [] }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
+    private var isMate: Bool { run?.assistantId != nil }
     private var forkRowID: String? {
-        guard run?.isReplica != true else { return nil }
+        guard !isMate, run?.isReplica != true else { return nil }
         return TranscriptForkAnchor.rowID(in: rows, atLatest: page?.hasNewer != true,
                                          active: run?.isActive == true,
                                          hasLocalContinuation: pending != nil && pending?.isSteering != true)
@@ -50,7 +51,7 @@ struct ConversationTranscript: View {
             // The backend already caps this page at 200 rows / 1 MB. Eager
             // measurement avoids lazy height estimates shifting a live tail.
             VStack(alignment: .leading, spacing: 24) {
-                let footers = run?.mode == "chat" ? [:] : TurnChangeFooters.build(sections: sections, turns: page?.turns ?? [], atLatest: page?.hasNewer != true)
+                let footers = isMate || run?.mode == "chat" ? [:] : TurnChangeFooters.build(sections: sections, turns: page?.turns ?? [], atLatest: page?.hasNewer != true)
                 if page?.hasOlder == true {
                     Button { navigate("older") } label: {
                         HStack(spacing: 8) {
@@ -72,7 +73,7 @@ struct ConversationTranscript: View {
                 }
                 ForEach(sections) { section in
                     VStack(alignment: .leading, spacing: 12) {
-                        ChatTurnView(session: session, section: section, providerID: providerID,
+                        ChatTurnView(session: session, section: section, providerID: providerID, isMate: isMate,
                                      live: run?.isActive == true && section.id == sections.last?.id && !session.transcript.isHistorical,
                                      readContent: readContent, openSubagents: openSubagents,
                                      forkRowID: forkRowID, forkRunID: runID, fork: fork, searchRowID: searchRowID)
@@ -189,7 +190,7 @@ struct ConversationTranscript: View {
             viewport.finishPage(latestConfirmed: false)
         }
         .sheet(item: $activitySelection) { selection in
-            ConversationActivitySheet(session: session, selection: selection)
+            ConversationActivitySheet(session: session, selection: selection, isMate: isMate)
         }
     }
 
@@ -260,7 +261,7 @@ struct ConversationTranscript: View {
         viewport.finishPage(latestConfirmed: latest)
     }
 
-    private var sections: [TranscriptSection] { TranscriptSection.build(rows) }
+    private var sections: [TranscriptSection] { TranscriptSection.build(rows, foldsResponses: !isMate) }
 }
 
 private struct ConversationActivitySelection: Identifiable {
@@ -277,6 +278,7 @@ private struct ConversationActivitySheet: View {
     #endif
     let session: BackendSession
     let selection: ConversationActivitySelection
+    let isMate: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var page: HistoryPage?
     @State private var loading = false
@@ -287,6 +289,7 @@ private struct ConversationActivitySheet: View {
     private var rows: [TranscriptRow] {
         guard let page, valid else { return [] }
         var transcript = Transcript(); transcript.replace(page)
+        if isMate { return transcript.rows(pending: nil, runID: selection.runID, forMate: true) }
         var result = transcript.rows.filter { $0.kind != .tool && $0.kind != .subagents }
         result += page.toolCalls.map { call in
             TranscriptRow(id: "tool:\(call.id)", kind: .tool, text: "", date: call.createdAt, live: false,
@@ -307,10 +310,11 @@ private struct ConversationActivitySheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     ForEach(TranscriptGroup.build(rows)) { group in
-                        if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows) }
+                        if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, isMate: isMate) }
                         else if let row = group.rows.first {
                             if row.id.hasPrefix("child-artifact:") { Text("Agent message").font(.caption).foregroundStyle(.secondary) }
-                            ChatMessage(session: session, row: row, providerID: "", readContent: { if valid { fullMessage = ActivityMessageReference(id: $0) } })
+                            ChatMessage(session: session, row: row, providerID: "", readContent: { if valid { fullMessage = ActivityMessageReference(id: $0) } },
+                                        isMate: isMate)
                         }
                     }
                     if !loading && rows.isEmpty && error == nil { Text("No messages or tool activity in this part.").font(.footnote).foregroundStyle(.secondary) }
@@ -369,6 +373,7 @@ private struct ChatTurnView: View {
     let session: BackendSession
     let section: TranscriptSection
     let providerID: String
+    let isMate: Bool
     let live: Bool
     let readContent: (Int) -> Void
     let openSubagents: () -> Void
@@ -402,10 +407,10 @@ private struct ChatTurnView: View {
             let lastResponse = section.rows.last(where: { $0.kind == .response && $0.mateTask == nil })
             let copyRowID = live || lastResponse?.live == true ? nil : lastResponse?.id
             ForEach(TranscriptGroup.build(rows)) { group in
-                if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: live) }
+                if group.rows.first?.kind == .tool { ChatToolBlock(session: session, rows: group.rows, live: live, isMate: isMate) }
                 else if group.rows.first?.kind == .media { ChatMediaGallery(session: session, media: group.rows.flatMap(\.media)) }
                 else if let row = group.rows.first {
-                    ChatMessage(session: session, row: row, providerID: providerID, readContent: readContent, openSubagents: openSubagents,
+                    ChatMessage(session: session, row: row, providerID: providerID, readContent: readContent, isMate: isMate, openSubagents: openSubagents,
                                 copyText: row.id == copyRowID ? section.responseText : nil, copyIsPreview: section.responseIsPreview,
                                 forkRunID: row.id == forkRowID ? forkRunID : nil, fork: fork)
                         .background(row.id == searchRowID ? Color.accentColor.opacity(0.08) : .clear, in: .rect(cornerRadius: 8))

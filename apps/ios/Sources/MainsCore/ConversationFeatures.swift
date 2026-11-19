@@ -77,12 +77,12 @@ public struct TranscriptSection: Identifiable, Equatable, Sendable {
         return [messages > 0 ? "\(messages) \(messages == 1 ? "message" : "messages")" : "",
                 tools > 0 ? "\(tools) \(tools == 1 ? "tool call" : "tool calls")" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
     }
-    public static func build(_ rows: [TranscriptRow]) -> [Self] {
+    public static func build(_ rows: [TranscriptRow], foldsResponses: Bool = true) -> [Self] {
         var result: [Self] = [], turn: [TranscriptRow] = []
         func flush() {
             guard let first = turn.first else { return }
             let responses = turn.indices.filter { turn[$0].kind == .response && turn[$0].mateTask == nil }
-            if responses.count > 1, let cut = responses.last {
+            if foldsResponses, responses.count > 1, let cut = responses.last {
                 let earlier = Array(turn[..<cut])
                 result.append(Self(id: first.id, rows: turn, previous: earlier.filter { $0.kind != .notice && $0.kind != .media && $0.kind != .subagents && !$0.voice && $0.voiceTask == nil && $0.mateTask == nil },
                                    breakout: earlier.filter { $0.kind == .notice || $0.kind == .media || $0.kind == .subagents || $0.voice || $0.voiceTask != nil || $0.mateTask != nil }, last: Array(turn[cut...])))

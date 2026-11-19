@@ -18,6 +18,8 @@ public struct TranscriptRow: Identifiable, Equatable, Sendable {
     public var voiceTask: VoiceTaskLink? = nil
     public var mateTask: MateAssignmentLink? = nil
     public var voice = false
+    var mateQuestions: [MateQuestion] = []
+    var mateSetupTurns: [MateWelcome.Turn] = []
     /// Display-only lifecycle adjustment; the history/cache keeps the wire status.
     public var toolDisplayStatus: String? = nil
     public var toolPresentation: ToolPresentation? { tool.map { ToolPresentation($0, status: toolDisplayStatus) } }
@@ -208,12 +210,18 @@ public struct Transcript: Sendable {
         promptIdentities[artifact.id]?.id ?? artifact.metadata?["streamId"].string.map { "stream:" + $0 } ?? "artifact:\(artifact.id)"
     }
 
-    public var rows: [TranscriptRow] {
-        let hiddenImageCopies = TranscriptMedia.hiddenGeneratedImageCopies(in: page?.artifacts ?? [])
-        var rows = (page?.artifacts ?? []).compactMap { artifact -> TranscriptRow? in
+    public var rows: [TranscriptRow] { projectedRows(forMate: false) }
+
+    private func projectedRows(forMate: Bool) -> [TranscriptRow] {
+        let artifacts = page?.artifacts ?? []
+        let asyncHistory = forMate ? MateQuestion.asyncHistory(artifacts) : (questions: [:], representedReplies: [])
+        let hiddenImageCopies = TranscriptMedia.hiddenGeneratedImageCopies(in: artifacts)
+        var rows = artifacts.compactMap { artifact -> TranscriptRow? in
             let metadata = artifact.metadata ?? .null
             guard (metadata["voice"].bool || AgentActivity.foreground(metadata)), !AgentActivity.thinking(kind: artifact.kind, metadata: metadata),
-                  artifact.kind != "prompt_suggestion", !hiddenImageCopies.contains(artifact.id) else { return nil }
+                  artifact.kind != "prompt_suggestion", !hiddenImageCopies.contains(artifact.id),
+                  !asyncHistory.representedReplies.contains(artifact.id) else { return nil }
+            if forMate && !metadata["outputSelected"].bool && (metadata["working"].bool || metadata["viewed"].bool) { return nil }
             if artifact.kind == "report", voiceNarration(metadata) { return nil }
             var text = artifact.content ?? ""
             let kind: TranscriptRow.Kind
@@ -238,14 +246,19 @@ public struct Transcript: Sendable {
                     text = "Mate request"
                 }
             case "log":
-                guard metadata["level"].string == "error" else { return nil }
+                guard metadata["level"].string == "error" || forMate && metadata["level"].string == "warn" else { return nil }
+                if forMate && metadata["source"].string == "context_compaction" { return nil }
                 kind = .notice
             case "file", "document", "image", "visualization":
                 guard let item = TranscriptMedia.artifact(artifact) else { return nil }
                 kind = .media; media = [item]; text = ""
             default: return nil
             }
-            guard !text.isEmpty || !media.isEmpty else { return nil }
+            let questions = asyncHistory.questions[artifact.id] ?? []
+            let setup = metadata["question"]["profileSetup"]
+            let setupTurns = forMate && metadata["source"].string == "assistant_welcome" && setup["saved"].bool
+                ? Array(((try? setup["turns"].decode([MateWelcome.Turn].self)) ?? []).prefix(2)) : []
+            guard !text.isEmpty || !media.isEmpty || !questions.isEmpty || !setupTurns.isEmpty else { return nil }
             let streamID = metadata["streamId"].string
             let identity = promptIdentities[artifact.id]
             let id = rowID(for: artifact)
@@ -256,13 +269,16 @@ public struct Transcript: Sendable {
                 return .mate(id: id, name: name)
             }
             return TranscriptRow(id: id, kind: kind, text: text, date: date, live: false,
-                                 deferredArtifactID: mateTask == nil && (metadata["mobileContentDeferred"].bool || metadata["mobileContentDeferred"]["chars"].number != nil) ? artifact.id : nil, media: media,
+                                 deferredArtifactID: mateTask == nil && questions.isEmpty && (metadata["mobileContentDeferred"].bool || metadata["mobileContentDeferred"]["chars"].number != nil) ? artifact.id : nil, media: media,
                                  turnID: Self.turnID(metadata), contextSkills: mates + ((try? metadata["skills"].decode([ContextSkill].self)) ?? []),
                                  delivery: identity == nil ? nil : .accepted,
-                                 voiceTask: VoiceTaskLink.read(metadata["voiceTask"]), mateTask: mateTask, voice: metadata["voice"].bool, sourceID: artifact.id)
+                                 voiceTask: VoiceTaskLink.read(metadata["voiceTask"]), mateTask: mateTask, voice: metadata["voice"].bool,
+                                 mateQuestions: questions, mateSetupTurns: setupTurns, sourceID: artifact.id)
         }
         let projection = SubagentProjection(calls: page?.toolCalls ?? [])
-        rows += (page?.toolCalls ?? []).filter { $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) && !projection.rootCallIDs.contains($0.id) }.map {
+        rows += (page?.toolCalls ?? []).filter {
+            $0.parentToolCallId == nil && AgentActivity.foreground($0.metadata ?? .null) && !projection.rootCallIDs.contains($0.id)
+        }.map {
             TranscriptRow(id: "tool:\($0.id)", kind: .tool, text: "\($0.toolName) · \($0.status)", date: $0.createdAt,
                           live: ["queued", "running"].contains($0.statusForDisplay()), deferredArtifactID: nil, tool: $0, turnID: Self.turnID($0.metadata ?? .null), sourceID: $0.id)
         }
@@ -273,10 +289,19 @@ public struct Transcript: Sendable {
         }
         // Historical pages never pull live output into an older reading position.
         if !isHistorical { rows += streams.values }
-        return Self.projectToolStatuses(rows.sorted(by: Self.ordered))
+        let projected = Self.projectToolStatuses(rows.sorted(by: Self.ordered))
+        // Match the desktop Mate transcript while leaving the full page available to approvals and history.
+        guard forMate else { return projected }
+        return projected.filter { row in
+            if row.kind == .subagents { return false }
+            guard let tool = row.tool else { return true }
+            return tool.isMateQuestion || (tool.metadata?["mcpApp"] ?? .null) != .null
+        }
     }
 
     private static func ordered(_ lhs: TranscriptRow, _ rhs: TranscriptRow) -> Bool {
+        // The phone can timestamp the first prompt before the server writes the welcome.
+        if lhs.mateSetupTurns.isEmpty != rhs.mateSetupTurns.isEmpty { return !lhs.mateSetupTurns.isEmpty }
         if lhs.date != rhs.date { return lhs.date < rhs.date }
         // Desktop orders artifacts before tools on timestamp ties, then by the
         // numeric database id ("tool:10" must never sort before "tool:9").
@@ -304,8 +329,8 @@ public struct Transcript: Sendable {
 
     /// The optimistic prompt occupies its chronological slot from the first frame,
     /// then the durable artifact takes over that same identity without a second row.
-    public func rows(pending: PendingMessage?, runID: String) -> [TranscriptRow] {
-        var result = rows
+    public func rows(pending: PendingMessage?, runID: String, forMate: Bool = false) -> [TranscriptRow] {
+        var result = projectedRows(forMate: forMate)
         guard !isHistorical, let pending, !pending.isSteering, !pending.isQueueOwned, pending.runID == runID, page?.artifacts.contains(where: pending.matches) != true else { return result }
         result.append(TranscriptRow(id: "pending:" + pending.id, kind: .prompt, text: pending.text, date: pending.date,
                                     live: false, deferredArtifactID: nil, contextSkills: pending.contextSkills,

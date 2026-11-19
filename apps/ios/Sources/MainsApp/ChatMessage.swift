@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var mateChatTint: Color? = nil
+}
+
 struct ChatPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View { configuration.label.opacity(configuration.isPressed ? 0.55 : 1) }
 }
@@ -12,19 +16,24 @@ struct ChatMessage: View {
     let row: TranscriptRow
     let providerID: String
     let readContent: (Int) -> Void
+    var isMate = false
     var openSubagents: () -> Void = {}
     var copyText: String? = nil
     var copyIsPreview = false
     var forkRunID: String? = nil
     var fork: () -> Void = {}
     @Environment(\.openVoiceConversation) private var openVoiceConversation
+    @Environment(\.mateChatTint) private var mateTint
     var body: some View {
         VStack(alignment: row.kind == .prompt ? .trailing : .leading, spacing: row.kind == .response ? 4 : 10) {
             switch row.kind {
             case .prompt:
                 if !row.pendingAttachments.isEmpty { PendingPromptAttachments(attachments: row.pendingAttachments) }
                 else if !row.media.isEmpty { ChatMediaGallery(session: session, media: row.media, prompt: true) }
-                if !row.text.isEmpty { PromptBubble(text: row.text, skills: row.contextSkills, providerID: providerID).accessibilityIdentifier(row.id) }
+                if !row.text.isEmpty {
+                    PromptBubble(text: row.text, skills: row.contextSkills, fill: mateTint ?? Provider.accent(providerID))
+                        .accessibilityIdentifier(row.id)
+                }
                 if let delivery = row.delivery {
                     HStack(spacing: 6) {
                         if delivery == .sending { ProgressView().controlSize(.mini) }
@@ -36,6 +45,9 @@ struct ChatMessage: View {
                 if let task = row.mateTask {
                     MateTaskCard(session: session, link: task)
                     if !row.media.isEmpty { ChatMediaGallery(session: session, media: row.media) }
+                } else if !row.mateQuestions.isEmpty {
+                    MateQuestionBubble(entries: row.mateQuestions, providerID: providerID)
+                        .accessibilityIdentifier(row.id)
                 } else if let task = row.voiceTask {
                     Button { openVoiceConversation(task.id) } label: {
                         HStack(spacing: 10) {
@@ -48,7 +60,16 @@ struct ChatMessage: View {
                     }.buttonStyle(ChatPressStyle()).accessibilityLabel("Open working chat: " + task.title)
                         .accessibilityIdentifier("voiceTask-" + task.id)
                 } else {
-                    ChatMessageBody(text: row.text).equatable().accessibilityIdentifier(row.live ? "liveMessage" : row.id)
+                    if !row.mateSetupTurns.isEmpty {
+                        MateSetupHistory(turns: row.mateSetupTurns, tint: mateTint ?? Provider.accent(providerID))
+                            .padding(.bottom, 12)
+                    }
+                    ChatMessageBody(text: row.text).equatable()
+                        .padding(isMate ? 14 : 0)
+                        .background(alignment: .center) {
+                            if isMate { RoundedRectangle(cornerRadius: 22).fill(Color(.secondarySystemBackground)) }
+                        }
+                        .accessibilityIdentifier(row.live ? "liveMessage" : row.id)
                 }
             case .notice:
                 Label(row.text, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
@@ -60,7 +81,7 @@ struct ChatMessage: View {
                 Button("Read full message", systemImage: "text.alignleft") { readContent(id) }
                     .font(.subheadline.weight(.medium))
             }
-            if row.kind == .response, !row.live, copyText != nil || forkRunID != nil {
+            if !isMate, row.kind == .response, !row.live, copyText != nil || forkRunID != nil {
                 ConversationMessageActions(session: session, copyText: copyText, copyIsPreview: copyIsPreview, forkRunID: forkRunID, fork: fork)
             }
         }
@@ -110,19 +131,74 @@ private struct MateTaskCard: View {
     }
 }
 
-private struct PromptBubble: View {
+struct PromptBubble: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let text: String
     let skills: [ContextSkill]
-    let providerID: String
+    let fill: Color
     var body: some View {
         InlineContextText(text: text, skills: skills).textSelection(.enabled).font(.body).lineSpacing(3)
             .padding(.horizontal, 16).padding(.vertical, 12)
             .foregroundStyle(.white)
-            .background(Provider.accent(providerID), in: .rect(cornerRadius: 22))
+            .background(fill, in: .rect(cornerRadius: 22))
             .padding(.leading, 56)
+    }
+}
+
+struct MateQuestionBubble: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let entries: [MateQuestion]
+    let providerID: String
+    @Environment(\.mateChatTint) private var mateTint
+    @ScaledMetric(relativeTo: .footnote) private var badgeSize = 26.0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                let selected = entry.selectedOptions
+                let visible = entry.answer.isEmpty ? Array(entry.options.indices) : selected
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(entry.text).fontWeight(.medium)
+                    ForEach(visible, id: \.self) { index in
+                        let option = entry.options[index]
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(badge(at: index)).font(.footnote.weight(.semibold))
+                                .frame(width: badgeSize, height: badgeSize)
+                                .foregroundStyle(selected.isEmpty ? Color.secondary : mateTint == nil ? .white : .black)
+                                .background(selected.isEmpty ? Color.primary.opacity(0.08) : mateTint ?? Provider.accent(providerID),
+                                            in: .rect(cornerRadius: 7))
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(option.label)
+                                if selected.isEmpty, let description = option.description {
+                                    Text(description).font(.footnote).foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 3)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityAddTraits(selected.isEmpty ? [] : .isSelected)
+                    }
+                    if let status = entry.unanswered { Text(status).font(.footnote).foregroundStyle(.secondary) }
+                }
+                .padding(14)
+                .frame(maxWidth: visible.isEmpty ? nil : .infinity, alignment: .leading)
+                .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 22))
+                if selected.isEmpty, !entry.answer.isEmpty {
+                    PromptBubble(text: entry.answer.joined(separator: "\n"), skills: [], fill: mateTint ?? Provider.accent(providerID))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+        }
+    }
+
+    private func badge(at index: Int) -> String {
+        let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        return letters.indices.contains(index) ? String(letters[index]) : String(index + 1)
     }
 }
 

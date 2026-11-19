@@ -19,7 +19,7 @@ struct WorkspaceConversationsView: View {
     private var runs: [Conversation] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return session.conversations.filter {
-            $0.workspaceId == workspaceID && $0.providerId == session.selectedSpace?.providerId && $0.mode == session.selectedSpace?.mode &&
+            $0.assistantId == nil && $0.workspaceId == workspaceID && $0.providerId == session.selectedSpace?.providerId && $0.mode == session.selectedSpace?.mode &&
             (needle.isEmpty || $0.displayTitle.localizedCaseInsensitiveContains(needle))
         }
     }

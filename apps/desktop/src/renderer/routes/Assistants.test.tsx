@@ -110,8 +110,12 @@ beforeEach(() => {
   mocks.assistants = [{ id: "release", accountId: "account", teamId: "team", name: "Release", description: "Own releases", instructions: "Verify the release before distribution.", isArchived: false, providerId: "codex", avatar: { shape: "sphere", color: "blue" }, model: "model", effort: "high", spaceSnapshot: { name: "Codex" } } as Assistant];
   mocks.assistants.push({ ...mocks.assistants[0], id: "website", name: "Website", description: "Own the website" });
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal("matchMedia", vi.fn(() => ({
+    matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+  })));
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView; else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView; else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
 
 describe("assistant profile and conversation", () => {
   it("opens a searchable archive from the sidebar and restores a mate from its row", async () => {
@@ -145,17 +149,17 @@ describe("assistant profile and conversation", () => {
     await waitFor(() => expect(screen.getByTestId("location").textContent).toContain("assistant=release"));
   });
 
-  it("shows animated avatar previews on the empty screen and opens the first mate form", () => {
+  it("shows the three robot styles on the empty screen and opens the first mate form", () => {
     mocks.assistants = [];
     const { container } = setup("/assistants");
     const heading = screen.getByRole("heading", { name: "Your mates" });
     const emptyState = heading.parentElement!;
-    const avatars = [...emptyState.querySelectorAll('[data-avatar-shape][data-animated="true"]')];
-    expect(avatars.map(avatar => avatar.getAttribute("data-avatar-shape"))).toEqual(["sphere", "mains", "flower"]);
+    const avatars = [...emptyState.querySelectorAll('.assistant-avatar--floating[data-avatar-family="robot"]')];
+    expect(avatars.map(avatar => avatar.getAttribute("data-avatar-shape"))).toEqual(["terminal-amber", "clear-violet", "metal-silver"]);
     expect(avatars.every(avatar => avatar.getAttribute("aria-hidden") === "true")).toBe(true);
     fireEvent.click(within(emptyState).getByRole("button", { name: "New mate" }));
     expect(screen.getByRole("form", { name: "Create mate" })).toBeTruthy();
-    expect(container.querySelector(".mosaic-avatar--floating")).toBeNull();
+    expect(container.querySelector(".assistant-avatar--floating")).toBeNull();
   });
 
   it("lists the new mate first, plays its welcome, and opens a revisited setup without replaying it", async () => {
@@ -309,14 +313,14 @@ describe("assistant profile and conversation", () => {
     fireEvent.change(within(form).getByRole("textbox", { name: "Name" }), { target: { value: "Release bot" } });
     fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), { target: { value: "Checks beta releases" } });
     fireEvent.change(within(form).getByRole("textbox", { name: "Instructions" }), { target: { value: "Verify signing first." } });
-    fireEvent.click(within(form).getByRole("radio", { name: "Kite" }));
-    fireEvent.click(within(form).getByRole("radio", { name: "Lime" }));
+    fireEvent.click(within(form).getByRole("radio", { name: "Clear Shell" }));
+    fireEvent.click(within(form).getByRole("radio", { name: "Coral Kite" }));
     fireEvent.click(save);
     await waitFor(() => expect(within(panel).queryByRole("form", { name: "Edit mate profile" })).toBeNull());
     expect(updateProfile).toHaveBeenCalledExactlyOnceWith({
       accountId: "account", id: "release",
       expectedProfile: { name: "Release", description: "Own releases", instructions: "Verify the release before distribution.", avatar: { shape: "sphere", color: "blue" } },
-      profile: { name: "Release bot", description: "Checks beta releases", instructions: "Verify signing first.", avatar: { shape: "kite", color: "lime" } },
+      profile: { name: "Release bot", description: "Checks beta releases", instructions: "Verify signing first.", avatar: { shape: "clear-coral", color: "coral" } },
     });
     expect(within(panel).getByText("Verify signing first.")).toBeTruthy();
     expect(within(panel).getByText("model", { exact: true })).toBeTruthy();
@@ -576,7 +580,7 @@ describe("assistant profile and conversation", () => {
     expect(screen.queryByTestId("conversation")).toBeNull();
     const header = screen.getByRole("banner", { name: "Assistant header" });
     expect(within(header).getByRole("heading", { name: "New mate" })).toBeTruthy();
-    expect(header.querySelector("[data-avatar-shape='sphere']")).toBeTruthy();
+    expect(header.querySelector("[data-avatar-shape='terminal-amber']")).toBeTruthy();
 
     const name = within(form).getByLabelText("Name");
     fireEvent.change(name, { target: { value: "Travel planner" } });
@@ -584,15 +588,15 @@ describe("assistant profile and conversation", () => {
     fireEvent.change(name, { target: { value: "" } });
     expect(within(header).getByRole("heading", { name: "New mate" })).toBeTruthy();
 
-    const sphere = within(form).getByRole("radio", { name: "Sphere" });
-    const mains = within(form).getByRole("radio", { name: "Mains" });
-    fireEvent.keyDown(sphere, { key: "End" });
-    expect(document.activeElement).toBe(mains);
-    expect(mains.getAttribute("aria-checked")).toBe("true");
-    const avatar = header.querySelector<HTMLElement>("[data-avatar-shape='mains']")!;
-    const previousColor = avatar.style.getPropertyValue("--avatar-base");
-    fireEvent.click(within(form).getByRole("radio", { name: "Rose" }));
-    expect(avatar.style.getPropertyValue("--avatar-base")).not.toBe(previousColor);
+    const amber = within(form).getByRole("radio", { name: "Amber" });
+    const frost = within(form).getByRole("radio", { name: "Frost" });
+    fireEvent.keyDown(amber, { key: "End" });
+    expect(document.activeElement).toBe(frost);
+    expect(frost.getAttribute("aria-checked")).toBe("true");
+    expect(header.querySelector("[data-avatar-shape='terminal-frost']")).toBeTruthy();
+    fireEvent.click(within(form).getByRole("radio", { name: "Clear Shell" }));
+    fireEvent.click(within(form).getByRole("radio", { name: "Rose Prism" }));
+    expect(header.querySelector("[data-avatar-shape='clear-rose']")).toBeTruthy();
 
     fireEvent.click(within(header).getByRole("button", { name: "Close new mate" }));
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("second"));

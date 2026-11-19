@@ -51,6 +51,24 @@ import Testing
 }
 
 @Suite(.serialized) struct ContextTests {
+    @Test func robotCatalogueKeepsSavedPresetsAndGivesLegacyMatesStableVariedAvatars() throws {
+        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let data = try Data(contentsOf: app.appendingPathComponent("Resources/RobotAvatars/presets.json"))
+        let catalogue = try JSONDecoder().decode(MateRobotCatalogue.self, from: data)
+        #expect(catalogue.styles.map(\.presets.count) == [7, 7, 7])
+        #expect(catalogue.defaultPreset?.avatar == MateAvatar(shape: "terminal-amber", color: "amber"))
+        let saved = MateAvatar(shape: "metal-silver", color: "mint")
+        #expect(catalogue.preset(for: saved, mateID: "one")?.avatar == saved)
+        #expect(catalogue.preset(for: saved, mateID: "two")?.avatar == saved)
+
+        let legacy = MateAvatar(shape: "sphere", color: "blue")
+        let identities = (0..<30).map { "legacy-mate-\($0)" }
+        let selected = identities.compactMap { catalogue.preset(for: legacy, mateID: $0)?.id }
+        let reopened = try JSONDecoder().decode(MateRobotCatalogue.self, from: data)
+        #expect(selected == identities.compactMap { reopened.preset(for: legacy, mateID: $0)?.id })
+        #expect(Set(selected).count > 7)
+    }
+
     @Test @MainActor func aPairedSessionRecoversMateCreationAndSendsCodeMentionsAsExplicitContext() async throws {
         let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
         let faults = ContextFaults(), storage = MemoryStorage()

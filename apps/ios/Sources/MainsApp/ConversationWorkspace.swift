@@ -9,16 +9,20 @@ struct ConversationWorkspace<ConversationContent: View, OutputContent: View>: Vi
     @ObserveHotReload private var hotReload
     #endif
     let plan: ConversationPanePlan
+    let extendsConversationUnderHeader: Bool
     let conversation: ConversationContent
     let output: OutputContent
 
-    init(plan: ConversationPanePlan, @ViewBuilder conversation: () -> ConversationContent, @ViewBuilder output: () -> OutputContent) {
-        self.plan = plan; self.conversation = conversation(); self.output = output()
+    init(plan: ConversationPanePlan, extendsConversationUnderHeader: Bool = false,
+         @ViewBuilder conversation: () -> ConversationContent, @ViewBuilder output: () -> OutputContent) {
+        self.plan = plan; self.extendsConversationUnderHeader = extendsConversationUnderHeader
+        self.conversation = conversation(); self.output = output()
     }
     var body: some View {
         ConversationReaderLayout(plan: plan) {
             ZStack { conversation }
-                .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipShape(ConversationReaderClip(extendsAbove: extendsConversationUnderHeader))
                 .environment(\.conversationPaneVisible, plan.showsConversation)
                 .opacity(plan.showsConversation ? 1 : 0).allowsHitTesting(plan.showsConversation)
                 .accessibilityHidden(!plan.showsConversation)
@@ -28,6 +32,13 @@ struct ConversationWorkspace<ConversationContent: View, OutputContent: View>: Vi
                 .accessibilityHidden(!plan.showsOutput)
         }
         .accessibilityIdentifier("conversationWorkspace-\(String(describing: plan.mode))")
+    }
+}
+
+private struct ConversationReaderClip: Shape {
+    let extendsAbove: Bool
+    func path(in rect: CGRect) -> Path {
+        Path(extendsAbove ? rect.union(rect.offsetBy(dx: 0, dy: -rect.height)) : rect)
     }
 }
 

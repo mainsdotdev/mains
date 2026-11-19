@@ -122,6 +122,123 @@ public struct ApprovalPresentation: Sendable {
     }
 }
 
+struct MateQuestion: Equatable, Sendable {
+    struct Option: Equatable, Sendable {
+        let label: String
+        let description: String?
+    }
+
+    let text: String
+    let options: [Option]
+    let answer: [String]
+    let unanswered: String?
+
+    var selectedOptions: [Int] {
+        guard !answer.isEmpty, answer.allSatisfy({ label in options.contains { $0.label == label } }) else { return [] }
+        return options.indices.filter { answer.contains(options[$0].label) }
+    }
+
+    static func read(_ call: ToolCall) -> [Self] {
+        let input = ToolPresentation.unwrap(call.input ?? .null)
+        let output = toolResult(call.output ?? .null)
+        let questions = [output["questions"].array, input["questions"].array, [input], [output]]
+            .lazy.map { $0.filter { nonempty($0["question"]) != nil } }.first { !$0.isEmpty } ?? []
+        let prefix = "User responded:"
+        let plainReply = [output, output["content"], output["detailedContent"]].compactMap(\.string)
+            .first { $0.lowercased().hasPrefix(prefix.lowercased()) }
+            .map { String($0.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines) }
+        return questions.enumerated().compactMap { index, question in
+            guard let text = nonempty(question["question"]) else { return nil }
+            let options = question["options"].array.compactMap { option -> Option? in
+                guard let label = nonempty(option["label"]) else { return nil }
+                return Option(label: label, description: nonempty(option["description"]))
+            }
+            let resolved = [output["answers"][text], output["answers"][String(index)],
+                            index == 0 ? output["answer"] : .null].first { $0 != .null }
+                ?? (index == 0 ? plainReply.map(JSONValue.string) : nil) ?? .null
+            var answer = nonempty(resolved).map { [$0] } ?? resolved.array.compactMap(nonempty)
+            if question["multiSelect"].bool, let label = nonempty(resolved), !options.contains(where: { $0.label == label }) {
+                answer = label.components(separatedBy: ", ")
+            }
+            let reason: String? = switch output["annotations"][text]["unanswered"].string {
+            case "dismissed": "Dismissed"
+            case "skipped": "Skipped"
+            case "replied_in_chat": "Answered in chat"
+            default: output["status"].string == "canceled" || (answer.isEmpty && ["error", "canceled"].contains(call.status)) ? "Unanswered" : nil
+            }
+            if reason != nil || input["isSecret"].bool || question["isSecret"].bool || output["isSecret"].bool { answer = [] }
+            return Self(text: text, options: options, answer: answer, unanswered: reason)
+        }
+    }
+
+    /// Retain the structured question and its reply in history, even if one arrived before the other.
+    static func asyncHistory(_ artifacts: [Artifact]) -> (questions: [Int: [Self]], representedReplies: Set<Int>) {
+        var replies: [Int: (artifact: Artifact, answers: [String])] = [:]
+        for artifact in artifacts where artifact.kind == "user-prompt" {
+            let metadata = artifact.metadata ?? .null
+            let reply = metadata["asyncQuestionReply"]
+            guard let id = reply["artifactId"].number.flatMap(Int.init(exactly:)), id > 0,
+                  metadata["clientUserMessageId"].string == "codex-async-answer-\(id)",
+                  let answers = readAsyncAnswers(reply) else { continue }
+            replies[id] = (artifact, answers)
+        }
+        var questions: [Int: [Self]] = [:]
+        var representedReplies: Set<Int> = []
+        for artifact in artifacts where artifact.metadata?["source"].string == "codex_async_questions" {
+            let metadata = artifact.metadata ?? .null
+            let entries = PendingAsyncQuestions.readQuestions(metadata["questions"])
+            guard !entries.isEmpty, AgentActivity.foreground(metadata),
+                  metadata["outputSelected"].bool || (!metadata["working"].bool && !metadata["viewed"].bool) else { continue }
+            let saved = metadata["asyncQuestionAnswer"]
+            let savedAnswers = saved["artifactId"].number == Double(artifact.id) &&
+                saved["clientUserMessageId"].string == "codex-async-answer-\(artifact.id)" ? readAsyncAnswers(saved) : nil
+            let reply = replies[artifact.id].flatMap { $0.artifact.runId == artifact.runId && $0.answers.count == entries.count ? $0 : nil }
+            let answers = savedAnswers?.count == entries.count ? savedAnswers : reply?.answers
+            if let reply, reply.answers == answers { representedReplies.insert(reply.artifact.id) }
+            let state = metadata["asyncQuestionState"]
+            let unanswered = state["dismissed"].bool ? "Dismissed" : (state["supersededBy"].number ?? 0) > 0 ? "Answered in chat" : nil
+            questions[artifact.id] = entries.enumerated().map { index, entry in
+                Self(text: entry.title, options: entry.options.map { Option(label: $0, description: nil) },
+                     answer: answers.map { [$0[index]] } ?? [], unanswered: answers == nil ? unanswered : nil)
+            }
+        }
+        return (questions, representedReplies)
+    }
+
+    private static func nonempty(_ value: JSONValue) -> String? {
+        guard let text = value.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return text
+    }
+
+    private static func readAsyncAnswers(_ value: JSONValue) -> [String]? {
+        let raw = value["answers"].array
+        let answers = raw.compactMap(nonempty)
+        return !answers.isEmpty && answers.count == raw.count ? answers : nil
+    }
+
+    private static func toolResult(_ value: JSONValue, depth: Int = 0) -> JSONValue {
+        guard depth < 8 else { return .null }
+        let result = ToolPresentation.unwrap(value)
+        if result["structuredContent"] != .null { return toolResult(result["structuredContent"], depth: depth + 1) }
+        if result["contentItems"] != .null { return toolResult(result["contentItems"], depth: depth + 1) }
+        let blocks = result.array.isEmpty ? result["content"].array : result.array
+        if blocks.count == 1, let block = blocks.first, ["text", "inputText"].contains(block["type"].string ?? ""),
+           let text = block["text"].string {
+            return toolResult(.string(text), depth: depth + 1)
+        }
+        return result
+    }
+}
+
+extension ToolCall {
+    var isMateQuestion: Bool {
+        let name = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let prefix = "mcp__mains__"
+        let shortName = name.hasPrefix(prefix) ? String(name.dropFirst(prefix.count)) : name
+        return ["askassistantquestion", "askuserquestion", "ask_user", "askuser", "userinput", "request_user_input"].contains(shortName)
+    }
+}
+
 public struct AsyncQuestion: Equatable, Sendable {
     public let title: String
     public let options: [String]

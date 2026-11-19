@@ -10,10 +10,39 @@ public struct MateTeam: Decodable, Identifiable, Sendable {
     public let name: String
 }
 
-public struct MateAvatar: Codable, Sendable {
+public struct MateAvatar: Codable, Hashable, Sendable {
     public var shape: String
     public var color: String
     public init(shape: String, color: String) { self.shape = shape; self.color = color }
+}
+
+struct MateRobotCatalogue: Decodable, Sendable {
+    struct Style: Decodable, Identifiable, Sendable {
+        let id: String
+        let label: String
+        let presets: [Preset]
+    }
+
+    struct Preset: Decodable, Identifiable, Sendable {
+        let id: String
+        let label: String
+        let color: String
+        var avatar: MateAvatar { MateAvatar(shape: id, color: color) }
+    }
+
+    let defaultShape: String
+    let styles: [Style]
+
+    var defaultPreset: Preset? { styles.lazy.flatMap(\.presets).first { $0.id == defaultShape } }
+
+    func preset(for avatar: MateAvatar?, mateID: String) -> Preset? {
+        let presets = styles.flatMap(\.presets)
+        if let avatar, let exact = presets.first(where: { $0.id == avatar.shape }) { return exact }
+        guard !presets.isEmpty else { return nil }
+        // Keep a legacy profile's display stable across relaunches and navigation.
+        let hash = mateID.utf8.reduce(UInt32(2_166_136_261)) { ($0 ^ UInt32($1)) &* 16_777_619 }
+        return presets[Int(hash % UInt32(presets.count))]
+    }
 }
 
 public struct Mate: Decodable, Identifiable, Sendable {
@@ -50,7 +79,7 @@ public struct MateWelcome: Decodable, Sendable {
         public let draft: MateProfile?
         public let saved: Bool?
     }
-    public struct Turn: Decodable, Sendable {
+    public struct Turn: Decodable, Equatable, Sendable {
         public let question: String
         public let answer: String
     }

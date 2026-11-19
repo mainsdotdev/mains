@@ -90,7 +90,7 @@ private struct ContextPickerPanel: View {
     private var skills: [ContextSkill] {
         let choices = showMates ? mates.filter { mate in
             mate.ready && (request.query.isEmpty || mate.name.localizedCaseInsensitiveContains(request.query) || mate.description.localizedCaseInsensitiveContains(request.query))
-        }.map { ContextSkill.mate(id: $0.id, name: $0.name, description: $0.description, providerID: $0.providerId) } : []
+        }.map { ContextSkill.mate(id: $0.id, name: $0.name, description: $0.description, providerID: $0.providerId, avatar: $0.avatar) } : []
         return choices + catalogue.matchingSkills(request.query, pluginsOnly: request.pluginsOnly)
     }
     private var commands: [ContextCommand] { catalogue.matchingCommands(request.query, trigger: request.trigger, pluginsOnly: request.pluginsOnly) }
@@ -244,8 +244,9 @@ struct ContextSkillIcon: View {
     }
     var body: some View {
         Group {
-            // Absolute paths belong to the computer; never treat them as phone files or URLs.
-            if let source = skill.iconSmall ?? skill.iconLarge, source.hasPrefix("data:image/"), source.utf8.count <= 350_000,
+            if let id = skill.mateID {
+                MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: skill.mateAvatar, mateID: id))
+            } else if let source = skill.iconSmall ?? skill.iconLarge, source.hasPrefix("data:image/"), source.utf8.count <= 350_000,
                let comma = source.firstIndex(of: ","), let bytes = Data(base64Encoded: String(source[source.index(after: comma)...])),
                let image = UIImage(data: bytes) {
                 Image(uiImage: image).resizable().scaledToFit()

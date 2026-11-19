@@ -7,6 +7,7 @@ struct ChatToolBlock: View {
     let session: BackendSession
     let rows: [TranscriptRow]
     var live = false
+    var isMate = false
     @State private var disclosure = TranscriptDisclosure()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var calls: [ToolCall] { rows.compactMap(\.tool) }
@@ -14,7 +15,24 @@ struct ChatToolBlock: View {
     private var active: Bool { running || live }
     private var expanded: Bool { disclosure.isExpanded(active: active) }
     var body: some View {
-        if !calls.isEmpty {
+        if isMate {
+            let providerID = session.conversations.first { $0.id == session.viewingRunID }?.providerId ?? ""
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(rows) { row in
+                    if let call = row.tool {
+                        if call.isMateQuestion {
+                            let entries = MateQuestion.read(call)
+                            if !entries.isEmpty {
+                                MateQuestionBubble(entries: entries, providerID: providerID)
+                                    .accessibilityIdentifier("mateQuestion-\(call.id)")
+                            }
+                        } else {
+                            ChatToolRow(session: session, call: call, displayStatus: row.toolDisplayStatus)
+                        }
+                    }
+                }
+            }
+        } else if !calls.isEmpty {
             let group = ToolGroupPresentation(calls)
             VStack(alignment: .leading, spacing: 6) {
                 if calls.count > 1 {

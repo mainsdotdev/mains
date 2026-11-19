@@ -10,6 +10,242 @@ final class MainsUITests: XCTestCase {
         return app
     }
 
+    func testNewMateSetupUsesChatBubblesAndContinuesInTheFirstConversation() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["openMates"].tap()
+        let newMate = app.buttons["newMate"]
+        XCTAssertTrue(newMate.waitForExistence(timeout: 5))
+        newMate.tap()
+        let name = app.textFields["mateName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap()
+        name.typeText("Kitchen Mate")
+        app.buttons["createMate"].tap()
+
+        let greeting = app.staticTexts["Hi, I’m Kitchen Mate. What would you like me to help with?"]
+        let setupAnswer = app.descendants(matching: .any).matching(identifier: "mateSetupAnswer").firstMatch
+        let sendAnswer = app.buttons["sendMateSetupAnswer"]
+        XCTAssertTrue(greeting.waitForExistence(timeout: 10))
+        XCTAssertTrue(setupAnswer.exists)
+        attachScreenshot(app, name: "New Mate – setup conversation")
+
+        setupAnswer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(setupAnswer.frame.midY, sendAnswer.frame.midY, accuracy: 3)
+        setupAnswer.typeText("Help me plan meals")
+        XCTAssertLessThanOrEqual(setupAnswer.frame.maxY, sendAnswer.frame.minY)
+        sendAnswer.tap()
+        let allow = app.buttons["allowDataSharing"]
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        XCTAssertTrue(app.staticTexts["What should I focus on first?"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Help me plan meals"].exists)
+        setupAnswer.tap()
+        setupAnswer.typeText("Quick dinners")
+        sendAnswer.tap()
+
+        let save = app.buttons["saveMateProfile"]
+        XCTAssertTrue(save.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Quick dinners"].exists)
+        let edit = app.buttons["editMateProfile"]
+        if !edit.isHittable { app.scrollViews.firstMatch.swipeUp() }
+        edit.tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "mateProfileInstructions").firstMatch.exists)
+        edit.tap()
+        XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "New Mate – profile draft")
+        save.tap()
+
+        let idle = app.staticTexts["Profile saved. What would you like me to do first?"]
+        XCTAssertTrue(idle.waitForExistence(timeout: 10))
+        let firstTask = app.textViews["homeMessageInput"]
+        XCTAssertTrue(firstTask.exists)
+        firstTask.tap()
+        let startTask = app.buttons["startConversation"]
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(firstTask.frame.midY, startTask.frame.midY, accuracy: 3)
+        firstTask.typeText("Make a prep list")
+        XCTAssertLessThanOrEqual(firstTask.frame.maxY, startTask.frame.minY)
+        startTask.tap()
+        XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Native reply delivered."].waitForExistence(timeout: 10))
+        XCTAssertTrue(greeting.exists)
+        XCTAssertTrue(app.staticTexts["Help me plan meals"].exists)
+        XCTAssertTrue(app.staticTexts["Quick dinners"].exists)
+        let firstMessage = app.staticTexts["Make a prep list"]
+        XCTAssertTrue(firstMessage.exists)
+        XCTAssertLessThan(greeting.frame.minY, firstMessage.frame.minY)
+        XCTAssertLessThan(idle.frame.minY, firstMessage.frame.minY)
+        attachScreenshot(app, name: "New Mate – setup history in the first chat")
+
+        app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars["Kitchen Mate"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMatesGroupByTeamAndOpenChatWithMateHeader() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["openMates"].tap()
+
+        let firstMate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(firstMate.waitForExistence(timeout: 5))
+        let rows = [
+            app.staticTexts["Release Team"], firstMate, app.buttons["mate-fixture-reviewer"],
+            app.staticTexts["Planning Team"], app.buttons["mate-fixture-planner"],
+            app.staticTexts["No team"], app.buttons["mate-fixture-solo"],
+        ]
+        for row in rows { XCTAssertTrue(row.exists) }
+        let offsets = rows.map { $0.frame.minY }
+        XCTAssertEqual(offsets, offsets.sorted())
+        XCTAssertFalse(app.staticTexts["Empty Team"].exists)
+        attachScreenshot(app, name: "Mates – grouped by team")
+
+        firstMate.tap()
+        XCTAssertTrue(app.staticTexts["1m ago"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["1d ago"].exists)
+        attachScreenshot(app, name: "Mate – avatar card and chat ages")
+
+        app.staticTexts["Release check 1"].tap()
+        let header = app.descendants(matching: .any).matching(identifier: "mateConversationHeader").firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 10))
+        XCTAssertEqual(header.label, "Fixture Mate")
+        XCTAssertEqual(header.frame.midX, app.frame.midX, accuracy: 3)
+        let bar = app.navigationBars["Fixture Mate"]
+        XCTAssertTrue(bar.exists)
+        XCTAssertGreaterThan(header.frame.height, 84)
+        XCTAssertGreaterThan(header.frame.maxY, bar.frame.maxY + 20)
+        XCTAssertTrue(app.buttons["newConversation"].exists)
+        XCTAssertTrue(app.buttons["conversationOptions"].exists)
+        let prompt = app.staticTexts["Check whether the build is ready."]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        let transcript = app.scrollViews.firstMatch
+        for _ in 0..<4 {
+            if prompt.frame.minY > header.frame.maxY { break }
+            transcript.swipeDown()
+        }
+        XCTAssertGreaterThan(prompt.frame.minY, header.frame.maxY)
+        XCTAssertTrue(app.staticTexts["The release checklist is ready."].exists)
+        XCTAssertTrue(app.staticTexts["Signing is still pending."].exists)
+        XCTAssertFalse(app.staticTexts["Temporary build note."].exists)
+        XCTAssertFalse(app.buttons["turnFile-91-src/Mate.swift"].exists)
+        XCTAssertFalse(app.staticTexts["Edited 1 file"].exists)
+        XCTAssertTrue(app.staticTexts["Which release audience should we use?"].exists)
+        XCTAssertTrue(app.staticTexts["Internal testing"].exists)
+        XCTAssertFalse(app.staticTexts["External testing"].exists)
+        XCTAssertTrue(app.staticTexts["When should we distribute the build?"].exists)
+        XCTAssertTrue(app.staticTexts["Today"].exists)
+        XCTAssertTrue(app.staticTexts["Tomorrow"].exists)
+        XCTAssertTrue(app.staticTexts["After signing completes."].exists)
+        XCTAssertFalse(app.buttons["toolCall-2"].exists)
+        XCTAssertFalse(app.buttons["copyAnswer"].exists)
+        attachScreenshot(app, name: "Mate chat – centered header")
+
+        app.buttons["conversationOptions"].tap()
+        let outputs = app.buttons["conversationOutputs"]
+        XCTAssertTrue(outputs.waitForExistence(timeout: 5))
+        outputs.tap()
+        XCTAssertTrue(app.navigationBars["Outputs"].waitForExistence(timeout: 5))
+        app.buttons["closeComposerSheet"].tap()
+
+        let initialPromptY = prompt.frame.minY
+        let start = transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.83, dy: 0.54))
+        let end = start.withOffset(CGVector(dx: 0, dy: -107))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.25)
+        XCTAssertLessThan(prompt.frame.minY, initialPromptY - 40)
+        attachScreenshot(app, name: "Mate chat – messages beneath header")
+
+        let input = app.textViews.firstMatch
+        let send = app.buttons["Send message"]
+        let addAttachment = app.buttons["Add attachment"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+        XCTAssertEqual(input.frame.midY, addAttachment.frame.midY, accuracy: 3)
+        XCTAssertEqual(input.frame.midY, send.frame.midY, accuracy: 3)
+        let compactWidth = input.frame.width
+        attachScreenshot(app, name: "Mate composer – empty with keyboard")
+
+        input.typeText("A")
+        XCTAssertTrue(keyboard.exists)
+        let expanded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            input.frame.maxY <= addAttachment.frame.minY && input.frame.width > compactWidth
+        }, object: input)
+        XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 3), .completed)
+        XCTAssertEqual(addAttachment.frame.midY, send.frame.midY, accuracy: 3)
+        input.typeText("\nSecond line")
+        XCTAssertEqual(input.value as? String, "A\nSecond line")
+        XCTAssertLessThan(send.frame.maxY, keyboard.frame.minY)
+        attachScreenshot(app, name: "Mate composer – expanded while typing")
+
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "A\nSecond line".count))
+        let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            abs(input.frame.midY - addAttachment.frame.midY) <= 3 && abs(input.frame.width - compactWidth) <= 3
+        }, object: input)
+        XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 3), .completed)
+        XCTAssertTrue(keyboard.exists)
+        XCTAssertEqual(input.value as? String, "")
+
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(app.staticTexts["Release check 1"].waitForExistence(timeout: 5))
+        app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateAvatarDragsKeepTheListAndNavigationInPlace() throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        let preview = app.descendants(matching: .any).matching(identifier: "mate-robot-preview").firstMatch
+        let root = app.coordinate(withNormalizedOffset: .zero)
+
+        func drag(from point: CGPoint, dx: CGFloat = 0, dy: CGFloat = 0) {
+            root.withOffset(CGVector(dx: point.x, dy: point.y)).press(forDuration: 0.05, thenDragTo:
+                root.withOffset(CGVector(dx: point.x + dx, dy: point.y + dy)))
+        }
+
+        func checkPreview(in title: String) {
+            XCTAssertTrue(preview.waitForExistence(timeout: 15))
+            let position = preview.frame
+            let center = CGPoint(x: position.midX, y: position.midY)
+            let original = preview.screenshot().pngRepresentation
+            drag(from: center, dx: 135)
+            XCTAssertTrue(app.navigationBars[title].exists)
+            XCTAssertNotEqual(preview.screenshot().pngRepresentation, original)
+            drag(from: center, dy: -130)
+            XCTAssertTrue(app.navigationBars[title].exists)
+            XCTAssertEqual(preview.frame.minY, position.minY, accuracy: 3)
+        }
+
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        mate.tap()
+        checkPreview(in: "Fixture Mate")
+
+        let initialY = preview.frame.minY
+        drag(from: CGPoint(x: app.frame.maxX - 38, y: app.frame.midY + 140), dy: -180)
+        XCTAssertTrue(!preview.exists || preview.frame.minY < initialY - 20)
+        app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+
+        app.buttons["newMate"].tap()
+        checkPreview(in: "New Mate")
+        let pickerPosition = preview.frame
+        drag(from: CGPoint(x: pickerPosition.midX, y: pickerPosition.midY), dy: 225)
+        XCTAssertTrue(app.navigationBars["New Mate"].exists)
+        XCTAssertEqual(preview.frame.minY, pickerPosition.minY, accuracy: 3)
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        forgetFixture(app)
+    }
+
     func testWorkInboxShowsAllProvidersOpensRequestsAndStopsBackgroundWork() async throws {
         continueAfterFailure = false
         let app = makeApplication()
@@ -813,31 +1049,32 @@ final class MainsUITests: XCTestCase {
         app.buttons["closeSidebar"].tap()
         let home = app.textViews["homeMessageInput"]
         home.tap(); home.typeText("A short keyboard draft")
-        assertComposerAboveKeyboard(app, sendID: "startConversation")
+        assertComposerAboveKeyboard(app)
         home.typeText("\nAnother line\nA third line")
-        assertComposerAboveKeyboard(app, sendID: "startConversation")
+        assertComposerAboveKeyboard(app)
         openSidebar(app); conversation.tap()
-        let input = app.textViews["messageInput"]
+        let input = app.textViews.firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("A conversation keyboard draft")
-        assertComposerAboveKeyboard(app, sendID: "sendMessage")
+        assertComposerAboveKeyboard(app)
         input.typeText("\nAnother line\nA third line")
-        assertComposerAboveKeyboard(app, sendID: "sendMessage")
+        assertComposerAboveKeyboard(app)
         forgetFixture(app)
     }
 
-    private func assertComposerAboveKeyboard(_ app: XCUIApplication, sendID: String, file: StaticString = #filePath, line: UInt = #line) {
+    private func assertComposerAboveKeyboard(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5), file: file, line: line)
         let keyboardTop = keyboard.frame.minY
-        for id in ["addAttachment", "chooseModel", sendID] {
-            let button = app.buttons[id]
+        let send = app.buttons["Send message"]
+        let model = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label BEGINSWITH %@", "chooseModel", "Balanced")).firstMatch
+        for button in [app.buttons["Add attachment"], model, send] {
             XCTAssertTrue(button.isHittable, file: file, line: line)
-            XCTAssertLessThanOrEqual(button.frame.maxY, keyboardTop - 4, "\(id) must be fully above the keyboard", file: file, line: line)
+            XCTAssertLessThanOrEqual(button.frame.maxY, keyboardTop - 4, "\(button.label) must be fully above the keyboard", file: file, line: line)
         }
         let dismiss = app.buttons["dismissKeyboard"]
         if dismiss.exists {
-            XCTAssertFalse(dismiss.frame.intersects(app.buttons[sendID].frame), "Keyboard dismissal must not cover Send", file: file, line: line)
+            XCTAssertFalse(dismiss.frame.intersects(send.frame), "Keyboard dismissal must not cover Send", file: file, line: line)
         }
     }
 

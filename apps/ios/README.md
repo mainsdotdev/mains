@@ -851,6 +851,11 @@ files, update them in Xcode or regenerate with `npm run project:generate`
 directly from desktop's current `iconRegistry` into the asset catalogue with
 `node scripts/sync-icons.mjs`. This includes new names, strokes and masks;
 full-viewport SVG wrappers are flattened for native template rendering.
+Mate robot thumbnails come from the desktop asset directory. After changing a
+robot preset, mesh, shader or motion, run `node scripts/export-ios-mate-avatars.mjs`
+from `apps/desktop` to regenerate the bundled preview renderer and preset catalogue.
+Add `--check` to verify both generated files.
+
 The filled Mains mark, Bridge status mark, Atlas navigation icons and model brand marks are included from their desktop components as well.
 Current-colour alpha masks use white mask paint so native luminance rendering
 does not erase outlined marks such as Mains.

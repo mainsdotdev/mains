@@ -50,6 +50,12 @@ app.resources_build_phase.add_file_reference(voice_license) if voice_enabled
 math = resources.new_file('Math')
 math.last_known_file_type = 'folder'
 app.resources_build_phase.add_file_reference(math)
+robot_avatars = resources.new_file('RobotAvatars')
+robot_avatars.last_known_file_type = 'folder'
+app.resources_build_phase.add_file_reference(robot_avatars)
+robot_thumbnails = resources.new_file('../../desktop/src/renderer/features/assistants/assets/robots')
+robot_thumbnails.last_known_file_type = 'folder'
+app.resources_build_phase.add_file_reference(robot_thumbnails)
 voice_previews = resources.new_file('VoicePreviews')
 voice_previews.last_known_file_type = 'folder'
 app.resources_build_phase.add_file_reference(voice_previews) if voice_enabled

@@ -17,12 +17,29 @@ const require = createRequire(new URL('../../server/package.json', import.meta.u
 const { WebSocketServer, WebSocket } = require('ws');
 const port = Number(process.env.MAINS_FIXTURE_PORT ?? 18787);
 const descriptor = { backendId: 'ios-fixture', name: 'Test Mac', appVersion: '0.1.0', protocolVersion: WS_PROTOCOL_VERSION,
-  capabilities: ['runs', 'space', 'workspace'], serverTime: new Date().toISOString() };
+  capabilities: ['runs', 'space', 'workspace', 'assistants'], serverTime: new Date().toISOString() };
+const fixtureMate = {
+  id: 'fixture-mate', name: 'Fixture Mate', description: 'Checks releases',
+  avatar: { shape: 'terminal-amber', color: 'amber' }, teamId: 'release-team',
+  providerId: 'codex', model: 'fixture-balanced', needsSetup: false, welcome: null,
+};
+const fixtureMateTeams = [
+  { id: 'release-team', name: 'Release Team' },
+  { id: 'planning-team', name: 'Planning Team' },
+  { id: 'empty-team', name: 'Empty Team' },
+];
+const fixtureMates = [
+  fixtureMate,
+  { ...fixtureMate, id: 'fixture-planner', name: 'Fixture Planner', description: 'Plans trips', teamId: 'planning-team' },
+  { ...fixtureMate, id: 'fixture-reviewer', name: 'Fixture Reviewer', description: 'Reviews changes' },
+  { ...fixtureMate, id: 'fixture-solo', name: 'Fixture Solo', description: '', teamId: null },
+];
 const connections = new Set(), receipts = new Map(), observations = [];
 const timers = new Set(), replies = new Map();
 const pendingDecisions = new Map();
 const queueProjections = createRunQueueProjectionStore();
 const storedTurns = new Map(), storedDiffs = new Map();
+const createdMates = new Map();
 let acceptsConnections = true;
 let holdSnapshot = 0;
 let contextDelayMs = 0, contextInvalidRows = false;
@@ -41,6 +58,7 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   pagedHistory = paging;
   disjointHistory = disjoint;
   receipts.clear(); pendingDecisions.clear(); storedTurns.clear(); storedDiffs.clear(); observations.length = 0; nextID = 10;
+  createdMates.clear();
   queueProjections.clear();
   tools = new Map();
   spaces = [{ id: 'fixture-space', name: 'Codex', providerId: 'codex', icon: 'icon:codex', mode: 'chat', model: null, isArchived: false },
@@ -376,6 +394,107 @@ wss.on('connection', socket => {
           result = { fileName: 'notes.md', relativePath: 'docs/notes.md', content: '# Notes\n\nA run-local file with $x^2$ and [a PDF](report.pdf).' }; break;
         }
         case CHANNELS.backend.describe: result = descriptor; break;
+        case CHANNELS.assistants.mobileDirectory: {
+          const mates = [...fixtureMates, ...createdMates.values()];
+          result = { mates: args[1] ? mates.filter(mate => mate.id === args[1]) : mates, teams: fixtureMateTeams }; break;
+        }
+        case CHANNELS.assistants.create: {
+          const input = args[0], space = spaces.find(space => space.id === input.spaceId);
+          if (!commandId || input.accountId !== 'fixture-account' || !space || !input.profileSetup) throw new Error('Invalid Mate creation');
+          const id = `created-mate-${nextID++}`;
+          const question = { question: `Hi, I’m ${input.name}. What would you like me to help with?`, options: [],
+            idleMessage: 'Profile saved. What would you like me to do first?', profileSetup: { turns: [] } };
+          createdMates.set(id, { id, name: input.name, avatar: input.avatar, teamId: input.teamId, description: '',
+            providerId: space.providerId, model: input.model, needsSetup: true,
+            welcome: { runId: `welcome-${id}`, question, state: 'ready', error: null } });
+          result = { id };
+          receipts.set(commandId, { success: true, data: result });
+          broadcast(CHANNELS.assistants.changed, {}); break;
+        }
+        case CHANNELS.assistants.setupProfile: {
+          const [accountId, mateId, input] = args;
+          const mate = createdMates.get(mateId), welcome = mate?.welcome, question = welcome?.question, setup = question?.profileSetup;
+          if (!commandId || accountId !== 'fixture-account' || welcome?.state !== 'ready' || !setup || setup.saved) throw new Error('Invalid Mate setup');
+          if (input.action === 'answer' && input.step === setup.turns.length && input.step < 2 && !setup.draft) {
+            setup.turns.push({ question: question.question, answer: input.answer });
+            welcome.state = 'generating';
+            later(1_100, () => {
+              if (setup.turns.length === 1) question.question = 'What should I focus on first?';
+              else setup.draft = { description: 'Helps plan meals.', instructions: 'Suggest practical recipes and make concise shopping lists.' };
+              welcome.state = 'ready';
+              broadcast(CHANNELS.assistants.changed, {});
+            });
+          } else if (input.action === 'save' && setup.draft) {
+            setup.draft = input.profile;
+            setup.saved = true;
+            mate.description = input.profile.description;
+            mate.needsSetup = false;
+            welcome.state = 'skipped';
+          } else { throw new Error('Unexpected Mate setup step'); }
+          result = null;
+          receipts.set(commandId, { success: true, data: result });
+          broadcast(CHANNELS.assistants.changed, {}); break;
+        }
+        case CHANNELS.assistants.send: {
+          const input = args[0], mate = createdMates.get(input.assistantId), welcome = mate?.welcome;
+          if (!commandId || input.accountId !== 'fixture-account' || !welcome?.question.profileSetup.saved ||
+              input.runId !== welcome.runId || input.requestId !== `welcome-${mate.id}`) throw new Error('Invalid first Mate message');
+          const runId = welcome.runId, date = new Date();
+          runs.unshift({ id: runId, assistantId: mate.id, accountId: input.accountId, title: input.message, providerId: mate.providerId,
+            mode: 'work', spaceId: 'fixture-space', model: mate.model, status: 'queued', isArchived: false, isReplica: false,
+            lastError: null, createdAt: date, updatedAt: date });
+          artifacts.set(runId, [{ id: nextID++, runId, kind: 'report', content: welcome.question.idleMessage,
+            metadata: { source: 'assistant_welcome', question: welcome.question }, createdAt: date }]);
+          mate.welcome = null;
+          result = { runId };
+          receipts.set(commandId, { success: true, data: result });
+          startReply(runId, input.message, commandId);
+          broadcast(CHANNELS.assistants.changed, {}); break;
+        }
+        case CHANNELS.assistants.conversations: {
+          result = args[1] === fixtureMate.id ? Array.from({ length: 20 }, (_, index) => {
+            const id = `fixture-mate-chat-${index}`, title = `Release check ${index + 1}`;
+            let run = runs.find(row => row.id === id);
+            if (!run) {
+              const date = new Date(Date.now() - (index === 0 ? 85_000 : index * 86_400_000));
+              run = { id, title, assistantId: fixtureMate.id, accountId: 'fixture-account', providerId: fixtureMate.providerId,
+                mode: 'developer', spaceId: 'fixture-code', model: fixtureMate.model, status: 'succeeded',
+                isArchived: false, isReplica: false, lastError: null, createdAt: date, updatedAt: date };
+              runs.push(run);
+              if (index === 0) {
+                const at = offset => new Date(date.getTime() + offset);
+                artifacts.set(id, [
+                  { id: 1, runId: id, kind: 'user-prompt', content: 'Check whether the build is ready.', metadata: { source: 'user' }, createdAt: date },
+                  { id: 2, runId: id, kind: 'report', content: 'The release checklist is ready.', metadata: { streamId: 'mate-check' },
+                    createdAt: at(1_000) },
+                  { id: 3, runId: id, kind: 'report', content: 'Temporary build note.', metadata: { working: true }, createdAt: at(2_000) },
+                  { id: 4, runId: id, kind: 'log', content: 'Signing is still pending.', metadata: { level: 'warn' }, createdAt: at(3_000) },
+                  ...Array.from({ length: 7 }, (_, part) => ({
+                    id: 5 + part, runId: id, kind: 'report',
+                    content: `Release note ${part + 1}. The build passed local validation. Check the release notes before sharing the build with the team.`,
+                    createdAt: at(4_000 + part * 1_000),
+                  })),
+                ]);
+                tools.set(id, [
+                  { id: 1, toolName: 'Edit', status: 'done', input: { file_path: 'src/Mate.swift' }, createdAt: at(1_500) },
+                  { id: 2, toolName: 'mcp__mains__AskAssistantQuestion', status: 'done', createdAt: at(1_600),
+                    input: { question: 'Which release audience should we use?', options: [{ label: 'External testing' }, { label: 'Internal testing' }] },
+                    output: { contentItems: [{ type: 'inputText', text: JSON.stringify({ status: 'answered', answer: 'Internal testing' }) }] } },
+                  { id: 3, toolName: 'AskAssistantQuestion', status: 'canceled', createdAt: at(1_700),
+                    input: { question: 'When should we distribute the build?', options: [{ label: 'Today' }, { label: 'Tomorrow' }] },
+                    output: { status: 'canceled' } },
+                  { id: 4, toolName: 'AskAssistantQuestion', status: 'done', createdAt: at(1_800),
+                    input: { question: 'Any release notes?' }, output: 'User responded: After signing completes.' },
+                ]);
+                storedTurns.set(id, [{ id: 91, runId: id, turnIndex: 0, status: 'completed', model: null,
+                  startedAt: date, createdAt: date, endedAt: at(10_000),
+                  changes: { id: 'fixture-mate-diff', files: [{ path: 'src/Mate.swift', status: 'modified', additions: 2, deletions: 1, binary: false }],
+                    fileCount: 1, additions: 2, deletions: 1, truncated: false } }]);
+              }
+            }
+            return { id, title, updatedAt: run.updatedAt };
+          }) : runs.filter(run => run.assistantId === args[1]).map(({ id, title, updatedAt }) => ({ id, title, updatedAt })); break;
+        }
         case CHANNELS.atlas.mobileLibrary:
         case CHANNELS.atlas.readMobilePage:
         case CHANNELS.atlas.describeMobileFile:
