@@ -24,23 +24,6 @@ struct HomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                SidebarControl(action: openSidebar)
-                ZStack {
-                    if session.isDemo || session.pairing != nil && !session.isConnected {
-                        ConnectionPill(session: session, action: openComputer)
-                            .transition(.opacity)
-                    }
-                }.frame(maxWidth: .infinity)
-                #if MAINS_GPT_LIVE
-                if preparingVoice {
-                    VoicePresentationMenu().frame(width: 46, height: 46).modifier(GlassSurface(radius: 23))
-                } else { Color.clear.frame(width: 46, height: 46).accessibilityHidden(true) }
-                #else
-                Color.clear.frame(width: 46, height: 46).accessibilityHidden(true)
-                #endif
-            }.padding(.horizontal, 16).padding(.top, 8)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: session.connection)
             #if MAINS_GPT_LIVE
             if preparingVoice && voicePresentation == .focus {
                 VoiceFocusStage(voice: session.voice)
@@ -51,7 +34,23 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(alignment: .center) { KeyboardDismissBackground(color: Color(.systemBackground)) }
-        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) { SidebarControl(action: openSidebar) }
+            if session.isDemo || session.pairing != nil && !session.isConnected {
+                ToolbarItem(placement: .principal) {
+                    ConnectionPill(session: session, action: openComputer)
+                        .transition(.opacity)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: session.connection)
+                }.sharedBackgroundVisibility(.hidden)
+            }
+            #if MAINS_GPT_LIVE
+            if preparingVoice {
+                ToolbarItem(placement: .topBarTrailing) { VoicePresentationMenu() }
+            }
+            #endif
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let space {
                 HomeComposerArea(session: session, space: space, targetSheet: $targetSheet, modelSheet: $modelSheet,

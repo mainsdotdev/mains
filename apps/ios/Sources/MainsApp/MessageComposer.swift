@@ -213,17 +213,10 @@ struct MessageComposer: View {
     }
 
     private var sendMessageButton: some View {
-        Button(action: send) {
-            Group {
-                if draft.isSending { ProgressView().tint(.white) }
-                else { Image(systemName: "arrow.up").font(.system(size: 18, weight: .medium)) }
-            }.frame(width: 36, height: 36).foregroundStyle(.white)
-                .background(Provider.accent(context.providerId), in: .circle)
-                .frame(width: 44, height: 44).contentShape(.circle)
-        }
-        .buttonStyle(ChatPressStyle())
-        .disabled(!canSend || draft.isSending || context.saving(session) || !draft.hasContent || voiceBlocksSending)
-        .accessibilityLabel(draft.isSending ? "Sending message" : sendLabel ?? "Send message").accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
+        ComposerSendButton(providerID: context.providerId, sending: draft.isSending, action: send)
+            .disabled(!canSend || draft.isSending || context.saving(session) || !draft.hasContent || voiceBlocksSending)
+            .accessibilityLabel(draft.isSending ? "Sending message" : sendLabel ?? "Send message")
+            .accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
     }
 
     @ViewBuilder private var composerActions: some View {
@@ -409,6 +402,28 @@ struct MessageComposer: View {
             throw MainsError.server("Attach up to 5 files, totalling 2 MB or less.")
         }
         draft.attachments.append(contentsOf: attachments)
+    }
+}
+
+struct ComposerSendButton: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let providerID: String
+    var sending = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if sending { ProgressView().tint(.white) }
+                else { Image(systemName: "arrow.up").font(.system(size: 18, weight: .medium)) }
+            }
+            .frame(width: 36, height: 36).foregroundStyle(.white)
+            .background(Provider.accent(providerID), in: .circle)
+            .frame(width: 44, height: 44).contentShape(.circle)
+        }
+        .buttonStyle(ChatPressStyle())
     }
 }
 

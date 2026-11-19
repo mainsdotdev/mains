@@ -28,6 +28,7 @@ try {
       const { default: Bridge } = require('./src/renderer/components/ui/icons/bridge.tsx');
       const { default: MainsFill } = require('./src/renderer/components/ui/icons/mains.tsx');
       const { default: Queue } = require('./src/renderer/components/ui/icons/queue.tsx');
+      const { default: AssistantSteps } = require('./src/renderer/components/ui/icons/assistant-steps.tsx');
       // Atlas navigation uses its own outlined icons outside the space registry.
       const atlasIcons = {
         'atlas-all': require('./src/renderer/components/ui/icons/library.tsx').default,
@@ -52,7 +53,7 @@ try {
         'model-zai': require('./src/renderer/components/ui/icons/zai.tsx').default,
         'model-bot': require('./src/renderer/components/ui/icons/bot.tsx').default,
       };
-      module.exports = Object.fromEntries(Object.entries({ ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill, ...atlasIcons, ...documentIcons, ...modelIcons })
+      module.exports = Object.fromEntries(Object.entries({ ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill, 'assistant-steps': AssistantSteps, ...atlasIcons, ...documentIcons, ...modelIcons })
         .map(([name, Icon]) => [name, renderToStaticMarkup(React.createElement(Icon))]));
     `, resolveDir: desktopRoot, loader: 'tsx' },
     bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic',

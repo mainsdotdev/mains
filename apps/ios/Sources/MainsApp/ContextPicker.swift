@@ -128,7 +128,7 @@ private struct ContextPickerPanel: View {
                                         ContextSkillIcon(skill: skill).frame(width: 30, height: 30).accessibilityHidden(true)
                                         VStack(alignment: .leading, spacing: 3) {
                                             HStack(spacing: 6) {
-                                                Text(skill.title).font(.subheadline.weight(.medium)).foregroundStyle(Color(uiColor: .label)).lineLimit(1)
+                                                Text(skill.mentionTitle).font(.subheadline.weight(.medium)).foregroundStyle(Color(uiColor: .label)).lineLimit(1)
                                                 Spacer(minLength: 6)
                                                 ContextTypeBadge(title: skill.badge).accessibilityIdentifier("contextSkillBadge-\(skill.name)")
                                             }

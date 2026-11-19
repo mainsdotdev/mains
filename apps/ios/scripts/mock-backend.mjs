@@ -40,6 +40,7 @@ const pendingDecisions = new Map();
 const queueProjections = createRunQueueProjectionStore();
 const storedTurns = new Map(), storedDiffs = new Map();
 const createdMates = new Map();
+const mateAssignments = new Map();
 let acceptsConnections = true;
 let holdSnapshot = 0;
 let contextDelayMs = 0, contextInvalidRows = false;
@@ -58,7 +59,7 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   pagedHistory = paging;
   disjointHistory = disjoint;
   receipts.clear(); pendingDecisions.clear(); storedTurns.clear(); storedDiffs.clear(); observations.length = 0; nextID = 10;
-  createdMates.clear();
+  createdMates.clear(); mateAssignments.clear();
   queueProjections.clear();
   tools = new Map();
   spaces = [{ id: 'fixture-space', name: 'Codex', providerId: 'codex', icon: 'icon:codex', mode: 'chat', model: null, isArchived: false },
@@ -189,8 +190,11 @@ function startReply(runId, message, commandId, input = {}) {
   const streamId = `reply-${commandId}`;
   const reply = { streamId, content: '', stopped: false };
   replies.set(runId, reply);
+  const mentions = (input.initialContext ?? input.additionalContext ?? []).filter(item => item.metadata?.source === 'assistant_mention')
+    .map(({ metadata }) => ({ id: metadata.assistantId, name: metadata.name, token: metadata.token }));
   artifacts.get(runId).push({ id: nextID++, runId, kind: 'user-prompt', content: message,
     metadata: { source: 'user', clientUserMessageId: input.clientUserMessageId, skills: input.contextSkills,
+      assistantMentions: mentions.length ? mentions : undefined, clientPromptId: input.clientPromptId,
       attachments: input.attachments?.map(({ name, type, mimeType }) => ({ name, type, mimeType })) }, createdAt: date });
   const run = runs.find(run => run.id === runId);
   run.status = 'running'; run.updatedAt = date;
@@ -206,6 +210,16 @@ function startReply(runId, message, commandId, input = {}) {
   }
   later(message === 'Take your time' ? 30000 : 2400, () => {
     if (replies.get(runId) !== reply || reply.stopped) return;
+    const mate = mentions.length ? fixtureMates.find(value => value.id === mentions[0].id) : null;
+    if (mate) {
+      const assignmentId = `assignment-${nextID++}`, workerRunId = `worker-${nextID++}`;
+      const result = 'Fixture Mate reviewed the workspace.';
+      mateAssignments.set(assignmentId, { runId, assignment: { id: assignmentId, title: 'Mate request', status: 'completed', result, workerRunId } });
+      runs.push({ ...run, id: workerRunId, title: 'Mate workspace review', assistantId: mate.id, status: 'succeeded' });
+      artifacts.set(workerRunId, [{ id: nextID++, runId: workerRunId, kind: 'report', content: 'Mate chat opened.', createdAt: new Date() }]);
+      artifacts.get(runId).push({ id: nextID++, runId, kind: 'report', content: 'Mate request',
+        metadata: { source: 'assistant_assignment', assignmentId }, createdAt: new Date() });
+    }
     artifacts.get(runId).push({ id: nextID++, runId, kind: 'report', content: 'Native reply delivered.', metadata: { streamId }, createdAt: new Date() });
     run.status = 'succeeded'; run.updatedAt = new Date();
     event(CHANNELS.runs.statusChanged, runId, { status: 'succeeded' });
@@ -398,6 +412,11 @@ wss.on('connection', socket => {
           const mates = [...fixtureMates, ...createdMates.values()];
           result = { mates: args[1] ? mates.filter(mate => mate.id === args[1]) : mates, teams: fixtureMateTeams }; break;
         }
+        case CHANNELS.assistants.mobileAssignment: {
+          const task = mateAssignments.get(args[2]);
+          if (!task || task.runId !== args[1]) throw new Error('Mate request not found');
+          result = task.assignment; break;
+        }
         case CHANNELS.assistants.create: {
           const input = args[0], space = spaces.find(space => space.id === input.spaceId);
           if (!commandId || input.accountId !== 'fixture-account' || !space || !input.profileSetup) throw new Error('Invalid Mate creation');
@@ -418,7 +437,7 @@ wss.on('connection', socket => {
           if (input.action === 'answer' && input.step === setup.turns.length && input.step < 2 && !setup.draft) {
             setup.turns.push({ question: question.question, answer: input.answer });
             welcome.state = 'generating';
-            later(1_100, () => {
+            later(2_500, () => {
               if (setup.turns.length === 1) question.question = 'What should I focus on first?';
               else setup.draft = { description: 'Helps plan meals.', instructions: 'Suggest practical recipes and make concise shopping lists.' };
               welcome.state = 'ready';

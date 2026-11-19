@@ -69,7 +69,9 @@ struct AppShell: View {
                                     ConversationView(session: session, runID: homeRunID, openComputer: showSettings, onNew: goHome, onFork: { path.append(.conversation($0)) })
                                         .id("\(session.ownership):\(homeRunID)")
                                         .toolbar {
-                                            ToolbarItem(placement: .topBarLeading) { sidebarButton }
+                                            ToolbarItem(placement: .topBarLeading) {
+                                                SidebarControl(action: toggleDrawer, isOpen: drawerOpen)
+                                            }
                                         }
                                 } else {
                                     HomeView(session: session, openSidebar: {
@@ -104,6 +106,7 @@ struct AppShell: View {
                                 }
                             }
                         }
+                        .padding(.top, AppNavigationStyle.topInset)
                         #if MAINS_GPT_LIVE
                         .environment(\.voiceSurfaceVisible, !sidebar.blocksContent && !searchMounted)
                         #endif
@@ -210,10 +213,6 @@ struct AppShell: View {
 
     private var mainPaneInteractive: Bool { !searchMounted && (!drawerOpen || inlineSidebarVisible) }
 
-    private var sidebarButton: some View {
-        Button(action: toggleDrawer) { SidebarIcon() }
-            .accessibilityLabel(drawerOpen ? "Close sidebar" : "Open sidebar").accessibilityIdentifier("openSidebar")
-    }
 #if MAINS_GPT_LIVE
     private var visibleVoiceRunID: String? {
         guard mainPaneInteractive else { return nil }

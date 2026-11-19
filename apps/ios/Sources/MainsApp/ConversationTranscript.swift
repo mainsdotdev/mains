@@ -24,6 +24,12 @@ struct ConversationTranscript: View {
     @State private var transcriptFrame = CGRect.zero
     @State private var searchLanded = false
     @State private var activitySelection: ConversationActivitySelection?
+    @State private var mentionArtwork: (owner: Int, avatars: [String: MateAvatar])?
+    private struct MentionArtworkRequest: Equatable {
+        let owner: Int
+        let revision: Int
+        let canLoad: Bool
+    }
     private var searchRowID: String? {
         guard let cursor = searchCursor, let artifact = page?.artifacts.first(where: { $0.id == cursor.id }) else { return nil }
         return session.transcript.rowID(for: artifact)
@@ -33,6 +39,11 @@ struct ConversationTranscript: View {
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
     private var isMate: Bool { run?.assistantId != nil }
+    private var mentionArtworkRequest: MentionArtworkRequest {
+        let hasMentions = page?.artifacts.contains { $0.metadata?["assistantMentions"].array.isEmpty == false } == true
+        return MentionArtworkRequest(owner: session.ownership, revision: session.matesRevision,
+                                     canLoad: paneVisible && hasMentions && session.isConnected && session.supportsMates)
+    }
     private var forkRowID: String? {
         guard !isMate, run?.isReplica != true else { return nil }
         return TranscriptForkAnchor.rowID(in: rows, atLatest: page?.hasNewer != true,
@@ -43,6 +54,13 @@ struct ConversationTranscript: View {
     var body: some View {
         GeometryReader { container in
             transcript(minimumHeight: max(0, container.size.height - container.safeAreaInsets.top - container.safeAreaInsets.bottom))
+        }
+        .environment(\.mateMentionAvatars, mentionArtwork?.owner == session.ownership ? mentionArtwork?.avatars ?? [:] : [:])
+        .task(id: mentionArtworkRequest) {
+            let request = mentionArtworkRequest
+            guard request.canLoad, let directory = try? await session.loadMates(),
+                  !Task.isCancelled, request == mentionArtworkRequest else { return }
+            mentionArtwork = (request.owner, Dictionary(directory.mates.map { ($0.id, $0.avatar) }, uniquingKeysWith: { first, _ in first }))
         }
     }
 

@@ -18,6 +18,7 @@ public struct ContextSkill: Codable, Hashable, Identifiable, Sendable {
     public private(set) var mateAvatar: MateAvatar?
     public var id: String { name }
     public var title: String { displayName.flatMap { $0.isEmpty ? nil : $0 } ?? name }
+    public var mentionTitle: String { mateID != nil && title.hasPrefix("@") ? String(title.dropFirst()) : title }
     public var detail: String? {
         [shortDescription, description].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
     }
@@ -51,7 +52,7 @@ public struct ContextSkill: Codable, Hashable, Identifiable, Sendable {
         guard let mateID else { return nil }
         return .object(["kind": .string("note"), "metadata": .object([
             "source": .string("assistant_mention"), "assistantId": .string(mateID), "requestId": .string(mateID),
-            "token": .string(wireToken), "name": .string(String(title.dropFirst())),
+            "token": .string(wireToken), "name": .string(mentionTitle),
         ])])
     }
     public init(from decoder: Decoder) throws {

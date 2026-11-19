@@ -24,13 +24,16 @@ struct MatesView: View {
             if let error { Text(error).foregroundStyle(.secondary) }
             if let directory {
                 if directory.mates.isEmpty {
-                    ContentUnavailableView("No Mates yet", systemImage: "squareshape.split.2x2")
+                    ContentUnavailableView {
+                        Label { Text("No Mates yet") } icon: { RegistryIcon(token: "icon:assistant-steps", size: 34) }
+                    }
                 } else {
                     mateSections(directory)
                 }
             } else if error == nil { ProgressView().accessibilityLabel("Loading Mates") }
         }
         .navigationTitle("Mates")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("New Mate", systemImage: "plus") { creating = true }
@@ -205,11 +208,13 @@ struct MateView: View {
         let step: Int
         let turn: MateWelcome.Turn
     }
+    private enum ProfileField: Hashable { case description, instructions }
     @State private var mate: Mate?
     @State private var chats: [MateChat] = []
     @State private var answer = ""
     @State private var submittedSetup: SetupReply?
     @State private var editedProfile: MateProfile?
+    @FocusState private var focusedProfileField: ProfileField?
     @State private var savingProfile = false
     @State private var draft = ConversationDraft()
     @State private var error: String?
@@ -301,35 +306,49 @@ struct MateView: View {
         let tint = MateRobotAssets.chatTint(for: mate.avatar)
         let pending = submittedSetup.flatMap { $0.step == setup.turns.count ? $0.turn : nil }
         let canAnswer = welcome.state == "ready" && setup.saved != true && setup.draft == nil && pending == nil
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                MateSetupHistory(turns: setup.turns + (pending.map { [$0] } ?? []), tint: tint)
-                if setup.saved == true {
-                    MateSetupBubble(text: question.idleMessage)
-                } else if welcome.state == "failed" {
-                    welcomeStatus(mate, welcome)
-                } else if welcome.state != "ready" || pending != nil {
-                    ProgressView("Preparing the profile…").foregroundStyle(.secondary)
-                } else if let draft = setup.draft {
-                    setupDraftCard(draft, mate: mate)
-                } else {
-                    MateSetupBubble(text: question.question)
+        return GeometryReader { container in
+            let visibleHeight = max(0, container.size.height - container.safeAreaInsets.top - container.safeAreaInsets.bottom)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    MateSetupHistory(turns: setup.turns + (pending.map { [$0] } ?? []), tint: tint)
+                    if setup.saved == true {
+                        MateSetupBubble(text: question.idleMessage)
+                    } else if welcome.state == "failed" {
+                        welcomeStatus(mate, welcome)
+                    } else if welcome.state != "ready" || pending != nil {
+                        preparingProfile(mate)
+                    } else if let draft = setup.draft {
+                        setupDraftCard(draft, mate: mate)
+                    } else {
+                        MateSetupBubble(text: question.question)
+                    }
+                    if let error { Text(error).font(.footnote).foregroundStyle(.secondary) }
+                    if session.mateCommandUncertain { checkMateChange }
                 }
-                if let error { Text(error).font(.footnote).foregroundStyle(.secondary) }
-                if session.mateCommandUncertain { checkMateChange }
+                .frame(maxWidth: 560, alignment: .leading)
+                .padding(16)
+                .frame(maxWidth: .infinity, minHeight: visibleHeight, alignment: .top)
+                .background(alignment: .center) {
+                    KeyboardDismissBackground(color: Color(.systemBackground)) { focusedProfileField = nil }
+                }
             }
-            .frame(maxWidth: 560, alignment: .leading)
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .scrollDismissesKeyboard(.interactively)
+            .defaultScrollAnchor(.bottom, for: .sizeChanges)
+            .accessibilityIdentifier("mateSetupConversation")
         }
         .safeAreaPadding(.top, 44)
         .scrollEdgeEffectStyle(.soft, for: .top)
-        .scrollDismissesKeyboard(.interactively)
-        .defaultScrollAnchor(.bottom, for: .sizeChanges)
-        .accessibilityIdentifier("mateSetupConversation")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if setup.saved == true, mate.ready { firstTaskComposer(mate) }
             else if canAnswer { setupComposer(mate, question: question.question, step: setup.turns.count) }
+        }
+    }
+
+    private func preparingProfile(_ mate: Mate) -> some View {
+        HStack(spacing: 10) {
+            MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id))
+                .frame(width: 34, height: 34)
+            Text("Preparing the profile…").foregroundStyle(.secondary).activityShimmer()
         }
     }
 
@@ -340,21 +359,15 @@ struct MateView: View {
             TextField("What would you like help with?", text: $answer, axis: .vertical)
                 .lineLimit(1...5).frame(maxWidth: .infinity)
                 .accessibilityIdentifier("mateSetupAnswer")
-            Button {
+            ComposerSendButton(providerID: mate.providerId) {
                 let reply = SetupReply(step: step, turn: .init(question: question, answer: text))
                 withConsent(mate) { Task { await submitSetupReply(reply) } }
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 19, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .background(Provider.accent(mate.providerId), in: .circle)
             }
-            .buttonStyle(ChatPressStyle())
             .disabled(text.isEmpty || text.utf16.count > 24_000 || !session.isConnected || session.mateCommandPending || consent != nil)
             .accessibilityLabel("Send answer").accessibilityIdentifier("sendMateSetupAnswer")
         }
         .animation(reduceMotion ? nil : MateComposerLayout.transition, value: expanded)
-        .padding(8)
+        .padding(.horizontal, 8).padding(.vertical, 6)
         .modifier(GlassSurface(radius: 28, interactive: false))
         .padding(.horizontal, 12).padding(.bottom, 8)
     }
@@ -365,15 +378,11 @@ struct MateView: View {
         return VStack(alignment: .leading, spacing: 14) {
             Text("Profile draft").font(.headline).accessibilityAddTraits(.isHeader)
             if editedProfile != nil {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Description").font(.footnote).foregroundStyle(.secondary)
-                    TextField("Description", text: Binding(get: { editedProfile?.description ?? draft.description },
-                        set: { editedProfile?.description = $0 }), axis: .vertical)
-                        .lineLimit(1...5).accessibilityIdentifier("mateProfileDescription")
-                    Text("Instructions").font(.footnote).foregroundStyle(.secondary)
-                    TextField("Instructions", text: Binding(get: { editedProfile?.instructions ?? draft.instructions },
-                        set: { editedProfile?.instructions = $0 }), axis: .vertical)
-                        .lineLimit(3...10).accessibilityIdentifier("mateProfileInstructions")
+                VStack(alignment: .leading, spacing: 12) {
+                    draftField(.description, text: Binding(get: { editedProfile?.description ?? draft.description },
+                        set: { editedProfile?.description = $0 }), lines: 1...5, identifier: "mateProfileDescription")
+                    draftField(.instructions, text: Binding(get: { editedProfile?.instructions ?? draft.instructions },
+                        set: { editedProfile?.instructions = $0 }), lines: 3...10, identifier: "mateProfileInstructions")
                 }
                 .disabled(busy)
             } else {
@@ -388,7 +397,29 @@ struct MateView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 22))
+        .background(alignment: .center) {
+            KeyboardDismissBackground(color: Color(.secondarySystemBackground)) { focusedProfileField = nil }
+                .clipShape(.rect(cornerRadius: 22))
+        }
+    }
+
+    private func draftField(_ field: ProfileField, text: Binding<String>, lines: ClosedRange<Int>, identifier: String) -> some View {
+        let title: LocalizedStringKey = field == .description ? "Description" : "Instructions"
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            TextField(title, text: text, axis: .vertical)
+                .lineLimit(lines)
+                .focused($focusedProfileField, equals: field)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.tertiarySystemFill), in: .rect(cornerRadius: 12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(focusedProfileField == field ? AppBrand.accent : Color(.separator))
+                        .allowsHitTesting(false)
+                }
+                .accessibilityLabel(Text(title)).accessibilityIdentifier(identifier)
+        }
     }
 
     @ViewBuilder private func draftActions(_ draft: MateProfile, profile: MateProfile, mateID: String, busy: Bool) -> some View {

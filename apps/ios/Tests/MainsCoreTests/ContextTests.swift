@@ -118,7 +118,7 @@ import Testing
         let submission = draft.snapshot()
         let message = ContextMentions.goal(submission.text, skills: submission.contextSkills)
         #expect(message == "@assistant-release-one @assistant-release-two")
-        #expect(ContextText(message, skills: submission.contextSkills, canonical: true).readable == "@Release @Release")
+        #expect(ContextText(message, skills: submission.contextSkills, canonical: true).readable == "Release Release")
         #expect(submission.contextSkills.compactMap(\.mateContext).map { $0["metadata"]["assistantId"].string } == ["release-one", "release-two"])
     }
 

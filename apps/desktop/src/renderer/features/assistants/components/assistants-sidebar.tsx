@@ -57,7 +57,7 @@ export function AssistantsSidebar() {
           <SearchBar isExpanded={searchExpanded} searchQuery={searchQuery} searchLabel="Search mates" onToggle={() => setSearchExpanded(true)} onSearchChange={setSearchQuery} onClear={() => { setSearchQuery(""); setSearchExpanded(false); }} />
         </div>
       </SidebarTopRows>
-      <nav aria-label="Mates" className="scroll-bounce min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-4 noscrollbar">
+      <nav aria-label="Mates" className="scroll-bounce min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-4 select-none noscrollbar">
         {!!error && <div className="px-2 py-3 text-xs text-danger">{errorText(error)}<Button variant="ghost" onClick={() => void refetch()}>Retry</Button></div>}
         {!overview && !error && <p className="px-2 py-3 text-xs text-primary-500">Loading mates…</p>}
         {overview && !visibleGroups.length && <p className="px-2 py-3 text-xs text-primary-500">{query ? "No matching mates" : "Your mates will appear here."}</p>}

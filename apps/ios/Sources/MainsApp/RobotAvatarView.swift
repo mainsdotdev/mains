@@ -48,7 +48,7 @@ struct MateRobotThumbnail: View {
             if let preset, let image = MateRobotAssets.image(for: preset) {
                 Image(uiImage: image).resizable().interpolation(.high).scaledToFit()
             } else {
-                Image(systemName: "squareshape.split.2x2").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
+                RegistryIcon(token: "icon:assistant-steps")
             }
         }.accessibilityHidden(true)
     }

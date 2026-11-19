@@ -19,7 +19,9 @@ struct SidebarView: View {
     @Namespace private var modeSelection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .subheadline) private var modeLabelWidth: CGFloat = 36
     @ScaledMetric(relativeTo: .body) private var searchLabelWidth: CGFloat = 110
+    private let horizontalInset: CGFloat = 28
     private var space: Space? { session.selectedSpace }
     private var modes: [String] { space.map { Experience.modes(for: $0.providerId) } ?? [] }
     private var otherSpaces: [Space] { session.spaces.filter { $0.id != space?.id } }
@@ -33,7 +35,7 @@ struct SidebarView: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            header.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
+            header.padding(.horizontal, horizontalInset).padding(.top, 12).padding(.bottom, 12)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if session.pairing != nil {
@@ -59,20 +61,23 @@ struct SidebarView: View {
                                 ].compactMap { $0 }.joined(separator: ", "))
                         }
                         Button(action: openAtlas) {
-                            Label { Text("Atlas") } icon: { RegistryIcon(token: "icon:globe", size: 22, tint: .primary) }
-                                .font(.body.weight(.medium))
-                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
+                            HStack(spacing: 10) {
+                                RegistryIcon(token: "icon:globe", size: 22, tint: .primary).frame(width: 22)
+                                Text("Atlas").font(.body.weight(.medium))
+                            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
                         }.buttonStyle(ChatPressStyle())
                             .accessibilityIdentifier("openAtlas")
                         if !session.isDemo {
                             Button(action: openMates) {
-                                Label("Mates", systemImage: "squareshape.split.2x2")
-                                    .font(.body.weight(.medium))
-                                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                    .contentShape(.rect)
+                                HStack(spacing: 10) {
+                                    RegistryIcon(token: "icon:assistant-steps", size: 22, tint: .primary)
+                                    Text("Mates").font(.body.weight(.medium))
+                                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
                             }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openMates")
                         }
-                        Divider().padding(.vertical, 16).accessibilityHidden(true)
+                        Rectangle().fill(Color(.separator)).frame(height: 1)
+                            .padding(.horizontal, 4).padding(.top, 24).padding(.bottom, 20)
+                            .accessibilityHidden(true)
                     }
                     if space?.mode == "developer" {
                         sectionTitle("Workspaces")
@@ -99,13 +104,13 @@ struct SidebarView: View {
                         if recents.isEmpty { empty("No chats yet.") }
                         ForEach(recents) { run in conversationRow(run) }
                     }
-                }.padding(.horizontal, 16).padding(.bottom, 24)
+                }.padding(.horizontal, horizontalInset).padding(.bottom, 24)
             }
             .refreshable { await session.refresh() }
             .scrollIndicators(.hidden)
             .modifier(SidebarScrollFade())
             .id("\(space?.id ?? ""):\(space?.mode ?? "")")
-            bottomBar.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 16)
+            bottomBar.padding(.horizontal, horizontalInset).padding(.top, 10).padding(.bottom, 16)
         }
         .background(Color(.systemBackground))
         .onChange(of: space?.id) { _, _ in providersExpanded = false }
@@ -122,12 +127,13 @@ struct SidebarView: View {
     }
     private var header: some View {
         GeometryReader { geometry in
+            let labeledWidth = 52 * CGFloat(modes.count + 1) + modeLabelWidth + 6
             HStack(spacing: 8) {
                 Image("registry-mains-fill").renderingMode(.template).resizable().scaledToFit()
                     .frame(width: 20, height: 20).foregroundStyle(.black)
                     .frame(width: 40, height: 40).background(Color(white: 0.92), in: .circle)
                     .frame(width: 44, height: 44).accessibilityLabel("Mains")
-                modeSwitcher(showLabel: geometry.size.width >= 264 && !dynamicTypeSize.isAccessibilitySize)
+                modeSwitcher(showLabel: geometry.size.width >= labeledWidth && !dynamicTypeSize.isAccessibilitySize)
                 Spacer(minLength: 0)
             }.frame(height: 48)
         }.frame(height: 48)

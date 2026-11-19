@@ -37,7 +37,7 @@ public struct ContextText: Sendable {
 
     public var readable: String {
         var result = display as NSString
-        for mention in mentions.reversed() { result = result.replacingCharacters(in: mention.displayRange, with: mention.skill.title) as NSString }
+        for mention in mentions.reversed() { result = result.replacingCharacters(in: mention.displayRange, with: mention.skill.mentionTitle) as NSString }
         return (result as String).replacingOccurrences(of: ContextMentions.marker, with: "")
     }
     public func sourceOffset(_ displayOffset: Int) -> Int {

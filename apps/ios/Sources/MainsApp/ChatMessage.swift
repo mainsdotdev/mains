@@ -105,15 +105,35 @@ private struct MateTaskCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(assignment?.title ?? "Mate request", systemImage: "squareshape.split.2x2").font(.headline)
+            taskSummary
+            if let runID = assignment?.workerRunId, runID != link.runID {
+                Button { openChat(runID) } label: {
+                    Label("Open Mate chat", systemImage: "arrow.up.right")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14).frame(minHeight: 44)
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(ChatPressStyle())
+                .modifier(GlassSurface(radius: 22))
+                .accessibilityIdentifier("openMateTaskChat")
+            }
+        }
+        .task(id: "\(link.runID):\(link.id):\(session.matesRevision):\(session.isConnected):\(retry)") {
+            guard session.isConnected, session.supportsMates else { return }
+            do { assignment = try await session.loadMateAssignment(link.id, runID: link.runID); error = nil }
+            catch { if !Task.isCancelled, session.viewingRunID == link.runID { self.error = error.localizedDescription } }
+        }
+    }
+
+    private var taskSummary: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label { Text(assignment?.title ?? "Mate request") } icon: {
+                RegistryIcon(token: "icon:assistant-steps", tint: .primary)
+            }.font(.headline)
             if let assignment {
                 Text(assignment.status.capitalized).font(.subheadline).foregroundStyle(.secondary)
                 if let result = assignment.result, !result.isEmpty { ChatMessageBody(text: result) }
                 if let failure = assignment.error { Text(failure).font(.footnote).foregroundStyle(.secondary) }
-                if let runID = assignment.workerRunId, runID != link.runID {
-                    Button("Open Mate chat", systemImage: "arrow.up.right") { openChat(runID) }
-                        .accessibilityIdentifier("openMateTaskChat")
-                }
             } else if error == nil && session.isConnected && session.supportsMates { ProgressView().controlSize(.small) }
             if let error {
                 Text(error).font(.footnote).foregroundStyle(.secondary)
@@ -123,11 +143,6 @@ private struct MateTaskCard: View {
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18))
         .accessibilityIdentifier("mateAssignment-\(link.id)")
-        .task(id: "\(link.runID):\(link.id):\(session.matesRevision):\(session.isConnected):\(retry)") {
-            guard session.isConnected, session.supportsMates else { return }
-            do { assignment = try await session.loadMateAssignment(link.id, runID: link.runID); error = nil }
-            catch { if !Task.isCancelled, session.viewingRunID == link.runID { self.error = error.localizedDescription } }
-        }
     }
 }
 

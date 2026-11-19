@@ -252,7 +252,10 @@ struct FilePreviewNavigation<Content: View>: View {
                         if let url { FileOptionsMenu(url: url, image: image, session: session, owner: owner, source: source, savedInAtlas: savedInAtlas, openSourceChat: openSourceChat, reload: reload) }
                     }
                 }
-        }.preferredColorScheme(image ? .dark : nil)
+        }
+        .padding(.top, AppNavigationStyle.topInset)
+        .background(image ? Color.black : Color(.systemBackground))
+        .preferredColorScheme(image ? .dark : nil)
     }
 }
 

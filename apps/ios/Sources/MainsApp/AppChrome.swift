@@ -5,6 +5,11 @@ enum AppListStyle {
     static let minimumContentHeight: CGFloat = 48
 }
 
+enum AppNavigationStyle {
+    // Keep the toolbar detached from the safe-area edge so iOS gives it top spacing.
+    static let topInset: CGFloat = 1
+}
+
 func compactRelativeAge(_ date: Date, now: Date) -> String {
     let seconds = max(0, now.timeIntervalSince(date))
     if seconds < 45 { return "just now" }
@@ -32,9 +37,11 @@ struct KeyboardDismissBackground: View {
     @ObserveHotReload private var hotReload
     #endif
     var color: Color = .clear
+    var dismissFocus: (() -> Void)? = nil
     var body: some View {
         color.contentShape(Rectangle())
             .onTapGesture {
+                dismissFocus?()
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }
             .accessibilityHidden(true)
@@ -114,12 +121,11 @@ struct SidebarControl: View {
     @ObserveHotReload private var hotReload
     #endif
     let action: () -> Void
+    var isOpen = false
     var body: some View {
-        Button(action: action) {
-            SidebarIcon().frame(width: 46, height: 46).contentShape(.circle)
-        }
-        .buttonStyle(ChatPressStyle()).modifier(GlassSurface(radius: 23))
-        .accessibilityLabel("Open sidebar").accessibilityIdentifier("openSidebar")
+        Button(action: action) { SidebarIcon() }
+            .accessibilityLabel(isOpen ? "Close sidebar" : "Open sidebar")
+            .accessibilityIdentifier("openSidebar")
     }
 }
 

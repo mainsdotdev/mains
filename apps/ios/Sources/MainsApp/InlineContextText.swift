@@ -2,6 +2,10 @@ import SwiftUI
 import UIKit
 import ImageIO
 
+extension EnvironmentValues {
+    @Entry var mateMentionAvatars: [String: MateAvatar] = [:]
+}
+
 /// Artwork stays scoped to visible mentions. Only bounded data/HTTPS images are
 /// accepted; absolute catalogue paths always use the bundled fallback.
 @MainActor @Observable
@@ -45,10 +49,16 @@ final class ContextArtwork {
         guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return .link }
         return UIColor(red: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
     }
+    static func matePreset(_ skill: ContextSkill, avatars: [String: MateAvatar] = [:]) -> MateRobotCatalogue.Preset? {
+        guard let id = skill.mateID, let avatar = skill.mateAvatar ?? avatars[id] else { return nil }
+        return MateRobotAssets.catalogue?.preset(for: avatar, mateID: id)
+    }
     static func icon(_ image: UIImage?, skill: ContextSkill, size: CGFloat, tint: UIColor) -> UIImage {
         UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { _ in
             let isSkill = skill.group == "Skills"
-            let source = image ?? UIImage(named: isSkill ? "registry-sparkles" : "registry-box")?.withTintColor(tint, renderingMode: .alwaysOriginal) ?? UIImage(systemName: isSkill ? "sparkles" : "cube")!.withTintColor(tint, renderingMode: .alwaysOriginal)
+            let asset = skill.mateID != nil ? "registry-assistant-steps" : isSkill ? "registry-sparkles" : "registry-box"
+            let source = image ?? UIImage(named: asset)?.withTintColor(tint, renderingMode: .alwaysOriginal)
+                ?? UIImage(systemName: isSkill ? "sparkles" : "cube")!.withTintColor(tint, renderingMode: .alwaysOriginal)
             let scale = min(size / max(1, source.size.width), size / max(1, source.size.height))
             let rect = CGRect(x: (size - source.size.width * scale) / 2, y: (size - source.size.height * scale) / 2, width: source.size.width * scale, height: source.size.height * scale)
             source.draw(in: rect)
@@ -64,6 +74,8 @@ struct InlineContextText: View {
     let text: String
     let skills: [ContextSkill]
     @State private var artwork = ContextArtwork()
+    @Environment(\.mateMentionAvatars) private var mateAvatars
+    @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 17
     var body: some View {
         let projection = ContextText(text, skills: skills, canonical: true)
         rendered(projection).accessibilityLabel(projection.readable)
@@ -74,9 +86,12 @@ struct InlineContextText: View {
         var result = Text(""), cursor = 0
         for mention in projection.mentions {
             let prefix = Text(display.substring(with: NSRange(location: cursor, length: mention.displayRange.location - cursor)))
-            let icon = ContextArtwork.icon(artwork.images[mention.skill.name], skill: mention.skill, size: 17, tint: .white)
-            let symbol = Text(Image(uiImage: icon)).baselineOffset(-2)
-            let title = Text(" " + mention.skill.title).fontWeight(.semibold)
+            let skill = mention.skill
+            let avatar = ContextArtwork.matePreset(skill, avatars: mateAvatars).flatMap { MateRobotAssets.image(for: $0) }
+            let size = skill.mateID == nil ? iconSize : iconSize * 1.18
+            let icon = ContextArtwork.icon(avatar ?? artwork.images[skill.name], skill: skill, size: size, tint: .white)
+            let symbol = Text(Image(uiImage: icon).renderingMode(.original)).baselineOffset(-iconSize * 0.14 - (size - iconSize) / 2)
+            let title = Text((skill.mateID == nil ? " " : "\u{00a0}") + skill.mentionTitle).fontWeight(.semibold)
             result = Text("\(result)\(prefix)\(symbol)\(title)")
             cursor = NSMaxRange(mention.displayRange)
         }
@@ -91,14 +106,20 @@ private final class ContextAttachment: NSTextAttachment {
     @MainActor init(skill: ContextSkill, scope: ContextScope, font: UIFont, image: UIImage?, maxWidth: CGFloat) {
         self.skill = skill; self.scope = scope
         super.init(data: nil, ofType: nil)
-        let color = ContextArtwork.color(skill), iconSize = font.pointSize
+        let preset = ContextArtwork.matePreset(skill)
+        let avatar = preset.flatMap { MateRobotAssets.image(for: $0) }
+        let color = preset.map { UIColor(MateRobotAssets.chatTint(for: $0.avatar)) } ?? ContextArtwork.color(skill)
+        let title = skill.mentionTitle as NSString
+        let iconSize = skill.mateID == nil ? font.pointSize : font.pointSize * 1.18
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
-        let width = min(maxWidth, max(iconSize + 12, (skill.title as NSString).size(withAttributes: attributes).width + iconSize + 6))
+        let width = min(maxWidth, max(iconSize + 12, title.size(withAttributes: attributes).width + iconSize + 6))
         let height = ceil(font.lineHeight)
+        let textTop = (height - font.lineHeight) / 2
+        let iconTop = skill.mateID == nil ? (height - iconSize) / 2 : textTop + font.ascender - (font.capHeight + iconSize) / 2
         self.image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { _ in
-            ContextArtwork.icon(image, skill: skill, size: iconSize, tint: color).draw(at: CGPoint(x: 0, y: (height - iconSize) / 2))
+            ContextArtwork.icon(avatar ?? image, skill: skill, size: iconSize, tint: color).draw(at: CGPoint(x: 0, y: iconTop))
             let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakMode = .byTruncatingTail
-            (skill.title as NSString).draw(in: CGRect(x: iconSize + 6, y: (height - font.lineHeight) / 2, width: max(1, width - iconSize - 6), height: height), withAttributes: attributes.merging([.paragraphStyle: paragraph]) { _, new in new })
+            title.draw(in: CGRect(x: iconSize + 6, y: textTop, width: max(1, width - iconSize - 6), height: height), withAttributes: attributes.merging([.paragraphStyle: paragraph]) { _, new in new })
         }
         bounds = CGRect(x: 0, y: font.descender, width: width, height: height)
     }

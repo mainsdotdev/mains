@@ -4,10 +4,112 @@ import UIKit
 /// Run alongside scripts/mock-backend.mjs. No AI provider or real workspace is contacted.
 @MainActor
 final class MainsUITests: XCTestCase {
+    func testFullScreenHeaderButtonsAlignWithTheNewChatHeader() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["closeSidebar"].tap()
+        let sidebar = app.buttons["openSidebar"]
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+        let reference = sidebar.frame
+        attachScreenshot(app, name: "New chat header")
+
+        func checkLeadingButton(file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
+            let back = app.navigationBars.buttons["BackButton"]
+            XCTAssertTrue(back.waitForExistence(timeout: 5), file: file, line: line)
+            XCTAssertEqual(back.frame.midY, reference.midY, accuracy: 1, file: file, line: line)
+            XCTAssertEqual(back.frame.midX, reference.midX, accuracy: 1, file: file, line: line)
+            return back
+        }
+
+        openSidebar(app)
+        app.buttons["openAtlas"].tap()
+        XCTAssertTrue(app.navigationBars["Atlas"].waitForExistence(timeout: 5))
+        let atlasBack = checkLeadingButton()
+        attachScreenshot(app, name: "Atlas header")
+        let report = app.buttons["atlasItem-fixture-atlas-doc"]
+        XCTAssertTrue(report.waitForExistence(timeout: 5))
+        report.tap()
+        let closePreview = app.buttons["Close preview"]
+        XCTAssertTrue(closePreview.waitForExistence(timeout: 5))
+        XCTAssertEqual(closePreview.frame.midY, reference.midY, accuracy: 1)
+        XCTAssertEqual(closePreview.frame.midX, reference.midX, accuracy: 1)
+        attachScreenshot(app, name: "File preview header")
+        closePreview.tap()
+        atlasBack.tap()
+
+        openSidebar(app)
+        app.buttons["openMates"].tap()
+        XCTAssertTrue(app.navigationBars["Mates"].waitForExistence(timeout: 5))
+        let matesBack = checkLeadingButton()
+        let addMate = app.buttons["newMate"]
+        XCTAssertTrue(addMate.exists)
+        XCTAssertEqual(addMate.frame.midY, reference.midY, accuracy: 1)
+        XCTAssertEqual(app.frame.maxX - addMate.frame.midX, reference.midX - app.frame.minX, accuracy: 1)
+        attachScreenshot(app, name: "Mates header")
+        matesBack.tap()
+
+        openSidebar(app)
+        app.buttons["openWorkInbox"].tap()
+        XCTAssertTrue(app.navigationBars["Activity"].waitForExistence(timeout: 5))
+        checkLeadingButton().tap()
+
+        openSidebar(app)
+        app.buttons["conversation-fixture-run"].tap()
+        let options = app.buttons["conversationOptions"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        _ = checkLeadingButton()
+        XCTAssertEqual(options.frame.midY, reference.midY, accuracy: 1)
+        attachScreenshot(app, name: "Code conversation header")
+    }
+
     private func makeApplication() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["MAINS_HOT_RELOAD"] = "0"
         return app
+    }
+
+    func testCodeMateMentionShowsItsNameAndOpensTheSeparateTaskChatButton() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test-workspace")
+        attachScreenshot(app, name: "Mate icon in the sidebar")
+        chooseSidebarSpace("fixture-code", in: app)
+        openSidebar(app)
+        app.buttons["workspace-fixture-workspace"].tap()
+        let conversation = app.buttons["conversation-workspace-first"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 5)); conversation.tap()
+
+        let input = app.textViews.firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap()
+        input.typeText("@Fixture")
+        let mate = app.buttons["context-skill-assistant-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5)); mate.tap()
+        let allow = app.buttons["allowDataSharing"]
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        XCTAssertEqual((input.value as? String)?.trimmingCharacters(in: .whitespaces), "Fixture Mate")
+        input.typeText("Review the release")
+        attachScreenshot(app, name: "Mate mention in the composer")
+        app.buttons["Send message"].tap()
+
+        let bubble = app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "Review the release")).firstMatch
+        XCTAssertTrue(bubble.waitForExistence(timeout: 10))
+        XCTAssertEqual(bubble.label.trimmingCharacters(in: .whitespacesAndNewlines), "Fixture Mate Review the release")
+        attachScreenshot(app, name: "Mate mention in the sent bubble")
+
+        let review = app.staticTexts["Fixture Mate reviewed the workspace."]
+        XCTAssertTrue(review.waitForExistence(timeout: 10))
+        let openChat = app.buttons["Open Mate chat"]
+        XCTAssertTrue(openChat.exists)
+        XCTAssertGreaterThan(openChat.frame.minY, review.frame.maxY)
+        attachScreenshot(app, name: "Mate task and separate chat button")
+        let transcript = app.scrollViews.containing(.staticText, identifier: "Fixture Mate reviewed the workspace.").firstMatch
+        for _ in 0..<3 where !openChat.isHittable { transcript.swipeUp() }
+        XCTAssertTrue(openChat.isHittable); openChat.tap()
+        XCTAssertTrue(app.staticTexts["Mate chat opened."].waitForExistence(timeout: 10))
+        app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
+        forgetFixture(app)
     }
 
     func testNewMateSetupUsesChatBubblesAndContinuesInTheFirstConversation() {
@@ -44,6 +146,8 @@ final class MainsUITests: XCTestCase {
         setupAnswer.tap()
         setupAnswer.typeText("Quick dinners")
         sendAnswer.tap()
+        XCTAssertTrue(app.staticTexts["Preparing the profile…"].waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "New Mate – preparing the profile")
 
         let save = app.buttons["saveMateProfile"]
         XCTAssertTrue(save.waitForExistence(timeout: 10))
@@ -51,7 +155,22 @@ final class MainsUITests: XCTestCase {
         let edit = app.buttons["editMateProfile"]
         if !edit.isHittable { app.scrollViews.firstMatch.swipeUp() }
         edit.tap()
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "mateProfileInstructions").firstMatch.exists)
+        let description = app.descendants(matching: .any).matching(identifier: "mateProfileDescription").firstMatch
+        XCTAssertTrue(description.exists)
+        let instructions = app.descendants(matching: .any).matching(identifier: "mateProfileInstructions").firstMatch
+        XCTAssertTrue(instructions.exists)
+        instructions.tap()
+        assertKeyboardVisible(app)
+        instructions.typeText(" More detail.")
+        let editedInstructions = instructions.value as? String
+        XCTAssertTrue(editedInstructions?.contains("More detail.") == true)
+        attachScreenshot(app, name: "New Mate – editing the profile draft")
+
+        let keyboard = app.keyboards.firstMatch
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: app.frame.width - 8, dy: description.frame.midY)).tap()
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(instructions.value as? String, editedInstructions)
         edit.tap()
         XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5))
         attachScreenshot(app, name: "New Mate – profile draft")
