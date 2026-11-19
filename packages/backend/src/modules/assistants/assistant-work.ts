@@ -10,7 +10,7 @@ import { assistantsService } from "./assistants.service";
 import { ASSISTANT_ROUTINE_TOOLS, assistantRoutineTool } from "./assistant-routines";
 import { askAssistantQuestion } from "./assistant-questions";
 import { object, onlyKeys, text, execution, readPullRequestReviewRef, readPullRequestRevision } from "./assistants.validation";
-import { canAccessAssistantAssignment, type AssistantAssignment, type AssistantMessageContext, type AssistantPullRequestContext } from "@mains/contracts/assistants";
+import { allowsAssistantMentions, canAccessAssistantAssignment, type AssistantAssignment, type AssistantMessageContext, type AssistantPullRequestContext } from "@mains/contracts/assistants";
 import { pullRequestsService } from "../pullRequests";
 
 type AssignmentSource =
@@ -44,11 +44,18 @@ function wake() {
     timer = setTimeout(() => { timer = undefined; void assistantWork.drain().catch(error => console.error("[Assistants] dispatch failed", error)); }, 0);
     timer.unref?.();
 }
-async function requester(runId: string) {
+async function requester(runId: string, fromMention = false) {
     const { runsService } = await import("../runs");
     const run = await runsService.getRunById(runId);
-    if (!run || run.isArchived || run.isReplica || (!run.assistantId && (run.mode !== "developer" || !run.workspaceId)))
+    if (!run || run.isArchived || run.isReplica)
         throw new Error("Assistant calls require an active local Code or assistant conversation");
+    const codeWorkspace = run.mode === "developer" && !!run.workspaceId;
+    if (fromMention) {
+        if (!allowsAssistantMentions(run.mode, run.assistantId) || (run.mode === "developer" && !codeWorkspace))
+            throw new Error("Call Mates from a standard Code or Work conversation.");
+    } else if (!run.assistantId && !codeWorkspace) {
+        throw new Error("Assistant calls require an active local Code or assistant conversation");
+    }
     return { run, assistant: run.assistantId ? assistantsService.require(run.assistantId, run.accountId) : null };
 }
 async function actor(runId: string) {
@@ -186,16 +193,16 @@ export const assistantWork = {
         onlyKeys(value, ["accountId", "toAssistantId", "taskKey", "title", "prompt", "execution"]);
         const accountId = text(value.accountId, "Account"), target = assistantsService.requireForWork(text(value.toAssistantId, "Assistant"), accountId);
         const taskKey = text(value.taskKey, "Task key", 200), title = text(value.title, "Title", 200), prompt = text(value.prompt, "Task", 24000);
-        const caller = requestingRunId ? await requester(requestingRunId) : null;
         const mention = source?.kind === "mention" ? source : undefined;
+        const caller = requestingRunId ? await requester(requestingRunId, !!mention) : null;
         const review = source?.kind === "pull-request" ? source.review : undefined;
         if (caller && (caller.run.accountId !== accountId ||
-            (!mention && caller.assistant && (!caller.assistant.teamId || caller.assistant.teamId !== target.teamId))))
+            (caller.assistant && (!caller.assistant.teamId || caller.assistant.teamId !== target.teamId))))
             throw new Error("Delegate only to members of your own team");
         if (caller?.assistant?.id === target.id)
             throw new Error("Choose a teammate for delegation");
         assertCurrent();
-        const requestedExecution = value.execution ?? (caller?.run.workspaceId ? { mode: "developer", workspaceId: caller.run.workspaceId } : undefined);
+        const requestedExecution = value.execution ?? (caller?.run.mode === "developer" && caller.run.workspaceId ? { mode: "developer", workspaceId: caller.run.workspaceId } : undefined);
         const dedupeKey = review ? reviewDedupeKey(target.id, review.key, review.revision) : JSON.stringify([requestingRunId ?? "user", target.id, taskKey]);
         function existingAssignment() {
             const existing = assistantsRepo.byKey(accountId, dedupeKey);

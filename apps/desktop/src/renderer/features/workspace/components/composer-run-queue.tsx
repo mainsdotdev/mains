@@ -135,7 +135,7 @@ function QueuedMessageRow({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-0.5 text-xs text-primary-600 dark:text-primary-400">
-        {message.status !== "editing" && (
+        {message.status !== "editing" && !message.contextItems.some(item => item.kind === "assistant") && (
           <Button
             type="button"
             disabled={!canSteer || busy || message.status !== "queued"}

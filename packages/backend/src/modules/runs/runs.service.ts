@@ -2253,7 +2253,7 @@ export const runsService = {
         payload.providerId,
       );
       const toolPolicy = composeToolPolicy(mode, payload.toolPolicySnapshot);
-      const mentions = prepareAssistantMentions({ accountId: payload.accountId, mode, prompt: payload.goal, promptId: payload.clientPromptId,
+      const mentions = prepareAssistantMentions({ accountId: payload.accountId, mode, assistantId: assistant?.id ?? null, prompt: payload.goal, promptId: payload.clientPromptId,
         context: { initialContext: payload.initialContext, contextFiles: payload.contextFiles, contextIssues: payload.contextIssues, contextSignals: payload.contextSignals, contextSkills: payload.contextSkills } });
       payload = { ...payload, clientPromptId: mentions.promptId, initialContext: mentions.items };
       const execution = resolveRunExecution({ runId, mode, workspace });
@@ -2551,7 +2551,7 @@ export const runsService = {
       if (!existing) throw new Error("Run not found");
       if (existing.accountId !== accountId)
         throw new Error("Run does not belong to this account");
-      const mentions = prepareAssistantMentions({ accountId, mode: existing.mode, prompt: message, promptId: payload.clientPromptId, fallbackPromptId: payload.clientUserMessageId,
+      const mentions = prepareAssistantMentions({ accountId, mode: existing.mode, assistantId: existing.assistantId ?? null, prompt: message, promptId: payload.clientPromptId, fallbackPromptId: payload.clientUserMessageId,
         context: { initialContext: additionalContext, contextFiles: payload.contextFiles, contextIssues: payload.contextIssues, contextSignals: payload.contextSignals, contextSkills: payload.contextSkills } });
       additionalContext = mentions.items;
       payload = { ...payload, clientPromptId: mentions.promptId };
@@ -2823,6 +2823,8 @@ export const runsService = {
     }
     if (!payload.clientUserMessageId || typeof payload.message !== "string")
       throw new Error("Invalid message.");
+    if (payload.additionalContext?.some(item => item.metadata?.source === "assistant_mention"))
+      throw new Error("Send a Mate request in the next turn.");
     const uploads = sanitizeRunAttachments(
       payload.attachments,
       await browserCaptureDir(),

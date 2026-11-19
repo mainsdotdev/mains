@@ -1837,9 +1837,12 @@ public final class BackendSession {
             }
         }
         if !mateMentions.isEmpty {
-            guard mate == nil, let actualWorkspaceID, workspaces.contains(where: { $0.id == actualWorkspaceID && $0.isReplica != true }),
-                  (runID.flatMap { id in conversations.first { $0.id == id }?.mode } ?? spaces.first { $0.id == spaceID }?.mode) == "developer" else {
-                throw MainsError.server("Call Mates from a local Code conversation.")
+            let source = runID.flatMap { id in conversations.first { $0.id == id } }
+            let mode = source?.mode ?? spaces.first { $0.id == spaceID }?.mode
+            let hasLocalWorkspace = workspaces.contains { $0.id == actualWorkspaceID && $0.isReplica != true }
+            guard Experience.allowsMateMentions(mode, isMateConversation: mate != nil || source?.assistantId != nil,
+                                                 hasLocalWorkspace: hasLocalWorkspace) else {
+                throw MainsError.server("Call Mates from a standard Code or Work conversation.")
             }
             if let provider = attached.compactMap(\.mateProviderID).first(where: { !hasConsent(providerID: $0) }) {
                 throw MainsError.server("Allow data sharing with \(Provider.recipient(provider)) before calling this Mate.")

@@ -1341,7 +1341,7 @@ describe("task-local execution and Code assistant calls", () => {
         const w = workspace("mention-code"), assistant = await makeAssistant("TestFlight");
         const source = createRun(db, { id: "mention-source", workspaceId: w.id, accountId: "default", providerId: "codex", mode: "developer", status: "succeeded" });
         const { prepareAssistantMentions } = await import("./assistant-mentions");
-        const prepared = prepareAssistantMentions({ accountId: "default", mode: "developer", prompt: "Check the current build", promptId: "accepted-mention-message", context: { initialContext: [
+        const prepared = prepareAssistantMentions({ accountId: "default", mode: "developer", assistantId: null, prompt: "Check the current build", promptId: "accepted-mention-message", context: { initialContext: [
             { kind: "note", metadata: { source: "assistant_mention", assistantId: assistant.id, token: `@assistant-${assistant.id}`, requestId: "stable-mention-request" } },
             { kind: "note", content: "Check build 42 only" },
         ] } });
@@ -1372,20 +1372,79 @@ describe("task-local execution and Code assistant calls", () => {
     });
 });
 
-it("connects a real Code submission to its teamless @ task and keeps mention names readable", async () => {
-    const rootPath = join(root, "submitted-code"); mkdirSync(rootPath);
-    const workspace = createWorkspace(db, { id: "submitted-code", rootPath });
+it.each(["developer", "work"] as const)("connects a real %s submission to its teamless @ task", async mode => {
+    const sourceWorkspace = mode === "developer" ? workspace("submitted-code") : null;
     const assistant = await makeIndependentAssistant("TestFlight");
     assistantWork.start();
-    const source = await runsService.executeRun({ accountId: "default", providerId: "codex", spaceId: "codex", mode: "developer", workspaceId: workspace.id,
-        goal: `@assistant-${assistant.id} Check build 42`, clientPromptId: "code-source-message", initialContext: [{ kind: "note", metadata: { source: "assistant_mention", assistantId: assistant.id, token: `@assistant-${assistant.id}`, requestId: "selected-assistant" } }] });
+    const source = await runsService.executeRun({ accountId: "default", providerId: "codex", spaceId: "codex", mode, workspaceId: sourceWorkspace?.id,
+        goal: `@assistant-${assistant.id} Check build 42`, clientPromptId: "source-message", initialContext: [{ kind: "note", metadata: { source: "assistant_mention", assistantId: assistant.id, token: `@assistant-${assistant.id}`, requestId: "selected-assistant" } }] });
     await settled(source.runId);
     await vi.waitFor(() => expect(assistantsRepo.assignments("default").some(t => t.fromRunId === source.runId)).toBe(true));
     const task = assistantsRepo.assignments("default").find(t => t.fromRunId === source.runId)!;
     expect(task).toMatchObject({ teamId: null, toAssistantId: assistant.id });
     expect(task.prompt).toBe("@TestFlight Check build 42");
-    expect(task.execution).toEqual({ mode: "developer", workspaceId: workspace.id });
+    expect(task.execution).toEqual(sourceWorkspace ? { mode, workspaceId: sourceWorkspace.id } : { mode });
+    await settled(task.workerRunId!);
+    expect(await runsService.getRunById(task.workerRunId!)).toMatchObject({ mode, workspaceId: sourceWorkspace?.id ?? null });
+    const sourceContext = driver.calls.createSession.find(request => request.runId === source.runId)?.context ?? [];
+    const handoff = sourceContext.find(item => item.metadata?.source === "assistant_mention");
+    expect(handoff?.content).toContain("The work addressed to @TestFlight in this message is delegated to that Mate.");
+    expect(handoff?.content).toContain("ask the user clarifying questions about it");
+    expect(handoff?.content).toContain("wait for Mains to deliver the Mate's report in a later turn");
+    const workerContext = driver.calls.createSession.find(request => request.runId === task.workerRunId)?.context ?? [];
+    expect(workerContext.some(item => item.metadata?.source === "assistant_mention")).toBe(false);
+    await vi.waitFor(async () => {
+        const history = await runsService.getHistoryPage({ runId: source.runId });
+        expect(history.artifacts.some(item => item.metadata?.source === "assistant_assignment" && item.metadata.assignmentId === task.id)).toBe(true);
+    });
     const history = await runsService.getHistoryPage({ runId: source.runId });
     const prompt = history.artifacts.find(a => String(a.kind) === "user-prompt");
     expect(prompt?.metadata?.assistantMentions).toEqual([{ id: assistant.id, name: "TestFlight", token: `@assistant-${assistant.id}` }]);
+});
+
+it("dispatches a Mate mention from a Work follow-up only once and returns its report", async () => {
+    const assistant = await makeIndependentAssistant("Trip Planner");
+    const source = await runsService.executeRun({ accountId: "default", providerId: "codex", spaceId: "codex", mode: "work", goal: "Plan a trip" });
+    await settled(source.runId);
+    const token = `@assistant-${assistant.id}`;
+    const input = { accountId: "default", runId: source.runId, message: `${token} Compare rail routes`, clientUserMessageId: "work-mention",
+        additionalContext: [{ kind: "note" as const, metadata: { source: "assistant_mention", assistantId: assistant.id, token, requestId: "selected-assistant" } }] };
+    await runsService.continueRun(input);
+    await settled(source.runId);
+    const handoff = driver.calls.resumeSession.find(request => request.runId === source.runId)?.context
+        ?.find(item => item.metadata?.source === "assistant_mention");
+    expect(handoff?.content).toContain("The Mate handles the task and asks any necessary clarifying questions in its own chat.");
+    await expect(assistantWork.assign({ accountId: "default", toAssistantId: assistant.id, taskKey: "autonomous", title: "Search", prompt: "Search" }, source.runId))
+        .rejects.toThrow("active local Code or assistant conversation");
+    assistantWork.start();
+    await vi.waitFor(() => expect(assistantsRepo.assignments("default")).toHaveLength(1));
+    const [task] = assistantsRepo.assignments("default");
+    expect(task).toMatchObject({ fromRunId: source.runId, prompt: "@Trip Planner Compare rail routes", execution: { mode: "work" } });
+    await settled(task.workerRunId!);
+    await assistantWork.report(task.workerRunId!, { assignmentId: task.id, status: "completed", result: "Rail routes compared", evidence: ["Timetable"] });
+    await assistantWork.drain();
+    await assistantWork.stop(); assistantWork.start(); await assistantWork.drain();
+    expect(assistantsRepo.assignments("default")).toEqual([
+        expect.objectContaining({ id: task.id, status: "completed", result: "Rail routes compared" }),
+    ]);
+    const history = await runsService.getHistoryPage({ runId: source.runId });
+    expect(history.artifacts).toContainEqual(expect.objectContaining({ metadata: expect.objectContaining({ source: "assistant_assignment", assignmentId: task.id }) }));
+});
+
+it.each(["chat", "mate"] as const)("rejects explicit Mate mentions on new and continued %s conversations", async source => {
+    const accountId = "default";
+    const target = await makeIndependentAssistant("Trip Planner");
+    const assistantId = source === "mate" ? (await makeIndependentAssistant("Researcher")).id : undefined;
+    const mode = source === "mate" ? "work" : "chat";
+    const origin = createRun(db, { id: `${source}-source`, accountId, providerId: "codex", mode, assistantId, status: "succeeded" });
+    const token = `@assistant-${target.id}`;
+    const message = `${token} Compare routes`;
+    const context = [{ kind: "note" as const, metadata: { source: "assistant_mention", assistantId: target.id, token, requestId: "selection" } }];
+    const error = "Call Mates from a standard Code or Work conversation.";
+    await expect(runsService.executeRun({ accountId, providerId: "codex", spaceId: "codex", mode, assistantId,
+        goal: message, reservedRunId: "rejected-mention", initialContext: context })).rejects.toThrow(error);
+    await expect(runsService.continueRun({ runId: origin.id, accountId, message, additionalContext: context })).rejects.toThrow(error);
+    expect(await runsService.getRunById("rejected-mention")).toBeNull();
+    expect(await runsService.getContextByRun(origin.id)).toEqual([]);
+    expect(assistantsRepo.assignments(accountId)).toEqual([]);
 });

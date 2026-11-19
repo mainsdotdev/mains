@@ -8,6 +8,11 @@ public enum Experience {
     public static func modes(for provider: String) -> [String] {
         ["copilot_cli", "cursor", "opencode"].contains(provider) ? ["developer"] : ["developer", "work", "chat"]
     }
+
+    // Mirrors the backend's assistant mention modes and Code workspace requirement.
+    public static func allowsMateMentions(_ mode: String?, isMateConversation: Bool, hasLocalWorkspace: Bool) -> Bool {
+        !isMateConversation && (mode == "work" || mode == "developer" && hasLocalWorkspace)
+    }
 }
 
 public struct ProjectCollection: Codable, Equatable, Identifiable, Sendable {

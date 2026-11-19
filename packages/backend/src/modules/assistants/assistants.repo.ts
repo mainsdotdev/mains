@@ -2,7 +2,7 @@ import { and, desc, eq, getTableColumns, inArray, isNull, isNotNull, or, sql } f
 import { getDb } from "../../db/client";
 import { assistantTeams, assistants, assistantWelcomes, assistantMemories, assistantAssignments, assistantMessages, runs, runContext, workspaces, projects } from "../../db/schema";
 import type { Assistant, AssistantAssignment, AssistantMessageContext, AssistantProfile, AssistantPullRequestContext, AssistantPullRequestReview } from "@mains/contracts/assistants";
-import { normalizeAssistantAvatar } from "@mains/contracts/assistants";
+import { ASSISTANT_MENTION_MODES, normalizeAssistantAvatar } from "@mains/contracts/assistants";
 function assistant(row: typeof assistants.$inferSelect): Assistant {
     const { settings, spaceSnapshot, mode: _mode, workspaceId: _workspace, avatar, ...rest } = row;
     return { ...rest, avatar: normalizeAssistantAvatar(JSON.parse(avatar)), conversationSettings: JSON.parse(settings), spaceSnapshot: JSON.parse(spaceSnapshot) };
@@ -88,7 +88,7 @@ export const assistantsRepo = {
     pendingMentions() {
         return getDb().select({ contextId: runContext.id, runId: runs.id, accountId: runs.accountId, metadata: runContext.metadata }).from(runContext)
             .innerJoin(runs, eq(runs.id, runContext.runId)).leftJoin(assistantAssignments, or(eq(assistantAssignments.sourceContextId, runContext.id), and(eq(assistantAssignments.fromRunId, runs.id), sql`${assistantAssignments.taskKey} = 'mention:' || json_extract(${runContext.metadata}, '$.sourcePromptId') || ':' || json_extract(${runContext.metadata}, '$.requestId')`, sql`${assistantAssignments.toAssistantId} = json_extract(${runContext.metadata}, '$.assistantId')`)))
-            .where(and(isNull(assistantAssignments.id), eq(runs.isArchived, false), eq(runs.mode, "developer"), sql`json_extract(${runContext.metadata}, '$.source') = 'assistant_mention'`,
+            .where(and(isNull(assistantAssignments.id), eq(runs.isArchived, false), isNull(runs.assistantId), inArray(runs.mode, ASSISTANT_MENTION_MODES), sql`json_extract(${runContext.metadata}, '$.source') = 'assistant_mention'`,
                 sql`EXISTS (SELECT 1 FROM assistants a WHERE a.id = json_extract(${runContext.metadata}, '$.assistantId') AND a.account_id = ${runs.accountId})`,
                 sql`EXISTS (SELECT 1 FROM run_artifacts a WHERE a.run_id = ${runs.id} AND a.kind = 'user-prompt' AND a.content = json_extract(${runContext.metadata}, '$.sourcePrompt') AND (json_extract(a.metadata, '$.clientPromptId') = json_extract(${runContext.metadata}, '$.sourcePromptId') OR json_extract(a.metadata, '$.clientUserMessageId') = json_extract(${runContext.metadata}, '$.sourcePromptId')))`))
             .orderBy(runContext.id).limit(50).all();

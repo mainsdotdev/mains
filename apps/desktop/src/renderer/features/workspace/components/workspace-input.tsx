@@ -1,6 +1,6 @@
 import { useGetAccountQuery } from "@/lib/redux/api";
 import { useAssistantOverviewQuery } from "@/lib/redux/api/assistantsApi";
-import type { Assistant } from "@mains/contracts/assistants";
+import { allowsAssistantMentions, type Assistant } from "@mains/contracts/assistants";
 import { AssistantAvatar, assistantMentionTextColor } from "@/features/assistants/components/assistant-avatar";
 import { cn } from "@/lib/cn";
 import { isAbsoluteFilePath } from "@/lib/file-path";
@@ -283,10 +283,12 @@ export function WorkspaceInput({
   const openSkillMention = useOpenComposerMention(contextSkills, activeProviderId);
   // Empty-state backlight: the centered composer glows in the accent.
   const { composerPlaceholder, mode: effectiveMode } = useModeConfig(mode);
-  const canMentionMates = effectiveMode === "developer" && !assistantComposer;
+  const mentionRun = isNewRunTabActive ? undefined : activeRun;
+  const canMentionMates = !assistantComposer && !mentionRun?.isReplica &&
+    allowsAssistantMentions(mentionRun?.mode ?? effectiveMode, mentionRun?.assistantId);
   const { data: account } = useGetAccountQuery();
   const { currentData: assistantOverview } = useAssistantOverviewQuery(account?.id ?? "", {
-    skip: !account || suspended || effectiveMode !== "developer" || (!canMentionMates && !contextAssistants.length),
+    skip: !account || suspended || (!canMentionMates && !contextAssistants.length),
   });
 
   // Built outside the JSX on purpose: calling the helper inline in `style`
@@ -975,7 +977,7 @@ export function WorkspaceInput({
     state: voice.state, runId: activeRun?.id, isNewRun: !activeRun || isNewRunTabActive,
     isRunning, canSendDuringRun, voiceEnabled, sendDisabled,
     sendLabel: runQueue?.editing ? "Save queued message"
-      : isRunning && canSendDuringRun ? runQueue?.queue?.mode === "steer" ? "Steer active turn" : "Queue message"
+      : isRunning && canSendDuringRun ? runQueue?.queue?.mode === "steer" && !contextAssistants.length ? "Steer active turn" : "Queue message"
       : sendLabel,
     hasMessage, preparing: voiceStarting,
     startDisabled: ((!activeRun || isNewRunTabActive) && !onCreateVoiceConversation) || !settingsReady || isLoading ||

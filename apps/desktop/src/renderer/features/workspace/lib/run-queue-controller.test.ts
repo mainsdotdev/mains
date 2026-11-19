@@ -36,9 +36,9 @@ function harness() {
   const controller = createRunQueueController({ getState: store.getState, dispatch: store.dispatch,
     getTransport: () => transport, serializeUploads, clearUploads });
   const ownerKey = runOwnerKey("local", "run");
-  const add = (id: string, backendId = "local") => {
+  const add = (id: string, backendId = "local", contextItems: QueuedRunMessage["contextItems"] = []) => {
     const owner = runOwnerKey(backendId, "run");
-    const message: QueuedRunMessage = { id, text: id, status: "queued", contextItems: [],
+    const message: QueuedRunMessage = { id, text: id, status: "queued", contextItems,
       uploadOwnerKey: `${owner}:${id}`, attachmentNames: ["image.png"], model: "chosen-model", additionalDirectories: ["/folder"] };
     store.dispatch(enqueueRunMessage({ ownerKey: owner, backendId, runId: "run", runStatus: "running", message }));
     return message;
@@ -49,6 +49,20 @@ function harness() {
 }
 
 describe("local run queue delivery", () => {
+  it("keeps a Mate request queued until a new turn can accept the mention", async () => {
+    const h = harness();
+    const mate = { kind: "assistant", id: "selection", assistantId: "release", name: "Release", token: "@assistant-release" } as const;
+    h.add("@assistant-release Check signing", "local", [mate]);
+    await expect(h.controller.send(h.ownerKey, "@assistant-release Check signing", "steer")).resolves.toBe(false);
+    expect(h.sends()).toEqual([]);
+    expect(h.messages()[0].status).toBe("queued");
+    h.state.status = "succeeded";
+    await h.controller.pump();
+    expect(h.sends()).toEqual([[CHANNELS.runs.continue, [expect.objectContaining({
+      additionalContext: [{ kind: "note", ref: "Release", metadata: { source: "assistant_mention", assistantId: "release", name: "Release", token: "@assistant-release", requestId: "selection" } }],
+    })]]]);
+  });
+
   it("delivers the reordered FIFO head with its own attachments", async () => {
     const h = harness(); h.add("first"); const second = h.add("second"); h.add("third");
     h.store.dispatch(reorderRunMessages({ ownerKey: h.ownerKey, orderedIds: ["second", "third", "first"] }));

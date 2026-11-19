@@ -1,14 +1,14 @@
-import type { AssistantMessageContext } from "@mains/contracts/assistants";
+import { allowsAssistantMentions, type AssistantMessageContext } from "@mains/contracts/assistants";
 import type { StartRunContextItem } from "../runs/runs.dto";
 import { assistantsService } from "./assistants.service";
 import { object, text } from "./assistants.validation";
 
 /** A durable user selection; only its own accepted prompt may dispatch it. */
-export function prepareAssistantMentions(args: { accountId: string; mode: string; prompt: string; promptId?: string; fallbackPromptId?: string; context: AssistantMessageContext }): { promptId?: string; items: StartRunContextItem[] | undefined } {
+export function prepareAssistantMentions(args: { accountId: string; mode: string; assistantId: string | null; prompt: string; promptId?: string; fallbackPromptId?: string; context: AssistantMessageContext }): { promptId?: string; items: StartRunContextItem[] | undefined } {
     const items = args.context.initialContext ?? [];
     const selected = items.filter(item => item.metadata?.source === "assistant_mention");
     if (!selected.length) return { promptId: args.promptId, items: args.context.initialContext };
-    if (args.mode !== "developer") throw new Error("Call assistants from a Code conversation");
+    if (!allowsAssistantMentions(args.mode, args.assistantId)) throw new Error("Call Mates from a standard Code or Work conversation.");
     if (selected.length > 4) throw new Error("Call up to four assistants in one message");
     const mentions = selected.map(item => {
         const assistant = assistantsService.requireForWork(text(item.metadata?.assistantId, "Assistant"), args.accountId);
@@ -25,7 +25,13 @@ export function prepareAssistantMentions(args: { accountId: string; mode: string
         const mention = mentions.find(m => m.item === item);
         if (!mention) return item;
         const { assistant, token, requestId } = mention;
-        return { kind: "note", ref: assistant.name, content: `The user selected @${assistant.name} for this message. Mains will schedule their task after this input is accepted. Do not create a duplicate assignment for this mention; its result will return here.`,
+        const content = [
+            `The work addressed to @${assistant.name} in this message is delegated to that Mate. Mains schedules the assignment automatically after accepting this message.`,
+            "Briefly acknowledge the handoff in the user's language. The Mate handles the task and asks any necessary clarifying questions in its own chat.",
+            "Do not work on the delegated task, ask the user clarifying questions about it, create another assignment, or poll for progress.",
+            "End this turn after the acknowledgment and wait for Mains to deliver the Mate's report in a later turn. Continue this turn only for separate work the user explicitly assigned to this conversation.",
+        ].join(" ");
+        return { kind: "note", ref: assistant.name, content,
             metadata: { source: "assistant_mention", assistantId: assistant.id, name: assistant.name, token, requestId, sourcePromptId: promptId, sourcePrompt: args.prompt, prompt, context: taskContext } };
     }) };
 }

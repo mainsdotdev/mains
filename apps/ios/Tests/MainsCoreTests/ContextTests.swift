@@ -105,6 +105,37 @@ import Testing
         #expect(payload["clientPromptId"].string == call.id)
     }
 
+    @Test @MainActor func aPairedSessionSendsMateMentionsFromWorkWithoutAWorkspace() async throws {
+        let backend = try DemoBackend(stepDelay: .milliseconds(1), streamDelay: .milliseconds(1))
+        let faults = ContextFaults(), storage = MemoryStorage()
+        faults.supportsMates = true
+        storage.pairing = backend.pairing
+        let session = BackendSession(storage: storage, makeTransport: { _ in ContextTransport(backend, faults) })
+        session.restore(); session.setActive(true)
+        defer { session.setActive(false) }
+        try await eventually { session.isConnected && session.supportsMates }
+        let codex = try #require(session.spaces.first { $0.providerId == "codex" })
+        session.grantConsent(providerID: "codex", backendID: DemoBackend.backendID)
+
+        let mate = ContextSkill.mate(id: "release", name: "Release", providerID: "codex")
+        let scope = session.contextScope(providerID: "codex", workspaceID: nil)
+        let text = ContextMentions.mention(mate) + " Compare routes"
+        try await session.setSpaceMode("chat", spaceID: codex.id)
+        await #expect(throws: MainsError.server("Call Mates from a standard Code or Work conversation.")) {
+            _ = try await session.send(text, spaceID: codex.id, contextSkills: [mate], contextScope: scope)
+        }
+        try await session.setSpaceMode("work", spaceID: codex.id)
+        _ = try await session.send(text, spaceID: codex.id, contextSkills: [mate], contextScope: scope)
+        let sends = faults.calls.filter { $0.channel == "runs:execute" }
+        #expect(sends.count == 1)
+        let call = try #require(sends.first)
+        let payload = try #require(call.args.first)
+        #expect(payload["initialContext"].array == [try #require(mate.mateContext)])
+        #expect(payload["workspaceId"] == .null)
+        #expect(payload["clientPromptId"].string == call.id)
+        #expect(!Experience.allowsMateMentions("work", isMateConversation: true, hasLocalWorkspace: false))
+    }
+
     @Test @MainActor func mateSelectionsKeepTheirIdentityWithDuplicateNamesAndPlainSavedDrafts() throws {
         let scope = ContextScope(providerID: "codex", workspaceID: "repo")
         let first = ContextSkill.mate(id: "release-one", name: "Release", providerID: "codex")

@@ -47,6 +47,12 @@ export function normalizeAssistantAvatar(value: unknown): AssistantAvatar {
     };
 }
 export type AssistantExecution = { mode: "work"; workspaceId?: never } | { mode: "developer"; workspaceId: string };
+export const ASSISTANT_MENTION_MODES = ["developer", "work"] as const satisfies readonly ModeId[];
+
+export function allowsAssistantMentions(mode: string, assistantId?: string | null): boolean {
+    return !assistantId && ASSISTANT_MENTION_MODES.some(allowed => allowed === mode);
+}
+
 export interface AssistantTeam {
     id: string;
     accountId: string;

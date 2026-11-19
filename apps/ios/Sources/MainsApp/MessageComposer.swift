@@ -334,9 +334,10 @@ struct MessageComposer: View {
     private var pickerRequest: ContextPickerRequest? {
         guard session.isConnected, !draft.isSending, !attachmentsOpen, trigger != nil || pluginsOpen else { return nil }
         let scope = contextScope, owner = session.ownership
+        let hasLocalWorkspace = session.workspaces.contains { $0.id == scope.workspaceID && $0.isReplica != true }
         return ContextPickerRequest(id: contextPresentationID, frame: composerFrame, session: session, scope: scope, owner: owner,
             trigger: trigger?.trigger, query: trigger?.filter ?? "", pluginsOnly: trigger == nil && pluginsOpen,
-            offersMates: !context.lockedProfile && context.mode == "developer" && scope.workspaceID != nil,
+            offersMates: Experience.allowsMateMentions(context.mode, isMateConversation: context.lockedProfile, hasLocalWorkspace: hasLocalWorkspace),
             pickSkill: { skill in
                 guard owner == session.ownership, scope == contextScope, !draft.isSending else { return }
                 let select = {
