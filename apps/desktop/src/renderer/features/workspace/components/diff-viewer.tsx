@@ -193,7 +193,7 @@ export function DiffViewer({
     { skip: !workspaceId },
   );
 
-  const { data: workspace } = useGetWorkspaceQuery(workspaceId!, { skip: !workspaceId });
+  const { currentData: workspace } = useGetWorkspaceQuery(workspaceId!, { skip: !workspaceId });
 
   const fileFindings = useMemo(() => {
     if (!allFindings || !filePath) return [];
@@ -310,7 +310,7 @@ export function DiffViewer({
     const absPath = `${workspace.rootPath.replace(/\/$/, "")}/${filePath}`;
     return (
       <div className={`h-full overflow-auto ${className}`}>
-        <ImageDiffView absPath={absPath} fileName={fileName} />
+        <ImageDiffView key={absPath} absPath={absPath} fileName={fileName} />
       </div>
     );
   }
