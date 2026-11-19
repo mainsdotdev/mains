@@ -484,8 +484,11 @@ function InfoGroupImpl({
       .filter((e) => e.type === "artifact" && e.metadata?.kind === "image")
       .map((e) => {
         const absPath = (e.metadata?.path as string | undefined) ?? "";
+        const hash = e.metadata?.imageContentHash;
         return {
           absPath,
+          // A later turn can deliver new bytes at the same path.
+          version: typeof hash === "string" ? hash : e.id,
           fileName:
             (e.metadata?.fileName as string | undefined) ??
             absPath.split("/").pop() ??
@@ -500,8 +503,7 @@ function InfoGroupImpl({
           <ImageArtifact
             key={images[0].absPath}
             runId={runId}
-            absPath={images[0].absPath}
-            fileName={images[0].fileName}
+            image={images[0]}
             onPreview={setPreviewAtt}
           />
         ) : (
@@ -730,13 +732,19 @@ function AttachmentDocumentCard({
   );
 }
 
+interface GeneratedImage {
+  absPath: string;
+  fileName: string;
+  version: string;
+}
+
 function ImageArtifactGallery({
   runId,
   images,
   onPreview,
 }: {
   runId?: string;
-  images: Array<{ absPath: string; fileName: string }>;
+  images: GeneratedImage[];
   onPreview: (att: { name: string; dataUrl: string }) => void;
 }) {
   const [selectedPath, setSelectedPath] = useState(images[0].absPath);
@@ -776,8 +784,7 @@ function ImageArtifactGallery({
         <ImageArtifact
           key={selected.absPath}
           runId={runId}
-          absPath={selected.absPath}
-          fileName={selected.fileName}
+          image={selected}
           onPreview={onPreview}
           variant="gallery"
         />
@@ -814,14 +821,14 @@ function ImageGalleryThumbnail({
   selected,
   onSelect,
 }: {
-  image: { absPath: string; fileName: string };
+  image: GeneratedImage;
   index: number;
   total: number;
   selected: boolean;
   onSelect: () => void;
 }) {
-  const url = useLocalImageUrl(image.absPath);
-  const [thumbFailed, setThumbFailed] = useState(false);
+  const url = useLocalImageUrl(image.absPath, undefined, image.version);
+  const [failedUrl, setFailedUrl] = useState<string>();
 
   return (
     <Button
@@ -834,14 +841,15 @@ function ImageGalleryThumbnail({
         selected ? "border border-accent/40 outline-none" : "glass-outline"
       }  `}
     >
-      {url && !thumbFailed ? (
+      {url && url !== failedUrl ? (
         <img
+          key={url}
           src={url}
           alt=""
           className="size-full object-contain"
           loading="lazy"
           draggable={false}
-          onError={() => setThumbFailed(true)}
+          onError={() => setFailedUrl(url)}
         />
       ) : (
         <Picture className="size-5 text-primary-500" aria-hidden />
@@ -852,22 +860,20 @@ function ImageGalleryThumbnail({
 
 function ImageArtifact({
   runId,
-  absPath,
-  fileName,
+  image: { absPath, fileName, version },
   onPreview,
   variant = "preview",
 }: {
-  absPath: string;
-  fileName: string;
+  image: GeneratedImage;
   onPreview: (att: { name: string; dataUrl: string }) => void;
   runId?: string;
   /** `gallery` fills the selected-image stage; `preview` keeps the single-image size. */
   variant?: "preview" | "gallery";
 }) {
   const atlas = useSaveToAtlas();
-  const url = useLocalImageUrl(absPath);
+  const url = useLocalImageUrl(absPath, undefined, version);
   const { revealInFolder } = useCapabilities();
-  const [thumbFailed, setThumbFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string>();
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{
     x: number;
@@ -993,8 +999,9 @@ function ImageArtifact({
         <div
           className={`flex items-center justify-center overflow-hidden ${variant === "gallery" ? "aspect-square w-full max-h-144" : "max-h-144 max-w-[24rem]"}`}
         >
-          {url && !thumbFailed ? (
+          {url && url !== failedUrl ? (
             <img
+              key={url}
               src={url}
               alt={fileName}
               className={
@@ -1004,7 +1011,7 @@ function ImageArtifact({
               }
               loading="lazy"
               draggable={false}
-              onError={() => setThumbFailed(true)}
+              onError={() => setFailedUrl(url)}
             />
           ) : (
             <div

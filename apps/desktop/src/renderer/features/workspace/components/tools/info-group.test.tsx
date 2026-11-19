@@ -22,9 +22,11 @@ vi.mock("../prompt-markdown", () => ({
   PromptMarkdown: ({ children }: { children: string }) => <div>{children}</div>,
   promptMessageMentionsFile: () => false,
 }));
-vi.mock("@/hooks/use-local-image-url", () => ({
-  useLocalImageUrl: (src: string | undefined) => src?.startsWith("/") ? `mains-localimg://signed?path=${encodeURIComponent(src)}` : src,
+vi.mock("@/lib/local-image-url", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/local-image-url")>(),
+  getCachedSignedUrl: (path: string) => path.startsWith("/") ? `mains-localimg://signed?path=${encodeURIComponent(path)}` : undefined,
 }));
+vi.mock("@/features/atlas/hooks/use-save-to-atlas", () => ({ useSaveToAtlas: () => ({ saving: false, save: vi.fn() }) }));
 vi.mock("../../lib/attachment-image", () => ({
   useAttachmentImage: (_runId?: string, attachmentId?: string, maxSide = 256) => ({
     observe: () => {}, src: attachmentId ? `blob:${attachmentId}:${maxSide}` : undefined,
@@ -56,7 +58,46 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
     ], ...metadata },
   }] };
 }
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+describe("generated image previews", () => {
+  function image(id: number, fileName: string, contentHash?: string) {
+    return mapArtifactToEvent({ id, runId: "run", kind: "image", contentHash,
+      metadata: { path: `/output/${fileName}`, fileName, outputSelected: true } });
+  }
+
+  it("refreshes the image and expanded preview when a saved path is overwritten", () => {
+    const original = groupEvents([image(1, "icon.png", "sha256:first")])[0];
+    const view = render(<InfoGroup group={original} />);
+    const previous = screen.getByRole("img", { name: "icon.png" });
+    expect(new URL((previous as HTMLImageElement).src).searchParams.get("v")).toBe("sha256:first");
+    fireEvent.error(previous);
+
+    const replacement = groupEvents([image(1, "icon.png", "sha256:second")])[0];
+    view.rerender(<InfoGroup group={replacement} />);
+    const current = screen.getByRole<HTMLImageElement>("img", { name: "icon.png" }).src;
+    expect(new URL(current).searchParams.get("v")).toBe("sha256:second");
+    fireEvent.click(screen.getByRole("button", { name: "Preview icon.png in Mains" }));
+    expect(screen.getByRole("dialog", { name: "icon.png" }).textContent).toBe(current);
+  });
+
+  it("refreshes the gallery stage and thumbnail on a new output without a content hash", () => {
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      disconnect() {}
+    });
+    const other = image(2, "light.png");
+    const view = render(<InfoGroup group={groupEvents([image(1, "icon.png"), other])[0]} />);
+    const thumbnail = () => screen.getByRole("button", { name: /Select image 1 of 2/ }).querySelector("img");
+    expect(thumbnail()?.src).toContain("&v=artifact-1");
+    fireEvent.error(thumbnail()!);
+
+    view.rerender(<InfoGroup group={groupEvents([image(3, "icon.png"), other])[0]} />);
+    const current = screen.getByRole<HTMLImageElement>("img", { name: "icon.png" }).src;
+    expect(current).toContain("&v=artifact-3");
+    expect(thumbnail()?.src).toBe(current);
+  });
+});
 
 describe("application-owned assistant task inputs", () => {
   it("renders the worker's initial task as a card without exposing its routing prompt", () => {
