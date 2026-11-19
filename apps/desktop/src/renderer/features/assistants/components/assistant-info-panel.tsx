@@ -211,7 +211,8 @@ export function AssistantInfoPanel({ assistant, overview, avatarState, chats, se
         <SegmentedTabs aria-label="Mate information" variant="plain" panelId="assistant-info-content" value={tab} onChange={onTabChange}
           options={[{ value: "profile", label: "Details" }, { value: "chats", label: "Chats" }, { value: "memory", label: "Memory" }, { value: "tasks", label: activeTasks ? `Assignments · ${activeTasks}` : "Assignments" }, { value: "routines", label: "Routines" }]} />
       </div>
-      <div id="assistant-info-content" role="tabpanel" aria-label={tab === "routines" ? "Routines" : tab === "chats" ? "Chats" : tab === "memory" ? "Memory" : tab === "tasks" ? "Assignments" : "Details"} className="scroll-bounce min-h-0 flex-1 overflow-y-auto px-5 pb-6">
+      <div id="assistant-info-content" role="tabpanel" aria-label={tab === "routines" ? "Routines" : tab === "chats" ? "Chats" : tab === "memory" ? "Memory" : tab === "tasks" ? "Assignments" : "Details"}
+        className={`min-h-0 flex-1 ${tab === "tasks" ? "flex flex-col" : "scroll-bounce overflow-y-auto px-5 pb-6"}`}>
         {tab === "routines" ? <AssistantRoutines assistant={assistant} onOpenChat={onSelectChat} />
           : tab === "chats" ? <AssistantChatsPanel chats={chats} selectedRunId={selectedRunId} error={chatsError} disabled={assistant.isArchived} onSelect={onSelectChat} onRetry={onRetryChats} />
           : tab === "memory" ? <AssistantMemoryPanel key={assistant.id} assistant={assistant} memories={overview.memories} />

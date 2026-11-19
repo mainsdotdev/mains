@@ -14,6 +14,12 @@ export function AssistantAssignments({ assistant, assignments, assistants, openA
 }) {
   const [creating, setCreating] = useState(false);
   const restoreFocus = useRef(false);
+  const listViewport = useRef<HTMLDivElement>(null);
+
+  function openForm() {
+    if (listViewport.current) listViewport.current.scrollTop = 0;
+    setCreating(true);
+  }
 
   function closeForm() {
     restoreFocus.current = true;
@@ -21,10 +27,10 @@ export function AssistantAssignments({ assistant, assignments, assistants, openA
   }
 
   return (
-    <section aria-label="Assignments" className="space-y-3 pt-2">
-      {creating ? <AssignmentForm assistant={assistant} onClose={closeForm} /> : (
-        <div className="flex justify-end">
-          <Button variant="primary" className="inline-flex items-center gap-2" onClick={() => setCreating(true)}
+    <section aria-label="Assignments" className="flex min-h-0 flex-1 flex-col">
+      {!creating && (
+        <div className="flex shrink-0 justify-end px-5 pt-2">
+          <Button variant="primary" className="inline-flex items-center gap-2" onClick={openForm}
             ref={button => {
               if (!button || !restoreFocus.current) return;
               restoreFocus.current = false;
@@ -35,18 +41,21 @@ export function AssistantAssignments({ assistant, assignments, assistants, openA
           </Button>
         </div>
       )}
-      {!assignments.length && !creating && (
-        <p className="rounded-2xl glass-card px-3 py-6 text-center text-sm text-primary-600 dark:text-primary-400">No assignments yet.</p>
-      )}
-      {!!assignments.length && (
-        <ul aria-label="Assignment list" className="space-y-2">
-          {assignments.map(task => (
-            <li key={task.id}>
-              <AssistantAssignmentCard task={task} assignee={assistants.find(candidate => candidate.id === task.toAssistantId)} openAssistant={openAssistant} />
-            </li>
-          ))}
-        </ul>
-      )}
+      <div ref={listViewport} className="scroll-bounce min-h-0 flex-1 space-y-3 overflow-y-auto scroll-pt-4 px-5 pb-6 pt-4 [mask-image:linear-gradient(to_bottom,transparent,black_1rem)]">
+        {creating && <AssignmentForm assistant={assistant} onClose={closeForm} />}
+        {!assignments.length && !creating && (
+          <p className="rounded-2xl glass-card px-3 py-6 text-center text-sm text-primary-600 dark:text-primary-400">No assignments yet.</p>
+        )}
+        {!!assignments.length && (
+          <ul aria-label="Assignment list" className="space-y-2">
+            {assignments.map(task => (
+              <li key={task.id}>
+                <AssistantAssignmentCard task={task} assignee={assistants.find(candidate => candidate.id === task.toAssistantId)} openAssistant={openAssistant} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }
