@@ -12,6 +12,7 @@ struct ConversationTranscript: View {
     let openSubagents: () -> Void
     let fork: () -> Void
     var searchCursor: HistoryCursor? = nil
+    var mate: Mate? = nil
     let readContent: (Int) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationPaneVisible) private var paneVisible
@@ -39,6 +40,7 @@ struct ConversationTranscript: View {
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
     private var isMate: Bool { run?.assistantId != nil }
+    private var activityArtwork: AgentActivityView.Artwork { isMate ? .mate(mate) : .provider(providerID) }
     private var mentionArtworkRequest: MentionArtworkRequest {
         let hasMentions = page?.artifacts.contains { $0.metadata?["assistantMentions"].array.isEmpty == false } == true
         return MentionArtworkRequest(owner: session.ownership, revision: session.matesRevision,
@@ -81,8 +83,14 @@ struct ConversationTranscript: View {
                 }
                 Color.clear.frame(height: 1).id("transcript-top")
                 if session.historyLoading && rows.isEmpty {
-                    VStack(spacing: 12) { ProgressView(); Text("Loading conversation…").font(.footnote).foregroundStyle(.secondary) }
-                        .frame(maxWidth: .infinity).padding(.vertical, 48)
+                    VStack(spacing: 12) {
+                        if isMate {
+                            if let mate { MateActivityAvatar(mate: mate) }
+                            else { Color.clear.frame(height: 34).accessibilityHidden(true) }
+                        } else { ProgressView() }
+                        Text("Loading conversation…").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 48)
                 } else if rows.isEmpty && pending == nil && session.historyError == nil && run?.isActive != true {
                     ContentUnavailableView(session.isConnected ? "Pick up where you left off" : "Not downloaded yet",
                                            systemImage: session.isConnected ? "bubble.left.and.bubble.right" : "wifi.slash",
@@ -214,17 +222,19 @@ struct ConversationTranscript: View {
 
     @ViewBuilder private var activity: some View {
         if session.stoppingRunID == runID {
-            ChatActivity(title: "Stopping reply…", symbol: "stop.circle", busy: true)
+            if isMate {
+                AgentActivityView(activity: AgentActivity(thinking: "Stopping reply…"), artwork: activityArtwork)
+            } else { ChatActivity(title: "Stopping reply…", symbol: "stop.circle", busy: true) }
         } else if session.waitingForDecision {
             EmptyView()
         } else if run?.isActive == true {
             if !session.isConnected {
                 ChatActivity(title: "Reply continues on your computer", symbol: "sparkle", busy: false)
             } else if !session.transcript.isHistorical, run?.status == "queued" {
-                AgentActivityView(activity: AgentActivity(thinking: "Queued"), providerID: providerID)
+                AgentActivityView(activity: AgentActivity(thinking: "Queued"), artwork: activityArtwork)
             } else if !session.transcript.isHistorical, session.viewingRunID == runID, let activity = session.transcript.activity,
                       !toolIsVisible(activity.toolID) {
-                AgentActivityView(activity: activity, providerID: providerID)
+                AgentActivityView(activity: activity, artwork: activityArtwork)
             }
         } else if run?.status == "canceled" {
             ChatActivity(title: "Reply stopped", symbol: "stop.circle", busy: false)

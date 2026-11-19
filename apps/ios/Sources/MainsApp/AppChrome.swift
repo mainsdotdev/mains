@@ -79,6 +79,37 @@ struct GlassSurface: ViewModifier {
     }
 }
 
+struct GlassSelectionTab<Icon: View>: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let title: String
+    let selected: Bool
+    let showLabel: Bool
+    let selection: Namespace.ID
+    @ViewBuilder let icon: () -> Icon
+
+    var body: some View {
+        HStack(spacing: 8) {
+            icon().frame(width: 22, height: 22)
+            if selected && showLabel {
+                Text(title).fixedSize().lineLimit(1)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .leading)))
+            }
+        }
+        .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+        .padding(.horizontal, selected ? 14 : 11)
+        .frame(minWidth: 44, minHeight: 40).clipped()
+        .background(alignment: .center) {
+            if selected {
+                Color.clear.modifier(GlassSurface(radius: 20))
+                    .matchedGeometryEffect(id: "selection", in: selection)
+            }
+        }
+        .padding(.vertical, 2).contentShape(.rect)
+    }
+}
+
 struct RoundControl: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload

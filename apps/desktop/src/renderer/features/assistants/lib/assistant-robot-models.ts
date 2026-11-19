@@ -172,7 +172,6 @@ function metalShell(preset: typeof METAL_SHELLS[keyof typeof METAL_SHELLS]): Rob
   const profile = roundedProfile(outline, .18);
   const gasket = profile.map(([x, y]): Point => [x * .968, y * .968]);
   const front = depth / 2;
-  const upperLid: Point[] = ellipse(.348, .33, 52).filter(([, y]) => y >= .082);
   return [
     plate(profile, [0, 0, -depth * .365], depth * .27, .046, shell, "metal"),
     plate(gasket, [0, 0, -depth * .205], depth * .11, .028, "#24262e"),
@@ -181,7 +180,7 @@ function metalShell(preset: typeof METAL_SHELLS[keyof typeof METAL_SHELLS]): Rob
     plate(ellipse(.376), [0, -.025, front + .061], .039, .018, "#1b2028", "glass"),
     plate(ellipse(.226), [0, -.027, front + .086], .02, .009, iris, "light", "iris"),
     plate(ellipse(.131), [0, -.027, front + .1], .023, .01, "#15191e", "glass", "iris"),
-    plate(roundedProfile(upperLid, .022), [0, -.025, front + .106], .027, .012, "#2f3036", "metal", "lid"),
+    plate(ellipse(.348, .342, 52), [0, -.025, front + .106], .027, .012, "#2f3036", "metal", "lid"),
     plate(rectangle(.225, .057, .046), [0, -.28, -front - .011], .04, .018, "#23252a"),
   ];
 }

@@ -66,15 +66,46 @@ extension View {
     func activityShimmer(_ enabled: Bool = true) -> some View { modifier(ActivityShimmer(enabled: enabled)) }
 }
 
+struct MateActivityAvatar: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let mate: Mate
+    @Environment(\.conversationPaneVisible) private var paneVisible
+    @State private var inViewport = false
+
+    var body: some View {
+        Group {
+            if let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
+                MateRobotPreview(preset: preset, acceptsDrag: false, renders: inViewport && paneVisible, motion: .thinking)
+            } else {
+                MateRobotThumbnail(preset: nil)
+            }
+        }
+        .frame(width: 34, height: 34)
+        .onScrollVisibilityChange(threshold: 0.1) { inViewport = $0 }
+        .accessibilityHidden(true)
+    }
+}
+
 struct AgentActivityView: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
+    enum Artwork {
+        case provider(String)
+        case mate(Mate?)
+    }
+
     let activity: AgentActivity
-    let providerID: String
+    let artwork: Artwork
     var body: some View {
         HStack(spacing: 9) {
-            AgentAsciiSpinner(providerID: providerID)
+            switch artwork {
+            case .provider(let providerID): AgentAsciiSpinner(providerID: providerID)
+            case .mate(let mate):
+                if let mate { MateActivityAvatar(mate: mate) }
+            }
             Text(activity.label).lineLimit(1).activityShimmer()
         }.font(.footnote).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)

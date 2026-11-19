@@ -46,10 +46,12 @@ const fragmentSource = `
 precision mediump float;
 uniform vec3 uColor;
 uniform float uFinish;
+uniform float uLidEdge;
 varying vec3 vNormal;
 varying vec3 vSurface;
 
 void main() {
+  if (vSurface.y < uLidEdge) discard;
   vec3 normal = normalize(vNormal);
   vec3 key = normalize(vec3(-0.50, 0.68, 0.78));
   vec3 fill = normalize(vec3(0.75, -0.40, 0.52));
@@ -77,6 +79,7 @@ void main() {
   } else {
     rgb += vec3(pow(specular, 12.0) * 0.10 + rim * 0.045);
   }
+  rgb += vec3(0.09 * (1.0 - smoothstep(0.0, 0.012, vSurface.y - uLidEdge)));
   gl_FragColor = vec4(rgb, min(alpha, 1.0));
 }
 `;
@@ -135,6 +138,7 @@ export function createRobotRenderer(canvas: HTMLCanvasElement, shape: AssistantR
   const uniform = (name: string) => gl.getUniformLocation(program, name);
   const position = uniform("uPosition"), orbit = uniform("uOrbit"), turn = uniform("uTurn");
   const look = uniform("uLook"), scale = uniform("uScale"), color = uniform("uColor"), finish = uniform("uFinish");
+  const lidEdge = uniform("uLidEdge");
   const parts: Array<RobotPart & { buffer: WebGLBuffer; tint: [number, number, number] }> = [];
   function dispose() {
     parts.forEach(({ buffer }) => gl.deleteBuffer(buffer));
@@ -177,7 +181,7 @@ export function createRobotRenderer(canvas: HTMLCanvasElement, shape: AssistantR
 
       function drawPart(part: typeof parts[number]) {
         const [x, y, z] = part.position;
-        let gazeX = 0, gazeY = 0, tilt = 0, width = 1, height = 1;
+        let gazeX = 0, gazeY = 0, tilt = 0, width = 1, height = 1, lowerEdge = -2;
         switch (part.motion) {
           case "terminalEyes":
             gazeX = lookX * 0.045;
@@ -186,19 +190,19 @@ export function createRobotRenderer(canvas: HTMLCanvasElement, shape: AssistantR
             break;
           case "clearFace":
           case "clearEyes":
-            gazeX = lookX * 0.101;
-            gazeY = lookY * 0.060 - focus * 0.031;
+            gazeX = lookX * (part.motion === "clearEyes" ? 0.096 : 0.047);
+            gazeY = lookY * (part.motion === "clearEyes" ? 0.064 : 0.044) - focus * 0.031;
             tilt = focus * 0.12;
             if (part.motion === "clearEyes") height = 1 - blink * 0.9;
             break;
           case "iris":
-            gazeX = lookX * 0.051;
-            gazeY = lookY * 0.035;
+            gazeX = lookX * 0.101;
+            gazeY = lookY * 0.040;
             width = height = 1 - focus * 0.22;
             break;
           case "lid":
-            gazeY = -blink * 0.047 - focus * 0.012;
-            height = 1 + blink * 0.82;
+            // Reveal the upper lid down to its moving edge, keeping the rim fixed inside the lens.
+            lowerEdge = y + 0.082 - blink * 0.43 - focus * 0.018;
             break;
         }
         gl.uniform3f(position, x, y, z);
@@ -207,6 +211,7 @@ export function createRobotRenderer(canvas: HTMLCanvasElement, shape: AssistantR
         gl.uniform2f(scale, width, height);
         gl.uniform3fv(color, part.tint);
         gl.uniform1f(finish, finishes[part.finish]);
+        gl.uniform1f(lidEdge, lowerEdge);
         gl.bindBuffer(gl.ARRAY_BUFFER, part.buffer);
         gl.vertexAttribPointer(positionAttr, 3, gl.FLOAT, false, 24, 0);
         gl.vertexAttribPointer(normalAttr, 3, gl.FLOAT, false, 24, 12);

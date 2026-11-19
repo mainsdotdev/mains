@@ -31,7 +31,7 @@ const fixtureMateTeams = [
 const fixtureMates = [
   fixtureMate,
   { ...fixtureMate, id: 'fixture-planner', name: 'Fixture Planner', description: 'Plans trips', teamId: 'planning-team' },
-  { ...fixtureMate, id: 'fixture-reviewer', name: 'Fixture Reviewer', description: 'Reviews changes' },
+  { ...fixtureMate, id: 'fixture-reviewer', name: 'Fixture Reviewer', description: '', needsSetup: true },
   { ...fixtureMate, id: 'fixture-solo', name: 'Fixture Solo', description: '', teamId: null },
 ];
 const connections = new Set(), receipts = new Map(), observations = [];
@@ -200,7 +200,8 @@ function startReply(runId, message, commandId, input = {}) {
   run.status = 'running'; run.updatedAt = date;
   event(CHANNELS.runs.statusChanged, runId, { status: 'running' });
   event(CHANNELS.runs.eventPersisted, runId);
-  for (const [delay, content] of [[350, 'Streaming a native reply…'], [1200, 'Streaming a native reply… almost there.']]) {
+  const firstChunk = run.assistantId && message === 'Take your time' ? 6500 : 350;
+  for (const [delay, content] of [[firstChunk, 'Streaming a native reply…'], [firstChunk + 850, 'Streaming a native reply… almost there.']]) {
     later(delay, () => {
       if (replies.get(runId) !== reply || reply.stopped) return;
       reply.content = content;
@@ -420,15 +421,18 @@ wss.on('connection', socket => {
         case CHANNELS.assistants.create: {
           const input = args[0], space = spaces.find(space => space.id === input.spaceId);
           if (!commandId || input.accountId !== 'fixture-account' || !space || !input.profileSetup) throw new Error('Invalid Mate creation');
-          const id = `created-mate-${nextID++}`;
+          const mateId = `created-mate-${nextID++}`;
           const question = { question: `Hi, I’m ${input.name}. What would you like me to help with?`, options: [],
             idleMessage: 'Profile saved. What would you like me to do first?', profileSetup: { turns: [] } };
-          createdMates.set(id, { id, name: input.name, avatar: input.avatar, teamId: input.teamId, description: '',
+          createdMates.set(mateId, { id: mateId, name: input.name, avatar: input.avatar, teamId: input.teamId, description: '',
             providerId: space.providerId, model: input.model, needsSetup: true,
-            welcome: { runId: `welcome-${id}`, question, state: 'ready', error: null } });
-          result = { id };
-          receipts.set(commandId, { success: true, data: result });
-          broadcast(CHANNELS.assistants.changed, {}); break;
+            welcome: { runId: `welcome-${mateId}`, question, state: 'ready', error: null } });
+          result = { id: mateId };
+          const receipt = { success: true, data: result };
+          receipts.set(commandId, receipt);
+          broadcast(CHANNELS.assistants.changed, {});
+          later(3500, () => { if (socket.readyState === WebSocket.OPEN) send(socket, { kind: 'response', id, result: receipt }); });
+          return;
         }
         case CHANNELS.assistants.setupProfile: {
           const [accountId, mateId, input] = args;

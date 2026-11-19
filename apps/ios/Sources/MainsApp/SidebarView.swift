@@ -224,30 +224,16 @@ struct SidebarView: View {
             ForEach(modes, id: \.self) { mode in
                 let selected = space?.mode == mode
                 Button { chooseMode(mode) } label: {
-                    HStack(spacing: 8) {
+                    GlassSelectionTab(title: Experience.label(mode), selected: selected,
+                                      showLabel: showLabel, selection: modeSelection) {
                         ZStack {
                             RegistryIcon(token: "icon:\(mode == "developer" ? "code" : mode == "work" ? "bag" : "chat")",
                                          size: 22, tint: selected ? .primary : .primary.opacity(0.8))
                                 .opacity(pendingMode == mode ? 0 : 1)
                             if pendingMode == mode { ProgressView().controlSize(.mini).transition(.opacity) }
                         }
-                        .frame(width: 22, height: 22)
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: pendingMode)
-                        if selected && showLabel {
-                            Text(Experience.label(mode)).fixedSize().lineLimit(1)
-                                .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .leading)))
-                        }
                     }
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                    .padding(.horizontal, selected ? 14 : 11)
-                    .frame(minWidth: 44, minHeight: 40).clipped()
-                    .background(alignment: .center) {
-                        if selected {
-                            Color.clear.modifier(GlassSurface(radius: 20))
-                                .matchedGeometryEffect(id: "mode", in: modeSelection)
-                        }
-                    }
-                    .padding(.vertical, 2).contentShape(.rect)
                 }
                 .buttonStyle(ChatPressStyle())
                 .disabled(!session.isConnected || session.changingMode || session.sending || pendingMode != nil)

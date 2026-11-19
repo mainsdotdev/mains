@@ -54,6 +54,20 @@ struct MateRobotThumbnail: View {
     }
 }
 
+struct MateAvatarSelection: Equatable {
+    enum Reaction: String, CaseIterable {
+        case blink, doubleBlink, spin, sway, shiver, glance, nod
+    }
+
+    private(set) var turn = 1
+    private(set) var reaction = Reaction.allCases.randomElement() ?? .blink
+
+    mutating func advance() {
+        turn += 1
+        reaction = Reaction.allCases.filter { $0 != reaction }.randomElement() ?? .blink
+    }
+}
+
 struct MateRobotPicker: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -62,6 +76,7 @@ struct MateRobotPicker: View {
     @Binding var avatar: MateAvatar
     @Binding var remembered: [String: String]
     let stageHeight: CGFloat
+    @State private var selection = MateAvatarSelection()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var style: MateRobotCatalogue.Style? {
@@ -71,7 +86,7 @@ struct MateRobotPicker: View {
     var body: some View {
         VStack(spacing: 6) {
             if let style, !style.presets.isEmpty {
-                MateAvatarCarousel(presets: style.presets, avatar: $avatar, stageHeight: stageHeight)
+                MateAvatarCarousel(presets: style.presets, avatar: $avatar, selection: $selection, stageHeight: stageHeight)
                     .id(style.id)
             }
 
@@ -119,6 +134,7 @@ struct MateRobotPicker: View {
         guard next.id != style?.id,
               let preset = next.presets.first(where: { $0.id == remembered[next.id] }) ?? next.presets.first else { return }
         if let style { remembered[style.id] = avatar.shape }
+        selection.advance()
         avatar = preset.avatar
     }
 }
@@ -129,20 +145,21 @@ private struct MateAvatarCarousel: View {
     #endif
     let presets: [MateRobotCatalogue.Preset]
     @Binding var avatar: MateAvatar
+    @Binding var selection: MateAvatarSelection
     let stageHeight: CGFloat
     @State private var index: Int
     @State private var dragOffset: CGFloat = 0
     @State private var visible = false
     @State private var renderedSlots: Set<Int> = []
     @State private var turn: (slot: Int, step: Int)?
-    @State private var selectionTurn = 1
     @State private var rotation: (slot: Int, drag: RobotPreviewDrag)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(presets: [MateRobotCatalogue.Preset], avatar: Binding<MateAvatar>, stageHeight: CGFloat) {
+    init(presets: [MateRobotCatalogue.Preset], avatar: Binding<MateAvatar>, selection: Binding<MateAvatarSelection>, stageHeight: CGFloat) {
         self.presets = presets
         self.stageHeight = stageHeight
         _avatar = avatar
+        _selection = selection
         _index = State(initialValue: presets.firstIndex { $0.id == avatar.wrappedValue.shape } ?? 0)
     }
 
@@ -165,7 +182,7 @@ private struct MateAvatarCarousel: View {
                     MateRobotPreview(preset: preset(at: slot), acceptsDrag: false,
                                      renders: visible && nearViewport, animates: slot == index && dragOffset == 0,
                                      turn: turn?.slot == slot ? turn?.step ?? 0 : 0,
-                                     selectionTurn: slot == index ? selectionTurn : nil,
+                                     selection: slot == index ? selection : nil,
                                      externalDrag: rotation?.slot == slot ? rotation?.drag : nil) { rendered in
                         if rendered { renderedSlots.insert(slot) }
                         else { renderedSlots.remove(slot) }
@@ -224,7 +241,7 @@ private struct MateAvatarCarousel: View {
 
     private func select(_ slot: Int) {
         if slot != index {
-            selectionTurn += 1
+            selection.advance()
             rotation = nil
         }
         withAnimation(snap) {
@@ -357,12 +374,15 @@ struct MateRobotPreview: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
+    enum Motion: String { case idle, greeting, creating, thinking }
+
     let preset: MateRobotCatalogue.Preset
     var acceptsDrag = true
     var renders = true
     var animates = true
+    var motion: Motion = .idle
     var turn = 0
-    var selectionTurn: Int?
+    var selection: MateAvatarSelection?
     var externalDrag: RobotPreviewDrag?
     var onRendered: (Bool) -> Void = { _ in }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -377,9 +397,9 @@ struct MateRobotPreview: View {
         ZStack {
             MateRobotThumbnail(preset: preset).opacity(showingPreview ? 0 : 1)
             if active || showingPreview {
-                RobotWebPreview(shape: preset.id, active: active, reducedMotion: reduceMotion, ambientMotion: animates,
+                RobotWebPreview(shape: preset.id, active: active, reducedMotion: reduceMotion, ambientMotion: animates, motion: motion,
                                 acceptsDrag: acceptsDrag, showingPreview: showingPreview,
-                                rotationStep: acceptsDrag ? rotationStep : turn, selectionTurn: selectionTurn,
+                                rotationStep: acceptsDrag ? rotationStep : turn, selection: selection,
                                 externalDrag: externalDrag, onRendered: { renderedShape = $0 })
                     .allowsHitTesting(active && acceptsDrag)
             }
@@ -410,10 +430,11 @@ private struct RobotWebPreview: UIViewRepresentable {
     let active: Bool
     let reducedMotion: Bool
     let ambientMotion: Bool
+    let motion: MateRobotPreview.Motion
     let acceptsDrag: Bool
     let showingPreview: Bool
     let rotationStep: Int
-    let selectionTurn: Int?
+    let selection: MateAvatarSelection?
     let externalDrag: RobotPreviewDrag?
     let onRendered: (String?) -> Void
 
@@ -486,8 +507,9 @@ private struct RobotWebPreview: UIViewRepresentable {
             let active: Bool
             let reducedMotion: Bool
             let ambientMotion: Bool
+            let motion: MateRobotPreview.Motion
             let step: Int
-            let selectionTurn: Int?
+            let selection: MateAvatarSelection?
         }
 
         init(parent: RobotWebPreview) { self.parent = parent }
@@ -535,14 +557,17 @@ private struct RobotWebPreview: UIViewRepresentable {
         func render(_ webView: WKWebView) {
             guard ready, !retired else { return }
             let request = Request(shape: parent.shape, active: parent.active, reducedMotion: parent.reducedMotion,
-                                  ambientMotion: parent.ambientMotion, step: parent.rotationStep, selectionTurn: parent.selectionTurn)
+                                  ambientMotion: parent.ambientMotion, motion: parent.motion,
+                                  step: parent.rotationStep, selection: parent.selection)
             guard request != lastRequest else { return }
             let delta = lastRequest.map { request.step - $0.step } ?? 0
             lastRequest = request
             webView.callAsyncJavaScript(
-                "const status = window.showRobot(shape, active, reduced, ambient, turn); if (status !== 'unavailable' && step) window.rotateRobot(step); return status;",
+                "const status = window.showRobot(shape, active, reduced, ambient, turn, reaction, motion); if (status !== 'unavailable' && step) window.rotateRobot(step); return status;",
                 arguments: ["shape": request.shape, "active": request.active, "reduced": request.reducedMotion,
-                            "ambient": request.ambientMotion, "step": delta, "turn": request.selectionTurn ?? 0],
+                            "ambient": request.ambientMotion, "motion": request.motion.rawValue,
+                            "step": delta, "turn": request.selection?.turn ?? 0,
+                            "reaction": request.selection?.reaction.rawValue ?? ""],
                 in: nil, in: .page
             ) { [weak self, weak webView] result in
                 guard let self, let webView, !self.retired, self.lastRequest == request else { return }

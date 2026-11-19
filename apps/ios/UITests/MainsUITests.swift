@@ -115,7 +115,7 @@ final class MainsUITests: XCTestCase {
     func testNewMateSetupUsesChatBubblesAndContinuesInTheFirstConversation() {
         continueAfterFailure = false
         let app = makeApplication()
-        _ = pairFixture(app, code: "ios-test")
+        _ = pairFixture(app, code: "ios-test-home")
         app.buttons["openMates"].tap()
         let newMate = app.buttons["newMate"]
         XCTAssertTrue(newMate.waitForExistence(timeout: 5))
@@ -139,6 +139,15 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(modelBar.waitForExistence(timeout: 5))
         XCTAssertFalse(name.exists)
         XCTAssertFalse(app.buttons["Team"].exists)
+        let codex = app.buttons["mate-provider-codex"], claude = app.buttons["mate-provider-claude_code"]
+        XCTAssertTrue(codex.isSelected)
+        XCTAssertGreaterThanOrEqual(codex.frame.minY, modelBar.frame.maxY)
+        claude.tap()
+        XCTAssertTrue(claude.isSelected)
+        XCTAssertTrue(wheel.waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "New Mate – Claude provider color")
+        codex.tap()
+        XCTAssertTrue(codex.isSelected)
         XCTAssertTrue(wheel.waitForExistence(timeout: 5))
         let effort = app.descendants(matching: .any)["effortSlider"]
         XCTAssertTrue(effort.waitForExistence(timeout: 5))
@@ -163,6 +172,12 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(effort.waitForExistence(timeout: 5))
         XCTAssertEqual(effort.value as? String, "High")
         app.buttons["createMate"].tap()
+
+        let creating = app.staticTexts["creatingMateStatus"]
+        XCTAssertTrue(creating.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["createMate"].exists)
+        XCTAssertFalse(wheel.exists)
+        attachScreenshot(app, name: "New Mate – creating with the selected avatar")
 
         let greeting = app.staticTexts["Hi, I’m Kitchen Mate. What would you like me to help with?"]
         let setupAnswer = app.descendants(matching: .any).matching(identifier: "mateSetupAnswer").firstMatch
@@ -242,7 +257,7 @@ final class MainsUITests: XCTestCase {
         forgetFixture(app)
     }
 
-    func testMatesGroupByTeamAndOpenChatWithMateHeader() {
+    func testMatesGroupByTeamAndOpenChatWithMateHeader() throws {
         continueAfterFailure = false
         let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
@@ -259,14 +274,48 @@ final class MainsUITests: XCTestCase {
         let offsets = rows.map { $0.frame.minY }
         XCTAssertEqual(offsets, offsets.sorted())
         XCTAssertFalse(app.staticTexts["Empty Team"].exists)
+        XCTAssertTrue(app.buttons["mate-fixture-reviewer"].label.contains("Finish setup"))
         attachScreenshot(app, name: "Mates – grouped by team")
 
-        firstMate.tap()
+        let rowEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.946, dy: 0))
+        rowEdge.withOffset(CGVector(dx: 0, dy: firstMate.frame.midY - app.frame.minY)).tap()
         XCTAssertTrue(app.staticTexts["1m ago"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["1d ago"].exists)
-        attachScreenshot(app, name: "Mate – avatar card and chat ages")
+        let description = app.staticTexts["Checks releases"]
+        XCTAssertTrue(description.exists)
+        XCTAssertEqual(description.frame.midX, app.frame.midX, accuracy: 2)
+        XCTAssertFalse(app.staticTexts["Codex"].exists)
+        let screenshot = try XCTUnwrap(app.screenshot().image.cgImage)
+        let scale = CGFloat(screenshot.width) / app.frame.width
+        let sampleY = (description.frame.midY * scale).rounded()
+        func backgroundPatch(at x: CGFloat) throws -> Data {
+            let rect = CGRect(x: (x * scale).rounded(), y: sampleY, width: 6, height: 6)
+            return try XCTUnwrap(UIImage(cgImage: XCTUnwrap(screenshot.cropping(to: rect))).pngData())
+        }
+        XCTAssertEqual(try backgroundPatch(at: 6), try backgroundPatch(at: 38))
+        attachScreenshot(app, name: "Mate – centered profile summary and chats")
 
-        app.staticTexts["Release check 1"].tap()
+        let info = app.buttons["openMateInfo"]
+        let mateBar = app.navigationBars["Fixture Mate"]
+        XCTAssertEqual(info.frame.midY, mateBar.buttons["BackButton"].frame.midY, accuracy: 1)
+        info.tap()
+        let infoBar = app.navigationBars["Mate Info"]
+        XCTAssertTrue(infoBar.waitForExistence(timeout: 5))
+        XCTAssertFalse(description.exists)
+        infoBar.buttons["BackButton"].tap()
+
+        let firstChat = app.staticTexts["Release check 1"]
+        XCTAssertTrue(firstChat.waitForExistence(timeout: 5))
+        let firstChatY = firstChat.frame.minY
+        let listInput = app.textViews["homeMessageInput"]
+        listInput.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let visibleChat = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            firstChat.isHittable && firstChat.frame.minY < firstChatY - 20 && firstChat.frame.maxY < listInput.frame.minY
+        }, object: firstChat)
+        XCTAssertEqual(XCTWaiter.wait(for: [visibleChat], timeout: 5), .completed)
+        attachScreenshot(app, name: "Mate – chat list above keyboard")
+        firstChat.tap()
         let header = app.descendants(matching: .any).matching(identifier: "mateConversationHeader").firstMatch
         XCTAssertTrue(header.waitForExistence(timeout: 10))
         XCTAssertEqual(header.label, "Fixture Mate")
@@ -346,6 +395,20 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 3), .completed)
         XCTAssertTrue(keyboard.exists)
         XCTAssertEqual(input.value as? String, "")
+
+        input.typeText("Take your time")
+        send.tap()
+        let allow = app.buttons["allowDataSharing"]
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        let thinking = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Thinking")).firstMatch
+        XCTAssertTrue(thinking.waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "Mate chat – avatar while thinking")
+        XCTAssertTrue(thinking.waitForNonExistence(timeout: 10))
+        let stop = app.buttons["Stop reply"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 10))
+        attachScreenshot(app, name: "Mate composer – avatar-tinted stop button")
+        stop.tap()
+        XCTAssertTrue(send.waitForExistence(timeout: 10))
 
         app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(app.staticTexts["Release check 1"].waitForExistence(timeout: 5))

@@ -11,7 +11,10 @@ extension EnvironmentValues {
 }
 
 
-enum AppRoute: Hashable { case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String), mates, newMate([MateTeam]), newMateModel, mate(String) }
+enum AppRoute: Hashable {
+    case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String)
+    case mates, newMate([MateTeam]), newMateModel, creatingMate(NewMateCreationRequest), mate(String), mateInfo(String)
+}
 
 struct AppShell: View {
     #if DEBUG && targetEnvironment(simulator)
@@ -110,14 +113,23 @@ struct AppShell: View {
                                     NewMateView(teams: teams, draft: $newMateDraft) { path.append(.newMateModel) }
                                         .id(session.ownership)
                                 case .newMateModel:
-                                    NewMateModelView(session: session, draft: $newMateDraft) { id in
-                                        guard path.last == .newMateModel, path.count >= 2,
-                                              case .newMate = path[path.count - 2] else { return }
-                                        path.replaceSubrange((path.count - 2)..., with: [.mate(id)])
+                                    NewMateModelView(session: session, draft: $newMateDraft, create: { request in
+                                        guard path.last == .newMateModel else { return }
+                                        path.append(.creatingMate(request))
+                                    }, created: { id in finishMateCreation(id, from: .newMateModel) })
+                                    .id(session.ownership)
+                                case .creatingMate(let request):
+                                    CreatingMateView(session: session, request: request) { id in
+                                        finishMateCreation(id, from: .creatingMate(request))
                                     }
                                     .id(session.ownership)
-                                case .mate(let id): MateView(session: session, mateID: id, openChat: { path.append(.conversation($0)) })
-                                    .id("\(session.ownership):mate:\(id)")
+                                case .mate(let id):
+                                    MateView(session: session, mateID: id, openChat: { path.append(.conversation($0)) },
+                                             openInfo: { path.append(.mateInfo(id)) })
+                                        .id("\(session.ownership):mate:\(id)")
+                                case .mateInfo:
+                                    Color(.systemBackground).ignoresSafeArea()
+                                        .navigationTitle("Mate Info").navigationBarTitleDisplayMode(.inline)
                                 }
                             }
                         }
@@ -229,9 +241,16 @@ struct AppShell: View {
 
     private var mainPaneInteractive: Bool { !searchMounted && (!drawerOpen || inlineSidebarVisible) }
 
+    private func finishMateCreation(_ id: String, from route: AppRoute) {
+        guard path.last == route else { return }
+        let firstStep = path.count - (route == .newMateModel ? 2 : 3)
+        guard firstStep >= 0, case .newMate = path[firstStep] else { return }
+        path.replaceSubrange(firstStep..., with: [.mate(id)])
+    }
+
     private var visibleColorScheme: ColorScheme? {
         switch path.last {
-        case .newMate, .newMateModel: .dark
+        case .newMate, .newMateModel, .creatingMate: .dark
         default: appearance.colorScheme
         }
     }
@@ -241,7 +260,7 @@ struct AppShell: View {
         guard mainPaneInteractive else { return nil }
         switch path.last {
         case .conversation(let id), .searchMessage(let id, _): return id
-        case .workspace, .settings, .workInbox, .atlas, .atlasPage: return nil
+        case .workspace, .settings, .workInbox, .atlas, .atlasPage, .mates, .newMate, .newMateModel, .creatingMate, .mate, .mateInfo: return nil
         case nil: return homeRunID
         }
     }

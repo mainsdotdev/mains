@@ -72,13 +72,23 @@ struct MatesView: View {
                         .frame(width: 40, height: 40)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(mate.name).font(.headline)
-                        if !mate.ready { Text("Finish setup").font(.subheadline).foregroundStyle(.secondary) }
-                        else if !mate.description.isEmpty { Text(mate.description).font(.subheadline).foregroundStyle(.secondary).lineLimit(2) }
+                        if !mate.ready {
+                            HStack(spacing: 6) {
+                                Text("Finish setup").font(.subheadline).foregroundStyle(.secondary)
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.caption).foregroundStyle(.orange).accessibilityHidden(true)
+                            }
+                        } else if !mate.description.isEmpty {
+                            Text(mate.description).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                        }
                     }
                     Spacer()
-                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
                 }
-            }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("mate-\(mate.id)")
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+            }.accessibilityIdentifier("mate-\(mate.id)")
         }
     }
 
@@ -193,12 +203,17 @@ struct NewMateModelView: View {
     #endif
     let session: BackendSession
     @Binding var draft: NewMateDraft
+    let create: (NewMateCreationRequest) -> Void
     let created: (String) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Namespace private var providerSelection
     @State private var error: String?
 
     private var spaces: [Space] { session.mateSpaces }
     private var space: Space? { spaces.first { $0.id == draft.spaceID } ?? spaces.first }
+    private var providerSpaces: [Space] { spaces.filter { $0.providerId == space?.providerId } }
     private var models: [ModelChoice] { space.flatMap { session.models[$0.providerId] } ?? [] }
     private var preferredSettings: ComposerSettings { draft.settings ?? space.map { session.settings(for: $0) } ?? .init() }
     private var model: ModelChoice? {
@@ -229,23 +244,29 @@ struct NewMateModelView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            ScrollView {
-                VStack(spacing: 0) {
-                    Spacer(minLength: 20)
-                    modelSelection.frame(maxWidth: 520)
-                    Spacer(minLength: 20)
-                }
-                .frame(minHeight: geometry.size.height)
-                .frame(maxWidth: .infinity)
+        VStack(spacing: 0) {
+            providerTabs.padding(.top, 12)
+            if providerSpaces.count > 1 {
+                spaceMenu.padding(.horizontal, 24).padding(.top, 2)
             }
-            .scrollBounceBehavior(.basedOnSize)
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 20)
+                        modelSelection.frame(maxWidth: 520)
+                        Spacer(minLength: 20)
+                    }
+                    .frame(minHeight: geometry.size.height)
+                    .frame(maxWidth: .infinity)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+            }
         }
         .mateCreationChrome("Model & Effort")
         .navigationBarBackButtonHidden(writing)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Create") { Task { await create() } }
+                Button("Create", action: beginCreation)
                     .disabled(!canCreate)
                     .accessibilityIdentifier("createMate")
             }
@@ -258,7 +279,6 @@ struct NewMateModelView: View {
     private var modelSelection: some View {
         VStack(spacing: 12) {
             if let space {
-                spaceMenu.frame(maxWidth: 230).padding(.horizontal, 24)
                 ModelEffortPicker(providerID: space.providerId, models: models, model: model, settings: settings,
                                   loading: ComposerContext(space: space).modelsLoading(session), enabled: session.isConnected && !writing,
                                   storedEffortOnly: true, error: session.modelErrors[space.providerId],
@@ -275,7 +295,7 @@ struct NewMateModelView: View {
                     .foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
             }
 
-            if writing { ProgressView("Creating Mate…").controlSize(.small) }
+            if writing { ProgressView("Checking creation…").controlSize(.small) }
             if let error { Text(error).foregroundStyle(.secondary).padding(.horizontal, 24) }
             if session.mateCommandUncertain {
                 Button("Check creation") { Task { await checkCreation() } }.disabled(!session.isConnected)
@@ -283,38 +303,66 @@ struct NewMateModelView: View {
         }
     }
 
+    private var providerTabs: some View {
+        HStack(spacing: 8) {
+            ForEach(["codex", "claude_code"], id: \.self) { provider in
+                let isClaude = provider == "claude_code"
+                let title = isClaude ? "Claude" : "Codex"
+                let selected = space?.providerId == provider
+                let candidate = spaces.first { $0.providerId == provider }
+                let iconTint: Color = isClaude ? Provider.accent(provider) : selected ? .primary : .primary.opacity(0.8)
+                Button {
+                    if let candidate, !selected { selectSpace(candidate) }
+                } label: {
+                    GlassSelectionTab(title: title, selected: selected, showLabel: !dynamicTypeSize.isAccessibilitySize,
+                                      selection: providerSelection) {
+                        RegistryIcon(token: isClaude ? "icon:claude" : "icon:codex", size: 22, tint: iconTint, useStoredColor: false)
+                    }
+                }
+                .buttonStyle(ChatPressStyle())
+                .disabled(candidate == nil || writing)
+                .accessibilityLabel(title).accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityIdentifier("mate-provider-\(provider)")
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.94), value: space?.providerId)
+        .accessibilityElement(children: .contain).accessibilityLabel("Provider")
+    }
+
     private var spaceMenu: some View {
         Menu {
-            ForEach(spaces) { candidate in
-                Button {
-                    if candidate.id != space?.id {
-                        draft.spaceID = candidate.id
-                        draft.settings = nil
-                    }
-                } label: {
-                    let title = "\(candidate.name) · \(Provider.name(candidate.providerId))"
-                    if candidate.id == space?.id { Label(title, systemImage: "checkmark") }
-                    else { Text(title) }
+            ForEach(providerSpaces) { candidate in
+                Button { selectSpace(candidate) } label: {
+                    if candidate.id == space?.id { Label(candidate.name, systemImage: "checkmark") }
+                    else { Text(candidate.name) }
                 }
             }
         } label: {
-            mateCreationChoiceLabel(space?.name ?? "Space", icon: space?.icon ?? "icon:box")
+            HStack(spacing: 6) {
+                Text("Space").foregroundStyle(.secondary)
+                Text(space?.name ?? "").lineLimit(1)
+                Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
+            }
+            .font(.footnote.weight(.medium))
+            .padding(.horizontal, 12).frame(minHeight: 44).contentShape(.rect)
         }
         .accessibilityLabel("Space")
         .accessibilityValue(space?.name ?? "")
-        .disabled(spaces.isEmpty || writing)
+        .disabled(writing)
     }
 
-    private func create() async {
+    private func selectSpace(_ candidate: Space) {
+        guard candidate.id != space?.id else { return }
+        draft.spaceID = candidate.id
+        draft.settings = nil
+    }
+
+    private func beginCreation() {
         guard canCreate, let space, let model else { return }
-        let owner = session.ownership
         error = nil
-        do {
-            let id = try await session.createMate(name: draft.name, space: space, model: model.id,
-                                                  effort: settings.effort(provider: space.providerId),
-                                                  teamID: draft.teamID, avatar: draft.avatar)
-            if owner == session.ownership { created(id) }
-        } catch { if owner == session.ownership { self.error = error.localizedDescription } }
+        create(NewMateCreationRequest(owner: session.ownership, name: draft.name, space: space, model: model.id,
+                                      effort: settings.effort(provider: space.providerId), teamID: draft.teamID, avatar: draft.avatar))
     }
 
     private func checkCreation() async {
@@ -324,6 +372,96 @@ struct NewMateModelView: View {
             guard owner == session.ownership else { return }
             if let id { created(id) } else { dismiss() }
         } catch { if owner == session.ownership { self.error = error.localizedDescription } }
+    }
+}
+
+struct NewMateCreationRequest: Hashable {
+    let id = UUID()
+    let owner: Int
+    let name: String
+    let space: Space
+    let model: String
+    let effort: String
+    let teamID: String?
+    let avatar: MateAvatar
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+struct CreatingMateView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let request: NewMateCreationRequest
+    let created: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var started = false
+    @State private var error: String?
+
+    private var working: Bool { error == nil }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let size = min(280, geometry.size.width * 0.68, geometry.size.height * 0.54)
+            ScrollView {
+                VStack(spacing: 14) {
+                    ZStack {
+                        RadialGradient(colors: [MateRobotAssets.chatTint(for: request.avatar).opacity(0.16), .clear],
+                                       center: .center, startRadius: 8, endRadius: size * 0.56)
+                        if let preset = MateRobotAssets.catalogue?.preset(for: request.avatar, mateID: request.name) {
+                            MateRobotPreview(preset: preset, acceptsDrag: false, animates: false, motion: working ? .creating : .idle)
+                        } else {
+                            MateRobotThumbnail(preset: nil)
+                        }
+                    }
+                    .frame(width: size, height: size)
+                    .accessibilityHidden(true)
+
+                    if let error {
+                        Text(error).font(.subheadline).foregroundStyle(.secondary)
+                        if session.mateCommandUncertain {
+                            Button("Check creation") { Task { await submit(checking: true) } }
+                                .disabled(!session.isConnected)
+                        }
+                    } else {
+                        Text("Creating Mate…").font(.headline).foregroundStyle(.secondary).activityShimmer()
+                            .accessibilityIdentifier("creatingMateStatus")
+                    }
+                }
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .frame(maxWidth: .infinity, minHeight: geometry.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .mateCreationChrome("Creating Mate")
+        .toolbarVisibility(working ? .hidden : .visible, for: .navigationBar)
+        .navigationBarBackButtonHidden(working)
+        .onAppear {
+            guard !started else { return }
+            started = true
+            Task { await submit() }
+        }
+    }
+
+    private func submit(checking: Bool = false) async {
+        guard request.owner == session.ownership,
+              !checking || (error != nil && session.mateCommandUncertain && session.isConnected) else { return }
+        let visibleUntil = ContinuousClock.now + .milliseconds(850)
+        error = nil
+        do {
+            let id = if checking { try await session.checkMateCommand() }
+            else {
+                try await session.createMate(name: request.name, space: request.space, model: request.model,
+                                             effort: request.effort, teamID: request.teamID, avatar: request.avatar)
+            }
+            // Give the pushed screen time to appear when the host acknowledges immediately.
+            if id != nil { try? await Task.sleep(until: visibleUntil, clock: .continuous) }
+            guard request.owner == session.ownership else { return }
+            if let id { created(id) } else { dismiss() }
+        } catch { if request.owner == session.ownership { self.error = error.localizedDescription } }
     }
 }
 
@@ -359,11 +497,13 @@ struct MateView: View {
     let session: BackendSession
     let mateID: String
     let openChat: (String) -> Void
+    let openInfo: () -> Void
     private struct SetupReply {
         let step: Int
         let turn: MateWelcome.Turn
     }
     private enum ProfileField: Hashable { case description, instructions }
+    private enum ChatListAnchor: Hashable { case chats }
     @State private var mate: Mate?
     @State private var chats: [MateChat] = []
     @State private var answer = ""
@@ -377,6 +517,7 @@ struct MateView: View {
     @State private var reload = 0
     @State private var consent: ConsentContext?
     @State private var afterConsent: (() -> Void)?
+    @State private var summaryVisible = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var showsSetup: Bool {
         guard let mate else { return false }
@@ -391,11 +532,17 @@ struct MateView: View {
                 mateDetails
             }
         }
+        .environment(\.mateChatTint, mate.map { MateRobotAssets.chatTint(for: $0.avatar) })
         .navigationTitle(mate?.name ?? "Mate").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if showsSetup, let mate {
                 ToolbarItem(placement: .principal) { MateConversationTitle(mate: mate) }
                     .sharedBackgroundVisibility(.hidden)
+            } else if mate != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Mate Info", systemImage: "info.circle", action: openInfo)
+                        .accessibilityIdentifier("openMateInfo")
+                }
             }
         }
         .task(id: "\(session.ownership):\(session.isConnected):\(session.matesRevision):\(reload)") { await load() }
@@ -410,50 +557,70 @@ struct MateView: View {
     }
 
     private var mateDetails: some View {
-        VStack(spacing: 0) {
-            List {
-                if let error { Text(error).foregroundStyle(.secondary) }
-                if session.mateCommandUncertain {
-                    checkMateChange
+        ScrollViewReader { scroll in
+            VStack(spacing: 0) {
+                List {
+                    if let error { Text(error).foregroundStyle(.secondary) }
+                    if session.mateCommandUncertain { checkMateChange }
+                    if let mate {
+                        Section { mateSummary(mate) }
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                        if mate.ready {
+                            if let welcome = mate.welcome { welcomeSection(mate, welcome) }
+                            mateChatHistory(mate)
+                        } else { Text("Loading profile setup…").foregroundStyle(.secondary) }
+                    } else if loading { ProgressView().accessibilityLabel("Loading Mate") }
                 }
-                if let mate {
-                    Section {
-                        VStack(spacing: 6) {
-                            if let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
-                                MateRobotPreview(preset: preset).frame(width: 120, height: 120)
-                            }
-                            VStack(spacing: 3) {
-                                Text(mate.name).font(.headline)
-                                Text(Provider.name(mate.providerId)).font(.subheadline).foregroundStyle(.secondary)
-                            }
+                .scrollDismissesKeyboard(.interactively)
+                if let mate, mate.ready {
+                    firstTaskComposer(mate) { focused in
+                        guard focused, summaryVisible else { return }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) {
+                            scroll.scrollTo(ChatListAnchor.chats, anchor: .top)
                         }
-                        .frame(maxWidth: .infinity)
-                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
-                        if !mate.description.isEmpty { Text(mate.description).font(.subheadline).foregroundStyle(.secondary) }
                     }
-                    if mate.ready {
-                        if let welcome = mate.welcome { welcomeSection(mate, welcome) }
-                        Section("Chats") {
-                            let history = chats.filter { $0.id != mate.welcome?.runId || mate.welcome?.state == "starting" }
-                            if history.isEmpty { Text("No chats yet").foregroundStyle(.secondary) }
-                            ForEach(history) { chat in
-                                Button { openChat(chat.id) } label: {
-                                    HStack {
-                                        Text(chat.displayTitle).lineLimit(1)
-                                        Spacer()
-                                        TimelineView(.periodic(from: .now, by: 60)) { clock in
-                                            Text(compactRelativeAge(chat.updatedAt, now: clock.date))
-                                                .font(.caption).foregroundStyle(.secondary)
-                                                .fixedSize(horizontal: true, vertical: false)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else { Text("Loading profile setup…").foregroundStyle(.secondary) }
-                } else if loading { ProgressView().accessibilityLabel("Loading Mate") }
+                }
             }
-            if let mate, mate.ready { firstTaskComposer(mate) }
+        }
+    }
+
+    private func mateSummary(_ mate: Mate) -> some View {
+        VStack(spacing: 8) {
+            if let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
+                MateRobotPreview(preset: preset).frame(width: 120, height: 120)
+            }
+            if !mate.description.isEmpty {
+                Text(mate.description).font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center).frame(maxWidth: 460)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .onScrollVisibilityChange(threshold: 0.1) { summaryVisible = $0 }
+    }
+
+    private func mateChatHistory(_ mate: Mate) -> some View {
+        let history = chats.filter { $0.id != mate.welcome?.runId || mate.welcome?.state == "starting" }
+        return Section {
+            if history.isEmpty { Text("No chats yet").foregroundStyle(.secondary) }
+            ForEach(history) { chat in
+                Button { openChat(chat.id) } label: {
+                    HStack {
+                        Text(chat.displayTitle).lineLimit(1)
+                        Spacer()
+                        TimelineView(.periodic(from: .now, by: 60)) { clock in
+                            Text(compactRelativeAge(chat.updatedAt, now: clock.date))
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(.rect)
+                }
+            }
+        } header: {
+            Text("Chats").id(ChatListAnchor.chats)
         }
     }
 
@@ -499,11 +666,10 @@ struct MateView: View {
         }
     }
 
-    private func preparingProfile(_ mate: Mate) -> some View {
+    private func preparingProfile(_ mate: Mate, title: LocalizedStringKey = "Preparing the profile…") -> some View {
         HStack(spacing: 10) {
-            MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id))
-                .frame(width: 34, height: 34)
-            Text("Preparing the profile…").foregroundStyle(.secondary).activityShimmer()
+            MateActivityAvatar(mate: mate)
+            Text(title).foregroundStyle(.secondary).activityShimmer()
         }
     }
 
@@ -603,7 +769,7 @@ struct MateView: View {
         }.disabled(!session.isConnected)
     }
 
-    private func firstTaskComposer(_ mate: Mate) -> some View {
+    private func firstTaskComposer(_ mate: Mate, focusChanged: ((Bool) -> Void)? = nil) -> some View {
         VStack(spacing: 8) {
             if session.pendingMessage?.status == .uncertain {
                 Button("Check message delivery", systemImage: "arrow.clockwise") {
@@ -618,7 +784,7 @@ struct MateView: View {
             }
             MessageComposer(session: session, context: ComposerContext(mate: mate), draft: draft,
                 canSend: session.isConnected && !session.sending && session.pendingMessage?.status != .uncertain && !draft.isSending,
-                model: {}, options: {}, send: { withConsent(mate) { Task { await send(mate) } } })
+                model: {}, options: {}, send: { withConsent(mate) { Task { await send(mate) } } }, focusChanged: focusChanged)
         }.padding(.bottom, 8)
     }
 
@@ -660,7 +826,7 @@ struct MateView: View {
             Text(welcome.error ?? "Couldn't prepare this Mate.").foregroundStyle(.secondary)
             Button("Retry") { withConsent(mate) { Task { await attempt { try await session.retryMateWelcome(mate.id) } } } }
                 .disabled(session.mateCommandPending || !session.isConnected)
-        } else if ["pending", "generating"].contains(welcome.state) { ProgressView("Preparing…") }
+        } else if ["pending", "generating"].contains(welcome.state) { preparingProfile(mate, title: "Preparing…") }
     }
 
     private func withConsent(_ mate: Mate, action: @escaping () -> Void) {

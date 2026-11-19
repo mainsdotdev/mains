@@ -244,10 +244,9 @@ struct ConversationView: View {
         ZStack {
             ConversationTranscript(session: session, runID: runID, providerID: run?.providerId ?? composerContext?.providerId ?? "", viewport: $viewport, openFile: { turn, file in
                 selectedFile = TurnFileSelection(runID: runID, turnID: turn.id, file: file, owner: session.ownership)
-            }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor) {
+            }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor, mate: conversationMate) {
                 content = ContentReference(id: $0)
             }
-            .environment(\.mateChatTint, conversationMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
             .safeAreaPadding(.top, showsMateHeader ? 32 : 0)
             .scrollEdgeEffectStyle(showsMateHeader ? .soft : nil, for: .top)
             .opacity(focusedVoice ? 0 : 1)
@@ -263,6 +262,7 @@ struct ConversationView: View {
         }
         .background(Color(.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
+        .environment(\.mateChatTint, conversationMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
         .effortOverlay(isPresented: $modelSheet, session: session, context: run.map { ComposerContext(run: $0) }, withinPane: true)
     }
 
@@ -505,8 +505,14 @@ struct MateConversationTitle: View {
         Color.clear.frame(width: compact ? 112 : 240, height: 44)
             .overlay(alignment: .top) {
                 VStack(spacing: -8) {
-                    MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id))
-                        .frame(width: 84, height: 84)
+                    Group {
+                        if let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
+                            MateRobotPreview(preset: preset, acceptsDrag: false, motion: .greeting)
+                        } else {
+                            MateRobotThumbnail(preset: nil)
+                        }
+                    }
+                    .frame(width: 84, height: 84)
                     Text(mate.name).font(.subheadline.weight(.semibold)).lineLimit(1)
                         .padding(.horizontal, 12).padding(.vertical, 6)
                         .modifier(GlassSurface(radius: 18, interactive: false))

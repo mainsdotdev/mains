@@ -18,6 +18,7 @@ struct MessageComposer: View {
     let options: () -> Void
     let send: () -> Void
     var voiceCreated: ((String) -> Void)? = nil
+    var focusChanged: ((Bool) -> Void)? = nil
     #if MAINS_GPT_LIVE
     @AppStorage(VoicePresentation.storageKey) private var voicePresentation = VoicePresentation.focus
     @State private var voiceConsent: ConsentContext?
@@ -40,6 +41,7 @@ struct MessageComposer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.conversationPaneVisible) private var paneVisible
+    @Environment(\.mateChatTint) private var mateTint
     @State private var attachmentError: String?
     private var settings: ComposerSettings { context.settings(session) }
     private var selectedModel: ModelChoice? { context.model(session) }
@@ -93,6 +95,7 @@ struct MessageComposer: View {
             }
         }
         .onChange(of: draft.text) { _, _ in draft.reconcileContext() }
+        .onChange(of: focused) { _, focused in focusChanged?(focused) }
         .onChange(of: contextScope, initial: true) { _, scope in draft.synchronizeContext(scope); pluginsOpen = false }
         .attachmentOverlay(isPresented: attachmentsOpen, id: attachmentPresentationID, accent: Provider.accent(context.providerId),
                            maxCount: 5 - draft.attachments.count, maxBytes: remainingBytes, add: addFromPanel, close: closeAttachments)
@@ -219,6 +222,19 @@ struct MessageComposer: View {
             .accessibilityIdentifier(context.runID == nil ? "startConversation" : "sendMessage")
     }
 
+    private func stopActionIcon(symbol: String = "stop.fill", useMateTint: Bool = true) -> some View {
+        let tint = useMateTint ? mateTint : nil
+        let ink = tint ?? .white
+        let fill = tint?.mix(with: .black, by: 0.62, in: .device) ?? Provider.accent(context.providerId)
+        return Group {
+            if stopping { ProgressView().tint(ink) }
+            else { Image(systemName: symbol).font(.callout.weight(.semibold)) }
+        }
+        .frame(width: 36, height: 36).foregroundStyle(ink)
+        .background(fill, in: .circle)
+        .frame(width: 44, height: 44).contentShape(.circle)
+    }
+
     @ViewBuilder private var composerActions: some View {
         #if MAINS_GPT_LIVE
         if ownsVoice, session.voice.phase == .connected {
@@ -231,12 +247,8 @@ struct MessageComposer: View {
                 if ownsVoice { Task { await session.voice.stop() } }
                 if active { stop?() }
             } label: {
-                Group {
-                    if stopping { ProgressView().tint(.white) }
-                    else { Image(systemName: ownsVoice && session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill").font(.callout.weight(.semibold)) }
-                }.frame(width: 36, height: 36).foregroundStyle(.white)
-                    .background(Provider.accent(context.providerId), in: .circle)
-                    .frame(width: 44, height: 44).contentShape(.circle)
+                stopActionIcon(symbol: ownsVoice && session.voice.phase == .stopFailed ? "arrow.clockwise" : "stop.fill",
+                               useMateTint: !ownsVoice)
             }.buttonStyle(ChatPressStyle()).disabled(ownsVoice ? session.voice.phase == .ending : !session.isConnected || stopping)
                 .accessibilityLabel(ownsVoice ? session.voice.phase == .stopFailed ? "Retry ending voice chat" : "End voice chat" : stopping ? "Stopping reply" : "Stop reply")
                 .accessibilityIdentifier(ownsVoice ? "endVoice" : "stopReply")
@@ -254,12 +266,7 @@ struct MessageComposer: View {
         #else
         if stopping || active {
             Button { stop?() } label: {
-                Group {
-                    if stopping { ProgressView().tint(.white) }
-                    else { Image(systemName: "stop.fill").font(.callout.weight(.semibold)) }
-                }.frame(width: 36, height: 36).foregroundStyle(.white)
-                    .background(Provider.accent(context.providerId), in: .circle)
-                    .frame(width: 44, height: 44).contentShape(.circle)
+                stopActionIcon()
             }
             .buttonStyle(ChatPressStyle()).disabled(!session.isConnected || stopping)
             .accessibilityLabel(stopping ? "Stopping reply" : "Stop reply").accessibilityIdentifier("stopReply")
@@ -412,15 +419,17 @@ struct ComposerSendButton: View {
     let providerID: String
     var sending = false
     let action: () -> Void
+    @Environment(\.mateChatTint) private var mateTint
 
     var body: some View {
+        let ink = mateTint == nil ? Color.white : .black
         Button(action: action) {
             Group {
-                if sending { ProgressView().tint(.white) }
+                if sending { ProgressView().tint(ink) }
                 else { Image(systemName: "arrow.up").font(.system(size: 18, weight: .medium)) }
             }
-            .frame(width: 36, height: 36).foregroundStyle(.white)
-            .background(Provider.accent(providerID), in: .circle)
+            .frame(width: 36, height: 36).foregroundStyle(ink)
+            .background(mateTint ?? Provider.accent(providerID), in: .circle)
             .frame(width: 44, height: 44).contentShape(.circle)
         }
         .buttonStyle(ChatPressStyle())
