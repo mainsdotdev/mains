@@ -51,7 +51,10 @@ struct ConversationView: View {
     @State private var companion = ConversationCompanionState()
     @State private var outputSelection: ConversationOutputSelection?
     @State private var outputsSheet = false
-    @State private var loadedMate: (owner: Int, mate: Mate)?
+    @State private var loadedMate: (owner: Int, profile: MateInfoProfile)?
+    @State private var mateAvatarFrame = CGRect.zero
+    @State private var presentedMateProfile: MateInfoProfile?
+    @Namespace private var mateInfoZoom
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.layoutDirection) private var layoutDirection
@@ -74,10 +77,11 @@ struct ConversationView: View {
         MateHeaderRequest(owner: session.ownership, mateID: mateID, revision: session.matesRevision,
                           canLoad: session.isConnected && session.supportsMates)
     }
-    private var conversationMate: Mate? {
-        guard let loadedMate, loadedMate.owner == session.ownership, loadedMate.mate.id == mateID else { return nil }
-        return loadedMate.mate
+    private var mateProfile: MateInfoProfile? {
+        guard let loadedMate, loadedMate.owner == session.ownership, loadedMate.profile.mate.id == mateID else { return nil }
+        return loadedMate.profile
     }
+    private var conversationMate: Mate? { mateProfile?.mate }
     private var showsMateHeader: Bool { (mateID != nil || mateSource != nil) && !focusedVoice && !showsConnectionPill }
     private var navigationTitle: String {
         if focusedVoice || showsConnectionPill { return "" }
@@ -137,7 +141,44 @@ struct ConversationView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in workspace(in: geometry) }
+        GeometryReader { geometry in
+            workspace(in: geometry)
+                .overlay {
+                    if showsMateHeader, mateProfile != nil, presentedMateProfile == nil {
+                        // The toolbar clips touches below the bar even though its avatar is visible there.
+                        let container = geometry.frame(in: .global)
+                        let avatar = mateAvatarFrame.intersection(container)
+                        if !avatar.isEmpty {
+                            Color.clear.frame(width: avatar.width, height: avatar.height)
+                                .contentShape(.rect)
+                                .onTapGesture(perform: presentMateInfo)
+                                .position(x: avatar.midX - container.minX, y: avatar.midY - container.minY)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                }
+        }
+        .fullScreenCover(item: $presentedMateProfile, content: mateInfoPage)
+    }
+
+    private func presentMateInfo() {
+        guard let mateProfile, presentedMateProfile == nil, session.viewingRunID == runID else { return }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        presentedMateProfile = mateProfile
+    }
+
+    private func mateInfoPage(_ profile: MateInfoProfile) -> some View {
+        NavigationStack {
+            MateInfoView(session: session, mateID: profile.id, initialProfile: profile)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { presentedMateProfile = nil } label: { Image(systemName: "chevron.left") }
+                            .accessibilityLabel("Back").accessibilityIdentifier("closeMateChatInfo")
+                    }
+                }
+                .accessibilityAction(.escape) { presentedMateProfile = nil }
+        }
+        .navigationTransition(.zoom(sourceID: profile.id, in: mateInfoZoom))
     }
 
     private func workspace(in geometry: GeometryProxy) -> some View {
@@ -197,7 +238,9 @@ struct ConversationView: View {
         .task(id: mateHeaderRequest) { await loadConversationMate(mateHeaderRequest) }
         .onChange(of: draft.text) { _, _ in companion.focusConversation() }
         .onChange(of: focusedVoice) { _, focused in if focused { companion.close(); outputSelection = nil } }
-        .onChange(of: session.ownership) { _, _ in companion.close(); outputSelection = nil; outputsSheet = false }
+        .onChange(of: session.ownership) { _, _ in
+            companion.close(); outputSelection = nil; outputsSheet = false; presentedMateProfile = nil
+        }
         .sheet(isPresented: $projectSheet) {
             ConversationProjectSheet(session: session, runID: runID, owner: owner ?? -1)
         }
@@ -207,7 +250,9 @@ struct ConversationView: View {
         } message: {
             Text("This permanently deletes the chat and its chat files. This can’t be undone.")
         }
-        .onDisappear { if selectedFile == nil { session.leaveConversation(runID) } }
+        .onDisappear {
+            if selectedFile == nil && presentedMateProfile == nil { session.leaveConversation(runID) }
+        }
         .navigationDestination(item: $selectedFile) { selection in
             TurnFileDiffView(session: session, selection: selection, close: { selectedFile = nil })
         }
@@ -246,7 +291,7 @@ struct ConversationView: View {
         guard request.canLoad, let id = request.mateID,
               let directory = try? await session.loadMates(mateID: id),
               !Task.isCancelled, request == mateHeaderRequest else { return }
-        loadedMate = directory.mates.first { $0.id == id }.map { (request.owner, $0) }
+        loadedMate = directory.mates.first { $0.id == id }.map { (request.owner, MateInfoProfile(mate: $0, teams: directory.teams)) }
     }
 
     private func performOutputsAction(_ action: ConversationCompanionState.OutputsAction) {
@@ -295,7 +340,8 @@ struct ConversationView: View {
                 .sharedBackgroundVisibility(.hidden)
             } else if showsMateHeader {
                 ToolbarItem(placement: .principal) {
-                    MateConversationTitle(mate: conversationMate)
+                    MateConversationTitle(mate: conversationMate, avatarFrame: $mateAvatarFrame,
+                                          zoomNamespace: mateInfoZoom, openInfo: presentMateInfo)
                 }
                 .sharedBackgroundVisibility(.hidden)
             } else if session.isDemo && !focusedVoice {
@@ -516,6 +562,9 @@ struct MateConversationTitle: View {
     @ObserveHotReload private var hotReload
     #endif
     let mate: Mate?
+    var avatarFrame: Binding<CGRect>? = nil
+    var zoomNamespace: Namespace.ID? = nil
+    var openInfo: (() -> Void)? = nil
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
@@ -524,31 +573,49 @@ struct MateConversationTitle: View {
         // Keep the native bar at its usual height while the avatar and name extend over the chat.
         Color.clear.frame(width: compact ? 112 : 240, height: 44)
             .overlay(alignment: .top) {
-                VStack(spacing: -8) {
-                    Group {
-                        if let mate, let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
-                            MateRobotPreview(preset: preset, acceptsDrag: false, motion: .greeting)
-                        } else {
-                            RegistryIcon(token: "icon:assistant-steps", size: 27)
-                                .frame(width: 56, height: 56)
-                                .background(.quaternary, in: .circle)
-                        }
+                Button { openInfo?() } label: {
+                    VStack(spacing: -8) {
+                        avatar
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame?.wrappedValue = $0 }
+                        Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .modifier(GlassSurface(radius: 18, interactive: false))
                     }
-                    .frame(width: 84, height: 84)
-                    Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .modifier(GlassSurface(radius: 18, interactive: false))
+                    .contentShape(.rect)
+                    .frame(width: compact ? 192 : 240)
+                    .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(width: compact ? 192 : 240)
-                .dynamicTypeSize(...DynamicTypeSize.xLarge)
-                .fixedSize(horizontal: false, vertical: true)
+                .buttonStyle(.plain)
                 .offset(y: -11)
-                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(name)
+                .accessibilityHint(mate == nil || openInfo == nil ? "" : "Opens Mate Info")
+                .accessibilityRemoveTraits(mate == nil || openInfo == nil ? .isButton : [])
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("mateConversationHeader")
+                .allowsHitTesting(mate != nil && openInfo != nil)
             }
-            .allowsHitTesting(false)
+    }
+
+    @ViewBuilder private var avatar: some View {
+        let artwork = Group {
+            if let mate, let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
+                MateRobotPreview(preset: preset, acceptsDrag: false, motion: .greeting)
+            } else {
+                RegistryIcon(token: "icon:assistant-steps", size: 27)
+                    .frame(width: 56, height: 56)
+                    .background(.quaternary, in: .circle)
+            }
+        }.frame(width: 84, height: 84)
+        if let mate, let zoomNamespace {
+            artwork.background(alignment: .center) {
+                // Use the avatar's bounds as the source without enlarging a second copy of the robot.
+                Color.black.opacity(0.001)
+                    .matchedTransitionSource(id: mate.id, in: zoomNamespace) { $0.clipShape(RoundedRectangle(cornerRadius: 22)) }
+            }
+        } else {
+            artwork
+        }
     }
 }
 

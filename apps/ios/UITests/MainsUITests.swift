@@ -488,6 +488,22 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(backButton.frame.midY, toolbarCenter, accuracy: 1)
         attachScreenshot(app, name: "Mate chat – avatar loaded")
 
+        let transcript = app.staticTexts["Check whether the build is ready."]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        let transcriptY = transcript.frame.minY
+        let avatar = app.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: header.frame.midX - app.frame.minX, dy: header.frame.minY - app.frame.minY + 70))
+        avatar.tap()
+        XCTAssertTrue(app.navigationBars["Mate Info"].waitForExistence(timeout: 5))
+        let profileName = app.staticTexts["mateInfoName"]
+        XCTAssertTrue(profileName.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(profileName.frame.minY, nameBottom)
+        XCTAssertTrue(app.staticTexts["Checks releases"].exists)
+        attachScreenshot(app, name: "Mate chat – expanded Mate Info")
+        app.buttons["closeMateChatInfo"].tap()
+        XCTAssertTrue(header.waitForExistence(timeout: 5))
+        XCTAssertEqual(transcript.frame.minY, transcriptY, accuracy: 3)
+
         backButton.tap()
         XCTAssertTrue(chat.waitForExistence(timeout: 5))
         app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()

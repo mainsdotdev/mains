@@ -185,24 +185,38 @@ private struct EmptyMatesAvatars: View {
     }
 }
 
+struct MateInfoProfile: Identifiable {
+    let mate: Mate
+    let teams: [MateTeam]
+    var id: String { mate.id }
+}
+
 struct MateInfoView: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let session: BackendSession
     let mateID: String
-    @State private var directory: MateDirectory?
+    @State private var details: MateInfoProfile?
+    @State private var rendersAvatar: Bool
     @State private var error: String?
     @State private var retry = 0
     @State private var requestID = UUID()
+
+    init(session: BackendSession, mateID: String, initialProfile: MateInfoProfile? = nil) {
+        self.session = session
+        self.mateID = mateID
+        _details = State(initialValue: initialProfile)
+        _rendersAvatar = State(initialValue: initialProfile == nil)
+    }
 
     var body: some View {
         Group {
             if !session.isConnected {
                 ContentUnavailableView("Computer offline", systemImage: "wifi.slash",
                                        description: Text("Connect to your computer to see this Mate’s profile."))
-            } else if let directory, let mate = directory.mates.first(where: { $0.id == mateID }) {
-                profile(mate, teams: directory.teams)
+            } else if let details {
+                profile(details.mate, teams: details.teams)
             } else if let error {
                 ContentUnavailableView {
                     Label("Mate info unavailable", systemImage: "person.crop.circle.badge.exclamationmark")
@@ -219,6 +233,12 @@ struct MateInfoView: View {
         .navigationTitle("Mate Info")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: "\(session.ownership):\(session.isConnected):\(session.matesRevision):\(retry)") { await load() }
+        .task {
+            guard !rendersAvatar else { return }
+            // Keep the thumbnail visible while the system runs the zoom.
+            do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
+            rendersAvatar = true
+        }
     }
 
     private func profile(_ mate: Mate, teams: [MateTeam]) -> some View {
@@ -227,18 +247,18 @@ struct MateInfoView: View {
         return List {
             Section {
                 VStack(spacing: 8) {
-                    let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id)
-                    if let preset {
-                        MateRobotPreview(preset: preset, acceptsDrag: false)
-                            .frame(width: 116, height: 116)
-                    } else {
-                        MateRobotThumbnail(preset: nil)
-                            .frame(width: 116, height: 116)
-                            .accessibilityHidden(true)
+                    Group {
+                        if let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
+                            MateRobotPreview(preset: preset, acceptsDrag: false, renders: rendersAvatar)
+                        } else {
+                            MateRobotThumbnail(preset: nil)
+                        }
                     }
+                    .frame(width: 116, height: 116)
                     Text(mate.name)
                         .font(.title2.weight(.semibold))
                         .accessibilityAddTraits(.isHeader)
+                        .accessibilityIdentifier("mateInfoName")
                     if !mate.description.isEmpty {
                         Text(mate.description).font(.subheadline).foregroundStyle(.secondary)
                     }
@@ -275,21 +295,21 @@ struct MateInfoView: View {
     private func load() async {
         let request = UUID()
         requestID = request
-        guard session.isConnected else { directory = nil; error = nil; return }
+        guard session.isConnected else { details = nil; error = nil; return }
         let owner = session.ownership
         error = nil
         do {
             let current = try await session.loadMates(mateID: mateID)
             guard !Task.isCancelled, request == requestID, owner == session.ownership else { return }
-            guard current.mates.contains(where: { $0.id == mateID }) else {
-                directory = nil
+            guard let mate = current.mates.first(where: { $0.id == mateID }) else {
+                details = nil
                 error = "This Mate is unavailable."
                 return
             }
-            directory = current
+            details = MateInfoProfile(mate: mate, teams: current.teams)
         } catch {
             guard !Task.isCancelled, request == requestID, owner == session.ownership else { return }
-            directory = nil
+            details = nil
             self.error = error.localizedDescription
         }
     }
