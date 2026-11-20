@@ -1,6 +1,6 @@
 import Foundation
 
-/// Keeps a wide drawer and its retained navigation pane inside the local window.
+/// Places the sidebar inline in wide windows and over the retained pane in narrow ones.
 public struct SidebarPanePlan: Equatable, Sendable {
     public let sidebarWidth: CGFloat
     public let contentOffset: CGFloat
@@ -14,11 +14,12 @@ public struct SidebarPanePlan: Equatable, Sendable {
     public static func make(width: CGFloat, regular: Bool, pinned: Bool, open: Bool, drag: CGFloat = 0) -> Self {
         let width = max(1, width)
         let sidebarWidth = min(regular ? 320 : 360, width * 0.82)
-        let offset = pinned ? sidebarWidth : min(sidebarWidth, max(0, (open ? sidebarWidth : 0) + drag))
+        let reveal = pinned ? sidebarWidth : min(sidebarWidth, max(0, (open ? sidebarWidth : 0) + drag))
         let inline = pinned || supportsInline(width: width, regular: regular)
-        return Self(sidebarWidth: sidebarWidth, contentOffset: offset, contentWidth: width - (inline ? offset : 0),
-                    overlayProgress: inline ? 0 : offset / sidebarWidth, blocksContent: open && !inline,
-                    isInline: inline && offset > 0)
+        let offset = inline ? reveal : 0
+        return Self(sidebarWidth: sidebarWidth, contentOffset: offset, contentWidth: width - offset,
+                    overlayProgress: inline ? 0 : reveal / sidebarWidth, blocksContent: open && !inline,
+                    isInline: offset > 0)
     }
 }
 

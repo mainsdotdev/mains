@@ -161,6 +161,7 @@ private struct ContextTextInput: UIViewRepresentable {
     let measuredWidth: CGFloat
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.mainPaneCovered) private var mainPaneCovered
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> ComposerTextView {
@@ -174,6 +175,9 @@ private struct ContextTextInput: UIViewRepresentable {
     }
     func updateUIView(_ view: ComposerTextView, context: Context) {
         let coordinator = context.coordinator; coordinator.parent = self
+        view.isUserInteractionEnabled = !mainPaneCovered
+        view.isAccessibilityElement = !mainPaneCovered
+        view.accessibilityElementsHidden = mainPaneCovered
         if coordinator.scope != scope {
             view.undoManager?.removeAllActions(); coordinator.scope = scope
         }
@@ -211,9 +215,10 @@ private struct ContextTextInput: UIViewRepresentable {
             let selected = view.attributedText.attributedSubstring(from: range)
             UIPasteboard.general.string = coordinator.source(selected).replacingOccurrences(of: ContextMentions.marker, with: "")
         }
-        view.wantsFocus = focused
-        if focused, !view.isFirstResponder { view.requestFocus() }
-        else if !focused, view.isFirstResponder { view.resignFirstResponder() }
+        let wantsFocus = focused && !mainPaneCovered
+        view.wantsFocus = wantsFocus
+        if wantsFocus, !view.isFirstResponder { view.requestFocus() }
+        else if !wantsFocus, view.isFirstResponder { view.resignFirstResponder() }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ComposerTextView, context: Context) -> CGSize? {
         guard let width = proposal.width else { return nil }

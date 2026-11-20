@@ -284,9 +284,10 @@ underlying tooling.
   least 760 points, opening the chat sidebar reserves up to 320 points while the
   retained conversation/output workspace fits the remaining width. Chat, composer,
   keyboard and mentions stay usable beside it; gallery/table swipes do not close
-  it. Navigation keeps an opened wide sidebar visible. Compact/narrow drawers
-  retain their sliding overlay, dimming and tap-to-close behavior. All app profiles support portrait and both landscape
-  directions. Demo uses its prepared PDF/Markdown outputs for the same workflow.
+  it. Navigation keeps an opened wide sidebar visible. In narrow windows the
+  sidebar opens over a blurred backdrop while the main pane stays in place.
+  All app profiles support portrait and both landscape directions. Demo uses its
+  prepared PDF/Markdown outputs for the same workflow.
 - Page options include **Move to project**, **Export as Markdown** and **Move to Trash**.
   Project selection reads current membership, while older computers leave every
   destination available. Trash uses the same recoverable, receipt-backed operation
@@ -462,7 +463,7 @@ underlying tooling.
   child message previews (8,192 characters each) stay in memory; they never enter
   the cache or main transcript. **Try subagents** replays working/completed Security
   and Tests agents; **Explore Mains** includes their prepared completed reports.
-- A sliding sidebar with provider/space discs, Code workspaces and branch
+- A sidebar with provider/space discs, Code workspaces and branch
   information, and Work/Chat project groups and recent conversations.
 - The sidebar header places the filled Mains vector logo beside Code / Work / Chat.
   Only the selected mode has a text label, with icon-only controls in narrow
@@ -491,8 +492,7 @@ underlying tooling.
   computers fall back to explicitly labelled saved chats. Full search requires an
   updated computer backend exposing `search:conversations`; global `search:query`
   remains unavailable to paired phones. Pull to refresh and read-only replicas remain supported.
-- Search slides in through the main pane as the sidebar slides left in one coordinated
-  transition. Closing reverses the movement and leaves the sidebar open. The keyboard
+- Search slides over the sidebar. Closing reveals the open sidebar. The keyboard
   opens with the transition, above the floating bottom search/close bar.
   Chats show their workspace/project, mode and age before workspace results; clear
   keeps focus, and either result opens in the main navigation after search closes.
@@ -778,8 +778,9 @@ Manual Duo/adaptive workspace checks (prepared demo files work offline):
   messages and Send must fit on screen, typing/mentions and gallery/table swipes
   must work, and selecting another chat must keep the wide sidebar open. Close it
   with the sidebar button, its trailing-edge swipe or the accessibility Escape
-  action. Narrow windows must use the old blocking drawer without navigating away
-  or reconnecting.
+  action. In a narrow window, check the blurred overlay keeps the main pane in
+  place, blocks its controls, and closes with the close button or a tap or swipe
+  in the area beside the sidebar. Reduce Transparency uses a solid background.
 
 The attachment UI test needs at least five library photos. Before running it,
 seed only your dedicated QA simulator and grant that test app library access:

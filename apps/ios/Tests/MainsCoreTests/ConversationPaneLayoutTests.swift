@@ -14,11 +14,13 @@ import Testing
         }
     }
 
-    @Test func phonesAndNarrowRegularWindowsKeepTheExistingDrawerBehavior() {
+    @Test func phonesAndNarrowRegularWindowsKeepTheMainPaneInPlace() {
         for (width, regular) in [(390.0, false), (900.0, false), (740.0, true)] {
             let plan = SidebarPanePlan.make(width: width, regular: regular, pinned: false, open: true)
-            #expect(plan.contentWidth == width && plan.contentOffset == plan.sidebarWidth)
+            #expect(plan.contentWidth == width && plan.contentOffset == 0)
             #expect(plan.blocksContent && !plan.isInline && plan.overlayProgress == 1)
+            let dragging = SidebarPanePlan.make(width: width, regular: regular, pinned: false, open: false, drag: plan.sidebarWidth / 2)
+            #expect(dragging.contentWidth == width && dragging.contentOffset == 0 && dragging.overlayProgress == 0.5)
         }
         let pinned = SidebarPanePlan.make(width: 900, regular: true, pinned: true, open: false)
         #expect(pinned.isInline && pinned.contentWidth == 580 && pinned.contentOffset == 320 && !pinned.blocksContent)

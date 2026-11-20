@@ -168,6 +168,7 @@ struct RegistryIcon: View {
     #endif
     let token: String?
     var fallback = "folder"
+    var fallbackAsset: String? = nil
     var size: CGFloat = 20
     var tint: Color = .secondary
     var useStoredColor = true
@@ -187,7 +188,10 @@ struct RegistryIcon: View {
                     .foregroundStyle(resolvedTint)
             } else if let token, !token.hasPrefix("icon:"), token.unicodeScalars.contains(where: { $0.properties.isEmoji && $0.value > 127 }) {
                 Text(token).font(.system(size: size)).fixedSize()
-            } else { Image(systemName: fallback).resizable().scaledToFit().foregroundStyle(resolvedTint) }
+            } else {
+                let image = fallbackAsset.map { Image($0).renderingMode(.template) } ?? Image(systemName: fallback)
+                image.resizable().scaledToFit().foregroundStyle(resolvedTint)
+            }
         }.frame(width: size, height: size).accessibilityHidden(true)
     }
     static func color(_ token: String?, dark: Bool) -> Color? {

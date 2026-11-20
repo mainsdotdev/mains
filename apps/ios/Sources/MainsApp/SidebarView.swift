@@ -7,6 +7,7 @@ struct SidebarView: View {
     let session: BackendSession
     @Binding var collapsed: Set<String>
     let isVisible: Bool
+    let menuWidth: CGFloat
     let openConversation: (String) -> Void
     let openWorkspace: (String) -> Void
     let selectSpace: (String) -> Void
@@ -22,10 +23,14 @@ struct SidebarView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .subheadline) private var modeLabelWidth: CGFloat = 36
     @ScaledMetric(relativeTo: .body) private var searchLabelWidth: CGFloat = 110
-    private let controlInset: CGFloat = 16
+    @ScaledMetric(relativeTo: .title3) private var shortcutIconSize: CGFloat = 24
+    static let controlInset: CGFloat = 16
+    static let headerDiscSize: CGFloat = 40
     private let menuInset: CGFloat = 28
     private let menuIconWidth: CGFloat = 22
+    private let menuIconSize: CGFloat = 20
     private let menuIconSpacing: CGFloat = 10
+    private let folderAsset = "registry-project-folder"
     private var space: Space? { session.selectedSpace }
     private var modes: [String] { space.map { Experience.modes(for: $0.providerId) } ?? [] }
     private var otherSpaces: [Space] { session.spaces.filter { $0.id != space?.id } }
@@ -38,48 +43,13 @@ struct SidebarView: View {
         return Array(chats.filter { $0.collectionId == nil || !collections.contains($0.collectionId!) }.prefix(20))
     }
     var body: some View {
-        VStack(spacing: 0) {
-            header.padding(.horizontal, controlInset).padding(.bottom, 21)
+        VStack(alignment: .leading, spacing: 0) {
+            header.padding(.horizontal, Self.controlInset).padding(.bottom, 21)
+                .frame(width: menuWidth)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if session.pairing != nil {
-                        TimelineView(.periodic(from: .now, by: 15)) { clock in
-                            let live = session.workInboxIsCurrent && session.isConnected
-                            let groups = session.displayedWorkInbox.groups(now: clock.date, live: live)
-                            let waitingCount = groups.needsYou.count
-                            let runningCount = live ? groups.running.count : 0
-                            Button(action: openWorkInbox) {
-                                menuLabel("Activity") {
-                                    Image(systemName: "bell").font(.system(size: 20, weight: .medium))
-                                } trailing: {
-                                    HStack(spacing: 6) {
-                                        activityBadge(waitingCount, tint: .orange)
-                                        activityBadge(runningCount, tint: .blue)
-                                    }
-                                }
-                            }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openWorkInbox")
-                                .accessibilityValue([
-                                    waitingCount > 0 ? "\(waitingCount) conversations need you" : nil,
-                                    runningCount > 0 ? "\(runningCount) running conversations" : nil
-                                ].compactMap { $0 }.joined(separator: ", "))
-                        }
-                        Button(action: openAtlas) {
-                            menuLabel("Atlas") {
-                                RegistryIcon(token: "icon:globe", size: menuIconWidth, tint: .primary)
-                            }
-                        }.buttonStyle(ChatPressStyle())
-                            .accessibilityIdentifier("openAtlas")
-                        if !session.isDemo {
-                            Button(action: openMates) {
-                                menuLabel("Mates") {
-                                    SidebarMateIcon(sidebarVisible: isVisible)
-                                }
-                            }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openMates")
-                        }
-                        // The smaller heading has less built-in whitespace than the menu row.
-                        Rectangle().fill(Color(.separator)).frame(height: 1)
-                            .padding(.top, 22).padding(.bottom, 33)
-                            .accessibilityHidden(true)
+                        shortcuts.padding(.bottom, 34)
                     }
                     if space?.mode == "developer" {
                         sectionTitle("Workspaces")
@@ -93,7 +63,8 @@ struct SidebarView: View {
                                 openWorkspace(workspace.id)
                             } label: {
                                 WorkspaceLabel(session: session, workspace: workspace,
-                                               iconColumnWidth: menuIconWidth, iconSpacing: menuIconSpacing)
+                                               iconColumnWidth: menuIconWidth, iconSpacing: menuIconSpacing,
+                                               iconSize: menuIconSize, fallbackIconAsset: folderAsset)
                             }
                             .buttonStyle(.plain).padding(.vertical, 10)
                             .accessibilityIdentifier("workspace-\(workspace.id)")
@@ -114,25 +85,61 @@ struct SidebarView: View {
             .refreshable { await session.refresh() }
             .scrollIndicators(.hidden)
             .modifier(SidebarScrollFade())
+            .frame(width: menuWidth)
             .id("\(space?.id ?? ""):\(space?.mode ?? "")")
-            bottomBar.padding(.horizontal, controlInset).padding(.top, 10).padding(.bottom, 16)
+            bottomBar.padding(.horizontal, Self.controlInset).padding(.top, 10).padding(.bottom, 16)
         }
-        .background(Color(.systemBackground))
         .onChange(of: space?.id) { _, _ in providersExpanded = false }
         .onChange(of: session.ownership) { _, _ in providersExpanded = false; pendingMode = nil }
         .onDisappear { providersExpanded = false }
     }
-    private func menuLabel<Icon: View, Trailing: View>(_ title: String, @ViewBuilder icon: () -> Icon,
-                                                       @ViewBuilder trailing: () -> Trailing = { EmptyView() }) -> some View {
+    private var shortcuts: some View {
+        VStack(spacing: 0) {
+            TimelineView(.periodic(from: .now, by: 15)) { clock in
+                let live = session.workInboxIsCurrent && session.isConnected
+                let groups = session.displayedWorkInbox.groups(now: clock.date, live: live)
+                let waitingCount = groups.needsYou.count
+                let runningCount = live ? groups.running.count : 0
+                Button(action: openWorkInbox) {
+                    shortcutLabel("Activity") {
+                        Image(systemName: "bell").font(.system(size: shortcutIconSize, weight: .medium))
+                    } trailing: {
+                        HStack(spacing: 6) {
+                            activityBadge(waitingCount, tint: .orange)
+                            activityBadge(runningCount, tint: .blue)
+                        }
+                    }
+                }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openWorkInbox")
+                    .accessibilityValue([
+                        waitingCount > 0 ? "\(waitingCount) conversations need you" : nil,
+                        runningCount > 0 ? "\(runningCount) running conversations" : nil
+                    ].compactMap { $0 }.joined(separator: ", "))
+            }
+            Button(action: openAtlas) {
+                shortcutLabel("Atlas") {
+                    RegistryIcon(token: "icon:globe", size: shortcutIconSize, tint: .primary)
+                }
+            }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openAtlas")
+            if !session.isDemo {
+                Button(action: openMates) {
+                    shortcutLabel("Mates") {
+                        SidebarMateIcon(sidebarVisible: isVisible, size: shortcutIconSize + 4)
+                    }
+                }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openMates")
+            }
+        }
+    }
+    private func shortcutLabel<Icon: View, Trailing: View>(_ title: String, @ViewBuilder icon: () -> Icon,
+                                                           @ViewBuilder trailing: () -> Trailing = { EmptyView() }) -> some View {
         HStack(spacing: menuIconSpacing) {
-            icon().frame(width: menuIconWidth).accessibilityHidden(true)
-            Text(title).font(.body)
+            icon().frame(width: shortcutIconSize + 4).accessibilityHidden(true)
+            Text(title).font(.title3.weight(.medium))
             Spacer(minLength: 0)
             trailing()
         }
         .foregroundStyle(.primary)
         .padding(.vertical, 6)
-        .frame(minHeight: 45)
+        .frame(minHeight: 52)
         .contentShape(.rect)
     }
     @ViewBuilder private func activityBadge(_ count: Int, tint: Color) -> some View {
@@ -149,8 +156,8 @@ struct SidebarView: View {
             HStack(spacing: 8) {
                 Image("registry-mains-fill").renderingMode(.template).resizable().scaledToFit()
                     .frame(width: 20, height: 20).foregroundStyle(.black)
-                    .frame(width: 40, height: 40).background(Color(white: 0.92), in: .circle)
-                    .frame(width: 44, height: 44).accessibilityLabel("Mains")
+                    .frame(width: Self.headerDiscSize, height: Self.headerDiscSize).background(Color(white: 0.92), in: .circle)
+                    .frame(width: AppNavigationStyle.inlineToolbarHeight, height: AppNavigationStyle.inlineToolbarHeight).accessibilityLabel("Mains")
                     .accessibilityIdentifier("sidebarMainsLogo")
                 modeSwitcher(showLabel: geometry.size.width >= labeledWidth && !dynamicTypeSize.isAccessibilitySize)
                 Spacer(minLength: 0)
@@ -285,14 +292,18 @@ struct SidebarView: View {
         let inside = chats.filter { $0.collectionId == collection.id }
         return VStack(alignment: .leading, spacing: 0) {
             Button {
-                if open { collapsed.insert(collection.id) } else { collapsed.remove(collection.id) }
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                    if open { collapsed.insert(collection.id) } else { collapsed.remove(collection.id) }
+                }
             } label: {
                 HStack(spacing: menuIconSpacing) {
-                    RegistryIcon(token: collection.icon, size: 20).frame(width: menuIconWidth)
+                    RegistryIcon(token: collection.icon, fallbackAsset: folderAsset, size: menuIconSize)
+                        .frame(width: menuIconWidth)
                     Text(collection.name).foregroundStyle(.primary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                    RegistryIcon(token: "tool-arrow-up", size: 16)
+                        .rotationEffect(.degrees(open ? 180 : 90))
                 }.font(.body).frame(minHeight: 44).contentShape(.rect)
             }.buttonStyle(.plain).accessibilityLabel("\(collection.name), \(open ? "expanded" : "collapsed")")
                 .accessibilityIdentifier("collection-\(collection.id)")
@@ -320,6 +331,7 @@ private struct SidebarMateIcon: View {
     @ObserveHotReload private var hotReload
     #endif
     let sidebarVisible: Bool
+    let size: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pose = Pose()
 
@@ -339,11 +351,10 @@ private struct SidebarMateIcon: View {
         let animate = sidebarVisible && !reduceMotion
         let currentPose = animate ? pose : Pose()
         MateRobotThumbnail(preset: Self.preset)
-            .frame(width: 25, height: 25)
+            .frame(width: size, height: size)
             .scaleEffect(x: 1, y: currentPose.verticalScale)
             .rotationEffect(.degrees(currentPose.rotation))
             .offset(y: currentPose.offset)
-            .frame(width: 22, height: 22)
             .task(id: animate) {
                 withAnimation(nil) { pose = Pose() }
                 guard animate, let reaction = Self.reactions.randomElement() else { return }
@@ -408,11 +419,14 @@ struct WorkspaceLabel: View {
     let workspace: Workspace
     var iconColumnWidth: CGFloat? = nil
     var iconSpacing: CGFloat = 9
+    var iconSize: CGFloat = 17
+    var fallbackIconAsset: String? = nil
     var body: some View {
         let project = session.projects.first { $0.id == workspace.projectId }
         let git = session.gitStates.first { $0.workspaceId == workspace.id }
         HStack(alignment: .top, spacing: iconSpacing) {
-            RegistryIcon(token: project?.icon, size: 17).frame(width: iconColumnWidth).padding(.top, 3)
+            RegistryIcon(token: project?.icon, fallbackAsset: fallbackIconAsset, size: iconSize)
+                .frame(width: iconColumnWidth).padding(.top, 3)
             VStack(alignment: .leading, spacing: 4) {
                 Text(workspace.name).font(.body).foregroundStyle(.primary).lineLimit(1)
                 Text(git?.branch ?? (workspace.isReplica == true ? "Read only" : "No branch"))

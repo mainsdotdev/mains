@@ -65,7 +65,7 @@ private struct EffortOverlayView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     private var settings: ComposerSettings { context.settings(session) }
-    private var backdropColor: Color { Color(white: colorScheme == .dark ? 0.025 : 0.965) }
+    private var backdropColor: Color { Color(white: colorScheme == .dark ? 0.015 : 0.88) }
     private var selected: ModelChoice? { context.model(session) }
     private var presentedModel: ModelChoice? { pendingModel ?? selected }
     private var presentedSettings: ComposerSettings { pendingSettings ?? settings }
@@ -113,7 +113,7 @@ private struct EffortOverlayView: View {
                             if reduceTransparency { RoundedRectangle(cornerRadius: 36).fill(backdropColor).padding(.horizontal, 16) }
                             else {
                                 Rectangle().fill(.ultraThinMaterial)
-                                    .overlay { backdropColor.opacity(0.85) }
+                                    .overlay { backdropColor.opacity(0.93) }
                                     .mask { RoundedRectangle(cornerRadius: 44).padding(24).blur(radius: 24) }
                                     .padding(-44)
                             }

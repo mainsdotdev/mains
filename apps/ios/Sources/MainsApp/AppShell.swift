@@ -8,6 +8,7 @@ extension EnvironmentValues {
     // Read-only navigation also works for chats created by desktop voice calls.
     @Entry var openVoiceConversation = OpenVoiceConversationAction()
     @Entry var openMateConversation = OpenVoiceConversationAction()
+    @Entry var mainPaneCovered = false
 }
 
 
@@ -27,7 +28,8 @@ struct AppShell: View {
     @State private var newMateDraft = NewMateDraft()
     @State private var homeRunID: String?
     @State private var drawerOpen = false
-    @GestureState private var drag: CGFloat = 0
+    @State private var drag: CGFloat = 0
+    @GestureState private var drawerDragActive = false
     @State private var searchMounted = false
     @State private var searchExpanded = false
     @State private var searchTransitionID = 0
@@ -37,6 +39,8 @@ struct AppShell: View {
     @State private var wideSidebarHidden = false
     @State private var inlineSidebarVisible = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
@@ -44,30 +48,16 @@ struct AppShell: View {
             GeometryReader { geometry in
                 let regular = horizontalSizeClass == .regular
                 let canPin = SidebarPanePlan.supportsInline(width: geometry.size.width, regular: regular) && path.isEmpty && homeRunID == nil && session.pairing != nil
-                let pinned = canPin && !wideSidebarHidden && !searchMounted
+                let pinned = canPin && !wideSidebarHidden
                 let sidebar = SidebarPanePlan.make(width: geometry.size.width, regular: regular, pinned: pinned, open: drawerOpen, drag: drag)
                 let width = sidebar.sidebarWidth
-                let offset = sidebar.contentOffset
+                let sidebarLayoutWidth = sidebar.isInline ? width : geometry.size.width
                 let progress = sidebar.overlayProgress
-                let sidebarVisible = (pinned || drawerOpen) && !searchExpanded
-                let pageOffset = searchMounted ? (searchExpanded ? 0 : width) : offset
-                let pageCorner = searchMounted ? (searchExpanded ? 0.0 : 44.0) : 44 * progress
-                let pageExpansion = searchMounted ? 0 : 12 * progress
+                let overlayMounted = sidebar.blocksContent || progress > 0
+                let sidebarVisible = (pinned || drawerOpen) && !searchMounted
+                let mainPaneCovered = sidebar.blocksContent || searchMounted
                 ZStack(alignment: .leading) {
                     Color(.systemBackground).ignoresSafeArea()
-                    if offset > 0 || searchMounted {
-                        SidebarView(session: session, collapsed: $collapsedCollections, isVisible: sidebarVisible, openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
-                                    selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
-                            .frame(width: width)
-                            .offset(x: searchExpanded ? -width : 0)
-                            .allowsHitTesting(!searchExpanded)
-                            .accessibilityHidden(!sidebarVisible)
-                            .simultaneousGesture(drawerGesture(width: width, closingEdge: width - 24),
-                                                 isEnabled: sidebar.isInline && drawerOpen && !pinned && !searchMounted)
-                            .accessibilityAction(.escape) {
-                                if pinned { toggleWideSidebar(visible: true) } else { closeDrawer() }
-                            }
-                    }
                     ZStack {
                         NavigationStack(path: $path) {
                             Group {
@@ -137,32 +127,61 @@ struct AppShell: View {
                             }
                         }
                         .safeAreaPadding(.top, AppNavigationStyle.topInset)
+                        .environment(\.mainPaneCovered, mainPaneCovered)
                         #if MAINS_GPT_LIVE
-                        .environment(\.voiceSurfaceVisible, !sidebar.blocksContent && !searchMounted)
+                        .environment(\.voiceSurfaceVisible, !mainPaneCovered)
                         #endif
-                        .allowsHitTesting(!searchMounted)
-                        .accessibilityHidden(sidebar.blocksContent || searchMounted)
+                        .accessibilityHidden(mainPaneCovered)
                     }
                     .frame(width: sidebar.contentWidth)
-                    .accessibilityHidden(sidebar.blocksContent && !searchMounted)
-                    .overlay {
-                        // Follow the sliding state so mounting/retiring Search cannot
-                        // abruptly remove or restore the drawer's dimming layer.
-                        Color.primary.opacity(searchExpanded ? 0 : 0.08 * progress)
-                            .ignoresSafeArea(edges: .vertical)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                    .overlay(alignment: .leading) {
-                        if sidebar.blocksContent && !searchMounted {
-                            Button(action: toggleDrawer) { Color.clear.contentShape(.rect) }
-                                .frame(width: max(0, geometry.size.width - offset))
-                                .buttonStyle(.plain).accessibilityLabel("Close sidebar").accessibilityIdentifier("closeSidebar")
+                    .allowsHitTesting(!mainPaneCovered)
+                    .accessibilityHidden(mainPaneCovered)
+                    .clipShape(MainPaneClip(cornerRadius: 0, safeAreaInsets: geometry.safeAreaInsets))
+                    .offset(x: sidebar.contentOffset)
+                    ZStack(alignment: .leading) {
+                        if overlayMounted {
+                            sidebarBackdrop
+                                .opacity(progress)
+                                .ignoresSafeArea()
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                                .transition(.opacity)
+
+                            Color.clear.contentShape(.rect)
+                                .onTapGesture(perform: closeDrawer)
+                                .simultaneousGesture(drawerGesture(width: width, closingEdge: width))
+                                .accessibilityHidden(true)
+                                .zIndex(1)
+                        }
+                        if sidebar.isInline || overlayMounted {
+                            SidebarView(session: session, collapsed: $collapsedCollections, isVisible: sidebarVisible, menuWidth: width,
+                                        openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
+                                        selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
+                                .frame(width: sidebarLayoutWidth)
+                                .background(sidebar.isInline ? Color(.systemBackground) : .clear)
+                                .opacity(sidebar.isInline ? 1 : progress)
+                                .offset(x: sidebar.isInline || reduceMotion ? 0 : -sidebarLayoutWidth * (1 - progress))
+                                .transition(sidebar.isInline || reduceMotion ? .opacity : .offset(x: -sidebarLayoutWidth))
+                                .simultaneousGesture(drawerGesture(width: width, closingEdge: width - 24),
+                                                     isEnabled: sidebar.isInline && drawerOpen && !pinned && !searchMounted)
+                                .zIndex(2)
+                        }
+                        if sidebar.blocksContent {
+                            closeSidebarControl
+                                .padding(.trailing, SidebarView.controlInset)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                                .opacity(progress)
+                                .transition(.opacity)
+                                .zIndex(3)
                         }
                     }
-                    .clipShape(MainPaneClip(cornerRadius: pageCorner, safeAreaInsets: geometry.safeAreaInsets, verticalExpansion: pageExpansion))
-                    .offset(x: pageOffset)
-                    .simultaneousGesture(drawerGesture(width: width), isEnabled: sidebar.blocksContent && !searchMounted)
+                    .allowsHitTesting(sidebarVisible)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityHidden(!sidebarVisible)
+                    .accessibilityAction(.escape) {
+                        if pinned { toggleWideSidebar(visible: true) } else { closeDrawer() }
+                    }
+                    .zIndex(1)
                     if !drawerOpen && !pinned && !searchMounted {
                         Color.clear.frame(width: 24).contentShape(.rect).gesture(drawerGesture(width: width))
                             .accessibilityHidden(true)
@@ -173,6 +192,14 @@ struct AppShell: View {
                 .onChange(of: sidebar.isInline, initial: true) { _, value in inlineSidebarVisible = value }
                 .onChange(of: sidebar.blocksContent) { _, covered in
                     if covered { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+                }
+                .onChange(of: drawerDragActive) { _, active in
+                    guard !active, drag != 0 else { return }
+                    DispatchQueue.main.async {
+                        // An ended drag settles in onEnded. Reset only an interrupted drag here.
+                        guard !drawerDragActive, drag != 0 else { return }
+                        withAnimation(drawerAnimation) { drag = 0 }
+                    }
                 }
             }
             // The inactive main pane and sidebar must not follow Search's keyboard.
@@ -190,8 +217,6 @@ struct AppShell: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .background(Color(.systemBackground))
                         .clipShape(MainPaneClip(cornerRadius: searchExpanded ? 0 : 44, safeAreaInsets: geometry.safeAreaInsets))
-                        // This independent layer travels the same full-screen distance
-                        // as the old shared pane, without resizing the page underneath.
                         .offset(x: searchExpanded ? 0 : geometry.size.width)
                         .allowsHitTesting(searchExpanded)
                 }
@@ -241,6 +266,35 @@ struct AppShell: View {
         }
     }
 
+    private var closeSidebarControl: some View {
+        let discSize = SidebarView.headerDiscSize
+        let hitSize = AppNavigationStyle.inlineToolbarHeight
+        return Button(action: closeDrawer) {
+            Image(systemName: "xmark").font(.system(size: 18))
+                .frame(width: discSize, height: discSize)
+                .modifier(GlassSurface(radius: discSize / 2))
+                .frame(width: hitSize, height: hitSize)
+                .contentShape(.circle)
+        }
+        .buttonStyle(ChatPressStyle())
+        .accessibilityLabel("Close sidebar")
+        .accessibilityIdentifier("closeSidebar")
+    }
+
+    @ViewBuilder private var sidebarBackdrop: some View {
+        let background = Color(.systemBackground)
+        if reduceTransparency {
+            background
+        } else {
+            let dark = colorScheme == .dark
+            Rectangle().fill(.regularMaterial)
+                .overlay {
+                    LinearGradient(colors: [.black.opacity(dark ? 0.84 : 0.13), .black.opacity(dark ? 0.98 : 0.23)],
+                                   startPoint: .leading, endPoint: .trailing)
+                }
+        }
+    }
+
     private var mainPaneInteractive: Bool { !searchMounted && (!drawerOpen || inlineSidebarVisible) }
 
     private func finishMateCreation(_ id: String, from route: AppRoute) {
@@ -280,17 +334,20 @@ struct AppShell: View {
         path.append(.settings)
         closeDrawerAfterNavigation()
     }
+    private var drawerAnimation: Animation? {
+        reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86)
+    }
     private func toggleWideSidebar(visible: Bool) {
-        withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86)) {
+        withAnimation(drawerAnimation) {
             wideSidebarHidden = visible; drawerOpen = false
         }
     }
     private func toggleDrawer() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86)) { drawerOpen.toggle() }
+        withAnimation(drawerAnimation) { drawerOpen.toggle() }
     }
     private func closeDrawer() {
-        withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86)) { drawerOpen = false }
+        withAnimation(drawerAnimation) { drawerOpen = false }
     }
     private func closeDrawerAfterNavigation() { if !inlineSidebarVisible { closeDrawer() } }
     private func open(_ route: AppRoute) {
@@ -312,7 +369,7 @@ struct AppShell: View {
         searchTransitionID += 1
         let transitionID = searchTransitionID
         searchExitHeight = nil
-        // Mount Search above the retained main pane before sliding either surface.
+        // Mount Search offscreen before sliding it over the sidebar.
         searchMounted = true
         DispatchQueue.main.async {
             guard searchMounted, transitionID == searchTransitionID else { return }
@@ -363,15 +420,17 @@ struct AppShell: View {
     }
     private func drawerGesture(width: CGFloat, closingEdge: CGFloat? = nil) -> some Gesture {
         DragGesture(minimumDistance: 10)
-            .updating($drag) { value, state, _ in
+            .updating($drawerDragActive) { _, active, _ in active = true }
+            .onChanged { value in
                 if let closingEdge, value.startLocation.x < closingEdge { return }
-                if abs(value.translation.width) > abs(value.translation.height) { state = value.translation.width }
+                if abs(value.translation.width) > abs(value.translation.height) { drag = value.translation.width }
             }
             .onEnded { value in
                 if let closingEdge, value.startLocation.x < closingEdge { return }
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
                 let projected = (drawerOpen ? width : 0) + value.predictedEndTranslation.width
-                withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86)) {
+                withAnimation(drawerAnimation) {
+                    drag = 0
                     drawerOpen = projected > width / 2
                 }
             }
@@ -381,10 +440,9 @@ struct AppShell: View {
 private struct MainPaneClip: Shape {
     var cornerRadius: CGFloat
     let safeAreaInsets: EdgeInsets
-    var verticalExpansion: CGFloat = 0
-    var animatableData: AnimatablePair<CGFloat, CGFloat> {
-        get { AnimatablePair(cornerRadius, verticalExpansion) }
-        set { cornerRadius = newValue.first; verticalExpansion = newValue.second }
+    var animatableData: CGFloat {
+        get { cornerRadius }
+        set { cornerRadius = newValue }
     }
 
     func path(in rect: CGRect) -> Path {
@@ -395,6 +453,6 @@ private struct MainPaneClip: Shape {
                                                   bottom: -safeAreaInsets.bottom, right: -safeAreaInsets.trailing)))
         }
         return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .path(in: rect.insetBy(dx: 0, dy: -verticalExpansion))
+            .path(in: rect)
     }
 }

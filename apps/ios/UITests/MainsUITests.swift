@@ -95,6 +95,55 @@ final class MainsUITests: XCTestCase {
         return app
     }
 
+    func testCompactSidebarPreservesTheDraftAndSupportsEdgeDismissal() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        app.launchArguments += ["-appearancePreference", "dark"]
+        _ = pairFixture(app, code: "ios-test")
+        let close = app.buttons["closeSidebar"]
+        close.tap()
+
+        let input = app.textViews["homeMessageInput"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        let inputPosition = app.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: input.frame.maxX - app.frame.minX - 8, dy: input.frame.midY - app.frame.minY))
+        let draft = "Keep this draft behind the sidebar"
+        input.tap()
+        input.typeText(draft)
+        openSidebar(app)
+        let settings = app.buttons["openSettings"]
+        let search = app.buttons["sidebarSearch"]
+        XCTAssertEqual(settings.frame.midX, close.frame.midX, accuracy: 1)
+        XCTAssertGreaterThan(search.frame.width, app.frame.width / 2)
+        let project = app.buttons["collection-fixture-kitchen"]
+        XCTAssertEqual(project.label, "Kitchen Notes, expanded")
+        project.tap()
+        XCTAssertEqual(project.label, "Kitchen Notes, collapsed")
+        project.tap()
+        XCTAssertEqual(project.label, "Kitchen Notes, expanded")
+        attachScreenshot(app, name: "Compact sidebar over Home")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        inputPosition.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        XCTAssertEqual(input.value as? String, draft)
+
+        let leadingEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5))
+        let trailingEdge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
+        let middle = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        leadingEdge.press(forDuration: 0.05, thenDragTo: trailingEdge)
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        trailingEdge.press(forDuration: 0.05, thenDragTo: middle)
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, draft)
+        openSidebar(app)
+        chooseSidebarSpace("fixture-code", in: app)
+        openSidebar(app)
+        XCTAssertTrue(app.buttons["workspace-fixture-workspace"].waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "Compact sidebar Workspaces")
+        forgetFixture(app)
+    }
+
     func testCodeMateMentionShowsItsNameAndOpensTheSeparateTaskChatButton() {
         continueAfterFailure = false
         let app = makeApplication()

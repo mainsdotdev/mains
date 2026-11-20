@@ -74,7 +74,11 @@ try {
         'model-zai': require('./src/renderer/components/ui/icons/zai.tsx').default,
         'model-bot': require('./src/renderer/components/ui/icons/bot.tsx').default,
       };
-      module.exports = Object.fromEntries(Object.entries({ ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill, 'assistant-steps': AssistantSteps, ...atlasIcons, ...documentIcons, ...modelIcons, ...toolIcons, ...toolFileIcons })
+      module.exports = Object.fromEntries(Object.entries({
+        ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill,
+        'assistant-steps': AssistantSteps, 'project-folder': ui.ProjectFolder,
+        ...atlasIcons, ...documentIcons, ...modelIcons, ...toolIcons, ...toolFileIcons,
+      })
         .map(([name, Icon]) => [name, renderToStaticMarkup(React.createElement(Icon))]));
     `, resolveDir: desktopRoot, loader: 'tsx' },
     bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic',
