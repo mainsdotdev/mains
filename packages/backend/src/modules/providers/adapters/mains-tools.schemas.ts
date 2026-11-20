@@ -133,27 +133,8 @@ export const SaveFindingsSchema = z.object({
     .describe("Array of findings to save"),
 });
 
-export const CheckPackageSchema = z.object({
-  packages: z
-    .array(
-      z.object({
-        name: z
-          .string()
-          .describe("Package name (e.g. 'axios', '@types/node')"),
-        version: z.string().optional().describe("Optional version"),
-        ecosystem: z
-          .enum(["npm", "pypi", "cargo", "go", "maven", "rubygems"])
-          .optional()
-          .describe("Package ecosystem (defaults to npm)"),
-      }),
-    )
-    .min(1)
-    .describe("Packages to check"),
-});
-
 // The registry parses every tool call against its schema before the handler
 // runs, so handlers receive the parsed (output) shape.
 export type SaveReviewArgs = z.infer<typeof SaveReviewSchema>;
 export type SaveFindingArgs = z.infer<typeof SaveFindingSchema>;
 export type SaveFindingsArgs = z.infer<typeof SaveFindingsSchema>;
-export type CheckPackageArgs = z.infer<typeof CheckPackageSchema>;

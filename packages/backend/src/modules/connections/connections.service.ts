@@ -29,7 +29,6 @@ import type {
   GitlabProject,
   TrelloBoard,
   SentryProject,
-  SocketDevOrganization,
   SaveResourcesPayload,
   SaveCredentialsPayload,
   SaveCredentialsResult,
@@ -45,12 +44,22 @@ const PROVIDER_METADATA_FIELDS: Record<string, string[]> = {
   jira: ["domain", "email"],
   gitlab: ["domain"],
   sentry: ["organization"],
-  socketdev: ["organization"],
 };
 
 const PROVIDER_METADATA_DEFAULTS: Record<string, Record<string, string>> = {
   gitlab: { domain: "gitlab.com" },
 };
+
+// Keep retired providers out of the catalog even if an old database still has their rows.
+function isConnectionProviderAvailable(provider: string): boolean {
+  return provider !== "socketdev";
+}
+
+function assertConnectionProviderAvailable(provider: string): void {
+  if (!isConnectionProviderAvailable(provider)) {
+    throw new Error(`Unsupported provider: ${provider}`);
+  }
+}
 
 async function getRuntimeCredentialSecrets(
   connectionId: string,
@@ -75,7 +84,7 @@ async function getRuntimeCredentialSecrets(
 // ─────────────────────────────────────────────────────────────
 // Cross-module helper: hand callers a connection + decrypted secrets.
 // Exported from index.ts as the single named entry point used by
-// sync, guards, and imageProxy. Internal callers in this service use
+// sync and imageProxy. Internal callers in this service use
 // `getConnectionAndSecrets` below, which also surfaces the typed
 // connection row for follow-up queries on metadata.
 // ─────────────────────────────────────────────────────────────
@@ -88,7 +97,7 @@ export async function getConnectionWithSecrets(
   metadata: Record<string, unknown>;
   lease?: ConnectionLease;
 } | null> {
-  if (!connectionsAccepting()) return null;
+  if (!isConnectionProviderAvailable(provider) || !connectionsAccepting()) return null;
   return readConnection(async () => {
     const lease = captureConnectionLease(provider);
     if (!lease.current()) return null;
@@ -204,12 +213,6 @@ const RESOURCE_MAPPERS: Record<string, ResourceMapper> = {
     name: project.name,
     metadata: { id: project.id, slug: project.slug, name: project.name, platform: project.platform, dateCreated: project.dateCreated, status: project.status, organization: project.organization },
   }),
-  socketdev: (org: SocketDevOrganization) => ({
-    externalId: org.slug,
-    kind: "socketdev_org",
-    name: org.name,
-    metadata: { id: org.id, slug: org.slug, name: org.name, plan: org.plan },
-  }),
 };
 
 const SELECTED_RESOURCE_CONFIGS: Record<string, {
@@ -250,11 +253,6 @@ const SELECTED_RESOURCE_CONFIGS: Record<string, {
   sentry: {
     kind: "sentry_project",
     responseKey: "projects",
-    formatItem: (r) => ({ id: r.id, slug: r.externalId, name: r.name || r.externalId, metadata: parseResourceMetadata(r.metadata) }),
-  },
-  socketdev: {
-    kind: "socketdev_org",
-    responseKey: "organizations",
     formatItem: (r) => ({ id: r.id, slug: r.externalId, name: r.name || r.externalId, metadata: parseResourceMetadata(r.metadata) }),
   },
 };
@@ -604,47 +602,11 @@ export const connectionsService = {
     });
   },
 
-  // Socket.dev
-  async getSocketDevOrganizations(connectionId: string): Promise<{ organizations: SocketDevOrganization[] }> {
-    return readConnection(async () => {
-      try {
-        const result = await getConnectionAndSecrets(connectionId, "socketdev");
-
-        const response = await fetch(
-          "https://api.socket.dev/v0/organizations",
-          { headers: { Authorization: `Bearer ${result.secrets.apiToken}`, Accept: "application/json" } }
-        );
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error(`Socket.dev API error (${response.status}):`, errorText);
-          throw new Error(`Socket.dev API error: ${response.status}`);
-        }
-
-        const data: any = await response.json();
-        const orgs = data?.organizations ?? data?.data ?? [];
-        const formattedOrgs: SocketDevOrganization[] = (Array.isArray(orgs) ? orgs : Object.entries(orgs).map(([slug, org]: [string, any]) => ({ id: org.id || slug, slug, name: org.name || slug, plan: org.plan || null }))).map(
-          (org: Record<string, unknown>) => ({
-            id: String(org.id || org.slug),
-            slug: (org.slug as string) || String(org.id),
-            name: (org.name as string) || (org.slug as string) || String(org.id),
-            plan: (org.plan as string) || null,
-          })
-        );
-
-        result.lease.assertCurrent();
-        return { organizations: formattedOrgs };
-      } catch (error) {
-        console.error(error);
-        throw error;
-      }
-    });
-  },
-
   // Save resources
   async saveResources(
     payload: SaveResourcesPayload
   ): Promise<{ message: string; count: number; revision: string }> {
+    assertConnectionProviderAvailable(payload.provider);
     return mutateConnection(payload, "resources", async (lease) => {
       try {
         const { provider, connectionId, resources } = payload;
@@ -707,6 +669,7 @@ export const connectionsService = {
       metadata: Record<string, unknown>;
     };
   }> {
+    assertConnectionProviderAvailable(provider);
     return readConnection(async () => {
       try {
         if (!provider) throw new Error("Provider is required");
@@ -735,6 +698,7 @@ export const connectionsService = {
 
   // Get selected resources
   async getSelectedResources(provider: string): Promise<unknown> {
+    assertConnectionProviderAvailable(provider);
     return readConnection(async () => {
       try {
         if (!provider) throw new Error("Provider is required");
@@ -804,7 +768,7 @@ export const connectionsService = {
     return readConnection(async () => {
       try {
         const states = await connectionsRepo.findAllStates();
-        return states;
+        return states.filter((state) => isConnectionProviderAvailable(state.id));
       } catch (error) {
         console.error(error);
         throw error;
@@ -817,11 +781,13 @@ export const connectionsService = {
       try {
         const idError = validateConnectionStateId(id);
         if (idError) throw new Error(idError);
+        const providerId = id as string;
+        assertConnectionProviderAvailable(providerId);
 
         const { data, error } = validateUpdateStatePayload(payload);
         if (error || !data) throw new Error(error ?? "Invalid payload");
 
-        await connectionsRepo.updateStateById(id as string, data);
+        await connectionsRepo.updateStateById(providerId, data);
         return null;
       } catch (error) {
         console.error(error);
@@ -836,6 +802,7 @@ export const connectionsService = {
   async saveCredentials(
     payload: SaveCredentialsPayload
   ): Promise<SaveCredentialsResult> {
+    assertConnectionProviderAvailable(payload.provider);
     return mutateConnection(payload, "credentials", async (lease) => {
       try {
         const { provider, connectionId, ...credentials } = payload;
@@ -899,6 +866,7 @@ export const connectionsService = {
   async checkCredentials(
     provider: string
   ): Promise<CredentialsCheckResult> {
+    assertConnectionProviderAvailable(provider);
     return readConnection(async () => {
       try {
         if (!provider) throw new Error("Provider is required");

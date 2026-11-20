@@ -174,6 +174,19 @@ if (typeof pty.spawn !== "function") throw new Error("node-pty did not load");
 (async () => {
   const claude = await import("@anthropic-ai/claude-agent-sdk");
   if (typeof claude.query !== "function") throw new Error("Claude SDK did not load");
+  const claudeEntry = require.resolve("@anthropic-ai/claude-agent-sdk");
+  const claudeManifest = JSON.parse(fs.readFileSync(path.join(path.dirname(claudeEntry), "package.json"), "utf8"));
+  const claudeRequire = createRequire(claudeEntry);
+  const claudePackage = "@anthropic-ai/claude-agent-sdk-" + process.platform + "-" + process.arch;
+  const claudeExecutable = claudeRequire.resolve(claudePackage + "/" + (process.platform === "win32" ? "claude.exe" : "claude"));
+  const claudeVersion = spawnSync(claudeExecutable, ["--version"], { encoding: "utf8", timeout: 10000, windowsHide: true });
+  const installedClaudeVersion = claudeVersion.stdout?.match(/\b\d+\.\d+\.\d+\b/)?.[0];
+  if (claudeVersion.status !== 0 || !installedClaudeVersion || installedClaudeVersion !== claudeManifest.claudeCodeVersion) {
+    throw new Error("Packaged Claude runtime does not match its SDK. Expected " + claudeManifest.claudeCodeVersion +
+      ", received " + (installedClaudeVersion ?? claudeVersion.error?.message ?? "no version"));
+  }
+  console.log("Packaged Claude runtime: " + installedClaudeVersion);
+
   const dynamicImport = new Function("specifier", "return import(specifier)");
   const copilot = await dynamicImport("@github/copilot-sdk");
   if (typeof copilot.CopilotClient !== "function") throw new Error("Copilot SDK did not load");

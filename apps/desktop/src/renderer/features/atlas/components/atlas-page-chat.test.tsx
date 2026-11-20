@@ -56,6 +56,7 @@ vi.mock("@/features/workspace/hooks/use-plugin-logos", () => ({ PluginLogoProvid
 vi.mock("@/features/workspace/components/workspace-events", () => ({ WorkspaceEvents: () => <div>Page conversation</div> }));
 vi.mock("@/features/workspace/components/tools/tool-approval-dialog", () => ({ ToolApprovalDialog: () => null }));
 vi.mock("@/lib/redux/api", () => ({
+  useGetAccountQuery: () => ({ data: undefined }),
   useGetAppSettingsQuery: () => ({ data: { activeSpaceId: mocks.activeSpaceId ?? mocks.spaces[0]?.id }, isLoading: false }),
   useGetSpacesQuery: () => ({ data: mocks.spaces, isLoading: false }),
   useAbortRunMutation: () => [mocks.abort],
@@ -68,6 +69,7 @@ vi.mock("@/lib/redux/api", () => ({
   },
   useGetProviderAccountInfoQuery: () => ({ data: undefined }),
 }));
+vi.mock("@/lib/redux/api/assistantsApi", () => ({ useAssistantOverviewQuery: () => ({ currentData: undefined }) }));
 vi.mock("@/lib/redux/api/providersApi", () => ({
   useGetProviderByIdQuery: () => ({ data: mocks.provider }),
   useGetProviderModelsQuery: () => ({ data: mocks.models }),

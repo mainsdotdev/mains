@@ -19,7 +19,6 @@ import {
 import type { ProviderResponse } from "../../providers.dto";
 import { runsRepo } from "../../../runs/runs.repo";
 import { bridgeService } from "../../../bridge";
-import { guardsService } from "../../../guards/guards.service";
 import { appSettingsService } from "../../../appSettings";
 import { clearAllPendingRequests, handleToolApprovalResponse, listPendingApprovals } from "../../../runs/user-input-broker";
 import type { WorkRunEvent } from "../../../../../shared/adapter.types";
@@ -45,9 +44,6 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   get getSessionInfo() { return sdk.getSessionInfo; },
   deleteSession: sdk.deleteSession,
   getSessionMessages: sdk.getSessionMessages,
-}));
-vi.mock("../../../guards/guards.service", () => ({
-  guardsService: { buildClaudeGuardHook: vi.fn().mockResolvedValue(null) },
 }));
 vi.mock("../../../bridge", () => ({ bridgeService: { mirrorClaudeSession: vi.fn().mockResolvedValue(undefined) } }));
 
@@ -768,16 +764,22 @@ if (command === "plugin") {
     expect(sdk.close).toHaveBeenCalledTimes(1);
   });
 
-  it("does not acquire a prepared session after shutdown retires its pending options", async () => {
+  it("does not acquire a resumed session after shutdown retires its pending lookup", async () => {
     let release!: () => void;
-    vi.mocked(guardsService.buildClaudeGuardHook).mockReturnValueOnce(new Promise((resolve) => { release = () => resolve(null); }));
-    const driver = createClaudeDriver({ settingSources: [] });
-    const pending = driver.createSession({ runId: "pending-options", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
-    const rejected = expect(pending).rejects.toThrow(/shutdown/);
-    await vi.waitFor(() => expect(guardsService.buildClaudeGuardHook).toHaveBeenCalled());
-    await driver.shutdown?.();
-    release(); await rejected;
-    expect(sdk.query.mock.calls.length).toBe(0);
+    const waiting = new Promise<null>((resolve) => { release = () => resolve(null); });
+    const lookup = vi.spyOn(runsRepo, "findRunById").mockReturnValueOnce(waiting);
+    try {
+      const driver = createClaudeDriver({ settingSources: [] });
+      const pending = driver.resumeSession!({ runId: "pending-lookup", accountId: "account-1", message: "Continue", execution: { workspaceId: null, cwd: fixture } });
+      const rejected = expect(pending).rejects.toThrow(/shutdown/);
+      await vi.waitFor(() => expect(lookup).toHaveBeenCalledWith("pending-lookup"));
+      await driver.shutdown?.();
+      release();
+      await rejected;
+      expect(sdk.query.mock.calls.length).toBe(0);
+    } finally {
+      lookup.mockRestore();
+    }
   });
 
   it("retires an acquired session on shutdown before its first query and removes its settings", async () => {
@@ -1188,11 +1190,28 @@ if (command === "plugin") {
   });
 
   it("keeps fallback models only for a failed query and retries the live catalogue", async () => {
-    sdk.supportedModels.mockRejectedValueOnce(new Error("Catalogue unavailable"));
+    sdk.supportedModels
+      .mockRejectedValueOnce(new Error("Catalogue unavailable"))
+      .mockResolvedValueOnce([
+        { value: "default", description: "Use the default model (currently Sonnet)" },
+        { value: "fable", displayName: "Fable", supportsFastMode: true },
+        { value: "claude-fable-5-2", displayName: "Claude Fable 5.2" },
+        { value: "custom-model", resolvedModel: "claude-fable-5-2", displayName: "Custom model" },
+        { value: "sonnet", displayName: "Sonnet" },
+      ]);
     const driver = createClaudeDriver({});
-    expect((await driver.listModels!()).map((model) => model.id))
-      .toEqual(["fable", "sonnet", "opus[1m]", "haiku"]);
-    expect(await driver.listModels!()).toHaveLength(1);
+    expect(await driver.listModels!()).toMatchObject([
+      { id: "fable", contextWindow: 1_000_000 },
+      { id: "sonnet" },
+      { id: "opus[1m]" },
+      { id: "haiku" },
+    ]);
+    expect(await driver.listModels!()).toMatchObject([
+      { id: "fable", contextWindow: 1_000_000, supportsFastMode: true },
+      { id: "claude-fable-5-2", contextWindow: 1_000_000 },
+      { id: "custom-model", contextWindow: 1_000_000 },
+      { id: "sonnet", contextWindow: 200_000 },
+    ]);
     expect(sdk.close).toHaveBeenCalledTimes(2);
   });
 

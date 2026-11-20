@@ -190,7 +190,6 @@ export const CHANNELS = {
     getLinearTeams: "connections:getLinearTeams",
     getSelectedResources: "connections:getSelectedResources",
     getSentryProjects: "connections:getSentryProjects",
-    getSocketDevOrganizations: "connections:getSocketDevOrganizations",
     getTrelloBoards: "connections:getTrelloBoards",
     githubDevicePoll: "connections:githubDevicePoll",
     githubDeviceStart: "connections:githubDeviceStart",
@@ -242,13 +241,6 @@ export const CHANNELS = {
     generatePrBody: "gitFlow:generatePrBody",
     getPublishPreflight: "gitFlow:getPublishPreflight",
     publish: "gitFlow:publish",
-  },
-  guards: {
-    checkPackage: "guards:checkPackage",
-    checkPackages: "guards:checkPackages",
-    getActiveGuard: "guards:getActiveGuard",
-    getPackageScore: "guards:getPackageScore",
-    scanWorkspace: "guards:scanWorkspace",
   },
   ssh: {
     cancelTunnelOpen: "ssh:cancelTunnelOpen",

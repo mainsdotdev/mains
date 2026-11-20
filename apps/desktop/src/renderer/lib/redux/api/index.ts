@@ -22,7 +22,6 @@ export * from "./collectionsApi";
 export * from "./connectionsApi";
 export * from "./entitiesApi";
 export * from "./gitFlowApi";
-export * from "./guardsApi";
 export * from "./mcpAppsApi";
 export * from "./projectsApi";
 export * from "./providersApi";

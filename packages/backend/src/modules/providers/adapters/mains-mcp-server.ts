@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // Mains MCP Stdio Server + IPC Bridge
 //
-// Exposes the mains tools (SaveReview, CheckPackage, ...) as a
+// Exposes the mains tools (SaveReview, RegisterDeliverable, ...) as a
 // stdio-based MCP server that Cursor can discover and spawn.
 //
 // Architecture:

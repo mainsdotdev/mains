@@ -150,11 +150,6 @@ import {
   pulseService,
 } from "@mains/backend/modules/pulse";
 import {
-  registerGuardsIpc,
-  unregisterGuardsIpc,
-  shutdownAllGuardAdapters,
-} from "@mains/backend/modules/guards";
-import {
   registerPullRequestsIpc,
   unregisterPullRequestsIpc,
 } from "@mains/backend/modules/pullRequests";
@@ -925,7 +920,6 @@ async function initializeAppResources(scope: ResourceScope) {
     updatesService.initialize();
     registerAutomationsIpc();
     registerPulseIpc();
-    registerGuardsIpc();
     registerPullRequestsIpc();
     registerBrowserIpc();
     registerBrowserChatWindowIpc();
@@ -1302,9 +1296,7 @@ async function cleanupAppResources() {
     unregisterUpdatesIpc();
     unregisterAutomationsIpc();
     unregisterPulseIpc();
-    unregisterGuardsIpc();
     unregisterPullRequestsIpc();
-    await shutdownAllGuardAdapters();
     try { browserService.destroy(); } catch { /* ignore */ }
     unregisterBrowserIpc();
     unregisterBrowserChatWindowIpc();

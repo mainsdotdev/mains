@@ -65,6 +65,19 @@ describe("connectionsService", () => {
     cleanup();
   });
 
+  it("hides a saved Socket.dev connection after retiring the integration", async () => {
+    const connection = createConnection(db, { id: "socket-1", provider: "socketdev", status: "active" });
+    createConnectionState(db, { id: "socketdev", isConnected: true, connectionId: connection.id });
+    createConnectionState(db, { id: "github" });
+
+    expect((await connectionsService.listStates()).map((state) => state.id)).toEqual(["github"]);
+    await expect(connectionsService.getByProvider("socketdev")).rejects.toThrow("Unsupported provider: socketdev");
+    await expect(connectionsService.saveCredentials({ provider: "socketdev", connectionId: connection.id, apiToken: "fixture-token" }))
+      .rejects.toThrow("Unsupported provider: socketdev");
+    await expect(getConnectionWithSecrets("socketdev", connection.id)).resolves.toBeNull();
+    expect(await connectionsRepo.findByProvider("socketdev")).toMatchObject({ id: connection.id, status: "active" });
+  });
+
   // ─────────────────────────────────────────────────────────────
   // getByProvider
   // ─────────────────────────────────────────────────────────────

@@ -22,10 +22,9 @@ const CATALOGUE = [
   { id: "auto", name: "Auto" },
   { id: "fixed-model", name: "Fixed model", capabilities: { supports: { reasoningEffort: true } } },
 ];
-const approvals = vi.hoisted(() => ({ request: vi.fn(), guard: vi.fn() }));
+const approvals = vi.hoisted(() => ({ request: vi.fn() }));
 
 vi.mock("../../../runs/user-input-broker", () => ({ requestToolApproval: approvals.request }));
-vi.mock("../../../guards/guards.service", () => ({ guardsService: { buildCopilotGuardHook: approvals.guard } }));
 
 vi.mock("@github/copilot-sdk", () => {
   function session(config: { model?: string }) {
@@ -96,7 +95,6 @@ describe("Copilot session settings and SDK callbacks", () => {
     sdk.startGate = undefined;
     sdk.backgroundGate = undefined;
     approvals.request.mockReset().mockImplementation(async (request) => ({ requestId: request.requestId, approved: true }));
-    approvals.guard.mockReset().mockResolvedValue(null);
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), "mains-copilot-sessions-"));
     restoreRuntime = installTestBackendRuntime({ getPath: () => fixture });
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -701,25 +699,12 @@ describe("Copilot session settings and SDK callbacks", () => {
     expect(approvals.request).not.toHaveBeenCalled();
   });
 
-  it("adapts the SDK's Date and workingDirectory hook fields for the package guard", async () => {
-    const guard = vi.fn().mockResolvedValue({ permissionDecision: "deny", permissionDecisionReason: "Blocked package" });
-    approvals.guard.mockResolvedValue(guard);
-    await driver().createSession(request());
-    const config = sdk.clients[0].createSession.mock.calls[0][0] as SessionConfig;
-    const timestamp = new Date("2026-10-03T00:00:00Z");
-    const input = { sessionId: "run-fast", toolName: "bash", toolArgs: { command: "npm install blocked-package" }, timestamp, workingDirectory: fixture };
-    expect(await config.hooks!.onPreToolUse!(input, { sessionId: "run-fast" }))
-      .toEqual({ permissionDecision: "deny", permissionDecisionReason: "Blocked package" });
-    expect(guard).toHaveBeenCalledWith({ toolName: "bash", toolArgs: input.toolArgs, timestamp: timestamp.getTime(), cwd: fixture });
-  });
-
   it("denies policy-excluded tools before the bypass hook can grant them", async () => {
     await driver({ permissionMode: "bypassPermissions" }).createSession(request({ toolPolicy: { allowedTools: null, disallowedTools: ["Bash"] } }));
     const config = sdk.clients[0].createSession.mock.calls[0][0] as SessionConfig;
     expect(await config.hooks!.onPreToolUse!({ sessionId: "run-fast", toolName: "bash", toolArgs: { command: "pwd" },
       timestamp: new Date(), workingDirectory: fixture }, { sessionId: "run-fast" }))
       .toEqual({ permissionDecision: "deny", permissionDecisionReason: "Tool not available in this space mode" });
-    expect(approvals.guard).not.toHaveBeenCalled();
   });
 
   it("preserves current SDK tool correlation, structured errors and assistant results", async () => {

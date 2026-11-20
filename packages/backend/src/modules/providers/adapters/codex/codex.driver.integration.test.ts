@@ -555,7 +555,10 @@ describe("codex.driver / app-server protocol", () => {
           pageId: "page-1", expectedVersion: 3, markdown: "Updated page",
         }, { workspaceId: base.execution.workspaceId, rootPath: base.execution.cwd, runId: expectedRunId });
       } else {
-        expect(reply?.error).toMatchObject({ code: -32601, message: "Unknown dynamic tool: AtlasUpdatePage" });
+        expect(reply?.result).toMatchObject({
+          success: false,
+          contentItems: [{ type: "inputText", text: "Unknown dynamic tool: AtlasUpdatePage" }],
+        });
         expect(dispatch).not.toHaveBeenCalled();
       }
     };

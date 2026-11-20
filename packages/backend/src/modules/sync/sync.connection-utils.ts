@@ -8,7 +8,7 @@ import type { SelectedResource } from "./sync.dto";
 // ─────────────────────────────────────────────────────────────
 // The connection_resources table is deliberately not part of the
 // connections aggregate (see ADR-0002) — it is read directly by
-// sync, projects, and guards. Connection identity and secrets live
+// sync and projects. Connection identity and secrets live
 // behind the connections module: callers needing those should import
 // `getConnectionWithSecrets` from "../connections".
 

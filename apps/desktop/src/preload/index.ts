@@ -240,8 +240,6 @@ const api = {
       ipcRenderer.invoke(CHANNELS.connections.getTrelloBoards, connectionId),
     getSentryProjects: (connectionId: string) =>
       ipcRenderer.invoke(CHANNELS.connections.getSentryProjects, connectionId),
-    getSocketDevOrganizations: (connectionId: string) =>
-      ipcRenderer.invoke(CHANNELS.connections.getSocketDevOrganizations, connectionId),
     saveResources: (payload: {
       provider: string;
       connectionId: string;
@@ -252,18 +250,6 @@ const api = {
       ipcRenderer.invoke(CHANNELS.connections.deleteResource, resourceId),
     getSelectedResources: (provider: string) =>
       ipcRenderer.invoke(CHANNELS.connections.getSelectedResources, provider),
-  },
-  // Guards operations (dependency security)
-  guards: {
-    getActiveGuard: () => ipcRenderer.invoke(CHANNELS.guards.getActiveGuard),
-    checkPackage: (pkg: { name: string; version?: string; ecosystem: string }) =>
-      ipcRenderer.invoke(CHANNELS.guards.checkPackage, pkg),
-    checkPackages: (pkgs: Array<{ name: string; version?: string; ecosystem: string }>) =>
-      ipcRenderer.invoke(CHANNELS.guards.checkPackages, pkgs),
-    getPackageScore: (pkg: { name: string; version?: string; ecosystem: string }) =>
-      ipcRenderer.invoke(CHANNELS.guards.getPackageScore, pkg),
-    scanWorkspace: (workspaceId: string, rootPath: string) =>
-      ipcRenderer.invoke(CHANNELS.guards.scanWorkspace, workspaceId, rootPath),
   },
   // SSH tunneling for remote backends (runs the local ssh client; not served remotely)
   ssh: {

@@ -10,6 +10,7 @@ import { ok } from "@mains/contracts/service-response";
 import { resetTransport, setTransport } from "@/lib/transport";
 import { baseApi } from "@/lib/redux/api/baseApi";
 import { runsApi } from "@/lib/redux/api/runsApi";
+import backendsReducer from "@/lib/redux/slices/backendsSlice";
 import workspaceReducer, { setActiveTab } from "@/lib/redux/slices/workspaceSlice";
 import { useWorkspaceRuns } from "./use-workspace-runs";
 
@@ -47,7 +48,7 @@ describe("embedded conversation creation and recent chats", () => {
       subscribe: () => () => {}, status: () => "connected", onStatusChange: () => () => {},
     });
     const store = configureStore({
-      reducer: { [baseApi.reducerPath]: baseApi.reducer, workspace: workspaceReducer },
+      reducer: { [baseApi.reducerPath]: baseApi.reducer, workspace: workspaceReducer, backends: backendsReducer },
       middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(baseApi.middleware),
     });
     store.dispatch(setActiveTab("existing-chat"));

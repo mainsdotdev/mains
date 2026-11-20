@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/redux", () => ({ store: { getState: () => mocks.getState() } }));
 vi.mock("@/lib/redux/api", () => ({
+  useGetAccountQuery: () => ({ data: undefined }),
   useGetAppSettingsQuery: () => ({ data: { activeSpaceId: "claude-chat" }, isLoading: false }),
   useGetSpacesQuery: () => ({ data: mocks.spaces, isLoading: false, error: mocks.spacesError, refetch: vi.fn() }),
   useCreateSpaceMutation: () => [mocks.create],
@@ -38,6 +39,7 @@ vi.mock("@/lib/redux/api", () => ({
   useAbortRunMutation: () => [mocks.abort],
   useGetProviderAccountInfoQuery: () => ({ data: undefined }),
 }));
+vi.mock("@/lib/redux/api/assistantsApi", () => ({ useAssistantOverviewQuery: () => ({ currentData: undefined }) }));
 vi.mock("@/lib/redux/api/providersApi", () => ({
   useGetProviderInstalledPluginsQuery: () => ({ data: mocks.installed, isLoading: false, refetch: vi.fn() }),
   useGetProviderPluginsQuery: () => ({ data: mocks.catalog }),

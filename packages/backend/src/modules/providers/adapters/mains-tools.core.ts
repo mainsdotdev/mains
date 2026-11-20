@@ -16,7 +16,6 @@ import type {
   SaveReviewArgs,
   SaveFindingArgs,
   SaveFindingsArgs,
-  CheckPackageArgs,
 } from "./mains-tools.schemas";
 import type { VoiceTaskTools } from "../../../../shared/voice-task-tools";
 import {
@@ -51,8 +50,6 @@ export const TOOL_DESCRIPTIONS = {
     "Save a single code review finding. Returns the generated finding ID.",
   SaveFindings:
     "Save multiple code review findings at once. Returns all generated finding IDs.",
-  CheckPackage:
-    "IMPORTANT: Call this tool only before explicitly adding named packages (for example: npm install axios, pnpm add zod, pip install requests, cargo add serde). Do NOT call it for dependency restore commands with no package names, such as npm install, npm ci, pnpm install, yarn install, or bun install. Checks packages against a dependency security service and returns safety scores, risk levels, and alerts. If any package is blocked, do NOT install it — inform the user instead. If the check itself fails, tell the user rather than installing unchecked.",
   StartVoiceTask: "Delegate user-requested project work or a multi-step task to a separate visible working chat. Inherits this chat's account, workspace, model and permissions. Returns immediately; creation is not completion. Repeated taskKey returns the existing chat without resending the prompt. For follow-ups use SendVoiceTaskMessage. Independent work needs a new taskKey.",
   ListVoiceTasks: "List this voice conversation's linked working chats and their current status. Use before starting work that may already have a chat.",
   ReadVoiceTask: "Read verified progress, latest report, tool activity and pending user action from a linked working chat. Never infer completion from a spoken acknowledgment.",
@@ -194,63 +191,5 @@ export async function handleSaveFindings(
     content: [
       { type: "text" as const, text: JSON.stringify({ findingIds }) },
     ],
-  };
-}
-
-// ─────────────────────────────────────────────────────────────
-// CheckPackage handler
-// ─────────────────────────────────────────────────────────────
-
-export async function handleCheckPackage(
-  args: CheckPackageArgs,
-  _ctx: MainsToolContext,
-) {
-  const { guardsService } = await import("../../guards/guards.service");
-
-  const pkgs = args.packages.map((p) => ({
-    name: p.name,
-    version: p.version,
-    ecosystem: p.ecosystem ?? "npm",
-  }));
-
-  let checks;
-  try {
-    checks = await guardsService.checkPackages(pkgs);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Guard check failed: ${message}`);
-  }
-
-  // Guard scores are 0–1; report every score on one 0–100 scale.
-  const percent = (score: number) => Math.round(score * 100);
-  const blocked = checks.some((r) => !r.allowed);
-  const output = {
-    blocked,
-    results: checks.map((r) => ({
-      name: r.package.name,
-      version: r.package.version ?? null,
-      ecosystem: r.package.ecosystem,
-      allowed: r.allowed,
-      score: r.score
-        ? {
-            overall: percent(r.score.overallScore),
-            riskLevel: r.score.riskLevel,
-            categories: Object.fromEntries(
-              Object.entries(r.score.categories).flatMap(([name, value]) =>
-                value === undefined ? [] : [[name, percent(value)]],
-              ),
-            ),
-          }
-        : null,
-      alerts: r.alerts.map((a) => ({ severity: a.severity, title: a.title })),
-      reason: r.reason ?? null,
-    })),
-    ...(blocked && {
-      warning: "One or more packages were BLOCKED. Do NOT install blocked packages. Inform the user about the security risks.",
-    }),
-  };
-
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(output) }],
   };
 }

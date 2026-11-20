@@ -89,7 +89,7 @@ Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). C
 
 **Preload** (`src/preload/index.ts`)
 - Exposes `window.api` object with typed IPC methods
-- Namespaced by domain: `api.account`, `api.app`, `api.appSettings`, `api.automations`, `api.bridge`, `api.browser`, `api.connections`, `api.documents`, `api.entities`, `api.fileExplorer`, `api.gitFlow`, `api.guards`, `api.imageProxy`, `api.issues`, `api.localBackend`, `api.platform`, `api.projects`, `api.providers`, `api.pullRequests`, `api.pulse`, `api.remoteBackends`, `api.runs`, `api.runArtifacts`, `api.runContext`, `api.runTurns`, `api.shell`, `api.signals`, `api.space`, `api.ssh`, `api.stats`, `api.sync`, `api.tasks`, `api.terminal`, `api.toolCalls`, `api.updates`, `api.workspace`
+- Namespaced by domain: `api.account`, `api.app`, `api.appSettings`, `api.automations`, `api.bridge`, `api.browser`, `api.connections`, `api.documents`, `api.entities`, `api.fileExplorer`, `api.gitFlow`, `api.imageProxy`, `api.issues`, `api.localBackend`, `api.platform`, `api.projects`, `api.providers`, `api.pullRequests`, `api.pulse`, `api.remoteBackends`, `api.runs`, `api.runArtifacts`, `api.runContext`, `api.runTurns`, `api.shell`, `api.signals`, `api.space`, `api.ssh`, `api.stats`, `api.sync`, `api.tasks`, `api.terminal`, `api.toolCalls`, `api.updates`, `api.workspace`
 - The `workspace` namespace is an aggregate — it covers workspace lifecycle plus reviews, review findings, diffs, and activity. Connection credentials/states are folded into `api.connections`; project resources and linked issues into `api.projects`.
 - **There is no `api.git`.** The `git` module is main-process-internal (see **Git Module**); renderer git effects go through `api.workspace.*`, `api.gitFlow.*`, and `projects:listBranches`.
 - After modifying preload, restart dev server to pick up changes
@@ -137,7 +137,7 @@ Each domain module follows a layered pattern (see `../../packages/backend/src/mo
 
 **Cross-module access** goes through service methods or named barrel functions (`logWorkspaceActivity`, `recordWorkspaceDiff`, `getConnectionWithSecrets`, `getIssuesByResourceIds`) — never another module's repo.
 
-Shared backend domains: `account`, `appSettings`, `automations`, `backend`, `bridge`, `collections`, `connections`, `entities`, `fileExplorer`, `git`, `gitFlow`, `guards`, `imageProxy`, `projects`, `providers`, `pullRequests`, `pulse`, `runs`, `search`, `space`, `stats`, `sync`, `tailscale`, `terminal`, `tools`, `workspace`. Desktop-only adapters and integrations remain under `src/main/modules/`: `appshots`, `browser`, `keyboardShortcuts`, `localBackend`, `mcpApps`, `remoteBackends`, `ssh`, and `updates`, plus the native halves of split domains.
+Shared backend domains: `account`, `appSettings`, `automations`, `backend`, `bridge`, `collections`, `connections`, `entities`, `fileExplorer`, `git`, `gitFlow`, `imageProxy`, `projects`, `providers`, `pullRequests`, `pulse`, `runs`, `search`, `space`, `stats`, `sync`, `tailscale`, `terminal`, `tools`, `workspace`. Desktop-only adapters and integrations remain under `src/main/modules/`: `appshots`, `browser`, `keyboardShortcuts`, `localBackend`, `mcpApps`, `remoteBackends`, `ssh`, and `updates`, plus the native halves of split domains.
 
 Not every domain has all six files. Domains that own no tables skip `repo`/`dto`, and `git` / `tailscale` have no `ipc.ts` at all. When adding a domain, match a sibling with similar responsibilities rather than blindly copying `account/`; keep native host adapters out of the backend package.
 
@@ -156,7 +156,7 @@ Sites that reference the registry:
 2. `../../packages/backend/src/modules/{name}/{name}.ipc.ts` — `ipcMain.handle(CHANNELS.entities.getAll, ...)`
 3. `src/renderer/lib/redux/api/{name}Api.ts` — `{ handler: CHANNELS.entities.getAll }`
 
-Channel namespaces: `account`, `app`, `appSettings`, `automations`, `backend`, `bridge`, `browser`, `connections`, `documents`, `entities`, `fileExplorer`, `gitFlow`, `guards`, `imageProxy`, `issues`, `localBackend`, `projects`, `providers`, `pullRequests`, `pulse`, `remoteBackends`, `runArtifacts`, `runContext`, `runToolCalls`, `runTurns`, `runs`, `search`, `shell`, `signals`, `space`, `ssh`, `stats`, `sync`, `tasks`, `terminal`, `toolCalls`, `updates`, `workspace`.
+Channel namespaces: `account`, `app`, `appSettings`, `automations`, `backend`, `bridge`, `browser`, `connections`, `documents`, `entities`, `fileExplorer`, `gitFlow`, `imageProxy`, `issues`, `localBackend`, `projects`, `providers`, `pullRequests`, `pulse`, `remoteBackends`, `runArtifacts`, `runContext`, `runToolCalls`, `runTurns`, `runs`, `search`, `shell`, `signals`, `space`, `ssh`, `stats`, `sync`, `tasks`, `terminal`, `toolCalls`, `updates`, `workspace`.
 
 All IPC responses use the `ServiceResponse<T>` envelope: `{ success: true, data }` or `{ success: false, error }`, built by `ok()` / `fail()` from `@mains/contracts/service-response`. The renderer unwraps it exactly once, in `ipcBaseQuery` — never in `transformResponse`.
 
@@ -260,7 +260,7 @@ Core tables:
 - `fake.driver.ts` — in-memory driver used by tests
 - `work-run-core.ts` — shared run loop / event plumbing used by every driver
 - `adapter.shared.ts` — common helpers used by every driver
-- `mains-mcp-server.ts`, `mains-tools.core.ts`, `mains-tools.schemas.ts`, `mains-tools.registry.ts` — in-process MCP server and the **mains tools** (`RegisterDeliverable`, `SaveReview`, `SaveFinding`, `SaveFindings`, `CheckPackage`). Handler logic lives once in core, the Zod schema once in schemas, assembly once in the registry with `providers` and `modes` allowlists (review/package tools are developer-only; `RegisterDeliverable` is available in Code and Work; a separate voice scope exposes Codex coordination tools in all modes). Git is not among them: commits and PRs are the user's job through the git-actions panel, or the agent's through the shell. Never hand-write a tool definition inside a driver.
+- `mains-mcp-server.ts`, `mains-tools.core.ts`, `mains-tools.schemas.ts`, `mains-tools.registry.ts` — in-process MCP server and the **mains tools** (`RegisterDeliverable`, `SaveReview`, `SaveFinding`, `SaveFindings`). Handler logic lives once in core, the Zod schema once in schemas, assembly once in the registry with `providers` and `modes` allowlists (review tools are developer-only; `RegisterDeliverable` is available in Code and Work; a separate voice scope exposes Codex coordination tools in all modes). Git is not among them: commits and PRs are the user's job through the git-actions panel, or the agent's through the shell. Never hand-write a tool definition inside a driver.
 - **Mode harness** (`src/shared/mode-harness.ts`) — per-mode prompt delta, tool policy, and per-provider config defaults/overrides, resolved once per run in `runs.service` (never inside a driver, never via the cached `AdapterConfig`). Drivers receive the resolved values on the per-run request (`extraInstructions`, `toolPolicy`, `configSnapshot`) and apply them natively: claude appends to the `claude_code` system-prompt preset + allow/disallow lists, copilot layers the session `systemMessage` + PreToolUse deny, codex sends `developerInstructions` + sandbox override (chat = `read-only`) + `personality` (work/chat = `friendly`) + `planMode`/`goalMode` pinned off (plan in work/chat, goal in chat — on create, resume, and fork), cursor prefixes the prompt + agent mode (chat = `ask`). Continue/fork re-derive the harness from the run row's `mode` snapshot.
 - Hook system for pre/post tool execution and subagent coordination; pre-approved tool list (Bash, Read, Glob, Grep, …) with interactive approval for others
 
@@ -316,10 +316,6 @@ Core tables:
 
 **Tools System** (`../../packages/backend/src/modules/tools/`)
 - Registry for local and provider-builtin tools; tool call tracking with nested calls (`parentToolCallId`)
-
-**Guards Module** (`../../packages/backend/src/modules/guards/`)
-- Pluggable package-safety adapters (`adapters/socketdev.adapter.ts` behind `adapter.factory.ts`) that score npm/PyPI/etc. packages and scan a workspace's manifests for risky dependencies. No DB tables — results stream back per call.
-- Claude/Copilot enforce package safety through a PreToolUse Bash hook; Codex/Cursor expose the `CheckPackage` tool instead. This asymmetry is deliberate.
 
 **Pull Requests Module** (`../../packages/backend/src/modules/pullRequests/`)
 - Live PR inbox behind the `/tasks` screen — no DB tables (PRs are view models, never entities; see CONTEXT.md). Channels: `pullRequests:getAvailability`, `pullRequests:search`, `pullRequests:getDetail`, cursor-paged `pullRequests:getCommits` / `pullRequests:getActivity`, `pullRequests:getDiff` (unified diff, truncated at a file boundary past 300k chars), plus the actions `pullRequests:merge`, `pullRequests:markReady`, `pullRequests:addComment`, `pullRequests:addReviewComment` (new review thread on a diff line), `pullRequests:replyToThread`, `pullRequests:resolveThread`.
@@ -381,7 +377,7 @@ Core tables:
 ### Frontend Conventions
 
 - **Redux**: RTK Query with custom `ipcBaseQuery`, `baseApi.injectEndpoints()` per domain
-- **Redux API files** (`src/renderer/lib/redux/api/`): `accountApi`, `appSettingsApi`, `automationsApi`, `connectionsApi`, `entitiesApi`, `gitFlowApi`, `guardsApi`, `projectsApi`, `providersApi`, `pullRequestsApi`, `pulseApi`, `runsApi`, `shellApi`, `signalsApi`, `spaceApi`, `statsApi`, `syncApi`, `toolsApi`, `updatesApi`, `workspaceApi` — all built on `baseApi.ts`. The barrel is `export * from "./xApi"` per file — adding an endpoint is one edit, in the file that owns it; only `baseApi` itself is re-exported explicitly, since its IPC base query is not public. Aggregate APIs use split RTK Query tag types (e.g. `workspaceApi`: `Workspace`, `WorkspaceActivity`, `WorkspaceDiff`, `WorkspaceReview`, `WorkspaceFinding`) so UI sections refresh independently.
+- **Redux API files** (`src/renderer/lib/redux/api/`): `accountApi`, `appSettingsApi`, `automationsApi`, `connectionsApi`, `entitiesApi`, `gitFlowApi`, `projectsApi`, `providersApi`, `pullRequestsApi`, `pulseApi`, `runsApi`, `shellApi`, `signalsApi`, `spaceApi`, `statsApi`, `syncApi`, `toolsApi`, `updatesApi`, `workspaceApi` — all built on `baseApi.ts`. The barrel is `export * from "./xApi"` per file — adding an endpoint is one edit, in the file that owns it; only `baseApi` itself is re-exported explicitly, since its IPC base query is not public. Aggregate APIs use split RTK Query tag types (e.g. `workspaceApi`: `Workspace`, `WorkspaceActivity`, `WorkspaceDiff`, `WorkspaceReview`, `WorkspaceFinding`) so UI sections refresh independently.
 - **Redux slices** (`src/renderer/lib/redux/slices/`): `appSettingsSlice`, `backendsSlice`, `workspaceSlice`, `assistantsSlice`
 - **Hooks**: `use-kebab-case.ts` filenames, `useCamelCase` export names
 - **Components**: `kebab-case.tsx` filenames in feature dirs under `src/renderer/features/{name}/components/`
@@ -487,7 +483,7 @@ Each connection type has:
 - Fetcher in `../../packages/backend/src/modules/sync/connections/`
 - Channels under `connections:*` for credentials, resources, and states
 
-Supported: GitHub, GitLab, Linear, Jira, Asana, Trello, Sentry (+ Socket.dev for the guards module).
+Supported: GitHub, GitLab, Linear, Jira, Asana, Trello, and Sentry.
 
 GitHub additionally offers **OAuth device flow** sign-in next to the PAT form (`connections:githubDeviceStart` / `connections:githubDevicePoll`, main-process only because GitHub's OAuth endpoints send no CORS headers). The flow yields a plain access token that the renderer saves through the normal `connections:saveCredentials` path — storage, sync, and the PR inbox are method-agnostic. Requires a GitHub OAuth App client id, supplied as `MAINS_GITHUB_CLIENT_ID` at **build** time — `.env.local` locally (loaded by `forge.config.js`), the repo secret of the same name in `release.yml`. It is the one MAINS_* env var the main process does not read at runtime: `vite.main.config.mjs` bakes it into the bundle via `define`, because a released app has no build environment left to read. Unset, the button reports sign-in as unconfigured and the token tab still works. The credential-step tabs come from `ResourceWizardConfig.credentialAlternative` — provider-agnostic, GitHub is just the first user.
 
@@ -510,7 +506,7 @@ Key functions (in `connections.utils.ts` unless noted):
 - `encryptSecrets(secrets)` / `decryptSecrets(buffer)` — encrypt/decrypt the JSON blob
 - `parseProviderCredentials(provider, credentials)` — validates and extracts secrets per provider config
 - `createTokenHash`, `parseConnectionMetadata` — module-internal helpers, not re-exported
-- `getConnectionWithSecrets(provider)` (in `connections.service.ts`, exported from the barrel) — returns `{ id, secrets, metadata }` for sync fetchers and guards
+- `getConnectionWithSecrets(provider)` (in `connections.service.ts`, exported from the barrel) — returns `{ id, secrets, metadata }` for sync fetchers and the image proxy
 - `getConnectionAndSecrets(connectionId)` — same pattern for connection operations
 
 To add a new provider's secrets: add an entry to `PROVIDER_SECRET_FIELDS`. Non-secret fields (domain, email) go in `PROVIDER_METADATA_FIELDS` in `connections.service.ts`. Never import the crypto helpers across modules — call `getConnectionWithSecrets`.

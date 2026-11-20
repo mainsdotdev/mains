@@ -75,7 +75,6 @@ import {
   pulseService,
   unregisterPulseIpc,
 } from "./modules/pulse";
-import { registerGuardsIpc, unregisterGuardsIpc } from "./modules/guards";
 import {
   registerPullRequestsIpc,
   unregisterPullRequestsIpc,
@@ -168,7 +167,6 @@ const BACKEND_REGISTRATIONS: readonly BackendRegistration[] = [
   { register: registerStatsIpc, unregister: unregisterStatsIpc },
   { register: registerAutomationsIpc, unregister: unregisterAutomationsIpc },
   { register: registerPulseIpc, unregister: unregisterPulseIpc },
-  { register: registerGuardsIpc, unregister: unregisterGuardsIpc },
   {
     register: registerPullRequestsIpc,
     unregister: unregisterPullRequestsIpc,

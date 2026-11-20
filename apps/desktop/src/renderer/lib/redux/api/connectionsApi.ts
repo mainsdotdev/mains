@@ -183,20 +183,6 @@ export interface SelectedSentryProject {
   metadata: any;
 }
 
-export interface SocketDevOrganization {
-  id: string;
-  slug: string;
-  name: string;
-  plan: string | null;
-}
-
-export interface SelectedSocketDevOrganization {
-  id: string;
-  slug: string;
-  name: string;
-  metadata: any;
-}
-
 // ─────────────────────────────────────────────────────────────
 // Payload types
 // ─────────────────────────────────────────────────────────────
@@ -353,14 +339,6 @@ export const connectionsApi = baseApi.injectEndpoints({
       transformResponse: (response: { projects: SentryProject[] }) => response.projects,
     }),
 
-    getSocketDevOrganizations: builder.query<SocketDevOrganization[], ConnectionReadKey>({
-      query: (connectionId) => ({
-        handler: CHANNELS.connections.getSocketDevOrganizations,
-        args: [readId(connectionId)],
-      }),
-      transformResponse: (response: { organizations: SocketDevOrganization[] }) => response.organizations,
-    }),
-
     /**
      * Generic accessor for the items the user has linked under a connection.
      * Main returns `{ [providerSpecificKey]: items, connectionId }` (e.g. `repos`,
@@ -456,7 +434,6 @@ export const {
   useLazyGetGitLabProjectsQuery,
   useLazyGetTrelloBoardsQuery,
   useLazyGetSentryProjectsQuery,
-  useLazyGetSocketDevOrganizationsQuery,
   useGetSelectedResourcesQuery,
   useLazyGetSelectedResourcesQuery,
   useSaveResourcesMutation,

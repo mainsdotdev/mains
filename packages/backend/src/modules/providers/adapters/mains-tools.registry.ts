@@ -13,8 +13,7 @@
 //   • Cursor  → stdio MCP script, JSON Schema embedded as `inputSchema`
 //   • Codex   → dynamic tools, JSON Schema as `inputSchema`
 //
-// `providers` records which drivers expose each tool. See CONTEXT.md
-// "Provider adapters" for why CheckPackage is absent from Claude/Copilot.
+// `providers` records which drivers expose each tool.
 // ─────────────────────────────────────────────────────────────
 
 import { z } from "zod";
@@ -29,7 +28,6 @@ import {
   handleSaveReview,
   handleSaveFinding,
   handleSaveFindings,
-  handleCheckPackage,
   handleRegisterDeliverable,
   handleStartVoiceTask, handleListVoiceTasks, handleReadVoiceTask, handleWaitVoiceTask,
   handleSendVoiceTaskMessage, handleStopVoiceTask, handleEndVoiceChat,
@@ -42,7 +40,6 @@ import {
   SaveReviewSchema,
   SaveFindingSchema,
   SaveFindingsSchema,
-  CheckPackageSchema,
   RegisterDeliverableSchema,
   StartVoiceTaskSchema, ListVoiceTasksSchema, ReadVoiceTaskSchema, WaitVoiceTaskSchema,
   SendVoiceTaskMessageSchema, StopVoiceTaskSchema, EndVoiceChatSchema,
@@ -52,8 +49,7 @@ import {
  * The MCP-style result every mains handler returns.
  *
  * A handler reports failure by throwing; every driver surfaces a throw as a
- * tool error. A result describes an outcome, including a negative verdict such
- * as a blocked package. `isError` is left to the seam itself (an unknown tool).
+ * tool error. A result describes an outcome. The seam sets `isError` for an unknown tool.
  */
 export type MainsToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -118,12 +114,9 @@ const REVIEW_FLOW: ProviderId[] = [
   PROVIDER_IDS.cursor,
   PROVIDER_IDS.opencode,
 ];
-// CheckPackage: Claude/Copilot guard packages via a PreToolUse Bash hook, so
-// they need no explicit tool; Codex/Cursor cannot hook that path. Deliberate.
-const PACKAGE_GUARD: ProviderId[] = [PROVIDER_IDS.codex, PROVIDER_IDS.cursor, PROVIDER_IDS.opencode];
 
-// Review and package tools belong to Developer; file delivery also belongs
-// to Work. Availability is declared per tool and checked against provider modes.
+// Review tools belong to Developer. File delivery also belongs to Work.
+// Availability is declared per tool and checked against provider modes.
 const DEVELOPER_ONLY: ModeId[] = ["developer"];
 
 // Atlas serves Work and Chat, which only Claude and Codex offer (PROVIDER_MODES
@@ -216,14 +209,6 @@ export const MAINS_TOOLS: MainsToolDef[] = [
     schema: SaveFindingsSchema,
     handler: handleSaveFindings,
     providers: REVIEW_FLOW,
-    modes: DEVELOPER_ONLY,
-  }),
-  defineTool({
-    name: "CheckPackage",
-    description: TOOL_DESCRIPTIONS.CheckPackage,
-    schema: CheckPackageSchema,
-    handler: handleCheckPackage,
-    providers: PACKAGE_GUARD,
     modes: DEVELOPER_ONLY,
   }),
 ];

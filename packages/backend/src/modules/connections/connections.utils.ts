@@ -161,7 +161,6 @@ const PROVIDER_SECRET_FIELDS: Record<string, { required: string[]; optional?: st
   asana: { required: ["accessToken"] },
   trello: { required: ["token", "apiKey"] },
   sentry: { required: ["token"] },
-  socketdev: { required: ["apiToken"] },
 };
 
 export function parseProviderCredentials(

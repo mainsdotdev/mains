@@ -94,7 +94,8 @@ import {
 import { createClaudeTurnInput, isClaudeUserInput } from "./claude-turn-input";
 import type { MainsToolContext } from "../mains-tools.core";
 import { toClaudeTools } from "../mains-tools.registry";
-import { guardsService } from "../../../guards/guards.service";
+
+const CLAUDE_FABLE_CONTEXT_WINDOW = 1_000_000;
 
 // ─────────────────────────────────────────────────────────────
 // SDK type sketches (the SDK is loaded via dynamic import to keep the
@@ -785,6 +786,7 @@ type SDKMessage =
 
 interface SDKModelInfo {
   value: string;
+  resolvedModel?: string;
   displayName: string;
   description: string;
   supportsFastMode?: boolean;
@@ -3006,10 +3008,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     );
 
     const models: ModelInfo[] = selectableSdkModels.map((sdkModel) => {
-      // SDK's .d.ts declares supportsFastMode but the runtime payload doesn't include it.
-      // Fast mode is currently meaningful only on opus; this fallback lights it up
-      // automatically when the SDK starts surfacing the field.
       const id = sdkModel.value;
+      const isFable = id === "fable" || (sdkModel.resolvedModel ?? id).startsWith("claude-fable-");
+      const defaultContextWindow = id.includes("haiku") ? 128_000 : 200_000;
+      // Older CLIs may omit supportsFastMode from the model catalogue.
       const fallbackFastMode = id === "opus[1m]";
       return {
         id,
@@ -3022,7 +3024,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           functionCalling: true,
           reasoning: sdkModel.value.includes("opus"),
         },
-        contextWindow: sdkModel.value.includes("haiku") ? 128000 : 200000,
+        contextWindow: isFable ? CLAUDE_FABLE_CONTEXT_WINDOW : defaultContextWindow,
         supportsFastMode: sdkModel.supportsFastMode ?? fallbackFastMode,
         supportsEffort: sdkModel.supportsEffort,
         supportedEffortLevels: sdkModel.supportedEffortLevels,
@@ -3086,9 +3088,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     const bridge = createClaudePermissionBridge({ runId, permissionMode,
       allowedTools: new Set(resolveEffectiveAllowedTools(toolPolicy)), restrictedToolset: !!toolPolicy?.allowedTools });
     const hooks = config.hooks ? convertHooksConfig(config.hooks) : {};
-    const guard = await guardsService.buildClaudeGuardHook();
-    assert();
-    if (guard) hooks.PreToolUse = [...(hooks.PreToolUse ?? []), guard];
     return { permissionMode, options: {
       ...buildClaudePermissionModeOptions(permissionMode.current, bridge.canUseTool, toolPolicy),
       hooks, onElicitation: createClaudeElicitationHandler({ runId }),
@@ -3402,7 +3401,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     }
   }
 
-  async function buildOptions(args: {
+  function buildOptions(args: {
     model: string;
     workspacePath?: string;
     abortController?: AbortController;
@@ -3431,8 +3430,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     toolPolicy?: WorkRunToolPolicy | null;
     additionalDirectories?: string[];
     configSnapshot?: Record<string, unknown> | null;
-  }): Promise<SDKOptions> {
-    const assert = queryLifecycle.checkpoint();
+  }): SDKOptions {
     const {
       model,
       workspacePath,
@@ -3593,16 +3591,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     // so a server asking for a form or an auth URL fails silently.
     if (runId) {
       options.onElicitation = createClaudeElicitationHandler({ runId });
-    }
-
-    {
-      const guardHook = await guardsService.buildClaudeGuardHook();
-      assert();
-      if (guardHook) {
-        if (!options.hooks) options.hooks = {};
-        if (!options.hooks.PreToolUse) options.hooks.PreToolUse = [];
-        options.hooks.PreToolUse.push(guardHook);
-      }
     }
 
     if (runId && onEvent) {
@@ -4059,9 +4047,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     let text = "";
     try {
       await owner.run(ensureSDK);
-      const options = await owner.run(() => buildOptions({
+      owner.assertActive();
+      const options = buildOptions({
         model: opts?.model ?? "claude-haiku-4-5-20251001", abortController: controller,
-      }));
+      });
       if (opts?.signal?.aborted) throw new Error("Text generation canceled");
       options.maxTurns = 6;
       if (opts?.effort) {
@@ -4122,7 +4111,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const overridePermissionMode = request.configSnapshot?.permissionMode;
       const sessionId = randomUUID();
       const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
-      const options = await buildOptions({
+      const options = buildOptions({
         model: getModel(request.model),
         workspacePath: request.execution.cwd,
         abortController,
@@ -4161,6 +4150,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
       const sessionId = await lookupSessionId(request.runId);
+      assert();
       if (!sessionId) {
         throw new Error(
           `Session not found for run ${request.runId}. The session may have expired or was never created.`,
@@ -4170,7 +4160,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const abortController = new AbortController();
       const resumePermissionMode = request.configSnapshot?.permissionMode;
       const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
-      const options = await buildOptions({
+      const options = buildOptions({
         model: getModel(request.model ?? config.defaultModel),
         workspacePath: request.execution.cwd,
         abortController,
@@ -4277,6 +4267,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
       const sourceSessionId = await lookupSessionId(request.sourceRunId);
+      assert();
       if (!sourceSessionId) {
         throw new Error(
           `Session not found for source run ${request.sourceRunId}. Cannot fork.`,
@@ -4289,7 +4280,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const sessionId = randomUUID();
       const forkPermissionMode = request.configSnapshot?.permissionMode;
       const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
-      const options = await buildOptions({
+      const options = buildOptions({
         model: getModel(request.model ?? config.defaultModel),
         workspacePath: request.execution.cwd,
         abortController,
@@ -5369,7 +5360,7 @@ function getDefaultModels(defaultModel?: string): ModelInfo[] {
       id: "fable",
       displayName: "Claude Fable",
       capabilities: { streaming: true, vision: true, functionCalling: true, reasoning: true },
-      contextWindow: 200000,
+      contextWindow: CLAUDE_FABLE_CONTEXT_WINDOW,
       supportsFastMode: false,
       supportsEffort: true,
       supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],

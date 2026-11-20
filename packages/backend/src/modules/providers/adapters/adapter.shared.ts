@@ -172,7 +172,6 @@ export const DEFAULT_ALLOWED_TOOLS = [
   "mcp__mains__SaveReview",
   "mcp__mains__SaveFinding",
   "mcp__mains__SaveFindings",
-  "mcp__mains__CheckPackage",
 ];
 
 export const ALLOWED_TOOLS_SET = new Set(DEFAULT_ALLOWED_TOOLS);

@@ -46,7 +46,6 @@ function createHarness(
   };
   const requestApproval = vi.fn(approval);
   const updateApproval = vi.fn(() => true);
-  const checkCommand = vi.fn(async () => ({ blocked: false }));
   const dispatchTool = vi.fn(async () => ({
     content: [{ type: "text" as const, text: "tool-result" }],
     isError: false,
@@ -65,14 +64,12 @@ function createHarness(
         : undefined,
     requestApproval,
     updateApproval,
-    checkCommand,
     dispatchTool,
     openExternal,
     now: () => 1_720_000_000_000,
   });
   return {
     broker,
-    checkCommand,
     dispatchTool,
     openExternal,
     requestApproval,
@@ -283,8 +280,7 @@ describe("Codex request broker", () => {
   });
 
   it("forwards network approvals and preserves session decisions", async () => {
-    const { broker, checkCommand, requestApproval } =
-      createHarness();
+    const { broker, requestApproval } = createHarness();
     const responder = createResponder();
 
     await handle(
@@ -302,7 +298,6 @@ describe("Codex request broker", () => {
       },
     );
 
-    expect(checkCommand).not.toHaveBeenCalled();
     expect(requestApproval).toHaveBeenCalledWith(
       expect.objectContaining({
         requestId: "42",
@@ -325,25 +320,23 @@ describe("Codex request broker", () => {
     ]);
   });
 
-  it("lets the dependency guard decline commands before UI approval", async () => {
-    const { broker, checkCommand, requestApproval } =
-      createHarness();
-    checkCommand.mockResolvedValue({ blocked: true });
+  it("routes package install commands through normal command approval", async () => {
+    const { broker, requestApproval } = createHarness();
     const responder = createResponder();
 
     await handle(
       broker,
       responder.server,
       "item/commandExecution/requestApproval",
-      { command: "npm install suspicious-package" },
+      { command: "npm install example-package" },
     );
 
-    expect(checkCommand).toHaveBeenCalledWith(
-      "npm install suspicious-package",
-    );
-    expect(requestApproval).not.toHaveBeenCalled();
+    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "Bash",
+      toolInput: { command: "npm install example-package" },
+    }));
     expect(responder.responses).toEqual([
-      { id: 42, result: { decision: "decline" } },
+      { id: 42, result: { decision: "acceptForSession" } },
     ]);
   });
 
@@ -458,10 +451,9 @@ describe("Codex request broker", () => {
     const unknown = createResponder();
 
     await handle(broker, known.server, "item/tool/call", {
-      tool: "CheckPackage",
+      tool: "AtlasReadPage",
       arguments: JSON.stringify({
-        packageName: "react",
-        packageManager: "npm",
+        pageId: "page-1",
       }),
       threadId: "thread-child",
     });
@@ -473,10 +465,9 @@ describe("Codex request broker", () => {
     );
 
     expect(dispatchTool).toHaveBeenCalledWith(
-      "CheckPackage",
+      "AtlasReadPage",
       {
-        packageName: "react",
-        packageManager: "npm",
+        pageId: "page-1",
       },
       {
         workspaceId: "workspace-1",
@@ -495,11 +486,13 @@ describe("Codex request broker", () => {
         },
       },
     ]);
-    expect(unknown.errors).toEqual([
+    expect(unknown.responses).toEqual([
       {
         id: 42,
-        code: -32601,
-        message: "Unknown dynamic tool: NotAMainsTool",
+        result: {
+          contentItems: [{ type: "inputText", text: "Unknown dynamic tool: NotAMainsTool" }],
+          success: false,
+        },
       },
     ]);
   });
@@ -548,7 +541,13 @@ describe("Codex request broker", () => {
     const args = { assignmentId: "881f747c-f0b6-456b-83ff-1bb1e75da729", status: "completed", result: "Check complete: NOT READY", evidence: ["/tmp/mains-swift-test-recheck.log"] };
     const unscoped = createResponder();
     await handle(broker, unscoped.server, "item/tool/call", { tool: "ReportAssistantTask", arguments: args });
-    expect(unscoped.errors).toEqual([{ id: 42, code: -32601, message: "Unknown dynamic tool: ReportAssistantTask" }]);
+    expect(unscoped.responses).toEqual([{
+      id: 42,
+      result: {
+        contentItems: [{ type: "inputText", text: "Unknown dynamic tool: ReportAssistantTask" }],
+        success: false,
+      },
+    }]);
     expect(dispatchTool).not.toHaveBeenCalled();
 
     runState.assistantId = "testflight-ready";
@@ -561,10 +560,9 @@ describe("Codex request broker", () => {
 
   it.each([
     ["developer", "AtlasUpdatePage"],
+    ["developer", "CheckPackage"],
     ["chat", "AtlasCreatePage"],
     ["chat", "AtlasUpdatePage"],
-    ["work", "CheckPackage"],
-    ["chat", "CheckPackage"],
     ["work", "ListAssistants"],
     ["work", "RecallAssistantMemory"],
     ["developer", "RecallAssistantMemory"],
@@ -581,9 +579,13 @@ describe("Codex request broker", () => {
     await handle(broker, responder.server, "item/tool/call", { tool });
 
     expect(dispatchTool).not.toHaveBeenCalled();
-    expect(responder.errors).toEqual([
-      { id: 42, code: -32601, message: `Unknown dynamic tool: ${tool}` },
-    ]);
+    expect(responder.responses).toEqual([{
+      id: 42,
+      result: {
+        contentItems: [{ type: "inputText", text: `Unknown dynamic tool: ${tool}` }],
+        success: false,
+      },
+    }]);
   });
 
   it.each(["developer", "work", "chat"] as const)("keeps AtlasReadPage available in %s mode", async (mode) => {

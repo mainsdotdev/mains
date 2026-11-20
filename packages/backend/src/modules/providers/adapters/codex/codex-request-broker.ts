@@ -6,7 +6,6 @@ import type {
 import type { WorkRunEventHandler } from "../../../../../shared/adapter.types";
 import { requestToolApproval, updatePendingRequest } from "../../../runs/user-input-broker";
 import type { ApprovalPresentationPatch } from "../../../runs/user-input-lifecycle";
-import { guardsService } from "../../../guards/guards.service";
 import type { MainsToolContext } from "../mains-tools.core";
 import {
   dispatchMainsTool,
@@ -100,9 +99,6 @@ interface CodexRequestBrokerOptions {
     request: ToolApprovalRequest,
   ) => Promise<ToolApprovalResponse>;
   updateApproval?: (requestId: string, patch: ApprovalPresentationPatch) => boolean;
-  checkCommand?: (
-    command: string,
-  ) => Promise<{ blocked: boolean }>;
   dispatchTool?: typeof dispatchMainsTool;
   openExternal?: (url: string) => Promise<unknown>;
   logger?: AdapterLogger;
@@ -123,9 +119,6 @@ export function createCodexRequestBroker(
     options.requestApproval ?? requestToolApproval;
   const updateApproval = options.updateApproval ?? updatePendingRequest;
   const fileApprovals = new Map<string, { runId: string; itemKey: string; reason?: string }>();
-  const checkCommand =
-    options.checkCommand ??
-    ((command: string) => guardsService.checkCommand(command));
   const dispatchTool =
     options.dispatchTool ?? dispatchMainsTool;
   const openExternal =
@@ -268,22 +261,6 @@ export function createCodexRequestBroker(
             ? `Network access: ${networkApprovalContext.protocol ?? "https"}://${networkApprovalContext.host}`
             : "Command approval"
         );
-
-      // Dependency guard check — intercept install commands before approval
-      let guardResult: { blocked: boolean };
-      try {
-        guardResult = command
-          ? await checkCommand(command)
-          : { blocked: false };
-      } catch (error) {
-        logger.error("Command guard failed:", error);
-        respondCommandApproval(server, id, approval, "decline");
-        break;
-      }
-      if (guardResult.blocked) {
-        respondCommandApproval(server, id, approval, "decline");
-        break;
-      }
 
       try {
         const result = await requestApproval({
@@ -578,11 +555,18 @@ export function createCodexRequestBroker(
             success: false,
           });
         }
+      } else if (toolName) {
+        // A resumed thread can still request a tool from its saved catalog.
+        // Return a tool result so the app-server preserves the reason.
+        server.respondToRequest(id, {
+          contentItems: [{ type: "inputText", text: `Unknown dynamic tool: ${toolName}` }],
+          success: false,
+        });
       } else {
         server.respondToRequestError(
           id,
           -32601,
-          `Unknown dynamic tool: ${toolName ?? "undefined"}`,
+          "Unknown dynamic tool: undefined",
         );
       }
       break;

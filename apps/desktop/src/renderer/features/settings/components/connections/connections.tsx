@@ -15,13 +15,12 @@ import type { ConnectionState } from "@/lib/redux/api";
 
 type ConnectionItem = ConnectionState;
 
-type CategoryFilter = "all" | "issues" | "monitoring" | "security";
+type CategoryFilter = "all" | "issues" | "monitoring";
 
 const FILTER_TABS: { id: CategoryFilter; label: string }[] = [
   { id: "all", label: "All" },
   { id: "issues", label: "Issues" },
   { id: "monitoring", label: "Monitoring" },
-  { id: "security", label: "Security" },
 ];
 
 export default function ConnectionsSettings() {
