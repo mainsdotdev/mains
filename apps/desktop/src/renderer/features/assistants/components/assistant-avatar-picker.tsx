@@ -1,20 +1,24 @@
-import { useLayoutEffect, useRef, type KeyboardEvent } from "react";
+import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { ASSISTANT_ROBOT_AVATARS, isAssistantRobotShape, type AssistantAvatar as Avatar, type AssistantRobotShape } from "@mains/contracts/assistants";
-import { Button } from "@/components/ui";
+import { Button, SegmentedTabs } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { DEFAULT_ROBOT_AVATAR, ROBOT_PRESETS, ROBOT_SHAPES_BY_STYLE, ROBOT_STYLES, ROBOT_STYLE_LABELS, type RobotStyle } from "../lib/assistant-robot-presets";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantRobotAvatar, AssistantRobotPreview } from "./assistant-robot-avatar";
 
-export function AssistantAvatarPicker({ avatar, seed, onChange, compact = false }: {
+const ROBOT_STYLE_OPTIONS = ROBOT_STYLES.map(value => ({ value, label: ROBOT_STYLE_LABELS[value] }));
+
+export function AssistantAvatarPicker({ avatar, seed, onChange, nameField, compact = false }: {
   avatar: Avatar;
   seed: string;
   onChange(avatar: Avatar): void;
+  nameField?: ReactNode;
   compact?: boolean;
 }) {
   const selectedShape = isAssistantRobotShape(avatar.shape) ? avatar.shape : undefined;
   const style = ROBOT_PRESETS[selectedShape ?? DEFAULT_ROBOT_AVATAR.shape].style;
   const shapes = ROBOT_SHAPES_BY_STYLE[style];
+  const previewSize = compact ? "size-20" : "size-32";
   const previousShapes = useRef<Partial<Record<RobotStyle, AssistantRobotShape>>>({});
   const variantViewport = useRef<HTMLDivElement>(null);
   const selectedButton = useRef<HTMLButtonElement>(null);
@@ -42,21 +46,15 @@ export function AssistantAvatarPicker({ avatar, seed, onChange, compact = false 
   }
 
   return <div className={cn("flex flex-col items-center", compact ? "gap-3" : "gap-5 pb-4 pt-2 sm:gap-6")}>
-    {selectedShape
-      ? <AssistantRobotPreview shape={selectedShape} presentation="picker" className={compact ? "size-20" : "size-28"} />
-      : <AssistantAvatar avatar={avatar} seed={seed} className={compact ? "size-20" : "size-28"} />}
-    <div role="radiogroup" aria-label="Robot style" onKeyDown={event => cycleAvatar(event, ROBOT_STYLES, style, selectStyle)}
-      className="flex max-w-full flex-wrap justify-center gap-1">
-      {ROBOT_STYLES.map(option => {
-        const selected = style === option;
-        return <Button key={option} variant="bare" role="radio" aria-checked={selected} tabIndex={selected ? 0 : -1}
-          onClick={() => selectStyle(option)}
-          className={cn("rounded-lg px-2 py-1 text-xs font-medium focus-visible:ring-2 focus-visible:ring-accent",
-            selected ? "bg-primary-200/60 text-primary-950 dark:bg-primary/10 dark:text-primary-50"
-              : "text-primary-600 hover:bg-primary-200/40 dark:text-primary-300 dark:hover:bg-primary/10")}>
-          {ROBOT_STYLE_LABELS[option]}
-        </Button>;
-      })}
+    <div className="flex w-full flex-col items-center gap-1">
+      {selectedShape
+        ? <AssistantRobotPreview shape={selectedShape} presentation="picker" className={previewSize} />
+        : <AssistantAvatar avatar={avatar} seed={seed} className={previewSize} />}
+      {nameField}
+    </div>
+    <div className="max-w-full overflow-x-auto overscroll-x-contain">
+      <SegmentedTabs value={style} options={ROBOT_STYLE_OPTIONS} onChange={selectStyle}
+        semantics="radiogroup" aria-label="Robot style" className="w-max" />
     </div>
     <div ref={variantViewport} className="max-w-full overflow-x-auto overscroll-x-contain">
       <div role="radiogroup" aria-label="Robot variant" onKeyDown={event => cycleAvatar(event, shapes, selectedShape ?? shapes[0], selectShape)}

@@ -1,6 +1,5 @@
 import { useId, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import type { AssistantTaskActivity } from "@mains/contracts/assistants";
 import { Button } from "@/components/ui";
 import { ArrowUp } from "@/components/ui/icons";
 import { AgentMarkdown } from "@/components/agent-markdown";
@@ -12,22 +11,12 @@ import { useAssistantUpdates } from "../hooks/use-assistant-updates";
 import { assistantHref } from "../lib/assistant-navigation";
 import { errorText, pullRequestReviewPresentation } from "../lib/assistant-ui";
 import { AssistantAvatar } from "./assistant-avatar";
+import { AssistantCardSection } from "./assistant-card-section";
 import { AssignmentStatusBadge } from "./assignment-status-badge";
 
 const activityLabels = { request: "Task request", followup: "Follow-up", status: "Status", result: "Report" };
-const deliveryLabels = { queued: "Waiting to send", dispatching: "Sending", uncertain: "Needs attention", canceled: "Canceled" };
-const sectionClassName = "min-w-0 space-y-1 rounded-xl bg-primary-200/55 px-3 py-2.5 dark:bg-primary-950/45";
+const deliveryLabels = { queued: "Waiting to send", dispatching: "Sending", delivered: undefined, uncertain: "Needs attention", canceled: "Canceled" };
 const disclosureClassName = "grid grid-cols-[minmax(0,1fr)] transition-[grid-template-rows,opacity] duration-250 ease-in-out motion-reduce:transition-none";
-
-function TaskSectionHeading({ label, deliveryStatus }: { label: string; deliveryStatus?: AssistantTaskActivity["deliveryStatus"] }) {
-  const deliveryLabel = deliveryStatus && deliveryStatus !== "delivered" ? deliveryLabels[deliveryStatus] : undefined;
-  return (
-    <div className="flex flex-wrap items-baseline gap-x-1.5 text-xs text-primary-600 dark:text-primary-400">
-      <h3 className="font-medium">{label}</h3>
-      {deliveryLabel && <><span aria-hidden="true">·</span><span>{deliveryLabel}</span></>}
-    </div>
-  );
-}
 
 export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: string; runId?: string }) {
   useAssistantUpdates();
@@ -90,40 +79,37 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
         <div id={detailsId} role="group" aria-label="Task details" aria-hidden={!expanded || undefined} inert={!expanded}
           className={cn(disclosureClassName, expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
           <div className="min-h-0 overflow-hidden">
-            {hasOpened && <div className="space-y-2 px-2.5 pb-2.5 pt-0.5">
-              {taskError && !errorInActivity && <p role="alert" className={cn(sectionClassName, "break-words text-xs text-danger")}>{taskError}</p>}
-              {(result || evidence.length > 0) && <section aria-label="Task report" className={sectionClassName}>
-                <TaskSectionHeading label="Report" deliveryStatus={reportActivity?.deliveryStatus} />
+            {hasOpened && <div className="space-y-2.5 px-2.5 pb-2.5 pt-0.5">
+              {taskError && !errorInActivity && <p role="alert" className="min-w-0 break-words rounded-xl bg-primary-200/55 px-3 py-2.5 text-xs text-danger dark:bg-primary-950/45">{taskError}</p>}
+              {(result || evidence.length > 0) && <AssistantCardSection title="Report" label="Task report" status={reportActivity && deliveryLabels[reportActivity.deliveryStatus]}>
                 {result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{result}</AgentMarkdown>}
                 {!!evidence.length && <ul aria-label="Task evidence" className={cn("text-xs text-primary-600 dark:text-primary-400", review ? "flex flex-wrap gap-x-3 gap-y-1" : "space-y-0.5")}>
                   {evidence.map((item, index) => <li key={index} className="break-words">{item}</li>)}
                 </ul>}
                 {reportActivity?.error && <p className="break-words text-xs text-danger">{errorText(reportActivity.error)}</p>}
-              </section>}
-              {review && <section aria-label="Review scope" className={sectionClassName}>
-                <TaskSectionHeading label="Review scope" />
+              </AssistantCardSection>}
+              {review && <AssistantCardSection title="Review scope">
                 <p className="break-words text-xs">
                   {review.reference} <span aria-hidden="true">·</span> <code>{review.commit}</code>
                   {review.truncated && " · Partial diff"}
                 </p>
-                {review.focus && <>
-                  <TaskSectionHeading label="Review focus" />
-                  <p className="whitespace-pre-wrap break-words text-sm leading-5">{review.focus}</p>
-                </>}
-              </section>}
-              {!review && task.prompt && !requestInActivity && <div className={sectionClassName}>
-                <TaskSectionHeading label="Task request" />
+              </AssistantCardSection>}
+              {review?.focus && <AssistantCardSection title="Review focus">
+                <p className="whitespace-pre-wrap break-words text-sm leading-5">{review.focus}</p>
+              </AssistantCardSection>}
+              {!review && task.prompt && !requestInActivity && <AssistantCardSection title="Task request">
                 <p className="whitespace-pre-wrap break-words text-sm leading-5">{task.prompt}</p>
-              </div>}
-              {!!activityRows.length && <ol aria-label="Task activity" className="space-y-2">
-                {activityRows.map(item => (
-                  <li key={item.id} className={sectionClassName}>
-                    <TaskSectionHeading label={activityLabels[item.kind]} deliveryStatus={item.deliveryStatus} />
-                    {!(item.kind === "result" && item.content === task.result) &&
-                      <AgentMarkdown className="[&>.document-paragraph]:leading-5">{item.kind === "status" ? errorText(item.content) : item.kind === "result" && review ? review.formatText(item.content) : item.content}</AgentMarkdown>}
-                    {item.error && <p className="break-words text-xs text-danger">{errorText(item.error)}</p>}
-                  </li>
-                ))}
+              </AssistantCardSection>}
+              {!!activityRows.length && <ol aria-label="Task activity" className="space-y-2.5">
+                {activityRows.map(item => {
+                  const showMessage = item.kind !== "result" || item.content !== task.result;
+                  return <AssistantCardSection key={item.id} as="li" title={activityLabels[item.kind]} status={deliveryLabels[item.deliveryStatus]}>
+                    {(showMessage || item.error) ? <>
+                      {showMessage && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{item.kind === "status" ? errorText(item.content) : item.kind === "result" && review ? review.formatText(item.content) : item.content}</AgentMarkdown>}
+                      {item.error && <p className="break-words text-xs text-danger">{errorText(item.error)}</p>}
+                    </> : null}
+                  </AssistantCardSection>;
+                })}
               </ol>}
             </div>}
           </div>

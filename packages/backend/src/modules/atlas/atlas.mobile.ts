@@ -390,7 +390,7 @@ async function selectGenerated(accountId: string, reference: AtlasMobileFileRefe
   const { runsService } = await import("../runs");
   const run = await runsService.getRunById(reference.runId!);
   if (!run || run.accountId !== accountId || run.mode !== "work" || run.isArchived) throw new Error("Atlas conversation not found");
-  const selected = (await generatedForRun(run.id, accountId, false)).find((file) => file.sourceKey === reference.sourceKey);
+  const selected = (await generatedForRun(run.id, accountId)).find((file) => file.sourceKey === reference.sourceKey);
   if (!selected) throw new Error("File not found in this conversation’s Atlas outputs");
   return { run, selected, runsService };
 }

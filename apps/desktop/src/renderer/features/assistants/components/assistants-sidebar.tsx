@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { Assistant } from "@mains/contracts/assistants";
 import { Button, Text } from "@/components/ui";
-import { AssistantSteps } from "@/components/ui/icons";
+import { AssistantSteps, Warning } from "@/components/ui/icons";
 import NewButton from "@/components/layout/sidebar/new-button";
 import SearchBar from "@/components/layout/sidebar/search-bar";
 import { SidebarGroupSection } from "@/components/layout/sidebar/sidebar-group-section";
@@ -16,7 +16,7 @@ import { useIsMobile } from "@/lib/platform";
 import { assistantHref, assistantTeamGroupKey } from "../lib/assistant-navigation";
 import { AssistantMonogram } from "./assistant-monogram";
 import { AssistantArchiveMenu } from "./assistant-archive-menu";
-import { errorText, isAssistantWorking } from "../lib/assistant-ui";
+import { assistantIdsWithPendingSetup, errorText, isAssistantWorking } from "../lib/assistant-ui";
 
 export function AssistantsSidebar() {
   const backendId = useAppSelector(state => state.backends.activeBackendId);
@@ -33,6 +33,7 @@ export function AssistantsSidebar() {
     if (mobile) dispatch(setSidebarCollapsed(true));
   };
   const query = searchQuery.trim().toLocaleLowerCase();
+  const pendingSetup = assistantIdsWithPendingSetup(overview?.welcomes);
   const groupsByTeam = new Map<string | null, Assistant[]>();
   for (const assistant of overview?.assistants.slice().reverse() ?? []) {
     if (assistant.isArchived) continue;
@@ -64,6 +65,7 @@ export function AssistantsSidebar() {
         {visibleGroups.map(({ teamId, label, members }) => {
           const groupKey = assistantTeamGroupKey(backendId, account?.id ?? "", teamId);
           const rows = members.map(assistant => <AssistantItem key={assistant.id} assistant={assistant}
+            needsSetup={pendingSetup.has(assistant.id)}
             working={isAssistantWorking(overview, assistant.id)} active={params.get("new") !== "1" && params.get("assistant") === assistant.id}
             open={open} onOpenDetails={() => open(`${assistantHref(assistant.id, params.get("assistant") === assistant.id ? params.get("run") : null)}&tab=profile`)} />);
           if (!showTeamHeadings) return <div key={groupKey} className="space-y-1.5">{rows}</div>;
@@ -89,8 +91,8 @@ export function AssistantsSidebar() {
   );
 }
 
-function AssistantItem({ assistant, working, active, open, onOpenDetails }: {
-  assistant: Assistant; working: boolean; active: boolean; open(href: string): void; onOpenDetails(): void;
+function AssistantItem({ assistant, needsSetup, working, active, open, onOpenDetails }: {
+  assistant: Assistant; needsSetup: boolean; working: boolean; active: boolean; open(href: string): void; onOpenDetails(): void;
 }) {
   return (
     <div>
@@ -100,7 +102,10 @@ function AssistantItem({ assistant, working, active, open, onOpenDetails }: {
           <Button variant="bare" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" aria-current={active ? "page" : undefined} onClick={() => open(assistantHref(assistant.id))}>
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
               <Text as="span" size="s" weight="medium" className="truncate">{assistant.name}</Text>
-              <span className="truncate text-xs text-primary-500">{assistant.description || assistant.spaceSnapshot.name}</span>
+              {needsSetup ? <span className="flex min-w-0 items-center gap-1.5 text-xs text-primary-500">
+                <span className="truncate">Finish setup</span>
+                <Warning aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
+              </span> : <span className="truncate text-xs text-primary-500">{assistant.description || assistant.spaceSnapshot.name}</span>}
             </span>
           </Button>
         </div>

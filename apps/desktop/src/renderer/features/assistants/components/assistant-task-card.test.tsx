@@ -96,7 +96,7 @@ describe("assistant task activity card", () => {
     expect(report.getAllByRole("listitem").map(item => item.textContent)).toEqual(["PR diff", "PR description", "src/index.ts:21"]);
     const scope = within(card.getByRole("region", { name: "Review scope" }));
     expect(scope.getByText(/acme\/widget#12/)).toBeTruthy();
-    expect(scope.getByText("Check defaults")).toBeTruthy();
+    expect(within(card.getByRole("region", { name: "Review focus" })).getByText("Check defaults")).toBeTruthy();
     expect(scope.getByText(/Partial diff/)).toBeTruthy();
     expect(card.queryByText(/Task request|untrusted source material/)).toBeNull();
     expect(card.queryByText(new RegExp(`${headOid}|${baseOid}|${digest}`))).toBeNull();

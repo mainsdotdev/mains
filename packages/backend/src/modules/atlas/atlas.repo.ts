@@ -138,12 +138,11 @@ export const atlasRepo = {
     if (limit !== undefined || offset !== undefined) query.limit(limit ?? ATLAS_LIBRARY_PAGE_SIZE);
     return query.all();
   },
-  imageIdentities(accountId: string, collectionId?: string) {
-    const conditions = [eq(atlasItems.accountId, accountId), eq(atlasItems.kind, "image"), isNull(atlasItems.trashedAt), libraryItem];
+  fileIdentities(accountId: string, kind?: "file" | "image", collectionId?: string) {
+    const conditions = [eq(atlasItems.accountId, accountId), isNull(atlasItems.trashedAt), isNotNull(atlasItems.contentHash), libraryItem,
+      kind ? eq(atlasItems.kind, kind) : inArray(atlasItems.kind, ["file", "image"])];
     if (collectionId) conditions.push(eq(atlasItems.collectionId, collectionId));
-    // Image identity is small; do not load storage paths, Page previews or the
-    // rest of the account's inventory merely to prefer permanent copies.
-    return getDb().select({ title: atlasItems.title, contentHash: atlasItems.contentHash })
+    return getDb().select({ kind: atlasItems.kind, contentHash: atlasItems.contentHash })
       .from(atlasItems).where(and(...conditions)).all();
   },
   find(id: string, accountId: string) {

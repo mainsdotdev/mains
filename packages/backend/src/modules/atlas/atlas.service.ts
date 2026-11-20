@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs, type Stats } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { AtlasAutoTagging, AtlasItemTag, AtlasSaveBookmark, AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedFile, AtlasIdentity,
@@ -17,13 +17,15 @@ import { continuesSession, historyCheckpoints, historyPrefix } from "./atlas.his
 import { metadataPatch, readMetadata } from "./atlas.metadata";
 import { ATLAS_COVER_SOURCE_PREFIX, coverPreset, isCoverId } from "@mains/contracts/atlas-covers";
 import { readCoverPreset } from "./atlas.covers";
-import { atlasRoot, fileHash, imageContentHash, inspectSource, readSource, removeFiles, restoreFile, safeName, sourceKey, storagePath, writeFile } from "./atlas.storage";
+import { atlasRoot, fileHash, fileVersionHash, inspectSource, readSource, removeFiles, restoreFile, safeName, sourceKey, storagePath, writeFile } from "./atlas.storage";
 import { atlasBookmarks, readBookmarkJob, validateTagInputs } from "./atlas.bookmarks";
 
 interface PagePresentation {
   metadata?: AtlasMetadataPatch | null;
   coverPreset?: string | null;
 }
+
+type DiscoveredFile = AtlasGeneratedFile & { stats?: Stats };
 
 const pendingSaves = new Map<string, Promise<AtlasItem>>();
 const IMAGE_MIMES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
@@ -156,7 +158,7 @@ async function runContext(runId: string, accountId: string) {
 }
 /** Another device's conversation offers the uploads and selected outputs Bridge synced
  * from it. Only their records are read: a card downloads its file when it opens. */
-async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeof runContext>>): Promise<AtlasGeneratedFile[]> {
+async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeof runContext>>, includeOutputs: boolean): Promise<AtlasGeneratedFile[]> {
   const common = { runId: run.id, runTitle: run.title ?? "Conversation", collectionId: run.collectionId };
   const backendId = run.ownerBackendId ?? "";
   const replicaKey = (...identity: unknown[]) => createHash("sha256").update(JSON.stringify([run.id, ...identity])).digest("hex");
@@ -169,7 +171,7 @@ async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeo
       byteSize: attachment.byteSize, modifiedAt: attachment.createdAt.toISOString(),
       replica: { backendId, attachmentId: attachment.id } });
   }
-  for (const output of await runsService.getOutputArtifacts(run.id)) {
+  for (const output of includeOutputs ? await runsService.getOutputArtifacts(run.id) : []) {
     const source = output.metadata?.path;
     const type = typeof source === "string" ? classify(source) : null;
     if (typeof source !== "string" || !type) continue;
@@ -184,28 +186,33 @@ async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeo
   }
   return [...new Map(result.map((item) => [item.sourceKey, item])).values()];
 }
-export async function generatedForRun(runId: string, accountId: string, hashImages = true): Promise<AtlasGeneratedFile[]> {
+export async function generatedForRun(runId: string, accountId: string,
+  { includeMateOutputs = true, hashFiles = false }: { includeMateOutputs?: boolean; hashFiles?: boolean } = {}): Promise<DiscoveredFile[]> {
   const context = await runContext(runId, accountId);
   const { run, runsService, roots, attachments } = context;
+  // Bridge omits the local Mate column, but its run snapshot carries the same identity.
+  const isMate = !!run.assistantId || (run.isReplica && typeof run.configSnapshot?.assistantId === "string");
+  const includeOutputs = includeMateOutputs || !isMate;
   // Generated discovery walks this backend's execution folders.
-  if (run.isReplica) return replicaFilesForRun(context);
+  if (run.isReplica) return replicaFilesForRun(context, includeOutputs);
   const candidates = new Set<string>();
-  for (const artifact of await runsService.getOutputArtifacts(runId)) {
+  for (const artifact of includeOutputs ? await runsService.getOutputArtifacts(runId) : []) {
     if (artifact.metadata?.outputSelected && artifact.path)
       candidates.add(artifact.path);
   }
   const uploads = new Map(attachments.map((file) => [file.path, file]));
   for (const [file, attachment] of uploads) if (!attachment.isBrowserAnnotation) candidates.add(file);
-  const result: AtlasGeneratedFile[] = [];
+  const result: DiscoveredFile[] = [];
   for (const file of candidates) {
     if (uploads.get(file)?.isBrowserAnnotation) continue;
     const type = classify(file);
     if (!type) continue;
     try {
       const { real, stats } = await inspectSource(file, roots);
+      const contentHash = uploads.get(file)?.contentHash ?? (hashFiles ? await fileVersionHash(real, stats) : undefined);
       result.push({ sourceKey: sourceKey(runId, real), runId, runTitle: run.title ?? "Conversation",
         origin: uploads.has(file) ? "attachment" : "generated",
-        ...(type.kind === "image" ? { contentHash: uploads.get(file)?.contentHash ?? (hashImages ? await imageContentHash(real, stats) : undefined) } : {}),
+        contentHash, stats,
         collectionId: run.collectionId, ...type, path: real, fileName: path.basename(real),
         byteSize: stats.size, modifiedAt: stats.mtime.toISOString() });
     } catch { /* Missing/incomplete files and symlinks are excluded from the projection. */ }
@@ -274,6 +281,10 @@ function savedEntry(item: AtlasListItem): AtlasLibraryEntry {
     collectionId: item.collectionId, path: item.path, contentHash: item.contentHash, saved: item };
 }
 
+function fileIdentity({ kind, contentHash }: { kind: AtlasLibraryEntry["kind"]; contentHash?: string | null }) {
+  return (kind === "file" || kind === "image") && contentHash ? `${kind}:${contentHash}` : undefined;
+}
+
 function matchesLibrary(entry: AtlasLibraryEntry, options: AtlasLibraryOptions, query: string) {
   return (!options.type || options.type === "all" || entry.kind === options.type)
     && (!options.collectionId || entry.collectionId === options.collectionId)
@@ -298,23 +309,34 @@ async function* savedLibraryEntries(options: AtlasLibraryOptions, query: string)
 
 async function* generatedLibraryEntries(options: AtlasLibraryOptions, query: string) {
   if (options.type === "page" || options.type === "bookmark" || options.tagId || options.scope === "saved" || options.scope === "favorites") return;
-  const preferredImages = options.scope === "all"
-    ? new Set(atlasRepo.imageIdentities(options.accountId, options.collectionId)
-      .filter((item) => item.title.toLocaleLowerCase().includes(query)).map((item) => item.contentHash).filter(Boolean))
-    : new Set<string>();
+  const preferredFiles = new Set<string>();
+  if (options.scope === "all") {
+    if (query) {
+      for await (const entry of savedLibraryEntries(options, query)) {
+        const key = fileIdentity(entry);
+        if (key) preferredFiles.add(key);
+      }
+    } else {
+      const kind = options.type === "all" ? undefined : options.type;
+      for (const item of atlasRepo.fileIdentities(options.accountId, kind, options.collectionId)) {
+        const key = fileIdentity(item);
+        if (key) preferredFiles.add(key);
+      }
+    }
+  }
   // Continue through older conversations only as the requested page needs
   // them. An empty conversation or a filtered batch cannot hide later files.
   const batchSize = 25;
   for (let offset = 0; ; offset += batchSize) {
     const runs = atlasRepo.generatedRuns(options.accountId, offset, batchSize, options.collectionId);
-    const files: AtlasGeneratedFile[] = [];
+    const files: DiscoveredFile[] = [];
     for (let index = 0; index < runs.length; index += 4) {
       const batch = await Promise.all(runs.slice(index, index + 4)
-        .map((run) => generatedForRun(run.id, options.accountId, false)));
+        .map((run) => generatedForRun(run.id, options.accountId, { includeMateOutputs: false })));
       files.push(...batch.flat());
     }
     files.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt) || a.sourceKey.localeCompare(b.sourceKey));
-    for (const file of files) {
+    for (const { stats, ...file } of files) {
       if (options.scope === "generated" && file.origin === "attachment") continue;
       if (options.scope === "uploads" && file.origin !== "attachment") continue;
       const entry: AtlasLibraryEntry = { key: file.sourceKey, kind: file.kind, title: file.fileName,
@@ -322,12 +344,13 @@ async function* generatedLibraryEntries(options: AtlasLibraryOptions, query: str
       if (!matchesLibrary(entry, options, query)) continue;
       const saved = atlasRepo.bySource(options.accountId, file.sourceKey);
       if (options.scope === "all" && saved && (saved.trashedAt || matchesLibrary(savedEntry(format(saved)), options, query))) continue;
-      if (file.kind === "image" && !file.contentHash && !file.replica) {
-        try { file.contentHash = await imageContentHash(file.path, await fs.stat(file.path)); }
+      if (!file.contentHash && stats) {
+        try { file.contentHash = await fileVersionHash(file.path, stats); }
         catch { continue; }
       }
-      if (file.kind === "image" && options.scope === "all" && file.contentHash && preferredImages.has(file.contentHash)) continue;
       entry.contentHash = file.contentHash;
+      const key = fileIdentity(entry);
+      if (key && preferredFiles.has(key)) continue;
       if (options.scope !== "all" && saved) entry.saved = format(saved);
       yield entry;
     }
@@ -339,12 +362,13 @@ async function* libraryEntries(options: AtlasLibraryOptions, query: string) {
   const saved = savedLibraryEntries(options, query);
   const generated = generatedLibraryEntries(options, query);
   let [left, right] = await Promise.all([saved.next(), generated.next()]);
-  const seenImages = new Set<string>();
+  const seenFiles = new Set<string>();
   while (!left.done || !right.done) {
     const takeSaved = !left.done && (right.done || left.value.date >= right.value.date);
     const entry = takeSaved ? left.value! : right.value!;
-    if (entry.kind !== "image" || !entry.contentHash || !seenImages.has(entry.contentHash)) {
-      if (entry.kind === "image" && entry.contentHash) seenImages.add(entry.contentHash);
+    const key = fileIdentity(entry);
+    if (!key || !seenFiles.has(key)) {
+      if (key) seenFiles.add(key);
       yield entry;
     }
     if (takeSaved) left = await saved.next(); else right = await generated.next();
@@ -393,7 +417,7 @@ export const atlasService = {
     const rows = atlasRepo.list({ ...options, accountId, includePagePreview: includePreview });
     const tags = atlasRepo.itemTags(rows.map(({ item }) => item.id), accountId);
     return rows.map(({ item, preview }) => ({ ...format(item, tags.get(item.id) ?? []),
-        ...(item.kind === "image" && item.contentHash ? { contentHash: item.contentHash } : {}),
+        ...((item.kind === "file" || item.kind === "image") && item.contentHash ? { contentHash: item.contentHash } : {}),
         ...(includePreview && item.kind === "page" ? { preview: preview ?? "" } : {}) }));
   },
   async library(input: AtlasLibraryOptions): Promise<AtlasLibraryPage> {
@@ -453,8 +477,8 @@ export const atlasService = {
     // Four filesystem walks at a time, rather than one walk for every conversation.
     for (let i = 0; i < Math.min(rows.length, limit); i += 4) {
       const batch = await Promise.all(rows.slice(i, Math.min(i + 4, limit))
-        .map((run) => generatedForRun(run.id, accountId)));
-      items.push(...batch.flat());
+        .map((run) => generatedForRun(run.id, accountId, { includeMateOutputs: false, hashFiles: true })));
+      items.push(...batch.flat().map(({ stats: _stats, ...file }) => file));
     }
     return { items: items.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt)),
       nextOffset: rows.length > limit ? offset + limit : null };

@@ -71,8 +71,11 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
   return <form onSubmit={submit} aria-label="Create mate" className="mx-auto flex w-full max-w-xl flex-col gap-6 px-6 py-8 text-primary-900 sm:py-12 dark:text-primary-100">
     <AssistantCreationHeader name={name} avatar={avatar} onClose={onClose} />
     <div className="space-y-5">
-      <AssistantAvatarPicker avatar={avatar} seed="creation-preview" onChange={setAvatar} />
-      <label className="flex flex-col gap-2.5 text-sm"><span>Name</span><Input required maxLength={100} value={name} onChange={e => setName(e.target.value)} placeholder="Name your mate" autoComplete="off" /></label>
+      <AssistantAvatarPicker avatar={avatar} seed="creation-preview" onChange={setAvatar} nameField={
+        <Input variant="bare" aria-label="Name" required maxLength={100} value={name} onChange={e => setName(e.target.value)}
+          placeholder="Mate name" autoComplete="off"
+          className="w-full py-1 text-center text-2xl font-semibold focus-visible:placeholder:text-primary-600 dark:focus-visible:placeholder:text-primary-400" />
+      } />
       <div className="space-y-2.5">
         <div className="flex items-center justify-between gap-3">
           <Label as="span" id={teamLabelId}>Team</Label>

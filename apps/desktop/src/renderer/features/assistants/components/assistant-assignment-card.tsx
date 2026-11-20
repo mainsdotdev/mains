@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useId, useState, type FormEvent } from "react";
 import type { Assistant, AssistantAssignment } from "@mains/contracts/assistants";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import { Button, Input } from "@/components/ui";
@@ -8,21 +8,10 @@ import { cn } from "@/lib/cn";
 import { useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation, useReconcileAssistantTaskMutation } from "@/lib/redux/api/assistantsApi";
 import { assignmentDisplayTitle, errorText, pullRequestReviewPresentation } from "../lib/assistant-ui";
 import { AssistantAvatar } from "./assistant-avatar";
+import { AssistantCardSection } from "./assistant-card-section";
 import { AssignmentStatusBadge } from "./assignment-status-badge";
 
 const disclosureClassName = "grid grid-cols-[minmax(0,1fr)] transition-[grid-template-rows,opacity] duration-250 ease-in-out motion-reduce:transition-none";
-
-function AssignmentSection({ title, children }: { title: string; children: ReactNode }) {
-  const titleId = useId();
-  return (
-    <section aria-labelledby={titleId} className="min-w-0 space-y-1">
-      <h3 id={titleId} className="px-2.5 text-xs font-medium text-primary-600 dark:text-primary-400">{title}</h3>
-      <div className="min-w-0 space-y-1 rounded-xl bg-primary-200/55 px-2.5 py-2 dark:bg-primary-950/45">
-        {children}
-      </div>
-    </section>
-  );
-}
 
 export function AssistantAssignmentCard({ task, assignee, openAssistant, initiallyExpanded = false, showBrief = true }: {
   task: AssistantAssignment;
@@ -73,25 +62,25 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant, initial
         <div className="min-h-0 overflow-hidden">
           {disclosure !== "unopened" && (
             <div className="space-y-2.5 px-2.5 pb-2.5 pt-0.5">
-              {!review && showBrief && <AssignmentSection title="Task brief">
+              {!review && showBrief && <AssistantCardSection title="Task brief">
                 <p className="whitespace-pre-wrap break-words text-sm leading-5">{task.prompt}</p>
-              </AssignmentSection>}
+              </AssistantCardSection>}
               {(result || evidence.length > 0) && (
-                <AssignmentSection title="Report">
+                <AssistantCardSection title="Report">
                   {result && <AgentMarkdown className="[&>.document-paragraph]:leading-5">{result}</AgentMarkdown>}
                   {!!evidence.length && <ul aria-label="Task evidence" className={cn("text-xs text-primary-600 dark:text-primary-400", review ? "flex flex-wrap gap-x-3 gap-y-1" : "space-y-0.5")}>
                     {evidence.map((entry, index) => <li key={index} className="break-words">{entry}</li>)}
                   </ul>}
-                </AssignmentSection>
+                </AssistantCardSection>
               )}
-              {review?.focus && <AssignmentSection title="Review focus">
+              {review?.focus && <AssistantCardSection title="Review focus">
                 <p className="whitespace-pre-wrap break-words text-sm leading-5">{review.focus}</p>
-              </AssignmentSection>}
+              </AssistantCardSection>}
               {(task.error || task.status === "blocked") && (
-                <AssignmentSection title="Status details">
+                <AssistantCardSection title="Status details">
                   {task.error && <p className="break-words text-sm leading-5">{errorText(task.error)}</p>}
                   {task.status === "blocked" && <AssignmentFollowup task={task} />}
-                </AssignmentSection>
+                </AssistantCardSection>
               )}
               {(task.workerRunId || canCheckDelivery || canCancel) && (
                 <AssignmentActions task={task} openAssistant={openAssistant} canCheckDelivery={canCheckDelivery} canCancel={canCancel} />

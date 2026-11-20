@@ -1,9 +1,13 @@
 import type { AssistantAssignment, AssistantOverview } from "@mains/contracts/assistants";
 
-export function assistantsReadyForWork(overview?: Pick<AssistantOverview, "assistants" | "welcomes">) {
-    const pendingSetup = new Set(overview?.welcomes?.filter(
+export function assistantIdsWithPendingSetup(welcomes: AssistantOverview["welcomes"]) {
+    return new Set(welcomes?.filter(
         ({ question }) => question?.profileSetup && !question.profileSetup.saved,
     ).map(({ assistantId }) => assistantId));
+}
+
+export function assistantsReadyForWork(overview?: Pick<AssistantOverview, "assistants" | "welcomes">) {
+    const pendingSetup = assistantIdsWithPendingSetup(overview?.welcomes);
     return overview?.assistants.filter(assistant => !assistant.isArchived && !pendingSetup.has(assistant.id)) ?? [];
 }
 

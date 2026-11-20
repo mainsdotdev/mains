@@ -88,14 +88,14 @@ export interface AtlasListOptions {
   includePagePreview?: boolean;
 }
 export interface AtlasListItem extends AtlasItem {
-  /** Exact byte identity for image presentation; absent on older backends. */
+  /** Exact byte identity for file presentation; absent when unavailable. */
   contentHash?: string;
   /** Display-only excerpt; never used to edit or restore a Page. */
   preview?: string;
 }
 export interface AtlasGeneratedFile {
   sourceKey: string;
-  /** Deduplicate images across conversations and paginated results. */
+  /** Exact byte identity for deduplication across conversations. */
   contentHash?: string;
   /** Omitted by older backends for generated outputs. Uploads are not creations. */
   origin?: "generated" | "attachment";

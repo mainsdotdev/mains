@@ -1,5 +1,6 @@
 import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from "react";
 import type { AssistantRobotShape } from "@mains/contracts/assistants";
+import { Warning } from "@/components/ui/icons";
 import { cn } from "@/lib/cn";
 import { isAvatarWorking, type AssistantAvatarState } from "../lib/assistant-avatar-activity";
 import { createRobotSelectionReactions, nextRobotAmbientGesture, nextRobotSelectionReaction, robotEntryGesture,
@@ -18,7 +19,8 @@ export function AssistantRobotAvatar({ shape, working, state = working ? "thinki
     data-avatar-state={state} data-avatar-motion={animateState || undefined}
     className={cn("assistant-robot-avatar relative inline-flex shrink-0", className)}>
     <img src={thumbnails[`../assets/robots/${shape}.webp`]} alt="" draggable={false} className="assistant-robot-avatar__image size-full object-contain" />
-    {(isAvatarWorking(state) || state === "waiting") && <span className="assistant-robot-avatar__activity" />}
+    {state === "waiting" ? <Warning className="assistant-robot-avatar__warning" />
+      : isAvatarWorking(state) && <span className="assistant-robot-avatar__activity" />}
   </span>;
 }
 

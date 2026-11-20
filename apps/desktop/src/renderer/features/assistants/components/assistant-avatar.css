@@ -208,6 +208,16 @@
   box-shadow: 0 0 0 1px var(--color-primary);
 }
 
+.assistant-robot-avatar__warning {
+  position: absolute;
+  inset-inline-end: -5%;
+  inset-block-end: 0;
+  inline-size: clamp(12px, 38%, 16px);
+  block-size: auto;
+  color: var(--color-warning);
+  filter: drop-shadow(0 0 1px var(--color-primary-950));
+}
+
 .assistant-robot-preview__canvas {
   visibility: hidden;
 }
@@ -227,10 +237,6 @@
 
 .assistant-robot-preview[data-robot-rendered] .assistant-robot-preview__fallback {
   visibility: hidden;
-}
-
-.assistant-robot-avatar[data-avatar-state="waiting"] .assistant-robot-avatar__activity {
-  background: var(--color-warning);
 }
 
 @media (prefers-reduced-motion: no-preference) {

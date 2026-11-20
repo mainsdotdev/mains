@@ -21,6 +21,7 @@ beforeEach(() => {
     observe = observe;
     disconnect = disconnect;
   });
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   vi.stubGlobal("matchMedia", vi.fn(() => ({
     matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn(),
   })));
@@ -42,6 +43,19 @@ describe("robot assistant avatars", () => {
     expect(container.querySelector("img")?.getAttribute("src")).toContain(`${shape}.webp`);
     expect(container.querySelector('[data-avatar-family="robot"][data-working="true"]')).toBeTruthy();
     expect(container.querySelector("canvas")).toBeNull();
+  });
+
+  it("shows a warning icon while waiting and an activity dot while working", () => {
+    const avatar = { shape: "clear-glacier", color: "cyan" } as const;
+    const { container, rerender } = render(<AssistantAvatar avatar={avatar} robotState="waiting" />);
+    const warning = () => container.querySelector("svg.assistant-robot-avatar__warning");
+    const activity = () => container.querySelector(".assistant-robot-avatar__activity");
+    expect(warning()).toBeTruthy();
+    expect(activity()).toBeNull();
+
+    rerender(<AssistantAvatar avatar={avatar} robotState="thinking" />);
+    expect(warning()).toBeNull();
+    expect(activity()).toBeTruthy();
   });
 
   it("offers only robot choices and remembers a selected variant when switching styles", () => {

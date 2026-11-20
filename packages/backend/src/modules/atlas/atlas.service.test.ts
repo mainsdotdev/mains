@@ -9,7 +9,6 @@ import { createAccount, createRun, createRunArtifact, createToolCall } from "../
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import type { DatabaseInstance } from "../../db/types";
 import { atlasItems, atlasPageRevisions, atlasTags, atlasItemTags, collections, runAttachmentRefs, runAttachments, runs } from "../../db/schema";
-import { ownershipOf } from "../bridge/bridge.ownership";
 import { HISTORY_CHECKPOINTS } from "./atlas.history";
 import { atlasRepo } from "./atlas.repo";
 import { sourceKey } from "./atlas.storage";
@@ -31,10 +30,7 @@ vi.mock("../runs", () => ({ runsService: {
   resolveAttachmentPath: vi.fn(),
   readAttachmentImage: vi.fn(),
   readArtifactImage: vi.fn(),
-  getRunById: async (id: string) => {
-    const run = db.select().from(runs).where(eq(runs.id, id)).get();
-    return run ? { ...run, ...ownershipOf(run.ownerBackendId) } : null;
-  },
+  getRunById: (id: string) => runsRepo.findRunById(id),
   getRunExecutionRoot: async (id: string) => {
     const run = db.select().from(runs).where(eq(runs.id, id)).get();
     return root(id, run?.mode ?? "work");
@@ -944,10 +940,10 @@ describe("Atlas Page asset visibility", { timeout: 15000 }, () => {
     const source = output("matching.png");
     const page = await atlasService.createPage({ accountId: "default", title: "Notes" });
     const image = await atlasService.uploadFile({ accountId: "default", pageId: page.item.id, fileName: "matching.png", data: fs.readFileSync(source).toString("base64") });
-    expect(atlasRepo.imageIdentities("default")).toEqual([]);
+    expect(atlasRepo.fileIdentities("default", "image")).toEqual([]);
     expect((await atlasService.library({ accountId: "default", type: "image" })).items.map(entry => entry.generated?.path)).toEqual([fs.realpathSync(source)]);
     await atlasService.saveFile({ accountId: "default", itemId: image.id });
-    expect(atlasRepo.imageIdentities("default")).toHaveLength(1);
+    expect(atlasRepo.fileIdentities("default", "image")).toHaveLength(1);
     expect((await atlasService.library({ accountId: "default", type: "image" })).items.map(entry => entry.key)).toEqual([image.id]);
   });
 
@@ -1027,6 +1023,37 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     const result = await atlasService.generated({ accountId: "default" });
     expect(result.items.map((item) => item.fileName).sort()).toEqual(mode === "work" ? ["report.pdf", "summary.txt"] : []);
   });
+
+  it("lists Mate deliverables only after an explicit save and continues to list their Work uploads", async () => {
+    createRun(db, { id: "mate-run", assistantId: "mate", mode: "work", status: "succeeded" });
+    const file = output("itinerary.md", "mate-run");
+    const [attachment] = (await prepareRunAttachments("mate-run", [{ name: "reference.md", type: "document",
+      mimeType: "text/markdown", data: Buffer.from("User reference").toString("base64") }]))!;
+    const items = async (scope: "all" | "generated" | "uploads") => (await atlasService.library({ accountId: "default", scope })).items;
+    expect((await items("all")).map((entry) => entry.title)).toEqual(["reference.md"]);
+    expect(await items("generated")).toEqual([]);
+    expect((await items("uploads")).map((entry) => entry.path)).toEqual([attachment.sourcePath]);
+    expect((await atlasService.generated({ accountId: "default" })).items.map((entry) => entry.path)).toEqual([attachment.sourcePath]);
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "mate-run", path: file });
+    expect(saved.sourceRunId).toBe("mate-run");
+    expect(fs.readFileSync(saved.path!, "utf8")).toBe("original contents");
+    expect((await items("all")).map((entry) => entry.title).sort()).toEqual(["itinerary.md", "reference.md"]);
+    expect(await items("generated")).toEqual([]);
+  });
+
+  it("recognizes synced Mate runs through their frozen configuration", async () => {
+    const source = "/Users/laptop/out/itinerary.md";
+    for (const runId of ["replica-mate", "replica-work"]) {
+      createRun(db, { id: runId, ownerBackendId: "laptop", mode: "work",
+        configSnapshot: runId === "replica-mate" ? JSON.stringify({ assistantId: "mate" }) : null });
+      replicaOutputs.set(runId, [{ id: -42, createdAt: new Date(), metadata: { outputSelected: true, path: source } }]);
+    }
+    try {
+      expect((await atlasService.library({ accountId: "default" })).items.map((entry) => entry.generated?.runId)).toEqual(["replica-work"]);
+      expect((await atlasService.generated({ accountId: "default" })).items.map((entry) => entry.runId)).toEqual(["replica-work"]);
+    } finally { replicaOutputs.clear(); }
+  });
+
   it("projects and saves Codex images from the native thread folder without final file references", async () => {
     vi.spyOn(os, "homedir").mockReturnValue(directory);
     createRun(db, { id: "codex-run", providerId: "codex", mode: "work", sessionId: "native-thread", status: "succeeded" });
@@ -1266,7 +1293,8 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     await expect(atlasService.saveFile({ accountId: "default", runId: "conversation", path: escape })).rejects.toThrow("outside");
   });
   it("filters out Code and Chat conversations before paginating older Work files", async () => {
-    output("one.pdf", "first"); output("two.pdf", "second");
+    output("one.pdf", "first");
+    fs.writeFileSync(output("two.pdf", "second"), "second document");
     db.update(runs).set({ createdAt: new Date("2020-01-01") }).run();
     for (let index = 0; index < 30; index++)
       createRun(db, { id: `excluded-${index}`, mode: index % 2 ? "chat" : "developer" });
@@ -1310,7 +1338,7 @@ describe("Atlas library pagination", { timeout: 15000 }, () => {
     fs.mkdirSync(root("many-files"), { recursive: true });
     const files = Array.from({ length: 105 }, (_, index) => path.join(root("many-files"), `report-${index}.pdf`));
     for (const file of files) {
-      fs.writeFileSync(file, "document");
+      fs.writeFileSync(file, `Document ${path.basename(file)}`);
       createRunArtifact(db, { runId: "many-files", kind: "document", metadata: JSON.stringify({ path: file }) });
     }
     createRunArtifact(db, { runId: "many-files", kind: "report", content: files.map((file) => `[File](<${file}>)`).join("\n") });
@@ -1357,24 +1385,47 @@ describe("Atlas library pagination", { timeout: 15000 }, () => {
     expect(combined.some((entry) => entry.generated?.path === fs.realpathSync(secondFile))).toBe(true);
   });
 
-  it("deduplicates images across page boundaries and retains the permanent copy in All", async () => {
+  it("merges identical Markdown across Work chats and prefers a matching saved copy", async () => {
+    const original = output("itinerary.md", "older");
+    const copy = output("itinerary-copy.md", "newer");
+    const updated = output("itinerary.md", "updated");
+    fs.writeFileSync(updated, "revised itinerary");
+    const recent = new Date("2026-10-02");
+    const old = new Date("2026-10-01");
+    fs.utimesSync(copy, recent, recent);
+    fs.utimesSync(original, old, old);
+    const library = async (query?: string) => (await atlasService.library({ accountId: "default", type: "file", query })).items;
+    const paths = (entries: Awaited<ReturnType<typeof library>>) => entries.map((entry) => entry.path).sort();
+    expect(paths(await library())).toEqual([copy, updated].map((file) => fs.realpathSync(file)).sort());
+    expect(paths(await library("itinerary.md"))).toEqual([original, updated].map((file) => fs.realpathSync(file)).sort());
+
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "older", path: original });
+    db.update(atlasItems).set({ updatedAt: old }).where(eq(atlasItems.id, saved.id)).run();
+    expect(paths(await library())).toEqual([saved.path!, fs.realpathSync(updated)].sort());
+    expect(paths(await library("copy"))).toEqual([fs.realpathSync(copy)]);
+
+    atlasService.setTags({ accountId: "default", id: saved.id, tags: ["copy"] });
+    expect(paths(await library("copy"))).toEqual([saved.path]);
+  });
+
+  it.each([["image", "photo.png"], ["file", "itinerary.md"]] as const)("deduplicates %s entries across page boundaries and retains the permanent copy in All", async (kind, name) => {
     savedFiles(51);
     db.insert(atlasItems).values([
-      { id: "image-first", accountId: "default", kind: "image", title: "Photo", contentHash: "identical", updatedAt: new Date("2026-10-02") },
-      { id: "image-last", accountId: "default", kind: "image", title: "Photo copy", contentHash: "identical", updatedAt: new Date("2026-09-01") },
+      { id: "copy-first", accountId: "default", kind, title: "Original", contentHash: "identical", updatedAt: new Date("2026-10-02") },
+      { id: "copy-last", accountId: "default", kind, title: "Copy", contentHash: "identical", updatedAt: new Date("2026-09-01") },
     ]).run();
     const first = await atlasService.library({ accountId: "default", scope: "saved" });
     const second = await atlasService.library({ accountId: "default", scope: "saved", page: 2 });
     expect(first.items).toHaveLength(50);
     expect(second.items).toHaveLength(2);
-    expect([...first.items, ...second.items].filter((entry) => entry.kind === "image").map((entry) => entry.key)).toEqual(["image-first"]);
+    expect([...first.items, ...second.items].filter((entry) => entry.key.startsWith("copy-")).map((entry) => entry.key)).toEqual(["copy-first"]);
 
-    const file = output("photo.png");
+    const file = output(name);
     const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
-    const images = await atlasService.library({ accountId: "default", type: "image" });
-    expect(images.items.some((entry) => entry.key === saved.id)).toBe(true);
-    expect(images.items.some((entry) => entry.generated?.path === fs.realpathSync(file))).toBe(false);
-    const creations = await atlasService.library({ accountId: "default", type: "image", scope: "generated" });
+    const entries = await atlasService.library({ accountId: "default", type: kind });
+    expect(entries.items.some((entry) => entry.key === saved.id)).toBe(true);
+    expect(entries.items.some((entry) => entry.generated?.path === fs.realpathSync(file))).toBe(false);
+    const creations = await atlasService.library({ accountId: "default", type: kind, scope: "generated" });
     expect(creations.items).toHaveLength(1);
     expect(creations.items[0].saved?.id).toBe(saved.id);
   });
@@ -1396,6 +1447,7 @@ describe("Atlas library pagination", { timeout: 15000 }, () => {
   it("keeps the existing activity order across conversations within each discovery batch", async () => {
     const recentFile = output("recent.pdf", "older-chat");
     const oldFile = output("old.pdf", "newer-chat");
+    fs.writeFileSync(oldFile, "older document");
     db.update(runs).set({ createdAt: new Date("2024-01-01") }).where(eq(runs.id, "older-chat")).run();
     db.update(runs).set({ createdAt: new Date("2025-01-01") }).where(eq(runs.id, "newer-chat")).run();
     fs.utimesSync(recentFile, new Date("2026-10-02"), new Date("2026-10-02"));

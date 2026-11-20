@@ -163,7 +163,7 @@ describe("assistant profile and conversation", () => {
   });
 
   it("lists the new mate first, plays its welcome, and opens a revisited setup without replaying it", async () => {
-    const mate = { ...mocks.assistants[0], id: "new-mate", name: "Travel planner" };
+    const mate = { ...mocks.assistants[0], id: "new-mate", name: "Travel planner", description: "" };
     const runId = "assistant-welcome-new-mate";
     createMate.mockReturnValue({ unwrap: async () => {
       mocks.assistants.push(mate);
@@ -189,11 +189,20 @@ describe("assistant profile and conversation", () => {
     expect(team.getAttribute("aria-expanded")).toBe("true");
     expect(sidebar.getAllByRole("button", { name: /^About / }).map(button => button.getAttribute("aria-label")))
       .toEqual(["About Travel planner", "About Website", "About Release"]);
+    const setupRow = sidebar.getByRole("button", { name: /^Travel planner\s*Finish setup$/ });
+    expect(within(setupRow).getByText("Finish setup").nextElementSibling?.matches('svg[aria-hidden="true"]')).toBe(true);
     fireEvent.click(sidebar.getByRole("button", { name: /^Website/ }));
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe("website-first"));
-    fireEvent.click(sidebar.getByRole("button", { name: /^Travel planner/ }));
+    fireEvent.click(setupRow);
     await waitFor(() => expect(screen.getByTestId("conversation").textContent).toBe(runId));
     expect(screen.getByTestId("conversation").getAttribute("data-animate-welcome")).toBe("false");
+
+    welcomes[0].question!.profileSetup!.saved = true;
+    welcomes[0].state = "skipped";
+    mate.description = "Plans trips abroad";
+    fireEvent.click(sidebar.getByRole("button", { name: /^Website/ }));
+    expect(sidebar.getByRole("button", { name: /^Travel planner\s*Plans trips abroad$/ })).toBeTruthy();
+    expect(sidebar.queryByText("Finish setup")).toBeNull();
   });
 
   it("opens Routines and its last task without closing the panel or losing chat selection", async () => {
