@@ -33,7 +33,7 @@ export function AtlasPageToolbar({
         aria-label="Page breadcrumb"
         className="flex min-w-0 items-center gap-1 text-base"
       >
-        <Button variant="ghost" className="shrink-0 p-0" onClick={onBack}>
+        <Button variant="ghost" className="min-h-7 shrink-0 px-1.5" onClick={onBack}>
           Pages
         </Button>
         <Text size="s" variant="muted" aria-hidden="true" className="shrink-0 text-primary-600">

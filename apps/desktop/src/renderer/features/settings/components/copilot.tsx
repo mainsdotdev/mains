@@ -93,7 +93,7 @@ export default function CopilotSettings(
           }
         >
           <Button
-            variant="primary"
+            variant="secondary"
             onClick={() => openPath(`${homedir}/.copilot/agents`)}
           >
             Open Folder
@@ -111,7 +111,7 @@ export default function CopilotSettings(
           }
         >
           <Button
-            variant="primary"
+            variant="secondary"
             onClick={() => openPath(`${homedir}/.copilot/skills`)}
           >
             Open Folder

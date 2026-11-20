@@ -831,11 +831,11 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               {entries.length > 0 && `${(page - 1) * ATLAS_LIBRARY_PAGE_SIZE + 1}–${(page - 1) * ATLAS_LIBRARY_PAGE_SIZE + entries.length} · `}Page {page}
             </Text>
             <div className="flex items-center gap-2">
-              <Button variant="primary" disabled={page === 1 || library.isFetching} onClick={() => setFilter("page", String(page - 1))}>
+              <Button variant="ghost" disabled={page === 1 || library.isFetching} onClick={() => setFilter("page", String(page - 1))}>
                 Previous
               </Button>
               <Button
-                variant="primary"
+                variant="ghost"
                 disabled={!library.currentData.hasNext || library.isFetching}
                 onClick={() => setFilter("page", String(page + 1))}
               >

@@ -430,11 +430,11 @@ function PullRequestsList({
               <div className="flex justify-center pt-2">
                 <Button
                   variant="subtle"
-                  disabled={isFetchingMore}
+                  isLoading={isFetchingMore}
                   onClick={handleLoadMore}
                   className="text-primary-800 dark:text-primary-200"
                 >
-                  {isFetchingMore ? "Loading..." : "Load more"}
+                  Load more
                 </Button>
               </div>
             )}

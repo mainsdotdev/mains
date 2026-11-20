@@ -54,7 +54,7 @@ function ErrorFallback({ error, resetError, level }: ErrorFallbackProps) {
           >
             {showDetails ? "Hide details" : "Learn more"}
           </Button>
-          <Button variant="submit" onClick={isApp ? handleReload : resetError}>
+          <Button variant="primary" onClick={isApp ? handleReload : resetError}>
             {isApp ? "Reload" : "Try again"}
           </Button>
         </div>

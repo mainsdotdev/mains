@@ -96,7 +96,7 @@ function AtlasSettingsForm({ accountId, initial }: { accountId: string; initial:
         To tag an existing bookmark, choose “Refresh details and tags” from its menu.</Muted>
       {error && <Text role="alert" className="mt-4 text-danger">{error}</Text>}
       <div className="mt-5 flex justify-end">
-        <Button type="submit" variant="submit" disabled={!isDirty || saving.isLoading || missingChoice} isLoading={saving.isLoading}>
+        <Button type="submit" variant="primary" disabled={!isDirty || saving.isLoading || missingChoice} isLoading={saving.isLoading}>
           Save
         </Button>
       </div>

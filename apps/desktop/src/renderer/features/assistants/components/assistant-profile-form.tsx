@@ -79,7 +79,7 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
       <div className="space-y-2.5">
         <div className="flex items-center justify-between gap-3">
           <Label as="span" id={teamLabelId}>Team</Label>
-          <Button type="button" variant="primary" disabled={teamEditorOpen || loadingTeams || creation.isLoading} onClick={() => { setTeamEditorOpen(true); setModelMenu(false); }}>New team</Button>
+          <Button type="button" variant="secondary" disabled={teamEditorOpen || loadingTeams || creation.isLoading} onClick={() => { setTeamEditorOpen(true); setModelMenu(false); }}>New team</Button>
         </div>
         <Select aria-labelledby={teamLabelId} searchable value={teamChoice} options={teamOptions}
           placeholder="Choose a team" disabled={teamEditorOpen || creation.isLoading} onChange={setTeamChoice} />
@@ -93,6 +93,7 @@ export function AssistantProfileForm({ accountId, onCreated, onClose }: {
       </div>
       {!!(failure || catalogError || !loadingProviders && !availableProvider) && <p role="alert" className="text-sm text-danger">{failure || (catalogError ? errorText(catalogError) : "Enable a provider to create a mate.")}</p>}
     </div>
-    <div className="pt-1"><Button variant="submit" fullWidth type="submit" disabled={creation.isLoading || isFetching || loadingProviders || !availableProvider || !space || !model || missingTeam || teamEditorOpen}>{creation.isLoading ? "Creating…" : "Create mate"}</Button></div>
+    <div className="pt-1"><Button variant="primary" fullWidth type="submit" isLoading={creation.isLoading}
+      disabled={isFetching || loadingProviders || !availableProvider || !space || !model || missingTeam || teamEditorOpen}>Create mate</Button></div>
   </form>;
 }

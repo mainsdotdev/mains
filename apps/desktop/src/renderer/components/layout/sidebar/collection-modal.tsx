@@ -155,7 +155,7 @@ export default function CollectionModal({
       <div className="mt-5 flex gap-3">
         <Button
           className="flex-1"
-          variant="primary"
+          variant="secondary"
           onClick={onClose}
           disabled={isSaving}
         >
@@ -163,7 +163,7 @@ export default function CollectionModal({
         </Button>
         <Button
           className="flex-1"
-          variant="submit"
+          variant="primary"
           onClick={submit}
           disabled={isSaving || !trimmed}
         >

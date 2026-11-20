@@ -211,14 +211,14 @@ export function ChatActionsMenu({ aboveBrowser = false }: { aboveBrowser?: boole
         <div className="mt-5 flex gap-3">
           <Button
             className="flex-1"
-            variant="primary"
+            variant="secondary"
             onClick={() => setRenameDraft(null)}
           >
             Cancel
           </Button>
           <Button
             className="flex-1"
-            variant="submit"
+            variant="primary"
             onClick={commitRename}
             disabled={!renameDraft?.trim()}
           >

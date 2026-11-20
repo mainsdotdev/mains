@@ -344,18 +344,13 @@ export function OnboardingScreen() {
                   )}
 
                   <Button
-                    variant="submit"
+                    variant="primary"
                     className="onboarding-next"
                     onClick={flow.goNext}
                     disabled={!flow.canContinue}
+                    isLoading={flow.isSaving}
                   >
-                    {flow.isSaving
-                      ? "Saving…"
-                      : flow.isLastStep
-                        ? "Get started"
-                        : flow.step === "welcome"
-                          ? "Let’s begin"
-                          : "Continue"}
+                    {flow.isLastStep ? "Get started" : flow.step === "welcome" ? "Let’s begin" : "Continue"}
 
                   </Button>
                   <div className="onboarding-footer-note">

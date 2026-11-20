@@ -176,7 +176,7 @@ export function AsyncQuestionDialogProvider({ ownerKey, runId, runStatus, turns,
       },
       questionControls: {
         value: draft.answers[index] ?? "", busy: sending, readOnly: unknown, error: draft.error,
-        submitLabel: sending ? "Sending…" : unknown ? "Check delivery" : last ? "Submit" : "Next",
+        submitLabel: unknown ? "Check delivery" : last ? "Submit" : "Next",
         onChange(value) {
           if (!owner.current()) return;
           updateDraft(source, (previous) => ({ ...previous, error: undefined,

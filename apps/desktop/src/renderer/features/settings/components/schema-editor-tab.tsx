@@ -135,7 +135,7 @@ export function SchemaEditorTab({
             <div className="px-2 -ml-2">
               <Button
                 onClick={onAddProperty}
-                variant="primary"
+                variant="secondary"
               >
                 + Add property
               </Button>
@@ -152,7 +152,7 @@ export function SchemaEditorTab({
           onClick={onSave}
           disabled={!canSave}
           isLoading={isSaving}
-          variant="submit"
+          variant="primary"
         >
           {editingId ? "Update" : "Save"}
         </Button>

@@ -132,7 +132,7 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
                 </div>
               </>}
               <div className="flex gap-2">
-                <Button variant="submit" type="submit" disabled={disabled || !draft.description.trim() || !draft.instructions.trim()}>Save profile</Button>
+                <Button variant="primary" type="submit" disabled={disabled || !draft.description.trim() || !draft.instructions.trim()}>Save profile</Button>
                 <Button variant="ghost" disabled={disabled} onClick={() => setEdit(edit ? null : draft)}>{edit ? "Discard edits" : "Edit"}</Button>
               </div>
             </form>
@@ -161,7 +161,7 @@ export function AssistantProfileSetupCard({ accountId, welcome, onRetry, busy, a
                   if (!event.repeat) event.currentTarget.form?.requestSubmit();
                 }}
                 onChange={event => setAnswer({ step, text: event.target.value })} className="w-full" />
-              <Button variant="submit" type="submit" disabled={disabled || !answerText.trim()}
+              <Button variant="primary" type="submit" disabled={disabled || !answerText.trim()}
                 aria-keyshortcuts={usesCommand ? "Meta+Enter" : "Control+Enter"} className="inline-flex gap-2">
                 Send
                 <kbd aria-hidden="true" className="rounded-md border border-current/25 px-1.5 py-0.5 font-sans text-xxs leading-none opacity-80">

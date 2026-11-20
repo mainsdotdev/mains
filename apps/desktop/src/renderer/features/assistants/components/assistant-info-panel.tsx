@@ -117,7 +117,7 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <Label id={teamLabelId} as="span" className="shrink-0" size="xs" tone="secondary">Team</Label>
         <div className="ml-auto flex min-w-0 flex-wrap items-stretch justify-end gap-2">
-          <Button className="inline-flex shrink-0 whitespace-nowrap" type="button" variant="primary"
+          <Button className="inline-flex shrink-0 whitespace-nowrap" type="button" variant="secondary"
             disabled={isLoading || creatingTeam} aria-expanded={creatingTeam} onClick={() => setCreatingTeam(true)}>New team</Button>
           <div className="min-w-0">
             <Select aria-labelledby={teamLabelId} value={draft.teamId ?? ""} disabled={isLoading || creatingTeam}
@@ -149,11 +149,11 @@ function AssistantProfileDetails({ assistant, overview, avatarState, archiving, 
     <div className="flex justify-end gap-2">
       {draft ? <Fragment key="editing">
         <Button variant="ghost" className="inline-flex min-h-9" disabled={isLoading} onClick={closeEditor}>Cancel</Button>
-        <Button type="submit" variant="submit" className="inline-flex min-h-9" isLoading={isLoading}
+        <Button type="submit" variant="primary" className="inline-flex min-h-9" isLoading={isLoading}
           disabled={!canEdit || archiving || creatingTeam || !draft.name.trim() || !draft.instructions.trim()}>Save</Button>
       </Fragment> : <Fragment key="viewing">
         <Button variant={assistant.isArchived ? "primary" : "danger"} className="inline-flex min-h-9" disabled={archiving} isLoading={archiving} onClick={onToggleArchive}>{assistant.isArchived ? "Restore mate" : "Archive mate"}</Button>
-        {canEdit && <Button ref={editButton} variant="primary" className="inline-flex min-h-9" disabled={archiving} onClick={beginEdit}>Edit</Button>}
+        {canEdit && <Button ref={editButton} variant="secondary" className="inline-flex min-h-9" disabled={archiving} onClick={beginEdit}>Edit</Button>}
       </Fragment>}
     </div>
   </form>;

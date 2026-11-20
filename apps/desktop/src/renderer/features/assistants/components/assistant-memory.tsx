@@ -78,7 +78,7 @@ export function AssistantMemoryPanel({ assistant, memories }: {
         <Checkbox checked={pinned} onChange={setPinned} />
         <Label as="span">Keep in context</Label>
       </label>
-      <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => { setCreating(false); setEditing(null); }}>Cancel</Button><Button type="submit" variant="submit" isLoading={saving.isLoading}>Save memory</Button></div>
+      <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => { setCreating(false); setEditing(null); }}>Cancel</Button><Button type="submit" variant="primary" isLoading={saving.isLoading}>Save memory</Button></div>
     </form>}
     {failure && <p role="alert" className="text-sm text-danger">{failure}</p>}
     {!visible.length && !creating && <div className="rounded-2xl border border-dashed border-primary-300 px-6 py-12 text-center text-sm text-primary-500 dark:border-primary-700">Save something you want {assistant.teamId ? "this team" : assistant.name} to remember.</div>}

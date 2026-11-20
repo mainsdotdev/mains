@@ -168,7 +168,7 @@ function ConnectionCard({
           </Text>
         ) : <span />}
         <Button
-          variant={connected ? "primary" : "secondary"}
+          variant={connected ? "secondary" : "primary"}
           onClick={onAction}
           className="rounded-xl shrink-0"
         >

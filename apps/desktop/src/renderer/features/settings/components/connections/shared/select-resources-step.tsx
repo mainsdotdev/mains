@@ -208,13 +208,13 @@ export function SelectResourcesStep<T extends SelectableResource>({
           Back
         </Button>
         <Button
-          variant="submit"
+          variant="primary"
           onClick={onSave}
           disabled={loading || selectedCount === 0}
           isLoading={loading}
           className="ml-auto"
         >
-          {loading ? "Saving..." : finalSaveLabel}
+          {finalSaveLabel}
         </Button>
       </div>
     </div>

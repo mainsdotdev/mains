@@ -306,7 +306,7 @@ export function TurnChangesCard({
             <Undo className="size-3.5" />
           </Button>
         )}
-        <Button className="text-xs" variant="primary" onClick={toggleReview}>
+        <Button className="text-xs" variant="secondary" onClick={toggleReview}>
           {allOpen ? "Hide" : "Review"}
         </Button>
       </div>

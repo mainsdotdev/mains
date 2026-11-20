@@ -75,7 +75,8 @@ describe("accessible dialog primitives", () => {
       }),
     );
 
-    expect(markup).toContain("glass-primary");
+    expect(markup).toContain("glass-action");
+    expect(markup).toContain("glass-secondary");
     expect(markup).not.toContain("glass-danger");
   });
 });

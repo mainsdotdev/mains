@@ -81,7 +81,7 @@ export default function PulsePage() {
         </div>
         <Button
           type="button"
-          variant="submit"
+          variant="primary"
           onClick={openCreate}
           className="flex items-center gap-1.5 cursor-pointer"
         >

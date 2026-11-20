@@ -134,7 +134,7 @@ export function ProviderCliSection({
   cliName,
   shortName,
   cli,
-  buttonVariant = "primary",
+  buttonVariant = "secondary",
   children,
 }: {
   providerId: string;
@@ -179,8 +179,8 @@ export function ProviderCliSection({
             <Text as="span" size="xs" tone="subtle">
               Not installed
             </Text>
-            <Button variant={buttonVariant} onClick={recheck} disabled={isChecking}>
-              {isChecking ? "Checking…" : "Recheck"}
+            <Button variant={buttonVariant} onClick={recheck} isLoading={isChecking}>
+              Recheck
             </Button>
           </div>
         </SettingsRow>

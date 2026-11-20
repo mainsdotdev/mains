@@ -209,7 +209,7 @@ export default function ClaudeSettings() {
               {selectedSchemaName}
             </Text>
             <Button
-              variant="primary"
+              variant="secondary"
               onClick={() => setIsStructuredOutputsModalOpen(true)}
             >
               Edit
@@ -240,7 +240,7 @@ export default function ClaudeSettings() {
           }
         >
           <Button
-            variant="primary"
+            variant="secondary"
             onClick={() => openPath(`${homedir}/.claude.json`)}
           >
             Open Config
@@ -265,7 +265,7 @@ export default function ClaudeSettings() {
           }
         >
           <Button
-            variant="primary"
+            variant="secondary"
             onClick={() => openPath(`${homedir}/.claude/skills`)}
           >
             Open Folder
@@ -289,7 +289,7 @@ export default function ClaudeSettings() {
           }
         >
           <Button
-            variant="primary"
+            variant="secondary"
             onClick={() => openPath(`${homedir}/.claude/agents`)}
           >
             Open Folder
@@ -314,7 +314,7 @@ export default function ClaudeSettings() {
           }
         >
           <Button
-            variant="primary"
+            variant="secondary"
             onClick={() => openPath(`${homedir}/.claude/commands`)}
           >
             Open Folder

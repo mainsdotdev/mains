@@ -74,7 +74,7 @@ export function AtlasBookmarkEditor({ accountId, item, collectionId, onClose }: 
       </div>
       {error && <Text role="alert" className="mt-4 text-danger">{error}</Text>}
       <div className="mt-6 flex items-center justify-end">
-        <Button type="submit" variant="primary" disabled={saving.isLoading || !url.trim()}>{saving.isLoading ? "Saving…" : "Save bookmark"}</Button>
+        <Button type="submit" variant="primary" disabled={!url.trim()} isLoading={saving.isLoading}>Save bookmark</Button>
       </div>
     </form>
   </Modal>;

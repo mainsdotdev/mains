@@ -174,20 +174,21 @@ function InlineThreadCard({
       ) : (
         <div className="flex items-center gap-1.5 mt-2">
           <Button
-          variant="subtle"
+            variant="subtle"
             onClick={() => setReplyOpen(true)}
-            className="text-xxs px-2 py-0.5 rounded-lg hover:bg-primary/20 dark:hover:bg-primary/10 text-primary-700 dark:text-primary-300"
+            className="min-h-7 rounded-lg px-2 py-0.5 text-xxs text-primary-700 dark:text-primary-300"
           >
             Reply
           </Button>
           {thread.viewerCanResolve && (
             <Button
-            variant="subtle"
+              variant="subtle"
               disabled={!actions.can({ kind: "resolve", threadId: thread.id, resolved: true })}
+              isLoading={isResolving}
               onClick={handleResolve}
-              className="text-xxs px-2 py-0.5 rounded-lg hover:bg-primary/20 dark:hover:bg-primary/10 text-primary-700 dark:text-primary-300"
+              className="min-h-7 rounded-lg px-2 py-0.5 text-xxs text-primary-700 dark:text-primary-300"
             >
-              {isResolving ? "Resolving..." : "Resolve"}
+              Resolve
             </Button>
           )}
         </div>

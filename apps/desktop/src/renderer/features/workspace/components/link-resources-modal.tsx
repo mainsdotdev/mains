@@ -235,12 +235,12 @@ export function LinkResourcesModal({
             Cancel
           </Button>
           <Button
-            variant="submit"
+            variant="primary"
             onClick={handleSave}
             disabled={saving}
             isLoading={saving}
           >
-            {saving ? "Saving..." : "Done"}
+            Done
           </Button>
         </div>
       </div>

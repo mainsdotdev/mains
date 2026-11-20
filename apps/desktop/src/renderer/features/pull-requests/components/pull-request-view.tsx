@@ -165,20 +165,21 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
                 onReviewed={id => { setSelectedReview(previous => ({ id, version: (previous?.version ?? 0) + 1 })); setTab("summary"); }} />
             )}
             {current?.state === "open" && (isDraft ? (
-              <Button variant="secondary" disabled={!actions.can({ kind: "ready" })}
+              <Button variant="secondary" disabled={!actions.can({ kind: "ready" })} isLoading={isMarkingReady}
                 onClick={handleMarkReady} className="ml-2">
-                {isMarkingReady ? "Working…" : "Ready for review"}
+                Ready for review
               </Button>
             ) : (
               <div className="relative ml-2" ref={mergeMenuRef}>
-                <div className="inline-flex overflow-hidden rounded-full bg-accent text-accent-foreground">
-                  <Button disabled={!canMerge || isMerging} onClick={handleMerge}
-                    className="px-3 py-1.5 text-xs font-medium text-accent-foreground hover:bg-accent-foreground/10 disabled:opacity-50">
-                    {isMerging ? "Merging…" : MERGE_METHODS.find((method) => method.value === mergeMethod)?.label}
+                <div className="inline-flex overflow-hidden rounded-full bg-action text-white">
+                  <Button disabled={!canMerge} isLoading={isMerging} onClick={handleMerge}
+                    aria-label={isMerging ? "Merging…" : undefined}
+                    className="px-3 py-1.5 text-xs font-medium enabled:hover:bg-white/12 enabled:active:bg-white/20 focus-visible:ring-white/85">
+                    {MERGE_METHODS.find((method) => method.value === mergeMethod)?.label}
                   </Button>
                   <Button disabled={!canMerge || isMerging} onClick={() => setMergeMenuOpen((open) => !open)}
                     aria-label="Choose merge method" aria-haspopup="menu" aria-expanded={mergeMenuOpen}
-                    className="border-l border-accent-foreground/20 px-2 text-accent-foreground hover:bg-accent-foreground/10 disabled:opacity-50">
+                    className="border-l border-white/20 px-2 enabled:hover:bg-white/12 enabled:active:bg-white/20 focus-visible:ring-white/85">
                     <ArrowUp className="size-3 rotate-180" />
                   </Button>
                 </div>
@@ -264,7 +265,7 @@ function PullRequestContent({ prRef, initialPr, url: suppliedUrl, active = true 
                             onClick={() =>
                               handleResolveThread(thread.id, !thread.isResolved)
                             }
-                            className="ml-auto text-xxs px-2 py-0.5 rounded-lg hover:bg-primary/20 dark:hover:bg-primary/10 text-primary-700 dark:text-primary-300"
+                            className="ml-auto min-h-7 rounded-lg px-2 py-0.5 text-xxs text-primary-700 dark:text-primary-300"
                           >
                             {thread.isResolved ? "Unresolve" : "Resolve"}
                           </Button>

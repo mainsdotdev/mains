@@ -242,7 +242,7 @@ export function CollectionSettingsModal({
             Available sources
           </Text>
           <Button
-            variant="primary"
+            variant="secondary"
             disabled={isUploading}
             onClick={() => fileInputRef.current?.click()}
             className="flex items-center gap-2 px-2 py-1 "
@@ -340,12 +340,13 @@ export function CollectionSettingsModal({
 
       <div className="flex shrink-0 justify-end px-6 py-4 ">
         <Button
-          variant="submit"
+          variant="primary"
           className="min-w-24"
           disabled={!trimmedName || !isDirty || isBusy}
+          isLoading={isSaving}
           onClick={() => void handleSave()}
         >
-          {isSaving ? "Saving…" : "Save"}
+          Save
         </Button>
       </div>
     </Modal>

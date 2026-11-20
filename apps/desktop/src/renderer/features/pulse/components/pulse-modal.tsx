@@ -164,11 +164,12 @@ function PulseStep({ isEditing }: { isEditing: boolean }) {
         </Button>
         <Button
           type="button"
-          variant="submit"
+          variant="primary"
           onClick={ctx.goNext}
-          disabled={!canSubmit || ctx.isSubmitting}
+          disabled={!canSubmit}
+          isLoading={ctx.isSubmitting}
         >
-          {ctx.isSubmitting ? "Saving…" : isEditing ? "Save" : "Create"}
+          {isEditing ? "Save" : "Create"}
         </Button>
       </div>
     </div>

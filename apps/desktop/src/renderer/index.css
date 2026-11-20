@@ -1004,18 +1004,23 @@ html.mains-web.dark #root {
   --glass-fill-toggle: color-mix(in srgb, var(--color-primary-200) 86%, var(--color-primary-100));
   --glass-fill-button: color-mix(in srgb, var(--color-primary) 72%, transparent);
   --glass-fill-primary: color-mix(in srgb, var(--color-primary-50) 72%, transparent);
-  --glass-fill-secondary: color-mix(in srgb, var(--color-primary-950) 42%, transparent);
-  --glass-fill-submit: color-mix(in srgb, var(--color-action) 90%, transparent);
+  --glass-fill-secondary: var(--glass-fill-primary);
+  --glass-fill-action: var(--color-action);
   --glass-fill-danger: rgba(255, 68, 54, 0.9);
   --glass-fill-success: rgba(13, 197, 94, 0.9);
 
   --glass-hover-button: color-mix(in srgb, var(--color-primary) 90%, transparent);
   --glass-hover-primary: var(--color-primary-200);
-  --glass-hover-submit: var(--color-action-hover);
+  --glass-hover-secondary: color-mix(in srgb, var(--color-primary-200) 55%, var(--color-primary-50));
+  --glass-hover-action: var(--color-action-hover);
   --glass-hover-danger: var(--color-danger-hover);
 
+  --glass-pressed-secondary: var(--color-primary-200);
+  --glass-pressed-action: color-mix(in srgb, var(--color-action-hover) 85%, black);
+  --glass-pressed-danger: color-mix(in srgb, var(--color-danger-hover) 85%, black);
+
   /* Saturated fills swallow a dark rim — light them from the other side. */
-  --glass-edge-submit: rgba(255, 255, 255, 0.42);
+  --glass-edge-action: rgba(255, 255, 255, 0.42);
   --glass-edge-danger: rgba(255, 255, 255, 0.42);
 }
 
@@ -1071,15 +1076,16 @@ html.mains-web.dark #root {
   --glass-fill-toggle: var(--glass-fill-input);
   --glass-fill-button: color-mix(in srgb, var(--color-primary-800) 72%, transparent);
   --glass-fill-primary: color-mix(in srgb, var(--color-primary-800) 72%, transparent);
-  --glass-fill-secondary: color-mix(in srgb, color-mix(in srgb, var(--color-primary-600) 62%, var(--color-primary-500)) 42%, transparent);
-
   --glass-hover-button: color-mix(in srgb, color-mix(in srgb, var(--color-primary-800) 80%, var(--color-primary-700)) 85%, transparent);
   --glass-hover-primary: color-mix(in srgb, var(--color-primary-800) 60%, transparent);
+  --glass-hover-secondary: color-mix(in srgb, var(--color-primary-800) 74%, var(--color-primary-700));
+  --glass-pressed-secondary: color-mix(in srgb, var(--color-primary-800) 50%, var(--color-primary-700));
 }
 
 @utility glass-* {
   --glass-fill: --value(--glass-fill-*);
   --glass-hover: --value(--glass-hover-*);
+  --glass-pressed: --value(--glass-pressed-*);
   --glass-rim: --value(--glass-edge-*);
   /* Indirection so :hover can retint without a var() cycle. */
   --glass-tint: var(--glass-fill);
@@ -1110,6 +1116,48 @@ html.mains-web.dark #root {
   &:hover {
     --glass-tint: var(--glass-hover, var(--glass-fill));
   }
+}
+
+/* Interpolate the fill while the rim gradients stay fixed. */
+@property --button-glass-tint {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: transparent;
+}
+
+.button-glass {
+  --glass-tint: var(--button-glass-tint);
+  --button-glass-tint: var(--glass-fill);
+}
+
+@media (hover: hover) {
+  .button-glass:enabled:hover {
+    --button-glass-tint: var(--glass-hover, var(--glass-fill));
+  }
+}
+
+.button-glass:enabled:active {
+  --button-glass-tint: var(--glass-pressed, var(--glass-fill));
+}
+
+@media (forced-colors: active) {
+  .button-control:focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: -2px;
+  }
+}
+
+/* Preserve the original content's layout and direct-child styling during loading. */
+[data-button-busy] {
+  -webkit-text-fill-color: transparent;
+}
+
+[data-button-busy] > :not(.button-spinner) {
+  opacity: 0;
+}
+
+.button-spinner {
+  -webkit-text-fill-color: currentColor;
 }
 
 /*

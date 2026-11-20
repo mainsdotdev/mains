@@ -220,7 +220,7 @@ function AddBackendForm({
       </Caption>
 
       <div className="flex justify-end">
-        <Button type="button" variant="submit" onClick={() => void submit()}>
+        <Button type="button" variant="primary" onClick={() => void submit()}>
           Add
         </Button>
       </div>

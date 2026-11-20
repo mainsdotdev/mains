@@ -138,7 +138,7 @@ export function GitHubDeviceFlowPanel({
           className="flex glass-outline py-2 items-center gap-2 bg-primary-950 hover:bg-primary-900 text-primary!"
         >
           <Github className="size-4" />
-          {isStarting ? "Starting..." : "Sign in with GitHub"}
+          Sign in with GitHub
         </Button>
       </div>
     </div>

@@ -537,7 +537,7 @@ export default function CodexSettings() {
               {selectedSchemaName}
             </Text>
             <Button
-              variant="primary"
+              variant="secondary"
               onClick={() => setIsStructuredOutputsModalOpen(true)}
             >
               Edit

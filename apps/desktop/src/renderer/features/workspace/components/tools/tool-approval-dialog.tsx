@@ -466,15 +466,15 @@ function ToolApprovalDialogContents({
               Cancel
             </Button>
             <Button
-              variant="primary"
-              className="min-w-18 text-primary-700 hover:bg-primary-200/40 dark:text-primary-300 dark:hover:bg-primary-800/50"
+              variant="secondary"
+              className="min-w-18"
               onClick={handleDeny}
               autoFocus={request.defaultToNo}
             >
               Decline
             </Button>
             <Button
-              variant="submit"
+              variant="primary"
               className="min-w-18 font-semibold shadow-sm disabled:opacity-45"
               onClick={isUrlMode ? handleElicitAcceptUrl : handleElicitSubmit}
               disabled={!isUrlMode && elicitSchema.unsupported.length > 0}
@@ -607,8 +607,8 @@ function ToolApprovalDialogContents({
                   <Button variant="ghost" disabled={questionControls.busy || questionControls.readOnly} onClick={questionControls.onPrevious}>Back</Button>
                 )}
                 <Button
-                  variant="primary"
-                  className="min-w-18  text-primary-700 hover:bg-primary-200/40  dark:text-primary-300 dark:hover:bg-primary-800/50"
+                  variant="secondary"
+                  className="min-w-18"
                   onClick={handleQuestionDismiss}
                   autoFocus={request.defaultToNo}
                   disabled={questionControls?.busy}
@@ -617,7 +617,7 @@ function ToolApprovalDialogContents({
                 </Button>
                 {!(submitsOnChoose && isCursor) && (
                   <Button
-                    variant="submit"
+                    variant="primary"
                     className="min-w-18 font-semibold shadow-sm disabled:opacity-45"
                     onClick={handleSubmitAnswer}
                     disabled={!canSubmit || questionControls?.busy}
@@ -784,7 +784,7 @@ function ToolApprovalDialogContents({
           <Button variant="secondary" onClick={handleDeny} autoFocus={request.defaultToNo}>
             Cancel
           </Button>
-          <Button variant="submit" onClick={handleAllow}>
+          <Button variant="primary" onClick={handleAllow}>
             Allow
           </Button>
         </div>

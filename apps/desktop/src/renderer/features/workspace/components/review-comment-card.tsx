@@ -24,7 +24,7 @@ export function ReviewCommentEditor({ initialValue = "", onSave, onCancel }: {
       }} />
     <div className="flex justify-end gap-2">
       <Button type="button" onClick={onCancel} className={`${actionClass} px-2 text-xs`}>Cancel</Button>
-      <Button variant="submit" type="button" disabled={!draft.trim()} onClick={save}
+      <Button variant="primary" type="button" disabled={!draft.trim()} onClick={save}
         className=" ">Save comment</Button>
     </div>
   </div>;

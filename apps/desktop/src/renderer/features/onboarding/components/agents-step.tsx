@@ -200,13 +200,13 @@ export function AgentsStep({
             )}
           </div>
           <Button
-            variant="primary"
+            variant="secondary"
             className="onboarding-recheck"
             onClick={recheck}
-            disabled={isDetecting || isCheckingAccount}
+            isLoading={isDetecting || isCheckingAccount}
           >
             <Refresh className="size-3.5" />{" "}
-            {isDetecting || isCheckingAccount ? "Checking…" : "Recheck"}
+            Recheck
           </Button>
         </div>
         {activeTerminal && !isSignedIn && (
@@ -304,7 +304,7 @@ export function AgentsStep({
               </label>
               {(!option.available || needsSignIn) && (
                 <Button
-                  variant="primary"
+                  variant="secondary"
                   ref={(node) => {
                     setupTriggers.current[option.variant] = node;
                   }}

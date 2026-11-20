@@ -1,11 +1,10 @@
-import React, { ButtonHTMLAttributes, forwardRef } from "react";
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cn } from "../../lib/cn";
-import Tooltip, { TooltipPosition } from "./tooltip";
+import Tooltip, { type TooltipPosition } from "./tooltip";
 import { AsciiSpinner } from "./ascii-spinner";
 
 export type ButtonVariant =
   | "primary"
-  | "submit"
   | "secondary"
   | "ghost"
   | "danger"
@@ -20,8 +19,8 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   iconSize?: "xs" | "sm" | "md" | "lg";
   isLoading?: boolean;
   fullWidth?: boolean;
-  leftIcon?: React.ReactNode;
-  rightIcon?: React.ReactNode;
+  leftIcon?: ReactNode;
+  rightIcon?: ReactNode;
   /** Tooltip text to show on hover */
   tooltip?: string;
   /** Keyboard shortcut to display in tooltip (e.g., "⌘," or "Ctrl+S") */
@@ -31,25 +30,19 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const iconStyles =
-  "inline-flex shrink-0 items-center justify-center rounded-xl text-primary-600 enabled:hover:bg-primary-300/20 focus-visible:bg-primary-300/20 focus-visible:ring-2 focus-visible:ring-accent/40 dark:text-primary-400 dark:enabled:hover:bg-primary/10 dark:focus-visible:bg-primary/10 [&>svg]:shrink-0";
+  "inline-flex shrink-0 items-center justify-center rounded-xl text-primary-600 focus-visible:bg-primary-950/8 dark:text-primary-400 dark:focus-visible:bg-primary/8 [&>svg]:shrink-0";
+
+const quietInteraction =
+  "enabled:hover:bg-primary-950/8 enabled:active:bg-primary-950/13 dark:enabled:hover:bg-primary/8 dark:enabled:active:bg-primary/13";
 
 const variantStyles: Record<ButtonVariant, string> = {
-  // Glass variants carry no bg-*/hover:bg-* — the `glass-*` utility owns the
-  // background, and a hover:bg-* would win on specificity and wipe the rim.
-  // Their hover fills come from the --glass-hover-* tokens in index.css.
-  primary: "text-primary-700 dark:text-primary-300 glass-primary",
-  secondary: "text-primary dark:text-primary glass-secondary",
-  submit: "text-primary glass-submit",
-  ghost:
-    "text-primary-900 dark:text-primary-100 hover:bg-primary dark:hover:bg-primary-950/10",
-  danger: "text-primary glass-danger",
-  icon: iconStyles,
-  filter: cn(
-    iconStyles,
-    "enabled:hover:glass-outline enabled:hover:bg-primary/80 enabled:hover:text-primary-900 dark:enabled:hover:bg-primary/10 dark:enabled:hover:text-primary-100",
-  ),
-  subtle:
-    "flex items-center gap-2 hover:bg-primary/50 dark:hover:bg-primary/5",
+  primary: "button-glass glass-action text-white focus-visible:ring-white/85",
+  secondary: "button-glass glass-secondary text-primary-800 dark:text-primary-200",
+  ghost: cn("text-primary-900 dark:text-primary-100", quietInteraction),
+  danger: "button-glass glass-danger text-white focus-visible:ring-white/85",
+  icon: cn(iconStyles, quietInteraction),
+  filter: cn(iconStyles, quietInteraction, "enabled:hover:text-primary-900 dark:enabled:hover:text-primary-100"),
+  subtle: cn("flex items-center gap-2", quietInteraction),
   bare: "",
 };
 
@@ -64,10 +57,10 @@ const iconSizeStyles = {
 // Even a fully custom `bare` button must remain visibly focusable and expose a
 // consistent disabled state.
 const interactionStyles =
-  "cursor-pointer duration-200 transition-[color,background-color,border-color,box-shadow,transform] disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none";
+  "button-control cursor-pointer duration-160 ease-out transition-[color,background-color,border-color,box-shadow,opacity,transform,--button-glass-tint] motion-reduce:transition-none disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent";
 
 const controlStyles =
-  "px-3 py-1.5 text-s font-medium rounded-xl items-center justify-center";
+  "inline-flex min-h-8 items-center justify-center rounded-xl px-3 py-1 text-s font-medium";
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   (
@@ -88,6 +81,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       tooltip,
       tooltipShortcut,
       tooltipPosition = "top",
+      "aria-label": ariaLabel,
       ...props
     },
     ref,
@@ -107,25 +101,22 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           visualBaseClass,
           variantClass,
           widthClass,
+          isLoading && "relative disabled:opacity-75",
           className,
         )}
         disabled={disabled || isLoading}
         aria-busy={isLoading || undefined}
+        aria-label={ariaLabel ?? (isLoading ? "Loading..." : undefined)}
+        data-button-busy={isLoading || undefined}
         {...props}
       >
-        {isLoading ? (
-          <div className="flex items-center gap-1.5">
-            {/* `inherit` so the spinner picks up the button's own text color
-                (warning, danger, provider accent…) like the label beside it. */}
-            <AsciiSpinner variant="inherit" kind="circle" />
-            <span>Loading...</span>
-          </div>
-        ) : (
-          <>
-            {leftIcon && <span className="mr-2">{leftIcon}</span>}
-            {children}
-            {rightIcon && <span className="ml-2">{rightIcon}</span>}
-          </>
+        {leftIcon && <span className="mr-2">{leftIcon}</span>}
+        {children}
+        {rightIcon && <span className="ml-2">{rightIcon}</span>}
+        {isLoading && (
+          <span aria-hidden="true" className="button-spinner pointer-events-none absolute inset-0 grid place-items-center">
+            <AsciiSpinner variant="inherit" kind="circle" className="size-4" />
+          </span>
         )}
       </button>
     );

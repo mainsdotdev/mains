@@ -579,53 +579,24 @@ function PluginDetail({
                   <Button
                     onClick={onInstall}
                     disabled={isBusy || Boolean(installBlockReason)}
+                    isLoading={isInstalling}
                     title={installBlockReason ?? undefined}
                     variant="primary"
                   >
-                    {isInstalling ? (
-                      <div className="px-1.5">
-                        <AsciiSpinner variant="null" />
-                      </div>
-                    ) : (
-                      "Add"
-                    )}
+                    Add
                   </Button>
                 </>
               ) : (
                 <>
                   {plugin.updateAvailable && (
-                    <Button onClick={onUpdate} disabled={isBusy} variant="primary">
-                      {isUpdating ? (
-                        <div className="px-1.5">
-                          <AsciiSpinner variant="null" />
-                        </div>
-                      ) : (
-                        "Update"
-                      )}
-                    </Button>
+                    <Button onClick={onUpdate} disabled={isBusy} isLoading={isUpdating} variant="primary">Update</Button>
                   )}
                   {supportsEnableToggle && (
-                    <Button onClick={onToggleEnabled} disabled={isBusy} variant="secondary">
-                      {isToggling ? (
-                        <div className="px-1.5">
-                          <AsciiSpinner variant="null" />
-                        </div>
-                      ) : plugin.enabled ? (
-                        "Disable"
-                      ) : (
-                        "Enable"
-                      )}
+                    <Button onClick={onToggleEnabled} disabled={isBusy} isLoading={isToggling} variant="secondary">
+                      {plugin.enabled ? "Disable" : "Enable"}
                     </Button>
                   )}
-                  <Button onClick={onUninstall} disabled={isBusy} variant="secondary">
-                    {isInstalling ? (
-                      <div className="px-1.5">
-                        <AsciiSpinner variant="null" />
-                      </div>
-                    ) : (
-                      "Uninstall"
-                    )}
-                  </Button>
+                  <Button onClick={onUninstall} disabled={isBusy} isLoading={isInstalling} variant="secondary">Uninstall</Button>
                 </>
               )}
             </div>
@@ -708,7 +679,7 @@ function PluginDetail({
                         app.isEnabled !== false &&
                         app.installUrl && (
                           <Button
-                            variant="submit"
+                            variant="secondary"
                             className="ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-0"
                             onClick={() =>
                               window.api.shell.openExternal(app.installUrl!)
@@ -764,17 +735,11 @@ function PluginDetail({
                   {plugin.installed && state.action && (
                     <Button
                       className="ml-auto"
-                      variant={
-                        state.action === "Reconnect" ? "primary" : "secondary"
-                      }
-                      disabled={isOAuthPending(server.name)}
+                      variant="secondary"
+                      isLoading={isOAuthPending(server.name)}
                       onClick={() => startLogin(server.name)}
                     >
-                      {isOAuthPending(server.name) ? (
-                        <AsciiSpinner variant="null" />
-                      ) : (
-                        state.action
-                      )}
+                      {state.action}
                     </Button>
                   )}
                 </div>
@@ -1320,8 +1285,8 @@ function ProviderPluginCatalog({
               {(currentPage - 1) * PLUGIN_PAGE_SIZE + 1}–{Math.min(currentPage * PLUGIN_PAGE_SIZE, catalogPlugins.length)} of {catalogPlugins.length} · Page {currentPage} of {pageCount}
             </Text>
             <div className="flex items-center gap-2">
-              <Button variant="primary" disabled={currentPage === 1} onClick={() => changePage(currentPage - 1)}>Previous</Button>
-              <Button variant="primary" disabled={currentPage === pageCount} onClick={() => changePage(currentPage + 1)}>Next</Button>
+              <Button variant="ghost" disabled={currentPage === 1} onClick={() => changePage(currentPage - 1)}>Previous</Button>
+              <Button variant="ghost" disabled={currentPage === pageCount} onClick={() => changePage(currentPage + 1)}>Next</Button>
             </div>
           </nav>
         )}

@@ -297,25 +297,25 @@ function CodeViewerContent({ content, filename, className = "", filePath, mtimeM
               {conflict ? (
                 <>
                   <Button
-                    variant="primary"
+                    variant="secondary"
                     onClick={() => void handleReload()}
-                    className="px-2 py-1 text-xs!"
+                    className="min-h-7 px-2 py-1 text-xs"
                   >
                     Reload
                   </Button>
                   <Button
                     variant="danger"
                     onClick={handleOverwrite}
-                    className="px-2 py-1 text-xs!"
+                    className="min-h-7 px-2 py-1 text-xs"
                   >
                     Overwrite
                   </Button>
                 </>
               ) : (
                 <Button
-                  variant="submit"
+                  variant="primary"
                   onClick={handleRetry}
-                  className="px-2 py-1 text-xs!"
+                  className="min-h-7 px-2 py-1 text-xs"
                 >
                   Retry
                 </Button>

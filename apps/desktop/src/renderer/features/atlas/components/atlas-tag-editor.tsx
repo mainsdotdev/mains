@@ -44,7 +44,7 @@ export function AtlasTagEditor({ item, onClose }: { item: AtlasItem; onClose: ()
         {error && <Text role="alert" className="mt-4 text-danger">{error}</Text>}
         <div className="mt-6 flex justify-end gap-2">
           <Button variant="secondary" onClick={close} disabled={saving.isLoading}>Cancel</Button>
-          <Button type="submit" variant="primary" disabled={saving.isLoading || known.isLoading}>{saving.isLoading ? "Saving…" : "Save tags"}</Button>
+          <Button type="submit" variant="primary" disabled={known.isLoading} isLoading={saving.isLoading}>Save tags</Button>
         </div>
       </form>
     </Modal>
