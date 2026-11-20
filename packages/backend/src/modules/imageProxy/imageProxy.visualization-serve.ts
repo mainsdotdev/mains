@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { verifySignedPath } from "./imageProxy.signing";
+import { VISUALIZATION_MOCKUP_CSS, VISUALIZATION_MOCKUP_SCRIPT } from "./imageProxy.visualization-mockups";
 
 export const MAX_VISUALIZATION_SIZE = 1024 * 1024;
 
@@ -375,6 +376,7 @@ const VISUALIZATION_HOST_BRIDGE = String.raw`
         const title = typeof request?.title === "string" ? request.title.trim().slice(0, 250) : "";
         if (!prompt) throw new TypeError("A follow-up prompt is required");
         if (prompt.length > 20000) throw new RangeError("Follow-up prompt is too long");
+        if (!hostPort) throw new Error("Visualization host is not connected");
         post({ type: "follow-up", prompt, ...(title ? { title } : {}) });
       }
     }
@@ -387,12 +389,10 @@ const VISUALIZATION_HOST_BRIDGE = String.raw`
     if (resizeFrame) cancelAnimationFrame(resizeFrame);
     resizeFrame = requestAnimationFrame(() => {
       resizeFrame = 0;
-      const body = document.body;
-      const root = document.documentElement;
+      const root = document.getElementById("mains-visualization-root");
       const height = Math.ceil(Math.max(
-        body?.scrollHeight || 0,
         root?.scrollHeight || 0,
-        body?.getBoundingClientRect().height || 0
+        root?.getBoundingClientRect().height || 0
       ));
       if (height > 0) post({ type: "height", height });
     });
@@ -405,6 +405,11 @@ const VISUALIZATION_HOST_BRIDGE = String.raw`
     hostPort = event.ports[0];
     hostPort.onmessage = (hostEvent) => {
       const data = hostEvent.data;
+      if (data?.type === "mockup-command") {
+        window.dispatchEvent(new NativeCustomEvent("mains:visualization-command", { detail: data.command }));
+        reportHeight();
+        return;
+      }
       if (data?.type !== "host-update") return;
       if (data.theme) applyTheme(data.theme);
       if (Object.prototype.hasOwnProperty.call(data, "widgetState")) widgetState = data.widgetState;
@@ -416,6 +421,10 @@ const VISUALIZATION_HOST_BRIDGE = String.raw`
     widgetState = event.data.widgetState ?? null;
     emitGlobals();
     reportHeight();
+  });
+
+  window.addEventListener("mains:visualization-controls", (event) => {
+    post({ type: "mockup-controls", controls: event.detail });
   });
 
   const observe = () => {
@@ -445,8 +454,9 @@ export function renderVisualizationDocument(fragment: string): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>${VISUALIZATION_BASE_CSS}</style>
+  <style>${VISUALIZATION_BASE_CSS}\n${VISUALIZATION_MOCKUP_CSS}</style>
   <script>${VISUALIZATION_HOST_BRIDGE}</script>
+  <script>${VISUALIZATION_MOCKUP_SCRIPT}</script>
 </head>
 <body>
   <main id="mains-visualization-root">${fragment}</main>

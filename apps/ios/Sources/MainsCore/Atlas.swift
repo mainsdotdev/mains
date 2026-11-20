@@ -47,6 +47,11 @@ public struct AtlasEntry: Decodable, Identifiable, Sendable {
     public let byteSize: Int?
     public let preview: String?
     public var hasImage: Bool? = nil
+    public var timestamp: Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: date) ?? ISO8601DateFormatter().date(from: date)
+    }
     public var savedIdentity: String? {
         savedItemId ?? pageId ?? file?.itemId ?? (kind == "bookmark" && origin == "saved" ? key : nil)
     }
@@ -85,6 +90,24 @@ public struct AtlasLibraryPage: Decodable, Sendable {
     public let items: [AtlasEntry]
     public let page: Int
     public let hasNext: Bool
+
+    /// Group only the loaded page, keeping the server's order within each local day.
+    public func daySections(calendar: Calendar = .current) -> [AtlasLibraryDay] {
+        var days: [Date: [AtlasEntry]] = [:]
+        var undated: [AtlasEntry] = []
+        for entry in items {
+            if let date = entry.timestamp { days[calendar.startOfDay(for: date), default: []].append(entry) }
+            else { undated.append(entry) }
+        }
+        var sections = days.keys.sorted(by: >).map { AtlasLibraryDay(day: $0, items: days[$0] ?? []) }
+        if !undated.isEmpty { sections.append(AtlasLibraryDay(day: nil, items: undated)) }
+        return sections
+    }
+}
+public struct AtlasLibraryDay: Identifiable, Sendable {
+    public var id: Date? { day }
+    public let day: Date?
+    public let items: [AtlasEntry]
 }
 public struct AtlasTrashItem: Decodable, Identifiable, Sendable {
     public let id: String

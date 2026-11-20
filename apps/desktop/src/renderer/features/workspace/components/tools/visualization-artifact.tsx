@@ -10,6 +10,8 @@ import { Text } from "@/components/ui";
 import { useDarkMode } from "@/hooks/use-dark-mode";
 import { useLocalVisualizationUrl } from "@/hooks/use-local-visualization-url";
 import { requestVisualizationFollowUp } from "@/features/workspace/lib/visualization-bridge";
+import { parseVisualizationControls, type VisualizationCommand, type VisualizationControls } from "@mains/contracts/visualization";
+import { VisualizationControlsView } from "./visualization-controls";
 
 const STATE_PREFIX = "mains:visualization-state:v1:";
 const MAX_STATE_BYTES = 16 * 1024;
@@ -33,7 +35,14 @@ type VisualizationHostMessage =
   | { type: "height"; height: unknown }
   | { type: "state"; state: unknown }
   | { type: "open-external"; url: unknown }
+  | { type: "mockup-controls"; controls: unknown }
   | { type: "follow-up"; prompt: unknown; title?: unknown };
+
+interface VisualizationOwner {
+  url: string;
+  port: MessagePort;
+  id: number;
+}
 
 function readStoredState(key: string): unknown {
   try {
@@ -85,6 +94,9 @@ export function VisualizationArtifact({
   const containerRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const portRef = useRef<MessagePort | null>(null);
+  const ownerRef = useRef<VisualizationOwner | null>(null);
+  const nextOwnerId = useRef(0);
+  const [controlsView, setControlsView] = useState<{ owner: VisualizationOwner; controls: VisualizationControls } | null>(null);
   const stateKey = useMemo(() => `${STATE_PREFIX}${absPath}`, [absPath]);
   const [height, setHeight] = useState(mode === "wide" ? 560 : 420);
   const [wideLayout, setWideLayout] = useState<{
@@ -122,8 +134,10 @@ export function VisualizationArtifact({
   }, [mode]);
 
   const disconnect = useCallback(() => {
+    if (portRef.current) portRef.current.onmessage = null;
     portRef.current?.close();
     portRef.current = null;
+    ownerRef.current = null;
   }, []);
 
   const connect = useCallback(() => {
@@ -131,11 +145,22 @@ export function VisualizationArtifact({
     const target = iframeRef.current?.contentWindow;
     if (!target) return;
 
+    if (!url) return;
     const channel = new MessageChannel();
+    const owner: VisualizationOwner = { url, port: channel.port1, id: ++nextOwnerId.current };
+    ownerRef.current = owner;
+    setControlsView(null);
     portRef.current = channel.port1;
     channel.port1.onmessage = (event: MessageEvent<VisualizationHostMessage>) => {
+      if (ownerRef.current !== owner) return;
       const message = event.data;
       if (!message || typeof message !== "object") return;
+
+      if (message.type === "mockup-controls") {
+        const controls = parseVisualizationControls(message.controls);
+        if (controls) setControlsView({ owner, controls });
+        return;
+      }
 
       if (message.type === "height") {
         const next = Number(message.height);
@@ -183,7 +208,13 @@ export function VisualizationArtifact({
       "*",
       [channel.port2],
     );
-  }, [disconnect, stateKey, theme]);
+  }, [disconnect, stateKey, theme, url]);
+
+  const controlOwner = controlsView?.owner;
+  const sendCommand = useCallback((command: VisualizationCommand) => {
+    if (controlOwner !== ownerRef.current || controlOwner?.url !== url) return;
+    controlOwner.port.postMessage({ type: "mockup-command", command });
+  }, [controlOwner, url]);
 
   useEffect(() => disconnect, [disconnect, url]);
 
@@ -204,7 +235,7 @@ export function VisualizationArtifact({
   return (
     <div
       ref={containerRef}
-      className="w-full mb-9 mt-6 overflow-hidden "
+      className="relative mb-9 mt-6 w-full min-w-0"
       data-visualization-mode={mode ?? "normal"}
       style={mode === "wide" ? wideLayout ?? undefined : undefined}
     >
@@ -218,6 +249,8 @@ export function VisualizationArtifact({
         className="block w-full border-0 bg-transparent"
         style={{ height, colorScheme: "normal" }}
       />
+      {controlsView && controlsView.owner.url === url && <VisualizationControlsView
+        key={controlsView.owner.id} controls={controlsView.controls} absPath={absPath} sendCommand={sendCommand} frameRef={iframeRef} />}
     </div>
   );
 }

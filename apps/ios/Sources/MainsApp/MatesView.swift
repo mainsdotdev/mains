@@ -841,13 +841,13 @@ struct MateView: View {
         let turn: MateWelcome.Turn
     }
     private enum ProfileField: Hashable { case description, instructions }
-    private enum ChatListAnchor: Hashable { case chats }
     @State private var mate: Mate?
     @State private var chats: [MateChat] = []
     @State private var answer = ""
     @State private var submittedSetup: SetupReply?
     @State private var editedProfile: MateProfile?
     @FocusState private var focusedProfileField: ProfileField?
+    @FocusState private var setupAnswerFocused: Bool
     @State private var savingProfile = false
     @State private var draft = ConversationDraft()
     @State private var error: String?
@@ -855,7 +855,7 @@ struct MateView: View {
     @State private var reload = 0
     @State private var consent: ConsentContext?
     @State private var afterConsent: (() -> Void)?
-    @State private var summaryVisible = true
+    @State private var composerFocused = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var showsSetup: Bool {
         guard let mate else { return false }
@@ -898,31 +898,29 @@ struct MateView: View {
     }
 
     private var mateDetails: some View {
-        ScrollViewReader { scroll in
-            VStack(spacing: 0) {
-                List {
-                    if let error { Text(error).foregroundStyle(.secondary) }
-                    if session.mateCommandUncertain { checkMateChange }
-                    if let mate {
-                        Section { mateSummary(mate) }
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                        if mate.ready {
-                            if let welcome = mate.welcome { welcomeSection(mate, welcome) }
-                            mateChatHistory(mate)
-                        } else { Text("Loading profile setup…").foregroundStyle(.secondary) }
-                    } else if loading { ProgressView().accessibilityLabel("Loading Mate") }
-                }
-                .navigationHeaderFade(background: Color(.systemGroupedBackground))
-                .scrollDismissesKeyboard(.interactively)
-                if let mate, mate.ready {
-                    firstTaskComposer(mate) { focused in
-                        guard focused, summaryVisible else { return }
-                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) {
-                            scroll.scrollTo(ChatListAnchor.chats, anchor: .top)
-                        }
-                    }
-                }
+        VStack(spacing: 0) {
+            List {
+                if let error { Text(error).foregroundStyle(.secondary) }
+                if session.mateCommandUncertain { checkMateChange }
+                if let mate {
+                    Section { mateSummary(mate) }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    if mate.ready {
+                        if let welcome = mate.welcome { welcomeSection(mate, welcome) }
+                        if !composerFocused { mateChatHistory(mate) }
+                    } else { Text("Loading profile setup…").foregroundStyle(.secondary) }
+                } else if loading { ProgressView().accessibilityLabel("Loading Mate") }
+            }
+            .navigationHeaderFade(background: Color(.systemGroupedBackground))
+            .scrollDismissesKeyboard(.interactively)
+            .contentShape(.rect)
+            .simultaneousGesture(TapGesture().onEnded {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }, isEnabled: composerFocused)
+            if let mate, mate.ready {
+                firstTaskComposer(mate) { composerFocused = $0 }
+                    .onDisappear { composerFocused = false }
             }
         }
     }
@@ -939,7 +937,6 @@ struct MateView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
-        .onScrollVisibilityChange(threshold: 0.1) { summaryVisible = $0 }
     }
 
     private func mateChatHistory(_ mate: Mate) -> some View {
@@ -962,7 +959,7 @@ struct MateView: View {
                 }
             }
         } header: {
-            Text("Chats").id(ChatListAnchor.chats)
+            Text("Chats")
         }
     }
 
@@ -1017,10 +1014,11 @@ struct MateView: View {
 
     private func setupComposer(_ mate: Mate, question: String, step: Int) -> some View {
         let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-        let expanded = !answer.isEmpty
+        let expanded = setupAnswerFocused || !answer.isEmpty
         return MateComposerLayout(expanded: expanded) {
             TextField("What would you like help with?", text: $answer, axis: .vertical)
                 .lineLimit(1...5).frame(maxWidth: .infinity)
+                .focused($setupAnswerFocused)
                 .accessibilityIdentifier("mateSetupAnswer")
             ComposerSendButton(providerID: mate.providerId) {
                 let reply = SetupReply(step: step, turn: .init(question: question, answer: text))
@@ -1029,9 +1027,9 @@ struct MateView: View {
             .disabled(text.isEmpty || text.utf16.count > 24_000 || !session.isConnected || session.mateCommandPending || consent != nil)
             .accessibilityLabel("Send answer").accessibilityIdentifier("sendMateSetupAnswer")
         }
-        .animation(reduceMotion ? nil : MateComposerLayout.transition, value: expanded)
-        .padding(.horizontal, 8).padding(.vertical, 6)
+        .padding(.horizontal, 8).padding(.vertical, expanded ? 6 : 4)
         .modifier(GlassSurface(radius: 28, interactive: false))
+        .animation(reduceMotion ? nil : MateComposerLayout.transition, value: expanded)
         .padding(.horizontal, 12).padding(.bottom, 8)
     }
 

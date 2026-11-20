@@ -12,6 +12,7 @@ struct AtlasView: View {
     let session: BackendSession
     let openPage: (String) -> Void
     let openConversation: (String) -> Void
+    @Environment(\.calendar) private var calendar
     @State private var query = AtlasQuery()
     @State private var library: AtlasLibraryPage?
     @State private var error: String?
@@ -59,45 +60,21 @@ struct AtlasView: View {
                                            description: Text(query.text.isEmpty ? "Pages, saved files and files from Work chats appear here." : "Try another search or change the filters."))
                         .listRowBackground(Color.clear).accessibilityIdentifier("atlasEmpty")
                 }
-                ForEach(library.items) { entry in
-                    Button { open(entry) } label: { AtlasEntryRow(session: session, entry: entry, project: session.collections.first { $0.id == entry.collectionId }?.name) }
-                        .buttonStyle(.plain).accessibilityIdentifier("atlasItem-" + entry.key)
-                        .listRowInsets(AppListStyle.rowInsets)
-                        .contextMenu {
-                            if entry.savedIdentity != nil {
-                                if entry.kind == "bookmark", let id = entry.savedIdentity {
-                                    Button("Edit bookmark", systemImage: "pencil") {
-                                        if let owner = libraryOwner { bookmarkEdit = AtlasBookmarkEditSelection(itemID: id, owner: owner) }
-                                    }.disabled(!canOrganize)
-                                }
-                                Button(entry.isFavorite ? "Remove from favorites" : "Add to favorites", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
-                                    .disabled(!canOrganize)
-                                Button("Move to project", systemImage: "folder") { move(entry) }.disabled(!canOrganize)
-                                Button("Edit tags", systemImage: "tag") {
-                                    if let id = entry.savedIdentity, let owner = libraryOwner { tagEdit = AtlasTagEditSelection(itemID: id, owner: owner) }
-                                }.disabled(!canOrganize)
-                            }
-                            if let id = entry.sourceRunId { Button("Open chat with source", systemImage: "bubble.left") { openConversation(id) } }
-                            if entry.savedIdentity != nil {
-                                Button(role: .destructive) { trash(entry) } label: {
-                                    Label {
-                                        Text("Move to Trash")
-                                    } icon: {
-                                        Image(uiImage: (UIImage(systemName: "trash") ?? UIImage())
-                                            .withTintColor(.systemRed, renderingMode: .alwaysOriginal))
-                                            .renderingMode(.original)
-                                    }
-                                }.disabled(!canOrganize)
-                            }
+                ForEach(library.daySections(calendar: calendar)) { section in
+                    Section {
+                        ForEach(section.items) { entry in itemCard(entry) }
+                    } header: {
+                        TimelineView(.periodic(from: .now, by: 60)) { clock in
+                            dayTitle(section.day, now: clock.date)
+                                .font(.title3.weight(.semibold).width(.expanded))
+                                .foregroundStyle(Color.primary)
+                                .accessibilityAddTraits(.isHeader)
                         }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if entry.savedIdentity != nil {
-                                Button("Move", systemImage: "folder") { move(entry) }.tint(.blue).disabled(!canOrganize)
-                                Button("Trash", systemImage: "trash") { trash(entry) }.tint(.red).disabled(!canOrganize)
-                                Button(entry.isFavorite ? "Unfavorite" : "Favorite", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
-                                    .tint(.orange).disabled(!canOrganize)
-                            }
-                        }
+                        .textCase(nil)
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+                    }
                 }
                 if library.page > 1 || library.hasNext {
                     HStack {
@@ -161,6 +138,65 @@ struct AtlasView: View {
         }
         .onChange(of: session.ownership) { _, _ in query.tagID = nil; activeTag = nil }
         .alert("Couldn’t update item", isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })) { Button("OK", role: .cancel) {} } message: { Text(editError ?? "") }
+    }
+
+    private func dayTitle(_ day: Date?, now: Date) -> Text {
+        guard let day else { return Text("Other dates") }
+        if calendar.isDate(day, inSameDayAs: now) { return Text("Today") }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(day, inSameDayAs: yesterday) {
+            return Text("Yesterday")
+        }
+        if calendar.isDate(day, equalTo: now, toGranularity: .year) { return Text(day, format: .dateTime.day().month(.wide)) }
+        return Text(day, format: .dateTime.day().month(.wide).year())
+    }
+
+    private func itemCard(_ entry: AtlasEntry) -> some View {
+        Button { open(entry) } label: {
+            AtlasEntryRow(session: session, entry: entry, project: session.collections.first { $0.id == entry.collectionId }?.name)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
+        }
+        .buttonStyle(.plain).accessibilityIdentifier("atlasItem-" + entry.key)
+        .listRowInsets(EdgeInsets(top: 5, leading: 0, bottom: 5, trailing: 0))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .contentShape(.contextMenuPreview, .rect(cornerRadius: 24))
+        .contextMenu {
+            if entry.savedIdentity != nil {
+                if entry.kind == "bookmark", let id = entry.savedIdentity {
+                    Button("Edit bookmark", systemImage: "pencil") {
+                        if let owner = libraryOwner { bookmarkEdit = AtlasBookmarkEditSelection(itemID: id, owner: owner) }
+                    }.disabled(!canOrganize)
+                }
+                Button(entry.isFavorite ? "Remove from favorites" : "Add to favorites", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
+                    .disabled(!canOrganize)
+                Button("Move to project", systemImage: "folder") { move(entry) }.disabled(!canOrganize)
+                Button("Edit tags", systemImage: "tag") {
+                    if let id = entry.savedIdentity, let owner = libraryOwner { tagEdit = AtlasTagEditSelection(itemID: id, owner: owner) }
+                }.disabled(!canOrganize)
+            }
+            if let id = entry.sourceRunId { Button("Open chat with source", systemImage: "bubble.left") { openConversation(id) } }
+            if entry.savedIdentity != nil {
+                Button(role: .destructive) { trash(entry) } label: {
+                    Label {
+                        Text("Move to Trash")
+                    } icon: {
+                        Image(uiImage: (UIImage(systemName: "trash") ?? UIImage())
+                            .withTintColor(.systemRed, renderingMode: .alwaysOriginal))
+                            .renderingMode(.original)
+                    }
+                }.disabled(!canOrganize)
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if entry.savedIdentity != nil {
+                Button("Move", systemImage: "folder") { move(entry) }.tint(.blue).disabled(!canOrganize)
+                Button("Trash", systemImage: "trash") { trash(entry) }.tint(.red).disabled(!canOrganize)
+                Button(entry.isFavorite ? "Unfavorite" : "Favorite", systemImage: entry.isFavorite ? "star.slash" : "star") { favorite(entry) }
+                    .tint(.orange).disabled(!canOrganize)
+            }
+        }
     }
     private var libraryFilters: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -341,7 +377,7 @@ private struct AtlasEntryRow: View {
         return info.isEmpty ? nil : info
     }
     var body: some View {
-        let date = ISO8601DateFormatter.atlasDate(entry.date)
+        let date = entry.timestamp
         let detail = self.detail
         HStack(alignment: .center, spacing: 10) {
             Group {
@@ -1006,12 +1042,5 @@ struct AtlasFilePreview: View {
             if let destination { try? FileManager.default.removeItem(at: destination) }
             if ticket == readID { cleanup(); if !Task.isCancelled { self.error = error.localizedDescription } }
         }
-    }
-}
-
-private extension ISO8601DateFormatter {
-    static func atlasDate(_ value: String) -> Date? {
-        let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
 }

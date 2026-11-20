@@ -455,6 +455,7 @@ private struct ChatTurnView: View {
     let fork: () -> Void
     let searchRowID: String?
     @State private var disclosure = TranscriptDisclosure()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var expanded: Bool { disclosure.isExpanded(active: live) }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -462,11 +463,13 @@ private struct ChatTurnView: View {
                 Button { disclosure.toggle(active: live) } label: {
                     HStack(spacing: 9) {
                         Text(section.label).font(.footnote)
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2)
+                        toolChevron(expanded)
+                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: expanded)
                     }.foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
                         .padding(.bottom, 8).contentShape(Rectangle().inset(by: -6))
                         .overlay(alignment: .bottom) { Color(.separator).frame(height: 0.5) }
                 }.buttonStyle(.plain).accessibilityIdentifier("executionDetails-" + section.id)
+                    .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             }
             // A response always stays in this same ForEach when another response
             // arrives; folding changes membership, never its parent view tree.

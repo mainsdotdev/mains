@@ -134,7 +134,9 @@ struct MessageComposer: View {
         } message: { Text(attachmentError ?? "") }
     }
     private var standardComposer: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let expanded = context.lockedProfile && (focused || !draft.text.isEmpty)
+        let compactMatePage = context.lockedProfile && context.runID == nil && !expanded
+        return VStack(alignment: .leading, spacing: 4) {
             if let error = draft.storageError { Text(error).font(.caption).foregroundStyle(.orange).padding(.horizontal, 12).padding(.top, 8).accessibilityIdentifier("draftStorageError") }
             if !draft.attachments.isEmpty {
                 ComposerAttachmentStrip(attachments: draft.attachments) { id in
@@ -142,14 +144,12 @@ struct MessageComposer: View {
                 }.padding(.horizontal, 8).padding(.top, 6)
             }
             if context.lockedProfile {
-                let expanded = !draft.text.isEmpty
                 MateComposerLayout(expanded: expanded) {
                     textEditor
                     attachmentButton
                     HStack(spacing: 6) { composerActions }
                 }
                 .buttonStyle(.plain)
-                .animation(reduceMotion ? nil : MateComposerLayout.transition, value: expanded)
             } else {
                 textEditor.padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 3)
                 HStack(spacing: 6) {
@@ -166,7 +166,9 @@ struct MessageComposer: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(8).modifier(GlassSurface(radius: 34, interactive: false)).padding(.horizontal, 12)
+        .padding(.horizontal, 8).padding(.vertical, compactMatePage ? 4 : 8)
+        .modifier(GlassSurface(radius: 34, interactive: false)).padding(.horizontal, 12)
+        .animation(reduceMotion ? nil : MateComposerLayout.transition, value: expanded)
     }
 
     private var textEditor: some View {

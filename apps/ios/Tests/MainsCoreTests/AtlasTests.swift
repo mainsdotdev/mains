@@ -6,6 +6,41 @@ import ImageIO
 @testable import MainsCore
 
 @Suite struct AtlasTests {
+    @Test func libraryDaysUseTheLocalCalendarAndPreserveRowsWithUnknownDates() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "Europe/Istanbul"))
+        let library = try datedLibrary([
+            "2026-11-20T21:30:00.000Z", "2026-11-20T20:59:59Z",
+            "2026-11-21T04:00:00+03:00", "invalid", "2025-11-21T12:00:00Z",
+        ])
+        let sections = library.daySections(calendar: calendar)
+        #expect(sections.map { $0.items.map(\.key) } == [["0", "2"], ["1"], ["4"], ["3"]])
+        let newest = try #require(sections.first?.day)
+        #expect(calendar.component(.day, from: newest) == 21 && calendar.component(.hour, from: newest) == 0)
+        #expect(sections.last?.day == nil)
+        #expect(try datedLibrary([]).daySections(calendar: calendar).isEmpty)
+    }
+
+    @Test func libraryDaysKeepBothRepeatedHoursInTheSameDayAtTheDaylightSavingBoundary() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let library = try datedLibrary([
+            "2026-11-01T05:30:00Z", "2026-11-01T06:30:00.000Z", "2026-11-01T03:59:59Z",
+            "2026-11-02T04:59:59Z", "2026-11-02T05:00:00Z",
+        ])
+        let sections = library.daySections(calendar: calendar)
+        #expect(sections.map { $0.items.map(\.key) } == [["4"], ["0", "1", "3"], ["2"]])
+        let dates = sections.compactMap(\.day)
+        #expect(dates.count == 3 && dates[0].timeIntervalSince(dates[1]) == 25 * 3600)
+    }
+
+    private func datedLibrary(_ dates: [String]) throws -> AtlasLibraryPage {
+        try JSONValue.object(["items": .array(dates.enumerated().map { index, date in
+            .object(["key": .string(String(index)), "kind": .string("page"), "title": .string("Item \(index)"),
+                     "date": .string(date), "isFavorite": .bool(false), "origin": .string("saved")])
+        }), "page": .number(1), "hasNext": .bool(false)]).decode(AtlasLibraryPage.self)
+    }
+
     @Test(arguments: ["atlas:mobileTags", "atlas:readMobileTags", "atlas:readMobileImage", "atlas:readMobilePageCover", "atlas:readMobilePageImage"]) @MainActor func atlasReadsRetiredByReconnectionCannotReturnToTheNewConnection(channel: String) async throws {
         let backend = try DemoBackend(), probe = AtlasProbe()
         let session = BackendSession(storage: MemoryStorage(), makeTransport: { _ in AtlasTransport(backend, probe) })

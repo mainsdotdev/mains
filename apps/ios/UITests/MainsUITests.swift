@@ -494,11 +494,15 @@ final class MainsUITests: XCTestCase {
         let sendAnswer = app.buttons["sendMateSetupAnswer"]
         XCTAssertTrue(greeting.waitForExistence(timeout: 10))
         XCTAssertTrue(setupAnswer.exists)
+        XCTAssertEqual(setupAnswer.frame.midY, sendAnswer.frame.midY, accuracy: 3)
         attachScreenshot(app, name: "New Mate – setup conversation")
 
         setupAnswer.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertEqual(setupAnswer.frame.midY, sendAnswer.frame.midY, accuracy: 3)
+        let focusedAnswer = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            setupAnswer.frame.maxY <= sendAnswer.frame.minY
+        }, object: setupAnswer)
+        XCTAssertEqual(XCTWaiter.wait(for: [focusedAnswer], timeout: 3), .completed)
         setupAnswer.typeText("Help me plan meals")
         XCTAssertLessThanOrEqual(setupAnswer.frame.maxY, sendAnswer.frame.minY)
         sendAnswer.tap()
@@ -543,10 +547,14 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(idle.waitForExistence(timeout: 10))
         let firstTask = app.textViews["homeMessageInput"]
         XCTAssertTrue(firstTask.exists)
-        firstTask.tap()
         let startTask = app.buttons["startConversation"]
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         XCTAssertEqual(firstTask.frame.midY, startTask.frame.midY, accuracy: 3)
+        firstTask.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let focusedTask = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            firstTask.frame.maxY <= startTask.frame.minY
+        }, object: firstTask)
+        XCTAssertEqual(XCTWaiter.wait(for: [focusedTask], timeout: 3), .completed)
         firstTask.typeText("Make a prep list")
         XCTAssertLessThanOrEqual(firstTask.frame.maxY, startTask.frame.minY)
         startTask.tap()
@@ -678,15 +686,24 @@ final class MainsUITests: XCTestCase {
 
         let firstChat = app.staticTexts["Release check 1"]
         XCTAssertTrue(firstChat.waitForExistence(timeout: 5))
-        let firstChatY = firstChat.frame.minY
+        let descriptionY = description.frame.midY
         let listInput = app.textViews["homeMessageInput"]
+        let listAttachment = app.buttons["addAttachment"]
+        XCTAssertEqual(listInput.frame.midY, listAttachment.frame.midY, accuracy: 3)
         listInput.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        let visibleChat = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            firstChat.isHittable && firstChat.frame.minY < firstChatY - 20 && firstChat.frame.maxY < listInput.frame.minY
-        }, object: firstChat)
-        XCTAssertEqual(XCTWaiter.wait(for: [visibleChat], timeout: 5), .completed)
-        attachScreenshot(app, name: "Mate – chat list above keyboard")
+        let listKeyboard = app.keyboards.firstMatch
+        XCTAssertTrue(listKeyboard.waitForExistence(timeout: 5))
+        XCTAssertTrue(firstChat.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Chats"].exists)
+        XCTAssertTrue(description.isHittable)
+        XCTAssertEqual(description.frame.midY, descriptionY, accuracy: 5)
+        XCTAssertLessThanOrEqual(listInput.frame.maxY, listAttachment.frame.minY)
+        attachScreenshot(app, name: "Mate – profile while composing")
+        let blankY = (description.frame.maxY + listInput.frame.minY) / 2
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: app.frame.width / 2, dy: blankY - app.frame.minY)).tap()
+        XCTAssertTrue(listKeyboard.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(firstChat.waitForExistence(timeout: 5))
         firstChat.tap()
         let header = app.descendants(matching: .any).matching(identifier: "mateConversationHeader").firstMatch
         XCTAssertTrue(header.waitForExistence(timeout: 10))
@@ -740,20 +757,21 @@ final class MainsUITests: XCTestCase {
         let send = app.buttons["Send message"]
         let addAttachment = app.buttons["Add attachment"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        input.tap()
-        let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
         XCTAssertEqual(input.frame.midY, addAttachment.frame.midY, accuracy: 3)
         XCTAssertEqual(input.frame.midY, send.frame.midY, accuracy: 3)
         let compactWidth = input.frame.width
-        attachScreenshot(app, name: "Mate composer – empty with keyboard")
-
-        input.typeText("A")
-        XCTAssertTrue(keyboard.exists)
+        input.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
         let expanded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             input.frame.maxY <= addAttachment.frame.minY && input.frame.width > compactWidth
         }, object: input)
         XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 3), .completed)
+        XCTAssertEqual(input.value as? String, "")
+        attachScreenshot(app, name: "Mate composer – expanded on focus")
+
+        input.typeText("A")
+        XCTAssertTrue(keyboard.exists)
         XCTAssertEqual(addAttachment.frame.midY, send.frame.midY, accuracy: 3)
         input.typeText("\nSecond line")
         XCTAssertEqual(input.value as? String, "A\nSecond line")
@@ -761,12 +779,9 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "Mate composer – expanded while typing")
 
         input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "A\nSecond line".count))
-        let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            abs(input.frame.midY - addAttachment.frame.midY) <= 3 && abs(input.frame.width - compactWidth) <= 3
-        }, object: input)
-        XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 3), .completed)
         XCTAssertTrue(keyboard.exists)
         XCTAssertEqual(input.value as? String, "")
+        XCTAssertLessThanOrEqual(input.frame.maxY, addAttachment.frame.minY)
 
         input.typeText("Take your time")
         send.tap()

@@ -841,10 +841,15 @@ adapters. Swift models are a manually maintained subset of `packages/contracts`;
 they do not introduce a second backend API. Dates preserve the existing `$date`
 wire tag, and arbitrary JSON preserves `$undefined` markers.
 
-Atlas, Trash and Activity share `AppListStyle` row insets and minimum content height.
-Keep list metadata compact beneath a single-line title, allowing extra lines at
-accessibility text sizes. Use `compactRelativeAge` for list dates (`5m ago`, `3h ago`,
-`1d ago`), with minute updates while visible; VoiceOver can read the exact Atlas date.
+Atlas shows each library item in a separate rounded card, grouped by its existing
+library date (last update for saved items, file modification for generated files).
+Day headings use the phone's calendar: Today, Yesterday, then the full day/month
+and a year for older years. Group only the loaded page and preserve its item order
+within each day. Trash and Activity share `AppListStyle` row insets; all three keep
+its minimum content height. Keep list metadata compact beneath a single-line title,
+allowing extra lines at accessibility text sizes. Use `compactRelativeAge` for list
+dates (`5m ago`, `3h ago`, `1d ago`), with minute updates while visible; VoiceOver can
+read the exact Atlas date.
 
 The Xcode project and shared scheme are committed. After adding/removing Swift
 files, update them in Xcode or regenerate with `npm run project:generate`

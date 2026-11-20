@@ -66,7 +66,7 @@ struct ChatToolBlock: View {
     }
 }
 
-@MainActor private func toolChevron(_ expanded: Bool) -> some View {
+@MainActor func toolChevron(_ expanded: Bool) -> some View {
     RegistryIcon(token: "tool-arrow-up", size: 16)
         .rotationEffect(.degrees(expanded ? 180 : 90))
 }
