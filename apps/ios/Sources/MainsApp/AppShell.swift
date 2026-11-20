@@ -50,18 +50,19 @@ struct AppShell: View {
                 let width = sidebar.sidebarWidth
                 let offset = sidebar.contentOffset
                 let progress = sidebar.overlayProgress
+                let sidebarVisible = (pinned || drawerOpen) && !searchExpanded
                 let pageOffset = searchMounted ? (searchExpanded ? 0 : width) : offset
                 let pageCorner = searchMounted ? (searchExpanded ? 0.0 : 44.0) : 44 * progress
                 let pageExpansion = searchMounted ? 0 : 12 * progress
                 ZStack(alignment: .leading) {
                     Color(.systemBackground).ignoresSafeArea()
                     if offset > 0 || searchMounted {
-                        SidebarView(session: session, collapsed: $collapsedCollections, openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
+                        SidebarView(session: session, collapsed: $collapsedCollections, isVisible: sidebarVisible, openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
                                     selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
                             .frame(width: width)
                             .offset(x: searchExpanded ? -width : 0)
                             .allowsHitTesting(!searchExpanded)
-                            .accessibilityHidden(!pinned && !drawerOpen || searchExpanded)
+                            .accessibilityHidden(!sidebarVisible)
                             .simultaneousGesture(drawerGesture(width: width, closingEdge: width - 24),
                                                  isEnabled: sidebar.isInline && drawerOpen && !pinned && !searchMounted)
                             .accessibilityAction(.escape) {

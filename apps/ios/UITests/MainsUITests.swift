@@ -190,10 +190,21 @@ final class MainsUITests: XCTestCase {
         }
     }
 
-    func testMateEffortSliderKeepsTheThumbDuringADrag() {
+    func testMateAndComposerEffortSlidersBehaveTheSame() {
         continueAfterFailure = false
         let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
+
+        app.buttons["closeSidebar"].tap()
+        app.buttons["chooseModel"].tap()
+        assertEffortSliderInteraction(app)
+        chooseModel("fixture-thinking", in: app)
+        chooseModel("fixture-balanced", in: app)
+        XCTAssertEqual(app.descendants(matching: .any)["effortSlider"].value as? String, "Low")
+        app.buttons["closeEffortOverlay"].tap()
+        XCTAssertTrue(app.buttons["closeEffortOverlay"].waitForNonExistence(timeout: 5))
+
+        openSidebar(app)
         app.buttons["openMates"].tap()
         let newMate = app.buttons["newMate"]
         XCTAssertTrue(newMate.waitForExistence(timeout: 5))
@@ -204,6 +215,17 @@ final class MainsUITests: XCTestCase {
         name.typeText("Slider test")
         app.buttons["nextMateStep"].tap()
 
+        assertEffortSliderInteraction(app)
+        chooseModel("fixture-thinking", in: app)
+        chooseModel("fixture-balanced", in: app)
+        XCTAssertEqual(app.descendants(matching: .any)["effortSlider"].value as? String, "Low")
+        app.navigationBars["Model & Effort"].buttons["BackButton"].tap()
+        app.navigationBars["New Mate"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    private func assertEffortSliderInteraction(_ app: XCUIApplication) {
         let slider = app.descendants(matching: .any)["effortSlider"]
         XCTAssertTrue(slider.waitForExistence(timeout: 5))
         let center = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -225,10 +247,6 @@ final class MainsUITests: XCTestCase {
 
         slider.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
         XCTAssertEqual(slider.value as? String, "Low")
-        app.navigationBars["Model & Effort"].buttons["BackButton"].tap()
-        app.navigationBars["New Mate"].buttons["BackButton"].tap()
-        app.navigationBars["Mates"].buttons["BackButton"].tap()
-        forgetFixture(app)
     }
 
     func testNewMateSetupUsesChatBubblesAndContinuesInTheFirstConversation() {

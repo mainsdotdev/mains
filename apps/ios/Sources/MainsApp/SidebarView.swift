@@ -6,6 +6,7 @@ struct SidebarView: View {
     #endif
     let session: BackendSession
     @Binding var collapsed: Set<String>
+    let isVisible: Bool
     let openConversation: (String) -> Void
     let openWorkspace: (String) -> Void
     let selectSpace: (String) -> Void
@@ -21,7 +22,10 @@ struct SidebarView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .subheadline) private var modeLabelWidth: CGFloat = 36
     @ScaledMetric(relativeTo: .body) private var searchLabelWidth: CGFloat = 110
-    private let horizontalInset: CGFloat = 16
+    private let controlInset: CGFloat = 16
+    private let menuInset: CGFloat = 28
+    private let menuIconWidth: CGFloat = 22
+    private let menuIconSpacing: CGFloat = 10
     private var space: Space? { session.selectedSpace }
     private var modes: [String] { space.map { Experience.modes(for: $0.providerId) } ?? [] }
     private var otherSpaces: [Space] { session.spaces.filter { $0.id != space?.id } }
@@ -35,8 +39,7 @@ struct SidebarView: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            header.padding(.horizontal, horizontalInset)
-                .frame(height: 72, alignment: .top)
+            header.padding(.horizontal, controlInset).padding(.bottom, 21)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if session.pairing != nil {
@@ -46,15 +49,14 @@ struct SidebarView: View {
                             let waitingCount = groups.needsYou.count
                             let runningCount = live ? groups.running.count : 0
                             Button(action: openWorkInbox) {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "bell").font(.system(size: 19)).frame(width: 22)
-                                    Text("Activity").font(.body.weight(.medium))
-                                    Spacer()
+                                menuLabel("Activity") {
+                                    Image(systemName: "bell").font(.system(size: 20, weight: .medium))
+                                } trailing: {
                                     HStack(spacing: 6) {
                                         activityBadge(waitingCount, tint: .orange)
                                         activityBadge(runningCount, tint: .blue)
                                     }
-                                }.frame(minHeight: 44).contentShape(.rect)
+                                }
                             }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openWorkInbox")
                                 .accessibilityValue([
                                     waitingCount > 0 ? "\(waitingCount) conversations need you" : nil,
@@ -62,22 +64,21 @@ struct SidebarView: View {
                                 ].compactMap { $0 }.joined(separator: ", "))
                         }
                         Button(action: openAtlas) {
-                            HStack(spacing: 10) {
-                                RegistryIcon(token: "icon:globe", size: 22, tint: .primary).frame(width: 22)
-                                Text("Atlas").font(.body.weight(.medium))
-                            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
+                            menuLabel("Atlas") {
+                                RegistryIcon(token: "icon:globe", size: menuIconWidth, tint: .primary)
+                            }
                         }.buttonStyle(ChatPressStyle())
                             .accessibilityIdentifier("openAtlas")
                         if !session.isDemo {
                             Button(action: openMates) {
-                                HStack(spacing: 10) {
-                                    RegistryIcon(token: "icon:assistant-steps", size: 22, tint: .primary)
-                                    Text("Mates").font(.body.weight(.medium))
-                                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
+                                menuLabel("Mates") {
+                                    SidebarMateIcon(sidebarVisible: isVisible)
+                                }
                             }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("openMates")
                         }
+                        // The smaller heading has less built-in whitespace than the menu row.
                         Rectangle().fill(Color(.separator)).frame(height: 1)
-                            .padding(.horizontal, 4).padding(.top, 24).padding(.bottom, 20)
+                            .padding(.top, 22).padding(.bottom, 33)
                             .accessibilityHidden(true)
                     }
                     if space?.mode == "developer" {
@@ -90,8 +91,11 @@ struct SidebarView: View {
                                     target.workspaceID = workspace.id; session.selectTarget(target, spaceID: space.id)
                                 }
                                 openWorkspace(workspace.id)
-                            } label: { WorkspaceLabel(session: session, workspace: workspace) }
-                            .buttonStyle(.plain).padding(.vertical, 12)
+                            } label: {
+                                WorkspaceLabel(session: session, workspace: workspace,
+                                               iconColumnWidth: menuIconWidth, iconSpacing: menuIconSpacing)
+                            }
+                            .buttonStyle(.plain).padding(.vertical, 10)
                             .accessibilityIdentifier("workspace-\(workspace.id)")
                         }
                     } else {
@@ -105,18 +109,31 @@ struct SidebarView: View {
                         if recents.isEmpty { empty("No chats yet.") }
                         ForEach(recents) { run in conversationRow(run) }
                     }
-                }.padding(.horizontal, horizontalInset).padding(.bottom, 24)
+                }.padding(.horizontal, menuInset).padding(.bottom, 24)
             }
             .refreshable { await session.refresh() }
             .scrollIndicators(.hidden)
             .modifier(SidebarScrollFade())
             .id("\(space?.id ?? ""):\(space?.mode ?? "")")
-            bottomBar.padding(.horizontal, horizontalInset).padding(.top, 10).padding(.bottom, 16)
+            bottomBar.padding(.horizontal, controlInset).padding(.top, 10).padding(.bottom, 16)
         }
         .background(Color(.systemBackground))
         .onChange(of: space?.id) { _, _ in providersExpanded = false }
         .onChange(of: session.ownership) { _, _ in providersExpanded = false; pendingMode = nil }
         .onDisappear { providersExpanded = false }
+    }
+    private func menuLabel<Icon: View, Trailing: View>(_ title: String, @ViewBuilder icon: () -> Icon,
+                                                       @ViewBuilder trailing: () -> Trailing = { EmptyView() }) -> some View {
+        HStack(spacing: menuIconSpacing) {
+            icon().frame(width: menuIconWidth).accessibilityHidden(true)
+            Text(title).font(.body)
+            Spacer(minLength: 0)
+            trailing()
+        }
+        .foregroundStyle(.primary)
+        .padding(.vertical, 6)
+        .frame(minHeight: 45)
+        .contentShape(.rect)
     }
     @ViewBuilder private func activityBadge(_ count: Int, tint: Color) -> some View {
         if count > 0 {
@@ -258,19 +275,20 @@ struct SidebarView: View {
             catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
         }
     }
-    private func sectionTitle(_ title: String) -> some View { Text(title).font(.subheadline.weight(.semibold)).padding(.bottom, 10) }
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            .padding(.bottom, 6).accessibilityAddTraits(.isHeader)
+    }
     private func empty(_ title: String) -> some View { Text(title).font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 8) }
     private func collectionSection(_ collection: ProjectCollection) -> some View {
         let open = !collapsed.contains(collection.id)
         let inside = chats.filter { $0.collectionId == collection.id }
-        let iconSize: CGFloat = 20
-        let iconSpacing: CGFloat = 9
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 if open { collapsed.insert(collection.id) } else { collapsed.remove(collection.id) }
             } label: {
-                HStack(spacing: iconSpacing) {
-                    RegistryIcon(token: collection.icon, size: iconSize)
+                HStack(spacing: menuIconSpacing) {
+                    RegistryIcon(token: collection.icon, size: 20).frame(width: menuIconWidth)
                     Text(collection.name).foregroundStyle(.primary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
@@ -279,21 +297,64 @@ struct SidebarView: View {
             }.buttonStyle(.plain).accessibilityLabel("\(collection.name), \(open ? "expanded" : "collapsed")")
                 .accessibilityIdentifier("collection-\(collection.id)")
             if open {
-                if inside.isEmpty { empty("No chats yet.").padding(.leading, iconSize + iconSpacing).padding(.bottom, 6) }
-                ForEach(inside) { run in conversationRow(run).padding(.leading, iconSize + iconSpacing) }
+                if inside.isEmpty { empty("No chats yet.").padding(.leading, menuIconWidth + menuIconSpacing).padding(.bottom, 6) }
+                ForEach(inside) { run in conversationRow(run).padding(.leading, menuIconWidth + menuIconSpacing) }
             }
         }
     }
     private func conversationRow(_ run: Conversation) -> some View {
         Button { openConversation(run.id) } label: {
             HStack(spacing: 8) {
-                Text(run.displayTitle).lineLimit(1)
+                Text(run.displayTitle).foregroundStyle(.primary).lineLimit(1)
                 Spacer(minLength: 4)
                 if run.isActive { Circle().fill(Provider.accent(run.providerId)).frame(width: 6, height: 6) }
                 if run.isReplica == true { BridgeIcon() }
-            }.font(.subheadline).frame(minHeight: 44).contentShape(.rect)
+            }.font(.body).frame(minHeight: 44).contentShape(.rect)
         }.buttonStyle(.plain).accessibilityIdentifier("conversation-\(run.id)")
             .accessibilityValue(run.isReplica == true ? "Read-only, synced through Bridge" : "")
+    }
+}
+
+private struct SidebarMateIcon: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let sidebarVisible: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pose = Pose()
+
+    private struct Pose {
+        var rotation: Double = 0
+        var offset: CGFloat = 0
+        var verticalScale: CGFloat = 1
+    }
+
+    private static let preset = MateRobotAssets.catalogue?.styles.lazy.flatMap(\.presets)
+        .first { $0.id == "terminal-amber" }
+    private static let reactions = [
+        Pose(rotation: -11), Pose(rotation: 11), Pose(offset: -4), Pose(offset: 1, verticalScale: 0.84)
+    ]
+
+    var body: some View {
+        let animate = sidebarVisible && !reduceMotion
+        let currentPose = animate ? pose : Pose()
+        MateRobotThumbnail(preset: Self.preset)
+            .frame(width: 25, height: 25)
+            .scaleEffect(x: 1, y: currentPose.verticalScale)
+            .rotationEffect(.degrees(currentPose.rotation))
+            .offset(y: currentPose.offset)
+            .frame(width: 22, height: 22)
+            .task(id: animate) {
+                withAnimation(nil) { pose = Pose() }
+                guard animate, let reaction = Self.reactions.randomElement() else { return }
+                // Let the drawer uncover the icon before playing the reaction.
+                try? await Task.sleep(for: .milliseconds(180))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.16)) { pose = reaction }
+                try? await Task.sleep(for: .milliseconds(160))
+                guard !Task.isCancelled else { return }
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { pose = Pose() }
+            }
     }
 }
 
@@ -345,11 +406,13 @@ struct WorkspaceLabel: View {
     #endif
     let session: BackendSession
     let workspace: Workspace
+    var iconColumnWidth: CGFloat? = nil
+    var iconSpacing: CGFloat = 9
     var body: some View {
         let project = session.projects.first { $0.id == workspace.projectId }
         let git = session.gitStates.first { $0.workspaceId == workspace.id }
-        HStack(alignment: .top, spacing: 9) {
-            RegistryIcon(token: project?.icon, size: 17).padding(.top, 3)
+        HStack(alignment: .top, spacing: iconSpacing) {
+            RegistryIcon(token: project?.icon, size: 17).frame(width: iconColumnWidth).padding(.top, 3)
             VStack(alignment: .leading, spacing: 4) {
                 Text(workspace.name).font(.body).foregroundStyle(.primary).lineLimit(1)
                 Text(git?.branch ?? (workspace.isReplica == true ? "Read only" : "No branch"))

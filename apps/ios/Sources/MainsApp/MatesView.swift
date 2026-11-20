@@ -11,40 +11,89 @@ struct MatesView: View {
     @State private var error: String?
     @State private var reload = 0
 
+    private var canCreateMate: Bool {
+        directory != nil && session.isConnected && !session.mateCommandPending
+    }
+
     var body: some View {
-        List {
-            if session.mateCommandUncertain {
-                Button("Check Mate change", systemImage: "arrow.clockwise") {
-                    Task {
-                        do { try await session.checkMateCommand(); error = nil }
-                        catch { self.error = error.localizedDescription }
+        Group {
+            if directory?.mates.isEmpty == true {
+                ScrollView {
+                    VStack(spacing: 16) {
+                        directoryStatus
+                        emptyMates
                     }
-                }.disabled(!session.isConnected)
-            }
-            if let error { Text(error).foregroundStyle(.secondary) }
-            if let directory {
-                if directory.mates.isEmpty {
-                    ContentUnavailableView {
-                        Label { Text("No Mates yet") } icon: { RegistryIcon(token: "icon:assistant-steps", size: 34) }
-                    }
-                } else {
-                    mateSections(directory)
+                    .frame(maxWidth: .infinity)
+                    .padding(24)
                 }
-            } else if error == nil { ProgressView().accessibilityLabel("Loading Mates") }
+                .defaultScrollAnchor(.center, for: .alignment)
+                .background(Color(.systemGroupedBackground))
+            } else {
+                List {
+                    directoryStatus
+                    if let directory { mateSections(directory) }
+                    else if error == nil { ProgressView().accessibilityLabel("Loading Mates") }
+                }
+            }
         }
         .navigationTitle("Mates")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("New Mate", systemImage: "plus") {
-                    if let directory { newMate(directory.teams) }
+            if directory?.mates.isEmpty == false {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("New Mate", systemImage: "plus", action: startNewMate)
+                        .disabled(!canCreateMate)
+                        .accessibilityIdentifier("newMate")
                 }
-                    .disabled(directory == nil || !session.isConnected || session.mateCommandPending)
-                    .accessibilityIdentifier("newMate")
             }
         }
         .task(id: "\(session.ownership):\(session.isConnected):\(session.matesRevision):\(reload)") { await load() }
         .refreshable { reload += 1 }
+    }
+
+    @ViewBuilder private var directoryStatus: some View {
+        if session.mateCommandUncertain {
+            Button("Check Mate change", systemImage: "arrow.clockwise") {
+                Task {
+                    do { try await session.checkMateCommand(); error = nil }
+                    catch { self.error = error.localizedDescription }
+                }
+            }.disabled(!session.isConnected)
+        }
+        if let error { Text(error).foregroundStyle(.secondary) }
+    }
+
+    private var emptyMates: some View {
+        VStack(spacing: 20) {
+            EmptyMatesAvatars()
+
+            VStack(spacing: 8) {
+                Text("Your mates").font(.title2.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Text("Create a mate, then start a conversation. Your team can share memory and work together.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: 290)
+
+            Button(action: startNewMate) {
+                HStack(spacing: 10) {
+                    Text("New Mate")
+                    Image(systemName: "arrow.right")
+                        .font(.subheadline.weight(.semibold))
+                        .accessibilityHidden(true)
+                }
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .disabled(!canCreateMate)
+            .accessibilityIdentifier("emptyStateNewMate")
+        }
+        .multilineTextAlignment(.center)
+    }
+
+    private func startNewMate() {
+        guard canCreateMate, let directory else { return }
+        newMate(directory.teams)
     }
 
     @ViewBuilder private func mateSections(_ directory: MateDirectory) -> some View {
@@ -97,6 +146,42 @@ struct MatesView: View {
         guard session.isConnected else { error = "Connect to your computer to use Mates."; return }
         do { directory = try await session.loadMates(); error = nil }
         catch { if !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription } }
+    }
+}
+
+private struct EmptyMatesAvatars: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var visible = false
+
+    var body: some View {
+        let animated = visible && !reduceMotion && scenePhase == .active
+        let presets = MateRobotAssets.catalogue?.styles.flatMap(\.presets) ?? []
+        let terminal = presets.first { $0.id == "terminal-amber" }
+        let shell = presets.first { $0.id == "clear-violet" }
+        let metal = presets.first { $0.id == "metal-silver" }
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animated)) { context in
+            let period = 3.6
+            let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) * 2 * .pi / period
+            HStack(alignment: .bottom, spacing: 10) {
+                avatar(terminal, size: 64, tilt: -10, lift: animated ? sin(phase) : 0)
+                avatar(shell, size: 80, tilt: 0, lift: animated ? sin(phase + 2 * .pi / 3) : 0)
+                avatar(metal, size: 64, tilt: 10, lift: animated ? sin(phase + 4 * .pi / 3) : 0)
+            }
+        }
+        .onScrollVisibilityChange(threshold: 0.1) { visible = $0 }
+        .onDisappear { visible = false }
+        .accessibilityHidden(true)
+    }
+
+    private func avatar(_ preset: MateRobotCatalogue.Preset?, size: CGFloat, tilt: Double, lift: Double) -> some View {
+        MateRobotThumbnail(preset: preset)
+            .frame(width: size, height: size)
+            .rotationEffect(.degrees(tilt + lift * 3))
+            .offset(y: -lift * 5)
     }
 }
 
