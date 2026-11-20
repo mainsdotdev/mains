@@ -1,12 +1,22 @@
 import { useState } from "react";
 import type { BridgeBillingInterval, BridgeSubscriptionStatus } from "@mains/contracts/bridge-subscription";
-import { Button, Muted, SegmentedTabs, Text } from "@/components/ui";
+import { Button, Muted, SegmentedTabs, StatusBadge, Text, type StatusTone } from "@/components/ui";
+import { Check, Clock, Minus, Warning } from "@/components/ui/icons";
 import { SettingsSection } from "./settings-layout";
 
-const labels = { none: "Subscription required", scheduled: "Scheduled", active: "Active", expired: "Expired", revoked: "Inactive", unavailable: "Plan unavailable", development: "Development" };
+const subscriptionStatus = {
+  none: { label: "Subscription required", tone: "warning", icon: Warning },
+  scheduled: { label: "Scheduled", tone: "info", icon: Clock },
+  active: { label: "Active", tone: "success", icon: Check },
+  expired: { label: "Expired", tone: "warning", icon: Warning },
+  revoked: { label: "Inactive", tone: "neutral", icon: Minus },
+  unavailable: { label: "Plan unavailable", tone: "warning", icon: Warning },
+} satisfies Record<Exclude<BridgeSubscriptionStatus["subscription"]["status"], "development">, { label: string; tone: StatusTone; icon: typeof Check }>;
+
 export function BridgeSubscriptionSection({ subscription, plans, busy, onRefresh, deviceLabel = "this device" }: BridgeSubscriptionStatus & { busy: boolean; onRefresh: () => void; deviceLabel?: string }) {
   const [interval, setInterval] = useState<BridgeBillingInterval>(subscription.billingInterval ?? "monthly");
   if (subscription.status === "development") return null;
+  const status = subscriptionStatus[subscription.status];
   const plan = plans.find((entry) => entry.id === subscription.planId) ?? plans[0];
   const expires = subscription.expiresAt ? new Date(subscription.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" }) : null;
   const starts = subscription.startsAt ? new Date(subscription.startsAt).toLocaleDateString(undefined, { dateStyle: "medium" }) : null;
@@ -20,9 +30,7 @@ export function BridgeSubscriptionSection({ subscription, plans, busy, onRefresh
             <Text weight="medium">{plan?.name ?? "Bridge"}</Text>
             {plan && <Muted size="xs">{(plan.storageLimitBytes / 1024 ** 3).toLocaleString()} GiB storage · {(plan.fileLimitBytes / 1024 ** 2).toLocaleString()} MiB per file</Muted>}
           </div>
-          <Text size="xs" tone={subscription.canUpload ? "default" : "muted"} className="inline-flex items-center gap-2">
-            {subscription.canUpload && <span aria-hidden="true" className="size-1.5 rounded-full bg-success" />}{labels[subscription.status]}
-          </Text>
+          <StatusBadge tone={status.tone} icon={status.icon}>{status.label}</StatusBadge>
         </div>
         {beta ? (
           <Muted>{subscription.status === "active" ? `Beta access ends ${betaExpires}.` : subscription.status === "expired" ? `Beta access ended ${betaExpires}.` : "Beta access is inactive."}</Muted>

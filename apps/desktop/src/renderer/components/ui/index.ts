@@ -53,6 +53,8 @@ export type {
   TextWeight,
   TextAlign,
 } from "./text";
+export { StatusBadge } from "./status-badge";
+export type { StatusTone } from "./status-badge";
 
 // Usage
 export { UsageTicks } from "./usage-ticks";

@@ -5,7 +5,8 @@ import rehypeSanitize from "rehype-sanitize";
 import { markdownComponents } from "@/components/markdown-components";
 import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
 import type { IssueWithEntity } from "@/lib/redux/api";
-import { Caption, Heading2, Text } from "@/components/ui";
+import { Caption, Heading2, StatusBadge, Text } from "@/components/ui";
+import { CircleDot, Minus } from "@/components/ui/icons";
 
 interface IssueTabContentProps {
   issue: IssueWithEntity;
@@ -25,6 +26,7 @@ export function IssueTabContent({ issue }: IssueTabContentProps) {
   const { issue: iss, entity } = issue;
   const labels = parseLabels(iss.labels);
   const isOpen = iss.state === "open";
+  const isClosed = iss.state === "closed";
   const title = entity.title || `Issue #${iss.number ?? "?"}`;
 
   return (
@@ -46,20 +48,9 @@ export function IssueTabContent({ issue }: IssueTabContentProps) {
                 </Text>
               </Text>
             )}
-            <span
-              className={`inline-flex capitalize items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                isOpen
-                  ? "bg-primary-100 dark:bg-success/30 text-success"
-                  : "bg-primary-100 dark:bg-primary-800 text-primary-600 dark:text-primary-400"
-              }`}
-            >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  isOpen ? "bg-success" : "bg-primary-400"
-                }`}
-              />
+            <StatusBadge tone={isOpen ? "info" : "neutral"} icon={isOpen ? CircleDot : isClosed ? Minus : undefined} className="capitalize">
               {iss.state}
-            </span>
+            </StatusBadge>
           </div>
         </div>
 
@@ -67,12 +58,9 @@ export function IssueTabContent({ issue }: IssueTabContentProps) {
         {labels.length > 0 && (
           <div className="flex items-center gap-2 flex-wrap">
             {labels.map((label) => (
-              <span
-                key={label}
-                className={`inline-block glass-primary px-2.5 py-1 text-xs rounded-full capitalize font-medium text-primary-600 dark:text-primary-400`}
-              >
+              <StatusBadge key={label} tone="neutral" className="max-w-full capitalize whitespace-normal wrap-anywhere">
                 {label}
-              </span>
+              </StatusBadge>
             ))}
           </div>
         )}

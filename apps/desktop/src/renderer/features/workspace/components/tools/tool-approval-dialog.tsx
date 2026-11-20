@@ -2,7 +2,7 @@ import { createDecisionOwner } from "@mains/contracts/decision-owner";
 import { onTransportChange } from "@/lib/transport";
 import { useState, useCallback, useMemo, useLayoutEffect, useReducer } from "react";
 import { ArrowUp, ChevronLeft, Close, Question } from "@/components/ui/icons";
-import { Body, Button, Caption, Checkbox, Input, Text } from "@/components/ui";
+import { Body, Button, Caption, Checkbox, Input, StatusBadge, Text, type StatusTone } from "@/components/ui";
 import {
   ElicitationForm,
   buildElicitationContent,
@@ -208,11 +208,11 @@ function findPluginLogo(
   return undefined;
 }
 
-const RISK_LEVEL_STYLES: Record<string, string> = {
-  high: "bg-danger/15 text-danger",
-  medium: "bg-warning/15 text-warning",
-  low: "bg-success/15 text-success",
-};
+const RISK_TONES = new Map<string, StatusTone>([
+  ["high", "danger"],
+  ["medium", "warning"],
+  ["low", "success"],
+]);
 
 /** The small uppercase line over a request's question. */
 function Eyebrow({ children }: { children: React.ReactNode }) {
@@ -657,6 +657,7 @@ function ToolApprovalDialogContents({
     typeof meta?.riskLevel === "string"
       ? meta.riskLevel.toLowerCase()
       : undefined;
+  const riskTone = riskLevel ? RISK_TONES.get(riskLevel) : undefined;
   const message =
     request.question ??
     (typeof request.toolInput?.message === "string" ? request.toolInput.message : undefined) ??
@@ -685,14 +686,10 @@ function ToolApprovalDialogContents({
         <Text as="span" tone="muted" weight="medium">
           {request.header || header.label}
         </Text>
-        {riskLevel && RISK_LEVEL_STYLES[riskLevel] && (
-          <span
-            className={`ml-auto rounded-full px-2 py-0.5 text-xxs font-medium capitalize ${RISK_LEVEL_STYLES[riskLevel]}`}
-          >
-            {riskLevel} risk
-          </span>
+        {riskTone && (
+          <StatusBadge tone={riskTone} className="ml-auto capitalize">{riskLevel} risk</StatusBadge>
         )}
-        <CloseControl className={riskLevel && RISK_LEVEL_STYLES[riskLevel] ? undefined : "ml-auto"} onClick={handleDeny} />
+        <CloseControl className={riskTone ? undefined : "ml-auto"} onClick={handleDeny} />
       </div>
 
       <div className="shrink-0 px-4 pb-3 pt-0.5">

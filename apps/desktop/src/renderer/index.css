@@ -197,6 +197,24 @@ html:not(.app-ready) *::after {
   --font-mono: var(--font-code-family, ui-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
+.status-badge {
+  --status-badge-color: var(--color-primary-700);
+  background-color: color-mix(in srgb, var(--status-badge-color) 13%, transparent);
+  color: color-mix(in srgb, var(--status-badge-color) 50%, var(--color-primary-950));
+}
+
+.dark .status-badge {
+  --status-badge-color: var(--color-primary-300);
+  --status-badge-ink-strength: 74%;
+  color: color-mix(in srgb, var(--status-badge-color) var(--status-badge-ink-strength), var(--color-primary-50));
+}
+
+.status-badge[data-status-tone="info"] { --status-badge-color: var(--color-accent); }
+.dark .status-badge[data-status-tone="info"] { --status-badge-ink-strength: 62%; }
+.status-badge[data-status-tone="success"] { --status-badge-color: var(--color-success); }
+.status-badge[data-status-tone="warning"] { --status-badge-color: var(--color-warning); }
+.status-badge[data-status-tone="danger"] { --status-badge-color: var(--color-danger); }
+
 .voice-orb {
   --color-voice-orb-secondary: hsl(from var(--color-voice-orb-deep) calc(h + 54) calc(s * 0.72) 72%);
   --color-voice-orb-tertiary: hsl(from var(--color-voice-orb-deep) calc(h - 84) calc(s * 0.65) 76%);
@@ -679,17 +697,6 @@ body[data-resizing] iframe {
 
 .animate-spin-slow {
   animation: spinSlow 2s linear infinite;
-}
-
-/* Pulse page — the live dot on an active pulse. A slow expanding halo rather
-   than tailwind's 1s ping: a list of them has to read calm, not alarmed. */
-@keyframes pulseBeat {
-  0% { transform: scale(1); opacity: 0.5; }
-  70%, 100% { transform: scale(2.6); opacity: 0; }
-}
-
-.animate-pulse-beat {
-  animation: pulseBeat 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
 @keyframes rotate3dY {
@@ -1432,11 +1439,6 @@ html.mains-web.dark #root {
   .animate-claude-pulse,
   .animate-rotate-3d {
     animation: none;
-  }
-
-  .animate-pulse-beat {
-    animation: none;
-    opacity: 0;
   }
 }
 

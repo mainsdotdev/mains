@@ -31,7 +31,7 @@ describe("assistant task activity card", () => {
     const openChat = within(card).queryByRole("button", { name: "Open chat" });
     expect(openChat?.textContent ?? null).toBe(runId === "source" ? "Open chat" : null);
     if (openChat) expect(surface?.nextElementSibling).toBe(openChat);
-    expect(within(summary).getByText("Completed").className).toContain("dark:text-success");
+    expect(within(summary).getByText("Completed").getAttribute("data-status-tone")).toBe("success");
     expect(summary.getAttribute("aria-expanded")).toBe("false");
     expect(within(card).getByText("Check complete: NOT READY")).toBeTruthy();
     expect(within(card).queryByRole("list", { name: "Task activity" })).toBeNull();

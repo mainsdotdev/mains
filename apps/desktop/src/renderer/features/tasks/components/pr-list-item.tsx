@@ -13,7 +13,7 @@ const STATE_CLASSES: Record<string, string> = {
 const CI_DOT_CLASSES: Record<string, string> = {
   passing: "bg-success",
   failing: "bg-danger",
-  pending: "bg-warning",
+  pending: "bg-accent",
 };
 
 interface PrListItemProps {

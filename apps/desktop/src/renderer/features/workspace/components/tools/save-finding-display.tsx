@@ -2,7 +2,7 @@ import { useToolExpansion } from "../../lib/transcript-view-state";
 import { MainsStroke } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader } from "./_shared";
 import { Text, Tiny } from "@/components/ui";
-import { SEVERITY_TINT } from "../../lib/severity";
+import { FindingSeverityBadge } from "../finding-severity-badge";
 import { shortPath } from "../../lib/path-utils";
 
 interface Finding {
@@ -81,11 +81,7 @@ export function SaveFindingDisplay({
             {findings.map((f) => (
               <div key={`${f.file ?? ""}:${f.lineStart ?? ""}:${f.severity ?? ""}`} className="bg-primary-50 dark:bg-primary/5 rounded-md p-2 space-y-1">
                 <Text as="div" size="xs" tone="inherit" className="flex items-center gap-2">
-                  {f.severity && (
-                    <span className={`px-1.5 py-0.5 rounded font-medium ${(SEVERITY_TINT as Record<string, string>)[f.severity] ?? "bg-primary-500/10 text-primary-500"}`}>
-                      {f.severity}
-                    </span>
-                  )}
+                  {f.severity && <FindingSeverityBadge severity={f.severity} />}
                   {f.file && (
                     <Text as="span" size="inherit" tone="contrast" className="font-mono">
                       {shortPath(f.file)}

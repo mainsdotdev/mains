@@ -1,17 +1,19 @@
 import { useEffect, useId, useState } from "react";
 import type { PrCiStatus, PullRequestDetail } from "@/lib/redux/api/pullRequestsApi";
-import { Button, Text } from "@/components/ui";
-import { ArrowUp, Check, Close, External } from "@/components/ui/icons";
+import { Button, StatusBadge, Text, type StatusTone } from "@/components/ui";
+import { ArrowUp, Check, Clock, Close, External, Minus } from "@/components/ui/icons";
 import { checkDuration } from "../lib/pr-checks";
 
+const CHECK_STATUS = {
+  passing: { label: "Passing", tone: "success", icon: Check },
+  failing: { label: "Failing", tone: "danger", icon: Close },
+  pending: { label: "Pending", tone: "info", icon: Clock },
+  none: { label: "No status", tone: "neutral", icon: Minus },
+} satisfies Record<PrCiStatus, { label: string; tone: StatusTone; icon: typeof Check }>;
+
 function CheckStatus({ status }: { status: PrCiStatus }) {
-  return <span className={"flex size-4 shrink-0 items-center justify-center rounded-full " + (
-    status === "passing" ? "bg-success/15 text-success" : status === "failing" ? "bg-danger/15 text-danger"
-      : status === "pending" ? "border-2 border-warning text-warning" : "bg-primary-400/20 text-primary-500"
-  )}>
-    {status === "passing" ? <Check className="size-2.5" /> : status === "failing" ? <Close className="size-2.5" /> : null}
-    <span className="sr-only">{status}</span>
-  </span>;
+  const { label, tone, icon } = CHECK_STATUS[status] ?? CHECK_STATUS.none;
+  return <StatusBadge iconOnly tone={tone} icon={icon}>{label}</StatusBadge>;
 }
 
 export function PrChecksCard({ detail, active }: { detail: PullRequestDetail; active: boolean }) {
@@ -49,13 +51,13 @@ export function PrChecksCard({ detail, active }: { detail: PullRequestDetail; ac
     <div className="mx-4 border-t border-primary-200/60 dark:border-primary-800/60" />
     <Button variant="bare" disabled={checks.length === 0} aria-expanded={expanded && checks.length > 0} aria-controls={id}
       onClick={() => setExpanded((value) => !value)} className="flex w-full items-center gap-3 px-4 py-3 text-left enabled:hover:bg-primary-200/20 dark:enabled:hover:bg-primary/3">
-      <CheckStatus status={status} />
+      <span aria-hidden="true" className="inline-flex"><CheckStatus status={status} /></span>
       <Text size="s">{headline}</Text>
       {failing > 0 && pending > 0 && <Text size="xs" tone="subtle">· {pending} pending</Text>}
       {elapsed && <Text size="xs" tone="subtle" className="tabular-nums">{elapsed}</Text>}
       {checks.length > 0 && <ArrowUp className={"ml-auto size-3 text-primary-500 " + (expanded ? "" : "rotate-180")} />}
     </Button>
-    {expanded && checks.length > 0 && <div id={id} className="px-4 pb-3 pl-11">
+    {expanded && checks.length > 0 && <div id={id} className="px-4 pb-3 pl-12">
       {(showAll ? checks : checks.slice(0, 5)).map((check) => <div key={check.id} className="flex items-center gap-3 py-2">
         <CheckStatus status={check.status} />
         <Text size="xs" tone="secondary" className="min-w-0 flex-1 wrap-break-word">{check.name}</Text>
