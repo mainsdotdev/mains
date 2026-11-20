@@ -40,8 +40,8 @@ const LABEL_TRACK =
   "grid transition-[grid-template-columns,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none";
 
 /**
- * Code, Work, and Chat as one row. The current mode wears its label; the
- * others are icons. Command+1/2/3 still selects them.
+ * Code, Work, and Chat as one row. The current mode shows its label when
+ * space allows. Command+1/2/3 still selects them.
  */
 export function SpaceModePicker({
   value,
@@ -116,7 +116,7 @@ export function SpaceModePicker({
             <span
               data-mode-label
               data-open={selected ? "true" : "false"}
-              className={`${LABEL_TRACK} ${selected ? "grid-cols-[1fr] opacity-100" : "grid-cols-[0fr] opacity-0"}`}
+              className={`${LABEL_TRACK} ${selected ? "grid-cols-[1fr] opacity-100 @max-[9rem]:grid-cols-[0fr] @max-[9rem]:opacity-0" : "grid-cols-[0fr] opacity-0"}`}
             >
               <span className="min-w-0 overflow-hidden">
                 <span className="block whitespace-nowrap pl-1.5">{label}</span>

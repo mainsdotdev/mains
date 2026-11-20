@@ -6,8 +6,9 @@ enum AppListStyle {
 }
 
 enum AppNavigationStyle {
-    // Keep the toolbar detached from the safe-area edge so iOS gives it top spacing.
+    // Keep toolbar spacing inside the safe area so destinations can draw edge to edge.
     static let topInset: CGFloat = 1
+    static let inlineToolbarHeight: CGFloat = 44
 }
 
 func compactRelativeAge(_ date: Date, now: Date) -> String {

@@ -44,6 +44,7 @@ const createdMates = new Map();
 const mateAssignments = new Map();
 let acceptsConnections = true;
 let holdSnapshot = 0;
+let mateDetailsDelayMs = 0;
 let contextDelayMs = 0, contextInvalidRows = false;
 let forkBehavior = null;
 let fileDeliveryFixture = false;
@@ -54,7 +55,7 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   resetAtlasFixture();
   for (const timer of timers) clearTimeout(timer);
   timers.clear(); replies.clear(); acceptsConnections = true;
-  holdSnapshot = 0; contextDelayMs = 0; contextInvalidRows = false;
+  holdSnapshot = 0; mateDetailsDelayMs = 0; contextDelayMs = 0; contextInvalidRows = false;
   forkBehavior = null;
   fileDeliveryFixture = false;
   pagedHistory = paging;
@@ -350,6 +351,11 @@ const server = http.createServer(async (request, response) => {
     holdSnapshot = Math.min(15000, Math.max(0, Number(body.durationMs ?? 700)));
     response.end('{}'); return;
   }
+  if (request.method === 'POST' && request.url === '/test/hold-mate-details') {
+    const body = JSON.parse(Buffer.concat(parts).toString() || '{}');
+    mateDetailsDelayMs = Math.min(15000, Math.max(0, Number(body.durationMs ?? 5000)));
+    response.end('{}'); return;
+  }
   if (request.method === 'POST' && request.url === '/test/offline') {
     acceptsConnections = false;
     for (const socket of connections) socket.terminate();
@@ -416,7 +422,15 @@ wss.on('connection', socket => {
             mates: args[1] ? mates.filter(mate => mate.id === args[1]).map(({ details, ...mate }) => details ? { ...mate, details } : mate)
               : mates.map(({ details: _details, ...mate }) => mate),
             teams: fixtureMateTeams,
-          }; break;
+          };
+          if (args[1] && mateDetailsDelayMs) {
+            const directory = result;
+            later(mateDetailsDelayMs, () => {
+              if (socket.readyState === WebSocket.OPEN) send(socket, { kind: 'response', id, result: { success: true, data: directory } });
+            });
+            return;
+          }
+          break;
         }
         case CHANNELS.assistants.mobileAssignment: {
           const task = mateAssignments.get(args[2]);

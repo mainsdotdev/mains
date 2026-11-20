@@ -12,7 +12,8 @@ extension EnvironmentValues {
 
 
 enum AppRoute: Hashable {
-    case conversation(String), searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String)
+    case conversation(String, mate: MateConversationSource? = nil)
+    case searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String)
     case mates, newMate([MateTeam]), newMateModel, creatingMate(NewMateCreationRequest), mate(String), mateInfo(String)
 }
 
@@ -92,7 +93,9 @@ struct AppShell: View {
                             }
                             .navigationDestination(for: AppRoute.self) { route in
                                 switch route {
-                                case .conversation(let id): ConversationView(session: session, runID: id, openComputer: showSettings, onNew: { newConversation(from: id) }, onFork: { path.append(.conversation($0)) })
+                                case .conversation(let id, let mate):
+                                    ConversationView(session: session, runID: id, openComputer: showSettings, onNew: { newConversation(from: id) },
+                                                     onFork: { path.append(.conversation($0)) }, mateSource: mate)
                                     .id("\(session.ownership):\(id)")
                                 case .searchMessage(let id, let cursor): ConversationView(session: session, runID: id, openComputer: showSettings, onNew: { newConversation(from: id) }, onFork: { path.append(.conversation($0)) }, initialCursor: cursor)
                                     .id("\(session.ownership):\(id):\(cursor.timestamp):\(cursor.id)")
@@ -124,7 +127,7 @@ struct AppShell: View {
                                     }
                                     .id(session.ownership)
                                 case .mate(let id):
-                                    MateView(session: session, mateID: id, openChat: { path.append(.conversation($0)) },
+                                    MateView(session: session, mateID: id, openChat: { path.append(.conversation($0, mate: .profile(id))) },
                                              openInfo: { path.append(.mateInfo(id)) })
                                         .id("\(session.ownership):mate:\(id)")
                                 case .mateInfo(let id):
@@ -133,7 +136,7 @@ struct AppShell: View {
                                 }
                             }
                         }
-                        .padding(.top, AppNavigationStyle.topInset)
+                        .safeAreaPadding(.top, AppNavigationStyle.topInset)
                         #if MAINS_GPT_LIVE
                         .environment(\.voiceSurfaceVisible, !sidebar.blocksContent && !searchMounted)
                         #endif
@@ -211,9 +214,9 @@ struct AppShell: View {
         .environment(\.openVoiceConversation, OpenVoiceConversationAction { openVoiceConversation($0) })
         .environment(\.openMateConversation, OpenVoiceConversationAction { id in
             guard session.viewingRunID != id else { return }
-            path.append(.conversation(id))
+            path.append(.conversation(id, mate: .assignment))
         })
-        .preferredColorScheme(visibleColorScheme)
+        .preferredColorScheme(appearance.colorScheme)
         #if MAINS_GPT_LIVE
         .onChange(of: session.voice.error) { _, error in if let error { session.actionError = error } }
         #endif
@@ -228,7 +231,7 @@ struct AppShell: View {
             if homeRunID == retired.runID { homeRunID = nil }
             path.removeAll { route in
                 switch route {
-                case .conversation(let id), .searchMessage(let id, _): id == retired.runID
+                case .conversation(let id, _), .searchMessage(let id, _): id == retired.runID
                 default: false
                 }
             }
@@ -248,18 +251,11 @@ struct AppShell: View {
         path.replaceSubrange(firstStep..., with: [.mate(id)])
     }
 
-    private var visibleColorScheme: ColorScheme? {
-        switch path.last {
-        case .newMate, .newMateModel, .creatingMate: .dark
-        default: appearance.colorScheme
-        }
-    }
-
 #if MAINS_GPT_LIVE
     private var visibleVoiceRunID: String? {
         guard mainPaneInteractive else { return nil }
         switch path.last {
-        case .conversation(let id), .searchMessage(let id, _): return id
+        case .conversation(let id, _), .searchMessage(let id, _): return id
         case .workspace, .settings, .workInbox, .atlas, .atlasPage, .mates, .newMate, .newMateModel, .creatingMate, .mate, .mateInfo: return nil
         case nil: return homeRunID
         }
@@ -299,7 +295,7 @@ struct AppShell: View {
     }
     private func closeDrawerAfterNavigation() { if !inlineSidebarVisible { closeDrawer() } }
     private func open(_ route: AppRoute) {
-        if case .conversation(let id) = route {
+        if case .conversation(let id, _) = route {
             if session.viewingRunID != id { leaveCurrentConversation() }
         } else { leaveCurrentConversation() }
         if case .workspace(let id) = route {

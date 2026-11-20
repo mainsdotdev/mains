@@ -76,6 +76,7 @@ struct MateRobotPicker: View {
     @Binding var avatar: MateAvatar
     @Binding var remembered: [String: String]
     let stageHeight: CGFloat
+    let previewActive: Bool
     @State private var selection = MateAvatarSelection()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -86,7 +87,8 @@ struct MateRobotPicker: View {
     var body: some View {
         VStack(spacing: 6) {
             if let style, !style.presets.isEmpty {
-                MateAvatarCarousel(presets: style.presets, avatar: $avatar, selection: $selection, stageHeight: stageHeight)
+                MateAvatarCarousel(presets: style.presets, avatar: $avatar, selection: $selection,
+                                   stageHeight: stageHeight, previewActive: previewActive)
                     .id(style.id)
             }
 
@@ -102,7 +104,7 @@ struct MateRobotPicker: View {
                             Text(candidate.label)
                                 .font(.caption.weight(.semibold))
                                 .multilineTextAlignment(.center)
-                                .foregroundStyle(selected ? .white : .secondary)
+                                .foregroundStyle(selected ? .primary : .secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .padding(.horizontal, 7)
@@ -110,7 +112,7 @@ struct MateRobotPicker: View {
                         .frame(maxWidth: .infinity, minHeight: 52)
                         .background(alignment: .center) {
                             if selected { Color.clear.modifier(GlassSurface(radius: 20)) }
-                            else { RoundedRectangle(cornerRadius: 20).fill(.white.opacity(0.06)) }
+                            else { RoundedRectangle(cornerRadius: 20).fill(Color.primary.opacity(0.06)) }
                         }
                         .contentShape(.rect)
                     }
@@ -147,17 +149,21 @@ private struct MateAvatarCarousel: View {
     @Binding var avatar: MateAvatar
     @Binding var selection: MateAvatarSelection
     let stageHeight: CGFloat
+    let previewActive: Bool
     @State private var index: Int
     @State private var dragOffset: CGFloat = 0
     @State private var visible = false
     @State private var renderedSlots: Set<Int> = []
+    @State private var canRenderNeighbors = false
     @State private var turn: (slot: Int, step: Int)?
     @State private var rotation: (slot: Int, drag: RobotPreviewDrag)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(presets: [MateRobotCatalogue.Preset], avatar: Binding<MateAvatar>, selection: Binding<MateAvatarSelection>, stageHeight: CGFloat) {
+    init(presets: [MateRobotCatalogue.Preset], avatar: Binding<MateAvatar>, selection: Binding<MateAvatarSelection>,
+         stageHeight: CGFloat, previewActive: Bool) {
         self.presets = presets
         self.stageHeight = stageHeight
+        self.previewActive = previewActive
         _avatar = avatar
         _selection = selection
         _index = State(initialValue: presets.firstIndex { $0.id == avatar.wrappedValue.shape } ?? 0)
@@ -179,13 +185,18 @@ private struct MateAvatarCarousel: View {
                 ForEach((index - neighbors)...(index + neighbors), id: \.self) { slot in
                     let x = CGFloat(slot - index) * spacing + dragOffset
                     let nearViewport = abs(x) < (width + size) / 2 + spacing * 0.3
+                    let renders = previewActive && visible && nearViewport && (slot == index || canRenderNeighbors)
                     MateRobotPreview(preset: preset(at: slot), acceptsDrag: false,
-                                     renders: visible && nearViewport, animates: slot == index && dragOffset == 0,
+                                     renders: renders, animates: slot == index && dragOffset == 0,
                                      turn: turn?.slot == slot ? turn?.step ?? 0 : 0,
                                      selection: slot == index ? selection : nil,
                                      externalDrag: rotation?.slot == slot ? rotation?.drag : nil) { rendered in
-                        if rendered { renderedSlots.insert(slot) }
-                        else { renderedSlots.remove(slot) }
+                        if rendered {
+                            renderedSlots.insert(slot)
+                            if slot == index { canRenderNeighbors = true }
+                        } else {
+                            renderedSlots.remove(slot)
+                        }
                     }
                         .frame(width: size, height: size)
                         .modifier(MateAvatarArc(x: x, radius: max(1, width * 0.58), reduceMotion: reduceMotion))
@@ -213,12 +224,6 @@ private struct MateAvatarCarousel: View {
         }
         .frame(height: stageHeight)
         .onScrollVisibilityChange(threshold: 0.05) { visible = $0 }
-        .background(alignment: .center) {
-            RadialGradient(colors: [MateRobotAssets.chatTint(for: avatar).opacity(0.15), .clear],
-                           center: .center, startRadius: 12, endRadius: stageHeight * 0.61)
-                .allowsHitTesting(false)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: avatar)
-        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Avatar")
         .accessibilityValue(preset(at: index).label)

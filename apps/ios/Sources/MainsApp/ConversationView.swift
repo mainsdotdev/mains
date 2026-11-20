@@ -1,5 +1,15 @@
 import SwiftUI
 
+enum MateConversationSource: Hashable {
+    case profile(String)
+    case assignment
+
+    var mateID: String? {
+        if case .profile(let id) = self { return id }
+        return nil
+    }
+}
+
 @MainActor
 struct ConversationView: View {
     #if DEBUG && targetEnvironment(simulator)
@@ -21,6 +31,7 @@ struct ConversationView: View {
     let onNew: () -> Void
     let onFork: (String) -> Void
     let initialCursor: HistoryCursor?
+    let mateSource: MateConversationSource?
     @Bindable private var draft: ConversationDraft
     @Bindable private var queue: ConversationQueue
     @State private var owner: Int?
@@ -58,15 +69,21 @@ struct ConversationView: View {
     #endif
     private var agents: [SessionSubagent] { run?.assistantId == nil && session.viewingRunID == runID ? session.transcript.subagents : [] }
     private var run: Conversation? { session.conversations.first { $0.id == runID } }
+    private var mateID: String? { run?.assistantId ?? mateSource?.mateID }
     private var mateHeaderRequest: MateHeaderRequest {
-        MateHeaderRequest(owner: session.ownership, mateID: run?.assistantId, revision: session.matesRevision,
+        MateHeaderRequest(owner: session.ownership, mateID: mateID, revision: session.matesRevision,
                           canLoad: session.isConnected && session.supportsMates)
     }
     private var conversationMate: Mate? {
-        guard let loadedMate, loadedMate.owner == session.ownership, loadedMate.mate.id == run?.assistantId else { return nil }
+        guard let loadedMate, loadedMate.owner == session.ownership, loadedMate.mate.id == mateID else { return nil }
         return loadedMate.mate
     }
-    private var showsMateHeader: Bool { conversationMate != nil && !focusedVoice && !showsConnectionPill }
+    private var showsMateHeader: Bool { (mateID != nil || mateSource != nil) && !focusedVoice && !showsConnectionPill }
+    private var navigationTitle: String {
+        if focusedVoice || showsConnectionPill { return "" }
+        if showsMateHeader { return conversationMate?.name ?? "" }
+        return run?.displayTitle ?? "Conversation"
+    }
     private var pending: PendingMessage? { session.pendingMessage?.runID == runID ? session.pendingMessage : nil }
     private var composerContext: ComposerContext? {
         if let run { return ComposerContext(run: run) }
@@ -107,12 +124,14 @@ struct ConversationView: View {
                     artifacts: session.transcript.page?.artifacts.filter { ["document", "file", "image", "visualization"].contains($0.kind) }.map(\.id) ?? [])
     }
 
-    init(session: BackendSession, runID: String, openComputer: @escaping () -> Void, onNew: @escaping () -> Void, onFork: @escaping (String) -> Void, initialCursor: HistoryCursor? = nil) {
+    init(session: BackendSession, runID: String, openComputer: @escaping () -> Void, onNew: @escaping () -> Void,
+         onFork: @escaping (String) -> Void, initialCursor: HistoryCursor? = nil, mateSource: MateConversationSource? = nil) {
         self.session = session; self.runID = runID
         self.openComputer = openComputer
         self.onNew = onNew
         self.onFork = onFork
         self.initialCursor = initialCursor
+        self.mateSource = mateSource
         draft = session.draft(for: runID)
         queue = session.messageQueue(for: runID)
     }
@@ -149,7 +168,7 @@ struct ConversationView: View {
         }
         .background(Color(.systemBackground))
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(focusedVoice || showsConnectionPill ? "" : conversationMate?.name ?? run?.displayTitle ?? "Conversation")
+        .navigationTitle(navigationTitle)
         .toolbarRole(showsMateHeader ? .navigationStack : .editor)
         .toolbar(.visible, for: .navigationBar)
         .task(id: historyEntry) {
@@ -274,9 +293,9 @@ struct ConversationView: View {
                     ConnectionPill(session: session, action: openComputer)
                 }
                 .sharedBackgroundVisibility(.hidden)
-            } else if let mate = conversationMate, !focusedVoice {
+            } else if showsMateHeader {
                 ToolbarItem(placement: .principal) {
-                    MateConversationTitle(mate: mate)
+                    MateConversationTitle(mate: conversationMate)
                 }
                 .sharedBackgroundVisibility(.hidden)
             } else if session.isDemo && !focusedVoice {
@@ -496,24 +515,27 @@ struct MateConversationTitle: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    let mate: Mate
+    let mate: Mate?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         let compact = horizontalSizeClass != .regular
+        let name = mate?.name ?? String(localized: "Mate")
         // Keep the native bar at its usual height while the avatar and name extend over the chat.
         Color.clear.frame(width: compact ? 112 : 240, height: 44)
             .overlay(alignment: .top) {
                 VStack(spacing: -8) {
                     Group {
-                        if let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
+                        if let mate, let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
                             MateRobotPreview(preset: preset, acceptsDrag: false, motion: .greeting)
                         } else {
-                            MateRobotThumbnail(preset: nil)
+                            RegistryIcon(token: "icon:assistant-steps", size: 27)
+                                .frame(width: 56, height: 56)
+                                .background(.quaternary, in: .circle)
                         }
                     }
                     .frame(width: 84, height: 84)
-                    Text(mate.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
                         .padding(.horizontal, 12).padding(.vertical, 6)
                         .modifier(GlassSurface(radius: 18, interactive: false))
                 }
@@ -522,7 +544,7 @@ struct MateConversationTitle: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .offset(y: -11)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(mate.name)
+                .accessibilityLabel(name)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("mateConversationHeader")
             }

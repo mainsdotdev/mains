@@ -120,7 +120,7 @@ private struct SteppedEffortSlider: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    private struct Scope: Equatable {
+    private struct Scope: Hashable {
         let modelID: String
         let stops: [String]
     }
@@ -136,12 +136,9 @@ private struct SteppedEffortSlider: View {
     let onCommit: (String) -> Void
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @GestureState private var touching = false
     @State private var dragPosition: CGFloat?
     @State private var pending: String?
     @State private var nearest: Int?
-    @State private var interrupted = false
-    @State private var gestureActive = false
     @State private var localScope: Scope?
     private var scope: Scope { Scope(modelID: modelID, stops: stops) }
     private var ownsState: Bool { localScope == scope }
@@ -206,40 +203,21 @@ private struct SteppedEffortSlider: View {
                     Circle().fill(.white).overlay { Circle().strokeBorder(Color(.separator), lineWidth: 0.5) }
                         .shadow(color: .black.opacity(0.16), radius: 3, y: 2)
                         .frame(width: thumb, height: thumb).offset(x: x - thumb / 2)
-                }.frame(width: width, height: hit).padding(.horizontal, inset).contentShape(.rect)
+                }.frame(width: width, height: hit).padding(.horizontal, inset)
                     .animation(rangeMotion, value: stops)
-                    .animation(rangeMotion, value: value)
-                    .simultaneousGesture(DragGesture(minimumDistance: 0)
-                        .updating($touching) { _, state, _ in state = true }
-                        .onChanged { gesture in
-                            guard enabled, interactionEnabled else { return }
-                            if !ownsState { reset(); localScope = scope }
-                            if !gestureActive { gestureActive = true; interrupted = false }
-                            guard !interrupted else { return }
-                            if dragPosition == nil {
-                                // Let the surrounding scroll view handle vertical swipes.
-                                if isVerticalSwipe(gesture) { interrupted = true; return }
-                                guard abs(gesture.translation.width) > 8 else { return }
-                            }
-                            let position = clamp(gesture.location.x - inset, width: width)
-                            dragPosition = position
-                            nearest = stop(at: position, width: width)
-                        }
-                        .onEnded { gesture in
-                            defer { gestureActive = false }
-                            guard enabled, interactionEnabled, ownsState, !interrupted else { reset(); return }
-                            guard dragPosition != nil || !isVerticalSwipe(gesture) else { return }
-                            let position = gesture.location.x - inset
-                            let selected = stop(at: position, width: width)
-                            let level = stops[selected]
-                            withAnimation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 1)) {
-                                dragPosition = nil; nearest = nil; pending = level == value ? nil : level
-                            }
-                            if level != value { onCommit(level) }
-                        })
+                    .animation(dragPosition == nil ? rangeMotion : nil, value: value)
+                    .overlay {
+                        EffortSliderGestures(thumbCenter: x + inset, thumbRadius: thumb / 2,
+                            enabled: enabled && interactionEnabled,
+                            onDrag: { preview(at: $0 - inset, width: width) },
+                            onSelect: { select(at: $0 - inset, width: width) },
+                            onCancel: { reset(keepingPending: true) })
+                            .id(scope)
+                            .id(geometry.size.width)
+                            .accessibilityHidden(true)
+                    }
                     .onChange(of: geometry.size.width) { _, _ in
-                        let wasTouching = touching
-                        reset(keepingPending: true); interrupted = wasTouching
+                        reset(keepingPending: true)
                     }
             }.frame(height: hit)
                 .allowsHitTesting(enabled && interactionEnabled)
@@ -257,23 +235,31 @@ private struct SteppedEffortSlider: View {
         .onAppear { localScope = scope; onPreview(label) }
         .onDisappear { onPreview(nil) }
         .onChange(of: label) { _, text in onPreview(text) }
-        .onChange(of: value) { _, _ in reset() }
-        .onChange(of: scope) { _, _ in
-            let wasTouching = touching
-            reset(); localScope = scope; interrupted = wasTouching
+        .onChange(of: value) { _, _ in pending = nil }
+        .onChange(of: scope) { _, _ in reset(); localScope = scope }
+        .onChange(of: enabled && interactionEnabled) { _, active in
+            if !active { reset(keepingPending: true) }
         }
-        .onChange(of: interactionEnabled) { _, active in
-            if !active { let wasTouching = touching; reset(keepingPending: true); interrupted = wasTouching }
-        }
-        .onChange(of: saving) { _, busy in if !busy { reset() } }
-        .onChange(of: touching) { _, active in
-            if !active { if dragPosition != nil { reset() }; gestureActive = false }
-        }
+        .onChange(of: saving) { _, busy in if !busy { pending = nil } }
     }
-    private func isVerticalSwipe(_ gesture: DragGesture.Value) -> Bool {
-        let vertical = abs(gesture.translation.height)
-        return vertical > max(8, abs(gesture.translation.width))
+
+    private func preview(at x: CGFloat, width: CGFloat) {
+        guard enabled, interactionEnabled, ownsState else { return }
+        let position = clamp(x, width: width)
+        dragPosition = position
+        nearest = stop(at: position, width: width)
     }
+
+    private func select(at x: CGFloat, width: CGFloat) {
+        guard enabled, interactionEnabled, ownsState else { return }
+        let level = stops[stop(at: x, width: width)]
+        withAnimation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 1)) {
+            reset()
+            pending = level == value ? nil : level
+        }
+        if level != value { onCommit(level) }
+    }
+
     private func center(_ index: Int, width: CGFloat) -> CGFloat {
         endInset + CGFloat(index) / CGFloat(max(1, stops.count - 1)) * max(0, width - endInset * 2)
     }
@@ -284,5 +270,72 @@ private struct SteppedEffortSlider: View {
     private func reset(keepingPending: Bool = false) {
         dragPosition = nil; nearest = nil
         if !keepingPending { pending = nil }
+    }
+}
+
+private struct EffortSliderGestures: UIViewRepresentable {
+    let thumbCenter: CGFloat
+    let thumbRadius: CGFloat
+    let enabled: Bool
+    let onDrag: (CGFloat) -> Void
+    let onSelect: (CGFloat) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        let coordinator = context.coordinator
+        let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.panChanged(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = coordinator
+        let tap = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.tapped(_:)))
+        tap.require(toFail: pan)
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(tap)
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.parent = self
+        view.isUserInteractionEnabled = enabled
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: EffortSliderGestures
+        private var grabOffset: CGFloat = 0
+        init(_ parent: EffortSliderGestures) { self.parent = parent }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            let offset = touch.location(in: gestureRecognizer.view).x - parent.thumbCenter
+            grabOffset = abs(offset) <= parent.thumbRadius ? offset : 0
+            return parent.enabled
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+            let translation = pan.translation(in: pan.view)
+            return abs(translation.x) >= abs(translation.y)
+        }
+
+        // Let vertical gestures scroll, and keep a recognized slider drag even outside the track.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            guard let surface = gestureRecognizer.view, let scroll = other.view as? UIScrollView else { return false }
+            return other === scroll.panGestureRecognizer && surface.isDescendant(of: scroll)
+        }
+
+        @objc func panChanged(_ pan: UIPanGestureRecognizer) {
+            let position = pan.location(in: pan.view).x - grabOffset
+            switch pan.state {
+            case .began, .changed: parent.onDrag(position)
+            case .ended: parent.onSelect(position)
+            case .cancelled, .failed: parent.onCancel()
+            default: break
+            }
+        }
+
+        @objc func tapped(_ tap: UITapGestureRecognizer) {
+            parent.onSelect(tap.location(in: tap.view).x)
+        }
     }
 }

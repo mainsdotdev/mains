@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { Button } from "@/components/ui";
+import { Button, Text } from "@/components/ui";
 import { Search } from "@/components/ui/icons";
 import { SpaceModePicker } from "@/features/workspace/components/space-mode-picker";
 import type { ModeId } from "../../../../shared/modes";
@@ -31,17 +31,16 @@ export function SidebarHeader({
   );
   return (
     <div className="flex w-full items-center gap-1">
-      <div className="flex min-w-0 flex-1 items-center">
-        {mode ? (
+      <Text as="h2" size="base" weight="medium" className="shrink-0 px-2">
+        Mains
+      </Text>
+      <div className="@container flex min-w-0 flex-1 items-center">
+        {mode && (
           <SpaceModePicker
             value={mode}
             providerId={providerId}
             onChange={onModeChange}
           />
-        ) : (
-          <span className="flex h-8 items-center px-2 text-base font-semibold text-primary-800 dark:text-primary-200">
-            Mains
-          </span>
         )}
       </div>
       <Button

@@ -253,7 +253,7 @@ struct FilePreviewNavigation<Content: View>: View {
                     }
                 }
         }
-        .padding(.top, AppNavigationStyle.topInset)
+        .safeAreaPadding(.top, AppNavigationStyle.topInset)
         .background(image ? Color.black : Color(.systemBackground))
         .preferredColorScheme(image ? .dark : nil)
     }

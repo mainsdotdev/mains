@@ -231,17 +231,44 @@ struct NewMateView: View {
     @Binding var draft: NewMateDraft
     let next: () -> Void
     @FocusState private var editingName: Bool
+    @State private var previewActive = false
 
     var body: some View {
+        ZStack {
+            // Draw on the moving page, including the area behind the status bar.
+            NewMateBackdrop(avatar: draft.avatar)
+            form
+        }
+        .background(alignment: .center) {
+            MatePickerAppearance(isVisible: $previewActive)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .mateCreationChrome("New Mate")
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Next") {
+                    editingName = false
+                    next()
+                }
+                .disabled(!draft.hasValidName)
+                .accessibilityIdentifier("nextMateStep")
+            }
+        }
+    }
+
+    private var form: some View {
         GeometryReader { geometry in
             let avatarHeight = min(330, max(220, geometry.size.height * 0.46))
             ScrollView {
                 VStack(spacing: 0) {
                     Spacer(minLength: 16)
-                    TextField("Mate name", text: $draft.name)
+                    TextField("Mate name", text: $draft.name,
+                              prompt: Text("Mate name").foregroundStyle(Color.primary.opacity(0.74)))
                         .font(.largeTitle.weight(.semibold))
                         .multilineTextAlignment(.center)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .textFieldStyle(.plain)
                         .textInputAutocapitalization(.words)
                         .submitLabel(.done)
@@ -253,7 +280,8 @@ struct NewMateView: View {
 
                     if let catalogue = MateRobotAssets.catalogue {
                         MateRobotPicker(catalogue: catalogue, avatar: $draft.avatar,
-                                        remembered: $draft.rememberedStyles, stageHeight: avatarHeight)
+                                        remembered: $draft.rememberedStyles, stageHeight: avatarHeight,
+                                        previewActive: previewActive)
                         Text("Swipe to choose. Hold and drag to rotate.")
                             .font(.caption).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -271,17 +299,6 @@ struct NewMateView: View {
             }
             .scrollBounceBehavior(.basedOnSize)
             .scrollDismissesKeyboard(.interactively)
-        }
-        .mateCreationChrome("New Mate")
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Next") {
-                    editingName = false
-                    next()
-                }
-                .disabled(!draft.hasValidName)
-                .accessibilityIdentifier("nextMateStep")
-            }
         }
     }
 
@@ -304,6 +321,72 @@ struct NewMateView: View {
         .accessibilityLabel("Team")
         .accessibilityValue(teamName)
         .disabled(teams.isEmpty)
+    }
+}
+
+private struct MatePickerAppearance: UIViewControllerRepresentable {
+    @Binding var isVisible: Bool
+
+    func makeUIViewController(context: Context) -> Controller {
+        Controller(isVisible: $isVisible)
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.isVisible = $isVisible
+    }
+
+    final class Controller: UIViewController {
+        var isVisible: Binding<Bool>
+
+        init(isVisible: Binding<Bool>) {
+            self.isVisible = isVisible
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        // Keep WebKit creation off the push and pop animations.
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            isVisible.wrappedValue = true
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            isVisible.wrappedValue = false
+        }
+    }
+}
+
+private struct NewMateBackdrop: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let avatar: MateAvatar
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        // Silver's catalogue tint follows the green iris. Use the casing color here.
+        let tint = avatar.shape == "metal-silver"
+            ? Color(red: 0.49, green: 0.62, blue: 0.73)
+            : MateRobotAssets.chatTint(for: avatar)
+        Rectangle()
+            .fill(tint)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.32), value: tint)
+            .mask(alignment: .center) {
+                LinearGradient(stops: [
+                    .init(color: .white.opacity(0.58), location: 0),
+                    .init(color: .white.opacity(0.53), location: 0.24),
+                    .init(color: .white.opacity(0.36), location: 0.50),
+                    .init(color: .white.opacity(0.14), location: 0.75),
+                    .init(color: .clear, location: 1)
+                ], startPoint: .top, endPoint: .bottom)
+            }
+            .opacity(colorScheme == .light ? 0.55 : 1)
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
@@ -578,13 +661,14 @@ struct CreatingMateView: View {
 
 private extension View {
     func mateCreationChrome(_ title: String) -> some View {
-        self.background(Color.black.ignoresSafeArea())
-            .environment(\.colorScheme, .dark)
-            .tint(.white)
-            .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Color.black, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarColorScheme(.dark, for: .navigationBar)
+        // The page carries its own fill through the push and pop transitions.
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            self
+        }
+        .tint(.primary)
+        .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
     }
 }
 
@@ -595,7 +679,7 @@ private extension View {
         Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
     }
     .font(.subheadline.weight(.medium))
-    .foregroundStyle(.white)
+    .foregroundStyle(.primary)
     .padding(.horizontal, 12)
     .frame(maxWidth: .infinity, minHeight: 44)
     .modifier(GlassSurface(radius: 22))

@@ -8,10 +8,14 @@ final class MainsUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApplication()
         _ = pairFixture(app, code: "ios-test")
+        let logo = app.images["sidebarMainsLogo"]
+        XCTAssertTrue(logo.waitForExistence(timeout: 5))
+        let sidebarHeaderY = logo.frame.midY
         app.buttons["closeSidebar"].tap()
         let sidebar = app.buttons["openSidebar"]
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
         let reference = sidebar.frame
+        XCTAssertEqual(reference.midY, sidebarHeaderY, accuracy: 1)
         attachScreenshot(app, name: "New chat header")
 
         func checkLeadingButton(file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
@@ -47,6 +51,28 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(addMate.frame.midY, reference.midY, accuracy: 1)
         XCTAssertEqual(app.frame.maxX - addMate.frame.midX, reference.midX - app.frame.minX, accuracy: 1)
         attachScreenshot(app, name: "Mates header")
+        let firstMate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(firstMate.waitForExistence(timeout: 5))
+        let firstMateY = firstMate.frame.minY
+        addMate.tap()
+        XCTAssertTrue(app.navigationBars["New Mate"].waitForExistence(timeout: 5))
+        let newMateBack = checkLeadingButton()
+        XCTAssertEqual(app.buttons["nextMateStep"].frame.midY, reference.midY, accuracy: 1)
+        attachScreenshot(app, name: "New Mate header")
+        let name = app.textFields["mateName"]
+        name.tap()
+        name.typeText("Hi")
+        app.buttons["nextMateStep"].tap()
+        XCTAssertTrue(app.navigationBars["Model & Effort"].waitForExistence(timeout: 5))
+        let modelBack = checkLeadingButton()
+        XCTAssertEqual(app.buttons["createMate"].frame.midY, reference.midY, accuracy: 1)
+        attachScreenshot(app, name: "Model & Effort header")
+        modelBack.tap()
+        XCTAssertTrue(app.navigationBars["New Mate"].waitForExistence(timeout: 5))
+        XCTAssertEqual(name.value as? String, "Hi")
+        newMateBack.tap()
+        XCTAssertTrue(app.navigationBars["Mates"].waitForExistence(timeout: 5))
+        XCTAssertEqual(firstMate.frame.minY, firstMateY, accuracy: 1)
         matesBack.tap()
 
         openSidebar(app)
@@ -109,6 +135,99 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Mate chat opened."].waitForExistence(timeout: 10))
         app.navigationBars.buttons["BackButton"].tap()
         app.navigationBars.buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateCreationFollowsTheSelectedAppearance() throws {
+        continueAfterFailure = false
+
+        for appearance in ["light", "dark"] {
+            let app = makeApplication()
+            app.launchArguments += ["-appearancePreference", appearance]
+            _ = pairFixture(app, code: "ios-test")
+
+            func checkBackground(_ step: String) throws {
+                let screenshot = app.screenshot()
+                let image = try XCTUnwrap(screenshot.image.cgImage)
+                let pixelRect = CGRect(x: image.width / 8, y: image.height / 4, width: 1, height: 1)
+                let sample = try XCTUnwrap(image.cropping(to: pixelRect))
+                var bytes = [UInt8](repeating: 0, count: 4)
+                try bytes.withUnsafeMutableBytes { buffer in
+                    let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                    context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                }
+                let brightness = bytes.prefix(3).map(Int.init).reduce(0, +) / 3
+                if appearance == "light" { XCTAssertGreaterThan(brightness, 190, step) }
+                else { XCTAssertLessThan(brightness, 145, step) }
+                let attachment = XCTAttachment(screenshot: screenshot)
+                attachment.name = "\(step) – \(appearance)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+
+            app.buttons["openMates"].tap()
+            let newMate = app.buttons["newMate"]
+            XCTAssertTrue(newMate.waitForExistence(timeout: 5))
+            newMate.tap()
+            let name = app.textFields["mateName"]
+            XCTAssertTrue(name.waitForExistence(timeout: 5))
+            try checkBackground("New Mate")
+            name.tap()
+            name.typeText("Theme test")
+            app.buttons["nextMateStep"].tap()
+            let create = app.buttons["createMate"]
+            XCTAssertTrue(create.waitForExistence(timeout: 5))
+            try checkBackground("Model & Effort")
+            create.tap()
+            XCTAssertTrue(app.staticTexts["creatingMateStatus"].waitForExistence(timeout: 5))
+            try checkBackground("Creating Mate")
+
+            XCTAssertTrue(app.navigationBars["Theme test"].waitForExistence(timeout: 10))
+            app.navigationBars["Theme test"].buttons["BackButton"].tap()
+            app.navigationBars["Mates"].buttons["BackButton"].tap()
+            forgetFixture(app)
+        }
+    }
+
+    func testMateEffortSliderKeepsTheThumbDuringADrag() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["openMates"].tap()
+        let newMate = app.buttons["newMate"]
+        XCTAssertTrue(newMate.waitForExistence(timeout: 5))
+        newMate.tap()
+        let name = app.textFields["mateName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap()
+        name.typeText("Slider test")
+        app.buttons["nextMateStep"].tap()
+
+        let slider = app.descendants(matching: .any)["effortSlider"]
+        XCTAssertTrue(slider.waitForExistence(timeout: 5))
+        let center = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        center.tap()
+        XCTAssertEqual(slider.value as? String, "Medium")
+        let thumbEdge = center.withOffset(CGVector(dx: 16, dy: 0))
+        let highBoundary = (slider.frame.width / 2 - 37) / 2
+        let pastBoundary = center.withOffset(CGVector(dx: highBoundary + 6, dy: 0))
+        thumbEdge.press(forDuration: 0.05, thenDragTo: pastBoundary, withVelocity: .slow, thenHoldForDuration: 0.2)
+        XCTAssertEqual(slider.value as? String, "Medium", "Grabbing the edge keeps the thumb center behind the touch.")
+
+        let outsideTrack = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: -0.4))
+        thumbEdge.press(forDuration: 0.05, thenDragTo: outsideTrack, withVelocity: .slow, thenHoldForDuration: 0.2)
+        XCTAssertEqual(slider.value as? String, "High")
+
+        let vertical = center.withOffset(CGVector(dx: 0, dy: -80))
+        center.press(forDuration: 0.05, thenDragTo: vertical, withVelocity: .slow, thenHoldForDuration: 0.2)
+        XCTAssertEqual(slider.value as? String, "High")
+
+        slider.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
+        XCTAssertEqual(slider.value as? String, "Low")
+        app.navigationBars["Model & Effort"].buttons["BackButton"].tap()
+        app.navigationBars["New Mate"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
         forgetFixture(app)
     }
 
@@ -266,6 +385,45 @@ final class MainsUITests: XCTestCase {
 
         app.navigationBars.buttons["BackButton"].tap()
         app.navigationBars["Kitchen Mate"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateChatKeepsItsHeaderWhileTheProfileLoads() async throws {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test")
+        app.buttons["openMates"].tap()
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        mate.tap()
+        let chat = app.staticTexts["Release check 1"]
+        XCTAssertTrue(chat.waitForExistence(timeout: 5))
+
+        var hold = URLRequest(url: URL(string: "http://127.0.0.1:18787/test/hold-mate-details")!)
+        hold.httpMethod = "POST"
+        _ = try await URLSession.shared.data(for: hold)
+        chat.tap()
+
+        let header = app.descendants(matching: .any).matching(identifier: "mateConversationHeader").firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 3))
+        XCTAssertEqual(header.label, "Mate")
+        XCTAssertFalse(app.navigationBars["Release check 1"].exists)
+        let nameBottom = header.frame.maxY
+        let backButton = app.navigationBars.buttons["BackButton"]
+        let toolbarCenter = backButton.frame.midY
+        attachScreenshot(app, name: "Mate chat – avatar placeholder")
+
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Fixture Mate"), object: header)
+        let result = await XCTWaiter.fulfillment(of: [loaded], timeout: 10)
+        XCTAssertEqual(result, .completed)
+        XCTAssertEqual(header.frame.maxY, nameBottom, accuracy: 1)
+        XCTAssertEqual(backButton.frame.midY, toolbarCenter, accuracy: 1)
+        attachScreenshot(app, name: "Mate chat – avatar loaded")
+
+        backButton.tap()
+        XCTAssertTrue(chat.waitForExistence(timeout: 5))
+        app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
         app.navigationBars["Mates"].buttons["BackButton"].tap()
         forgetFixture(app)
     }

@@ -35,7 +35,8 @@ struct SidebarView: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            header.padding(.horizontal, horizontalInset).padding(.top, 12).padding(.bottom, 12)
+            header.padding(.horizontal, horizontalInset)
+                .frame(height: 72, alignment: .top)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if session.pairing != nil {
@@ -133,10 +134,11 @@ struct SidebarView: View {
                     .frame(width: 20, height: 20).foregroundStyle(.black)
                     .frame(width: 40, height: 40).background(Color(white: 0.92), in: .circle)
                     .frame(width: 44, height: 44).accessibilityLabel("Mains")
+                    .accessibilityIdentifier("sidebarMainsLogo")
                 modeSwitcher(showLabel: geometry.size.width >= labeledWidth && !dynamicTypeSize.isAccessibilitySize)
                 Spacer(minLength: 0)
-            }.frame(height: 48)
-        }.frame(height: 48)
+            }.frame(height: AppNavigationStyle.inlineToolbarHeight)
+        }.frame(height: AppNavigationStyle.inlineToolbarHeight)
     }
     private var bottomBar: some View {
         GeometryReader { geometry in
