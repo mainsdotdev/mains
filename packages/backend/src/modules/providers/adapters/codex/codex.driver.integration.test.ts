@@ -255,6 +255,25 @@ describe("codex.driver / app-server protocol", () => {
     else expect(capabilities).not.toHaveProperty("requiredHumanApproval");
   });
 
+  it.each([
+    ["0.169.0", "Codex withheld this response."],
+    ["0.170.0", "Codex blocked this response."],
+  ])("projects only completed, display-approved answers from Codex %s", async (version, notice) => {
+    vi.stubEnv("MAINS_CODEX_FIXTURE_VERSION", version);
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const acquired = await driver.createSession({ ...request("answer-display"), goal: "answer display" });
+    const events: Array<Record<string, unknown>> = [];
+    const outcome = await driver.executePrompt(
+      acquired.session, acquired.prompt, async (event) => { events.push({ ...event }); }, new AbortController().signal,
+    );
+    expect(outcome.status).toBe("succeeded");
+    const reports = events.filter((event) => event.type === "artifact" && event.kind === "report");
+    expect(reports.map((event) => event.content)).toEqual([notice, "Ordinary test answer"]);
+    expect(reports.some((event) => event.ephemeral)).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("Private ");
+  });
+
   it("routes a native human command to one-call approval and waits for the response", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-human-command-"));
     tempDirs.push(dir);

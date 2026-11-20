@@ -424,6 +424,25 @@ input.on("line", (line) => {
             delta: "Final answer",
           });
         }
+        if (prompt === "answer display") {
+          const threadId = params.threadId;
+          const itemId = "withheld-answer";
+          notify("item/agentMessage/delta", { threadId, turnId, itemId, delta: "Private test draft" });
+          notify("item/completed", {
+            threadId, turnId,
+            item: {
+              type: "agentMessage", id: itemId, text: "Private test answer", phase: "final_answer",
+              moderation: fixtureCliVersion === "0.169.0"
+                ? { moderated: true, display: { action: "futureAction" } }
+                : { moderated: true, display: { mode: "block", version: 1, reason: { kind: "protection", protectionType: "test" } } },
+            },
+          });
+          notify("item/completed", {
+            threadId, turnId,
+            item: { type: "agentMessage", id: "ordinary-answer", text: "Ordinary test answer", moderation: null },
+          });
+          notify("item/agentMessage/delta", { threadId, turnId, itemId: "unfinished-answer", delta: "Private unfinished draft" });
+        }
         if (prompt.includes("parallel")) {
           notify("item/agentMessage/delta", {
             threadId: params.threadId,

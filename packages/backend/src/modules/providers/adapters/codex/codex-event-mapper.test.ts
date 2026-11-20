@@ -861,6 +861,77 @@ describe("Codex event mapper", () => {
     ]);
   });
 
+  it.each([
+    [null, "Test answer"],
+    [{ moderated: false, display: null }, "Test answer"],
+    [{ moderated: true, display: { version: 1, mode: "show", trustedContacts: "skip" } }, "Test answer"],
+    [{ moderated: true, display: { version: 1, mode: "show", trustedContacts: "check", annotation: { kind: "wellbeingHelpline", subject: "answer" } } },
+      "Test answer\n\nCodex recommends reaching out for support."],
+    [{ moderated: true, display: { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } } },
+      "Codex hid this response and recommends reaching out for support."],
+    [{ moderated: true, display: null }, "Codex withheld this response."],
+    [{ moderated: true, display: { version: 2, mode: "show" } }, "Codex withheld this response."],
+  ])("projects the completed answer using moderation %j", (moderation, text) => {
+    const { mapper } = createHarness();
+    const events = mapper.mapNotification("item/completed", {
+      threadId: "thread-parent",
+      item: { id: "answer", type: "agentMessage", text: "Test answer", phase: "final_answer", moderation },
+    }, "run-1");
+    expect(events).toEqual([expect.objectContaining({
+      type: "artifact", kind: "report", content: text,
+      metadata: expect.objectContaining({ itemId: "answer", messagePhase: "final_answer" }),
+    })]);
+  });
+
+  it("excludes files referenced only in a hidden answer", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-answer-"));
+    tempDirs.push(root);
+    const image = path.join(root, "answer.png");
+    fs.writeFileSync(image, Buffer.from(ONE_PIXEL_PNG, "base64"));
+    const { mapper } = createHarness(createRunState(root));
+    const threadId = "thread-parent";
+    const answer = { type: "agentMessage", text: `Created ${image}` };
+    const withheld = mapper.mapNotification("item/completed", {
+      threadId,
+      item: { ...answer, id: "hidden", moderation: { moderated: true, display: { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } } } },
+    }, "run-1");
+    expect(JSON.stringify(withheld)).not.toContain(image);
+    const shown = mapper.mapNotification("item/completed", {
+      threadId, item: { ...answer, id: "shown" },
+    }, "run-1");
+    expect(shown).toContainEqual(expect.objectContaining({
+      type: "artifact", kind: "image", metadata: expect.objectContaining({ path: image }),
+    }));
+  });
+
+  it("uses the blocked notice in a child transcript and its terminal result", () => {
+    const { mapper, state } = createHarness();
+    state.requireCompletedAgentMessages = true;
+    state.subAgents.set("child", { threadId: "child", spawnItemId: "spawn" });
+    const transcript = mapper.mapNotification("item/completed", {
+      threadId: "child",
+      item: {
+        id: "answer", type: "agentMessage", text: "Private child answer",
+        moderation: { moderated: true, display: { version: 1, mode: "block", reason: { kind: "protection", protectionType: "test" } } },
+      },
+    }, "run-1");
+    expect(transcript).toContainEqual(expect.objectContaining({
+      type: "artifact", kind: "report", content: "Codex blocked this response.",
+      metadata: expect.objectContaining({ isFromSubagent: true, itemId: "answer" }),
+    }));
+    const terminal = mapper.mapNotification("item/completed", {
+      threadId: "thread-parent",
+      item: {
+        id: "wait", type: "collabAgentToolCall", tool: "wait", status: "completed",
+        receiverThreadIds: ["child"], agentsStates: { child: { status: "completed", message: "Private child answer" } },
+      },
+    }, "run-1");
+    expect(terminal).toContainEqual(expect.objectContaining({
+      type: "subagent", phase: "completed", result: "Codex blocked this response.",
+    }));
+    expect(JSON.stringify([...transcript, ...terminal])).not.toContain("Private child answer");
+  });
+
   it("surfaces a completed async agent message and its questions without deltas", () => {
     const { mapper } = createHarness();
     const notification = {

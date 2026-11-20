@@ -85,9 +85,10 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.167.0";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.170.0";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
+const CODEX_ANSWER_MODERATION_VERSION = "0.169.0";
 
 function compareCodexVersions(left: string, right: string): number | null {
   const parse = (value: string): [number, number, number] | null => {
@@ -637,7 +638,6 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     await server.start(binaryPath, spawnCwd, env);
     scope.assertActive();
     appServer = server;
-    runCoordinator.installDispatcher(server);
 
     // Handshake: initialize → initialized (required before any other RPC)
     const cliVersion = await getCodexVersion();
@@ -669,6 +669,11 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         `Codex app-server initialize response is incompatible with protocol ${CODEX_APP_SERVER_PROTOCOL_VERSION}`,
       );
     }
+    // Use the running process's version when available; the CLI file can be
+    // updated between the version probe and app-server startup.
+    const serverVersion = initializeResponse.userAgent.match(/^[^/\s]+\/(\d+\.\d+\.\d+)/)?.[1] ?? cliVersion;
+    const moderationComparison = serverVersion ? compareCodexVersions(serverVersion, CODEX_ANSWER_MODERATION_VERSION) : null;
+    runCoordinator.installDispatcher(server, (moderationComparison ?? 0) >= 0);
     server.sendNotification("initialized");
 
     // Background handler: captures notifications that arrive after turn completes

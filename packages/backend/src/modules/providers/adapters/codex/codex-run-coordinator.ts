@@ -110,6 +110,7 @@ export function createCodexRunCoordinator(
   const runSinks = new Map<string, CodexRunSink>();
   const serverRequestOwners = new Map<string, string>();
   const turnOwners = new Map<string, string>();
+  const serversWithAnswerModeration = new WeakSet<CodexAppServer>();
   const closingStatusWrites = new Set<Promise<void>>();
   const realtimeOwners = new Map<string, {
     model: string | undefined;
@@ -399,7 +400,8 @@ export function createCodexRunCoordinator(
     return undefined;
   }
 
-  function installDispatcher(server: CodexAppServer): void {
+  function installDispatcher(server: CodexAppServer, hasAnswerModeration = false): void {
+    if (hasAnswerModeration) serversWithAnswerModeration.add(server);
     server.setNotificationHandler((method, params) => {
       if (method === "serverRequest/resolved") {
         const requestId = (
@@ -633,6 +635,8 @@ export function createCodexRunCoordinator(
     onEvent: WorkRunEventHandler,
     timeout: number,
   ): Promise<TurnCompletion> {
+    const state = activeRuns.get(runId);
+    if (state) state.requireCompletedAgentMessages = serversWithAnswerModeration.has(server);
     return new Promise((resolve) => {
       let resolved = false;
 

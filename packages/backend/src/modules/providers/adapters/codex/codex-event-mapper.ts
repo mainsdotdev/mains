@@ -45,6 +45,34 @@ function optionalString(value: unknown): string | undefined {
     : undefined;
 }
 
+function projectAgentMessage(item: ThreadItem, text = optionalString(item.text) ?? "") {
+  const moderation = objectRecord(item.moderation);
+  if (item.moderation == null || (moderation?.moderated === false && moderation.display == null)) {
+    return { text, questions: normalizeAsyncQuestions(item.questions) };
+  }
+
+  const display = objectRecord(moderation?.display);
+  if (display?.version === 1) {
+    if (display.mode === "hide" && objectRecord(display.replacement)?.kind === "wellbeingPromptHelpline") {
+      return { text: "Codex hid this response and recommends reaching out for support.", questions: [] };
+    }
+    if (display.mode === "block") {
+      return { text: "Codex blocked this response.", questions: [] };
+    }
+    if (display.mode === "show" && (display.trustedContacts === "check" || display.trustedContacts === "skip")) {
+      const annotation = objectRecord(display.annotation);
+      if (display.annotation == null) return { text, questions: normalizeAsyncQuestions(item.questions) };
+      if (annotation?.kind === "wellbeingHelpline" && (annotation.subject === "prompt" || annotation.subject === "answer")) {
+        const notice = "Codex recommends reaching out for support.";
+        return { text: text ? `${text}\n\n${notice}` : notice, questions: normalizeAsyncQuestions(item.questions) };
+      }
+    }
+  }
+
+  // Legacy or unrecognized moderation decisions do not authorize showing the body.
+  return { text: "Codex withheld this response.", questions: [] };
+}
+
 function fileChanges(value: unknown): Array<{ path: string; kind: string; diff?: string }> | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.flatMap((value) => {
@@ -370,6 +398,7 @@ export interface CodexEventRunState extends CodexRuntimeStatusState {
   /** Survives usage flushing until this projection state is released. */
   reportedErrors?: Set<string>;
   completedFileChangeItems?: Set<string>;
+  requireCompletedAgentMessages?: boolean;
   currentMessageItemId: string | null;
   agentMessageBuffer: string;
   /** Prevents completed-item replay from duplicating persisted assistant text. */
@@ -1764,13 +1793,11 @@ export function createCodexEventMapper(
             runState.lastPlanSnapshot = null;
           } else if (runState && threadId) {
             const meta = runState.subAgents.get(threadId);
-            if (
-              meta?.spawnItemId &&
-              meta.lastRunningTurnId !== turnId &&
-              meta.terminalEmitted !== false
-            ) {
+            if (!meta || meta.lastRunningTurnId === turnId) break;
+            meta.lastRunningTurnId = turnId;
+            if (runState.requireCompletedAgentMessages) meta.lastMessage = undefined;
+            if (meta.spawnItemId && meta.terminalEmitted !== false) {
               meta.activeTurnId = turnId;
-              meta.lastRunningTurnId = turnId;
               meta.terminalEmitted = false;
               meta.terminalPhase = undefined;
               events.push({
@@ -1982,17 +2009,11 @@ export function createCodexEventMapper(
             // and persist each as an artifact tagged with the spawn anchor —
             // that is what the subagent detail tab renders as chat flow. The
             // main transcript's grouping drops `isFromSubagent` artifacts.
-            const subMessage =
-              typeof item?.text === "string"
-                ? stripAnnotationMarkers(item.text).trim()
-                : "";
-            const subQuestions = normalizeAsyncQuestions(item?.questions);
-            if (
-              meta &&
-              method === "item/completed" &&
-              (item?.type === "agentMessage" || item?.type === "agent_message") &&
-              (subMessage || subQuestions.length > 0)
-            ) {
+            if (meta && method === "item/completed" &&
+              (item?.type === "agentMessage" || item?.type === "agent_message")) {
+              const projected = projectAgentMessage(item);
+              const subMessage = stripAnnotationMarkers(projected.text).trim();
+              const subQuestions = projected.questions;
               if (subMessage) meta.lastMessage = subMessage;
               if (meta.spawnItemId) {
                 if (subMessage) {
@@ -2111,6 +2132,10 @@ export function createCodexEventMapper(
 
       // Streaming delta: accumulate agent message text per itemId
       case "item/agentMessage/delta": {
+        // The display decision arrives with the completed item. Earlier
+        // deltas must never enter a preview or the end-of-turn fallback.
+        if (runState?.requireCompletedAgentMessages) break;
+
         // Skip sub-thread deltas — they would garble the parent's streaming buffer
         const deltaThreadId = (p?.threadId ?? p?.thread_id) as string | undefined;
         const parentForDelta = getRunState(runId);
@@ -2736,6 +2761,7 @@ export function createCodexEventMapper(
    */
   function mapThreadItem(item: ThreadItem, eventMethod: string, ts: number, runId: string, foreground = true): WorkRunEvent[] {
     const events: WorkRunEvent[] = [];
+    let artifactSource = item;
     const phase: ThreadItemPhase = eventMethod.endsWith("/started") ? "start" :
       eventMethod.endsWith("/completed") ? "complete" : "update";
     if (foreground && phase === "start") clearReasoning(events, runId, item.type === "reasoning" ? item.id : undefined);
@@ -2786,8 +2812,7 @@ export function createCodexEventMapper(
             const itemText = typeof item.text === "string"
               ? item.text.trim()
               : "";
-            const messageText = bufferedText || itemText;
-            const questions = normalizeAsyncQuestions(item.questions);
+            const { text: messageText, questions } = projectAgentMessage(item, bufferedText || itemText);
             const messagePhase = typeof item.phase === "string"
               ? item.phase
               : undefined;
@@ -2831,9 +2856,10 @@ export function createCodexEventMapper(
               rs.agentMessageBuffer = "";
               rs.currentMessageItemId = null;
             }
+            emitImageArtifacts(events, runId, { text: messageText, questions }, ts);
           }
         }
-        break;
+        return events;
       }
       case "userMessage":
         // Internal — no UI event needed.
@@ -3432,6 +3458,9 @@ export function createCodexEventMapper(
 
         // Resolve sub-agent metadata captured up-front by maybeResolveCollabSubAgents
         const runStateCollab = runId ? getRunState(runId) : undefined;
+        if (runStateCollab?.requireCompletedAgentMessages) {
+          artifactSource = { ...item, agentsStates: undefined, agents_states: undefined };
+        }
         const subAgents = receiverThreadIds.map((id) => {
           const meta = runStateCollab?.subAgents.get(id);
           return {
@@ -3590,8 +3619,9 @@ export function createCodexEventMapper(
               const terminalPhase = collabTerminalPhase(state.status);
               if (!meta || !terminalPhase) continue;
               const failed = terminalPhase === "failed";
+              const result = runStateCollab.requireCompletedAgentMessages ? meta.lastMessage : (state.message ?? meta.lastMessage);
               const settled = settleSubAgent(meta, threadId, terminalPhase, ts, {
-                result: failed ? undefined : (state.message ?? meta.lastMessage),
+                result: failed ? undefined : result,
                 error: failed ? (state.message ?? "Sub-agent errored") : undefined,
                 extraMetadata: { collabStatus: state.status },
               });
@@ -3619,18 +3649,14 @@ export function createCodexEventMapper(
     const isImageGeneration = item.type === "imageGeneration" || item.type === "image_generation";
     const isImageView = item.type === "imageView" || item.type === "image_view";
     if (phase === "complete" && !isImageGeneration && !isImageView) {
-      emitImageArtifacts(events, runId, item, ts);
+      emitImageArtifacts(events, runId, artifactSource, ts);
     }
     // Agent messages are scanned above after citation directives are removed;
     // treating a cited source as an output document would misfile it as a
     // deliverable. Other item types still scan on every phase: a command like
     // `qlmanage … report.docx` can name a document before it completes.
-    if (
-      !isImageGeneration &&
-      item.type !== "agentMessage" &&
-      item.type !== "agent_message"
-    ) {
-      emitDocumentArtifacts(events, runId, item, ts);
+    if (!isImageGeneration) {
+      emitDocumentArtifacts(events, runId, artifactSource, ts);
     }
 
     return events;

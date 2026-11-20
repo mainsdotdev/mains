@@ -1,5 +1,5 @@
 {
-  "cliVersion": "0.167.0",
+  "cliVersion": "0.170.0",
   "files": [
     {
       "path": "AbsolutePathBuf.ts",
@@ -47,7 +47,7 @@
     },
     {
       "path": "FunctionCallOutputContentItem.ts",
-      "sha256": "b9054d9f4e5a85b84d60493eecda675af9ebde7f15d98e09e3213aba3ef02e17"
+      "sha256": "8225d53a198d8f3cb78dad689cc63d291165e1f918d525b3435eb56b24b54f99"
     },
     {
       "path": "ImageDetail.ts",
@@ -254,8 +254,24 @@
       "sha256": "2fa497987aab791b697c9dee5cdd634ec566bf0b82cd56b5a796f26241a95957"
     },
     {
+      "path": "v2/AgentMessageDisplay.ts",
+      "sha256": "d5a6c49a7ae3b3a1ecb13ed412339afdb274ebc9fded59beea372e0534a58001"
+    },
+    {
+      "path": "v2/AgentMessageModeration.ts",
+      "sha256": "205603ad778b43049a1b4f6837645e4bf4a60a279587d4517af0b133071024cf"
+    },
+    {
       "path": "v2/AllowDenyRequirement.ts",
       "sha256": "1679d0a3a65f1da1e274a5540f31e0d6ccc0afea2c18cad9ca8db8fa2f3d2c01"
+    },
+    {
+      "path": "v2/AnswerAnnotation.ts",
+      "sha256": "46d3dcc7fda90446a4b57b200ae39d71619f06f25ff860054908930843b85ec6"
+    },
+    {
+      "path": "v2/AnswerReplacement.ts",
+      "sha256": "7251c539d68463fc1ce6fd468cea4e9bc8e7b7e449a7c97062fb409494bfc927"
     },
     {
       "path": "v2/AppBranding.ts",
@@ -350,6 +366,10 @@
       "sha256": "06f524009ba3c67c54612c9b878dbf90a0e1176c79b10e51c17feaf1464d50dd"
     },
     {
+      "path": "v2/BlockReason.ts",
+      "sha256": "a9a39125450da2e5d6fa9d421ee4c0c478bb78ab6c6f0e51c264cb21fb0d1d6c"
+    },
+    {
       "path": "v2/BrowserUseAccessApprovalLifetime.ts",
       "sha256": "e875e8c91e97c70297d7a1f10bd7f28daf21724ae717c74720207d635d6c29b4"
     },
@@ -379,7 +399,7 @@
     },
     {
       "path": "v2/CodexErrorInfo.ts",
-      "sha256": "288b1dcae273c89677eef35fdd70d7645643e500614e505cda29f683d36a1935"
+      "sha256": "481d8f8996504aad6553cf8811257313a17faa1718b5916c0fbd9f864dde5c5a"
     },
     {
       "path": "v2/CollabAgentState.ts",
@@ -591,7 +611,7 @@
     },
     {
       "path": "v2/GetAccountResponse.ts",
-      "sha256": "e0d48a4d1993b7637062f347ebc7e943615de9b74c56afb2558ca1b024517cf3"
+      "sha256": "c026bf25c71339b9a748da9f09d247add1c7c4725e7255b4d7d99cb03ba058de"
     },
     {
       "path": "v2/GitInfo.ts",
@@ -620,6 +640,10 @@
     {
       "path": "v2/GuardianUserAuthorization.ts",
       "sha256": "fa796e3b1473b7ff56348b9f50b6aeb98dd292474edbc3840449e172372fc75a"
+    },
+    {
+      "path": "v2/HelplineSubject.ts",
+      "sha256": "83f105873f15bb1bad33166a2efec265fe860642ab7c3acd8d1f95f595c43caf"
     },
     {
       "path": "v2/HookCompletedNotification.ts",
@@ -719,7 +743,7 @@
     },
     {
       "path": "v2/McpResourceReadParams.ts",
-      "sha256": "68e5d44798d10810e3b75faad06f3abcd426d583033ee39ab5a0f991cd24a75c"
+      "sha256": "d86c2e30e267a873a0967a542e37af6222b4d45d3c337a59ac4dc6f16406727d"
     },
     {
       "path": "v2/McpResourceReadResponse.ts",
@@ -815,7 +839,7 @@
     },
     {
       "path": "v2/ModelListParams.ts",
-      "sha256": "9749040f93232fee23f044d307fd69eb08fea77eb6c56b1d04593d7533dd7bf4"
+      "sha256": "d1bd9aedff2d5e25a47e1330ad7450d9dcac35bc47ee023878cd7868eb35d112"
     },
     {
       "path": "v2/ModelListResponse.ts",
@@ -979,7 +1003,7 @@
     },
     {
       "path": "v2/PluginInterface.ts",
-      "sha256": "41d7d65beeae405f08c41c346e6a7dd4083907c1b286343f59fe52dfdf50698e"
+      "sha256": "ece1cdcf81e5308abb7af4b7e6bd5fee1803cd47c316559654b8a90cbdf12045"
     },
     {
       "path": "v2/PluginListMarketplaceKind.ts",
@@ -1191,7 +1215,7 @@
     },
     {
       "path": "v2/Thread.ts",
-      "sha256": "1f9dc096a3c6735956ce38cbb7527e35b13e9ed663254ee13dba7414eab6d28c"
+      "sha256": "69aef3ea80d72a43f3513e956f90396cbb1285638fb14b5c151e347be299a899"
     },
     {
       "path": "v2/ThreadActiveFlag.ts",
@@ -1271,7 +1295,7 @@
     },
     {
       "path": "v2/ThreadItem.ts",
-      "sha256": "3cb8211f7a24818527d5b9f2d77b1e606bcd164959f821f162611f7497a7d605"
+      "sha256": "55b1c9faf87ac8827c690566df253a7de5b5f3df5a2391f3b3696162e24b3380"
     },
     {
       "path": "v2/ThreadReadParams.ts",
@@ -1444,6 +1468,10 @@
     {
       "path": "v2/ThreadUnsubscribeStatus.ts",
       "sha256": "0efe48aff131c9c0270d6ad2c5db92e4660e7e89a27d03c05053648ac349382a"
+    },
+    {
+      "path": "v2/TrustedContacts.ts",
+      "sha256": "843a38c0dbab1609ec052b41133cfcc04fb222bd5290f5d4e7ee489e7b4b6829"
     },
     {
       "path": "v2/Turn.ts",
