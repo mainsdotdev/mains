@@ -1502,13 +1502,10 @@ final class MainsUITests: XCTestCase {
         openSidebar(app); app.buttons["openSettings"].tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Test Mac"].exists)
+        XCTAssertTrue(app.staticTexts["Connection details"].isHittable)
         attachScreenshot(app, name: "Settings – compact groups in system appearance")
         let sync = app.buttons["syncNow"]
         XCTAssertTrue(sync.isEnabled); sync.tap()
-        let copy = app.buttons["copyDiagnostics"]
-        scrollTo(copy, in: app); copy.tap()
-        let copied = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Copied"), object: copy)
-        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 3), .completed)
         let dark = app.buttons["appearance-dark"]
         scrollTo(dark, in: app); dark.tap()
         XCTAssertTrue(dark.isSelected)
@@ -1520,16 +1517,22 @@ final class MainsUITests: XCTestCase {
         let version = app.staticTexts["settingsAppVersion"]
         XCTAssertTrue(version.isHittable)
         XCTAssertTrue(version.label.hasPrefix("App Version "))
-        let sign = app.descendants(matching: .any).matching(identifier: "settingsTokyoSign").firstMatch
+        let sign = app.buttons["settingsTokyoSign"]
         XCTAssertTrue(sign.isHittable)
-        XCTAssertEqual(sign.label, "Live from Tokyo")
-        attachScreenshot(app, name: "Settings – Tokyo sign in English")
+        let firstLanguage = sign.label
+        XCTAssertTrue(["Live from Tokyo", "東京から生中継"].contains(firstLanguage))
+        let otherLanguage = firstLanguage == "Live from Tokyo" ? "東京から生中継" : "Live from Tokyo"
+        sign.tap()
+        XCTAssertEqual(sign.label, otherLanguage)
 
-        let japaneseSign = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "東京から生中継"), object: sign)
-        XCTAssertEqual(XCTWaiter.wait(for: [japaneseSign], timeout: 8), .completed)
-        attachScreenshot(app, name: "Settings – Tokyo sign in Japanese")
-        let englishSign = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Live from Tokyo"), object: sign)
-        XCTAssertEqual(XCTWaiter.wait(for: [englishSign], timeout: 6), .completed)
+        let automaticChange = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", firstLanguage), object: sign)
+        XCTAssertEqual(XCTWaiter.wait(for: [automaticChange], timeout: 6), .completed)
+        attachScreenshot(app, name: "Settings – support and Tokyo sign")
+
+        let copy = app.buttons["copyDiagnostics"]
+        XCTAssertTrue(copy.isHittable); copy.tap()
+        let copied = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Copied"), object: copy)
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 3), .completed)
 
         sharing.tap()
         let codex = app.buttons["consent-codex"]
@@ -1546,6 +1549,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(dark.isSelected, "Appearance persists across app launches.")
         attachScreenshot(app, name: "Settings – compact groups in dark appearance")
         app.buttons["appearance-system"].tap()
+        if !app.buttons["forgetComputer"].isHittable { app.swipeDown() }
         forgetFromSettings(app)
         XCTAssertTrue(app.buttons["scanPairingCode"].waitForExistence(timeout: 5))
     }

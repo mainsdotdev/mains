@@ -51,16 +51,8 @@ struct ComputerView: View {
                         SettingsRow(title: "Pair a computer", symbol: "chevron.right",
                                     subtitle: "Connect to Mains with a pairing code")
                     }
-                } else if let pairing = session.pairing {
+                } else if session.pairing != nil {
                     computerSummary
-                    SettingsRow(title: "Address", subtitle: fallbackAddresses, value: endpoint.map(Self.host) ?? "—")
-                    SettingsRow(title: "Mains version", value: descriptor?.appVersion ?? "—")
-                    timestampRow("Paired", date: pairing.pairedAt, empty: "—")
-                    timestampRow("Last synced", date: session.lastSyncedAt, empty: "Not yet")
-                    Button(role: .destructive) { forget = true } label: {
-                        SettingsRow(title: "Forget this computer", symbol: "xmark.circle", destructive: true)
-                    }
-                    .accessibilityIdentifier("forgetComputer")
                 } else {
                     SettingsRow(title: "No computer paired", symbol: "desktopcomputer",
                                 subtitle: "Start Mains on your computer, then scan its pairing code.")
@@ -68,15 +60,8 @@ struct ComputerView: View {
                         SettingsRow(title: "Scan pairing code", symbol: "chevron.right")
                     }
                 }
-            }
-            if session.pairing != nil {
-                SettingsSection {
-                    Button { Task { await session.refresh() } } label: {
-                        SettingsRow(title: session.refreshing ? "Syncing…" : "Sync now", symbol: "arrow.clockwise",
-                                    subtitle: session.isDemo ? "Refresh the on-device sample conversations" : session.isConnected ? "Pull the latest runs, workspaces and settings" : "Available once Mains is reachable",
-                                    loading: session.refreshing)
-                    }
-                    .disabled(!session.isConnected || session.refreshing).accessibilityIdentifier("syncNow")
+                if session.pairing != nil {
+                    syncRow
                     if canRetry {
                         Button { session.retry() } label: {
                             SettingsRow(title: "Try again", symbol: "wifi", subtitle: "Reconnect to Mains on your computer now")
@@ -88,16 +73,26 @@ struct ComputerView: View {
                                         subtitle: "Scan a new pairing code from your computer")
                         }
                     }
-                    Button {
-                        UIPasteboard.general.string = diagnostics
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        copied = true
-                    } label: {
-                        SettingsRow(title: "Copy diagnostics", symbol: "doc.on.doc",
-                                    subtitle: "Versions, addresses and the connection’s state, for a bug report",
-                                    value: copied ? "Copied" : nil)
+                    if session.isDemo {
+                        Button(role: .destructive) { session.exitDemo(); dismiss() } label: {
+                            SettingsRow(title: "Exit Demo Mode", symbol: "rectangle.portrait.and.arrow.right", destructive: true)
+                        }
+                        .accessibilityIdentifier("exitDemo")
                     }
-                    .accessibilityIdentifier("copyDiagnostics")
+                }
+            }
+            if let pairing = session.pairing, !session.isDemo {
+                SettingsSection("Connection details") {
+                    SettingsRow(title: "Address", subtitle: fallbackAddresses, value: endpoint.map(Self.host) ?? "—")
+                    SettingsRow(title: "Mains version", value: descriptor?.appVersion ?? "—")
+                    TimelineView(.periodic(from: .now, by: 60)) { timeline in
+                        SettingsRow(title: "Paired", subtitle: pairing.pairedAt?.formatted(date: .numeric, time: .standard),
+                                    value: pairing.pairedAt.map { compactRelativeAge($0, now: timeline.date) } ?? "—")
+                    }
+                    Button(role: .destructive) { forget = true } label: {
+                        SettingsRow(title: "Forget this computer", symbol: "xmark.circle", destructive: true)
+                    }
+                    .accessibilityIdentifier("forgetComputer")
                 }
             }
             #if MAINS_GPT_LIVE
@@ -144,16 +139,20 @@ struct ComputerView: View {
                 externalRow("Terms of Use", subtitle: "Terms for using Mains", url: "https://mains.dev/terms")
                 externalRow("Support", symbol: "envelope", subtitle: "Email team@mains.dev",
                             url: "mailto:team@mains.dev?subject=Mains%20Mobile%20Support")
+                if session.pairing != nil {
+                    Button {
+                        UIPasteboard.general.string = diagnostics
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        copied = true
+                    } label: {
+                        SettingsRow(title: "Copy diagnostics", symbol: "doc.on.doc",
+                                    subtitle: "Versions, addresses and the connection’s state, for a bug report",
+                                    value: copied ? "Copied" : nil)
+                    }
+                    .accessibilityIdentifier("copyDiagnostics")
+                }
                 externalRow("Open Source Licenses",
                             subtitle: "Open-source software used by the app", url: "https://mains.dev/license")
-            }
-            if session.isDemo && session.pairing != nil {
-                SettingsSection {
-                    Button(role: .destructive) { session.exitDemo(); dismiss() } label: {
-                        SettingsRow(title: "Exit Demo Mode", symbol: "rectangle.portrait.and.arrow.right", destructive: true)
-                    }
-                    .accessibilityIdentifier("exitDemo")
-                }
             }
             SettingsFooter(version: Self.appVersion, build: Self.buildNumber)
         }
@@ -188,10 +187,6 @@ struct ComputerView: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(session.pairing?.descriptor.name ?? "Computer").font(.headline)
-                if let endpoint {
-                    Text(session.isConnected ? "via \(Self.host(endpoint)) · Mains \(descriptor?.appVersion ?? "—")" : Self.host(endpoint))
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
                 if let connectionHint { Text(connectionHint).font(.footnote).foregroundStyle(.secondary) }
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -221,10 +216,16 @@ struct ComputerView: View {
         let alternatives = (session.pairing?.endpoints ?? []).filter { $0 != endpoint }.map(Self.host)
         return alternatives.isEmpty ? nil : "Also " + alternatives.joined(separator: ", ")
     }
-    private func timestampRow(_ title: String, date: Date?, empty: String) -> some View {
+    private var syncRow: some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in
-            SettingsRow(title: title, subtitle: date?.formatted(date: .numeric, time: .standard),
-                        value: date.map { compactRelativeAge($0, now: timeline.date) } ?? empty)
+            let lastSynced = session.lastSyncedAt.map { "Last synced \(compactRelativeAge($0, now: timeline.date))" } ?? "Not synced yet"
+            Button { Task { await session.refresh() } } label: {
+                SettingsRow(title: session.refreshing ? "Syncing…" : "Sync now", symbol: "arrow.clockwise",
+                            subtitle: session.isDemo ? "Refresh the on-device sample conversations" : lastSynced,
+                            loading: session.refreshing)
+            }
+            .disabled(!session.isConnected || session.refreshing)
+            .accessibilityIdentifier("syncNow")
         }
     }
     private func externalRow(_ title: String, symbol: String = "arrow.up.right.square", subtitle: String, url: String) -> some View {
@@ -420,7 +421,7 @@ private struct SettingsScrollView<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) { content }
+            VStack(alignment: .leading, spacing: 26) { content }
                 .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
         }
         .background(Color(.systemBackground))
@@ -440,8 +441,11 @@ private struct SettingsFooter: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var visible = false
     @State private var showsJapanese = false
-    @State private var lightLevel = 1.0
-    @State private var sweepFinished = false
+
+    private struct SignLight {
+        var level = 1.0
+        var sweep: CGFloat = 0
+    }
 
     private var animates: Bool { visible && scenePhase == .active && !reduceMotion }
     private var red: Color {
@@ -457,66 +461,80 @@ private struct SettingsFooter: View {
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("settingsAppVersion")
 
-            sign
-                .foregroundStyle(red)
-                .shadow(color: red.opacity(0.5), radius: 4)
-                .shadow(color: red.opacity(0.26), radius: 14)
-                .overlay {
-                    GeometryReader { geometry in
-                        let beamWidth = geometry.size.width * 0.55
-                        LinearGradient(colors: [.clear, .cyan.opacity(0.75), .white.opacity(0.85), .clear],
-                                       startPoint: .leading, endPoint: .trailing)
-                            .frame(width: beamWidth)
-                            .offset(x: sweepFinished ? geometry.size.width : -beamWidth)
-                    }
-                    .mask(alignment: .center) { sign }
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-                }
-                .opacity(lightLevel)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(showsJapanese ? "東京から生中継" : "Live from Tokyo")
-                .accessibilityIdentifier("settingsTokyoSign")
-                .onScrollVisibilityChange(threshold: 0.6) { visible = $0 }
+            Button {
+                showsJapanese.toggle()
+            } label: {
+                neonSign.frame(minWidth: 44, minHeight: 44).contentShape(.rect)
+            }
+            .accessibilityLabel(showsJapanese ? "東京から生中継" : "Live from Tokyo")
+            .accessibilityHint("Switches the language")
+            .accessibilityIdentifier("settingsTokyoSign")
+            .onScrollVisibilityChange(threshold: 0.6) { visible = $0 }
         }
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
-        .task(id: animates) { try? await alternateLanguages() }
+        .task(id: animates ? Optional(showsJapanese) : nil) { try? await waitForNextLanguage() }
     }
 
-    private var sign: some View {
-        ZStack {
-            lettering("LIVE FROM", "TOKYO").opacity(showsJapanese ? 0 : 1)
-            lettering("東京から", "生中継").opacity(showsJapanese ? 1 : 0)
+    @ViewBuilder private var neonSign: some View {
+        let japanese = showsJapanese
+        let glow = Self.sign(japanese: japanese, animated: !reduceMotion)
+            .foregroundStyle(red)
+            .shadow(color: red.opacity(0.5), radius: 4)
+            .shadow(color: red.opacity(0.26), radius: 14)
+        if reduceMotion {
+            glow
+        } else {
+            glow.keyframeAnimator(initialValue: SignLight(), trigger: showsJapanese) { content, light in
+                content
+                    .overlay {
+                        GeometryReader { geometry in
+                            let beamWidth = geometry.size.width * 0.55
+                            LinearGradient(colors: [.clear, .cyan.opacity(0.75), .white.opacity(0.85), .clear],
+                                           startPoint: .leading, endPoint: .trailing)
+                                .frame(width: beamWidth)
+                                .offset(x: (geometry.size.width + beamWidth) * light.sweep - beamWidth)
+                        }
+                        .mask(alignment: .center) { Self.sign(japanese: japanese, animated: true) }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                    }
+                    .opacity(light.level)
+            } keyframes: { _ in
+                KeyframeTrack(\.level) {
+                    LinearKeyframe(0.62, duration: 0.14)
+                    CubicKeyframe(1, duration: 0.46)
+                }
+                KeyframeTrack(\.sweep) {
+                    MoveKeyframe(0)
+                    LinearKeyframe(1, duration: 0.6)
+                }
+            }
         }
     }
 
-    private func lettering(_ line: String, _ headline: String) -> some View {
+    nonisolated private static func sign(japanese: Bool, animated: Bool) -> some View {
+        ZStack {
+            lettering("LIVE FROM", "TOKYO").opacity(japanese ? 0 : 1)
+            lettering("東京から", "生中継").opacity(japanese ? 1 : 0)
+        }
+        .animation(animated ? .easeInOut(duration: 0.6) : nil, value: japanese)
+    }
+
+    nonisolated private static func lettering(_ line: String, _ headline: String) -> some View {
         VStack(spacing: 3) {
             Text(verbatim: line).font(.caption.weight(.medium).monospaced()).tracking(2.5)
             Text(verbatim: headline).font(.title2.weight(.medium).width(.expanded)).tracking(1.6)
         }
     }
 
-    private func alternateLanguages() async throws {
-        lightLevel = 1
-        sweepFinished = false
-        if reduceMotion { showsJapanese = false }
+    private func waitForNextLanguage() async throws {
         guard animates else { return }
-
-        while !Task.isCancelled {
-            try await Task.sleep(for: .seconds(showsJapanese ? 3.5 : 5))
-            withAnimation(.easeOut(duration: 0.14)) { lightLevel = 0.62 }
-            try await Task.sleep(for: .milliseconds(140))
-            withAnimation(.easeInOut(duration: 0.6)) {
-                showsJapanese.toggle()
-                sweepFinished = true
-                lightLevel = 1
-            }
-            try await Task.sleep(for: .milliseconds(650))
-            sweepFinished = false
-        }
+        // Start a fresh countdown after either a tap or an automatic change.
+        try await Task.sleep(for: .seconds(showsJapanese ? 2.5 : 4))
+        try Task.checkCancellation()
+        showsJapanese.toggle()
     }
 }
 
