@@ -284,8 +284,10 @@ export interface AssistantWelcome {
     createdAt: Date;
 }
 
+export type MobileMateIdentity = Pick<Assistant, "id" | "name" | "avatar" | "isArchived">;
+
 export interface MobileMateDirectory {
-    mates: Array<Pick<Assistant, "id" | "name" | "description" | "avatar" | "teamId" | "providerId" | "model"> & {
+    mates: Array<MobileMateIdentity & Pick<Assistant, "description" | "teamId" | "providerId" | "model"> & {
         needsSetup: boolean;
         welcome: Pick<AssistantWelcome, "runId" | "state" | "question" | "error"> | null;
         details?: Pick<Assistant, "effort" | "instructions"> & { spaceName: string };
@@ -294,4 +296,6 @@ export interface MobileMateDirectory {
 }
 
 export type MobileMateChat = Pick<AssistantConversation, "id" | "title" | "updatedAt">;
-export type MobileMateAssignment = Pick<AssistantAssignment, "id" | "title" | "status" | "result" | "error" | "workerRunId">;
+export type MobileMateAssignment = Pick<AssistantAssignment, "id" | "title" | "status" | "result" | "error" | "workerRunId"> & {
+    assignee: MobileMateIdentity | null;
+};

@@ -1,6 +1,6 @@
 import type { AssignmentStatus } from "@mains/contracts/assistants";
 import { StatusBadge, type StatusTone } from "@/components/ui";
-import { Check, Clock, Close, Play, Stop, Warning } from "@/components/ui/icons";
+import { Archive, Check, Clock, Close, Play, Stop, Warning } from "@/components/ui/icons";
 
 const statusStyle = {
   queued: { label: "Queued", tone: "info", icon: Clock },
@@ -15,4 +15,8 @@ const statusStyle = {
 export function AssignmentStatusBadge({ status }: { status: AssignmentStatus }) {
   const { label, tone, icon } = statusStyle[status];
   return <StatusBadge tone={tone} icon={icon}>{label}</StatusBadge>;
+}
+
+export function ArchivedMateBadge() {
+  return <StatusBadge tone="neutral" icon={Archive}>Archived</StatusBadge>;
 }

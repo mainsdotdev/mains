@@ -45,6 +45,7 @@ const mateAssignments = new Map();
 let acceptsConnections = true;
 let holdSnapshot = 0;
 let mateDetailsDelayMs = 0;
+let mateArchived = false;
 let contextDelayMs = 0, contextInvalidRows = false;
 let forkBehavior = null;
 let fileDeliveryFixture = false;
@@ -56,6 +57,7 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   for (const timer of timers) clearTimeout(timer);
   timers.clear(); replies.clear(); acceptsConnections = true;
   holdSnapshot = 0; mateDetailsDelayMs = 0; contextDelayMs = 0; contextInvalidRows = false;
+  mateArchived = false;
   forkBehavior = null;
   fileDeliveryFixture = false;
   pagedHistory = paging;
@@ -136,6 +138,11 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
         { id: 1, runId: id, kind: 'user-prompt', content: 'Hello', metadata: { source: 'user' }, createdAt: at },
         { id: 2, runId: id, kind: 'report', content: 'Hello from this workspace.', metadata: {}, createdAt: new Date(at.getTime() + 1) },
       ]);
+    }
+    for (let index = 0; index < 16; index++) {
+      const id = `workspace-earlier-${index}`, at = new Date(Date.now() - (index + 4) * 86400000);
+      runs.push({ ...runs[0], id, title: `Earlier task ${index + 1}`, spaceId: 'fixture-code', workspaceId: 'fixture-workspace', mode: 'developer', createdAt: at, updatedAt: at });
+      artifacts.set(id, []);
     }
   }
 }
@@ -364,11 +371,24 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === 'POST' && request.url === '/pair') {
     const body = JSON.parse(Buffer.concat(parts).toString());
-    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
+    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
       response.writeHead(403); response.end(JSON.stringify({ error: 'Invalid pairing code' })); return;
     }
     const paging = body.code.startsWith('ios-test-paging');
     reset(body.code === 'ios-test-chat' || paging, body.code === 'ios-test-home', body.code === 'ios-test-design', body.code === 'ios-test-workspace', body.code === 'ios-test-media', paging, body.code === 'ios-test-paging-disjoint');
+    if (body.code === 'ios-test-archived-mate') {
+      mateArchived = true;
+      const source = runs[0], workerRunId = 'fixture-old-mate-chat', id = 'fixture-old-mate-request', at = new Date();
+      const { id: mateId, name, avatar } = fixtureMate;
+      mateAssignments.set(id, { runId: source.id, assignment: {
+        id, title: 'Mate request', status: 'completed', result: 'Historical release report.', workerRunId,
+        assignee: { id: mateId, name, avatar, isArchived: true },
+      } });
+      runs.push({ ...source, id: workerRunId, mode: 'work', title: 'Release history', assistantId: mateId });
+      artifacts.set(workerRunId, [{ id: nextID++, runId: workerRunId, kind: 'report', content: 'Historical Mate reply.', createdAt: at }]);
+      artifacts.get(source.id).push({ id: nextID++, runId: source.id, kind: 'report', content: 'Mate request',
+        metadata: { source: 'assistant_assignment', assignmentId: id }, createdAt: at });
+    }
     response.end(JSON.stringify({ deviceId: 'fixture-phone', deviceToken: 'fixture-device-token', backend: descriptor })); return;
   }
   response.writeHead(404); response.end('{}');
@@ -417,10 +437,11 @@ wss.on('connection', socket => {
         }
         case CHANNELS.backend.describe: result = descriptor; break;
         case CHANNELS.assistants.mobileDirectory: {
-          const mates = [...fixtureMates, ...createdMates.values()];
+          const mates = [...fixtureMates, ...createdMates.values()].map(mate => mateArchived && mate.id === fixtureMate.id
+            ? { ...mate, isArchived: true, details: undefined } : mate);
           result = {
             mates: args[1] ? mates.filter(mate => mate.id === args[1]).map(({ details, ...mate }) => details ? { ...mate, details } : mate)
-              : mates.map(({ details: _details, ...mate }) => mate),
+              : mates.filter(mate => !mate.isArchived).map(({ details: _details, ...mate }) => mate),
             teams: fixtureMateTeams,
           };
           if (args[1] && mateDetailsDelayMs) {
@@ -606,7 +627,9 @@ wss.on('connection', socket => {
             ...model, description: model.description, isDefault: model.isDefault,
             supportsFastMode: model.supportsFastMode, supportedEffortLevels: model.supportedEffortLevels,
             serviceTiers: model.serviceTiers,
-          })) : modelList;
+          })) : modelList.map(model => args[0] === 'codex' && model.supportsFastMode ? {
+            ...model, serviceTiers: [{ id: 'fast', name: 'Fast' }, { id: 'ultrafast', name: 'Ultrafast' }],
+          } : model);
           break;
         case CHANNELS.runs.updateConversationSettings: {
           if (!commandId) throw new Error('Missing command identity');

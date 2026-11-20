@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var effortSliderLocksAncestorScroll = false
+}
+
 struct EffortControlPanel: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -136,6 +140,7 @@ private struct SteppedEffortSlider: View {
     let onCommit: (String) -> Void
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.effortSliderLocksAncestorScroll) private var locksAncestorScroll
     @State private var dragPosition: CGFloat?
     @State private var pending: String?
     @State private var nearest: Int?
@@ -183,6 +188,7 @@ private struct SteppedEffortSlider: View {
             if !expanded { HStack { Text("Effort"); Spacer(); Text(label).foregroundStyle(.secondary).contentTransition(.opacity) } }
             GeometryReader { geometry in
                 let width = max(0, geometry.size.width - inset * 2)
+                let gestureWidth = locksAncestorScroll ? geometry.size.width.rounded() : geometry.size.width
                 let x = (ownsState ? dragPosition : nil) ?? center(index, width: width)
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color(.separator)).frame(height: track)
@@ -208,15 +214,15 @@ private struct SteppedEffortSlider: View {
                     .animation(dragPosition == nil ? rangeMotion : nil, value: value)
                     .overlay {
                         EffortSliderGestures(thumbCenter: x + inset, thumbRadius: thumb / 2,
-                            enabled: enabled && interactionEnabled,
+                            enabled: enabled && interactionEnabled, locksAncestorScroll: locksAncestorScroll,
                             onDrag: { preview(at: $0 - inset, width: width) },
                             onSelect: { select(at: $0 - inset, width: width) },
                             onCancel: { reset(keepingPending: true) })
                             .id(scope)
-                            .id(geometry.size.width)
+                            .id(gestureWidth)
                             .accessibilityHidden(true)
                     }
-                    .onChange(of: geometry.size.width) { _, _ in
+                    .onChange(of: gestureWidth) { _, _ in
                         reset(keepingPending: true)
                     }
             }.frame(height: hit)
@@ -277,6 +283,7 @@ private struct EffortSliderGestures: UIViewRepresentable {
     let thumbCenter: CGFloat
     let thumbRadius: CGFloat
     let enabled: Bool
+    let locksAncestorScroll: Bool
     let onDrag: (CGFloat) -> Void
     let onSelect: (CGFloat) -> Void
     let onCancel: () -> Void
@@ -299,11 +306,17 @@ private struct EffortSliderGestures: UIViewRepresentable {
     func updateUIView(_ view: UIView, context: Context) {
         context.coordinator.parent = self
         view.isUserInteractionEnabled = enabled
+        if !enabled { context.coordinator.releaseScroll() }
+    }
+
+    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) {
+        coordinator.releaseScroll()
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: EffortSliderGestures
         private var grabOffset: CGFloat = 0
+        private weak var lockedScrollView: UIScrollView?
         init(_ parent: EffortSliderGestures) { self.parent = parent }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
@@ -327,11 +340,37 @@ private struct EffortSliderGestures: UIViewRepresentable {
         @objc func panChanged(_ pan: UIPanGestureRecognizer) {
             let position = pan.location(in: pan.view).x - grabOffset
             switch pan.state {
-            case .began, .changed: parent.onDrag(position)
-            case .ended: parent.onSelect(position)
-            case .cancelled, .failed: parent.onCancel()
+            case .began:
+                if parent.locksAncestorScroll { lockScroll(containing: pan.view) }
+                parent.onDrag(position)
+            case .changed:
+                parent.onDrag(position)
+            case .ended:
+                releaseScroll()
+                parent.onSelect(position)
+            case .cancelled, .failed:
+                releaseScroll()
+                parent.onCancel()
             default: break
             }
+        }
+
+        private func lockScroll(containing view: UIView?) {
+            var ancestor = view?.superview
+            while let host = ancestor {
+                if let scroll = host as? UIScrollView, scroll.panGestureRecognizer.isEnabled {
+                    lockedScrollView = scroll
+                    scroll.panGestureRecognizer.isEnabled = false
+                    return
+                }
+                ancestor = host.superview
+            }
+        }
+
+        func releaseScroll() {
+            guard let scroll = lockedScrollView else { return }
+            lockedScrollView = nil
+            scroll.panGestureRecognizer.isEnabled = scroll.isScrollEnabled
         }
 
         @objc func tapped(_ tap: UITapGestureRecognizer) {

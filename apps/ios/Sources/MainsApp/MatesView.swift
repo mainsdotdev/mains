@@ -18,27 +18,38 @@ struct MatesView: View {
     var body: some View {
         Group {
             if directory?.mates.isEmpty == true {
-                ScrollView {
-                    VStack(spacing: 16) {
-                        directoryStatus
-                        emptyMates
+                GeometryReader { geometry in
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            PageTitle("Mates")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 20).padding(.top, 8)
+                            Spacer(minLength: 0)
+                            VStack(spacing: 16) {
+                                directoryStatus
+                                emptyMates
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(24)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(minHeight: geometry.size.height)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(24)
+                    .scrollBounceBehavior(.basedOnSize)
                 }
-                .defaultScrollAnchor(.center, for: .alignment)
                 .background(Color(.systemGroupedBackground))
             } else {
                 List {
+                    Section { PageTitle("Mates").listRow }
                     directoryStatus
                     if let directory { mateSections(directory) }
                     else if error == nil { ProgressView().accessibilityLabel("Loading Mates") }
                 }
+                .contentMargins(.top, 8, for: .scrollContent)
             }
         }
         .navigationHeaderFade(background: Color(.systemGroupedBackground))
-        .navigationTitle("Mates")
-        .navigationBarTitleDisplayMode(.inline)
+        .scrollingNavigationTitle("Mates")
         .toolbar {
             if directory?.mates.isEmpty == false {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -121,7 +132,7 @@ struct MatesView: View {
                     MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id))
                         .frame(width: 40, height: 40)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(mate.name).font(.headline)
+                        Text(mate.name).font(.headline.width(.expanded))
                         if !mate.ready {
                             HStack(spacing: 6) {
                                 Text("Finish setup").font(.subheadline).foregroundStyle(.secondary)
@@ -257,7 +268,7 @@ struct MateInfoView: View {
                     }
                     .frame(width: 116, height: 116)
                     Text(mate.name)
-                        .font(.title2.weight(.semibold))
+                        .font(.title2.weight(.semibold).width(.expanded))
                         .accessibilityAddTraits(.isHeader)
                         .accessibilityIdentifier("mateInfoName")
                     if !mate.description.isEmpty {
@@ -334,11 +345,18 @@ struct NewMateView: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
+    let session: BackendSession
     let teams: [MateTeam]
     @Binding var draft: NewMateDraft
-    let next: () -> Void
+    let create: (NewMateCreationRequest) -> Void
+    let created: (String) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Namespace private var providerSelection
     @FocusState private var editingName: Bool
     @State private var previewActive = false
+    @State private var choosingModel = false
+    @State private var error: String?
 
     var body: some View {
         ZStack {
@@ -352,61 +370,111 @@ struct NewMateView: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
-        .mateCreationChrome("New Mate")
+        .mateCreationChrome(choosingModel ? "Model & Effort" : "New Mate", extendsBackdrop: true)
+        .navigationBarBackButtonHidden(choosingModel)
         .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Next") {
-                    editingName = false
-                    next()
+            if choosingModel && !writing {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Back", systemImage: "chevron.backward") { showModelOptions(false) }
+                        .labelStyle(.iconOnly)
+                        .accessibilityIdentifier("BackButton")
                 }
-                .disabled(!draft.hasValidName)
-                .accessibilityIdentifier("nextMateStep")
             }
+            ToolbarItem(placement: .confirmationAction) {
+                if choosingModel {
+                    Button("Create", action: beginCreation)
+                        .disabled(!canCreate)
+                        .accessibilityIdentifier("createMate")
+                } else {
+                    Button("Next") { showModelOptions(true) }
+                        .disabled(!draft.hasValidName)
+                        .accessibilityIdentifier("nextMateStep")
+                }
+            }
+        }
+        .task(id: "\(choosingModel):\(space?.providerId ?? ""):\(session.isConnected)") {
+            if choosingModel, let space, session.isConnected { await session.loadModels(space.providerId) }
+        }
+    }
+
+    private func showModelOptions(_ visible: Bool) {
+        editingName = false
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.28)) {
+            choosingModel = visible
         }
     }
 
     private var form: some View {
         GeometryReader { geometry in
-            let avatarHeight = min(330, max(220, geometry.size.height * 0.46))
+            let avatarHeight = min(330, max(220, geometry.size.width * 0.78))
+            let restingInset = max(16, (geometry.size.height - avatarHeight - 216) / 2)
             ScrollView {
                 VStack(spacing: 0) {
-                    Spacer(minLength: 16)
-                    TextField("Mate name", text: $draft.name,
-                              prompt: Text("Mate name").foregroundStyle(Color.primary.opacity(0.74)))
-                        .font(.largeTitle.weight(.semibold))
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.primary)
-                        .textFieldStyle(.plain)
-                        .textInputAutocapitalization(.words)
-                        .submitLabel(.done)
-                        .focused($editingName)
-                        .onSubmit { editingName = false }
-                        .padding(.horizontal, 24)
-                        .frame(maxWidth: 460, minHeight: 52)
-                        .accessibilityIdentifier("mateName")
+                    nameHeading
 
                     if let catalogue = MateRobotAssets.catalogue {
                         MateRobotPicker(catalogue: catalogue, avatar: $draft.avatar,
                                         remembered: $draft.rememberedStyles, stageHeight: avatarHeight,
-                                        previewActive: previewActive)
-                        Text("Swipe to choose. Hold and drag to rotate.")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24).padding(.top, 12)
+                                        previewActive: previewActive, isSelecting: !choosingModel)
                     } else {
                         MateRobotThumbnail(preset: nil).frame(height: avatarHeight)
                     }
 
-                    teamMenu.frame(maxWidth: 230).padding(.horizontal, 24).padding(.top, 20)
-                    Spacer(minLength: 24)
+                    if choosingModel {
+                        modelOptions.transition(.opacity)
+                    } else {
+                        appearanceOptions.transition(.opacity)
+                    }
                 }
-                .frame(minHeight: geometry.size.height)
-                .frame(maxWidth: .infinity)
+                .padding(.top, choosingModel ? max(12, restingInset - 72) : restingInset)
+                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .top)
                 .background(alignment: .center) { KeyboardDismissBackground(dismissFocus: { editingName = false }) }
             }
             .scrollBounceBehavior(.basedOnSize)
             .scrollDismissesKeyboard(.interactively)
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+
+    private var nameHeading: some View {
+        ZStack {
+            TextField("Mate name", text: $draft.name,
+                      prompt: Text("Mate name").foregroundStyle(Color.primary.opacity(0.74)))
+                .textFieldStyle(.plain)
+                .textInputAutocapitalization(.words)
+                .submitLabel(.done)
+                .focused($editingName)
+                .onSubmit { editingName = false }
+                .opacity(choosingModel ? 0 : 1)
+                .allowsHitTesting(!choosingModel)
+                .accessibilityHidden(choosingModel)
+                .accessibilityIdentifier("mateName")
+            if choosingModel {
+                Text(draft.name)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("newMateNamePreview")
+            }
+        }
+        .font(.largeTitle.weight(.semibold).width(.expanded))
+        .multilineTextAlignment(.center)
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: 460, minHeight: 52)
+    }
+
+    private var appearanceOptions: some View {
+        VStack(spacing: 20) {
+            if MateRobotAssets.catalogue != nil {
+                Text("Swipe to choose. Hold and drag to rotate.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+            teamMenu.frame(maxWidth: 230).padding(.horizontal, 24)
+        }
+        .padding(.top, 12)
     }
 
     private var teamMenu: some View {
@@ -497,20 +565,7 @@ private struct NewMateBackdrop: View {
     }
 }
 
-struct NewMateModelView: View {
-    #if DEBUG && targetEnvironment(simulator)
-    @ObserveHotReload private var hotReload
-    #endif
-    let session: BackendSession
-    @Binding var draft: NewMateDraft
-    let create: (NewMateCreationRequest) -> Void
-    let created: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Namespace private var providerSelection
-    @State private var error: String?
-
+private extension NewMateView {
     private var spaces: [Space] { session.mateSpaces }
     private var space: Space? { spaces.first { $0.id == draft.spaceID } ?? spaces.first }
     private var providerSpaces: [Space] { spaces.filter { $0.providerId == space?.providerId } }
@@ -543,36 +598,13 @@ struct NewMateModelView: View {
         draft.hasValidName && model != nil && session.isConnected && !session.mateCommandPending
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            providerTabs.padding(.top, 12)
+    var modelOptions: some View {
+        VStack(spacing: 4) {
+            providerTabs
             if providerSpaces.count > 1 {
                 spaceMenu.padding(.horizontal, 24).padding(.top, 2)
             }
-            GeometryReader { geometry in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        Spacer(minLength: 20)
-                        modelSelection.frame(maxWidth: 520)
-                        Spacer(minLength: 20)
-                    }
-                    .frame(minHeight: geometry.size.height)
-                    .frame(maxWidth: .infinity)
-                }
-                .scrollBounceBehavior(.basedOnSize)
-            }
-        }
-        .mateCreationChrome("Model & Effort")
-        .navigationBarBackButtonHidden(writing)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Create", action: beginCreation)
-                    .disabled(!canCreate)
-                    .accessibilityIdentifier("createMate")
-            }
-        }
-        .task(id: "\(space?.providerId ?? ""):\(session.isConnected)") {
-            if let space, session.isConnected { await session.loadModels(space.providerId) }
+            modelSelection.frame(maxWidth: 520)
         }
     }
 
@@ -581,14 +613,15 @@ struct NewMateModelView: View {
             if let space {
                 ModelEffortPicker(providerID: space.providerId, models: models, model: model, settings: settings,
                                   loading: ComposerContext(space: space).modelsLoading(session), enabled: session.isConnected && !writing,
-                                  storedEffortOnly: true, error: session.modelErrors[space.providerId],
+                                  storedEffortOnly: true, compactWheel: true, error: session.modelErrors[space.providerId],
                                   canRetry: session.isConnected && !writing,
                                   retry: { Task { await session.loadModels(space.providerId, force: true) } },
                                   selectModel: { model in
-                                      var next = settings
+                                      var next = preferredSettings
                                       next.select(model, provider: space.providerId)
                                       draft.settings = next
                                   }, updateEffort: { draft.settings = $0 })
+                    .environment(\.effortSliderLocksAncestorScroll, true)
                     .id(space.id)
             } else {
                 Text("Enable a Claude or Codex Space on your computer.")
@@ -671,7 +704,7 @@ struct NewMateModelView: View {
         do {
             let id = try await session.checkMateCommand()
             guard owner == session.ownership else { return }
-            if let id { created(id) } else { dismiss() }
+            if let id { created(id) } else { showModelOptions(false) }
         } catch { if owner == session.ownership { self.error = error.localizedDescription } }
     }
 }
@@ -767,11 +800,15 @@ struct CreatingMateView: View {
 }
 
 private extension View {
-    func mateCreationChrome(_ title: String) -> some View {
+    func mateCreationChrome(_ title: String, extendsBackdrop: Bool = false) -> some View {
         // The page carries its own fill through the push and pop transitions.
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
-            self.navigationHeaderFade()
+            if extendsBackdrop {
+                self.scrollEdgeEffectHidden(for: .top).toolbarBackground(.hidden, for: .navigationBar)
+            } else {
+                self.navigationHeaderFade()
+            }
         }
         .tint(.primary)
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
@@ -839,7 +876,10 @@ struct MateView: View {
             if showsSetup, let mate {
                 ToolbarItem(placement: .principal) { MateConversationTitle(mate: mate) }
                     .sharedBackgroundVisibility(.hidden)
-            } else if mate != nil {
+            } else if let mate {
+                ToolbarItem(placement: .title) {
+                    Text(mate.name).font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Mate Info", systemImage: "info.circle", action: openInfo)
                         .accessibilityIdentifier("openMateInfo")

@@ -99,16 +99,20 @@ private struct MateTaskCard: View {
     let session: BackendSession
     let link: MateAssignmentLink
     @Environment(\.openMateConversation) private var openChat
-    @State private var assignment: MateAssignment?
+    @State private var loaded: (owner: Int, link: MateAssignmentLink, assignment: MateAssignment)?
     @State private var error: String?
     @State private var retry = 0
+    private var assignment: MateAssignment? {
+        guard let loaded, loaded.owner == session.ownership, loaded.link == link else { return nil }
+        return loaded.assignment
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             taskSummary
             if let runID = assignment?.workerRunId, runID != link.runID {
                 Button { openChat(runID) } label: {
-                    Label("Open Mate chat", systemImage: "arrow.up.right")
+                    Label(assignment?.assignee?.isArchived == true ? "Open archived Mate chat" : "Open Mate chat", systemImage: "arrow.up.right")
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 14).frame(minHeight: 44)
                         .contentShape(.capsule)
@@ -118,18 +122,35 @@ private struct MateTaskCard: View {
                 .accessibilityIdentifier("openMateTaskChat")
             }
         }
-        .task(id: "\(link.runID):\(link.id):\(session.matesRevision):\(session.isConnected):\(retry)") {
+        .task(id: "\(session.ownership):\(link.runID):\(link.id):\(session.matesRevision):\(session.isConnected):\(retry)") {
             guard session.isConnected, session.supportsMates else { return }
-            do { assignment = try await session.loadMateAssignment(link.id, runID: link.runID); error = nil }
+            let owner = session.ownership
+            do {
+                let assignment = try await session.loadMateAssignment(link.id, runID: link.runID)
+                guard !Task.isCancelled, owner == session.ownership else { return }
+                loaded = (owner, link, assignment); error = nil
+            }
             catch { if !Task.isCancelled, session.viewingRunID == link.runID { self.error = error.localizedDescription } }
         }
     }
 
     private var taskSummary: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label { Text(assignment?.title ?? "Mate request") } icon: {
-                RegistryIcon(token: "icon:assistant-steps", tint: .primary)
-            }.font(.headline)
+            HStack(spacing: 10) {
+                if let mate = assignment?.assignee {
+                    MateRobotThumbnail(preset: MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id))
+                        .frame(width: 30, height: 30).saturation(mate.isArchived ? 0.25 : 1)
+                } else { RegistryIcon(token: "icon:assistant-steps", tint: .primary) }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(assignment?.title ?? "Mate request").font(.headline)
+                    if let mate = assignment?.assignee {
+                        HStack(spacing: 8) {
+                            Text(mate.name).font(.subheadline).foregroundStyle(.secondary)
+                            if mate.isArchived { ArchivedMateBadge() }
+                        }
+                    }
+                }
+            }
             if let assignment {
                 Text(assignment.status.capitalized).font(.subheadline).foregroundStyle(.secondary)
                 if let result = assignment.result, !result.isEmpty { ChatMessageBody(text: result) }
@@ -143,6 +164,21 @@ private struct MateTaskCard: View {
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18))
         .accessibilityIdentifier("mateAssignment-\(link.id)")
+    }
+}
+
+struct ArchivedMateBadge: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "archivebox").accessibilityHidden(true)
+            Text("Archived")
+        }
+        .font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+        .accessibilityIdentifier("archivedMateBadge")
     }
 }
 

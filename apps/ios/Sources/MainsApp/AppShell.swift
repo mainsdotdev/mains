@@ -14,8 +14,8 @@ extension EnvironmentValues {
 
 enum AppRoute: Hashable {
     case conversation(String, mate: MateConversationSource? = nil)
-    case searchMessage(String, HistoryCursor), workspace(String), settings, workInbox, atlas, atlasPage(String)
-    case mates, newMate([MateTeam]), newMateModel, creatingMate(NewMateCreationRequest), mate(String), mateInfo(String)
+    case searchMessage(String, HistoryCursor), workspace(String), project(String), settings, workInbox, atlas, atlasPage(String)
+    case mates, newMate([MateTeam]), creatingMate(NewMateCreationRequest), mate(String), mateInfo(String)
 }
 
 struct AppShell: View {
@@ -89,7 +89,9 @@ struct AppShell: View {
                                     .id("\(session.ownership):\(id)")
                                 case .searchMessage(let id, let cursor): ConversationView(session: session, runID: id, openComputer: showSettings, onNew: { newConversation(from: id) }, onFork: { path.append(.conversation($0)) }, initialCursor: cursor)
                                     .id("\(session.ownership):\(id):\(cursor.timestamp):\(cursor.id)")
-                                case .workspace(let id): WorkspaceConversationsView(session: session, workspaceID: id,
+                                case .workspace(let id): TargetConversationsView(session: session, target: .workspace(id),
+                                    openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
+                                case .project(let id): TargetConversationsView(session: session, target: .project(id),
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
                                 case .settings: ComputerView(session: session)
                                 case .workInbox: WorkInboxView(session: session, openConversation: { path.append(.conversation($0)) }, openSettings: showSettings)
@@ -103,13 +105,10 @@ struct AppShell: View {
                                 })
                                     .id(session.ownership)
                                 case .newMate(let teams):
-                                    NewMateView(teams: teams, draft: $newMateDraft) { path.append(.newMateModel) }
-                                        .id(session.ownership)
-                                case .newMateModel:
-                                    NewMateModelView(session: session, draft: $newMateDraft, create: { request in
-                                        guard path.last == .newMateModel else { return }
+                                    NewMateView(session: session, teams: teams, draft: $newMateDraft, create: { request in
+                                        guard path.last == route else { return }
                                         path.append(.creatingMate(request))
-                                    }, created: { id in finishMateCreation(id, from: .newMateModel) })
+                                    }, created: { id in finishMateCreation(id, from: route) })
                                     .id(session.ownership)
                                 case .creatingMate(let request):
                                     CreatingMateView(session: session, request: request) { id in
@@ -156,6 +155,7 @@ struct AppShell: View {
                         if sidebar.isInline || overlayMounted {
                             SidebarView(session: session, collapsed: $collapsedCollections, isVisible: sidebarVisible, menuWidth: width,
                                         openConversation: { open(.conversation($0)) }, openWorkspace: { open(.workspace($0)) },
+                                        openProject: { open(.project($0)) },
                                         selectSpace: { session.selectSpace($0); goHome() }, search: showSearch, settings: showSettings, openWorkInbox: { open(.workInbox) }, openAtlas: { open(.atlas) }, openMates: { open(.mates) })
                                 .frame(width: sidebarLayoutWidth)
                                 .background(sidebar.isInline ? Color(.systemBackground) : .clear)
@@ -299,7 +299,8 @@ struct AppShell: View {
 
     private func finishMateCreation(_ id: String, from route: AppRoute) {
         guard path.last == route else { return }
-        let firstStep = path.count - (route == .newMateModel ? 2 : 3)
+        let steps = if case .creatingMate = route { 2 } else { 1 }
+        let firstStep = path.count - steps
         guard firstStep >= 0, case .newMate = path[firstStep] else { return }
         path.replaceSubrange(firstStep..., with: [.mate(id)])
     }
@@ -309,7 +310,7 @@ struct AppShell: View {
         guard mainPaneInteractive else { return nil }
         switch path.last {
         case .conversation(let id, _), .searchMessage(let id, _): return id
-        case .workspace, .settings, .workInbox, .atlas, .atlasPage, .mates, .newMate, .newMateModel, .creatingMate, .mate, .mateInfo: return nil
+        case .workspace, .project, .settings, .workInbox, .atlas, .atlasPage, .mates, .newMate, .creatingMate, .mate, .mateInfo: return nil
         case nil: return homeRunID
         }
     }

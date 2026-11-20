@@ -4,16 +4,28 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AssistantAssignment } from "@mains/contracts/assistants";
 import { AssistantTaskCard } from "./assistant-task-card";
-const mocks = vi.hoisted(() => ({ task: undefined as AssistantAssignment | undefined }));
+const mocks = vi.hoisted(() => ({ task: undefined as AssistantAssignment | undefined, archived: false }));
 vi.mock("@/lib/redux/api", () => ({ useGetAccountQuery: () => ({ data: { id: "account" } }), useGetWorkspaceQuery: (id: string) => ({ currentData: id ? { name: "Mains" } : undefined }) }));
 vi.mock("@/lib/redux/api/assistantsApi", () => ({
-  useAssistantOverviewQuery: () => ({ currentData: { assistants: [{ id: "assistant", name: "Testflight Ready", providerId: "codex" }] } }),
+  useAssistantOverviewQuery: () => ({ currentData: { assistants: [{ id: "assistant", name: "Testflight Ready", providerId: "codex", isArchived: mocks.archived }] } }),
   useAssistantAssignmentQuery: () => ({ currentData: mocks.task }),
 }));
 vi.mock("../hooks/use-assistant-updates", () => ({ useAssistantUpdates() {} }));
-afterEach(cleanup);
+afterEach(() => { cleanup(); mocks.archived = false; });
 
 describe("assistant task activity card", () => {
+  it("keeps the archived Mate name, report, and link to their chat", () => {
+    mocks.archived = true;
+    mocks.task = { id: "task", fromRunId: "source", workerRunId: "worker", toAssistantId: "assistant", status: "completed",
+      execution: { mode: "work" }, prompt: "Review", result: "Historical report", evidence: [], error: null } as AssistantAssignment;
+    render(<MemoryRouter><AssistantTaskCard assignmentId="task" runId="source" /></MemoryRouter>);
+    const card = within(screen.getByRole("article", { name: "Testflight Ready task" }));
+    expect(card.getByText("Archived")).toBeTruthy();
+    expect(card.getByText("Completed")).toBeTruthy();
+    expect(card.getByText("Historical report")).toBeTruthy();
+    expect(card.getByRole("button", { name: "Open archived Mate chat" })).toBeTruthy();
+  });
+
   it.each(["source", "worker"])("shows task events within one glass card in the %s chat", runId => {
     mocks.task = { id: "task", fromRunId: "source", workerRunId: "worker", toAssistantId: "assistant", status: "completed", execution: { mode: "developer", workspaceId: "repo" }, prompt: "Review TestFlight", result: "Check complete: NOT READY", evidence: ["swift-test.log"], error: null,
       activity: [

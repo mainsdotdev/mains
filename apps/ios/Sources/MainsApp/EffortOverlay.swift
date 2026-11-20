@@ -1,61 +1,77 @@
 import SwiftUI
 
+enum ComposerPicker: Hashable {
+    case model, runOptions
+}
+
+struct ComposerPickerSourceFrames: PreferenceKey {
+    static let defaultValue: [ComposerPicker: CGRect] = [:]
+    static func reduce(value: inout [ComposerPicker: CGRect], nextValue: () -> [ComposerPicker: CGRect]) {
+        value.merge(nextValue()) { _, next in next }
+    }
+}
+
 extension View {
-    func effortOverlay(isPresented: Binding<Bool>, session: BackendSession, context: ComposerContext?, withinPane: Bool = false) -> some View {
-        modifier(EffortOverlayModifier(isPresented: isPresented, session: session, context: context, withinPane: withinPane))
+    func composerPickerSource(_ picker: ComposerPicker) -> some View {
+        background(alignment: .center) {
+            GeometryReader { geometry in
+                Color.clear.preference(key: ComposerPickerSourceFrames.self, value: [picker: geometry.frame(in: .global)])
+            }
+        }
+    }
+
+    func composerPickers(model: Binding<Bool>, options: Binding<Bool>, session: BackendSession,
+                         context: ComposerContext?, withinPane: Bool = false) -> some View {
+        modifier(ComposerPickers(model: model, options: options, session: session, context: context, withinPane: withinPane))
     }
 }
 
-struct EffortSourceFrameKey: PreferenceKey {
-    static let defaultValue = CGRect.zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        let next = nextValue()
-        if !next.isEmpty { value = next }
-    }
-}
-
-private struct EffortOverlayModifier: ViewModifier {
+private struct ComposerPickers: ViewModifier {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    @Binding var isPresented: Bool
+    @Binding var model: Bool
+    @Binding var options: Bool
     let session: BackendSession
     let context: ComposerContext?
     let withinPane: Bool
-    @State private var sourceFrame = CGRect.zero
+    @State private var sourceFrames: [ComposerPicker: CGRect] = [:]
     @Environment(\.conversationPaneVisible) private var paneVisible
+
     func body(content: Content) -> some View {
+        let picker: ComposerPicker? = model ? .model : options ? .runOptions : nil
         content
-            .onPreferenceChange(EffortSourceFrameKey.self) { sourceFrame = $0 }
+            .onPreferenceChange(ComposerPickerSourceFrames.self) { sourceFrames = $0 }
             .onChange(of: paneVisible) { _, visible in
-                if withinPane && !visible { isPresented = false }
+                if withinPane && !visible { model = false; options = false }
             }
             .overlay {
-                if isPresented, let context {
-                    EffortOverlayView(session: session, context: context, sourceFrame: sourceFrame,
-                        currentSourceFrame: { sourceFrame }, close: { isPresented = false })
-                        .id("\(session.ownership):\(context.providerId):\(context.spaceID ?? ""):\(context.runID ?? "")")
-                        .ignoresSafeArea(withinPane ? [] : .container)
-                        .accessibilityElement(children: .contain)
-                        .accessibilityAddTraits(.isModal)
+                if let picker, let context {
+                    ComposerPickerPanel(sourceFrame: sourceFrames[picker] ?? .zero,
+                                        currentSourceFrame: { sourceFrames[picker] ?? .zero },
+                                        close: { if picker == .model { model = false } else { options = false } }) { close, closing in
+                        switch picker {
+                        case .model: EffortOverlayView(session: session, context: context, closing: closing, close: close)
+                        case .runOptions: RunOptionsSheet(session: session, context: context, closing: closing, close: close)
+                        }
+                    }
+                    .id("\(picker):\(session.ownership):\(context.providerId):\(context.spaceID ?? ""):\(context.runID ?? "")")
+                    .ignoresSafeArea(withinPane ? [] : .container)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityAddTraits(.isModal)
                 }
             }
     }
 }
 
-private struct EffortOverlayView: View {
+private struct ComposerPickerPanel<PanelContent: View>: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    let session: BackendSession
-    let context: ComposerContext
     let sourceFrame: CGRect
     let currentSourceFrame: () -> CGRect
     let close: () -> Void
-    @State private var selectingModel = false
-    @State private var pendingModel: ModelChoice?
-    @State private var pendingSettings: ComposerSettings?
-    @State private var showingModelSave = false
+    @ViewBuilder let panelContent: (@escaping () -> Void, Bool) -> PanelContent
     @State private var panelSize = CGSize.zero
     @State private var revealed = false
     @State private var appeared = false
@@ -64,13 +80,7 @@ private struct EffortOverlayView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
-    private var settings: ComposerSettings { context.settings(session) }
     private var backdropColor: Color { Color(white: colorScheme == .dark ? 0.015 : 0.88) }
-    private var selected: ModelChoice? { context.model(session) }
-    private var presentedModel: ModelChoice? { pendingModel ?? selected }
-    private var presentedSettings: ComposerSettings { pendingSettings ?? settings }
-    private var models: [ModelChoice] { session.models[context.providerId] ?? [] }
-    private var modelSelectionBlocked: Bool { closing || selectingModel || context.saving(session) || !session.isConnected || session.sending }
     private var transition: Animation {
         reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.36, dampingFraction: 0.94)
     }
@@ -100,7 +110,7 @@ private struct EffortOverlayView: View {
                 Color.clear.contentShape(.rect)
                     .onTapGesture(perform: requestClose).accessibilityHidden(true)
                 ScrollView(.vertical) {
-                    controls
+                    panelContent(requestClose, closing)
                         .frame(width: panelWidth)
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { panelSize = $0 }
                 }
@@ -139,6 +149,29 @@ private struct EffortOverlayView: View {
         }
         .tint(.primary)
         .accessibilityAction(.escape, requestClose)
+    }
+}
+
+private struct EffortOverlayView: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let session: BackendSession
+    let context: ComposerContext
+    let closing: Bool
+    let close: () -> Void
+    @State private var selectingModel = false
+    @State private var pendingModel: ModelChoice?
+    @State private var pendingSettings: ComposerSettings?
+    @State private var showingModelSave = false
+    private var settings: ComposerSettings { context.settings(session) }
+    private var selected: ModelChoice? { context.model(session) }
+    private var presentedModel: ModelChoice? { pendingModel ?? selected }
+    private var presentedSettings: ComposerSettings { pendingSettings ?? settings }
+    private var models: [ModelChoice] { session.models[context.providerId] ?? [] }
+    private var modelSelectionBlocked: Bool { closing || selectingModel || context.saving(session) || !session.isConnected || session.sending }
+    var body: some View {
+        controls
         .task { await session.loadModels(context.providerId) }
         .task(id: pendingModel?.id) {
             showingModelSave = false
@@ -154,7 +187,7 @@ private struct EffortOverlayView: View {
                               enabled: !modelSelectionBlocked, saving: context.saving(session),
                               showingModelSave: showingModelSave, error: session.modelErrors[context.providerId],
                               canRetry: session.isConnected, retry: { Task { await session.loadModels(context.providerId, force: true) } },
-                              close: requestClose, selectModel: chooseModel,
+                              close: close, selectModel: chooseModel,
                               updateEffort: { context.save($0, session: session) })
             SettingsRecoveryNotice(session: session, runID: context.runID)
         }
@@ -187,6 +220,7 @@ struct ModelEffortPicker: View {
     var saving = false
     var showingModelSave = false
     var storedEffortOnly = false
+    var compactWheel = false
     var error: String?
     let canRetry: Bool
     let retry: () -> Void
@@ -214,18 +248,14 @@ struct ModelEffortPicker: View {
     }
 
     var body: some View {
+        let rowHeight = compactWheel ? modelRowHeight * 0.75 : modelRowHeight
         VStack(spacing: 10) {
             HStack(spacing: 4) {
                 ComposerModelWheel(models: models, selectedID: model?.id ?? settings.model,
                                    pendingModel: model, providerID: providerID, loading: loading, enabled: enabled,
-                                   rowHeight: modelRowHeight, reduceMotion: reduceMotion, onSelect: selectModel)
-                    .frame(maxWidth: .infinity).frame(height: modelRowHeight * (dynamicTypeSize.isAccessibilitySize ? 1.8 : 3))
-                    .mask {
-                        LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .white.opacity(0.55), location: 0.16),
-                                               .init(color: .white, location: 0.4), .init(color: .white, location: 0.6),
-                                               .init(color: .white.opacity(0.55), location: 0.84), .init(color: .clear, location: 1)],
-                                       startPoint: .top, endPoint: .bottom)
-                    }
+                                   rowHeight: rowHeight, reduceMotion: reduceMotion, onSelect: selectModel)
+                    .frame(maxWidth: .infinity).frame(height: rowHeight * (dynamicTypeSize.isAccessibilitySize ? 1.8 : 3))
+                    .composerWheelFade()
                 if let close {
                     Button(action: close) {
                         Image(systemName: "xmark").font(.body).foregroundStyle(.secondary)

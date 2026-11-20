@@ -1,42 +1,80 @@
 import SwiftUI
 
-struct WorkspaceConversationsView: View {
+struct TargetConversationsView: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let session: BackendSession
-    let workspaceID: String
+    enum Target {
+        case workspace(String)
+        case project(String)
+    }
+    let target: Target
     let openConversation: (String) -> Void
     let startConversation: () -> Void
     @State private var query = ""
     @FocusState private var searching: Bool
-    @Environment(\.colorScheme) private var scheme
-    private var workspace: Workspace? { session.workspaces.first { $0.id == workspaceID } }
-    private var branch: String? { session.gitStates.first { $0.workspaceId == workspaceID }?.branch }
-    private var accent: Color {
-        scheme == .dark ? Color(red: 59 / 255, green: 130 / 255, blue: 246 / 255) : Color(red: 37 / 255, green: 99 / 255, blue: 235 / 255)
+    private var workspace: Workspace? {
+        guard case .workspace(let id) = target else { return nil }
+        return session.workspaces.first { $0.id == id }
+    }
+    private var project: ProjectCollection? {
+        guard case .project(let id) = target else { return nil }
+        return session.collections.first { $0.id == id }
+    }
+    private var gitState: WorkspaceGitState? {
+        guard let workspace else { return nil }
+        return session.gitStates.first { $0.workspaceId == workspace.id }
+    }
+    private var isWorkspace: Bool {
+        if case .workspace = target { return true }
+        return false
+    }
+    private var title: LocalizedStringKey {
+        if let name = workspace?.name ?? project?.name { return "\(name)" }
+        return isWorkspace ? "Workspace" : "Project"
     }
     private var runs: [Conversation] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return session.conversations.filter {
-            $0.assistantId == nil && $0.workspaceId == workspaceID && $0.providerId == session.selectedSpace?.providerId && $0.mode == session.selectedSpace?.mode &&
-            (needle.isEmpty || $0.displayTitle.localizedCaseInsensitiveContains(needle))
+            $0.assistantId == nil && belongsToTarget($0) && $0.providerId == session.selectedSpace?.providerId &&
+            $0.mode == session.selectedSpace?.mode && (needle.isEmpty || $0.displayTitle.localizedCaseInsensitiveContains(needle))
+        }
+    }
+    private func belongsToTarget(_ run: Conversation) -> Bool {
+        switch target {
+        case .workspace(let id): run.workspaceId == id
+        case .project(let id): run.collectionId == id
         }
     }
     private var canStart: Bool {
-        workspace != nil && workspace?.isReplica != true && session.selectedSpace?.mode == "developer" &&
-        session.gitStates.first(where: { $0.workspaceId == workspaceID })?.pathExists != false
+        guard let mode = session.selectedSpace?.mode else { return false }
+        switch target {
+        case .workspace: return workspace != nil && workspace?.isReplica != true && mode == "developer" && gitState?.pathExists != false
+        case .project: return project != nil && (mode == "work" || mode == "chat")
+        }
+    }
+    private var emptyMessage: LocalizedStringKey {
+        if isWorkspace { return query.isEmpty ? "No runs in this workspace yet." : "No runs match." }
+        return query.isEmpty ? "No chats in this project yet." : "No chats match."
     }
     var body: some View {
         ScrollView {
             TimelineView(.periodic(from: .now, by: 60)) { clock in
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        PageTitle(title).fixedSize(horizontal: false, vertical: true)
+                        if let branch = gitState?.branch {
+                            Text(branch).font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.bottom, 16)
                     if workspace?.isReplica == true {
                         BridgeReadOnlyNotice(text: "Read-only · this workspace runs on another computer")
                             .padding(.bottom, 12)
                     }
                     if runs.isEmpty {
-                        Text(query.isEmpty ? "No runs in this workspace yet." : "No runs match.")
+                        Text(emptyMessage)
                             .font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 4).padding(.vertical, 16)
                     }
                     ForEach(runs) { run in
@@ -47,7 +85,7 @@ struct WorkspaceConversationsView: View {
                                 Text(run.displayTitle).font(.body.weight(.medium)).foregroundStyle(.primary)
                                     .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                                 Text(run.isActive && run.isReplica != true ? (run.status == "queued" ? "Queued" : "Running") : compactRelativeAge(run.updatedAt, now: clock.date))
-                                    .font(.caption).monospacedDigit().foregroundStyle(run.isActive && run.isReplica != true ? accent : Color(.tertiaryLabel))
+                                    .font(.caption).monospacedDigit().foregroundStyle(run.isActive && run.isReplica != true ? AppBrand.accent : Color(.tertiaryLabel))
                                     .fixedSize(horizontal: true, vertical: false)
                             }.padding(.horizontal, 4).padding(.vertical, 16).contentShape(.rect)
                         }.buttonStyle(ChatPressStyle()).accessibilityIdentifier("conversation-\(run.id)")
@@ -55,19 +93,12 @@ struct WorkspaceConversationsView: View {
                 }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 24)
             }
         }
+        .accessibilityIdentifier("targetConversationList")
         .background(Color(.systemBackground))
         .navigationHeaderFade()
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle(workspace?.name ?? "Workspace").navigationBarTitleDisplayMode(.inline)
+        .scrollingNavigationTitle(title)
         .toolbar(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text(workspace?.name ?? "Workspace").font(.headline).lineLimit(1)
-                    if let branch { Text(branch).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
-                }.accessibilityElement(children: .combine).accessibilityIdentifier("workspaceTitle")
-            }
-        }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .refreshable { await session.refresh() }
     }
@@ -75,23 +106,27 @@ struct WorkspaceConversationsView: View {
         HStack(spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").font(.system(size: 18)).foregroundStyle(.secondary)
-                TextField("Search runs", text: $query)
+                TextField(isWorkspace ? "Search runs" : "Search chats", text: $query)
                     .font(.body).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .submitLabel(.search).focused($searching).accessibilityIdentifier("workspaceSearch")
+                    .submitLabel(.search).focused($searching).accessibilityIdentifier(isWorkspace ? "workspaceSearch" : "projectSearch")
             }.padding(.horizontal, 16).frame(height: 52).modifier(GlassSurface(radius: 26))
             if searching || !query.isEmpty {
                 RoundControl(symbol: "xmark", label: "Close search", size: 52) { query = ""; searching = false }
-                    .accessibilityIdentifier("closeWorkspaceSearch")
+                    .accessibilityIdentifier(isWorkspace ? "closeWorkspaceSearch" : "closeProjectSearch")
             } else if workspace?.isReplica != true {
                 Button {
                     guard canStart, let space = session.selectedSpace else { return }
                     searching = false
                     var target = session.homeTargets[space.id] ?? HomeTarget()
-                    target.workspaceID = workspaceID; session.selectTarget(target, spaceID: space.id)
+                    switch self.target {
+                    case .workspace(let id): target.workspaceID = id
+                    case .project(let id): target.collectionID = id
+                    }
+                    session.selectTarget(target, spaceID: space.id)
                     startConversation()
                 } label: {
                     Image(systemName: "square.and.pencil").font(.system(size: 22))
-                        .foregroundStyle(.white).frame(width: 52, height: 52).background(accent, in: .circle)
+                        .foregroundStyle(.white).frame(width: 52, height: 52).background(AppBrand.accent, in: .circle)
                 }.buttonStyle(ChatPressStyle()).disabled(!canStart)
                     .accessibilityLabel("New conversation").accessibilityIdentifier("newConversation")
             }

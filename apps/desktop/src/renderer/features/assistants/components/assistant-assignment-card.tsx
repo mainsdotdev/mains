@@ -9,7 +9,7 @@ import { useCancelAssistantTaskMutation, useFollowupAssistantTaskMutation, useRe
 import { assignmentDisplayTitle, errorText, pullRequestReviewPresentation } from "../lib/assistant-ui";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantCardSection } from "./assistant-card-section";
-import { AssignmentStatusBadge } from "./assignment-status-badge";
+import { ArchivedMateBadge, AssignmentStatusBadge } from "./assignment-status-badge";
 
 const disclosureClassName = "grid grid-cols-[minmax(0,1fr)] transition-[grid-template-rows,opacity] duration-250 ease-in-out motion-reduce:transition-none";
 
@@ -42,13 +42,14 @@ export function AssistantAssignmentCard({ task, assignee, openAssistant, initial
           onClick={() => setDisclosure(expanded ? "closed" : "open")}
           className="block min-w-0 rounded-xl px-2 py-1.5 text-left hover:bg-primary-300/20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent dark:hover:bg-primary/5">
           <span className="flex min-w-0 items-center gap-2">
-            <AssistantAvatar avatar={assignee?.avatar} seed={task.toAssistantId} animated={false} className="size-5" />
+            <AssistantAvatar avatar={assignee?.avatar} seed={task.toAssistantId} animated={false} className={cn("size-5", assignee?.isArchived && "grayscale")} />
             <span className="min-w-0 flex-1 truncate text-sm font-medium" id={titleId} title={title}>{title}</span>
             <AssignmentStatusBadge status={task.status} />
             <ArrowUp aria-hidden="true" className={cn("size-3.5 shrink-0 text-primary-500 transition-transform duration-250 ease-in-out motion-reduce:transition-none", expanded ? "rotate-180" : "rotate-90")} />
           </span>
           <span className="mt-1.5 flex min-w-0 items-baseline gap-1.5 pl-7 text-xs text-primary-600 dark:text-primary-400">
             <span className="max-w-[45%] shrink-0 truncate">{assigneeName}</span>
+            {assignee?.isArchived && <ArchivedMateBadge />}
             {preview && <span aria-hidden="true" className={cn(disclosureClassName, "min-w-0", expanded ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100")}>
               <span className="min-h-0 overflow-hidden">
                 <span className="block truncate"><span aria-hidden="true">· </span><span id={previewId}>{preview}</span></span>

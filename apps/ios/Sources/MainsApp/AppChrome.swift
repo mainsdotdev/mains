@@ -15,6 +15,68 @@ extension View {
     func navigationHeaderFade(background: Color = Color(.systemBackground), coversSafeAreaAtRest: Bool = true) -> some View {
         modifier(NavigationHeaderFade(background: background, coversSafeAreaAtRest: coversSafeAreaAtRest))
     }
+
+    func scrollingNavigationTitle(_ title: LocalizedStringKey) -> some View {
+        modifier(ScrollingNavigationTitle(title: title))
+    }
+}
+
+private extension EnvironmentValues {
+    @Entry var pageTitleVisible: Binding<Bool> = .constant(true)
+}
+
+struct PageTitle: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let title: LocalizedStringKey
+    @Environment(\.pageTitleVisible) private var visibility
+
+    init(_ title: LocalizedStringKey) { self.title = title }
+
+    var body: some View {
+        Text(title)
+            .font(.largeTitle.weight(.semibold).width(.expanded))
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("pageTitle")
+            .onScrollVisibilityChange(threshold: 0.05) { visibility.wrappedValue = $0 }
+    }
+
+    var listRow: some View {
+        self.listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+    }
+}
+
+private struct ScrollingNavigationTitle: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let title: LocalizedStringKey
+    @State private var titleVisible = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.pageTitleVisible, $titleVisible)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    ZStack {
+                        Color.clear.frame(width: 1, height: 1).accessibilityHidden(true)
+                        if !titleVisible {
+                            Text(title)
+                                .font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
+                                .accessibilityIdentifier("inlinePageTitle")
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: titleVisible)
+                }.sharedBackgroundVisibility(.hidden)
+            }
+    }
 }
 
 private struct NavigationHeaderFade: ViewModifier {

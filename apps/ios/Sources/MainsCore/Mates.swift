@@ -53,10 +53,11 @@ public struct Mate: Decodable, Identifiable, Sendable {
     public let teamId: String?
     public let providerId: String
     public let model: String
+    public let isArchived: Bool?
     public let needsSetup: Bool
     public let welcome: MateWelcome?
     public let details: MateDetails?
-    public var ready: Bool { !needsSetup }
+    public var ready: Bool { !needsSetup && isArchived != true }
 }
 
 public struct MateDetails: Decodable, Sendable {
@@ -106,12 +107,20 @@ public struct MateChat: Decodable, Identifiable, Sendable {
 }
 
 public struct MateAssignment: Decodable, Sendable {
+    public struct Assignee: Decodable, Sendable {
+        public let id: String
+        public let name: String
+        public let avatar: MateAvatar
+        public let isArchived: Bool
+    }
+
     public let id: String
     public let title: String
     public let status: String
     public let result: String?
     public let error: String?
     public let workerRunId: String?
+    public let assignee: Assignee?
 }
 
 public struct MateAssignmentLink: Equatable, Sendable {

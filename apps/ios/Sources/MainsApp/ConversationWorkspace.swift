@@ -31,6 +31,7 @@ struct ConversationWorkspace<ConversationContent: View, OutputContent: View>: Vi
                 .opacity(plan.showsOutput ? 1 : 0).allowsHitTesting(plan.showsOutput)
                 .accessibilityHidden(!plan.showsOutput)
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("conversationWorkspace-\(String(describing: plan.mode))")
     }
 }

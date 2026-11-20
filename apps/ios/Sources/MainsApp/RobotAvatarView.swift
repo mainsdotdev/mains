@@ -77,6 +77,7 @@ struct MateRobotPicker: View {
     @Binding var remembered: [String: String]
     let stageHeight: CGFloat
     let previewActive: Bool
+    let isSelecting: Bool
     @State private var selection = MateAvatarSelection()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -88,48 +89,54 @@ struct MateRobotPicker: View {
         VStack(spacing: 6) {
             if let style, !style.presets.isEmpty {
                 MateAvatarCarousel(presets: style.presets, avatar: $avatar, selection: $selection,
-                                   stageHeight: stageHeight, previewActive: previewActive)
+                                   stageHeight: stageHeight, previewActive: previewActive, isSelecting: isSelecting)
                     .id(style.id)
             }
 
-            HStack(spacing: 8) {
-                ForEach(catalogue.styles) { candidate in
-                    let selected = candidate.id == style?.id
-                    Button {
-                        selectStyle(candidate)
-                    } label: {
-                        VStack(spacing: 2) {
-                            MateRobotThumbnail(preset: candidate.presets.first)
-                                .frame(width: 30, height: 24)
-                            Text(candidate.label)
-                                .font(.caption.weight(.semibold))
-                                .multilineTextAlignment(.center)
-                                .foregroundStyle(selected ? .primary : .secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                        .background(alignment: .center) {
-                            if selected { Color.clear.modifier(GlassSurface(radius: 20)) }
-                            else { RoundedRectangle(cornerRadius: 20).fill(Color.primary.opacity(0.06)) }
-                        }
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(ChatPressStyle())
-                    .accessibilityAddTraits(selected ? .isSelected : [])
-                    .accessibilityIdentifier("mate-avatar-style-\(candidate.id)")
-                }
+            if isSelecting {
+                styleChoices.transition(.opacity)
             }
-            .frame(maxWidth: 432)
-            .padding(.horizontal, 24)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Robot style")
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: style?.id)
         }
         .onChange(of: avatar.shape) { _, id in
             if let style { remembered[style.id] = id }
         }
+    }
+
+    private var styleChoices: some View {
+        HStack(spacing: 8) {
+            ForEach(catalogue.styles) { candidate in
+                let selected = candidate.id == style?.id
+                Button {
+                    selectStyle(candidate)
+                } label: {
+                    VStack(spacing: 2) {
+                        MateRobotThumbnail(preset: candidate.presets.first)
+                            .frame(width: 30, height: 24)
+                        Text(candidate.label)
+                            .font(.caption.weight(.semibold))
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(selected ? .primary : .secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(alignment: .center) {
+                        if selected { Color.clear.modifier(GlassSurface(radius: 20)) }
+                        else { RoundedRectangle(cornerRadius: 20).fill(Color.primary.opacity(0.06)) }
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(ChatPressStyle())
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityIdentifier("mate-avatar-style-\(candidate.id)")
+            }
+        }
+        .frame(maxWidth: 432)
+        .padding(.horizontal, 24)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Robot style")
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: style?.id)
     }
 
     private func selectStyle(_ next: MateRobotCatalogue.Style) {
@@ -150,6 +157,7 @@ private struct MateAvatarCarousel: View {
     @Binding var selection: MateAvatarSelection
     let stageHeight: CGFloat
     let previewActive: Bool
+    let isSelecting: Bool
     @State private var index: Int
     @State private var dragOffset: CGFloat = 0
     @State private var visible = false
@@ -160,10 +168,11 @@ private struct MateAvatarCarousel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(presets: [MateRobotCatalogue.Preset], avatar: Binding<MateAvatar>, selection: Binding<MateAvatarSelection>,
-         stageHeight: CGFloat, previewActive: Bool) {
+         stageHeight: CGFloat, previewActive: Bool, isSelecting: Bool) {
         self.presets = presets
         self.stageHeight = stageHeight
         self.previewActive = previewActive
+        self.isSelecting = isSelecting
         _avatar = avatar
         _selection = selection
         _index = State(initialValue: presets.firstIndex { $0.id == avatar.wrappedValue.shape } ?? 0)
@@ -179,11 +188,13 @@ private struct MateAvatarCarousel: View {
             let size = min(320, width * 0.69, stageHeight - 16)
             let spacing = size * 0.86 + 8
             let neighbors = max(2, Int(ceil(width / (2 * spacing))) + 1)
+            let slots = isSelecting ? ((index - neighbors)...(index + neighbors)) : (index...index)
 
             ZStack {
                 // Absolute slots keep their identity across the two ends of the preset list.
-                ForEach((index - neighbors)...(index + neighbors), id: \.self) { slot in
-                    let x = CGFloat(slot - index) * spacing + dragOffset
+                ForEach(slots, id: \.self) { slot in
+                    let x = CGFloat(slot - index) * spacing + (isSelecting ? dragOffset : 0)
+                    let exitDistance = (slot < index ? -1 : 1) * (width + size) / 2
                     let nearViewport = abs(x) < (width + size) / 2 + spacing * 0.3
                     let renders = previewActive && visible && nearViewport && (slot == index || canRenderNeighbors)
                     MateRobotPreview(preset: preset(at: slot), acceptsDrag: false,
@@ -200,26 +211,29 @@ private struct MateAvatarCarousel: View {
                     }
                         .frame(width: size, height: size)
                         .modifier(MateAvatarArc(x: x, radius: max(1, width * 0.58), reduceMotion: reduceMotion))
-                        .transition(.identity)
+                        .transition(reduceMotion || slot == index ? .identity : .offset(x: exitDistance))
                 }
             }
             .frame(width: width, height: geometry.size.height)
             .clipped()
             .overlay {
-                MateAvatarGestures(
-                    rotationSize: renderedSlots.contains(index) ? size : 0,
-                    onDrag: { dragOffset = min(spacing, max(-spacing, $0)) },
-                    onEnd: { distance in
-                        let step = abs(distance) >= spacing / 3 ? (distance < 0 ? 1 : -1) : 0
-                        select(index + step)
-                    },
-                    onTap: { x in
-                        let step = Int((x / spacing).rounded())
-                        if step == 0 { rotateSelection() }
-                        else { select(index + step) }
-                    },
-                    onRotate: { drag in rotation = (index, drag) }
-                )
+                if isSelecting {
+                    MateAvatarGestures(
+                        rotationSize: renderedSlots.contains(index) ? size : 0,
+                        onDrag: { dragOffset = min(spacing, max(-spacing, $0)) },
+                        onEnd: { distance in
+                            let step = abs(distance) >= spacing / 3 ? (distance < 0 ? 1 : -1) : 0
+                            select(index + step)
+                        },
+                        onTap: { x in
+                            let step = Int((x / spacing).rounded())
+                            if step == 0 { rotateSelection() }
+                            else { select(index + step) }
+                        },
+                        onRotate: { drag in rotation = (index, drag) }
+                    )
+                    .transition(.identity)
+                }
             }
         }
         .frame(height: stageHeight)
@@ -227,16 +241,19 @@ private struct MateAvatarCarousel: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Avatar")
         .accessibilityValue(preset(at: index).label)
-        .accessibilityHint("Choose an avatar for this Mate. Hold and drag to rotate it.")
+        .accessibilityHint(isSelecting ? "Choose an avatar for this Mate. Hold and drag to rotate it." : "")
         .accessibilityIdentifier(renderedSlots.contains(index) ? "mate-avatar-carousel-3d" : "mate-avatar-carousel")
         .accessibilityAdjustableAction { direction in
+            guard isSelecting else { return }
             switch direction {
             case .increment: select(index + 1)
             case .decrement: select(index - 1)
             @unknown default: break
             }
         }
-        .accessibilityAction(named: Text("Rotate avatar"), rotateSelection)
+        .accessibilityActions {
+            if isSelecting { Button("Rotate avatar", action: rotateSelection) }
+        }
         .sensoryFeedback(.selection, trigger: avatar)
     }
 
@@ -245,6 +262,7 @@ private struct MateAvatarCarousel: View {
     }
 
     private func select(_ slot: Int) {
+        guard isSelecting else { return }
         if slot != index {
             selection.advance()
             rotation = nil
@@ -257,7 +275,7 @@ private struct MateAvatarCarousel: View {
     }
 
     private func rotateSelection() {
-        guard renderedSlots.contains(index) else { return }
+        guard isSelecting, renderedSlots.contains(index) else { return }
         turn = (index, turn?.slot == index ? (turn?.step ?? 0) + 1 : 1)
     }
 }

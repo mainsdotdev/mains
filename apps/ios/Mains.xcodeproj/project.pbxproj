@@ -116,6 +116,10 @@
 		34C428D04E7C79234C3BC37D /* RobotAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20F7FE6F06247BA5F630F212 /* RobotAvatarView.swift */; };
 		B0C120B4ACE26726EF795E6B /* RobotAvatars in Resources */ = {isa = PBXBuildFile; fileRef = C85FDA14D6F50A5653B52A25 /* RobotAvatars */; };
 		C7FCFA03FF9D31CE83BDE210 /* robots in Resources */ = {isa = PBXBuildFile; fileRef = 3A9545DDF85B0F8782EBD7D3 /* robots */; };
+		16A07FF93F3B1458D51C8D4C2C30F644 /* atlas.icon in Resources */ = {isa = PBXBuildFile; fileRef = 502F9C097A6DD0A35847BF5E9DC96335 /* atlas.icon */; };
+		8BC97250AFC7C0785FBDB87E51EC41B5 /* bridge.icon in Resources */ = {isa = PBXBuildFile; fileRef = F1352082D8A48B19FCD4DD1604604DA9 /* bridge.icon */; };
+		C6D825CF7FF882FB7F9A670EE9E021C6 /* mate.icon in Resources */ = {isa = PBXBuildFile; fileRef = 8B26F4239A0A57006F9302C7062427B8 /* mate.icon */; };
+		CF7AD0141296BFF1B816899801A7E291 /* mains-default.icon in Resources */ = {isa = PBXBuildFile; fileRef = D8132EC910353E488FECA58614C51E19 /* mains-default.icon */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -251,6 +255,10 @@
 		20F7FE6F06247BA5F630F212 /* RobotAvatarView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RobotAvatarView.swift; sourceTree = "<group>"; };
 		3A9545DDF85B0F8782EBD7D3 /* robots */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; name = robots; path = ../../desktop/src/renderer/features/assistants/assets/robots; sourceTree = "<group>"; };
 		C85FDA14D6F50A5653B52A25 /* RobotAvatars */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder; path = RobotAvatars; sourceTree = "<group>"; };
+		502F9C097A6DD0A35847BF5E9DC96335 /* atlas.icon */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.iconcomposer.icon; name = atlas.icon; path = ../../desktop/src/renderer/public/icons/atlas.icon; sourceTree = "<group>"; };
+		8B26F4239A0A57006F9302C7062427B8 /* mate.icon */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.iconcomposer.icon; name = mate.icon; path = ../../desktop/src/renderer/public/icons/mate.icon; sourceTree = "<group>"; };
+		D8132EC910353E488FECA58614C51E19 /* mains-default.icon */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.iconcomposer.icon; name = "mains-default.icon"; path = "../../desktop/src/renderer/public/icons/mains-default.icon"; sourceTree = "<group>"; };
+		F1352082D8A48B19FCD4DD1604604DA9 /* bridge.icon */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.iconcomposer.icon; name = bridge.icon; path = ../../desktop/src/renderer/public/icons/bridge.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -367,6 +375,10 @@
 			isa = PBXGroup;
 			children = (
 				EA4F393EC8807CA69C5153931C0248DF /* Assets.xcassets */,
+				D8132EC910353E488FECA58614C51E19 /* mains-default.icon */,
+				502F9C097A6DD0A35847BF5E9DC96335 /* atlas.icon */,
+				F1352082D8A48B19FCD4DD1604604DA9 /* bridge.icon */,
+				8B26F4239A0A57006F9302C7062427B8 /* mate.icon */,
 				C3A422F7113AA0A576160355576558E3 /* LaunchIntro */,
 				EF565433E98163A9A65192F9B073FE4C /* PrivacyInfo.xcprivacy */,
 				09372078680AFA8109162659B0390FAA /* WebRTC-LICENSE.txt */,
@@ -551,6 +563,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				84E2BE84B6A605C4EF1C912B40413AF0 /* Assets.xcassets in Resources */,
+				CF7AD0141296BFF1B816899801A7E291 /* mains-default.icon in Resources */,
+				16A07FF93F3B1458D51C8D4C2C30F644 /* atlas.icon in Resources */,
+				8BC97250AFC7C0785FBDB87E51EC41B5 /* bridge.icon in Resources */,
+				C6D825CF7FF882FB7F9A670EE9E021C6 /* mate.icon in Resources */,
 				8D5BCF7D714A9E3A3B4DB6BB6F79FCBA /* LaunchIntro in Resources */,
 				969811191C072CEDD3C9BF84F40EA642 /* PrivacyInfo.xcprivacy in Resources */,
 				807686D78C9ABAACD0960179C5726CD0 /* Math in Resources */,
@@ -693,7 +709,8 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 3AF5510525587FCCFEF05752AFE5BFDC /* Version.xcconfig */;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "atlas bridge mate";
+				ASSETCATALOG_COMPILER_APPICON_NAME = "mains-default";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
@@ -822,7 +839,8 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 3AF5510525587FCCFEF05752AFE5BFDC /* Version.xcconfig */;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "atlas bridge mate";
+				ASSETCATALOG_COMPILER_APPICON_NAME = "mains-default";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;

@@ -12,7 +12,7 @@ import { assistantHref } from "../lib/assistant-navigation";
 import { errorText, pullRequestReviewPresentation } from "../lib/assistant-ui";
 import { AssistantAvatar } from "./assistant-avatar";
 import { AssistantCardSection } from "./assistant-card-section";
-import { AssignmentStatusBadge } from "./assignment-status-badge";
+import { ArchivedMateBadge, AssignmentStatusBadge } from "./assignment-status-badge";
 
 const activityLabels = { request: "Task request", followup: "Follow-up", status: "Status", result: "Report" };
 const deliveryLabels = { queued: "Waiting to send", dispatching: "Sending", delivered: undefined, uncertain: "Needs attention", canceled: "Canceled" };
@@ -40,6 +40,7 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
   const expanded = hasOpened && disclosure.expanded;
   const review = pullRequestReviewPresentation(task);
   const name = assistant?.name ?? "Mate";
+  const archived = assistant?.isArchived === true;
   const scope = review ? "PR review" : workspace?.name ?? (task.execution.mode === "work" ? "Work" : "");
   const running = task.status === "running" || task.status === "queued";
   const workerRunId = task.workerRunId;
@@ -61,9 +62,11 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
           <Button variant="bare" aria-expanded={expanded} aria-controls={detailsId}
             onClick={() => setDisclosure({ taskKey, expanded: !expanded })}
             className="flex min-h-9 w-full min-w-0 items-center gap-2 rounded-xl px-2 py-1.5 text-left hover:bg-primary-300/20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent dark:hover:bg-primary/5">
-            <AssistantAvatar avatar={assistant?.avatar} working={running} seed={task.toAssistantId} className="size-6" />
+            <AssistantAvatar avatar={assistant?.avatar} working={running && !archived} animated={!archived}
+              seed={task.toAssistantId} className={cn("size-6", archived && "grayscale")} />
             <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
               <span className="truncate text-sm font-medium">{name}</span>
+              {archived && <ArchivedMateBadge />}
               {scope && <span className="truncate text-xs text-primary-600 dark:text-primary-400"><span aria-hidden="true">· </span>{scope}</span>}
             </span>
             <AssignmentStatusBadge status={task.status} />
@@ -118,7 +121,7 @@ export function AssistantTaskCard({ assignmentId, runId }: { assignmentId: strin
       {canOpenChat && (
         <Button variant="secondary" className="self-end whitespace-nowrap px-2.5 text-xs focus-visible:ring-2 focus-visible:ring-accent"
           onClick={() => navigate(assistantHref(task.toAssistantId, workerRunId))}>
-          Open chat
+          {archived ? "Open archived Mate chat" : "Open chat"}
         </Button>
       )}
     </article>

@@ -26,7 +26,6 @@ struct ComputerView: View {
     @State private var forget = false
     @State private var pair = false
     @State private var copied = false
-    @State private var showInlineTitle = false
 
     private var descriptor: BackendDescriptor? { session.connectedDescriptor ?? session.pairing?.descriptor }
     private var endpoint: URL? { session.activeEndpoint ?? session.pairing?.endpoints.first }
@@ -35,14 +34,7 @@ struct ComputerView: View {
 
     var body: some View {
         SettingsScrollView {
-            Text("Settings")
-                .font(.largeTitle.weight(.semibold).width(.expanded))
-                .accessibilityAddTraits(.isHeader)
-                .onGeometryChange(for: Bool.self) { geometry in
-                    geometry.frame(in: .scrollView).maxY <= 0
-                } action: { scrolledPastTitle in
-                    showInlineTitle = scrolledPastTitle
-                }
+            PageTitle("Settings")
             SettingsSection(session.isDemo ? "Demo Mode" : "Connected computer") {
                 if session.isDemo {
                     SettingsRow(title: "Demo Mac",
@@ -120,6 +112,7 @@ struct ComputerView: View {
                     .accessibilityAddTraits(appearance == option ? .isSelected : [])
                 }
             }
+            AppIconSettings()
             SettingsSection("This phone") {
                 SettingsRow(title: "Name", value: UIDevice.current.name)
                 if let pairing = session.pairing, !session.isDemo {
@@ -156,16 +149,7 @@ struct ComputerView: View {
             }
             SettingsFooter(version: Self.appVersion, build: Self.buildNumber)
         }
-        .navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .title) {
-                Text("Settings")
-                    .font(.headline.weight(.medium).width(.expanded))
-                    .opacity(showInlineTitle ? 1 : 0)
-                    .accessibilityHidden(!showInlineTitle)
-                    .animation(.easeInOut(duration: 0.18), value: showInlineTitle)
-            }
-        }
+        .scrollingNavigationTitle("Settings")
         .toolbar(.visible, for: .navigationBar)
         .accessibilityIdentifier("settingsList")
         .alert("Forget this computer?", isPresented: $forget) {
@@ -327,6 +311,82 @@ private struct AIDataSharingSettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text(session.isDemo ? "Show the demo disclosures again. Real provider permissions stay separate." : "Mains will ask again before this computer sends data to any AI provider.") }
+    }
+}
+
+private struct AppIconSettings: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var selectedName = UIApplication.shared.alternateIconName
+    @State private var changing = false
+    @State private var changeError: String?
+
+    private enum Choice: String, CaseIterable {
+        case `default`, atlas, bridge, mate
+
+        var title: String { rawValue.capitalized }
+        var alternateName: String? { self == .default ? nil : rawValue }
+    }
+
+    var body: some View {
+        SettingsSection("App Icon") {
+            HStack(alignment: .top, spacing: 4) {
+                ForEach(Choice.allCases, id: \.self) { choice in
+                    let selected = choice.alternateName == selectedName
+                    Button { changeIcon(to: choice) } label: {
+                        VStack(spacing: 6) {
+                            Image("app-icon-preview-\(choice.rawValue)")
+                                .resizable().scaledToFit()
+                                .frame(maxWidth: 54)
+                                .padding(3)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .strokeBorder(.blue, lineWidth: 2)
+                                        .opacity(selected ? 1 : 0)
+                                }
+                                .accessibilityHidden(true)
+                            Text(choice.title)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(selected ? Color.blue : .primary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                    }
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("appIcon-\(choice.rawValue)")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 14)
+            .disabled(!UIApplication.shared.supportsAlternateIcons)
+        }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .active { selectedName = UIApplication.shared.alternateIconName }
+        }
+        .alert("Couldn’t change the app icon", isPresented: Binding(
+            get: { changeError != nil }, set: { if !$0 { changeError = nil } }
+        )) {} message: {
+            Text(changeError ?? "")
+        }
+    }
+
+    private func changeIcon(to choice: Choice) {
+        let application = UIApplication.shared
+        guard application.supportsAlternateIcons, !changing, choice.alternateName != application.alternateIconName else { return }
+        changing = true
+        Task { @MainActor in
+            do {
+                try await application.setAlternateIconName(choice.alternateName)
+            } catch {
+                changeError = error.localizedDescription
+            }
+            selectedName = application.alternateIconName
+            changing = false
+        }
     }
 }
 

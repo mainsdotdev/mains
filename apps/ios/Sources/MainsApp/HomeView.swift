@@ -61,8 +61,8 @@ struct HomeView: View {
             }
         }
         .sheet(isPresented: $targetSheet) { if let space { TargetSheet(session: session, space: space) } }
-        .effortOverlay(isPresented: $modelSheet, session: session, context: space.map { ComposerContext(space: $0) })
-        .sheet(isPresented: $optionsSheet) { if let space { RunOptionsSheet(session: session, context: ComposerContext(space: space)) } }
+        .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
+                         context: space.map { ComposerContext(space: $0) })
         .task(id: "\(space?.providerId ?? ""):\(session.isConnected)") {
             if let space { await session.loadModels(space.providerId, force: true) }
         }
@@ -72,10 +72,28 @@ struct HomeView: View {
         Spacer(minLength: 20)
         if session.pairing != nil && space == nil && !session.connection.isBusy {
             ContentUnavailableView("Choose a space", systemImage: "square.grid.2x2", description: Text("Open the sidebar to choose where to start."))
+        } else if let space, session.isConnected, !session.homeDraft(for: space.id).hasContent {
+            ViewThatFits(in: .vertical) {
+                Text(welcomeTitle(for: space.mode))
+                    .font(.title.weight(.medium).width(.expanded))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+                    .padding(.horizontal, 24)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("homeWelcomeTitle")
+                Color.clear.frame(height: 0).accessibilityHidden(true)
+            }
         }
         Spacer(minLength: 20)
     }
 
+    private func welcomeTitle(for mode: String) -> LocalizedStringKey {
+        switch mode {
+        case "developer": "What are we building?"
+        case "work": "What are we working on?"
+        default: "What’s on your mind?"
+        }
+    }
 }
 
 private struct UnpairedHomeArea: View {

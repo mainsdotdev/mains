@@ -130,10 +130,18 @@ struct ConversationTranscript: View {
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 48)
                 } else if rows.isEmpty && pending == nil && session.historyError == nil && run?.isActive != true {
-                    ContentUnavailableView(session.isConnected ? "Pick up where you left off" : "Not downloaded yet",
-                                           systemImage: session.isConnected ? "bubble.left.and.bubble.right" : "wifi.slash",
-                                           description: Text(session.isConnected ? "Send a message to continue with \(Provider.name(providerID))." : "Reconnect to your computer to load this conversation."))
-                        .padding(.vertical, 24)
+                    ContentUnavailableView {
+                        Label {
+                            Text(session.isConnected ? "Pick up where you left off" : "Not downloaded yet")
+                                .font(.title2.weight(.medium).width(.expanded))
+                                .accessibilityAddTraits(.isHeader)
+                        } icon: {
+                            Image(systemName: session.isConnected ? "bubble.left.and.bubble.right" : "wifi.slash")
+                        }
+                    } description: {
+                        Text(session.isConnected ? "Send a message to continue with \(Provider.name(providerID))." : "Reconnect to your computer to load this conversation.")
+                    }
+                    .padding(.vertical, 24)
                 }
                 ForEach(sections) { section in
                     VStack(alignment: .leading, spacing: 12) {

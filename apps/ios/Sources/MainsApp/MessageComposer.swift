@@ -66,7 +66,8 @@ struct MessageComposer: View {
             let value = settings.permission(provider: context.providerId)
             return PermissionChoice.title(for: value, provider: context.providerId) ?? "Options"
         }
-        return context.mode == "work" && context.providerId == "codex" || selectedModel?.supportsFastMode == true || selectedModel?.serviceTiers?.isEmpty == false ? "Options" : nil
+        return context.mode == "work" && context.providerId == "codex" || ComposerSpeed(model: selectedModel, providerID: context.providerId) != nil
+            ? "Options" : nil
     }
     var body: some View {
         VStack(spacing: 8) {
@@ -194,13 +195,12 @@ struct MessageComposer: View {
                     if let effort { Text(effort).foregroundStyle(.secondary).fixedSize(horizontal: true, vertical: false) }
                 }.lineLimit(1).frame(minHeight: 44)
             }
-            .background(GeometryReader { geometry in
-                Color.clear.preference(key: EffortSourceFrameKey.self, value: geometry.frame(in: .global))
-            })
+            .composerPickerSource(.model)
             .disabled(!session.isConnected || session.sending || context.saving(session)).accessibilityIdentifier("chooseModel")
             if let label = optionsLabel {
                 Button(label, action: options).fontWeight(.semibold).frame(minHeight: 44)
                     .fixedSize(horizontal: true, vertical: false).layoutPriority(1)
+                    .composerPickerSource(.runOptions)
                     .disabled(!session.isConnected || session.sending || context.saving(session)).accessibilityIdentifier("runOptions")
             }
             Spacer(minLength: 0)

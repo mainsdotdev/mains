@@ -96,7 +96,7 @@ struct TargetSheet: View {
 
 /// A transparent snapping wheel. Native scrolling supplies momentum, while the
 /// rows have no system picker highlight or model-dependent height.
-struct ComposerModelWheel: UIViewRepresentable {
+struct ComposerModelWheel: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
@@ -110,7 +110,7 @@ struct ComposerModelWheel: UIViewRepresentable {
     var reduceMotion = false
     let onSelect: (ModelChoice) -> Void
 
-    fileprivate struct Item: Equatable {
+    fileprivate struct Item: Identifiable, Equatable {
         let id: String
         let title: String
         let displayName: String
@@ -118,7 +118,7 @@ struct ComposerModelWheel: UIViewRepresentable {
         let model: ModelChoice?
         var accessibleName: String { accessibilityDetail.map { title + ", " + $0 } ?? title }
     }
-    fileprivate var items: [Item] {
+    private var items: [Item] {
         let catalogue = providerID == "opencode" ? OpenCodeModelDisplay.groups(models).flatMap(\.models) : models
         var result = catalogue.map { model in
             Item(id: model.id, title: model.label(for: providerID), displayName: model.displayName,
@@ -132,22 +132,48 @@ struct ComposerModelWheel: UIViewRepresentable {
         }
         return result
     }
+    var body: some View {
+        ComposerChoiceWheel(items: items, selectedID: selectedID, accessibilityTitle: "Model", accessibilityID: "selectModel",
+                            enabled: enabled && !models.isEmpty, rowHeight: rowHeight, reduceMotion: reduceMotion,
+                            accessibleName: \.accessibleName, canSelect: { $0.model != nil }, onSelect: {
+                                if let model = $0.model { onSelect(model) }
+                            }) { ModelWheelRow(item: $0, providerID: providerID) }
+    }
+}
+
+private struct ComposerChoiceWheel<Item: Identifiable & Equatable, Row: View>: UIViewRepresentable where Item.ID == String {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let items: [Item]
+    let selectedID: String
+    let accessibilityTitle: String
+    let accessibilityID: String
+    let enabled: Bool
+    let rowHeight: CGFloat
+    let reduceMotion: Bool
+    let accessibleName: (Item) -> String
+    let canSelect: (Item) -> Bool
+    let onSelect: (Item) -> Void
+    @ViewBuilder let rowContent: (Item) -> Row
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
-    func makeUIView(context: Context) -> ModelWheelScroller {
-        let view = ModelWheelScroller()
+    func makeUIView(context: Context) -> ComposerWheelScroller {
+        let view = ComposerWheelScroller()
         let coordinator = context.coordinator
         coordinator.view = view; view.delegate = coordinator
         view.configureRow = { [weak coordinator] index, reused in coordinator?.row(index, reusing: reused) ?? UIView() }
         view.onChoose = { [weak coordinator] index, animated in coordinator?.choose(index, animated: animated) }
         view.onGeometryChange = { [weak coordinator] in coordinator?.restorePosition() }
-        view.accessibilityIdentifier = "selectModel"; view.accessibilityLabel = "Model"
+        view.canChoose = { [weak coordinator] in coordinator?.canChoose($0) == true }
+        view.accessibilityIdentifier = accessibilityID; view.accessibilityLabel = accessibilityTitle
         return view
     }
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ModelWheelScroller, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ComposerWheelScroller, context: Context) -> CGSize? {
         guard let width = proposal.width, let height = proposal.height, width.isFinite, height.isFinite else { return nil }
         return CGSize(width: width, height: height)
     }
-    func updateUIView(_ view: ModelWheelScroller, context: Context) {
+    func updateUIView(_ view: ComposerWheelScroller, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
         let nextItems = items
@@ -160,27 +186,27 @@ struct ComposerModelWheel: UIViewRepresentable {
         // History/effort refreshes must not interrupt an in-progress wheel spin.
         // Programmatic positioning/reload never invokes the selection callback.
         if changed || availabilityChanged || coordinator.lastSelectedID != selectedID { coordinator.restorePosition() }
-        view.isUserInteractionEnabled = enabled && !models.isEmpty
+        view.isUserInteractionEnabled = enabled
         view.accessibilityTraits = enabled ? [.adjustable] : [.adjustable, .notEnabled]
         coordinator.updateAccessibility()
     }
-    static func dismantleUIView(_ view: ModelWheelScroller, coordinator: Coordinator) {
-        view.delegate = nil; view.configureRow = nil; view.onChoose = nil; view.onGeometryChange = nil
+    static func dismantleUIView(_ view: ComposerWheelScroller, coordinator: Coordinator) {
+        view.delegate = nil; view.configureRow = nil; view.onChoose = nil; view.canChoose = nil; view.onGeometryChange = nil
     }
     @MainActor final class Coordinator: NSObject, UIScrollViewDelegate {
-        var parent: ComposerModelWheel
-        fileprivate var items: [Item]
-        weak var view: ModelWheelScroller?
+        var parent: ComposerChoiceWheel
+        var items: [Item]
+        weak var view: ComposerWheelScroller?
         var lastSelectedID: String?
         var lastRowHeight: CGFloat = 0
         var lastEnabled: Bool?
         private var userInitiated = false
-        init(_ parent: ComposerModelWheel) { self.parent = parent; items = parent.items }
+        init(_ parent: ComposerChoiceWheel) { self.parent = parent; items = parent.items }
         func row(_ index: Int, reusing view: UIView?) -> UIView {
             guard items.indices.contains(index) else { return UIView() }
             let item = items[index]
-            let providerID = parent.providerID
-            let configuration = UIHostingConfiguration { ModelWheelRow(item: item, providerID: providerID) }
+            let rowContent = parent.rowContent
+            let configuration = UIHostingConfiguration { rowContent(item) }
                 .background { Color.clear }.margins(.all, 0)
             if let view, let content = view as? UIContentView {
                 content.configuration = configuration
@@ -197,8 +223,11 @@ struct ComposerModelWheel: UIViewRepresentable {
             if abs(view.contentOffset.y - offset.y) > 0.5 { view.setContentOffset(offset, animated: false) }
             lastSelectedID = parent.selectedID; updateAccessibility()
         }
+        func canChoose(_ index: Int) -> Bool {
+            parent.enabled && items.indices.contains(index) && parent.canSelect(items[index])
+        }
         func choose(_ index: Int, animated: Bool) {
-            guard parent.enabled, let view, items.indices.contains(index) else { return }
+            guard let view, canChoose(index) else { return }
             userInitiated = true
             let offset = CGPoint(x: 0, y: CGFloat(index) * parent.rowHeight)
             if animated && !parent.reduceMotion && abs(view.contentOffset.y - offset.y) > 0.5 {
@@ -207,16 +236,16 @@ struct ComposerModelWheel: UIViewRepresentable {
         }
         func updateAccessibility() {
             guard let view, items.indices.contains(view.centeredIndex) else { return }
-            view.accessibilityValue = items[view.centeredIndex].accessibleName
+            view.accessibilityValue = parent.accessibleName(items[view.centeredIndex])
         }
         private func finish(endingInteraction: Bool = false) {
             guard let view, endingInteraction || (!view.isTracking && !view.isDragging) else { return }
-            guard userInitiated, parent.enabled, items.indices.contains(view.centeredIndex),
-                  let model = items[view.centeredIndex].model else { restorePosition(); return }
+            guard userInitiated, canChoose(view.centeredIndex) else { restorePosition(); return }
+            let item = items[view.centeredIndex]
             userInitiated = false
             view.setContentOffset(CGPoint(x: 0, y: CGFloat(view.centeredIndex) * parent.rowHeight), animated: false)
-            lastSelectedID = model.id
-            parent.onSelect(model)
+            lastSelectedID = item.id
+            parent.onSelect(item)
         }
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { userInitiated = parent.enabled }
         func scrollViewDidScroll(_ scrollView: UIScrollView) { updateAccessibility() }
@@ -232,14 +261,26 @@ struct ComposerModelWheel: UIViewRepresentable {
     }
 }
 
+extension View {
+    func composerWheelFade() -> some View {
+        mask {
+            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .white.opacity(0.55), location: 0.16),
+                                   .init(color: .white, location: 0.4), .init(color: .white, location: 0.6),
+                                   .init(color: .white.opacity(0.55), location: 0.84), .init(color: .clear, location: 1)],
+                           startPoint: .top, endPoint: .bottom)
+        }
+    }
+}
+
 /// Reuses only nearby rows. Transparent native scrolling avoids depending on
 /// UIPickerView's private selection-background hierarchy.
-final class ModelWheelScroller: UIScrollView {
+final class ComposerWheelScroller: UIScrollView {
     var rowHeight: CGFloat = 52
     var rowCount = 0
     var reduceMotion = false
     var configureRow: (@MainActor (Int, UIView?) -> UIView)?
     var onChoose: (@MainActor (Int, Bool) -> Void)?
+    var canChoose: (@MainActor (Int) -> Bool)?
     var onGeometryChange: (@MainActor () -> Void)?
     private var rows: [Int: UIView] = [:]
     private var reusableRows: [UIView] = []
@@ -303,12 +344,14 @@ final class ModelWheelScroller: UIScrollView {
         onChoose?(row, true)
     }
     override func accessibilityIncrement() {
-        let next = min(max(0, rowCount - 1), centeredIndex + 1)
-        if next != centeredIndex { onChoose?(next, false) }
+        if let next = (0..<rowCount).dropFirst(centeredIndex + 1).first(where: { canChoose?($0) == true }) {
+            onChoose?(next, false)
+        }
     }
     override func accessibilityDecrement() {
-        let next = max(0, centeredIndex - 1)
-        if next != centeredIndex { onChoose?(next, false) }
+        if let previous = (0..<rowCount).prefix(centeredIndex).last(where: { canChoose?($0) == true }) {
+            onChoose?(previous, false)
+        }
     }
 }
 
@@ -328,119 +371,276 @@ private struct ModelWheelRow: View {
     }
 }
 
+/// Uses the advertised tier IDs, including legacy Codex Fast and boolean-only providers.
+struct ComposerSpeed {
+    private static let fastIDs = ["fast", "priority", "ultrafast"]
+    let tiers: [ModelServiceTier]
+    let fastTier: String?
+    private let usesServiceTier: Bool
+
+    init?(model: ModelChoice?, providerID: String) {
+        guard let model else { return nil }
+        let reported = model.serviceTiers ?? []
+        let hasFast = reported.contains { $0.id == "fast" }
+        tiers = reported.filter { !$0.id.isEmpty && $0.id != "default" && !(hasFast && $0.id == "priority") }
+        guard !tiers.isEmpty || model.supportsFastMode == true else { return nil }
+        usesServiceTier = !tiers.isEmpty || providerID == "codex"
+        if tiers.isEmpty && usesServiceTier {
+            fastTier = "fast"
+        } else {
+            let available = Set(tiers.map(\.id))
+            fastTier = Self.fastIDs.first { available.contains($0) }
+        }
+    }
+
+    var showsFast: Bool { !usesServiceTier || fastTier != nil }
+
+    func tier(in settings: ComposerSettings) -> String {
+        let saved = settings.config["serviceTier"]?.string ?? ""
+        let canonical = saved == "priority" && tiers.contains { $0.id == "fast" } ? "fast" : saved
+        return tiers.contains { $0.id == canonical } ? canonical : "default"
+    }
+
+    func isFast(in settings: ComposerSettings) -> Bool {
+        guard usesServiceTier else { return settings.config["fastMode"]?.bool == true }
+        let value = tiers.isEmpty ? settings.config["serviceTier"]?.string ?? "" : tier(in: settings)
+        return Self.fastIDs.contains(value)
+    }
+
+    func setFast(_ enabled: Bool, in settings: inout ComposerSettings) {
+        if let fastTier { settings.config["serviceTier"] = .string(enabled ? fastTier : "default") }
+        else if !usesServiceTier { settings.config["fastMode"] = .bool(enabled) }
+    }
+}
+
 struct RunOptionsSheet: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
     let session: BackendSession
     let context: ComposerContext
+    let closing: Bool
+    let close: () -> Void
     @State private var catalog: CodexPermissions?
     @State private var catalogError: String?
     @State private var loading = true
-    private var settings: ComposerSettings { context.settings(session) }
-    private var model: ModelChoice? { session.models[context.providerId]?.first { $0.id == settings.model || settings.model.isEmpty && $0.isDefault == true } }
+    @State private var pendingSettings: ComposerSettings?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .title2) private var permissionRowHeight: CGFloat = 54
+
+    private var settings: ComposerSettings { pendingSettings ?? context.settings(session) }
+    private var blocked: Bool {
+        closing || pendingSettings != nil || context.saving(session) || !session.isConnected || session.sending
+    }
+    private var selectedPermission: String { settings.permission(provider: context.providerId) }
+
     var body: some View {
-        ComposerSheet(title: "Run options", backgroundStyle: AnyShapeStyle(Color(.secondarySystemBackground))) {
-            List {
-                if context.mode == "developer" {
-                    Section("Permissions") {
-                        if context.providerId == "codex", loading { HStack { ProgressView(); Text("Loading computer policy…") }.modifier(CompactOptionRow()) }
-                        else if let catalogError {
-                            Text(catalogError).foregroundStyle(.secondary).modifier(CompactOptionRow())
-                            Button("Try again") { Task { await loadPolicy() } }.modifier(CompactOptionRow())
-                        } else {
-                            ForEach(permissions) { option in
-                                choice(option.title, detail: option.disabledReason ?? option.detail, detailLimit: option.disabledReason == nil ? 1 : nil,
-                                       selected: settings.permission(provider: context.providerId) == option.id,
-                                       first: option.id == permissions.first?.id, last: option.id == permissions.last?.id) {
-                                    var next = settings; next.setPermission(option.id, provider: context.providerId); context.save(next, session: session)
-                                }.disabled(option.disabledReason != nil).accessibilityIdentifier("permission-\(option.id)")
-                            }
-                        }
+        VStack(spacing: 12) {
+            Text("Run options").font(.headline)
+                .padding(.horizontal, 48).frame(maxWidth: .infinity, minHeight: 44)
+                .accessibilityAddTraits(.isHeader)
+                .overlay(alignment: .trailing) {
+                    Button(action: close) {
+                        Image(systemName: "xmark").font(.body).foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44).contentShape(.circle)
                     }
+                    .buttonStyle(ChatPressStyle())
+                    .accessibilityLabel("Close").accessibilityIdentifier("closeRunOptions")
                 }
-                if context.providerId == "codex" {
-                    Section {
+            VStack(spacing: 14) {
+                if context.mode == "developer" { permissionPicker }
+                VStack(spacing: 0) {
+                    if context.providerId == "codex" && context.mode != "chat" {
                         if context.mode == "developer" {
-                            Toggle("Plan mode", isOn: configToggle("planMode", exclusive: "goalMode")).modifier(CompactOptionRow())
+                            Toggle("Plan mode", isOn: configToggle("planMode", exclusive: "goalMode"))
+                                .accessibilityIdentifier("runPlanMode").padding(.vertical, 5)
                         }
-                        if context.mode != "chat" { Toggle("Goal mode", isOn: configToggle("goalMode", exclusive: "planMode")).modifier(CompactOptionRow()) }
+                        Toggle("Goal mode", isOn: configToggle("goalMode", exclusive: "planMode"))
+                            .accessibilityIdentifier("runGoalMode").padding(.vertical, 5)
+                    }
+                    if let speed = ComposerSpeed(model: context.model(session), providerID: context.providerId) {
+                        speedRow(speed)
                     }
                 }
-                if let tiers = model?.serviceTiers, !tiers.isEmpty {
-                    Section("Speed") {
-                        Picker("Service tier", selection: Binding(get: {
-                            let value = settings.config["serviceTier"]?.string ?? ""
-                            return value.isEmpty ? "default" : value
-                        }, set: { value in
-                            var next = settings; next.config["serviceTier"] = .string(value); context.save(next, session: session)
-                        })) {
-                            Text("Default").tag("default")
-                            ForEach(tiers.filter { $0.id != "default" }) { Text($0.name).tag($0.id) }
-                        }.modifier(CompactOptionRow())
-                    }
-                } else if model?.supportsFastMode == true {
-                    Section {
-                        Toggle("Fast mode", isOn: Binding(get: {
-                            context.providerId == "codex" ? ["fast", "priority", "ultrafast"].contains(settings.config["serviceTier"]?.string ?? "") : settings.config["fastMode"]?.bool == true
-                        }, set: { on in
-                            var next = settings
-                            if context.providerId == "codex" { next.config["serviceTier"] = .string(on ? "fast" : "default") }
-                            else { next.config["fastMode"] = .bool(on) }
-                            context.save(next, session: session)
-                        })).modifier(CompactOptionRow())
-                    }
-                }
+                .toggleStyle(.switch)
+                .tint(Provider.accent(context.providerId))
+                .disabled(blocked)
             }
-                .listStyle(.insetGrouped).scrollContentBackground(.hidden).contentMargins(.top, 0, for: .scrollContent)
-                .listSectionSpacing(8).environment(\.defaultMinListRowHeight, 44).environment(\.defaultMinListHeaderHeight, 24)
-                .textCase(nil).tint(Provider.accent(context.providerId))
-                .disabled(context.saving(session) || !session.isConnected || session.sending)
-                .safeAreaInset(edge: .bottom) { SettingsRecoveryNotice(session: session, runID: context.runID) }
-                .task(id: context.workspace(session)) { await loadPolicy() }
+            .padding(.horizontal, 8)
+            SettingsRecoveryNotice(session: session, runID: context.runID)
+        }
+        .padding(.horizontal, 20).padding(.bottom, 16)
+        .task(id: context.workspace(session)) { await loadPolicy() }
+    }
+
+    private var permissions: [PermissionChoice] {
+        var choices = context.providerId == "codex"
+            ? catalog?.choices(current: selectedPermission) ?? []
+            : PermissionChoice.choices(provider: context.providerId)
+        if !choices.isEmpty, !choices.contains(where: { $0.id == selectedPermission }) {
+            let title = selectedPermission.isEmpty ? "Select permission" : selectedPermission
+            choices.insert(PermissionChoice(id: selectedPermission, title: title, detail: "", disabledReason: "Saved selection"), at: 0)
+        }
+        return choices
+    }
+
+    private var permissionPicker: some View {
+        let height = permissionRowHeight * (dynamicTypeSize.isAccessibilitySize ? 1.8 : 3)
+        return Group {
+            if context.providerId == "codex", loading {
+                ProgressView("Loading computer policy…").font(.subheadline)
+            } else if let catalogError {
+                VStack(spacing: 8) {
+                    Text(catalogError).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Button("Try again") { Task { await loadPolicy() } }.buttonStyle(ChatPressStyle()).disabled(blocked)
+                }
+            } else if permissions.isEmpty {
+                Text("No permission options available").font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                ComposerChoiceWheel(items: permissions, selectedID: selectedPermission, accessibilityTitle: "Permissions",
+                                    accessibilityID: "selectPermission", enabled: !blocked, rowHeight: permissionRowHeight,
+                                    reduceMotion: reduceMotion, accessibleName: { choice in
+                    let detail = choice.disabledReason ?? choice.detail
+                    return detail.isEmpty ? choice.title : "\(choice.title), \(detail)"
+                },
+                                    canSelect: { $0.disabledReason == nil }, onSelect: { item in
+                    updateSettings { $0.setPermission(item.id, provider: context.providerId) }
+                }) { item in
+                    VStack(spacing: 2) {
+                        HStack(spacing: 7) {
+                            if item.disabledReason != nil { Image(systemName: "lock.fill").font(.footnote) }
+                            Text(item.title).font(.title2.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.75)
+                        }
+                        Text(item.disabledReason ?? item.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    .foregroundStyle(item.disabledReason == nil ? .primary : .secondary)
+                    .multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.horizontal, 4)
+                }
+                .composerWheelFade()
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: height, idealHeight: height, maxHeight: height)
+    }
+
+    @ViewBuilder private func speedRow(_ speed: ComposerSpeed) -> some View {
+        if speed.showsFast {
+            let active = speed.isFast(in: settings)
+            HStack(spacing: 8) {
+                if speed.tiers.count > 1 {
+                    tierMenu(speed, title: "Fast")
+                    Spacer(minLength: 0)
+                }
+                Button {
+                    updateSettings { speed.setFast(!active, in: &$0) }
+                } label: {
+                    HStack {
+                        if speed.tiers.count <= 1 {
+                            Text("Fast")
+                            Spacer(minLength: 0)
+                        }
+                        FastBolt(active: active)
+                            .frame(width: 48, height: 48)
+                    }.contentShape(.rect)
+                }
+                .buttonStyle(ChatPressStyle()).accessibilityLabel("Fast")
+                .accessibilityValue(active ? "On" : "Off")
+                .accessibilityIdentifier("runFastMode")
+            }
+        } else {
+            tierMenu(speed, title: "Service tier")
         }
     }
-    private var permissions: [PermissionChoice] {
-        if context.providerId == "codex" { return catalog?.choices(current: settings.permission(provider: context.providerId)) ?? [] }
-        return PermissionChoice.choices(provider: context.providerId)
+
+    private func tierMenu(_ speed: ComposerSpeed, title: String) -> some View {
+        let current = speed.tier(in: settings)
+        let name = speed.tiers.first { $0.id == current }?.name ?? "Default"
+        return Menu {
+            Picker("Service tier", selection: Binding(get: { current }, set: { value in
+                updateSettings { $0.config["serviceTier"] = .string(value) }
+            })) {
+                Text("Default").tag("default")
+                ForEach(speed.tiers) { Text($0.name).tag($0.id) }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(title)
+                if current != "default", name.caseInsensitiveCompare(title) != .orderedSame {
+                    Text(name).font(.caption).foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.primary).frame(minHeight: 44).contentShape(.rect)
+        }
+        .tint(.primary)
+        .accessibilityLabel("Service tier").accessibilityValue(name)
+        .accessibilityIdentifier("runServiceTier")
     }
+
     private func configToggle(_ key: String, exclusive: String) -> Binding<Bool> {
         Binding(get: { settings.config[key]?.bool == true }, set: { value in
-            var next = settings; next.config[key] = .bool(value)
-            if value { next.config[exclusive] = .bool(false) }
-            context.save(next, session: session)
+            updateSettings {
+                $0.config[key] = .bool(value)
+                if value { $0.config[exclusive] = .bool(false) }
+            }
         })
     }
+
+    private func updateSettings(_ edit: (inout ComposerSettings) -> Void) {
+        guard !blocked else { return }
+        var next = settings
+        edit(&next)
+        guard next != settings else { return }
+        let owner = session.ownership
+        pendingSettings = next
+        Task {
+            guard owner == session.ownership else { return }
+            defer { if owner == session.ownership { pendingSettings = nil } }
+            do { try await context.commit(next, session: session) }
+            catch { if owner == session.ownership { session.actionError = error.localizedDescription } }
+        }
+    }
+
     private func loadPolicy() async {
-        guard context.providerId == "codex", context.mode == "developer" else { loading = false; return }
-        loading = true; catalogError = nil
-        do { catalog = try await session.codexPermissions(workspaceID: context.workspace(session)) }
-        catch { catalogError = error.localizedDescription }
-        loading = false
+        guard context.providerId == "codex", context.mode == "developer" else { return }
+        let workspace = context.workspace(session)
+        let owner = session.ownership
+        loading = true; catalogError = nil; catalog = nil
+        defer { if !Task.isCancelled && owner == session.ownership && workspace == context.workspace(session) { loading = false } }
+        do {
+            let policy = try await session.codexPermissions(workspaceID: workspace)
+            if !Task.isCancelled && owner == session.ownership && workspace == context.workspace(session) { catalog = policy }
+        } catch {
+            if !Task.isCancelled && owner == session.ownership && workspace == context.workspace(session) { catalogError = error.localizedDescription }
+        }
     }
 }
 
-@MainActor private func choice(_ title: String, detail: String? = nil, detailLimit: Int? = 1, selected: Bool,
-                              first: Bool, last: Bool, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).foregroundStyle(.primary).lineLimit(1)
-                if let detail, !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(detailLimit) }
-            }
-            Spacer(minLength: 8)
-            if selected { Image(systemName: "checkmark").foregroundStyle(.blue) }
-        }.frame(minHeight: 32).contentShape(.rect)
-    }.buttonStyle(.plain).modifier(CompactOptionRow(top: first ? 12 : 5, bottom: last ? 12 : 5)).accessibilityAddTraits(selected ? .isSelected : [])
-}
-
-private struct CompactOptionRow: ViewModifier {
+private struct FastBolt: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    var top: CGFloat = 10
-    var bottom: CGFloat = 10
-    func body(content: Content) -> some View {
-        content.listRowInsets(EdgeInsets(top: top, leading: 20, bottom: bottom, trailing: 20)).listRowBackground(Color(.tertiarySystemBackground))
+    let active: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
+    private let size: CGFloat = 28
+
+    private func bolt(_ name: String) -> some View {
+        Image(name).renderingMode(.template).resizable().scaledToFit()
+            .frame(width: size, height: size)
+    }
+
+    var body: some View {
+        let glow = scheme == .dark ? Color(red: 1, green: 0.33, blue: 0.38) : Color(red: 0.7, green: 0.08, blue: 0.18)
+        ZStack {
+            bolt("registry-bolt").foregroundStyle(.secondary).opacity(active ? 0 : 1)
+            bolt("registry-bolt-fill")
+                .foregroundStyle(.linearGradient(colors: [glow, Color(red: 1, green: 0.55, blue: 0.62)], startPoint: .bottom, endPoint: .top))
+                .mask(alignment: .bottom) { Rectangle().frame(height: active ? size : 0) }
+                .shadow(color: glow.opacity(0.75), radius: 4)
+                .shadow(color: glow.opacity(0.3), radius: 10)
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: active ? 0.38 : 0.24), value: active)
+        .accessibilityHidden(true)
     }
 }

@@ -44,6 +44,13 @@ source_group = project.main_group.new_group('Sources', 'Sources')
 end
 resources = project.main_group.new_group('Resources', 'Resources')
 app.resources_build_phase.add_file_reference(resources.new_file('Assets.xcassets'))
+primary_app_icon = 'mains-default'
+alternate_app_icons = %w[atlas bridge mate]
+([primary_app_icon] + alternate_app_icons).each do |name|
+  icon = resources.new_file("../../desktop/src/renderer/public/icons/#{name}.icon")
+  icon.last_known_file_type = 'folder.iconcomposer.icon'
+  app.resources_build_phase.add_file_reference(icon)
+end
 app.resources_build_phase.add_file_reference(resources.new_file('PrivacyInfo.xcprivacy'))
 launch_intro = resources.new_file('LaunchIntro')
 launch_intro.last_known_file_type = 'folder'
@@ -98,7 +105,8 @@ app.build_configurations.each do |configuration|
     'PRODUCT_NAME' => 'Mains Native',
     'INFOPLIST_FILE' => voice_enabled ? (debug ? 'Info.Voice.Debug.plist' : 'Info.Voice.plist') : (debug ? 'Info.Debug.plist' : 'Info.plist'),
     'SWIFT_ACTIVE_COMPILATION_CONDITIONS' => ['$(inherited)', (debug ? 'DEBUG' : nil), (voice_enabled ? 'MAINS_GPT_LIVE' : nil)].compact.join(' '),
-    'ASSETCATALOG_COMPILER_APPICON_NAME' => 'AppIcon',
+    'ASSETCATALOG_COMPILER_APPICON_NAME' => primary_app_icon,
+    'ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES' => alternate_app_icons,
     'ENABLE_USER_SCRIPT_SANDBOXING' => 'YES',
   })
   if debug

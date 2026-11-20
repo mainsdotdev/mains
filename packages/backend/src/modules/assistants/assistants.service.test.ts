@@ -17,6 +17,7 @@ vi.mock("../providers/adapters", async () => ({
 }));
 import { assistantsService } from "./assistants.service";
 import { assistantsRepo } from "./assistants.repo";
+import { assistantsMobile } from "./assistants-mobile";
 import { assistantWelcome } from "./assistant-welcome";
 import { assistantWork } from "./assistant-work";
 import { providersService } from "../providers";
@@ -447,6 +448,36 @@ describe("conversational assistant routines", () => {
         await assistantWork.stop();
         await expect(assistantWork.tool(source.id, "DeleteAssistantRoutine", { routineId: created.id })).rejects.toThrow("shutting down");
         expect(pulseService.getById(created.id)).not.toBeNull();
+    });
+});
+
+describe("archived Mate history", () => {
+    it("keeps owned chats and task identity readable without admitting archived work", async () => {
+        const mate = await makeAssistant("Release");
+        const accountId = mate.accountId;
+        const source = createRun(db, { status: "succeeded" });
+        const worker = createRun(db, { assistantId: mate.id, status: "succeeded", mode: "work", title: "Release check" });
+        assistantsRepo.enqueue({
+            id: "historical", accountId, teamId, fromRunId: source.id, toAssistantId: mate.id,
+            taskKey: "historical", dedupeKey: "historical", title: "Check release", prompt: "Check release", status: "completed",
+            workerRunId: worker.id, result: "Release checked",
+        }, { id: "historical-request", assignmentId: "historical", kind: "request", content: "Check release", status: "delivered" });
+        assistantsService.archive(mate.id, accountId, true);
+
+        expect((await assistantsMobile.directory(accountId)).mates).toEqual([]);
+        const identity = { id: mate.id, name: mate.name, avatar: mate.avatar, isArchived: true };
+        const { mates: [archived] } = await assistantsMobile.directory(accountId, mate.id);
+        expect(archived).toMatchObject({ ...identity, needsSetup: false, welcome: null });
+        expect(archived).not.toHaveProperty("details");
+        expect(await assistantsMobile.chats(accountId, mate.id)).toMatchObject([{ id: worker.id, title: "Release check" }]);
+        expect(await assistantsMobile.assignment(accountId, source.id, "historical")).toMatchObject({
+            assignee: identity, workerRunId: worker.id, result: "Release checked", status: "completed",
+        });
+        await expect(assistantsMobile.assignment(accountId, "unrelated", "historical")).rejects.toThrow("unavailable");
+        await expect(assistantsMobile.directory("foreign", mate.id)).rejects.toThrow("Account is unavailable");
+        expect(() => assistantsService.require(mate.id, accountId)).toThrow("Assistant is unavailable");
+        assistantsService.archive(mate.id, accountId, false);
+        expect((await assistantsMobile.directory(accountId)).mates).toMatchObject([{ ...identity, isArchived: false }]);
     });
 });
 

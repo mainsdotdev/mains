@@ -10,6 +10,7 @@ struct SidebarView: View {
     let menuWidth: CGFloat
     let openConversation: (String) -> Void
     let openWorkspace: (String) -> Void
+    let openProject: (String) -> Void
     let selectSpace: (String) -> Void
     let search: () -> Void
     let settings: () -> Void
@@ -291,22 +292,29 @@ struct SidebarView: View {
         let open = !collapsed.contains(collection.id)
         let inside = chats.filter { $0.collectionId == collection.id }
         return VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                    if open { collapsed.insert(collection.id) } else { collapsed.remove(collection.id) }
+            HStack(spacing: 0) {
+                Button { openProject(collection.id) } label: {
+                    HStack(spacing: menuIconSpacing) {
+                        RegistryIcon(token: collection.icon, fallbackAsset: folderAsset, size: menuIconSize)
+                            .frame(width: menuIconWidth)
+                        Text(collection.name).foregroundStyle(.primary).lineLimit(1)
+                    }
+                    .font(.body).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(.rect)
                 }
-            } label: {
-                HStack(spacing: menuIconSpacing) {
-                    RegistryIcon(token: collection.icon, fallbackAsset: folderAsset, size: menuIconSize)
-                        .frame(width: menuIconWidth)
-                    Text(collection.name).foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
+                .accessibilityIdentifier("openProject-\(collection.id)")
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                        if open { collapsed.insert(collection.id) } else { collapsed.remove(collection.id) }
+                    }
+                } label: {
                     RegistryIcon(token: "tool-arrow-up", size: 16)
                         .rotationEffect(.degrees(open ? 180 : 90))
-                }.font(.body).frame(minHeight: 44).contentShape(.rect)
-            }.buttonStyle(.plain).accessibilityLabel("\(collection.name), \(open ? "expanded" : "collapsed")")
+                        .frame(width: 44, height: 44, alignment: .trailing).contentShape(.rect)
+                }
+                .accessibilityLabel("\(collection.name), \(open ? "expanded" : "collapsed")")
+                .accessibilityHint(open ? "Hide project chats" : "Show project chats")
                 .accessibilityIdentifier("collection-\(collection.id)")
+            }.buttonStyle(.plain)
             if open {
                 if inside.isEmpty { empty("No chats yet.").padding(.leading, menuIconWidth + menuIconSpacing).padding(.bottom, 6) }
                 ForEach(inside) { run in conversationRow(run).padding(.leading, menuIconWidth + menuIconSpacing) }

@@ -7,13 +7,16 @@ struct WorkInboxView: View {
     let session: BackendSession
     let openConversation: (String) -> Void
     let openSettings: () -> Void
+    @Environment(\.calendar) private var calendar
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 15)) { clock in
             let snapshot = session.displayedWorkInbox
             let live = session.isConnected && session.workInboxIsCurrent
             let groups = snapshot.groups(now: clock.date, live: live)
+            let finishedByDay = Dictionary(grouping: groups.finished) { calendar.startOfDay(for: $0.run.updatedAt) }
             List {
+                Section { PageTitle("Activity").listRow }
                 if !session.isConnected || session.workInboxError != nil || session.workInboxLoading && !live {
                   Section {
                     VStack(alignment: .leading, spacing: 4) {
@@ -34,7 +37,9 @@ struct WorkInboxView: View {
                 inboxSection("Needs you", items: groups.needsYou, kind: .waiting, now: clock.date, live: live)
                 inboxSection("Running", items: groups.running, kind: .running, now: clock.date, live: live)
                 inboxSection("Needs attention", items: groups.failed, kind: .failed, now: clock.date, live: live)
-                inboxSection("Recently finished", items: groups.finished, kind: .finished, now: clock.date, live: live)
+                ForEach(finishedByDay.keys.sorted(by: >), id: \.self) { day in
+                    inboxSection(activityDay(day, now: clock.date), items: finishedByDay[day] ?? [], kind: .finished, now: clock.date, live: live)
+                }
 
                 if groups.isEmpty && !session.workInboxLoading {
                     ContentUnavailableView(live ? "You're all caught up" : "No saved activity", systemImage: live ? "checkmark.circle" : "tray",
@@ -48,19 +53,28 @@ struct WorkInboxView: View {
                 }
             }
             .listStyle(.insetGrouped).scrollContentBackground(.hidden)
+            .contentMargins(.top, 8, for: .scrollContent)
             .listSectionSpacing(.compact)
             .environment(\.defaultMinListRowHeight, 44)
             .background(Color(.systemBackground))
             .navigationHeaderFade()
+            .scrollingNavigationTitle("Activity")
             .accessibilityIdentifier("workInboxList")
         }
-        .navigationTitle("Activity").navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .refreshable { await session.refreshWorkInbox() }
     }
 
+    private func activityDay(_ day: Date, now: Date) -> LocalizedStringKey {
+        if calendar.isDate(day, inSameDayAs: now) { return "Today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(day, inSameDayAs: yesterday) {
+            return "Yesterday"
+        }
+        return "\(day, format: .dateTime.weekday(.wide))"
+    }
+
     @ViewBuilder
-    private func inboxSection(_ title: String, items: [WorkInboxItem], kind: WorkInboxRow.Kind, now: Date, live: Bool) -> some View {
+    private func inboxSection(_ title: LocalizedStringKey, items: [WorkInboxItem], kind: WorkInboxRow.Kind, now: Date, live: Bool) -> some View {
         if !items.isEmpty {
             Section {
                 ForEach(items) { item in
@@ -69,7 +83,12 @@ struct WorkInboxView: View {
                         .listRowInsets(AppListStyle.rowInsets)
                 }
             } header: {
-                HStack { Text(title); Spacer(); Text(items.count, format: .number).monospacedDigit() }
+                HStack {
+                    Text(title).font(.title3.weight(.medium).width(.expanded)).foregroundStyle(.primary)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer()
+                    Text(items.count, format: .number).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                }.textCase(nil)
             }
         }
     }

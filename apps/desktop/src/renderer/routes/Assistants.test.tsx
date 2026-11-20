@@ -133,6 +133,15 @@ describe("assistant profile and conversation", () => {
     await waitFor(() => expect(archiveMate).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "website", archived: false }));
   });
 
+  it("opens an archived Mate's saved conversation with a restore action", () => {
+    mocks.assistants[1].isArchived = true;
+    setup("/assistants?assistant=website&run=website-first");
+    expect(screen.getByTestId("conversation").textContent).toBe("website-first");
+    const header = screen.getByRole("button", { name: "Website profile" });
+    expect(within(header).getByText("Archived")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restore mate" })).toBeTruthy();
+  });
+
   it("asks before permanent deletion and clears the deleted mate's selection", async () => {
     mocks.assistants[1].isArchived = true;
     removeMate.mockReturnValue({ unwrap: async () => {

@@ -36,7 +36,7 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
   const { isOpen: previewOpen, ownerKey: previewOwner, hide: hidePreview } = usePreviewPanel();
   const selectedId = params.get("assistant");
   const selected = overview?.assistants.find(a => a.id === selectedId);
-  const setupWelcome = overview?.welcomes?.find(welcome => welcome.assistantId === selectedId &&
+  const setupWelcome = selected?.isArchived ? undefined : overview?.welcomes?.find(welcome => welcome.assistantId === selectedId &&
     welcome.question?.profileSetup && !welcome.question.profileSetup.saved);
   const requestedRun = params.get("run");
   const runParam = setupWelcome?.runId ?? requestedRun;
@@ -45,7 +45,7 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
   const creating = params.get("new") === "1";
   const createdMateId = (location.state as { createdMateId?: string } | null)?.createdMateId;
   const animateWelcome = selectedId === createdMateId;
-  const { currentData: chats, error: chatsError, refetch: refetchChats } = useAssistantConversationsQuery({ accountId, id: selectedId ?? "" }, { skip: !selected || selected.isArchived });
+  const { currentData: chats, error: chatsError, refetch: refetchChats } = useAssistantConversationsQuery({ accountId, id: selectedId ?? "" }, { skip: !selected });
   const ownerKey = assistantConversationOwner(backendId, accountId, selectedId ?? "");
   const savedView = useAppSelector(state => state.assistants.views[ownerKey]);
   const navigateChat = useCallback((id: string, replace = false) => {
@@ -74,14 +74,14 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
       if (first) setParams({ assistant: first.id }, { replace: true });
     } else if (setupWelcome && requestedRun !== setupWelcome.runId) {
       setParams(previous => { const next = new URLSearchParams(previous); next.set("run", setupWelcome.runId); return next; }, { replace: true });
-    } else if (selected && chats && !runParam) {
+    } else if (selected && !selected.isArchived && chats && !runParam) {
       setParams(previous => { const next = new URLSearchParams(previous); next.set("run", savedView?.activeRunId ?? chats[0]?.id ?? "new"); return next; }, { replace: true });
     }
   }, [overview, creating, selectedId, selected, chats, runParam, requestedRun, setupWelcome, savedView?.activeRunId, setParams]);
   const changeTab = useCallback((value?: string, replace = false) => setParams(previous => { const next = new URLSearchParams(previous); if (value) next.set("tab", value); else next.delete("tab"); next.delete("new"); return next; }, { replace }), [setParams]);
   const panelRequested = !!selected && !!tab && !creating;
   const panelOpen = panelRequested && !previewOpen;
-  const chatOwner = selected && !selected.isArchived ? composerOwnerKey({
+  const chatOwner = selected && (!selected.isArchived || runId) ? composerOwnerKey({
     backendId, assistantId: selected.id, spaceId: selected.spaceId, providerId: selected.providerId, mode: selected.spaceSnapshot.mode,
   }, runId) : previewOwner;
   const panelRequest = panelRequested ? `${selectedId}:${tab}:${chatOwner}` : null;
@@ -138,12 +138,30 @@ function AssistantConversations({ accountId, backendId }: { accountId: string; b
     {creating ? <div className="scroll-bounce min-h-0 flex-1 overflow-y-auto noscrollbar">
       <AssistantProfileForm accountId={accountId} onClose={closeCreation} onCreated={openCreatedMate} />
     </div> : selected ? <>
-      {selected.isArchived ? <div className="flex flex-1 flex-col items-center justify-center gap-4 text-sm text-primary-500"><p>{selected.name} is archived.</p><Button variant="subtle" disabled={archiving.isLoading} onClick={() => void toggleArchive()}>Restore mate</Button>{failure && <p role="alert" className="text-danger">{failure}</p>}</div> : runParam ? <AssistantChat key={avatarScope} assistant={selected} welcome={overview?.welcomes?.find(w => w.assistantId === selected.id && w.runId === runId)} animateWelcome={animateWelcome} selectedRunId={runId} onAvatarState={reportAvatarState} onOpenDetails={() => changeTab("profile")} onSelectRun={id => {
-        if (!id) { openChat("new"); return; }
-        if (!runId) dispatch(replaceAssistantConversationDraft({ ownerKey, runId: id }));
-        else dispatch(visitAssistantConversation({ ownerKey, runId: id, initialIds: chats?.map(chat => chat.id) ?? [] }));
-        navigateChat(id, !runId);
-      }} /> : <div className="flex flex-1 items-center justify-center text-sm text-primary-500">Loading conversation…</div>}
+      {selected.isArchived && !runId ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 text-sm text-primary-500">
+          <p>{selected.name} is archived.</p>
+          <div className="flex items-center gap-2">
+            {!!chats?.length && <Button variant="ghost" onClick={() => changeTab("chats")}>View chats</Button>}
+            <Button variant="subtle" disabled={archiving.isLoading} onClick={() => void toggleArchive()}>Restore mate</Button>
+          </div>
+          {failure && <p role="alert" className="text-danger">{failure}</p>}
+        </div>
+      ) : runParam ? <>
+        <AssistantChat key={avatarScope} assistant={selected} welcome={overview?.welcomes?.find(w => w.assistantId === selected.id && w.runId === runId)}
+          animateWelcome={animateWelcome} selectedRunId={runId} onAvatarState={reportAvatarState} onOpenDetails={() => changeTab("profile")} onSelectRun={id => {
+            if (selected.isArchived) return;
+            if (!id) { openChat("new"); return; }
+            if (!runId) dispatch(replaceAssistantConversationDraft({ ownerKey, runId: id }));
+            else dispatch(visitAssistantConversation({ ownerKey, runId: id, initialIds: chats?.map(chat => chat.id) ?? [] }));
+            navigateChat(id, !runId);
+          }} />
+        {selected.isArchived && <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-4 py-3 text-sm text-primary-500">
+          <p>Restore this Mate to send messages.</p>
+          <Button variant="subtle" disabled={archiving.isLoading} onClick={() => void toggleArchive()}>Restore mate</Button>
+          {failure && <p role="alert" className="text-danger">{failure}</p>}
+        </div>}
+      </> : <div className="flex flex-1 items-center justify-center text-sm text-primary-500">Loading conversation…</div>}
     </> : <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
       {error ? <><p role="alert" className="text-sm text-danger">{errorText(error)}</p><Button variant="ghost" onClick={() => void refetch()}>Retry</Button></> : isLoading || (isFetching && animateWelcome) ? <p className="text-sm text-primary-500">Loading mates…</p> : <>
         {selectedId ? <Bot className="size-8 text-primary-400" aria-hidden /> : (

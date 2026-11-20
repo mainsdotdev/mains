@@ -45,7 +45,15 @@ struct MainsApp: App {
                 }
                 monitor.start(queue: DispatchQueue(label: "dev.mains.ios.network"))
             }
-            .onChange(of: scenePhase) { _, phase in session.setActive(phase == .active) }
+            .onChange(of: scenePhase) { _, phase in
+                // System alerts, including the app-icon confirmation, briefly make the scene inactive.
+                switch phase {
+                case .active: session.setActive(true)
+                case .inactive: break
+                case .background: session.setActive(false)
+                @unknown default: session.setActive(false)
+                }
+            }
     }
 }
 

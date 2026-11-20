@@ -297,10 +297,12 @@ export const assistantsService = {
         const { setupPrompt: _setup, updatedAt: _updated, ...value } = row;
         return { ...value, execution: execution(JSON.parse(row.execution)), question: row.question ? JSON.parse(row.question) : null };
     },
-    conversations(id: string, accountId: string) {
-        const assistant = this.require(id, accountId);
-        const chats: AssistantConversation[] = assistantsRepo.conversations(id, accountId);
-        const welcome = assistantsRepo.welcome(id);
+    conversations(id: string, accountId: string, { includeArchivedMate = false } = {}) {
+        const assistant = includeArchivedMate ? this.get(id, accountId) : this.require(id, accountId);
+        if (!assistant) throw new Error("Assistant is unavailable");
+        const chats: AssistantConversation[] = assistantsRepo.conversations(assistant.id, assistant.accountId);
+        if (assistant.isArchived) return chats;
+        const welcome = assistantsRepo.welcome(assistant.id);
         if (welcome && welcome.state !== "started" && !chats.some(chat => chat.id === welcome.runId)) {
             const target = execution(JSON.parse(welcome.execution));
             chats.push({ id: welcome.runId, title: assistant.name, goal: null, status: "idle", mode: target.mode, workspaceId: target.workspaceId ?? null, workspaceName: null, projectName: null, createdAt: welcome.createdAt, updatedAt: welcome.updatedAt });

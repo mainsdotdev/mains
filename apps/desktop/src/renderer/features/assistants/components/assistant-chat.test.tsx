@@ -72,14 +72,22 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView; else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
 
-function setup(options: { selectedRunId?: string; welcome?: AssistantWelcome; seedWorkspaceId?: string; onAvatarState?: (state: AssistantAvatarState | undefined) => void } = {}) {
+function setup(options: { selectedRunId?: string; welcome?: AssistantWelcome; seedWorkspaceId?: string; archived?: boolean; onAvatarState?: (state: AssistantAvatarState | undefined) => void } = {}) {
   const legacyState = { ...assistantsReducer(undefined, { type: "init" }), draftExecutionByOwner: options.seedWorkspaceId ? { [ownerKey]: { mode: "developer", workspaceId: options.seedWorkspaceId } } : {} };
   const store = configureStore({ reducer: { assistants: assistantsReducer, workspace: workspaceReducer, appSettings: appSettingsReducer, backends: () => ({ activeBackendId: "local" }) }, preloadedState: { assistants: legacyState } });
   const selected = vi.fn();
-  const tree = () => <Provider store={store}><AssistantChat assistant={assistant} selectedRunId={options.selectedRunId ?? null} welcome={options.welcome} onSelectRun={selected} onOpenDetails={vi.fn()} onAvatarState={options.onAvatarState} /></Provider>;
+  const tree = () => <Provider store={store}><AssistantChat assistant={{ ...assistant, isArchived: options.archived === true }} selectedRunId={options.selectedRunId ?? null} welcome={options.welcome} onSelectRun={selected} onOpenDetails={vi.fn()} onAvatarState={options.onAvatarState} /></Provider>;
   const view = render(tree());
   return { store, selected, ...view, update: () => view.rerender(tree()) };
 }
+
+it("shows an archived Mate's history without a composer or an app send handler", () => {
+  mocks.run = { id: "existing", assistantId: assistant.id, status: "succeeded", mode: "work", createdAt: new Date() };
+  setup({ selectedRunId: "existing", archived: true });
+  expect(screen.getByText("Existing transcript")).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull();
+  expect(mocks.registerAppConversation).not.toHaveBeenCalled();
+});
 
 describe("assistant avatar activity", () => {
   const run = { id: "existing", assistantId: assistant.id, mode: "work", createdAt: new Date() };

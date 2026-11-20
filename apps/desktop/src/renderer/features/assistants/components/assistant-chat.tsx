@@ -53,7 +53,8 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
   // The route adds the welcome run ID after this chat mounts.
   const [animateIntro] = useState(animateWelcome);
   const welcomeColumnRef = useRef<HTMLDivElement>(null);
-  const waitingWelcome = welcome && welcome.state !== "started" ? welcome : undefined;
+  const archived = assistant.isArchived;
+  const waitingWelcome = !archived && welcome && welcome.state !== "started" ? welcome : undefined;
   const chatRunId = waitingWelcome ? null : selectedRunId;
   const backendId = useAppSelector(state => state.backends.activeBackendId);
   const ownerKey = selectedRunId ? runOwnerKey(backendId, selectedRunId) : `${backendId ?? "local"}:assistant:${assistant.id}:draft`;
@@ -103,7 +104,7 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
     try { await prepareWelcome({ accountId: assistant.accountId, id: assistant.id }).unwrap(); }
     catch (error) { if (bound.current) setFailure(errorText(error)); }
   };
-  const { pendingApprovals, respond } = useToolApproval(run && belongs ? [run] : []);
+  const { pendingApprovals, respond } = useToolApproval(run && belongs && !archived ? [run] : []);
   const approval = pendingApprovals.find(item => item.runId === chatRunId);
   const bound = useRef(true);
   const eventsEndRef = useRef<HTMLDivElement>(null!);
@@ -142,7 +143,7 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
   }), [backendId, assistant.id, assistant.spaceId, assistant.providerId, run?.spaceId, run?.providerId, run?.mode, run?.workspaceId, run?.collectionId, execution]);
   const submit = useCallback(async (appMessage?: string, options?: McpAppMessageOptions): Promise<string | null> => {
     const content = appMessage ?? message;
-    if (appMessage !== undefined && pending) return null;
+    if (archived || appMessage !== undefined && pending) return null;
     if (sendingRef.current || working && !pending || !belongs || !content.trim() && !files.length && !context.items.length && !pending) return null;
     sendingRef.current = true;
     setPreparing(true);
@@ -167,11 +168,11 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
       return result.runId;
     } catch (error) { if (bound.current) setFailure(errorText(error)); return null; }
     finally { sendingRef.current = false; if (bound.current) setPreparing(false); }
-  }, [message, pending, working, belongs, files, context.items, assistant.accountId, assistant.id, waitingWelcome, selectedRunId, chatRunId, execution, appContext, ownerKey, transport, send, dispatch, setMessage, setFiles, refreshRun, load, appScope, attachAppRun, onSelectRun]);
+  }, [message, pending, working, belongs, archived, files, context.items, assistant.accountId, assistant.id, waitingWelcome, selectedRunId, chatRunId, execution, appContext, ownerKey, transport, send, dispatch, setMessage, setFiles, refreshRun, load, appScope, attachAppRun, onSelectRun]);
   useLayoutEffect(() => {
-    if (!belongs || waitingWelcome || chatRunId && !run) return;
+    if (archived || !belongs || waitingWelcome || chatRunId && !run) return;
     return registerAppConversation?.({ scope: appScope, ownerKey, runId: chatRunId ?? undefined, send: submit });
-  }, [registerAppConversation, belongs, waitingWelcome, chatRunId, run, appScope, ownerKey, submit]);
+  }, [registerAppConversation, archived, belongs, waitingWelcome, chatRunId, run, appScope, ownerKey, submit]);
   const stop = useCallback(() => { if (chatRunId) void abort(chatRunId).unwrap().catch(error => { if (bound.current) setFailure(errorText(error)); }); }, [chatRunId, abort]);
   const variant = assistant.providerId === "codex" ? "codex" : "claude";
   const mateColor = AVATAR_COLORS[normalizeAssistantAvatar(assistant.avatar).color].fill;
@@ -184,7 +185,7 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
     placeholder={`Message ${assistant.name}…`} inputLabel={`Message ${assistant.name}`} isNewRunTabActive={!chatRunId}
     layout={chatRunId || waitingWelcome ? "default" : "centered"} />;
   return <PluginLogoProvider providerId={assistant.providerId}>
-    <AsyncQuestionDialogProvider ownerKey={ownerKey} runId={chatRunId} runStatus={run?.status} turns={turns} events={events} historical={history.historical}>
+    <AsyncQuestionDialogProvider ownerKey={ownerKey} runId={chatRunId} runStatus={run?.status} turns={turns} events={events} historical={history.historical || archived}>
       {onAvatarState && <ReportAvatarState onChange={onAvatarState} status={belongs ? run?.status : undefined}
         hasApproval={!!approval} historical={history.historical} streamingReply={streamingReply}
         fallback={waitingWelcome ? welcomeAvatarState(waitingWelcome) : chatRunId ? undefined : "idle"} />}
@@ -204,11 +205,11 @@ export function AssistantChat({ assistant, welcome, animateWelcome, selectedRunI
           <div className="w-full">{composer}</div>
         </div> : <>
           <div className="min-h-0 flex-1 overflow-hidden">
-            {belongs ? <WorkspaceEvents appearance="assistant" assistant={assistant} hideTurnChanges hasPendingUserInput={!!approval} mode={run?.mode ?? "work"} runs={visibleRun ? [visibleRun] : []} activeTab={chatRunId} currentEvents={events} currentWorkspace={workspace ?? null} eventsEndRef={eventsEndRef} history={history} issueTabs={[]} turns={turns} variant={variant} onSuggestionSelect={setMessage} /> : <p role={runError ? "alert" : "status"} className="p-6 text-sm text-primary-500">{runError ? errorText(runError) : run ? "This conversation belongs to another mate." : "Loading conversation…"}</p>}
+            {belongs ? <WorkspaceEvents appearance="assistant" assistant={assistant} hideTurnChanges hasPendingUserInput={!!approval} mode={run?.mode ?? "work"} runs={visibleRun ? [visibleRun] : []} activeTab={chatRunId} currentEvents={events} currentWorkspace={workspace ?? null} eventsEndRef={eventsEndRef} history={history} issueTabs={[]} turns={turns} variant={variant} onSuggestionSelect={archived ? undefined : setMessage} /> : <p role={runError ? "alert" : "status"} className="p-6 text-sm text-primary-500">{runError ? errorText(runError) : run ? "This conversation belongs to another mate." : "Loading conversation…"}</p>}
           </div>
-          <div className={CONTENT_COLUMN_GUTTER}>
+          {!archived && <div className={CONTENT_COLUMN_GUTTER}>
             <ComposerSlot request={approval} onRespond={respond} variant={variant}>{composer}</ComposerSlot>
-          </div>
+          </div>}
         </>}
         {failure && <div role="alert" className="mx-auto flex max-w-210 items-center gap-3 px-6 pb-3 text-xs text-danger"><span>{failure}</span>{pending && <Button variant="ghost" className="shrink-0" disabled={preparing} onClick={() => void submit()}>Check delivery</Button>}</div>}
       </div>

@@ -82,6 +82,7 @@ struct ConversationView: View {
         return loadedMate.profile
     }
     private var conversationMate: Mate? { mateProfile?.mate }
+    private var archivedMate: Bool { conversationMate?.isArchived == true }
     private var showsMateHeader: Bool { (mateID != nil || mateSource != nil) && !focusedVoice && !showsConnectionPill }
     private var navigationTitle: String {
         if focusedVoice || showsConnectionPill { return "" }
@@ -144,7 +145,7 @@ struct ConversationView: View {
         GeometryReader { geometry in
             workspace(in: geometry)
                 .overlay {
-                    if showsMateHeader, mateProfile != nil, presentedMateProfile == nil {
+                    if showsMateHeader, !archivedMate, mateProfile != nil, presentedMateProfile == nil {
                         // The toolbar clips touches below the bar even though its avatar is visible there.
                         let container = geometry.frame(in: .global)
                         let avatar = mateAvatarFrame.intersection(container)
@@ -159,10 +160,13 @@ struct ConversationView: View {
                 }
         }
         .fullScreenCover(item: $presentedMateProfile, content: mateInfoPage)
+        .onChange(of: archivedMate) { _, archived in
+            if archived { presentedMateProfile = nil; modelSheet = false; optionsSheet = false }
+        }
     }
 
     private func presentMateInfo() {
-        guard let mateProfile, presentedMateProfile == nil, session.viewingRunID == runID else { return }
+        guard !archivedMate, let mateProfile, presentedMateProfile == nil, session.viewingRunID == runID else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         presentedMateProfile = mateProfile
     }
@@ -268,7 +272,6 @@ struct ConversationView: View {
         .sheet(item: $content) { reference in
             NavigationStack { FullMessageView(session: session, artifactID: reference.id) }
         }
-        .sheet(isPresented: $optionsSheet) { if let run { RunOptionsSheet(session: session, context: ComposerContext(run: run)) } }
         .sheet(isPresented: $outputsSheet) { OutputsView(session: session, runID: runID) }
         .sheet(item: $selectedAgent) { SubagentDetailSheet(session: session, selection: $0) }
         .onChange(of: agents.isEmpty) { _, empty in if empty { agentsExpanded = false } }
@@ -312,7 +315,7 @@ struct ConversationView: View {
                 content = ContentReference(id: $0)
             }
             .navigationHeaderFade()
-            .safeAreaPadding(.top, showsMateHeader ? 32 : 0)
+            .safeAreaPadding(.top, showsMateHeader ? archivedMate ? 46 : 32 : 0)
             .opacity(focusedVoice ? 0 : 1)
             .allowsHitTesting(!focusedVoice)
             .accessibilityHidden(focusedVoice)
@@ -327,7 +330,8 @@ struct ConversationView: View {
         .background(Color(.systemBackground))
         .safeAreaInset(edge: .bottom, spacing: 0) { composerArea }
         .environment(\.mateChatTint, conversationMate.map { MateRobotAssets.chatTint(for: $0.avatar) })
-        .effortOverlay(isPresented: $modelSheet, session: session, context: run.map { ComposerContext(run: $0) }, withinPane: true)
+        .composerPickers(model: $modelSheet, options: $optionsSheet, session: session,
+                         context: run.map { ComposerContext(run: $0) }, withinPane: true)
     }
 
     @ToolbarContentBuilder private func conversationToolbar(outputsAction: ConversationCompanionState.OutputsAction) -> some ToolbarContent {
@@ -339,10 +343,7 @@ struct ConversationView: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
             } else if showsMateHeader {
-                ToolbarItem(placement: .principal) {
-                    MateConversationTitle(mate: conversationMate, avatarFrame: $mateAvatarFrame,
-                                          zoomNamespace: mateInfoZoom, openInfo: presentMateInfo)
-                }
+                ToolbarItem(placement: .principal) { mateChatHeader }
                 .sharedBackgroundVisibility(.hidden)
             } else if session.isDemo && !focusedVoice {
                 ToolbarItem(placement: .principal) {
@@ -360,14 +361,18 @@ struct ConversationView: View {
                     outputsButton(outputsAction)
                 }
                 if !focusedVoice {
-                    Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
+                    if !archivedMate {
+                        Button("New conversation", systemImage: "square.and.pencil", action: onNew).accessibilityIdentifier("newConversation")
+                    }
                     Menu {
                         if hasOutputAction && outputsInMenu {
                             outputsButton(outputsAction)
                         }
-                        Button(action: prepareFork) {
-                            Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
-                        }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
+                        if !archivedMate {
+                            Button(action: prepareFork) {
+                                Label { Text(forkTitle) } icon: { ConversationActionIcons.fork }
+                            }.disabled(!session.canForkConversation(runID)).accessibilityIdentifier("forkConversation")
+                        }
                         if run?.mode == "work" || run?.mode == "chat" {
                             Button("Move to project", systemImage: "folder") { projectSheet = true }
                                 .disabled(!session.canManageConversation(runID, action: .moveToProject(nil)))
@@ -390,13 +395,30 @@ struct ConversationView: View {
             }
     }
 
+    private var mateChatHeader: some View {
+        let openInfo: (() -> Void)? = archivedMate ? nil : { presentMateInfo() }
+        return MateConversationTitle(mate: conversationMate, avatarFrame: $mateAvatarFrame,
+                                     zoomNamespace: archivedMate ? nil : mateInfoZoom, openInfo: openInfo)
+    }
+
     private func outputsButton(_ action: ConversationCompanionState.OutputsAction) -> some View {
         Button(action == .showConversation ? "Show conversation" : "Outputs",
                systemImage: action == .showConversation ? "bubble.left" : "doc.on.doc") { performOutputsAction(action) }
             .accessibilityIdentifier("conversationOutputs")
     }
 
-    private var composerArea: some View {
+    @ViewBuilder private var composerArea: some View {
+        if archivedMate {
+            Label("Restore this Mate on your computer to send messages.", systemImage: "archivebox")
+                .font(.footnote).foregroundStyle(.secondary)
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .accessibilityIdentifier("archivedMateConversationNotice")
+        } else {
+            composerControls
+        }
+    }
+
+    private var composerControls: some View {
         VStack(spacing: 8) {
             #if MAINS_GPT_LIVE
             if focusedVoice && (session.waitingForDecision || session.pendingQuestions != nil) {
@@ -468,7 +490,7 @@ struct ConversationView: View {
     }
 
     private func prepareSend() {
-        guard let run, run.archivedReplyError == nil, owner == session.ownership,
+        guard !archivedMate, let run, run.archivedReplyError == nil, owner == session.ownership,
               let backendID = session.pairing?.descriptor.backendId, !draft.isSending else { return }
         let queued = usesQueue
         if !session.hasConsent(providerID: run.providerId) {
@@ -494,7 +516,7 @@ struct ConversationView: View {
     }
 
     private func prepareQueueResume() {
-        guard let run, let backendID = session.pairing?.descriptor.backendId, owner == session.ownership else { return }
+        guard !archivedMate, let run, let backendID = session.pairing?.descriptor.backendId, owner == session.ownership else { return }
         if !session.hasConsent(providerID: run.providerId) {
             consentResumesQueue = true; consentForksConversation = false
             consent = ConsentContext(backendID: backendID, providerID: run.providerId, isDemo: session.isDemo)
@@ -502,7 +524,7 @@ struct ConversationView: View {
     }
 
     private func send(queued: Bool) async {
-        guard owner == session.ownership else { return }
+        guard !archivedMate, owner == session.ownership else { return }
         if queued {
             do { try session.submitQueuedDraft(runID); acceptedCount += 1 }
             catch { draft.showFailure(error.localizedDescription) }
@@ -533,7 +555,7 @@ struct ConversationView: View {
     }
 
     private func prepareFork() {
-        guard session.canForkConversation(runID), let run, owner == session.ownership,
+        guard !archivedMate, session.canForkConversation(runID), let run, owner == session.ownership,
               let backendID = session.pairing?.descriptor.backendId else { return }
         if !session.hasConsent(providerID: run.providerId) {
             consentForksConversation = true; consentResumesQueue = false
@@ -542,7 +564,7 @@ struct ConversationView: View {
     }
 
     private func fork() async {
-        guard owner == session.ownership, session.viewingRunID == runID else { return }
+        guard !archivedMate, owner == session.ownership, session.viewingRunID == runID else { return }
         do {
             let id = try await session.forkConversation(runID)
             guard owner == session.ownership, session.viewingRunID == runID else { return }
@@ -570,6 +592,7 @@ struct MateConversationTitle: View {
     var body: some View {
         let compact = horizontalSizeClass != .regular
         let name = mate?.name ?? String(localized: "Mate")
+        let archived = mate?.isArchived == true
         // Keep the native bar at its usual height while the avatar and name extend over the chat.
         Color.clear.frame(width: compact ? 112 : 240, height: 44)
             .overlay(alignment: .top) {
@@ -577,9 +600,12 @@ struct MateConversationTitle: View {
                     VStack(spacing: -8) {
                         avatar
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame?.wrappedValue = $0 }
-                        Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                            .padding(.horizontal, 12).padding(.vertical, 6)
-                            .modifier(GlassSurface(radius: 18, interactive: false))
+                        VStack(spacing: 2) {
+                            Text(name).font(.footnote.weight(.semibold).width(.expanded)).lineLimit(1)
+                            if archived { ArchivedMateBadge().accessibilityHidden(true) }
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .modifier(GlassSurface(radius: 18, interactive: false))
                     }
                     .contentShape(.rect)
                     .frame(width: compact ? 192 : 240)
@@ -588,7 +614,7 @@ struct MateConversationTitle: View {
                 }
                 .buttonStyle(.plain)
                 .offset(y: -11)
-                .accessibilityLabel(name)
+                .accessibilityLabel(archived ? "\(name), archived Mate" : name)
                 .accessibilityHint(mate == nil || openInfo == nil ? "" : "Opens Mate Info")
                 .accessibilityRemoveTraits(mate == nil || openInfo == nil ? .isButton : [])
                 .accessibilityAddTraits(.isHeader)
@@ -600,7 +626,8 @@ struct MateConversationTitle: View {
     @ViewBuilder private var avatar: some View {
         let artwork = Group {
             if let mate, let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
-                MateRobotPreview(preset: preset, acceptsDrag: false, motion: .greeting)
+                if mate.isArchived == true { MateRobotThumbnail(preset: preset).saturation(0.25) }
+                else { MateRobotPreview(preset: preset, acceptsDrag: false, motion: .greeting) }
             } else {
                 RegistryIcon(token: "icon:assistant-steps", size: 27)
                     .frame(width: 56, height: 56)

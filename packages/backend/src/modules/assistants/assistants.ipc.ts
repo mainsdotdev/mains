@@ -47,7 +47,7 @@ export function registerAssistantsIpc() {
     ipcMain.handle(CHANNELS.assistants.saveMemory, handle((payload: unknown) => changed(() => assistantsService.saveMemory(payload))));
     ipcMain.handle(CHANNELS.assistants.removeMemory, handle((accountId: string, id: string, revision: number) => changed(() => assistantsService.removeMemory(accountId, id, revision))));
     ipcMain.handle(CHANNELS.assistants.conversations, handleWithContext((ctx, accountId: string, id: string) => {
-        return ctx?.deviceId ? assistantsMobile.chats(accountId, id) : assistantsService.conversations(id, accountId);
+        return ctx?.deviceId ? assistantsMobile.chats(accountId, id) : assistantsService.conversations(id, accountId, { includeArchivedMate: true });
     }));
     ipcMain.handle(CHANNELS.assistants.assign, handle((payload: unknown) => assistantWork.assign(payload, undefined, assistantWork.guard())));
     ipcMain.handle(CHANNELS.assistants.reviewPullRequest, handle((payload: unknown) => assistantWork.reviewPullRequest(payload)));

@@ -38,6 +38,7 @@ struct AtlasView: View {
 
     var body: some View {
         List {
+            Section { PageTitle("Atlas").listRow }
             Section {
                 libraryFilters.listRowInsets(EdgeInsets())
             }.listRowBackground(Color.clear).listRowSeparator(.hidden)
@@ -109,11 +110,11 @@ struct AtlasView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped).navigationTitle("Atlas")
+        .listStyle(.insetGrouped)
         .navigationHeaderFade(background: Color(.systemGroupedBackground))
         .contentMargins(.top, 8, for: .scrollContent)
         .listSectionSpacing(.compact)
-        .navigationBarTitleDisplayMode(.inline)
+        .scrollingNavigationTitle("Atlas")
         .searchable(text: $query.text, placement: .toolbar, prompt: "Search Atlas")
         .toolbar {
             DefaultToolbarItem(kind: .search, placement: .bottomBar)
@@ -167,19 +168,22 @@ struct AtlasView: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
                         ForEach(atlasTypes, id: \.0) { type in
+                            let selected = query.type == type.0
+                            let foreground = selected ? Color(.systemBackground) : .primary
                             Button { query.type = type.0 } label: {
                                 Label {
                                     Text(type.1)
                                 } icon: {
-                                    RegistryIcon(token: "icon:" + type.2, size: 18, tint: .primary)
+                                    RegistryIcon(token: "icon:" + type.2, size: 18, tint: foreground)
                                 }
-                                    .font(.subheadline.weight(.medium)).fixedSize()
-                                    .padding(.horizontal, 14).frame(minHeight: 36)
-                                    .background(query.type == type.0 ? Color.primary.opacity(0.1) : Color(.tertiarySystemGroupedBackground), in: .capsule)
-                                    .frame(minHeight: 44).contentShape(.rect)
-                            }.buttonStyle(ChatPressStyle()).foregroundStyle(.primary)
-                                .accessibilityAddTraits(query.type == type.0 ? .isSelected : [])
-                                .accessibilityIdentifier("atlasType-" + type.0)
+                                .font(.subheadline.weight(.medium)).foregroundStyle(foreground).fixedSize()
+                                .padding(.horizontal, 14).frame(minHeight: 36)
+                                .background(selected ? Color.primary : .clear, in: .capsule)
+                                .frame(minHeight: 44).contentShape(.rect)
+                            }
+                            .buttonStyle(ChatPressStyle())
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                            .accessibilityIdentifier("atlasType-" + type.0)
                         }
                     }
                 }

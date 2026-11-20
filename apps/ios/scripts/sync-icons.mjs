@@ -76,7 +76,7 @@ try {
       };
       module.exports = Object.fromEntries(Object.entries({
         ...iconRegistry, copilot: CopilotStatic, bridge: Bridge, queue: Queue, 'mains-fill': MainsFill,
-        'assistant-steps': AssistantSteps, 'project-folder': ui.ProjectFolder,
+        'assistant-steps': AssistantSteps, 'project-folder': ui.ProjectFolder, 'bolt-fill': ui.BoltFill,
         ...atlasIcons, ...documentIcons, ...modelIcons, ...toolIcons, ...toolFileIcons,
       })
         .map(([name, Icon]) => [name, renderToStaticMarkup(React.createElement(Icon))]));
