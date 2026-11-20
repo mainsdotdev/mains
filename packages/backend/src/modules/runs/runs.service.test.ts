@@ -198,6 +198,26 @@ describe("runsService", () => {
       } finally { off(); await runsService.stopRealtime(h.payload); }
     });
 
+    it("persists recovered voice with its original timestamp and no inferred turn", async () => {
+      const h = voiceFixture();
+      try {
+        await runsService.startRealtime(h.payload);
+        await h.work().onTurnStarted("active-turn", "Current work", "resolved-model");
+        h.voice({ type: "transcript", itemId: "recovered", role: "user", text: "Earlier speech",
+          final: true, recovered: true, observedAtMs: 1_760_000_000_000 });
+        await vi.waitFor(async () => {
+          const [artifact] = await runsRepo.findArtifactsByRun(h.run.id);
+          expect(artifact).toMatchObject({ kind: "user-prompt", content: "Earlier speech",
+            metadata: { voiceRecovered: true, voiceStartedAt: 1_760_000_000_000 } });
+          expect(artifact.metadata).not.toHaveProperty("providerTurnId");
+          expect(artifact.metadata).not.toHaveProperty("delivery");
+        });
+      } finally {
+        await runSessionRegistry.get(h.run.id)?.finalize({ status: "canceled" });
+        await runsService.stopRealtime(h.payload);
+      }
+    });
+
     it("never starts voice from a socket already closed during command admission", async () => {
       const h = voiceFixture();
       const lifetime = new AbortController(); lifetime.abort();

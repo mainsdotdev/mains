@@ -302,6 +302,11 @@ try {
       '"mode": "show", version: 1', '"mode": "hide", version: 1', '"mode": "block", version: 1',
     ]);
   }
+  if (compareVersions(versionOutput, "0.171.0") >= 0) {
+    assertContains("ClientRequest.ts", ['"method": "thread/realtime/list"']);
+    assertContains("v2/ThreadRealtimeListResponse.ts", ["nextCursor: string | null", "coverage: ThreadRealtimeCoverage"]);
+    assertContains("v2/ThreadRealtimeItem.ts", ['"type": "frame"', "observedAtMs?: number"]);
+  }
   assertContains("v2/McpResourceReadParams.ts", [
     "threadId?: string | null",
     "originCallId?: string | null",

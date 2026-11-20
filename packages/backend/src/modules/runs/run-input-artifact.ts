@@ -40,7 +40,8 @@ export async function insertRunInputArtifact(
       metadata: event.metadata,
       contentHash: event.content ? createHash("sha256").update(event.content).digest("hex") : undefined,
     });
-    if (event.kind === "user-prompt" && event.metadata?.isFromSubagent !== true) {
+    // Recovered voice speech belongs to history and cannot answer or supersede a newer question.
+    if (event.kind === "user-prompt" && event.metadata?.isFromSubagent !== true && event.metadata?.voiceRecovered !== true) {
       const reply = readAsyncQuestionReply(event.metadata?.asyncQuestionReply);
       if (reply && id === asyncQuestionMessageId(reply.artifactId)) {
         await runsRepo.recordAsyncQuestionAnswer(runId, { ...reply, clientUserMessageId: id });

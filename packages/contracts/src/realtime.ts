@@ -59,7 +59,7 @@ export type RunRealtimeUpdate =
   | { type: "started"; sessionId: string | null }
   | { type: "ending" }
   | { type: "sdp"; sdp: string }
-  | { type: "transcript"; itemId: string; role: "user" | "assistant"; text: string; final: boolean }
+  | { type: "transcript"; itemId: string; role: "user" | "assistant"; text: string; final: boolean; observedAtMs?: number; recovered?: true }
   | { type: "context"; eventId: string; content: string; announce: boolean }
   | { type: "error"; message: string }
   | { type: "closed"; reason: string | null }

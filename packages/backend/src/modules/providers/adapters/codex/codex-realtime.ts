@@ -5,16 +5,19 @@ import type { CodexRunCoordinator } from "./codex-run-coordinator";
 import type { CodexSessionAcquisition } from "./codex-session-acquisition";
 import type { ThreadRealtimeItem } from "./codex-app-server-protocol/generated/v2/ThreadRealtimeItem";
 import type { RealtimeVoice } from "./codex-app-server-protocol/generated/RealtimeVoice";
+import type { ThreadRealtimeListResponse } from "./codex-app-server-protocol/generated/v2/ThreadRealtimeListResponse";
 
 interface VoiceSession {
   runId: string;
   connectionId: string;
+  nativeSessionId?: string;
   threadId?: string;
   server?: CodexAppServer;
   release?: () => void;
   dispose?: () => Promise<void>;
   publish: (event: RunRealtimeEvent) => void;
   items: Map<string, { role: "user" | "assistant"; text: string }>;
+  completedItems: Set<string>;
   legacyIds: Map<string, string>;
   sequence: number;
   latestUserText: string;
@@ -33,6 +36,7 @@ interface VoiceSession {
 export function createCodexRealtime(options: {
   sessions: CodexSessionAcquisition;
   runs: CodexRunCoordinator;
+  supportsHistory?: (server: CodexAppServer) => boolean;
   getTimeout?: () => number;
   getVoice?: () => string | undefined;
 }) {
@@ -45,6 +49,35 @@ export function createCodexRealtime(options: {
     session.publish({ ...event, runId: session.runId, connectionId: session.connectionId });
   }
 
+  async function recoverTranscript(session: VoiceSession) {
+    const { server, threadId, nativeSessionId } = session;
+    if (!server?.isRunning || !threadId || !nativeSessionId || !options.supportsHistory?.(server)) return;
+
+    // A native history read is best effort and must not hold up closing the call.
+    const deadline = Date.now() + 2_000;
+    const cursors = new Set<string>();
+    let cursor: string | null = null;
+    do {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return;
+      const page: ThreadRealtimeListResponse = await server.sendRequest("thread/realtime/list", {
+        threadId, sessionId: nativeSessionId, order: "observedAt", limit: 100,
+        ...(cursor ? { cursor } : {}),
+      }, remaining);
+      if (page.coverage !== "ready" || !Array.isArray(page.data)) return;
+      for (const entry of page.data) {
+        if (entry.item?.realtimeSessionId === nativeSessionId) {
+          projectTranscriptItem(session, entry.item, true, true);
+        }
+      }
+      cursor = page.nextCursor;
+      if (cursor) {
+        if (cursors.has(cursor)) return;
+        cursors.add(cursor);
+      }
+    } while (cursor);
+  }
+
   function finish(session: VoiceSession, reason: string | null) {
     if (session.finishing) return session.finishing;
     if (active !== session) return Promise.resolve();
@@ -55,6 +88,7 @@ export function createCodexRealtime(options: {
     cleanup = Promise.resolve(session.preparation).then(() => Promise.allSettled([
       Promise.resolve().then(() => session.server && options.runs.cleanupRun(session.server, session.runId)),
       Promise.resolve().then(() => session.dispose?.()),
+      recoverTranscript(session),
     ])).then(() => {});
     // A new ordinary continuation must see closed only after the old thread's
     // subscription cleanup is complete, not while unsubscribe is in flight.
@@ -70,6 +104,25 @@ export function createCodexRealtime(options: {
     publish(session, { type: "transcript", itemId, role, text, final });
   }
 
+  function projectTranscriptItem(session: VoiceSession, item: ThreadRealtimeItem, final: boolean, recovered = false) {
+    const segment = item.type === "transcriptSegment" ? item
+      : item.type === "frame" ? item.channels?.voice_transcript : undefined;
+    if (!segment || (segment.role !== "user" && segment.role !== "assistant") || typeof segment.text !== "string" ||
+      typeof item.id !== "string" || !item.id || session.completedItems.has(item.id)) return;
+    if (final) {
+      session.completedItems.add(item.id);
+      session.items.delete(item.id);
+    } else {
+      session.items.set(item.id, { role: segment.role, text: segment.text });
+    }
+    if (!recovered && segment.role === "user") session.latestUserText = segment.text;
+    publish(session, {
+      type: "transcript", itemId: item.id, role: segment.role, text: segment.text, final,
+      ...(item.observedAtMs !== undefined && Number.isSafeInteger(item.observedAtMs) ? { observedAtMs: item.observedAtMs } : {}),
+      ...(recovered ? { recovered: true } : {}),
+    });
+  }
+
   function handleNotification(method: string, params: unknown) {
     const session = active;
     if (!session) return;
@@ -77,7 +130,8 @@ export function createCodexRealtime(options: {
     if (!p || !session.threadId || p.threadId !== session.threadId) return;
     switch (method) {
       case "thread/realtime/started":
-        publish(session, { type: "started", sessionId: typeof p.realtimeSessionId === "string" ? p.realtimeSessionId : null });
+        session.nativeSessionId = typeof p.realtimeSessionId === "string" ? p.realtimeSessionId : undefined;
+        publish(session, { type: "started", sessionId: session.nativeSessionId ?? null });
         break;
       case "thread/realtime/sdp":
         if (typeof p.sdp === "string") publish(session, { type: "sdp", sdp: p.sdp });
@@ -85,10 +139,10 @@ export function createCodexRealtime(options: {
       case "thread/realtime/item/started":
       case "thread/realtime/item/completed": {
         const item = p.item as ThreadRealtimeItem | undefined;
-        if (item?.type !== "transcriptSegment") break;
+        if (!item || (item.type !== "transcriptSegment" && item.type !== "frame") ||
+          (session.nativeSessionId && item.realtimeSessionId !== session.nativeSessionId)) break;
         session.canonicalTimeline = true;
-        session.items.set(item.id, { role: item.role, text: item.text });
-        transcript(session, item.id, item.role, item.text, method.endsWith("completed"));
+        projectTranscriptItem(session, item, method.endsWith("completed"));
         break;
       }
       case "thread/realtime/item/transcript/delta": {
@@ -139,7 +193,7 @@ export function createCodexRealtime(options: {
     const closed = new Promise<void>((resolve) => { confirmClosed = resolve; });
     const session: VoiceSession = {
       runId: request.runId, connectionId: request.connectionId, publish: onEvent,
-      items: new Map(), legacyIds: new Map(), sequence: 0, latestUserText: "", canonicalTimeline: false,
+      items: new Map(), completedItems: new Set(), legacyIds: new Map(), sequence: 0, latestUserText: "", canonicalTimeline: false,
       closed, confirmClosed,
     };
     active = session;

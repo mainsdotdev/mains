@@ -1086,20 +1086,20 @@ export const runsService = {
           return;
         if (!transcriptContext.has(event.itemId)) {
           transcriptContext.set(event.itemId, {
-            steering: event.role === "user" && !!runSessionRegistry.get(run.id),
-            providerTurnId: nativeTurnId,
-            providerRootTurnId: nativeRootTurnId,
+            steering: !event.recovered && event.role === "user" && !!runSessionRegistry.get(run.id),
+            providerTurnId: event.recovered ? undefined : nativeTurnId,
+            providerRootTurnId: event.recovered ? undefined : nativeRootTurnId,
           });
           if (transcriptContext.size > 256)
             transcriptContext.delete(transcriptContext.keys().next().value!);
         }
-        if (event.role === "user") latestUserItemId = event.itemId;
+        if (event.role === "user" && !event.recovered) latestUserItemId = event.itemId;
         // Capture delivery at speech start, not at transcript completion: the
         // initiating speech can finish transcription after its work has begun.
         const context = transcriptContext.get(event.itemId);
         const providerTurnId = context?.providerTurnId;
         const streamId = `voice-${payload.connectionId}-${event.itemId}`;
-        const voiceStartedAt = itemTimestamps.get(event.itemId) ?? Date.now();
+        const voiceStartedAt = event.observedAtMs ?? itemTimestamps.get(event.itemId) ?? Date.now();
         itemTimestamps.set(event.itemId, voiceStartedAt);
         if (itemTimestamps.size > 256)
           itemTimestamps.delete(itemTimestamps.keys().next().value!);
@@ -1112,6 +1112,7 @@ export const runsService = {
           voiceStartedAt,
           itemId: event.itemId,
           realtimeSessionId: payload.connectionId,
+          ...(event.recovered ? { voiceRecovered: true } : {}),
           ...(providerTurnId ? { providerTurnId } : {}),
           ...(context?.providerRootTurnId
             ? { providerRootTurnId: context.providerRootTurnId }

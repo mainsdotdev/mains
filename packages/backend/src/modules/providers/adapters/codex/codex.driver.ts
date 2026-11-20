@@ -85,10 +85,11 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.170.0";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.171.0";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
 const CODEX_ANSWER_MODERATION_VERSION = "0.169.0";
+const CODEX_REALTIME_HISTORY_VERSION = "0.171.0";
 
 function compareCodexVersions(left: string, right: string): number | null {
   const parse = (value: string): [number, number, number] | null => {
@@ -338,6 +339,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   let codexVersionPromise: Promise<string | null> | null = null;
   let codexCompatibilityPromise: Promise<void> | null = null;
   const mcpThreadResumePromises = new Map<string, Promise<void>>();
+  const serversWithRealtimeHistory = new WeakSet<CodexAppServer>();
   // One-shot generation model (titles, commit messages, PR bodies): Codex's
   // "fast and affordable agentic coding model" tier, at medium effort.
   const titleGenerationModel = "gpt-6-luna";
@@ -374,6 +376,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   });
   const realtime = createCodexRealtime({
     sessions: sessionAcquisition, runs: runCoordinator,
+    supportsHistory: (server) => serversWithRealtimeHistory.has(server),
     getTimeout: () => config.timeout ?? 3_600_000,
     getVoice: () => config.realtimeVoice,
   });
@@ -674,6 +677,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     const serverVersion = initializeResponse.userAgent.match(/^[^/\s]+\/(\d+\.\d+\.\d+)/)?.[1] ?? cliVersion;
     const moderationComparison = serverVersion ? compareCodexVersions(serverVersion, CODEX_ANSWER_MODERATION_VERSION) : null;
     runCoordinator.installDispatcher(server, (moderationComparison ?? 0) >= 0);
+    if (serverVersion && (compareCodexVersions(serverVersion, CODEX_REALTIME_HISTORY_VERSION) ?? -1) >= 0) {
+      serversWithRealtimeHistory.add(server);
+    }
     server.sendNotification("initialized");
 
     // Background handler: captures notifications that arrive after turn completes

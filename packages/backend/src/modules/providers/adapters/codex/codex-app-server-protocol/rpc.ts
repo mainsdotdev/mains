@@ -4,6 +4,8 @@ import type { ThreadRealtimeStartParams } from "./generated/v2/ThreadRealtimeSta
 import type { ThreadRealtimeStartResponse } from "./generated/v2/ThreadRealtimeStartResponse";
 import type { ThreadRealtimeStopParams } from "./generated/v2/ThreadRealtimeStopParams";
 import type { ThreadRealtimeStopResponse } from "./generated/v2/ThreadRealtimeStopResponse";
+import type { ThreadRealtimeListParams } from "./generated/v2/ThreadRealtimeListParams";
+import type { ThreadRealtimeListResponse } from "./generated/v2/ThreadRealtimeListResponse";
 import type { ThreadRealtimeListVoicesParams } from "./generated/v2/ThreadRealtimeListVoicesParams";
 import type { ThreadRealtimeListVoicesResponse } from "./generated/v2/ThreadRealtimeListVoicesResponse";
 import type { AppsInstalledParams } from "./generated/v2/AppsInstalledParams";
@@ -162,6 +164,7 @@ export interface CodexAppServerRpc {
   "thread/turns/list": RpcMethod<ThreadTurnsListParams, ThreadTurnsListResponse>;
   "thread/realtime/start": RpcMethod<ThreadRealtimeStartParams, ThreadRealtimeStartResponse>;
   "thread/realtime/stop": RpcMethod<ThreadRealtimeStopParams, ThreadRealtimeStopResponse>;
+  "thread/realtime/list": RpcMethod<ThreadRealtimeListParams, ThreadRealtimeListResponse>;
   "thread/realtime/listVoices": RpcMethod<ThreadRealtimeListVoicesParams, ThreadRealtimeListVoicesResponse>;
   "thread/resume": RpcMethod<ThreadResumeParams, ThreadResumeResponse>;
   "thread/start": RpcMethod<ThreadStartParams, ThreadStartResponse>;

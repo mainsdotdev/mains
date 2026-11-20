@@ -5,12 +5,12 @@ import type { CodexRunCoordinator } from "./codex-run-coordinator";
 import type { CodexSessionAcquisition } from "./codex-session-acquisition";
 import { createCodexRealtime } from "./codex-realtime";
 
-function setup(getVoice?: () => string | undefined) {
+function setup(getVoice?: () => string | undefined, supportsHistory = false) {
   const server = { isRunning: true, sendRequest: vi.fn().mockResolvedValue({}) };
   const release = vi.fn();
   const runs = { watchRealtimeRun: vi.fn((_runId: string, _model: string | undefined, _work: RealtimeWorkHandlers, _prompt?: () => string) => release), cleanupRun: vi.fn().mockResolvedValue(undefined) };
   const sessions = { prepareRealtimeSession: vi.fn().mockResolvedValue({ server, threadId: "thread", model: "resolved" }) };
-  const native = createCodexRealtime({ runs: runs as unknown as CodexRunCoordinator, sessions: sessions as unknown as CodexSessionAcquisition, getVoice });
+  const native = createCodexRealtime({ runs: runs as unknown as CodexRunCoordinator, sessions: sessions as unknown as CodexSessionAcquisition, getVoice, supportsHistory: () => supportsHistory });
   const events: RunRealtimeEvent[] = [];
   const work: RealtimeWorkHandlers = { onTurnStarted: vi.fn().mockResolvedValue(undefined), onEvent: vi.fn().mockResolvedValue(undefined), onCompleted: vi.fn().mockResolvedValue(undefined) };
   const request: WorkRunRealtimeRequest = { runId: "run", accountId: "account", connectionId: "connection", sdp: "offer", execution: { cwd: "/tmp", workspaceId: null } };
@@ -140,6 +140,46 @@ describe("Codex native voice signaling", () => {
       { itemId: "item", text: "Hi there", final: true },
     ]);
     await h.native.stop("run", "connection");
+  });
+
+  it("recovers only missed transcripts for the closing call across native history pages", async () => {
+    const h = setup(undefined, true);
+    const frame = (id: string, text: string, realtimeSessionId = "native") => ({
+      id, type: "frame", realtimeSessionId, observedAtMs: 100, channels: { voice_transcript: { role: "user", text } },
+    });
+    await h.start();
+    h.notify("thread/realtime/started", { realtimeSessionId: "native" });
+    h.notify("thread/realtime/item/completed", { item: { type: "transcriptSegment", id: "seen", role: "user", text: "Already shown", realtimeSessionId: "native" } });
+    h.server.sendRequest.mockImplementation(async (method, params) => {
+      if (method !== "thread/realtime/list") return {};
+      return params.cursor
+        ? { coverage: "ready", data: [{ item: frame("missed", "Saved speech") }], nextCursor: null }
+        : { coverage: "ready", data: [{ item: frame("seen", "Already shown") }, { item: frame("other", "Another call", "old") }], nextCursor: "next" };
+    });
+    await h.native.stop("run", "connection");
+    expect(h.server.sendRequest.mock.calls.filter(([method]) => method === "thread/realtime/list").map(([, params]) => params))
+      .toEqual([
+        { threadId: "thread", sessionId: "native", order: "observedAt", limit: 100 },
+        { threadId: "thread", sessionId: "native", order: "observedAt", limit: 100, cursor: "next" },
+      ]);
+    expect(h.events.filter((event) => event.type === "transcript")).toMatchObject([
+      { itemId: "seen", text: "Already shown", final: true },
+      { itemId: "missed", text: "Saved speech", final: true, recovered: true, observedAtMs: 100 },
+    ]);
+    expect(h.events.at(-1)?.type).toBe("closed");
+    expect(h.runs.watchRealtimeRun.mock.calls[0][3]?.()).toBe("Already shown");
+  });
+
+  it("confirms voice closure when the history read fails", async () => {
+    const h = setup(undefined, true);
+    await h.start();
+    h.notify("thread/realtime/started", { realtimeSessionId: "native" });
+    h.server.sendRequest.mockImplementation(async (method) => {
+      if (method === "thread/realtime/list") throw new Error("History unavailable");
+      return {};
+    });
+    await expect(h.native.stop("run", "connection")).resolves.toBeUndefined();
+    expect(h.events.at(-1)?.type).toBe("closed");
   });
 
   it("keeps handoff speech and ignores another thread or a stale stop", async () => {
