@@ -45,6 +45,9 @@ end
 resources = project.main_group.new_group('Resources', 'Resources')
 app.resources_build_phase.add_file_reference(resources.new_file('Assets.xcassets'))
 app.resources_build_phase.add_file_reference(resources.new_file('PrivacyInfo.xcprivacy'))
+launch_intro = resources.new_file('LaunchIntro')
+launch_intro.last_known_file_type = 'folder'
+app.resources_build_phase.add_file_reference(launch_intro)
 voice_license = resources.new_file('WebRTC-LICENSE.txt')
 app.resources_build_phase.add_file_reference(voice_license) if voice_enabled
 math = resources.new_file('Math')

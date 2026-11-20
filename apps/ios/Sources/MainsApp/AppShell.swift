@@ -23,7 +23,6 @@ struct AppShell: View {
     #endif
     let session: BackendSession
     let openPairing: () -> Void
-    @AppStorage("appearancePreference") private var appearance = AppAppearance.system
     @State private var path: [AppRoute] = []
     @State private var newMateDraft = NewMateDraft()
     @State private var homeRunID: String?
@@ -217,7 +216,6 @@ struct AppShell: View {
             guard session.viewingRunID != id else { return }
             path.append(.conversation(id, mate: .assignment))
         })
-        .preferredColorScheme(appearance.colorScheme)
         #if MAINS_GPT_LIVE
         .onChange(of: session.voice.error) { _, error in if let error { session.actionError = error } }
         #endif

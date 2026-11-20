@@ -13,6 +13,7 @@ enum AppFeatures {
 @main
 struct MainsApp: App {
     @State private var session = BackendSession(storage: NativeStorage())
+    @State private var showsLaunchIntro = true
     @Environment(\.scenePhase) private var scenePhase
     private let monitor = NWPathMonitor()
 
@@ -28,7 +29,7 @@ struct MainsApp: App {
     }
 
     private var application: some View {
-        RootView(session: session)
+        RootView(session: session, showsLaunchIntro: $showsLaunchIntro)
             .tint(.primary)
             .task {
 #if MAINS_GPT_LIVE
@@ -53,6 +54,8 @@ struct RootView: View {
     @ObserveHotReload private var hotReload
     #endif
     @Bindable var session: BackendSession
+    @Binding var showsLaunchIntro: Bool
+    @AppStorage("appearancePreference") private var appearance = AppAppearance.system
     @State private var incomingLink = ""
     @State private var showPairing = false
 
@@ -61,7 +64,16 @@ struct RootView: View {
             incomingLink = ""
             showPairing = true
         }).id(session.pairing?.deviceId)
+        .allowsHitTesting(!showsLaunchIntro)
+        .accessibilityHidden(showsLaunchIntro)
+        .overlay {
+            if showsLaunchIntro {
+                LaunchIntro(preferredScheme: appearance.colorScheme, finish: finishLaunchIntro)
+                    .transition(.opacity)
+            }
+        }
         .onOpenURL { url in
+            finishLaunchIntro(false)
             incomingLink = url.absoluteString
             showPairing = true
         }
@@ -71,6 +83,14 @@ struct RootView: View {
         .alert("Mains", isPresented: Binding(get: { session.actionError != nil }, set: { if !$0 { session.actionError = nil } })) {
             Button("OK", role: .cancel) { session.actionError = nil }
         } message: { Text(session.actionError ?? "") }
+        .preferredColorScheme(appearance.colorScheme)
+    }
+
+    private func finishLaunchIntro(_ animated: Bool) {
+        guard showsLaunchIntro else { return }
+        withAnimation(animated ? .easeOut(duration: 0.14) : nil) {
+            showsLaunchIntro = false
+        }
     }
 }
 
