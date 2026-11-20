@@ -11,6 +11,7 @@ struct ComposerSheet<Content: View>: View {
     var body: some View {
         NavigationStack {
             content()
+                .navigationHeaderFade(background: Color(.secondarySystemBackground))
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {

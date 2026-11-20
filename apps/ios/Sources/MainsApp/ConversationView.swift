@@ -311,8 +311,8 @@ struct ConversationView: View {
             }, openSubagents: { agentsExpanded.toggle() }, fork: prepareFork, searchCursor: initialCursor, mate: conversationMate) {
                 content = ContentReference(id: $0)
             }
+            .navigationHeaderFade()
             .safeAreaPadding(.top, showsMateHeader ? 32 : 0)
-            .scrollEdgeEffectStyle(showsMateHeader ? .soft : nil, for: .top)
             .opacity(focusedVoice ? 0 : 1)
             .allowsHitTesting(!focusedVoice)
             .accessibilityHidden(focusedVoice)

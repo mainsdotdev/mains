@@ -110,6 +110,7 @@ struct AtlasView: View {
             }
         }
         .listStyle(.insetGrouped).navigationTitle("Atlas")
+        .navigationHeaderFade(background: Color(.systemGroupedBackground))
         .contentMargins(.top, 8, for: .scrollContent)
         .listSectionSpacing(.compact)
         .navigationBarTitleDisplayMode(.inline)
@@ -485,8 +486,8 @@ struct AtlasPageView: View {
           .refreshable { refresh() }
         }
         .background(Color(.systemBackground))
+        .navigationHeaderFade(coversSafeAreaAtRest: content?.coverFileId == nil || error != nil)
         .navigationTitle("").navigationBarTitleDisplayMode(.inline).toolbarRole(.editor)
-        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -859,6 +860,7 @@ private struct AtlasBookmarkView: View {
                     }
                 }
             }.listStyle(.insetGrouped).listSectionSpacing(.compact).contentMargins(.top, 8, for: .scrollContent)
+                .navigationHeaderFade(background: Color(.systemGroupedBackground))
                 .navigationTitle("Bookmark").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { Button("Close", systemImage: "xmark") { dismiss() } }

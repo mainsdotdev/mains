@@ -26,6 +26,7 @@ struct ComputerView: View {
     @State private var forget = false
     @State private var pair = false
     @State private var copied = false
+    @State private var showInlineTitle = false
 
     private var descriptor: BackendDescriptor? { session.connectedDescriptor ?? session.pairing?.descriptor }
     private var endpoint: URL? { session.activeEndpoint ?? session.pairing?.endpoints.first }
@@ -33,52 +34,58 @@ struct ComputerView: View {
     private var needsPairing: Bool { [.unauthorized, .incompatible].contains(session.connection) }
 
     var body: some View {
-        List {
+        SettingsScrollView {
+            Text("Settings")
+                .font(.largeTitle.weight(.semibold).width(.expanded))
+                .accessibilityAddTraits(.isHeader)
+                .onGeometryChange(for: Bool.self) { geometry in
+                    geometry.frame(in: .scrollView).maxY <= 0
+                } action: { scrolledPastTitle in
+                    showInlineTitle = scrolledPastTitle
+                }
             SettingsSection(session.isDemo ? "Demo Mode" : "Connected computer") {
                 if session.isDemo {
-                    SettingsRow(title: "Demo Mac", leadingSymbol: "desktopcomputer",
+                    SettingsRow(title: "Demo Mac",
                                 subtitle: "Runs on this iPhone. No AI service is contacted. Demo changes reset when the app restarts.", value: "Demo")
                     Button { pair = true } label: {
-                        SettingsRow(title: "Pair a computer", leadingSymbol: "qrcode.viewfinder",
-                                    subtitle: "Connect to Mains with a pairing code", trailingSymbol: "chevron.right")
+                        SettingsRow(title: "Pair a computer", symbol: "chevron.right",
+                                    subtitle: "Connect to Mains with a pairing code")
                     }
                 } else if let pairing = session.pairing {
                     computerSummary
-                    SettingsRow(title: "Address", leadingSymbol: "network", subtitle: fallbackAddresses, value: endpoint.map(Self.host) ?? "—")
-                    SettingsRow(title: "Mains version", leadingSymbol: "info.circle", value: descriptor?.appVersion ?? "—")
-                    timestampRow("Paired", symbol: "calendar", date: pairing.pairedAt, empty: "—")
-                    timestampRow("Last synced", symbol: "clock", date: session.lastSyncedAt, empty: "Not yet")
+                    SettingsRow(title: "Address", subtitle: fallbackAddresses, value: endpoint.map(Self.host) ?? "—")
+                    SettingsRow(title: "Mains version", value: descriptor?.appVersion ?? "—")
+                    timestampRow("Paired", date: pairing.pairedAt, empty: "—")
+                    timestampRow("Last synced", date: session.lastSyncedAt, empty: "Not yet")
                     Button(role: .destructive) { forget = true } label: {
-                        SettingsRow(title: "Forget this computer", leadingSymbol: "xmark.circle", destructive: true)
+                        SettingsRow(title: "Forget this computer", symbol: "xmark.circle", destructive: true)
                     }
                     .accessibilityIdentifier("forgetComputer")
                 } else {
-                    SettingsRow(title: "No computer paired", leadingSymbol: "desktopcomputer",
+                    SettingsRow(title: "No computer paired", symbol: "desktopcomputer",
                                 subtitle: "Start Mains on your computer, then scan its pairing code.")
                     Button { pair = true } label: {
-                        SettingsRow(title: "Scan pairing code", leadingSymbol: "qrcode.viewfinder", trailingSymbol: "chevron.right")
+                        SettingsRow(title: "Scan pairing code", symbol: "chevron.right")
                     }
                 }
             }
             if session.pairing != nil {
                 SettingsSection {
                     Button { Task { await session.refresh() } } label: {
-                        HStack {
-                            SettingsRow(title: session.refreshing ? "Syncing…" : "Sync now", leadingSymbol: "arrow.clockwise",
-                                        subtitle: session.isDemo ? "Refresh the on-device sample conversations" : session.isConnected ? "Pull the latest runs, workspaces and settings" : "Available once Mains is reachable")
-                            if session.refreshing { ProgressView().controlSize(.small) }
-                        }
+                        SettingsRow(title: session.refreshing ? "Syncing…" : "Sync now", symbol: "arrow.clockwise",
+                                    subtitle: session.isDemo ? "Refresh the on-device sample conversations" : session.isConnected ? "Pull the latest runs, workspaces and settings" : "Available once Mains is reachable",
+                                    loading: session.refreshing)
                     }
                     .disabled(!session.isConnected || session.refreshing).accessibilityIdentifier("syncNow")
                     if canRetry {
                         Button { session.retry() } label: {
-                            SettingsRow(title: "Try again", leadingSymbol: "wifi", subtitle: "Reconnect to Mains on your computer now")
+                            SettingsRow(title: "Try again", symbol: "wifi", subtitle: "Reconnect to Mains on your computer now")
                         }
                     }
                     if needsPairing {
                         Button { pair = true } label: {
-                            SettingsRow(title: "Pair again", leadingSymbol: "qrcode.viewfinder",
-                                        subtitle: "Scan a new pairing code from your computer", trailingSymbol: "chevron.right")
+                            SettingsRow(title: "Pair again", symbol: "chevron.right",
+                                        subtitle: "Scan a new pairing code from your computer")
                         }
                     }
                     Button {
@@ -86,7 +93,7 @@ struct ComputerView: View {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         copied = true
                     } label: {
-                        SettingsRow(title: "Copy diagnostics", leadingSymbol: "doc.on.doc",
+                        SettingsRow(title: "Copy diagnostics", symbol: "doc.on.doc",
                                     subtitle: "Versions, addresses and the connection’s state, for a bug report",
                                     value: copied ? "Copied" : nil)
                     }
@@ -97,7 +104,7 @@ struct ComputerView: View {
             if AppFeatures.gptLiveEnabled && session.pairing != nil {
                 SettingsSection("GPT Live") {
                     NavigationLink { VoiceSettingsView(session: session) } label: {
-                        SettingsRow(title: "Voice", leadingSymbol: "waveform", subtitle: "Choose a voice and listen to samples",
+                        SettingsRow(title: "Voice", symbol: "chevron.right", subtitle: "Choose a voice and listen to samples",
                                     value: session.selectedRealtimeVoice?.capitalized)
                     }
                     .accessibilityIdentifier("voiceSettings")
@@ -110,7 +117,7 @@ struct ComputerView: View {
                         appearance = option
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     } label: {
-                        SettingsRow(title: option.title, leadingSymbol: option.symbol,
+                        SettingsRow(title: option.title, symbol: option.symbol,
                                     subtitle: option == .system ? "Follow the phone’s Display & Brightness setting" : nil,
                                     selected: appearance == option)
                     }
@@ -119,39 +126,47 @@ struct ComputerView: View {
                 }
             }
             SettingsSection("This phone") {
-                SettingsRow(title: "Name", leadingSymbol: "iphone", value: UIDevice.current.name)
+                SettingsRow(title: "Name", value: UIDevice.current.name)
                 if let pairing = session.pairing, !session.isDemo {
-                    SettingsRow(title: "Device ID", leadingSymbol: "number.square",
+                    SettingsRow(title: "Device ID",
                                 subtitle: "As listed by Mains on your computer", value: String(pairing.deviceId.prefix(8)))
                 }
-                SettingsRow(title: "Version", leadingSymbol: "info.circle", value: Self.appVersion)
-                SettingsRow(title: "Build", leadingSymbol: "hammer", value: "\(Self.buildVariant) (\(Self.buildNumber))")
-                SettingsRow(title: "Protocol", leadingSymbol: "arrow.left.arrow.right", value: String(Wire.protocolVersion))
+                SettingsRow(title: "Build", value: "\(Self.buildVariant) (\(Self.buildNumber))")
+                SettingsRow(title: "Protocol", value: String(Wire.protocolVersion))
             }
             SettingsSection("Legal & Support") {
                 NavigationLink { AIDataSharingSettingsView(session: session) } label: {
-                    SettingsRow(title: "AI Data Sharing", leadingSymbol: "hand.raised",
+                    SettingsRow(title: "AI Data Sharing", symbol: "chevron.right",
                                 subtitle: session.isDemo ? "Demo choices are separate from real provider permissions" : "Review or reset provider permissions")
                 }
                 .accessibilityIdentifier("aiDataSharing")
-                externalRow("Privacy Policy", symbol: "lock.shield", subtitle: "How Mains handles your data", url: "https://mains.dev/privacy")
-                externalRow("Terms of Use", symbol: "doc.text", subtitle: "Terms for using Mains", url: "https://mains.dev/terms")
+                externalRow("Privacy Policy", subtitle: "How Mains handles your data", url: "https://mains.dev/privacy")
+                externalRow("Terms of Use", subtitle: "Terms for using Mains", url: "https://mains.dev/terms")
                 externalRow("Support", symbol: "envelope", subtitle: "Email team@mains.dev",
-                            url: "mailto:team@mains.dev?subject=Mains%20Mobile%20Support", trailingSymbol: nil)
-                externalRow("Open Source Licenses", symbol: "chevron.left.forwardslash.chevron.right",
+                            url: "mailto:team@mains.dev?subject=Mains%20Mobile%20Support")
+                externalRow("Open Source Licenses",
                             subtitle: "Open-source software used by the app", url: "https://mains.dev/license")
             }
             if session.isDemo && session.pairing != nil {
                 SettingsSection {
                     Button(role: .destructive) { session.exitDemo(); dismiss() } label: {
-                        SettingsRow(title: "Exit Demo Mode", leadingSymbol: "rectangle.portrait.and.arrow.right", destructive: true)
+                        SettingsRow(title: "Exit Demo Mode", symbol: "rectangle.portrait.and.arrow.right", destructive: true)
                     }
                     .accessibilityIdentifier("exitDemo")
                 }
             }
+            SettingsFooter(version: Self.appVersion, build: Self.buildNumber)
         }
-        .modifier(SettingsListStyle())
-        .navigationTitle("Settings").navigationBarTitleDisplayMode(.large)
+        .navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .title) {
+                Text("Settings")
+                    .font(.headline.weight(.medium).width(.expanded))
+                    .opacity(showInlineTitle ? 1 : 0)
+                    .accessibilityHidden(!showInlineTitle)
+                    .animation(.easeInOut(duration: 0.18), value: showInlineTitle)
+            }
+        }
         .toolbar(.visible, for: .navigationBar)
         .accessibilityIdentifier("settingsList")
         .alert("Forget this computer?", isPresented: $forget) {
@@ -171,26 +186,22 @@ struct ComputerView: View {
 
     private var computerSummary: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            SettingsRowIcon(symbol: "desktopcomputer")
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 12) {
-                    Text(session.pairing?.descriptor.name ?? "Computer").font(.headline).lineLimit(1)
-                    Spacer(minLength: 4)
-                    HStack(spacing: 6) {
-                        if session.connection.isBusy { ProgressView().controlSize(.mini) }
-                        else { Circle().fill(statusColor).frame(width: 7, height: 7).accessibilityHidden(true) }
-                        Text(session.connection.label.replacingOccurrences(of: "…", with: "")).font(.subheadline.weight(.medium))
-                    }
-                    .foregroundStyle(statusColor).accessibilityIdentifier("settingsConnectionStatus")
-                }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(session.pairing?.descriptor.name ?? "Computer").font(.headline)
                 if let endpoint {
                     Text(session.isConnected ? "via \(Self.host(endpoint)) · Mains \(descriptor?.appVersion ?? "—")" : Self.host(endpoint))
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                if let connectionHint { Text(connectionHint).font(.footnote).foregroundStyle(.secondary).padding(.top, 2) }
+                if let connectionHint { Text(connectionHint).font(.footnote).foregroundStyle(.secondary) }
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(session.connection.label)
+                .font(.subheadline.weight(.medium)).multilineTextAlignment(.trailing)
+                .foregroundStyle(statusColor).accessibilityIdentifier("settingsConnectionStatus")
         }
-        .padding(.vertical, 10)
+        .settingsRowLayout()
     }
     private var statusColor: Color {
         if session.isConnected { return .blue }
@@ -210,13 +221,13 @@ struct ComputerView: View {
         let alternatives = (session.pairing?.endpoints ?? []).filter { $0 != endpoint }.map(Self.host)
         return alternatives.isEmpty ? nil : "Also " + alternatives.joined(separator: ", ")
     }
-    private func timestampRow(_ title: String, symbol: String, date: Date?, empty: String) -> some View {
+    private func timestampRow(_ title: String, date: Date?, empty: String) -> some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in
-            SettingsRow(title: title, leadingSymbol: symbol, subtitle: date?.formatted(date: .numeric, time: .standard),
+            SettingsRow(title: title, subtitle: date?.formatted(date: .numeric, time: .standard),
                         value: date.map { compactRelativeAge($0, now: timeline.date) } ?? empty)
         }
     }
-    private func externalRow(_ title: String, symbol: String, subtitle: String, url: String, trailingSymbol: String? = "arrow.up.right.square") -> some View {
+    private func externalRow(_ title: String, symbol: String = "arrow.up.right.square", subtitle: String, url: String) -> some View {
         Button {
             guard let destination = URL(string: url) else { return }
             openURL(destination) { accepted in
@@ -224,7 +235,7 @@ struct ComputerView: View {
                     session.actionError = title == "Support" ? "Could not open Mail. Email team@mains.dev for support." : "Could not open \(title). Visit \(url) in your browser."
                 }
             }
-        } label: { SettingsRow(title: title, leadingSymbol: symbol, subtitle: subtitle, trailingSymbol: trailingSymbol) }
+        } label: { SettingsRow(title: title, symbol: symbol, subtitle: subtitle) }
     }
     private static var appVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—" }
     private static var buildNumber: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—" }
@@ -267,15 +278,10 @@ private struct AIDataSharingSettingsView: View {
     private var allowedProviders: [String] { providers.filter { session.hasConsent(providerID: $0) } }
 
     var body: some View {
-        List {
-            Section {
-                Text(session.isDemo ? "Demo Mode stays on this iPhone. These demo choices never grant permission to share data with a real AI service. Mains asks separately after pairing a computer." : "Before Mains on your computer sends a request to a third-party AI service, Mains asks for permission for that computer and provider. Switching providers asks again. These choices are stored only on this phone.")
-                    .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    .listRowBackground(Color.clear)
-                    // Inset-grouped rows clip their corners even with a clear
-                    // background. Keep the prose inside that rounded boundary.
-                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
-            }
+        SettingsScrollView {
+            Text(session.isDemo ? "Demo Mode stays on this iPhone. These demo choices never grant permission to share data with a real AI service. Mains asks separately after pairing a computer." : "Before Mains on your computer sends a request to a third-party AI service, Mains asks for permission for that computer and provider. Switching providers asks again. These choices are stored only on this phone.")
+                .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
             SettingsSection(session.isDemo ? "Demo providers" : "This computer") {
                 ForEach(providers, id: \.self) { id in
                     let allowed = session.hasConsent(providerID: id)
@@ -303,7 +309,6 @@ private struct AIDataSharingSettingsView: View {
                 }
             }
         }
-        .modifier(SettingsListStyle())
         .navigationTitle("AI Data Sharing").navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .confirmationDialog(session.isDemo ? "Reset the \(revokeProvider.map(Provider.name) ?? "AI") demo disclosure?" : "Revoke \(revokeProvider.map(Provider.name) ?? "AI") permission?", isPresented: Binding(
@@ -329,29 +334,32 @@ private struct SettingsRow: View {
     @ObserveHotReload private var hotReload
     #endif
     let title: String
-    var leadingSymbol: String? = nil
+    var symbol: String? = nil
     var subtitle: String? = nil
     var value: String? = nil
-    var trailingSymbol: String? = nil
     var selected = false
     var destructive = false
+    var loading = false
     var body: some View {
-        HStack(spacing: 14) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                if let leadingSymbol {
-                    SettingsRowIcon(symbol: leadingSymbol).foregroundStyle(destructive ? .red : .primary)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).foregroundStyle(destructive ? .red : .primary)
-                    if let subtitle { Text(subtitle).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-                }
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).foregroundStyle(destructive ? .red : .primary)
+                if let subtitle { Text(subtitle).font(.footnote).foregroundStyle(.secondary) }
             }
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            if let value { Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing) }
-            if selected { Image(systemName: "checkmark").foregroundStyle(.blue).font(.body.weight(.medium)).accessibilityHidden(true) }
-            if let trailingSymbol { Image(systemName: trailingSymbol).font(.subheadline).foregroundStyle(.tertiary).accessibilityHidden(true) }
+            if let value {
+                Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if loading {
+                ProgressView().controlSize(.small).frame(width: 20).accessibilityHidden(true)
+            } else if selected {
+                SettingsRowIcon(symbol: "checkmark").foregroundStyle(.blue)
+            } else if let symbol {
+                SettingsRowIcon(symbol: symbol).foregroundStyle(destructive ? .red : .primary)
+            }
         }
-        .font(.body).padding(.vertical, 8).frame(minHeight: 36).contentShape(.rect)
+        .font(.body).settingsRowLayout()
         .accessibilityElement(children: .combine)
     }
 }
@@ -360,12 +368,12 @@ private struct SettingsRowIcon: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    @ScaledMetric(relativeTo: .body) private var width: CGFloat = 24
+    @ScaledMetric(relativeTo: .subheadline) private var width: CGFloat = 20
     let symbol: String
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.body)
+            .font(.subheadline.weight(.medium))
             .symbolRenderingMode(.monochrome)
             .frame(width: width)
             .accessibilityHidden(true)
@@ -382,23 +390,139 @@ private struct SettingsSection<Content: View>: View {
         self.title = title; self.content = content()
     }
     var body: some View {
-        Section { content } header: {
+        VStack(alignment: .leading, spacing: 8) {
             if let title {
-                Text(title).font(.title3.weight(.semibold)).foregroundStyle(.primary).textCase(nil).padding(.bottom, 4)
-                    .listRowInsets(.leading, 0)
+                Text(title).font(.title3.weight(.medium).width(.expanded)).padding(.horizontal, 4)
+                    .accessibilityAddTraits(.isHeader)
             }
+            VStack(spacing: 0) {
+                Group(subviews: content) { rows in
+                    ForEach(rows) { row in
+                        row.overlay(alignment: .bottom) {
+                            if row.id != rows.last?.id {
+                                Divider().allowsHitTesting(false).accessibilityHidden(true)
+                            }
+                        }
+                    }
+                }
+            }
+            .background(Color(.secondarySystemBackground))
+            .clipShape(.rect(cornerRadius: 14))
         }
-        .listRowBackground(Color(.secondarySystemBackground))
-        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
     }
 }
 
-private struct SettingsListStyle: ViewModifier {
+private struct SettingsScrollView<Content: View>: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    func body(content: Content) -> some View {
-        content.listStyle(.insetGrouped).scrollContentBackground(.hidden)
-            .background(Color(.systemBackground)).listSectionSpacing(24).buttonStyle(.plain)
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) { content }
+                .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
+        }
+        .background(Color(.systemBackground))
+        .navigationHeaderFade()
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SettingsFooter: View {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let version: String
+    let build: String
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var visible = false
+    @State private var showsJapanese = false
+    @State private var lightLevel = 1.0
+    @State private var sweepFinished = false
+
+    private var animates: Bool { visible && scenePhase == .active && !reduceMotion }
+    private var red: Color {
+        colorScheme == .dark
+            ? Color(red: 1, green: 0.33, blue: 0.38)
+            : Color(red: 0.73, green: 0.08, blue: 0.16)
+    }
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("App Version \(version) (\(build))")
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("settingsAppVersion")
+
+            sign
+                .foregroundStyle(red)
+                .shadow(color: red.opacity(0.5), radius: 4)
+                .shadow(color: red.opacity(0.26), radius: 14)
+                .overlay {
+                    GeometryReader { geometry in
+                        let beamWidth = geometry.size.width * 0.55
+                        LinearGradient(colors: [.clear, .cyan.opacity(0.75), .white.opacity(0.85), .clear],
+                                       startPoint: .leading, endPoint: .trailing)
+                            .frame(width: beamWidth)
+                            .offset(x: sweepFinished ? geometry.size.width : -beamWidth)
+                    }
+                    .mask(alignment: .center) { sign }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+                .opacity(lightLevel)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(showsJapanese ? "東京から生中継" : "Live from Tokyo")
+                .accessibilityIdentifier("settingsTokyoSign")
+                .onScrollVisibilityChange(threshold: 0.6) { visible = $0 }
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+        .task(id: animates) { try? await alternateLanguages() }
+    }
+
+    private var sign: some View {
+        ZStack {
+            lettering("LIVE FROM", "TOKYO").opacity(showsJapanese ? 0 : 1)
+            lettering("東京から", "生中継").opacity(showsJapanese ? 1 : 0)
+        }
+    }
+
+    private func lettering(_ line: String, _ headline: String) -> some View {
+        VStack(spacing: 3) {
+            Text(verbatim: line).font(.caption.weight(.medium).monospaced()).tracking(2.5)
+            Text(verbatim: headline).font(.title2.weight(.medium).width(.expanded)).tracking(1.6)
+        }
+    }
+
+    private func alternateLanguages() async throws {
+        lightLevel = 1
+        sweepFinished = false
+        if reduceMotion { showsJapanese = false }
+        guard animates else { return }
+
+        while !Task.isCancelled {
+            try await Task.sleep(for: .seconds(showsJapanese ? 3.5 : 5))
+            withAnimation(.easeOut(duration: 0.14)) { lightLevel = 0.62 }
+            try await Task.sleep(for: .milliseconds(140))
+            withAnimation(.easeInOut(duration: 0.6)) {
+                showsJapanese.toggle()
+                sweepFinished = true
+                lightLevel = 1
+            }
+            try await Task.sleep(for: .milliseconds(650))
+            sweepFinished = false
+        }
+    }
+}
+
+private extension View {
+    func settingsRowLayout() -> some View {
+        padding(.horizontal, 16).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 52).contentShape(.rect)
     }
 }

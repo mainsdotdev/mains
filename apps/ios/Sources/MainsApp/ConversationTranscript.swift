@@ -399,6 +399,7 @@ private struct ConversationActivitySheet: View {
                     }
                 }.font(.subheadline).padding().background(.bar)
             }
+            .navigationHeaderFade()
             .navigationTitle("Messages and activity").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task { await load("refresh") }

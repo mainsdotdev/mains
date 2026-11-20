@@ -241,11 +241,10 @@ struct FilePreviewNavigation<Content: View>: View {
     private var image: Bool { previewType == "image" }
     var body: some View {
         NavigationStack {
-            content
+            reader
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(image ? Color.black : Color(.systemBackground))
                 .navigationTitle(image ? "" : name).navigationBarTitleDisplayMode(.inline)
-                .toolbarBackground(image ? .hidden : .automatic, for: .navigationBar)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { Button("Close preview", systemImage: "xmark") { dismiss() } }
                     ToolbarItem(placement: .topBarTrailing) {
@@ -256,6 +255,14 @@ struct FilePreviewNavigation<Content: View>: View {
         .safeAreaPadding(.top, AppNavigationStyle.topInset)
         .background(image ? Color.black : Color(.systemBackground))
         .preferredColorScheme(image ? .dark : nil)
+    }
+
+    @ViewBuilder private var reader: some View {
+        if ["text", "markdown"].contains(previewType) {
+            content.navigationHeaderFade()
+        } else {
+            content.toolbarBackground(image ? .hidden : .automatic, for: .navigationBar)
+        }
     }
 }
 

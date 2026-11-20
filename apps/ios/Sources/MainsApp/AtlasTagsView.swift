@@ -69,6 +69,7 @@ struct AtlasTagsEditor: View {
                     }
                 }
             }
+            .navigationHeaderFade(background: Color(.systemGroupedBackground))
             .navigationTitle("Edit tags").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -130,6 +131,7 @@ struct AtlasTagFilterView: View {
                 Button("All tags") { choose(nil) }.frame(minHeight: 44)
                 AtlasTagCatalogue(session: session, owner: owner, selected: Set([selected?.id].compactMap { $0 }), enabled: session.isConnected) { choose($0) }
             }
+            .navigationHeaderFade(background: Color(.systemGroupedBackground))
             .navigationTitle("Filter by tag").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() } } }
         }

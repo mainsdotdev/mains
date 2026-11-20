@@ -63,6 +63,7 @@ struct VoiceSettingsView: View {
                 Section { Text(error).font(.subheadline).foregroundStyle(.secondary) }
             }
         }
+        .navigationHeaderFade(background: Color(.systemGroupedBackground))
         .navigationTitle("Voices")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)

@@ -40,6 +40,7 @@ struct ConversationProjectSheet: View {
                     if projects.isEmpty { Text(query.isEmpty ? "No projects yet." : "No matching projects.").foregroundStyle(.secondary) }
                 }
             }
+            .navigationHeaderFade(background: Color(.systemGroupedBackground))
             .navigationTitle("Move to project").navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "Search projects")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }

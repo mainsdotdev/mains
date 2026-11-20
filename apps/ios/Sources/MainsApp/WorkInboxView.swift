@@ -51,6 +51,7 @@ struct WorkInboxView: View {
             .listSectionSpacing(.compact)
             .environment(\.defaultMinListRowHeight, 44)
             .background(Color(.systemBackground))
+            .navigationHeaderFade()
             .accessibilityIdentifier("workInboxList")
         }
         .navigationTitle("Activity").navigationBarTitleDisplayMode(.inline)

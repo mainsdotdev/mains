@@ -116,6 +116,7 @@ struct MoveAtlasItemView: View {
                     Text("The change hasn’t been confirmed. Close this sheet and use Check change to confirm it.").foregroundStyle(.secondary)
                 }
             }
+            .navigationHeaderFade(background: Color(.systemGroupedBackground))
             .navigationTitle("Move to project").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
@@ -186,6 +187,7 @@ struct NewAtlasBookmarkView: View {
                     }
                 }
             }
+            .navigationHeaderFade(background: Color(.systemGroupedBackground))
             .navigationTitle("New bookmark").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

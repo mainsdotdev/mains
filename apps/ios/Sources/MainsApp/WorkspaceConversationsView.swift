@@ -56,6 +56,7 @@ struct WorkspaceConversationsView: View {
             }
         }
         .background(Color(.systemBackground))
+        .navigationHeaderFade()
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle(workspace?.name ?? "Workspace").navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)

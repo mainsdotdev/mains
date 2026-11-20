@@ -152,6 +152,7 @@ struct SubagentDetailSheet: View {
             // Details open at the start of the flow and never pull the reader
             // away from a tool or report while further child activity arrives.
             .defaultScrollAnchor(.top).background(Color(.systemBackground))
+            .navigationHeaderFade()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

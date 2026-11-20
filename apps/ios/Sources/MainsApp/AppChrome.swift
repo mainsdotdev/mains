@@ -11,6 +11,52 @@ enum AppNavigationStyle {
     static let inlineToolbarHeight: CGFloat = 44
 }
 
+extension View {
+    func navigationHeaderFade(background: Color = Color(.systemBackground), coversSafeAreaAtRest: Bool = true) -> some View {
+        modifier(NavigationHeaderFade(background: background, coversSafeAreaAtRest: coversSafeAreaAtRest))
+    }
+}
+
+private struct NavigationHeaderFade: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    let background: Color
+    let coversSafeAreaAtRest: Bool
+    @State private var fadeOpacity = 0.0
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: Double.self) { geometry in
+                let distance = geometry.contentOffset.y + geometry.contentInsets.top
+                return min(max(distance / 24, 0), 1)
+            } action: { _, opacity in
+                fadeOpacity = opacity
+            }
+            .scrollEdgeEffectHidden(for: .top)
+            .overlay(alignment: .top) {
+                VStack(spacing: 0) {
+                    // Fill behind the navigation controls and fade below their safe-area edge.
+                    background.frame(height: 1)
+                        .background(background, ignoresSafeAreaEdges: .top)
+                        .opacity(coversSafeAreaAtRest ? 1 : fadeOpacity)
+                    LinearGradient(stops: [
+                        .init(color: background, location: 0),
+                        .init(color: background.opacity(0.9), location: 0.22),
+                        .init(color: background.opacity(0.47), location: 0.55),
+                        .init(color: background.opacity(0.1), location: 0.82),
+                        .init(color: .clear, location: 1),
+                    ], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 44)
+                    .opacity(fadeOpacity)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+            .toolbarBackground(.hidden, for: .navigationBar)
+    }
+}
+
 func compactRelativeAge(_ date: Date, now: Date) -> String {
     let seconds = max(0, now.timeIntervalSince(date))
     if seconds < 45 { return "just now" }

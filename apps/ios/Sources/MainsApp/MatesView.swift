@@ -36,6 +36,7 @@ struct MatesView: View {
                 }
             }
         }
+        .navigationHeaderFade(background: Color(.systemGroupedBackground))
         .navigationTitle("Mates")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -289,6 +290,7 @@ struct MateInfoView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .navigationHeaderFade(background: Color(.systemGroupedBackground))
         .refreshable { await load() }
     }
 
@@ -769,11 +771,10 @@ private extension View {
         // The page carries its own fill through the push and pop transitions.
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
-            self
+            self.navigationHeaderFade()
         }
         .tint(.primary)
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
     }
 }
 
@@ -872,6 +873,7 @@ struct MateView: View {
                         } else { Text("Loading profile setup…").foregroundStyle(.secondary) }
                     } else if loading { ProgressView().accessibilityLabel("Loading Mate") }
                 }
+                .navigationHeaderFade(background: Color(.systemGroupedBackground))
                 .scrollDismissesKeyboard(.interactively)
                 if let mate, mate.ready {
                     firstTaskComposer(mate) { focused in
@@ -954,12 +956,12 @@ struct MateView: View {
                     KeyboardDismissBackground(color: Color(.systemBackground)) { focusedProfileField = nil }
                 }
             }
+            .navigationHeaderFade()
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom, for: .sizeChanges)
             .accessibilityIdentifier("mateSetupConversation")
         }
         .safeAreaPadding(.top, 44)
-        .scrollEdgeEffectStyle(.soft, for: .top)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if setup.saved == true, mate.ready { firstTaskComposer(mate) }
             else if canAnswer { setupComposer(mate, question: question.question, step: setup.turns.count) }

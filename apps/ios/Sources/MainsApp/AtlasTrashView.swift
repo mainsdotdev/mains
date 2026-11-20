@@ -69,6 +69,7 @@ struct AtlasTrashView: View {
                 }
             }
             .listStyle(.insetGrouped).navigationTitle("Trash").navigationBarTitleDisplayMode(.inline)
+            .navigationHeaderFade(background: Color(.systemGroupedBackground))
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Close", systemImage: "xmark") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) { Button("Refresh", systemImage: "arrow.clockwise") { reload += 1 }.disabled(loading || !session.isConnected) }

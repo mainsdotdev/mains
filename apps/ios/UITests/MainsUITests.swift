@@ -1490,10 +1490,10 @@ final class MainsUITests: XCTestCase {
         let app = makeApplication()
         let conversation = pairFixture(app, code: "ios-test")
         conversation.tap()
-        let input = app.textViews["messageInput"]
+        let input = app.textViews.firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap(); input.typeText("Allow this fixture for the settings check")
-        app.buttons["sendMessage"].tap()
+        app.buttons["Send message"].tap()
         let allow = app.buttons["allowDataSharing"]
         XCTAssertTrue(allow.waitForExistence(timeout: 5)); allow.tap()
         XCTAssertTrue(allow.waitForNonExistence(timeout: 5))
@@ -1502,6 +1502,7 @@ final class MainsUITests: XCTestCase {
         openSidebar(app); app.buttons["openSettings"].tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Test Mac"].exists)
+        attachScreenshot(app, name: "Settings – compact groups in system appearance")
         let sync = app.buttons["syncNow"]
         XCTAssertTrue(sync.isEnabled); sync.tap()
         let copy = app.buttons["copyDiagnostics"]
@@ -1513,7 +1514,24 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(dark.isSelected)
 
         let sharing = app.buttons["aiDataSharing"]
-        scrollTo(sharing, in: app); sharing.tap()
+        scrollTo(sharing, in: app)
+        attachScreenshot(app, name: "Settings – collapsed title in dark appearance")
+        app.swipeUp()
+        let version = app.staticTexts["settingsAppVersion"]
+        XCTAssertTrue(version.isHittable)
+        XCTAssertTrue(version.label.hasPrefix("App Version "))
+        let sign = app.descendants(matching: .any).matching(identifier: "settingsTokyoSign").firstMatch
+        XCTAssertTrue(sign.isHittable)
+        XCTAssertEqual(sign.label, "Live from Tokyo")
+        attachScreenshot(app, name: "Settings – Tokyo sign in English")
+
+        let japaneseSign = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "東京から生中継"), object: sign)
+        XCTAssertEqual(XCTWaiter.wait(for: [japaneseSign], timeout: 8), .completed)
+        attachScreenshot(app, name: "Settings – Tokyo sign in Japanese")
+        let englishSign = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Live from Tokyo"), object: sign)
+        XCTAssertEqual(XCTWaiter.wait(for: [englishSign], timeout: 6), .completed)
+
+        sharing.tap()
         let codex = app.buttons["consent-codex"]
         XCTAssertTrue(codex.waitForExistence(timeout: 5))
         XCTAssertTrue(codex.label.contains("Allowed"))
@@ -1526,6 +1544,7 @@ final class MainsUITests: XCTestCase {
         openSidebar(app); app.buttons["openSettings"].tap()
         scrollTo(dark, in: app)
         XCTAssertTrue(dark.isSelected, "Appearance persists across app launches.")
+        attachScreenshot(app, name: "Settings – compact groups in dark appearance")
         app.buttons["appearance-system"].tap()
         forgetFromSettings(app)
         XCTAssertTrue(app.buttons["scanPairingCode"].waitForExistence(timeout: 5))

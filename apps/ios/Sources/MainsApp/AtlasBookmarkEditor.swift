@@ -60,6 +60,7 @@ struct AtlasBookmarkEditor: View {
                     }
                 }
             }
+            .navigationHeaderFade(background: Color(.systemGroupedBackground))
             .navigationTitle("Edit bookmark").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

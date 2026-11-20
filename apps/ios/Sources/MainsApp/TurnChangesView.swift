@@ -144,7 +144,9 @@ struct TurnFileDiffView: View {
                     proxy.scrollTo("diff-top", anchor: .top)
                 }
         }
-        .background(Color(.systemBackground)).navigationTitle(selection.file.path.split(separator: "/").last.map(String.init) ?? "File diff")
+        .background(Color(.systemBackground))
+        .navigationHeaderFade()
+        .navigationTitle(selection.file.path.split(separator: "/").last.map(String.init) ?? "File diff")
         .navigationBarTitleDisplayMode(.inline).toolbarRole(.editor)
         .navigationBarBackButtonHidden()
         .toolbar {

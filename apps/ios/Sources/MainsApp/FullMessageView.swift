@@ -35,6 +35,7 @@ struct FullMessageView: View {
                     }
                 }.padding().background(.bar)
             }
+            .navigationHeaderFade()
             .navigationTitle(source == "tool-output" ? "Tool output" : source == "tool-input" ? "Tool input" : "Full message").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task(id: offset) { await load() }
