@@ -1,9 +1,5 @@
 import SwiftUI
 
-extension EnvironmentValues {
-    @Entry var effortSliderLocksAncestorScroll = false
-}
-
 struct EffortControlPanel: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
@@ -140,7 +136,6 @@ private struct SteppedEffortSlider: View {
     let onCommit: (String) -> Void
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.effortSliderLocksAncestorScroll) private var locksAncestorScroll
     @State private var dragPosition: CGFloat?
     @State private var pending: String?
     @State private var nearest: Int?
@@ -188,7 +183,8 @@ private struct SteppedEffortSlider: View {
             if !expanded { HStack { Text("Effort"); Spacer(); Text(label).foregroundStyle(.secondary).contentTransition(.opacity) } }
             GeometryReader { geometry in
                 let width = max(0, geometry.size.width - inset * 2)
-                let gestureWidth = locksAncestorScroll ? geometry.size.width.rounded() : geometry.size.width
+                // Keep the recognizer alive across fractional layout changes.
+                let gestureWidth = geometry.size.width.rounded()
                 let x = (ownsState ? dragPosition : nil) ?? center(index, width: width)
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color(.separator)).frame(height: track)
@@ -214,7 +210,7 @@ private struct SteppedEffortSlider: View {
                     .animation(dragPosition == nil ? rangeMotion : nil, value: value)
                     .overlay {
                         EffortSliderGestures(thumbCenter: x + inset, thumbRadius: thumb / 2,
-                            enabled: enabled && interactionEnabled, locksAncestorScroll: locksAncestorScroll,
+                            enabled: enabled && interactionEnabled,
                             onDrag: { preview(at: $0 - inset, width: width) },
                             onSelect: { select(at: $0 - inset, width: width) },
                             onCancel: { reset(keepingPending: true) })
@@ -283,7 +279,6 @@ private struct EffortSliderGestures: UIViewRepresentable {
     let thumbCenter: CGFloat
     let thumbRadius: CGFloat
     let enabled: Bool
-    let locksAncestorScroll: Bool
     let onDrag: (CGFloat) -> Void
     let onSelect: (CGFloat) -> Void
     let onCancel: () -> Void
@@ -341,7 +336,7 @@ private struct EffortSliderGestures: UIViewRepresentable {
             let position = pan.location(in: pan.view).x - grabOffset
             switch pan.state {
             case .began:
-                if parent.locksAncestorScroll { lockScroll(containing: pan.view) }
+                lockScroll(containing: pan.view)
                 parent.onDrag(position)
             case .changed:
                 parent.onDrag(position)

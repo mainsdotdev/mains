@@ -304,7 +304,7 @@ struct SearchView: View {
         }.padding(.horizontal, 16).padding(.vertical, 8)
     }
     private func sectionTitle(_ title: String) -> some View {
-        Text(title).font(.subheadline.weight(.semibold)).padding(.top, 20).padding(.bottom, 8)
+        Text(title).font(.subheadline.weight(.semibold).width(.expanded)).padding(.top, 20).padding(.bottom, 8)
     }
     private func place(of run: Conversation) -> String {
         let workspace = session.workspaces.first { $0.id == run.workspaceId }?.name

@@ -29,17 +29,32 @@ struct PageTitle: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
-    let title: LocalizedStringKey
+    private let title: LocalizedStringKey
+    private let accessibilityID: String
+    private let viewport: String?
     @Environment(\.pageTitleVisible) private var visibility
 
-    init(_ title: LocalizedStringKey) { self.title = title }
+    init(_ title: LocalizedStringKey, accessibilityID: String = "pageTitle", viewport: String? = nil) {
+        self.title = title
+        self.accessibilityID = accessibilityID
+        self.viewport = viewport
+    }
 
     var body: some View {
+        if let viewport {
+            label.onGeometryChange(for: Bool.self) { geometry in
+                geometry.frame(in: .named(viewport)).maxY > 0
+            } action: { visibility.wrappedValue = $0 }
+        } else {
+            label.onScrollVisibilityChange(threshold: 0.05) { visibility.wrappedValue = $0 }
+        }
+    }
+
+    private var label: some View {
         Text(title)
             .font(.largeTitle.weight(.semibold).width(.expanded))
             .accessibilityAddTraits(.isHeader)
-            .accessibilityIdentifier("pageTitle")
-            .onScrollVisibilityChange(threshold: 0.05) { visibility.wrappedValue = $0 }
+            .accessibilityIdentifier(accessibilityID)
     }
 
     var listRow: some View {
@@ -64,16 +79,15 @@ private struct ScrollingNavigationTitle: ViewModifier {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    ZStack {
-                        Color.clear.frame(width: 1, height: 1).accessibilityHidden(true)
-                        if !titleVisible {
-                            Text(title)
-                                .font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
-                                .accessibilityIdentifier("inlinePageTitle")
-                                .transition(.opacity)
+                    // Preserve the toolbar item's width throughout the fade.
+                    let label = Text(title).font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
+                    label.hidden().accessibilityHidden(true)
+                        .overlay {
+                            if !titleVisible {
+                                label.accessibilityIdentifier("inlinePageTitle").transition(.opacity)
+                            }
                         }
-                    }
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: titleVisible)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: titleVisible)
                 }.sharedBackgroundVisibility(.hidden)
             }
     }

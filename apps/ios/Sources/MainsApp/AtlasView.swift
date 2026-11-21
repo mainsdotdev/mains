@@ -463,6 +463,7 @@ struct AtlasPageView: View {
     #if DEBUG && targetEnvironment(simulator)
     @ObserveHotReload private var hotReload
     #endif
+    private static let titleViewport = "atlasPageViewport"
     let session: BackendSession
     let pageID: String
     let openPage: (String) -> Void
@@ -525,9 +526,11 @@ struct AtlasPageView: View {
           .ignoresSafeArea(.container, edges: content?.coverFileId != nil && error == nil ? .top : [])
           .refreshable { refresh() }
         }
+        .coordinateSpace(.named(Self.titleViewport))
         .background(Color(.systemBackground))
         .navigationHeaderFade(coversSafeAreaAtRest: content?.coverFileId == nil || error != nil)
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline).toolbarRole(.editor)
+        .scrollingNavigationTitle("\(error == nil ? content?.title ?? "" : "")")
+        .toolbarRole(.navigationStack)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -677,8 +680,10 @@ struct AtlasPageView: View {
             }
             VStack(alignment: .leading, spacing: 20) {
                 if let icon { RegistryIcon(token: icon, size: iconSize, tint: .primary) }
-                Text(page.title).font(.largeTitle.bold()).textSelection(.enabled)
-                    .accessibilityAddTraits(.isHeader).accessibilityIdentifier("atlasPageTitle")
+                // A cover extends the scroll view beneath the navigation bar.
+                PageTitle("\(page.title)", accessibilityID: "atlasPageTitle",
+                          viewport: page.coverFileId == nil ? nil : Self.titleViewport)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
             .padding(.horizontal, 24)
             .padding(.top, page.coverFileId != nil ? (icon != nil ? -28 : 20) : (icon != nil ? 24 : 12))

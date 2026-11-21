@@ -32,7 +32,10 @@ struct PairingView: View {
         VStack(spacing: 0) {
             HStack {
                 Color.clear.frame(width: 46, height: 46).accessibilityHidden(true)
-                Text("Pair a Computer").font(.title3.weight(.semibold)).frame(maxWidth: .infinity)
+                Text("Pair a Computer")
+                    .font(.title3.weight(.semibold).width(.expanded))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
                 RoundControl(symbol: "xmark", label: "Close pairing") {
                     pairingTask?.cancel(); dismiss()
                 }.accessibilityIdentifier("closePairing")

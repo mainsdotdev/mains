@@ -17,7 +17,9 @@ describe("assistant task activity card", () => {
   it("keeps the archived Mate name, report, and link to their chat", () => {
     mocks.archived = true;
     mocks.task = { id: "task", fromRunId: "source", workerRunId: "worker", toAssistantId: "assistant", status: "completed",
-      execution: { mode: "work" }, prompt: "Review", result: "Historical report", evidence: [], error: null } as AssistantAssignment;
+      accountId: "account", teamId: null, fromAssistantId: null, parentId: null, taskKey: "task", title: "Review",
+      createdAt: new Date(), updatedAt: new Date(),
+      execution: { mode: "work" }, prompt: "Review", result: "Historical report", evidence: [], error: null };
     render(<MemoryRouter><AssistantTaskCard assignmentId="task" runId="source" /></MemoryRouter>);
     const card = within(screen.getByRole("article", { name: "Testflight Ready task" }));
     expect(card.getByText("Archived")).toBeTruthy();

@@ -70,6 +70,7 @@ final class MainsUITests: XCTestCase {
         let compactTitle = app.staticTexts["inlinePageTitle"]
         XCTAssertTrue(compactTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(compactTitle.label, "Atlas")
+        XCTAssertEqual(compactTitle.frame.midX, app.frame.midX, accuracy: 3)
         attachScreenshot(app, name: "Atlas scrolled header")
         app.swipeDown()
         XCTAssertTrue(compactTitle.waitForNonExistence(timeout: 5))
@@ -81,6 +82,22 @@ final class MainsUITests: XCTestCase {
         XCTAssertEqual(closePreview.frame.midX, reference.midX, accuracy: 1)
         attachScreenshot(app, name: "File preview header")
         closePreview.tap()
+
+        app.buttons["atlasItem-fixture-atlas-page"].tap()
+        let pageTitle = app.staticTexts["atlasPageTitle"]
+        XCTAssertTrue(pageTitle.waitForExistence(timeout: 5))
+        XCTAssertEqual(pageTitle.label, "Travel notes")
+        XCTAssertFalse(compactTitle.exists)
+        let reader = app.scrollViews.firstMatch
+        reader.swipeUp()
+        XCTAssertTrue(compactTitle.waitForExistence(timeout: 5))
+        XCTAssertEqual(compactTitle.label, "Travel notes")
+        XCTAssertEqual(compactTitle.frame.midX, app.frame.midX, accuracy: 3)
+        attachScreenshot(app, name: "Atlas Page scrolled title")
+        reader.swipeDown()
+        XCTAssertTrue(compactTitle.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(pageTitle.isHittable)
+        checkLeadingButton().tap()
         atlasBack.tap()
 
         openSidebar(app)
@@ -150,6 +167,9 @@ final class MainsUITests: XCTestCase {
         app.swipeUp()
         XCTAssertTrue(compactTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(compactTitle.label, "Settings")
+        XCTAssertEqual(compactTitle.frame.midX, app.frame.midX, accuracy: 3)
+        app.swipeDown()
+        XCTAssertTrue(compactTitle.waitForNonExistence(timeout: 5))
         checkLeadingButton().tap()
 
         openSidebar(app)
@@ -165,6 +185,44 @@ final class MainsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["MAINS_HOT_RELOAD"] = "0"
         return app
+    }
+
+    func testAtlasPageCoverDoesNotDelayItsCompactTitle() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        XCUIDevice.shared.orientation = .portrait
+        addTeardownBlock { await MainActor.run { XCUIDevice.shared.orientation = .portrait } }
+        prepareUnpaired(app)
+        app.buttons["startDemo"].tap()
+        openSidebar(app)
+        app.buttons["openAtlas"].tap()
+        let page = app.buttons["atlasItem-demo-atlas-page"]
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
+        page.tap()
+        let title = app.staticTexts["atlasPageTitle"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, "Explore Atlas")
+
+        // A short viewport lets the sample cover and title scroll behind the toolbar.
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let landscape = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.frame.width > app.frame.height }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [landscape], timeout: 5), .completed)
+        let bar = app.navigationBars.firstMatch
+        let compactTitle = app.staticTexts["inlinePageTitle"]
+        let isExpanded = compactTitle.waitForNonExistence(timeout: 5)
+        XCTAssertTrue(isExpanded, "Title: \(title.frame). Navigation bar: \(bar.frame).")
+        let reader = app.scrollViews.firstMatch
+        let start = reader.coordinate(withNormalizedOffset: CGVector(dx: 0.82, dy: 0.9))
+        let distance = title.frame.maxY - bar.frame.maxY + 26
+        let end = start.withOffset(CGVector(dx: 0, dy: -distance))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+        let isCompact = compactTitle.waitForExistence(timeout: 5)
+        XCTAssertTrue(isCompact, "Title: \(title.frame). Navigation bar: \(bar.frame).")
+        XCTAssertEqual(compactTitle.label, "Explore Atlas")
+        XCTAssertEqual(compactTitle.frame.midX, bar.frame.midX, accuracy: 3)
+        attachScreenshot(app, name: "Atlas cover scrolled title")
+        reader.swipeDown()
+        XCTAssertTrue(compactTitle.waitForNonExistence(timeout: 5))
     }
 
     func testCompactSidebarPreservesTheDraftAndSupportsEdgeDismissal() {
@@ -364,16 +422,6 @@ final class MainsUITests: XCTestCase {
         attachScreenshot(app, name: "New Mate – inline model controls")
         assertEffortSliderInteraction(app)
 
-        let heading = app.staticTexts["newMateNamePreview"]
-        let headingY = heading.frame.minY
-        let left = mateSlider.coordinate(withNormalizedOffset: CGVector(dx: 0.10, dy: 0.5))
-        let right = mateSlider.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: 0.85))
-        left.press(forDuration: 0.05, thenDragTo: right, withVelocity: .slow, thenHoldForDuration: 0.2)
-        XCTAssertEqual(mateSlider.value as? String, "High")
-        XCTAssertEqual(heading.frame.minY, headingY, accuracy: 2)
-        left.tap()
-        XCTAssertEqual(mateSlider.value as? String, "Low")
-
         chooseModel("fixture-thinking", in: app)
         chooseModel("fixture-balanced", in: app)
         XCTAssertEqual(app.descendants(matching: .any)["effortSlider"].value as? String, "Low")
@@ -403,7 +451,16 @@ final class MainsUITests: XCTestCase {
         center.press(forDuration: 0.05, thenDragTo: vertical, withVelocity: .slow, thenHoldForDuration: 0.2)
         XCTAssertEqual(slider.value as? String, "High")
 
-        slider.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
+        let left = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5))
+        left.tap()
+        XCTAssertEqual(slider.value as? String, "Low")
+
+        let sliderY = slider.frame.minY
+        let right = slider.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: 0.85))
+        left.press(forDuration: 0.05, thenDragTo: right, withVelocity: .slow, thenHoldForDuration: 0.2)
+        XCTAssertEqual(slider.value as? String, "High")
+        XCTAssertEqual(slider.frame.minY, sliderY, accuracy: 2, "A horizontal drag should keep the picker in place.")
+        left.tap()
         XCTAssertEqual(slider.value as? String, "Low")
     }
 

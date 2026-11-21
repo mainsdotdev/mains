@@ -437,7 +437,7 @@ struct RunOptionsSheet: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("Run options").font(.headline)
+            Text("Run options").font(.headline.width(.expanded))
                 .padding(.horizontal, 48).frame(maxWidth: .infinity, minHeight: 44)
                 .accessibilityAddTraits(.isHeader)
                 .overlay(alignment: .trailing) {

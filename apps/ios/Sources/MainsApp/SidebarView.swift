@@ -134,7 +134,7 @@ struct SidebarView: View {
                                                            @ViewBuilder trailing: () -> Trailing = { EmptyView() }) -> some View {
         HStack(spacing: menuIconSpacing) {
             icon().frame(width: shortcutIconSize + 4).accessibilityHidden(true)
-            Text(title).font(.title3.weight(.medium))
+            Text(title).font(.title3.weight(.medium).width(.expanded))
             Spacer(minLength: 0)
             trailing()
         }

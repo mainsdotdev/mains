@@ -557,12 +557,12 @@ describe("WorkspaceProviderPage while changing spaces", () => {
     expect(screen.queryByRole("button", { name: /Close/ })).toBeNull();
     page.state = { ...page.state, activeTab: "new-run", activeRunId: null, activeRun: null, tabRuns: [], showNewRunTab: true };
     view.rerender(content());
-    expect(screen.getByRole("tab", { name: "New chat" })).toBe(tab);
+    expect(screen.getByRole("tab", { name: "New run" })).toBe(tab);
     expect(screen.getByTestId("centered-input")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
   });
 
-  it("keeps a New chat tab on a confirmed empty workspace without a plus button", () => {
+  it("keeps a New run tab on a confirmed empty workspace without a plus button", () => {
     page.realTabs = true;
     page.state = {
       useProjectChats: true, runs: [], runsLoaded: true, activeTab: "new-run", activeRunId: null,
@@ -571,7 +571,7 @@ describe("WorkspaceProviderPage while changing spaces", () => {
       currentWorkspace: null, currentEvents: [], currentTurns: [], goal: "", uploadedFiles: [],
     };
     renderPage();
-    expect(screen.getByRole("tab", { name: "New chat" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "New run" })).toBeTruthy();
     expect(screen.getByTestId("centered-input")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
   });

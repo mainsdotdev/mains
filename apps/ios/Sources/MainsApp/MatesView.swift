@@ -621,7 +621,6 @@ private extension NewMateView {
                                       next.select(model, provider: space.providerId)
                                       draft.settings = next
                                   }, updateEffort: { draft.settings = $0 })
-                    .environment(\.effortSliderLocksAncestorScroll, true)
                     .id(space.id)
             } else {
                 Text("Enable a Claude or Codex Space on your computer.")

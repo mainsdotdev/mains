@@ -105,7 +105,7 @@ private struct UnpairedHomeArea: View {
     var body: some View {
         VStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("No computer paired").font(.headline)
+                Text("No computer paired").font(.headline.width(.expanded))
                 Text("Start Mains on your computer with LAN or Tailscale access, then scan its pairing code.")
                     .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button("Scan pairing code", action: pair)
@@ -116,7 +116,7 @@ private struct UnpairedHomeArea: View {
                 .buttonStyle(PairingActionStyle(prominent: false)).accessibilityIdentifier("startDemo")
             }
             .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18))
+            .modifier(GlassSurface(radius: 18, interactive: false))
             .padding(.horizontal, 12)
 
             VStack(alignment: .leading, spacing: 4) {
