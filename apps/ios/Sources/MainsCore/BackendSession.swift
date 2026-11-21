@@ -143,6 +143,7 @@ public final class BackendSession {
     public var mateCommandPending: Bool { pendingMateCommand != nil }
     public var mateCommandUncertain: Bool { pendingMateCommand?.uncertain == true }
     public var supportsMates: Bool { connectedDescriptor?.capabilities.contains("assistants") == true && !isDemo }
+    public var supportsMateInfo: Bool { supportsMates && connectedDescriptor?.capabilities.contains("mateInfo") == true }
     public var mateSpaces: [Space] {
         spaces.filter { ($0.providerId == "codex" || $0.providerId == "claude_code") && providerConfigs[$0.providerId] != nil }
     }
@@ -811,8 +812,9 @@ public final class BackendSession {
         return value
     }
 
-    public func loadMates(mateID: String? = nil) async throws -> MateDirectory {
-        let directory = try await mateRead("assistants:mobileDirectory", args: mateID.map { [.string($0)] } ?? []).decode(MateDirectory.self)
+    public func loadMates(mateID: String? = nil, archived: Bool = false) async throws -> MateDirectory {
+        let args: [JSONValue] = archived ? [mateID.map(JSONValue.string) ?? .null, .bool(true)] : mateID.map { [.string($0)] } ?? []
+        let directory = try await mateRead("assistants:mobileDirectory", args: args).decode(MateDirectory.self)
         guard directory.mates.count <= 200, directory.teams.count <= 100 else { throw MainsError.invalidReply }
         return directory
     }
@@ -827,6 +829,54 @@ public final class BackendSession {
         let assignment = try await mateRead("assistants:mobileAssignment", args: [.string(runID), .string(id)]).decode(MateAssignment.self)
         guard assignment.id == id, viewingRunID == runID else { throw MainsError.changedBackend }
         return assignment
+    }
+
+    private func mateInfoRead<T: Decodable>(_ channel: String, mateID: String, selection: JSONValue? = nil, as type: T.Type) async throws -> T {
+        guard supportsMateInfo else { throw MainsError.server("Update Mains on your computer to use this Mate tab.") }
+        let args = [.string(mateID)] + (selection.map { [$0] } ?? [])
+        return try await mateRead(channel, args: args).decode(type)
+    }
+
+    public func loadMateMemory(_ mateID: String) async throws -> [MateMemoryNote] {
+        let notes = try await mateInfoRead("assistants:mobileMemory", mateID: mateID, as: [MateMemoryNote].self)
+        guard notes.count <= 200 else { throw MainsError.invalidReply }
+        return notes
+    }
+
+    public func readMateMemory(_ id: String, mateID: String) async throws -> MateMemoryNote {
+        let note = try await mateInfoRead("assistants:mobileMemory", mateID: mateID, selection: .string(id), as: MateMemoryNote.self)
+        guard note.id == id, note.revision > 0, note.content.utf16.count <= 6000 else { throw MainsError.invalidReply }
+        return note
+    }
+
+    public func loadMateTasks(_ mateID: String, offset: Int) async throws -> MateTasks {
+        let tasks = try await mateInfoRead("assistants:mobileAssignments", mateID: mateID, selection: .number(Double(offset)), as: MateTasks.self)
+        guard tasks.items.count <= 100, tasks.activeCount >= 0 else { throw MainsError.invalidReply }
+        return tasks
+    }
+
+    public func readMateTask(_ id: String, mateID: String) async throws -> MateTask {
+        let task = try await mateInfoRead("assistants:mobileAssignments", mateID: mateID, selection: .string(id), as: MateTask.self)
+        guard task.id == id, task.brief.utf16.count <= 24_000, (task.result?.utf16.count ?? 0) <= 12_000,
+              task.evidence.count <= 20 else { throw MainsError.invalidReply }
+        return task
+    }
+
+    public func loadMateRoutines(_ mateID: String, offset: Int) async throws -> MateRoutines {
+        let routines = try await mateInfoRead("assistants:mobileRoutines", mateID: mateID, selection: .number(Double(offset)), as: MateRoutines.self)
+        guard routines.items.count <= 100, routines.nextOffset == nil || routines.nextOffset == offset + 100 else { throw MainsError.invalidReply }
+        return routines
+    }
+
+    public func readMateRoutine(_ id: String, mateID: String) async throws -> MateRoutine {
+        let routine = try await mateInfoRead("assistants:mobileRoutines", mateID: mateID, selection: .string(id), as: MateRoutine.self)
+        guard routine.id == id, routine.schedule.prompt.utf16.count <= 24_000 else { throw MainsError.invalidReply }
+        return routine
+    }
+
+    public func manageMate(_ id: String, change: MateChange) async throws {
+        guard let accountID, supportsMateInfo else { throw MainsError.disconnected }
+        _ = try await writeMate("assistants:mobileManage", args: [.string(accountID), .string(id), try change.payload(), .string(UUID().uuidString)])
     }
 
     public func createMate(name: String, space: Space, model: String, effort: String, teamID: String?, avatar: MateAvatar) async throws -> String {
@@ -883,6 +933,7 @@ public final class BackendSession {
             let result = try await command(attempt.channel, args: attempt.args, commandID: attempt.id, owner: attempt.owner)
             guard attempt.owner == pairingOwner else { throw MainsError.changedBackend }
             if attempt.channel == "assistants:create", result["id"].string?.isEmpty != false { throw MainsError.invalidReply }
+            if attempt.channel == "assistants:mobileManage", !result["accepted"].bool { throw MainsError.invalidReply }
             pendingMateCommand = nil
             matesRevision += 1
             return result

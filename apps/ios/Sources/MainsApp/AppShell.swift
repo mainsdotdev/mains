@@ -62,7 +62,8 @@ struct AppShell: View {
                         NavigationStack(path: $path) {
                             Group {
                                 if let homeRunID {
-                                    ConversationView(session: session, runID: homeRunID, openComputer: showSettings, onNew: goHome, onFork: { path.append(.conversation($0)) })
+                                    ConversationView(session: session, runID: homeRunID, openComputer: showSettings, onNew: goHome,
+                                                     onFork: { path.append(.conversation($0)) }, onMateNavigation: { path.append($0) })
                                         .id("\(session.ownership):\(homeRunID)")
                                         .toolbar {
                                             ToolbarItem(placement: .topBarLeading) {
@@ -85,9 +86,11 @@ struct AppShell: View {
                                 switch route {
                                 case .conversation(let id, let mate):
                                     ConversationView(session: session, runID: id, openComputer: showSettings, onNew: { newConversation(from: id) },
-                                                     onFork: { path.append(.conversation($0)) }, mateSource: mate)
+                                                     onFork: { path.append(.conversation($0)) }, mateSource: mate, onMateNavigation: { path.append($0) })
                                     .id("\(session.ownership):\(id)")
-                                case .searchMessage(let id, let cursor): ConversationView(session: session, runID: id, openComputer: showSettings, onNew: { newConversation(from: id) }, onFork: { path.append(.conversation($0)) }, initialCursor: cursor)
+                                case .searchMessage(let id, let cursor): ConversationView(session: session, runID: id, openComputer: showSettings,
+                                    onNew: { newConversation(from: id) }, onFork: { path.append(.conversation($0)) }, initialCursor: cursor,
+                                    onMateNavigation: { path.append($0) })
                                     .id("\(session.ownership):\(id):\(cursor.timestamp):\(cursor.id)")
                                 case .workspace(let id): TargetConversationsView(session: session, target: .workspace(id),
                                     openConversation: { path.append(.conversation($0)) }, startConversation: goHome)
@@ -99,7 +102,8 @@ struct AppShell: View {
                                     .id(session.ownership)
                                 case .atlasPage(let id): AtlasPageView(session: session, pageID: id, openPage: { path.append(.atlasPage($0)) }, openConversation: { path.append(.conversation($0)) })
                                     .id("\(session.ownership):atlas:\(id)")
-                                case .mates: MatesView(session: session, openMate: { path.append(.mate($0)) }, newMate: { teams in
+                                case .mates: MatesView(session: session, openMate: { path.append(.mate($0)) },
+                                                      navigateFromArchive: { if path.last == route { path.append($0) } }, newMate: { teams in
                                     newMateDraft = NewMateDraft()
                                     path.append(.newMate(teams))
                                 })
@@ -120,7 +124,12 @@ struct AppShell: View {
                                              openInfo: { path.append(.mateInfo(id)) })
                                         .id("\(session.ownership):mate:\(id)")
                                 case .mateInfo(let id):
-                                    MateInfoView(session: session, mateID: id)
+                                    MateInfoView(session: session, mateID: id, openChat: { runID, mateID in
+                                        path.append(.conversation(runID, mate: mateID.map(MateConversationSource.profile) ?? .assignment))
+                                    }, newTask: {
+                                        if path.dropLast().last == .mate(id) { path.removeLast() }
+                                        else { path.append(.mate(id)) }
+                                    })
                                         .id("\(session.ownership):mate-info:\(id)")
                                 }
                             }

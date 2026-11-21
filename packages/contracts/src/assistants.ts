@@ -299,3 +299,59 @@ export type MobileMateChat = Pick<AssistantConversation, "id" | "title" | "updat
 export type MobileMateAssignment = Pick<AssistantAssignment, "id" | "title" | "status" | "result" | "error" | "workerRunId"> & {
     assignee: MobileMateIdentity | null;
 };
+
+export const MOBILE_MATE_INFO_CAPABILITY = "mateInfo";
+
+/** List responses carry a content preview. A selected id returns the entire note. */
+export type MobileMateMemory = Pick<AssistantMemory, "id" | "title" | "content" | "pinned" | "revision"> & { shared: boolean };
+
+export interface MobileMateTask extends MobileMateAssignment {
+    brief: string;
+    evidence: string[];
+}
+
+export interface MobileMateTasks {
+    items: MobileMateTask[];
+    activeCount: number;
+    hasMore: boolean;
+}
+
+export interface MobileMateSchedule {
+    title: string;
+    prompt: string;
+    frequency: "hourly" | "daily" | "weekdays" | "weekly";
+    dayOfWeek: number | null;
+    hour: number;
+    minute: number;
+    timezone: string;
+}
+
+/** List responses carry a prompt preview. A selected id returns the complete schedule. */
+export interface MobileMateRoutine extends MobileMateSchedule {
+    id: string;
+    workspaceId: string | null;
+    isActive: boolean;
+    nextRunAt: Date | null;
+    lastRunId: string | null;
+    lastAssignmentStatus: string | null;
+    lastError: string | null;
+    revision: string;
+}
+
+export interface MobileMateRoutines {
+    items: MobileMateRoutine[];
+    nextOffset: number | null;
+}
+
+export type MobileMateChange =
+    | ({ action: "updateProfile" } & Pick<UpdateAssistantProfile, "profile" | "expectedProfile" | "teamChange">)
+    | { action: "archive"; archived: boolean }
+    | { action: "saveMemory"; note: MobileMateMemory; expectedTeamId: string | null }
+    | { action: "deleteMemory"; id: string; revision: number }
+    | { action: "assign"; title: string; prompt: string }
+    | { action: "cancelTask" | "checkTask"; id: string }
+    | { action: "followup"; id: string; message: string }
+    | { action: "createRoutine"; schedule: MobileMateSchedule; workspaceId: string | null }
+    | { action: "updateRoutine"; id: string; schedule: MobileMateSchedule; revision: string }
+    | { action: "toggleRoutine"; id: string; isActive: boolean }
+    | { action: "deleteRoutine" | "runRoutine"; id: string };

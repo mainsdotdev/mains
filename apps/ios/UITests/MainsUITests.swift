@@ -670,12 +670,12 @@ final class MainsUITests: XCTestCase {
         let avatar = app.coordinate(withNormalizedOffset: .zero).withOffset(
             CGVector(dx: header.frame.midX - app.frame.minX, dy: header.frame.minY - app.frame.minY + 70))
         avatar.tap()
-        XCTAssertTrue(app.navigationBars["Mate Info"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Mate Details"].waitForExistence(timeout: 5))
         let profileName = app.staticTexts["mateInfoName"]
         XCTAssertTrue(profileName.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(profileName.frame.minY, nameBottom)
         XCTAssertTrue(app.staticTexts["Checks releases"].exists)
-        attachScreenshot(app, name: "Mate chat – expanded Mate Info")
+        attachScreenshot(app, name: "Mate chat – expanded Mate Details")
         app.buttons["closeMateChatInfo"].tap()
         XCTAssertTrue(header.waitForExistence(timeout: 5))
         XCTAssertEqual(transcript.frame.minY, transcriptY, accuracy: 3)
@@ -729,7 +729,7 @@ final class MainsUITests: XCTestCase {
         let mateBar = app.navigationBars["Fixture Mate"]
         XCTAssertEqual(info.frame.midY, mateBar.buttons["BackButton"].frame.midY, accuracy: 1)
         info.tap()
-        let infoBar = app.navigationBars["Mate Info"]
+        let infoBar = app.navigationBars["Mate Details"]
         XCTAssertTrue(infoBar.waitForExistence(timeout: 5))
         XCTAssertTrue(description.waitForExistence(timeout: 5))
         XCTAssertTrue(mateInfoRow(containing: "Release Team", in: app).exists)
@@ -738,7 +738,7 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(mateInfoRow(containing: "High", in: app).exists)
         let instructions = app.staticTexts["Summarize release risks and link the checks."]
         XCTAssertTrue(instructions.waitForExistence(timeout: 5))
-        attachScreenshot(app, name: "Mate Info – saved profile")
+        attachScreenshot(app, name: "Mate Details – saved profile")
         infoBar.buttons["BackButton"].tap()
 
         let firstChat = app.staticTexts["Release check 1"]
@@ -878,8 +878,99 @@ final class MainsUITests: XCTestCase {
         XCTAssertTrue(mateInfoRow(containing: "No team", in: app).exists)
         XCTAssertTrue(mateInfoRow(containing: "Model", in: app).exists)
         XCTAssertFalse(app.staticTexts["Instructions"].exists)
-        app.navigationBars["Mate Info"].buttons["BackButton"].tap()
+        app.buttons["mateInfoTab-Memory"].tap()
+        XCTAssertTrue(mateInfoRow(containing: "Update Mains on your computer", in: app).waitForExistence(timeout: 5))
+        app.navigationBars["Mate Details"].buttons["BackButton"].tap()
         app.navigationBars["Fixture Solo"].buttons["BackButton"].tap()
+        app.navigationBars["Mates"].buttons["BackButton"].tap()
+        forgetFixture(app)
+    }
+
+    func testMateInfoTabsReadAndManageThePairedMate() {
+        continueAfterFailure = false
+        let app = makeApplication()
+        _ = pairFixture(app, code: "ios-test-mate-info")
+        app.buttons["openMates"].tap()
+        let openArchive = app.buttons["openArchivedMates"]
+        XCTAssertTrue(openArchive.waitForExistence(timeout: 5))
+        openArchive.tap()
+        let archiveBar = app.navigationBars["Archived Mates"]
+        XCTAssertTrue(archiveBar.waitForExistence(timeout: 5))
+        let closeArchive = archiveBar.buttons["closeArchivedMates"]
+        XCTAssertTrue(closeArchive.exists)
+        XCTAssertGreaterThan(closeArchive.frame.midX, archiveBar.frame.midX)
+        let archivedMate = app.buttons["mate-fixture-retired-mate"]
+        XCTAssertTrue(archivedMate.waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "Archived Mates – full screen")
+        closeArchive.tap()
+        XCTAssertTrue(archiveBar.waitForNonExistence(timeout: 5))
+
+        openArchive.tap()
+        XCTAssertTrue(archivedMate.waitForExistence(timeout: 5))
+        archivedMate.tap()
+        let detailsBar = app.navigationBars["Mate Details"]
+        XCTAssertTrue(detailsBar.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Restore Mate"].waitForExistence(timeout: 5))
+        detailsBar.buttons["closeArchivedMates"].tap()
+        XCTAssertTrue(detailsBar.waitForNonExistence(timeout: 5))
+
+        let mate = app.buttons["mate-fixture-mate"]
+        XCTAssertTrue(mate.waitForExistence(timeout: 5))
+        mate.tap()
+        let info = app.buttons["openMateInfo"]
+        XCTAssertTrue(info.waitForExistence(timeout: 5))
+        info.tap()
+        let name = app.staticTexts["mateInfoName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        XCTAssertEqual(name.label, "Fixture Mate")
+        XCTAssertTrue(detailsBar.staticTexts["Mate Details"].exists)
+        XCTAssertTrue(app.buttons["Archive Mate"].exists)
+        attachScreenshot(app, name: "Mate Details – profile")
+
+        app.buttons["mateInfoTab-Memory"].tap()
+        let addMemory = app.buttons["New Memory"]
+        XCTAssertTrue(addMemory.waitForExistence(timeout: 5))
+        addMemory.tap()
+        let title = app.textFields["Title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap()
+        title.typeText("QA release note")
+        let note = app.textViews["mateMemoryText"]
+        note.tap()
+        note.typeText("Remember final checks.")
+        app.navigationBars.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["QA release note"].waitForExistence(timeout: 5))
+
+        app.buttons["mateInfoTab-Assignments"].tap()
+        let assignment = app.staticTexts["Release handoff"]
+        XCTAssertTrue(assignment.waitForExistence(timeout: 5))
+        assignment.tap()
+        XCTAssertTrue(app.buttons["Open Chat"].waitForExistence(timeout: 5))
+        let assignmentBar = app.navigationBars["Assignment"]
+        let closeAssignment = assignmentBar.buttons["closeMateAssignment"]
+        XCTAssertTrue(closeAssignment.exists)
+        XCTAssertLessThan(closeAssignment.frame.midX, assignmentBar.frame.midX)
+        attachScreenshot(app, name: "Mate Details – Assignment")
+        closeAssignment.tap()
+        XCTAssertTrue(assignmentBar.waitForNonExistence(timeout: 5))
+
+        let routines = app.buttons["mateInfoTab-Routines"]
+        if !routines.isHittable { app.descendants(matching: .any)["mateInfoTabs"].firstMatch.swipeLeft() }
+        routines.tap()
+        XCTAssertTrue(app.staticTexts["Morning release check"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Paused"].exists)
+        attachScreenshot(app, name: "Mate Details – Routines")
+
+        let chats = app.buttons["mateInfoTab-Chats"]
+        if !chats.isHittable { app.descendants(matching: .any)["mateInfoTabs"].firstMatch.swipeRight() }
+        chats.tap()
+        let chat = app.buttons["mateInfoChat-fixture-mate-chat-0"]
+        XCTAssertTrue(chat.waitForExistence(timeout: 5))
+        chat.tap()
+        XCTAssertTrue(app.staticTexts["Check whether the build is ready."].waitForExistence(timeout: 10))
+        app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars["Mate Details"].buttons["BackButton"].tap()
+        app.navigationBars["Fixture Mate"].buttons["BackButton"].tap()
         app.navigationBars["Mates"].buttons["BackButton"].tap()
         forgetFixture(app)
     }

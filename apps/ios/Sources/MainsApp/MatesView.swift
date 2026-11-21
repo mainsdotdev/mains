@@ -6,18 +6,76 @@ struct MatesView: View {
     #endif
     let session: BackendSession
     let openMate: (String) -> Void
+    let navigateFromArchive: (AppRoute) -> Void
     let newMate: ([MateTeam]) -> Void
+    @State private var showingArchive = false
+    @State private var archivedMateID: String?
+    @State private var routeAfterArchive: (owner: Int, route: AppRoute)?
+
+    var body: some View {
+        MateDirectoryView(session: session, archived: false, openMate: openMate, newMate: newMate)
+            .scrollingNavigationTitle("Mates")
+            .toolbar {
+                if session.supportsMateInfo {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Archived Mates", systemImage: "archivebox") { showingArchive = true }
+                            .accessibilityIdentifier("openArchivedMates")
+                    }
+                }
+            }
+            .fullScreenCover(isPresented: $showingArchive, onDismiss: finishArchive) {
+                NavigationStack {
+                    MateDirectoryView(session: session, archived: true, openMate: { archivedMateID = $0 })
+                        .expandedNavigationTitle("Archived Mates")
+                        .toolbar { closeArchiveButton }
+                        .navigationDestination(item: $archivedMateID) { id in
+                            MateInfoView(session: session, mateID: id, openChat: { runID, mateID in
+                                leaveArchive(for: .conversation(runID, mate: mateID.map(MateConversationSource.profile) ?? .assignment))
+                            }, newTask: { leaveArchive(for: .mate(id)) })
+                            .toolbar { closeArchiveButton }
+                        }
+                }
+                .accessibilityAction(.escape) { showingArchive = false }
+            }
+    }
+
+    private var closeArchiveButton: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button("Close Archived Mates", systemImage: "xmark") { showingArchive = false }
+                .labelStyle(.iconOnly)
+                .accessibilityIdentifier("closeArchivedMates")
+        }
+    }
+
+    private func leaveArchive(for route: AppRoute) {
+        routeAfterArchive = (session.ownership, route)
+        showingArchive = false
+    }
+
+    private func finishArchive() {
+        archivedMateID = nil
+        let next = routeAfterArchive
+        routeAfterArchive = nil
+        if let next, next.owner == session.ownership { navigateFromArchive(next.route) }
+    }
+}
+
+private struct MateDirectoryView: View {
+    let session: BackendSession
+    let archived: Bool
+    let openMate: (String) -> Void
+    var newMate: (([MateTeam]) -> Void)? = nil
     @State private var directory: MateDirectory?
     @State private var error: String?
     @State private var reload = 0
 
     private var canCreateMate: Bool {
-        directory != nil && session.isConnected && !session.mateCommandPending
+        newMate != nil && directory != nil && session.isConnected && !session.mateCommandPending
     }
 
     var body: some View {
         Group {
-            if directory?.mates.isEmpty == true {
+            if !archived && directory?.mates.isEmpty == true {
                 GeometryReader { geometry in
                     ScrollView {
                         VStack(spacing: 0) {
@@ -40,18 +98,20 @@ struct MatesView: View {
                 .background(Color(.systemGroupedBackground))
             } else {
                 List {
-                    Section { PageTitle("Mates").listRow }
+                    if !archived { Section { PageTitle("Mates").listRow } }
                     directoryStatus
-                    if let directory { mateSections(directory) }
+                    if let directory {
+                        if archived && directory.mates.isEmpty { Text("No archived Mates").foregroundStyle(.secondary) }
+                        else { mateSections(directory) }
+                    }
                     else if error == nil { ProgressView().accessibilityLabel("Loading Mates") }
                 }
                 .contentMargins(.top, 8, for: .scrollContent)
             }
         }
         .navigationHeaderFade(background: Color(.systemGroupedBackground))
-        .scrollingNavigationTitle("Mates")
         .toolbar {
-            if directory?.mates.isEmpty == false {
+            if !archived && directory?.mates.isEmpty == false {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("New Mate", systemImage: "plus", action: startNewMate)
                         .disabled(!canCreateMate)
@@ -80,7 +140,7 @@ struct MatesView: View {
             EmptyMatesAvatars()
 
             VStack(spacing: 8) {
-                Text("Your mates").font(.title2.weight(.semibold))
+                Text("Your mates").font(.title2.weight(.semibold).width(.expanded))
                     .accessibilityAddTraits(.isHeader)
                 Text("Create a mate, then start a conversation. Your team can share memory and work together.")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -105,7 +165,7 @@ struct MatesView: View {
 
     private func startNewMate() {
         guard canCreateMate, let directory else { return }
-        newMate(directory.teams)
+        newMate?(directory.teams)
     }
 
     @ViewBuilder private func mateSections(_ directory: MateDirectory) -> some View {
@@ -115,13 +175,15 @@ struct MatesView: View {
         let teamIDs = directory.mates.compactMap(\.teamId).filter { seen.insert($0).inserted }
 
         ForEach(teamIDs, id: \.self) { teamID in
-            Section(teamNames[teamID] ?? "Unavailable team") {
+            Section {
                 mateRows(members[teamID] ?? [])
+            } header: {
+                MateSectionHeading(teamNames[teamID] ?? "Unavailable team")
             }
         }
         if let unassigned = members[nil] {
             if teamIDs.isEmpty { mateRows(unassigned) }
-            else { Section("No team") { mateRows(unassigned) } }
+            else { Section { mateRows(unassigned) } header: { MateSectionHeading("No team") } }
         }
     }
 
@@ -133,7 +195,7 @@ struct MatesView: View {
                         .frame(width: 40, height: 40)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(mate.name).font(.headline.width(.expanded))
-                        if !mate.ready {
+                        if mate.needsSetup {
                             HStack(spacing: 6) {
                                 Text("Finish setup").font(.subheadline).foregroundStyle(.secondary)
                                 Image(systemName: "exclamationmark.triangle.fill")
@@ -156,8 +218,14 @@ struct MatesView: View {
     private func load() async {
         let owner = session.ownership
         guard session.isConnected else { error = "Connect to your computer to use Mates."; return }
-        do { directory = try await session.loadMates(); error = nil }
-        catch { if !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription } }
+        do {
+            let result = try await session.loadMates(archived: archived)
+            guard !Task.isCancelled, owner == session.ownership else { return }
+            directory = result
+            error = nil
+        } catch {
+            if !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription }
+        }
     }
 }
 
@@ -194,137 +262,6 @@ private struct EmptyMatesAvatars: View {
             .frame(width: size, height: size)
             .rotationEffect(.degrees(tilt + lift * 3))
             .offset(y: -lift * 5)
-    }
-}
-
-struct MateInfoProfile: Identifiable {
-    let mate: Mate
-    let teams: [MateTeam]
-    var id: String { mate.id }
-}
-
-struct MateInfoView: View {
-    #if DEBUG && targetEnvironment(simulator)
-    @ObserveHotReload private var hotReload
-    #endif
-    let session: BackendSession
-    let mateID: String
-    @State private var details: MateInfoProfile?
-    @State private var rendersAvatar: Bool
-    @State private var error: String?
-    @State private var retry = 0
-    @State private var requestID = UUID()
-
-    init(session: BackendSession, mateID: String, initialProfile: MateInfoProfile? = nil) {
-        self.session = session
-        self.mateID = mateID
-        _details = State(initialValue: initialProfile)
-        _rendersAvatar = State(initialValue: initialProfile == nil)
-    }
-
-    var body: some View {
-        Group {
-            if !session.isConnected {
-                ContentUnavailableView("Computer offline", systemImage: "wifi.slash",
-                                       description: Text("Connect to your computer to see this Mate’s profile."))
-            } else if let details {
-                profile(details.mate, teams: details.teams)
-            } else if let error {
-                ContentUnavailableView {
-                    Label("Mate info unavailable", systemImage: "person.crop.circle.badge.exclamationmark")
-                } description: {
-                    Text(error)
-                } actions: {
-                    Button("Try Again") { retry += 1 }
-                }
-            } else {
-                ProgressView().accessibilityLabel("Loading Mate info")
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("Mate Info")
-        .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(session.ownership):\(session.isConnected):\(session.matesRevision):\(retry)") { await load() }
-        .task {
-            guard !rendersAvatar else { return }
-            // Keep the thumbnail visible while the system runs the zoom.
-            do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
-            rendersAvatar = true
-        }
-    }
-
-    private func profile(_ mate: Mate, teams: [MateTeam]) -> some View {
-        let team = mate.teamId.map { id in teams.first(where: { $0.id == id })?.name ?? "Unavailable team" } ?? "No team"
-        let model = session.models[mate.providerId]?.first(where: { $0.id == mate.model })?.label(for: mate.providerId) ?? mate.model
-        return List {
-            Section {
-                VStack(spacing: 8) {
-                    Group {
-                        if let preset = MateRobotAssets.catalogue?.preset(for: mate.avatar, mateID: mate.id) {
-                            MateRobotPreview(preset: preset, acceptsDrag: false, renders: rendersAvatar)
-                        } else {
-                            MateRobotThumbnail(preset: nil)
-                        }
-                    }
-                    .frame(width: 116, height: 116)
-                    Text(mate.name)
-                        .font(.title2.weight(.semibold).width(.expanded))
-                        .accessibilityAddTraits(.isHeader)
-                        .accessibilityIdentifier("mateInfoName")
-                    if !mate.description.isEmpty {
-                        Text(mate.description).font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .padding(.bottom, 8)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-            }
-            Section {
-                LabeledContent("Team", value: team)
-                if let details = mate.details { LabeledContent("Space", value: details.spaceName) }
-                LabeledContent("Model", value: model)
-                if let details = mate.details {
-                    LabeledContent("Effort", value: details.effort.isEmpty ? "Default" : ComposerSettings.effortLabel(details.effort))
-                }
-            }
-            if let details = mate.details, !details.instructions.isEmpty {
-                Section("Instructions") {
-                    ChatMessageBody(text: details.instructions).equatable()
-                        .environment(\.openURL, OpenURLAction { url in
-                            ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
-                        })
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 4)
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationHeaderFade(background: Color(.systemGroupedBackground))
-        .refreshable { await load() }
-    }
-
-    private func load() async {
-        let request = UUID()
-        requestID = request
-        guard session.isConnected else { details = nil; error = nil; return }
-        let owner = session.ownership
-        error = nil
-        do {
-            let current = try await session.loadMates(mateID: mateID)
-            guard !Task.isCancelled, request == requestID, owner == session.ownership else { return }
-            guard let mate = current.mates.first(where: { $0.id == mateID }) else {
-                details = nil
-                error = "This Mate is unavailable."
-                return
-            }
-            details = MateInfoProfile(mate: mate, teams: current.teams)
-        } catch {
-            guard !Task.isCancelled, request == requestID, owner == session.ownership else { return }
-            details = nil
-            self.error = error.localizedDescription
-        }
     }
 }
 
@@ -880,7 +817,7 @@ struct MateView: View {
                     Text(mate.name).font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Mate Info", systemImage: "info.circle", action: openInfo)
+                    Button("Mate Details", systemImage: "info.circle", action: openInfo)
                         .accessibilityIdentifier("openMateInfo")
                 }
             }
@@ -939,7 +876,7 @@ struct MateView: View {
     }
 
     private func mateChatHistory(_ mate: Mate) -> some View {
-        let history = chats.filter { $0.id != mate.welcome?.runId || mate.welcome?.state == "starting" }
+        let history = chats.filter { mate.showsChat($0) }
         return Section {
             if history.isEmpty { Text("No chats yet").foregroundStyle(.secondary) }
             ForEach(history) { chat in

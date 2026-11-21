@@ -204,27 +204,19 @@ struct AtlasView: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
                         ForEach(atlasTypes, id: \.0) { type in
-                            let selected = query.type == type.0
-                            let foreground = selected ? Color(.systemBackground) : .primary
-                            Button { query.type = type.0 } label: {
+                            FilterChip(selected: query.type == type.0, action: { query.type = type.0 }) { foreground in
                                 Label {
                                     Text(type.1)
                                 } icon: {
                                     RegistryIcon(token: "icon:" + type.2, size: 18, tint: foreground)
                                 }
-                                .font(.subheadline.weight(.medium)).foregroundStyle(foreground).fixedSize()
-                                .padding(.horizontal, 14).frame(minHeight: 36)
-                                .background(selected ? Color.primary : .clear, in: .capsule)
-                                .frame(minHeight: 44).contentShape(.rect)
                             }
-                            .buttonStyle(ChatPressStyle())
-                            .accessibilityAddTraits(selected ? .isSelected : [])
                             .accessibilityIdentifier("atlasType-" + type.0)
                         }
                     }
                 }
                 .scrollIndicators(.hidden)
-                .modifier(AtlasTypeScrollFade())
+                .modifier(FilterChipScrollFade())
                 Menu {
                     Picker("Source", selection: $query.scope) {
                         ForEach(atlasScopes, id: \.0) { Text($0.1).tag($0.0) }
@@ -297,47 +289,6 @@ struct AtlasView: View {
         } catch {
             if readID == ticket, !Task.isCancelled, owner == session.ownership { self.error = error.localizedDescription }
         }
-    }
-}
-
-private struct AtlasTypeScrollFade: ViewModifier {
-    #if DEBUG && targetEnvironment(simulator)
-    @ObserveHotReload private var hotReload
-    #endif
-    private struct Edges: Equatable {
-        var left = false
-        var right = false
-    }
-    @State private var edges = Edges()
-    @Environment(\.layoutDirection) private var layoutDirection
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func body(content: Content) -> some View {
-        content
-            .onScrollGeometryChange(for: Edges.self) { geometry in
-                let start = -geometry.contentInsets.leading
-                let end = max(start, geometry.contentSize.width - geometry.containerSize.width + geometry.contentInsets.trailing)
-                let overflows = end > start + 1
-                return Edges(left: overflows && geometry.contentOffset.x > start + 1,
-                             right: overflows && geometry.contentOffset.x < end - 1)
-            } action: { _, next in edges = next }
-            .overlay(alignment: layoutDirection == .leftToRight ? .leading : .trailing) {
-                fade(left: true).opacity(edges.left ? 1 : 0)
-            }
-            .overlay(alignment: layoutDirection == .leftToRight ? .trailing : .leading) {
-                fade(left: false).opacity(edges.right ? 1 : 0)
-            }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: edges)
-    }
-
-    private func fade(left: Bool) -> some View {
-        let background = Color(.systemGroupedBackground)
-        let fromLeading = left == (layoutDirection == .leftToRight)
-        return LinearGradient(colors: [background, background.opacity(0)],
-                              startPoint: fromLeading ? .leading : .trailing,
-                              endPoint: fromLeading ? .trailing : .leading)
-            .frame(width: 20)
-            .allowsHitTesting(false).accessibilityHidden(true)
     }
 }
 

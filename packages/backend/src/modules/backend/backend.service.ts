@@ -1,6 +1,7 @@
 import { getLocalBackendId } from "../../db/backend-identity";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
+import { MOBILE_MATE_INFO_CAPABILITY } from "@mains/contracts/assistants";
 import { CHANNELS } from "@mains/contracts/channels";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { assertAuthActive, createAuthFence, createAuthGrants } from "@mains/contracts/auth-lifecycle";
@@ -32,6 +33,9 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.search.conversations,
   CHANNELS.assistants.mobileDirectory,
   CHANNELS.assistants.mobileAssignment,
+  CHANNELS.assistants.mobileMemory,
+  CHANNELS.assistants.mobileAssignments,
+  CHANNELS.assistants.mobileRoutines,
   CHANNELS.assistants.conversations,
   // Narrow Atlas readers return identities and bounded content, never host paths.
   CHANNELS.atlas.mobileLibrary,
@@ -113,6 +117,7 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   CHANNELS.assistants.prepareWelcome,
   CHANNELS.assistants.respondWelcome,
   CHANNELS.assistants.send,
+  CHANNELS.assistants.mobileManage,
   CHANNELS.atlas.updateMobileItem,
   CHANNELS.atlas.setMobileTrash,
   CHANNELS.atlas.setMobileTags,
@@ -285,7 +290,11 @@ export const backendService = {
             PAIRED_DEVICE_CHANNELS.has(channel) || PAIRED_DEVICE_COMMANDS.has(channel),
         )
       : served;
-    const capabilities = [...new Set(reachable.map(namespaceOf))].sort();
+    const namespaces = reachable.map(namespaceOf);
+    const mateInfoChannels = [CHANNELS.assistants.mobileMemory, CHANNELS.assistants.mobileAssignments,
+      CHANNELS.assistants.mobileRoutines, CHANNELS.assistants.mobileManage];
+    if (mateInfoChannels.every(channel => reachable.includes(channel))) namespaces.push(MOBILE_MATE_INFO_CAPABILITY);
+    const capabilities = [...new Set(namespaces)].sort();
     return {
       backendId,
       name: machineName(),

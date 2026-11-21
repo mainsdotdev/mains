@@ -19,6 +19,13 @@ export function registerAssistantsIpc() {
     const changed = async <T>(action: () => T | Promise<T>) => { const result = await action(); emit(CHANNELS.assistants.changed, {}); return result; };
     ipcMain.handle(CHANNELS.assistants.mobileDirectory, handle(assistantsMobile.directory));
     ipcMain.handle(CHANNELS.assistants.mobileAssignment, handle(assistantsMobile.assignment));
+    ipcMain.handle(CHANNELS.assistants.mobileMemory, handle(assistantsMobile.memory));
+    ipcMain.handle(CHANNELS.assistants.mobileAssignments, handle(assistantsMobile.assignments));
+    ipcMain.handle(CHANNELS.assistants.mobileRoutines, handle(assistantsMobile.routines));
+    ipcMain.handle(CHANNELS.assistants.mobileManage, handle(async (accountId: string, mateId: string, change: unknown, requestId: string) => {
+        await changed(() => assistantsMobile.manage(accountId, mateId, change, requestId));
+        return { accepted: true };
+    }));
     ipcMain.handle(CHANNELS.assistants.assignment, handle((accountId: string, id: string) => assistantsService.assignment(accountId, id)));
     ipcMain.handle(CHANNELS.assistants.overview, handle((accountId: string) => assistantsService.overview(accountId)));
     ipcMain.handle(CHANNELS.assistants.createTeam, handle((payload: unknown) => changed(() => assistantsService.createTeam(payload))));

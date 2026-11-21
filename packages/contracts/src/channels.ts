@@ -6,6 +6,8 @@
 export const CHANNELS = {
   assistants: {
     mobileDirectory: "assistants:mobileDirectory", mobileAssignment: "assistants:mobileAssignment",
+    mobileMemory: "assistants:mobileMemory", mobileAssignments: "assistants:mobileAssignments",
+    mobileRoutines: "assistants:mobileRoutines", mobileManage: "assistants:mobileManage",
     assignment: "assistants:assignment", prepareWelcome: "assistants:prepareWelcome", respondWelcome: "assistants:respondWelcome", setupProfile: "assistants:setupProfile",
     overview: "assistants:overview", create: "assistants:create", createTeam: "assistants:createTeam",
     changeTeam: "assistants:changeTeam", updateProfile: "assistants:updateProfile",

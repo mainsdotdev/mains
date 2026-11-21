@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 import WebSocket from "ws";
 import { buildSubprotocols } from "@mains/contracts/ws-protocol";
 import { CHANNELS } from "@mains/contracts/channels";
-import type { MobileMateDirectory } from "@mains/contracts/assistants";
+import { MOBILE_MATE_INFO_CAPABILITY, type MobileMateChange, type MobileMateDirectory, type MobileMateRoutines } from "@mains/contracts/assistants";
 import { getDb } from "./db/client";
 import { providers as providerTable } from "./db/schema";
 import { eq } from "drizzle-orm";
@@ -184,6 +184,58 @@ describe("backend host acquisition and shutdown", () => {
         success: true, data: { workerRunId: task.workerRunId, result: "Sample checked", status: "completed" },
       });
       await vi.waitFor(() => expect(driver.calls.resumeSession.some(request => request.runId === runId && request.message.includes("Sample checked"))).toBe(true));
+
+      expect(await invoke(CHANNELS.backend.describe, [])).toMatchObject({ data: { capabilities: expect.arrayContaining([MOBILE_MATE_INFO_CAPABILITY]) } });
+      expect(await invoke(CHANNELS.pulse.getAll, [])).toMatchObject({ success: false });
+      const team = assistantsService.createTeam({ accountId, name: "Release team" });
+      const reviewer = await assistantsService.create({ ...input, ...profile, name: "Reviewer", teamId: team.id, profileSetup: false });
+      const teammate = await assistantsService.create({ ...input, ...profile, name: "Teammate", teamId: team.id, profileSetup: false });
+      const manage = (id: string, change: MobileMateChange, key: string) =>
+        invoke(CHANNELS.assistants.mobileManage, [accountId, id, change, key], key);
+      const accepted = { success: true, data: { accepted: true } };
+      const note = { id: "mobile-note", title: "Release checklist", content: "Note ".repeat(300).trim(), revision: 0, pinned: true, shared: true };
+      const saveNote: MobileMateChange = { action: "saveMemory", note, expectedTeamId: team.id };
+      expect(await invoke(CHANNELS.assistants.mobileManage, [accountId, reviewer.id, saveNote, "note-key"])).toMatchObject({ success: false, error: expect.stringContaining("commandId") });
+      expect(await manage(reviewer.id, saveNote, "note-key")).toEqual(accepted);
+      expect(await manage(reviewer.id, saveNote, "note-key")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileMemory, [accountId, teammate.id])).toMatchObject({
+        success: true, data: [{ id: note.id, content: note.content.slice(0, 400), revision: 1, shared: true }],
+      });
+      expect(await invoke(CHANNELS.assistants.mobileMemory, [accountId, teammate.id, note.id])).toMatchObject({ success: true, data: { content: note.content } });
+      expect(await invoke(CHANNELS.assistants.mobileMemory, [accountId, mateId, note.id])).toMatchObject({ success: false });
+      expect(await manage(mateId, { action: "deleteMemory", id: note.id, revision: 1 }, "delete-foreign")).toMatchObject({ success: false });
+      expect(await manage(reviewer.id, { ...saveNote, note: { ...note, revision: 1, pinned: false } }, "unpin-note")).toEqual(accepted);
+      expect(await manage(reviewer.id, { action: "deleteMemory", id: note.id, revision: 1 }, "delete-stale")).toMatchObject({ success: false });
+
+      expect(await invoke(CHANNELS.assistants.mobileAssignments, [accountId, mateId, task.id])).toMatchObject({ success: true, data: { workerRunId: task.workerRunId, result: "Sample checked" } });
+      expect(await invoke(CHANNELS.assistants.mobileAssignments, [accountId, reviewer.id, task.id])).toMatchObject({ success: false });
+      const assignment = { action: "assign", title: "Check release", prompt: "Review the release summary." } as const;
+      expect(await manage(teammate.id, assignment, "new-assignment")).toEqual(accepted);
+      expect(await manage(teammate.id, assignment, "new-assignment")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileAssignments, [accountId, reviewer.id])).toMatchObject({
+        success: true, data: { activeCount: 1, items: [{ title: assignment.title, assignee: { id: teammate.id } }] },
+      });
+
+      const schedule = { title: "Morning review", prompt: "Check the release.", frequency: "daily", dayOfWeek: null, hour: 9, minute: 20, timezone: "Europe/Istanbul" } as const;
+      expect(await manage(reviewer.id, { action: "createRoutine", schedule, workspaceId: workspace.id }, "create-routine")).toEqual(accepted);
+      const routines = await invoke(CHANNELS.assistants.mobileRoutines, [accountId, reviewer.id]) as { data: MobileMateRoutines };
+      expect(routines).toMatchObject({ success: true, data: { items: [{ ...schedule, workspaceId: workspace.id, isActive: true }] } });
+      const routine = routines.data.items[0];
+      expect(await manage(teammate.id, { action: "toggleRoutine", id: routine.id, isActive: false }, "pause-foreign")).toMatchObject({ success: false });
+      expect(await manage(reviewer.id, { action: "updateRoutine", id: routine.id, revision: routine.revision, schedule: { ...schedule, hour: 8 } }, "update-routine")).toEqual(accepted);
+      expect(await manage(reviewer.id, { action: "toggleRoutine", id: routine.id, isActive: false }, "pause-routine")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileRoutines, [accountId, reviewer.id, routine.id])).toMatchObject({ success: true, data: { hour: 8, isActive: false } });
+
+      const expectedProfile = { ...profile, name: reviewer.name, avatar: reviewer.avatar };
+      expect(await manage(reviewer.id, { action: "updateProfile", expectedProfile, profile: { ...expectedProfile, name: "Release reviewer" } }, "edit-profile")).toEqual(accepted);
+      expect(await manage(reviewer.id, { action: "archive", archived: true }, "archive-mate")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileDirectory, [accountId, null, true])).toMatchObject({ success: true, data: { mates: [{ id: reviewer.id, name: "Release reviewer", isArchived: true }] } });
+      expect(await manage(reviewer.id, { action: "archive", archived: false }, "restore-mate")).toEqual(accepted);
+      expect(await manage(reviewer.id, { action: "runRoutine", id: routine.id }, "run-routine")).toEqual(accepted);
+      expect(await manage(reviewer.id, { action: "runRoutine", id: routine.id }, "run-routine")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileRoutines, [accountId, reviewer.id, routine.id])).toMatchObject({ success: true, data: { lastAssignmentStatus: expect.any(String) } });
+      expect(await manage(reviewer.id, { action: "deleteRoutine", id: routine.id }, "delete-routine")).toEqual(accepted);
+      expect(await invoke(CHANNELS.assistants.mobileRoutines, [accountId, reviewer.id])).toMatchObject({ success: true, data: { items: [] } });
     } finally {
       workerReleased.resolve();
       socket.close();

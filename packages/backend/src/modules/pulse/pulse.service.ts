@@ -219,8 +219,10 @@ export const pulseService = {
     return this.create(accountId, { ...input, assistantId, providerId: "", model: "" }, requestKey);
   },
 
-  forAssistant(accountId: string, assistantId: string, offset = 0): Pulse[] {
-    assistantsService.require(assistantId, accountId);
+  forAssistant(accountId: string, assistantId: string, offset = 0, { includeArchivedMate = false } = {}): Pulse[] {
+    if (includeArchivedMate) {
+      if (!assistantsService.get(assistantId, accountId)) throw new Error("Assistant is unavailable");
+    } else assistantsService.require(assistantId, accountId);
     return pulseRepo.findForAssistant(accountId, assistantId, offset);
   },
 

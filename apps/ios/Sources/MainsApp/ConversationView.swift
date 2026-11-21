@@ -32,6 +32,7 @@ struct ConversationView: View {
     let onFork: (String) -> Void
     let initialCursor: HistoryCursor?
     let mateSource: MateConversationSource?
+    let onMateNavigation: (AppRoute) -> Void
     @Bindable private var draft: ConversationDraft
     @Bindable private var queue: ConversationQueue
     @State private var owner: Int?
@@ -54,6 +55,7 @@ struct ConversationView: View {
     @State private var loadedMate: (owner: Int, profile: MateInfoProfile)?
     @State private var mateAvatarFrame = CGRect.zero
     @State private var presentedMateProfile: MateInfoProfile?
+    @State private var mateRouteAfterDismissal: (owner: Int, route: AppRoute)?
     @Namespace private var mateInfoZoom
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -130,13 +132,15 @@ struct ConversationView: View {
     }
 
     init(session: BackendSession, runID: String, openComputer: @escaping () -> Void, onNew: @escaping () -> Void,
-         onFork: @escaping (String) -> Void, initialCursor: HistoryCursor? = nil, mateSource: MateConversationSource? = nil) {
+         onFork: @escaping (String) -> Void, initialCursor: HistoryCursor? = nil, mateSource: MateConversationSource? = nil,
+         onMateNavigation: @escaping (AppRoute) -> Void = { _ in }) {
         self.session = session; self.runID = runID
         self.openComputer = openComputer
         self.onNew = onNew
         self.onFork = onFork
         self.initialCursor = initialCursor
         self.mateSource = mateSource
+        self.onMateNavigation = onMateNavigation
         draft = session.draft(for: runID)
         queue = session.messageQueue(for: runID)
     }
@@ -159,7 +163,7 @@ struct ConversationView: View {
                     }
                 }
         }
-        .fullScreenCover(item: $presentedMateProfile, content: mateInfoPage)
+        .fullScreenCover(item: $presentedMateProfile, onDismiss: navigateAfterMateInfo, content: mateInfoPage)
         .onChange(of: archivedMate) { _, archived in
             if archived { presentedMateProfile = nil; modelSheet = false; optionsSheet = false }
         }
@@ -173,7 +177,15 @@ struct ConversationView: View {
 
     private func mateInfoPage(_ profile: MateInfoProfile) -> some View {
         NavigationStack {
-            MateInfoView(session: session, mateID: profile.id, initialProfile: profile)
+            MateInfoView(session: session, mateID: profile.id, initialProfile: profile, currentChatID: runID, openChat: { id, mateID in
+                if id != runID {
+                    mateRouteAfterDismissal = (session.ownership, .conversation(id, mate: mateID.map(MateConversationSource.profile) ?? .assignment))
+                }
+                presentedMateProfile = nil
+            }, newTask: {
+                mateRouteAfterDismissal = (session.ownership, .mate(profile.id))
+                presentedMateProfile = nil
+            })
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button { presentedMateProfile = nil } label: { Image(systemName: "chevron.left") }
@@ -183,6 +195,13 @@ struct ConversationView: View {
                 .accessibilityAction(.escape) { presentedMateProfile = nil }
         }
         .navigationTransition(.zoom(sourceID: profile.id, in: mateInfoZoom))
+    }
+
+    private func navigateAfterMateInfo() {
+        guard let next = mateRouteAfterDismissal else { return }
+        mateRouteAfterDismissal = nil
+        guard next.owner == session.ownership, session.viewingRunID == runID else { return }
+        onMateNavigation(next.route)
     }
 
     private func workspace(in geometry: GeometryProxy) -> some View {
@@ -615,7 +634,7 @@ struct MateConversationTitle: View {
                 .buttonStyle(.plain)
                 .offset(y: -11)
                 .accessibilityLabel(archived ? "\(name), archived Mate" : name)
-                .accessibilityHint(mate == nil || openInfo == nil ? "" : "Opens Mate Info")
+                .accessibilityHint(mate == nil || openInfo == nil ? "" : "Opens Mate Details")
                 .accessibilityRemoveTraits(mate == nil || openInfo == nil ? .isButton : [])
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("mateConversationHeader")

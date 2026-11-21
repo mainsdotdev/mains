@@ -169,6 +169,7 @@ describe("backendService", () => {
     it("is exactly the control loop's verbs plus the picker writes, disjoint from the read list", () => {
       expect([...PAIRED_DEVICE_COMMANDS].sort()).toEqual([
         "assistants:create",
+        "assistants:mobileManage",
         "assistants:prepareWelcome",
         "assistants:respondWelcome",
         "assistants:send",

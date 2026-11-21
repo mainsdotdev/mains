@@ -3,12 +3,14 @@ import { getDb } from "../../db/client";
 import { assistantTeams, assistants, assistantWelcomes, assistantMemories, assistantAssignments, assistantMessages, runs, runContext, workspaces, projects } from "../../db/schema";
 import type { Assistant, AssistantAssignment, AssistantMessageContext, AssistantProfile, AssistantPullRequestContext, AssistantPullRequestReview } from "@mains/contracts/assistants";
 import { ASSISTANT_MENTION_MODES, normalizeAssistantAvatar } from "@mains/contracts/assistants";
+import { ownedHere } from "../bridge/bridge.ownership";
 function assistant(row: typeof assistants.$inferSelect): Assistant {
     const { settings, spaceSnapshot, mode: _mode, workspaceId: _workspace, avatar, ...rest } = row;
     return { ...rest, avatar: normalizeAssistantAvatar(JSON.parse(avatar)), conversationSettings: JSON.parse(settings), spaceSnapshot: JSON.parse(spaceSnapshot) };
 }
 const { context: _assignmentContext, ...assignmentFields } = getTableColumns(assistantAssignments);
 const assignmentProjection = { ...assignmentFields, review: sql<string | null>`json_extract(${assistantAssignments.context}, '$.pullRequestReview')` };
+const activeAssignment = sql`${assistantAssignments.status} NOT IN ('completed', 'failed', 'canceled')`;
 type AssignmentRow = Omit<typeof assistantAssignments.$inferSelect, "context"> & { review: string | null };
 type AssignmentContext = AssistantMessageContext & { pullRequestReview?: AssistantPullRequestContext };
 
@@ -107,6 +109,22 @@ export const assistantsRepo = {
             .orderBy(desc(runs.updatedAt), desc(runs.createdAt), desc(runs.id)).limit(100).all();
     },
     assignments(accountId: string) { return getDb().select(assignmentProjection).from(assistantAssignments).where(eq(assistantAssignments.accountId, accountId)).orderBy(sql`CASE WHEN status IN ('completed', 'failed', 'canceled') THEN 1 ELSE 0 END`, desc(assistantAssignments.createdAt), assistantAssignments.id).limit(200).all().map(assignment); },
+    assignmentsForMate(mate: Pick<Assistant, "id" | "accountId" | "teamId">, taskId?: string, offset = 0) {
+        // Match canAccessAssistantAssignment before applying the page limit.
+        const scope = and(eq(assistantAssignments.accountId, mate.accountId), or(
+            and(isNull(assistantAssignments.teamId), eq(assistantAssignments.toAssistantId, mate.id)),
+            mate.teamId ? eq(assistantAssignments.teamId, mate.teamId) : undefined,
+        ));
+        return getDb().select({ task: assignmentProjection, workerRunId: runs.id,
+            activeCount: sql<number>`sum(CASE WHEN ${activeAssignment} THEN 1 ELSE 0 END) OVER ()`,
+        }).from(assistantAssignments)
+            .leftJoin(runs, and(eq(runs.id, assistantAssignments.workerRunId), eq(runs.accountId, mate.accountId),
+                eq(runs.assistantId, assistantAssignments.toAssistantId), eq(runs.isArchived, false), ownedHere(runs.ownerBackendId)))
+            .where(and(scope, taskId === undefined ? undefined : eq(assistantAssignments.id, taskId)))
+            .orderBy(desc(activeAssignment), desc(assistantAssignments.createdAt), assistantAssignments.id)
+            .limit(taskId === undefined ? 101 : 1).offset(offset).all()
+            .map(row => ({ ...row, task: assignment(row.task) }));
+    },
     pullRequestReviews(accountId: string, prKey: string, selectedId: string): AssistantPullRequestReview[] {
         const rows = getDb().select({ task: assignmentProjection, workerRunId: runs.id })
             .from(assistantAssignments)

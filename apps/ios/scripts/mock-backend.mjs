@@ -42,6 +42,13 @@ const queueProjections = createRunQueueProjectionStore();
 const storedTurns = new Map(), storedDiffs = new Map();
 const createdMates = new Map();
 const mateAssignments = new Map();
+const mateMemory = new Map();
+const fixtureInfoTask = { id: 'fixture-info-task', title: 'Release handoff', status: 'completed', brief: 'Check the changelog.',
+  result: 'Changelog checked.', error: null, workerRunId: 'fixture-mate-chat-0', evidence: ['Release checklist'],
+  assignee: { id: fixtureMate.id, name: fixtureMate.name, avatar: fixtureMate.avatar, isArchived: false } };
+const fixtureRoutine = { id: 'fixture-info-routine', title: 'Morning release check', prompt: 'Summarize changes.', frequency: 'daily',
+  dayOfWeek: null, hour: 9, minute: 30, timezone: 'Europe/Istanbul', workspaceId: null, isActive: false, nextRunAt: null,
+  lastRunId: 'fixture-mate-chat-0', lastAssignmentStatus: 'completed', lastError: null, revision: 'fixture-revision' };
 let acceptsConnections = true;
 let holdSnapshot = 0;
 let mateDetailsDelayMs = 0;
@@ -64,6 +71,8 @@ function reset(longHistory = false, home = false, design = false, workspaceList 
   disjointHistory = disjoint;
   receipts.clear(); pendingDecisions.clear(); storedTurns.clear(); storedDiffs.clear(); observations.length = 0; nextID = 10;
   createdMates.clear(); mateAssignments.clear();
+  mateMemory.clear();
+  descriptor.capabilities = ['runs', 'space', 'workspace', 'assistants'];
   queueProjections.clear();
   tools = new Map();
   spaces = [{ id: 'fixture-space', name: 'Codex', providerId: 'codex', icon: 'icon:codex', mode: 'chat', model: null, isArchived: false },
@@ -371,11 +380,12 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method === 'POST' && request.url === '/pair') {
     const body = JSON.parse(Buffer.concat(parts).toString());
-    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
+    if (!['ios-test', 'ios-test-chat', 'ios-test-home', 'ios-test-design', 'ios-test-workspace', 'ios-test-media', 'ios-test-paging', 'ios-test-paging-disjoint', 'ios-test-archived-mate', 'ios-test-mate-info'].includes(body.code) || body.platform !== 'ios' || !body.deviceName) {
       response.writeHead(403); response.end(JSON.stringify({ error: 'Invalid pairing code' })); return;
     }
     const paging = body.code.startsWith('ios-test-paging');
     reset(body.code === 'ios-test-chat' || paging, body.code === 'ios-test-home', body.code === 'ios-test-design', body.code === 'ios-test-workspace', body.code === 'ios-test-media', paging, body.code === 'ios-test-paging-disjoint');
+    if (body.code === 'ios-test-mate-info') descriptor.capabilities.push('mateInfo');
     if (body.code === 'ios-test-archived-mate') {
       mateArchived = true;
       const source = runs[0], workerRunId = 'fixture-old-mate-chat', id = 'fixture-old-mate-request', at = new Date();
@@ -438,10 +448,14 @@ wss.on('connection', socket => {
         case CHANNELS.backend.describe: result = descriptor; break;
         case CHANNELS.assistants.mobileDirectory: {
           const mates = [...fixtureMates, ...createdMates.values()].map(mate => mateArchived && mate.id === fixtureMate.id
-            ? { ...mate, isArchived: true, details: undefined } : mate);
+            ? { ...mate, isArchived: true } : mate);
+          if (descriptor.capabilities.includes('mateInfo')) {
+            mates.push({ ...fixtureMate, id: 'fixture-retired-mate', name: 'Retired Release Mate', isArchived: true });
+          }
+          const [_, selected, archived = false] = args;
           result = {
-            mates: args[1] ? mates.filter(mate => mate.id === args[1]).map(({ details, ...mate }) => details ? { ...mate, details } : mate)
-              : mates.filter(mate => !mate.isArchived).map(({ details: _details, ...mate }) => mate),
+            mates: selected ? mates.filter(mate => mate.id === selected).map(({ details, ...mate }) => details && (!mate.isArchived || archived) ? { ...mate, details } : mate)
+              : mates.filter(mate => !!mate.isArchived === archived).map(({ details: _details, ...mate }) => mate),
             teams: fixtureMateTeams,
           };
           if (args[1] && mateDetailsDelayMs) {
@@ -457,6 +471,29 @@ wss.on('connection', socket => {
           const task = mateAssignments.get(args[2]);
           if (!task || task.runId !== args[1]) throw new Error('Mate request not found');
           result = task.assignment; break;
+        }
+        case CHANNELS.assistants.mobileMemory: {
+          const [account, mateID, noteID] = args;
+          if (account !== 'fixture-account' || mateID !== fixtureMate.id) throw new Error('Mate unavailable');
+          result = noteID ? mateMemory.get(noteID) : [...mateMemory.values()];
+          break;
+        }
+        case CHANNELS.assistants.mobileAssignments:
+          result = args[2] === fixtureInfoTask.id ? fixtureInfoTask : { items: [fixtureInfoTask], activeCount: 0, hasMore: false };
+          break;
+        case CHANNELS.assistants.mobileRoutines:
+          result = args[2] === fixtureRoutine.id ? fixtureRoutine : { items: [fixtureRoutine], nextOffset: null };
+          break;
+        case CHANNELS.assistants.mobileManage: {
+          const [account, mateID, change] = args;
+          if (account !== 'fixture-account' || mateID !== fixtureMate.id || !commandId || change.action !== 'saveMemory') {
+            throw new Error('Invalid fixture Mate change');
+          }
+          mateMemory.set(change.note.id, { ...change.note, revision: change.note.revision + 1 });
+          result = { accepted: true };
+          receipts.set(commandId, { success: true, data: result });
+          broadcast(CHANNELS.assistants.changed, {});
+          break;
         }
         case CHANNELS.assistants.create: {
           const input = args[0], space = spaces.find(space => space.id === input.spaceId);

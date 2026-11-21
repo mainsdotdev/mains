@@ -19,10 +19,93 @@ extension View {
     func scrollingNavigationTitle(_ title: LocalizedStringKey) -> some View {
         modifier(ScrollingNavigationTitle(title: title))
     }
+
+    func expandedNavigationTitle(_ title: String) -> some View {
+        navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text(title).font(.headline.weight(.medium).width(.expanded)).lineLimit(1)
+                        .accessibilityAddTraits(.isHeader)
+                }.sharedBackgroundVisibility(.hidden)
+            }
+    }
 }
 
 private extension EnvironmentValues {
     @Entry var pageTitleVisible: Binding<Bool> = .constant(true)
+}
+
+struct FilterChipSelectionBounds: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        if value == nil { value = nextValue() }
+    }
+}
+
+struct FilterChip<Label: View>: View {
+    let selected: Bool
+    var usesSharedHighlight = false
+    let action: () -> Void
+    @ViewBuilder let label: (Color) -> Label
+
+    var body: some View {
+        let foreground = selected ? Color(.systemBackground) : .primary
+        Button(action: action) {
+            label(foreground)
+                .font(.subheadline.weight(.medium)).foregroundStyle(foreground).fixedSize()
+                .padding(.horizontal, 14).frame(minHeight: 36)
+                .background(selected && !usesSharedHighlight ? Color.primary : .clear, in: .capsule)
+                .anchorPreference(key: FilterChipSelectionBounds.self, value: .bounds) {
+                    selected && usesSharedHighlight ? $0 : nil
+                }
+                .frame(minHeight: 44).contentShape(.rect)
+        }
+        .buttonStyle(ChatPressStyle())
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+struct FilterChipScrollFade: ViewModifier {
+    #if DEBUG && targetEnvironment(simulator)
+    @ObserveHotReload private var hotReload
+    #endif
+    private struct Edges: Equatable {
+        var left = false
+        var right = false
+    }
+    @State private var edges = Edges()
+    @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: Edges.self) { geometry in
+                let start = -geometry.contentInsets.leading
+                let end = max(start, geometry.contentSize.width - geometry.containerSize.width + geometry.contentInsets.trailing)
+                let overflows = end > start + 1
+                return Edges(left: overflows && geometry.contentOffset.x > start + 1,
+                             right: overflows && geometry.contentOffset.x < end - 1)
+            } action: { _, next in edges = next }
+            .overlay(alignment: layoutDirection == .leftToRight ? .leading : .trailing) {
+                fade(left: true).opacity(edges.left ? 1 : 0)
+            }
+            .overlay(alignment: layoutDirection == .leftToRight ? .trailing : .leading) {
+                fade(left: false).opacity(edges.right ? 1 : 0)
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: edges)
+    }
+
+    private func fade(left: Bool) -> some View {
+        let background = Color(.systemGroupedBackground)
+        let fromLeading = left == (layoutDirection == .leftToRight)
+        return LinearGradient(colors: [background, background.opacity(0)],
+                              startPoint: fromLeading ? .leading : .trailing,
+                              endPoint: fromLeading ? .trailing : .leading)
+            .frame(width: 20)
+            .allowsHitTesting(false).accessibilityHidden(true)
+    }
 }
 
 struct PageTitle: View {
